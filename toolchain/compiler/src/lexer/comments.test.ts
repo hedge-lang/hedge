@@ -35,4 +35,16 @@ describe("BlockComment", () => {
     expect(nextIndex).toBe(blockComment.length);
     expect(tokens).toEqual([]);
   });
+
+  it("supports nested block comments", () => {
+    const blockComment = "/* foo /* bar */ baz */";
+    const tokens: Token[] = [];
+    expect(isBlockComment(blockComment, 0)).toBe(true);
+    const nextIndex = parseBlockComment(tokens, blockComment + "  ", 0);
+    expect(blockComment.slice(0, nextIndex)).toBe(blockComment);
+    expect(blockComment[nextIndex]).toBeUndefined();
+    expect(blockComment[nextIndex - 1]).not.toBeUndefined();
+    expect(nextIndex).toBe(blockComment.length);
+    expect(tokens).toEqual([]);
+  });
 });
