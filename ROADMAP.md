@@ -69,32 +69,32 @@ Spec: `0011-strings`, `0012-collections`, `0015-iterators` (renumbered `0017`).
 
 `Result`/`Option`, `?`, `From` conversion, `panic`/`catch_unwind`, `loop`/`while`/
 `for`, loop labels + `break 'l value`, the never type.
-Spec: `0018-error-handling` (renumbered `0020`), `0008`.
+Spec: `0020-error-handling`, `0008`.
 
 ### Slice 7 — Modules & name resolution
 
 File-as-module tree, `use` + `as` renaming, raw identifiers (`r#`), `pub` /
 `pub(package)` visibility, `pub use`. **Write the name-resolution algorithm here.**
-Spec: `0016-modules` (renumbered `0018`).
+Spec: `0018-modules`.
 
 ### Slice 8 — Async
 
 `async fn` / `await` → `Promise`, borrows held across `await`, detached tasks
 (owned captures only), async `Drop` (`await using` / `Symbol.asyncDispose`).
-Spec: `0017-async` (renumbered `0019`).
+Spec: `0019-async`.
 
 ### Slice 9 — JS interop & declaration generation
 
 `export "js"` / `extern "js"`, runtime guards (primitive-only), `unchecked`,
 `unsafe`, the JS-reserved-word/`as` boundary rules, `.d.ts` generation from
 Hedge's type model.
-Spec: `0003`, `0019`–`0021` (renumbered `0021`–`0023`).
+Spec: `0003`, `0021`–`0023`.
 
 ### Slice 10 — Toolchain
 
 `hedge` CLI (build/test/run/add/publish over npm), the test runner, npm package
 format + Hedge metadata artifact, optional downleveling post-pass.
-Spec: `0022-toolchain` (renumbered `0024`).
+Spec: `0024-toolchain`.
 
 ### Milestone — Self-hosting
 
