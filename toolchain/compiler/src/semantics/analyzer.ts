@@ -98,6 +98,9 @@ class Analyzer {
       case "CallExpression":
         this.call(expression);
         return;
+      case "ReferenceExpression":
+        this.expression(expression.operand);
+        return;
       default:
         assertNever(expression);
     }
