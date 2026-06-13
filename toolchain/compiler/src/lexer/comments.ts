@@ -1,33 +1,56 @@
 import type { Token } from "./token.js";
 import { isWhitespace } from "./whitespace.js";
 
+/**
+ * Identify if the source at `index` is a comment.
+ *
+ * @param source The source to scan.
+ * @param index The index to start scanning at.
+ *
+ * @returns `true` if the source starts with a comment.
+ */
 export function isComment(source: string, index: number): boolean {
   return (
     isBlockComment(source, index) ||
     isBlockOuterDocComment(source, index) ||
     isBlockInnerDocComment(source, index) ||
-    isLineComment(source, index)
+    isLineComment(source, index) ||
+    isOuterDocComment(source, index)
   );
 }
 
+/**
+ * Parse a comment starting at `start` in `source`, appending it to `tokens`.
+ *
+ * @param tokens The token list to append to.
+ * @param source The source to scan.
+ * @param start The index to start scanning at.
+ *
+ * @returns The index of the first character after the comment.
+ */
 export function parseComment(
   tokens: Token[],
   source: string,
   start: number,
 ): number {
+  if (isOuterDocComment(source, start)) {
+    return parseOuterDocComment(tokens, source, start);
+  }
   if (isLineComment(source, start)) {
     return parseLineComment(tokens, source, start);
-  } else if (isBlockComment(source, start)) {
-    return parseBlockComment(tokens, source, start);
-  } else if (isBlockOuterDocComment(source, start)) {
-    return parseBlockOuterDocComment(tokens, source, start);
-  } else if (isBlockInnerDocComment(source, start)) {
-    return parseBlockInnerDocComment(tokens, source, start);
-  } else {
-    throw new SyntaxError("Expected comment", {
-      cause: { start, end: start + 1 },
-    });
   }
+  if (isBlockComment(source, start)) {
+    return parseBlockComment(tokens, source, start);
+  }
+  if (isBlockOuterDocComment(source, start)) {
+    return parseBlockOuterDocComment(tokens, source, start);
+  }
+  if (isBlockInnerDocComment(source, start)) {
+    return parseBlockInnerDocComment(tokens, source, start);
+  }
+  throw new SyntaxError("Expected comment", {
+    cause: { start, end: start + 1 },
+  });
 }
 
 /**
@@ -212,6 +235,71 @@ export function parseBlockInnerDocComment(
   throw new SyntaxError("Unterminated block comment", {
     cause: { start, end: source.length },
   });
+}
+
+/**
+ * Identify an outer doc comment starting at `index` in `source`.
+ *
+ * @param source The source to scan.
+ * @param index The index to start scanning at.
+ *
+ * @returns `true` if the source starts with an outer doc comment.
+ */
+function isOuterDocComment(source: string, index: number): boolean {
+  return (
+    source[index] === "/" &&
+    source[index + 1] === "/" &&
+    source[index + 2] === "/"
+  );
+}
+
+/**
+ * Parse an outer doc comment starting at `start` in `source`, appending it to `tokens`.
+ *
+ * @param tokens The token list to append to.
+ * @param source The source to scan.
+ * @param start The index to start scanning at.
+ *
+ * @returns The index of the first character after the comment.
+ */
+function parseOuterDocComment(
+  tokens: Token[],
+  source: string,
+  start: number,
+): number {
+  const OFFSET_START = 3;
+
+  const lines: string[] = [];
+  let end = source.length;
+  for (let i = start; i < source.length; i++) {
+    while (i < source.length && isWhitespace(source, i)) {
+      i += 1;
+    }
+
+    if (!isOuterDocComment(source, i)) {
+      break;
+    }
+
+    let j = i + OFFSET_START;
+    const lastStart = j;
+    while (j < source.length && source[j] !== "\n") {
+      j += 1;
+    }
+    lines.push(source.slice(lastStart, j));
+    i = j + 1;
+    end = j;
+  }
+
+  const text = lines.join("\n");
+  tokens.push({
+    kind: "doc-outer",
+    text: normalizeComment(text),
+    span: {
+      start,
+      end,
+    },
+  });
+  return end;
 }
 
 /**

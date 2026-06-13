@@ -174,6 +174,7 @@ describe("lexer", (): void => {
           { kind: "ident", text: "example" },
           { kind: "punct", text: "(" },
           { kind: "punct", text: ")" },
+          { kind: "punct", text: "{" },
           { kind: "punct", text: "}" },
           { kind: "eof" },
         ]);
