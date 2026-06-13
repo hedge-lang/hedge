@@ -1,3 +1,5 @@
+import {isLineComment, parseLineComment} from "./comments.js";
+import {scanWhile} from "./scan-while.js";
 import type { Token, TokenKind } from "./token.js";
 
 /**
@@ -73,26 +75,6 @@ function isStringEnd(beginCh: string): (ch: string) => boolean {
 }
 
 /**
- * Advance from `start` while `pred` holds, returning the first index at which it
- * does not (or the end of the source).
- */
-function scanWhile(
-  source: string,
-  start: number,
-  pred: (ch: string) => boolean,
-): number {
-  let j = start;
-  while (j < source.length) {
-    const ch = source[j];
-    if (ch === undefined || !pred(ch)) {
-      break;
-    }
-    j += 1;
-  }
-  return j;
-}
-
-/**
  * Tokenize Hedge source into a flat token list terminated by an `eof` token.
  *
  * Slice-1 subset: ASCII identifiers and hard keywords, decimal integer
@@ -143,6 +125,10 @@ export function tokenize(source: string): Token[] {
         span: { start, end: end + 1 },
       });
       i = end + 1;
+      continue;
+    }
+    if (isLineComment(source, i)) {
+      i = parseLineComment(tokens, source, i + 2);
       continue;
     }
     tokens.push({ kind: "punct", text: ch, span: { start, end: i + 1 } });
