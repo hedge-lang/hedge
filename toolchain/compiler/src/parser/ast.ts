@@ -17,7 +17,8 @@ export type Expression =
   | StringLiteral
   | IntLiteral
   | PathExpression
-  | CallExpression;
+  | CallExpression
+  | ReferenceExpression;
 
 export interface FunctionDecl extends AstNode {
   readonly kind: "Function";
@@ -83,4 +84,11 @@ export interface CallExpression extends AstNode {
   readonly kind: "CallExpression";
   readonly callee: Expression;
   readonly arguments: Expression[];
+}
+
+export interface ReferenceExpression extends AstNode {
+  readonly kind: "ReferenceExpression";
+  /** `true` for `&write` (exclusive), `false` for `&` (shared). */
+  readonly mutable: boolean;
+  readonly operand: Expression;
 }

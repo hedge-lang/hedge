@@ -11,6 +11,7 @@ import type {
   LetStatement,
   PathExpression,
   Program,
+  ReferenceExpression,
   Statement,
 } from "./ast.js";
 
@@ -96,6 +97,26 @@ function parsePath(
   return { node: pathExpr, next: ident.next };
 }
 
+function parseReference(
+  tokens: readonly Token[],
+  pos: number,
+): Parsed<ReferenceExpression> {
+  let cursor = pos + 1;
+  let mutable = false;
+  if (isContextual(tokenAt(tokens, cursor), "write")) {
+    mutable = true;
+    cursor += 1;
+  }
+  const operand = parsePrimary(tokens, cursor);
+  const reference: ReferenceExpression = {
+    kind: "ReferenceExpression",
+    tokenId: pos,
+    mutable,
+    operand: operand.node,
+  };
+  return { node: reference, next: operand.next };
+}
+
 function parsePrimary(
   tokens: readonly Token[],
   pos: number,
@@ -115,6 +136,9 @@ function parsePrimary(
   }
   if (token.kind === "ident") {
     return parsePath(tokens, pos);
+  }
+  if (token.kind === "punct" && token.text === "&") {
+    return parseReference(tokens, pos);
   }
   throw new SyntaxError(
     `Expected an expression, found "${token.text}" at offset ${token.span.start}`,
