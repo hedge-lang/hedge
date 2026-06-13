@@ -126,9 +126,17 @@ export function parseBlockComment(
   const OFFSET_START = 2;
   const OFFSET_END = 2;
   void tokens;
+
+  let nesting = 0;
   for (let i = start + OFFSET_START; i < source.length; i++) {
+    if (isBlockComment(source, i)) {
+      nesting += 1;
+    }
     if (source[i] === "*" && source[i + 1] === "/") {
-      return i + OFFSET_END;
+      if (nesting === 0) {
+        return i + OFFSET_END;
+      }
+      nesting -= 1;
     }
   }
   throw new SyntaxError("Unterminated block comment", {
