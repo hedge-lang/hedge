@@ -15,6 +15,70 @@ describe("parser", (): void => {
         });
     });
 
+    it("parses a simple let binding", (): void => {
+        const tokens = tokenize('let x = "string literal";');
+        const ast = parse(tokens);
+        expect(ast).toMatchObject({
+            kind: "Program",
+            items: [{
+                kind: "LetStatement",
+                bind: true,
+                write: false,
+                pattern: {
+                    kind: "BindingPattern",
+                    name: {
+                        kind: "Identifier",
+                        text: "x",
+                    },
+                    initializer: {
+                        kind: "StringLiteral",
+                        value: "string literal",
+                    },
+                }
+            }]
+        })
+    })
+
+    it("parses a simple function call", (): void => {
+        const tokens = tokenize('print("Hello, world!");');
+        const ast = parse(tokens);
+        expect(ast).toMatchObject({
+            kind: "Program",
+            items: [{
+                kind: "ExpressionStatement",
+                expression: {
+                    kind: "CallExpression",
+                    callee: {
+                        kind: "PathExpression",
+                        path: {
+                            absolute: false,
+                            segments: ["print"],
+                        },
+                    },
+                    arguments: [{
+                        kind: "StringLiteral",
+                        value: "Hello, world!",
+                    }],
+                }
+            }]
+        });
+    });
+
+    it("parses a simple function declaration", (): void => {
+        const tokens = tokenize('fn main() {}');
+        const ast = parse(tokens);
+        expect(ast).toMatchObject({
+            kind: "Program",
+            items: [{
+                kind: "Function",
+                name: {
+                    kind: "Identifier",
+                    text: "main",
+                },
+            }]
+        })
+    });
+
     it("parses the tracer bullet", (): void => {
         const tokens = tokenize(`
           fn main() {
