@@ -152,12 +152,16 @@ export default defineConfig([
        MARKDOWN SUPPORT
     ========================================================= */
   markdown.configs.recommended,
+  {
+    files: [".github/**/*.md"],
+    language: "markdown/gfm",
+  },
 
   /* =========================================================
        IGNORE PATTERNS
     ========================================================= */
   {
-    ignores: ["**/{coverage,dist,node_modules}/**"],
+    ignores: ["**/{coverage,dist,node_modules}/**", "**/examples/**/*.js"],
   },
 
   /* =========================================================

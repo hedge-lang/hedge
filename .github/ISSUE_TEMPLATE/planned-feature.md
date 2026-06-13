@@ -2,9 +2,8 @@
 name: Planned feature
 about: Define a planned feature
 title: "-- An easy-to-read name for the feature --"
-labels: ''
-assignees: ''
-
+labels: ""
+assignees: ""
 ---
 
 ## Summary
@@ -13,7 +12,7 @@ assignees: ''
 
 ## Details
 
--- A technical explanation, clarifying the goal to be accomplished --
+-- A technical explanation, clarifying the goal --
 
 ## Acceptance Criteria
 
