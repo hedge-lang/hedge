@@ -36,6 +36,9 @@ export function parseComment(
   if (isOuterDocComment(source, start)) {
     return parseOuterDocComment(tokens, source, start);
   }
+  if (isInnerDocComment(source, start)) {
+    return parseInnerDocComment(tokens, source, start);
+  }
   if (isLineComment(source, start)) {
     return parseLineComment(tokens, source, start);
   }
@@ -141,7 +144,7 @@ export function parseBlockComment(
  *
  * @returns `true` if the source starts with a block comment.
  */
-export function isBlockOuterDocComment(source: string, index: number): boolean {
+function isBlockOuterDocComment(source: string, index: number): boolean {
   return (
     source[index] === "/" &&
     source[index + 1] === "*" &&
@@ -158,7 +161,7 @@ export function isBlockOuterDocComment(source: string, index: number): boolean {
  *
  * @returns The index of the first character after the comment.
  */
-export function parseBlockOuterDocComment(
+function parseBlockOuterDocComment(
   tokens: Token[],
   source: string,
   start: number,
@@ -193,7 +196,7 @@ export function parseBlockOuterDocComment(
  *
  * @returns `true` if the source starts with a block comment.
  */
-export function isBlockInnerDocComment(source: string, index: number): boolean {
+function isBlockInnerDocComment(source: string, index: number): boolean {
   return (
     source[index] === "/" &&
     source[index + 1] === "*" &&
@@ -210,7 +213,7 @@ export function isBlockInnerDocComment(source: string, index: number): boolean {
  *
  * @returns The index of the first character after the comment.
  */
-export function parseBlockInnerDocComment(
+function parseBlockInnerDocComment(
   tokens: Token[],
   source: string,
   start: number,
@@ -293,6 +296,62 @@ function parseOuterDocComment(
   const text = lines.join("\n");
   tokens.push({
     kind: "doc-outer",
+    text: normalizeComment(text),
+    span: {
+      start,
+      end,
+    },
+  });
+  return end;
+}
+
+/**
+ * Identify an inner doc comment starting at `index` in `source`.
+ *
+ * @param source The source to scan.
+ * @param index The index to start scanning at.
+ *
+ * @returns `true` if the source starts with an inner doc comment.
+ */
+function isInnerDocComment(source: string, index: number): boolean {
+  return (
+    source[index] === "/" &&
+    source[index + 1] === "/" &&
+    source[index + 2] === "!"
+  );
+}
+
+function parseInnerDocComment(
+  tokens: Token[],
+  source: string,
+  start: number,
+): number {
+  const OFFSET_START = 3;
+
+  const lines: string[] = [];
+  let end = source.length;
+  for (let i = start; i < source.length; i++) {
+    while (i < source.length && isWhitespace(source, i)) {
+      i += 1;
+    }
+
+    if (!isInnerDocComment(source, i)) {
+      break;
+    }
+
+    let j = i + OFFSET_START;
+    const lastStart = j;
+    while (j < source.length && source[j] !== "\n") {
+      j += 1;
+    }
+    lines.push(source.slice(lastStart, j));
+    i = j + 1;
+    end = j;
+  }
+
+  const text = lines.join("\n");
+  tokens.push({
+    kind: "doc-inner",
     text: normalizeComment(text),
     span: {
       start,
