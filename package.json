@@ -4,8 +4,7 @@
   "type": "module",
   "workspaces": [
     "toolchain/*",
-    "stdlib",
-    "examples/*"
+    "stdlib"
   ],
   "directories": {
     "doc": "docs"
@@ -14,7 +13,7 @@
     "test": "vitest run",
     "build": "npm -ws run build",
     "clean": "rimraf node_modules toolchain/**/dist stdlib/dist",
-    "check": "npm-run-all --parallel --print-label --continue-on-error --print-name build check:*",
+    "check": "npm-run-all --parallel --print-label --continue-on-error --print-name check:*",
     "check:ws": "npm -ws run check",
     "check:lint": "eslint --max-warnings=0 .",
     "check:types": "tsc --noEmit",
