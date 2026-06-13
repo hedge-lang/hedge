@@ -1,4 +1,3 @@
-
 /**
  * Advance from `start` while `pred` holds, returning the first index at which it
  * does not (or the end of the source).
@@ -10,17 +9,20 @@
  * @returns The index of the first character that does not satisfy `pred`.
  */
 export function scanWhile(
-    source: string,
-    start: number,
-    pred: (ch: string) => boolean,
+  source: string,
+  start: number,
+  pred: (ch: string, index: number, source: string) => boolean,
 ): number {
-    let j = start;
-    while (j < source.length) {
-        const ch = source[j];
-        if (ch === undefined || !pred(ch)) {
-            break;
-        }
-        j += 1;
+  let j = start;
+  while (j < source.length) {
+    const ch = source[j];
+    if (ch === undefined) {
+      throw new Error("Unexpected end of source");
     }
-    return j;
+    if (!pred(ch, j, source)) {
+      break;
+    }
+    j += 1;
+  }
+  return j;
 }

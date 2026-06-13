@@ -1,5 +1,10 @@
-import {isLineComment, parseLineComment} from "./comments.js";
-import {scanWhile} from "./scan-while.js";
+import {
+  isBlockComment,
+  isLineComment,
+  parseBlockComment,
+  parseLineComment,
+} from "./comments.js";
+import { scanWhile } from "./scan-while.js";
 import type { Token, TokenKind } from "./token.js";
 
 /**
@@ -94,15 +99,17 @@ export function tokenize(source: string): Token[] {
       continue;
     }
     const start = i;
-    if (isIdentStart(ch)) {
+    if (isLineComment(source, i)) {
+      i = parseLineComment(tokens, source, i + 2);
+    } else if (isBlockComment(source, i)) {
+      i = parseBlockComment(tokens, source, i + 2);
+    } else if (isIdentStart(ch)) {
       const end = scanWhile(source, i + 1, isIdentContinue);
       const text = source.slice(start, end);
       const kind: TokenKind = HARD_KEYWORDS.has(text) ? "keyword" : "ident";
       tokens.push({ kind, text, span: { start, end } });
       i = end;
-      continue;
-    }
-    if (isDigit(ch)) {
+    } else if (isDigit(ch)) {
       const end = scanWhile(source, i + 1, isDigitOrSeparator);
       tokens.push({
         kind: "int",
@@ -110,9 +117,7 @@ export function tokenize(source: string): Token[] {
         span: { start, end },
       });
       i = end;
-      continue;
-    }
-    if (isStringBegin(ch)) {
+    } else if (isStringBegin(ch)) {
       const end = scanWhile(source, i + 1, isStringEnd(ch));
       if (end >= source.length) {
         throw new SyntaxError(
@@ -125,14 +130,10 @@ export function tokenize(source: string): Token[] {
         span: { start, end: end + 1 },
       });
       i = end + 1;
-      continue;
+    } else {
+      tokens.push({ kind: "punct", text: ch, span: { start, end: i + 1 } });
+      i += 1;
     }
-    if (isLineComment(source, i)) {
-      i = parseLineComment(tokens, source, i + 2);
-      continue;
-    }
-    tokens.push({ kind: "punct", text: ch, span: { start, end: i + 1 } });
-    i += 1;
   }
   tokens.push({
     kind: "eof",
