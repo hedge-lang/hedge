@@ -71,22 +71,29 @@ export default defineConfig([
       ],
     },
     rules: {
-      "boundaries/element-types": [
+      "boundaries/dependencies": [
         "error",
         {
           default: "disallow",
           rules: [
             {
-              from: "compiler",
-              allow: ["compiler", "runtime"],
+              from: { type: "compiler" },
+              allow: [
+                { to: { type: "compiler" } },
+                { to: { type: "runtime" } },
+              ],
             },
             {
-              from: "runtime",
-              allow: ["runtime"],
+              from: { type: "runtime" },
+              allow: [{ to: { type: "runtime" } }],
             },
             {
-              from: "cli",
-              allow: ["compiler", "runtime", "cli"],
+              from: { type: "cli" },
+              allow: [
+                { to: { type: "compiler" } },
+                { to: { type: "runtime" } },
+                { to: { type: "cli" } },
+              ],
             },
           ],
         },
