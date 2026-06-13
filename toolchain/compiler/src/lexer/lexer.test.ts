@@ -32,4 +32,33 @@ describe("lexer", (): void => {
 
     expect(first).toMatchObject({ kind: "ident", span: { start: 0, end: 3 } });
   });
+
+  it("parses the tracer bullet", (): void => {
+    const tokens = tokenize(`
+      fn main() {
+        let greeting = "Hello, world!";
+        print(greeting);
+      }
+    `);
+
+    expect(tokens).toMatchObject([
+      { kind: "keyword", text: "fn" },
+      { kind: "ident", text: "main" },
+      { kind: "punct", text: "(" },
+      { kind: "punct", text: ")" },
+      { kind: "punct", text: "{" },
+      { kind: "keyword", text: "let" },
+      { kind: "ident", text: "greeting" },
+      { kind: "punct", text: "=" },
+      { kind: "string", text: "Hello, world!" },
+      { kind: "punct", text: ";" },
+      { kind: "ident", text: "print" },
+      { kind: "punct", text: "(" },
+      { kind: "ident", text: "greeting" },
+      { kind: "punct", text: ")" },
+      { kind: "punct", text: ";" },
+      { kind: "punct", text: "}" },
+      { kind: "eof" },
+    ]);
+  });
 });

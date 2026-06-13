@@ -64,6 +64,14 @@ function isDigitOrSeparator(ch: string): boolean {
   return isDigit(ch) || ch === "_";
 }
 
+function isStringBegin(ch: string): boolean {
+  return ch === '"';
+}
+
+function isStringEnd(beginCh: string): (ch: string) => boolean {
+  return (ch: string) => ch !== beginCh && ch !== "\\";
+}
+
 /**
  * Advance from `start` while `pred` holds, returning the first index at which it
  * does not (or the end of the source).
@@ -120,6 +128,21 @@ export function tokenize(source: string): Token[] {
         span: { start, end },
       });
       i = end;
+      continue;
+    }
+    if (isStringBegin(ch)) {
+      const end = scanWhile(source, i + 1, isStringEnd(ch));
+      if (end >= source.length) {
+        throw new SyntaxError(
+          `Unterminated string literal starting at ${start}`,
+        );
+      }
+      tokens.push({
+        kind: "string",
+        text: source.slice(start + 1, end),
+        span: { start, end: end + 1 },
+      });
+      i = end + 1;
       continue;
     }
     tokens.push({ kind: "punct", text: ch, span: { start, end: i + 1 } });

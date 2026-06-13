@@ -5,7 +5,13 @@ export interface Span {
 }
 
 /** The lexical category of a {@link Token}. Extended as the lexer grows. */
-export type TokenKind = "ident" | "keyword" | "int" | "punct" | "eof";
+export type TokenKind =
+  | "ident"
+  | "keyword"
+  | "int"
+  | "string"
+  | "punct"
+  | "eof";
 
 /** A single lexical token: its category, its source text, and where it sits. */
 export interface Token {
