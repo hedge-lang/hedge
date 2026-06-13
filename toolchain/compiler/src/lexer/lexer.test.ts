@@ -122,7 +122,7 @@ describe("lexer", (): void => {
           { kind: "punct", text: ";" },
           {
             kind: "doc-outer",
-            text: "This is a comment\nThis is another comment with trailing whitespace",
+            text: "This is a comment\n            This is another comment with trailing whitespace   ",
           },
           { kind: "ident", text: "b" },
           { kind: "punct", text: ";" },
@@ -148,7 +148,7 @@ describe("lexer", (): void => {
           { kind: "punct", text: "{" },
           {
             kind: "doc-inner",
-            text: "* This is a comment\n* This is another comment with trailing whitespace",
+            text: "\n* This is a comment\n* This is another comment with trailing whitespace   \n",
           },
           { kind: "punct", text: "}" },
           { kind: "eof" },

@@ -1,11 +1,7 @@
-import {
-  isBlockComment,
-  isLineComment,
-  parseBlockComment,
-  parseLineComment,
-} from "./comments.js";
+import { isComment, parseComment } from "./comments.js";
 import { scanWhile } from "./scan-while.js";
 import type { Token, TokenKind } from "./token.js";
+import { isWhitespace } from "./whitespace.js";
 
 /**
  * The hard keywords (grammar appendix). Contextual keywords (`write`, `bind`,
@@ -49,10 +45,6 @@ const HARD_KEYWORDS: ReadonlySet<string> = new Set([
   "while",
 ]);
 
-function isWhitespace(ch: string): boolean {
-  return ch === " " || ch === "\t" || ch === "\n" || ch === "\r";
-}
-
 // NOTE: ASCII subset of ECMAScript IdentifierName for now; full Unicode
 // ID_Start / ID_Continue (grammar appendix) is a later refinement.
 function isIdentStart(ch: string): boolean {
@@ -94,15 +86,13 @@ export function tokenize(source: string): Token[] {
     if (ch === undefined) {
       break;
     }
-    if (isWhitespace(ch)) {
+    if (isWhitespace(source, i)) {
       i += 1;
       continue;
     }
     const start = i;
-    if (isLineComment(source, i)) {
-      i = parseLineComment(tokens, source, i + 2);
-    } else if (isBlockComment(source, i)) {
-      i = parseBlockComment(tokens, source, i + 2);
+    if (isComment(source, i)) {
+      i = parseComment(tokens, source, i);
     } else if (isIdentStart(ch)) {
       const end = scanWhile(source, i + 1, isIdentContinue);
       const text = source.slice(start, end);
