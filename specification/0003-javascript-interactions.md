@@ -26,7 +26,7 @@ export function greet(name: string): string {
 }
 
 function internal(name: string): string {
-    return greet(name);
+  return greet(name);
 }
 ```
 
@@ -77,10 +77,10 @@ can hide mutation behind ordinary-looking access:
 // A getter that mutates internal state would break Hedge's assumptions if the
 // object were passed directly into Hedge code.
 class SharedObject {
-    #value = 0;
-    get value() {
-        return this.#value++;
-    }
+  #value = 0;
+  get value() {
+    return this.#value++;
+  }
 }
 ```
 
@@ -135,7 +135,7 @@ read-only guarantee would be gone:
 
 ```ts
 const alice = hedgeProgram.get_by_name("Alice");
-alice.name = "Bob";   // no longer read-only
+alice.name = "Bob"; // no longer read-only
 ```
 
 ## Owned values with cleanup
@@ -146,7 +146,7 @@ that surrenders ownership and attaches a disposer, so the JavaScript side can
 release it with `using`:
 
 ```ts
-using file = hedge.openLog();   // Hedge's cleanup runs at end of scope
+using file = hedge.openLog(); // Hedge's cleanup runs at end of scope
 ```
 
 See [Drop & RAII](0007-drop-and-raii.md) for how this is generated.
@@ -169,6 +169,6 @@ unsafe fn query_selector(document: Document, selector: str) -> Element {
 
 ```ts
 export function query_selector(document: Document, selector: string): Element {
-    return document.querySelector(selector);
+  return document.querySelector(selector);
 }
 ```

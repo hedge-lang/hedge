@@ -10,15 +10,15 @@ capabilities, whether it may be mutated or reassigned.
 These states refine the execution model's single OWNED state into four owned
 variants by capability, so the full set a region may be in is:
 
-* **OWNED-READONLY**: exclusively owned, with neither mutation nor reassignment.
-* **OWNED-REBINDABLE**: exclusively owned, reassignment permitted.
-* **OWNED-WRITE**: exclusively owned, mutation permitted.
-* **OWNED-FULL**: exclusively owned, both mutation and reassignment permitted.
-* **SHARED**: one or more shared references (`&`) exist; neither mutation nor
+- **OWNED-READONLY**: exclusively owned, with neither mutation nor reassignment.
+- **OWNED-REBINDABLE**: exclusively owned, reassignment permitted.
+- **OWNED-WRITE**: exclusively owned, mutation permitted.
+- **OWNED-FULL**: exclusively owned, both mutation and reassignment permitted.
+- **SHARED**: one or more shared references (`&`) exist; neither mutation nor
   reassignment is permitted.
-* **EXCLUSIVE-BORROW**: one mutable reference (`&write`) exists; the owning
+- **EXCLUSIVE-BORROW**: one mutable reference (`&write`) exists; the owning
   binding is frozen until the borrow ends, and the owner must hold `write`.
-* **UNBOUND**: the value has been moved and can no longer be accessed.
+- **UNBOUND**: the value has been moved and can no longer be accessed.
 
 The invariant tying these together is that a region is either held exclusively —
 an OWNED variant, or a single `&write` borrow — or shared, but never both.

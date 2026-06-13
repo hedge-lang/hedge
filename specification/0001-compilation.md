@@ -44,7 +44,7 @@ let x = 1 + 2;
 
 parses to roughly
 
-```
+```txt
 LetBinding
  ├─ name: x
  └─ value: BinaryExpr(+)

@@ -23,7 +23,7 @@ This makes the borrow itself a compile-time lock for a uniquely-owned value:
 holding `&write` across an `await` excludes every other task from that region for
 the whole span (a mutex), and the read/write borrow split gives many-readers or
 one-writer (an RW-lock), all checked statically, with no runtime primitive. A
-*runtime* async lock is only needed for shared ownership, which is deferred along
+_runtime_ async lock is only needed for shared ownership, which is deferred along
 with interior mutability; when added it must be a non-blocking awaitable lock
 (its guard releases on `Drop` and yields `&write`), never a thread-style blocking
 one.

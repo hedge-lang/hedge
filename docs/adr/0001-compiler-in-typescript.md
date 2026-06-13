@@ -18,7 +18,7 @@ Write the compiler in TypeScript.
 
 - **Rust**: well-suited to compiler construction (sum types, performance,
   `chalk`/`oxc`/`swc`). Rejected as the bootstrap language because self-hosting
-  makes the *production* compiler JS/Node regardless, so Rust never reaches
+  makes the _production_ compiler JS/Node regardless, so Rust never reaches
   production and would mean implementing the hard parts (borrow checker, trait
   solver) twice, once in Rust and once in Hedge.
 - **OCaml/Haskell**: excellent for compilers, but an ecosystem mismatch with a

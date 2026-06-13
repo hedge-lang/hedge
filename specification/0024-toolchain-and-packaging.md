@@ -12,9 +12,9 @@ audiences.
 
 A published package contains three artifacts:
 
-* **Compiled JavaScript:** the runtime, for everyone.
-* **`.d.ts`:** for JavaScript and TypeScript consumers.
-* **Hedge metadata:** ownership, lifetime, and borrow signatures plus generic
+- **Compiled JavaScript:** the runtime, for everyone.
+- **`.d.ts`:** for JavaScript and TypeScript consumers.
+- **Hedge metadata:** ownership, lifetime, and borrow signatures plus generic
   bodies, for Hedge consumers.
 
 The third artifact is essential: a `.d.ts` is erased, so a Hedge package that
@@ -57,12 +57,12 @@ ecosystem with low ceremony.
 
 ## Debugging, testing, and runtime target
 
-* **Source maps** are emitted alongside the compiled JavaScript, so stack traces
+- **Source maps** are emitted alongside the compiled JavaScript, so stack traces
   and debuggers map back to Hedge source rather than generated code; this is part
   of code generation from the start, not an afterthought.
-* **Testing** is built into the toolchain: a `#[test]` attribute marks test functions
+- **Testing** is built into the toolchain: a `#[test]` attribute marks test functions
   and `hedge test` runs them, rather than relying on a separate JavaScript runner.
-* **Runtime target.** The generated code uses recent JavaScript features:
+- **Runtime target.** The generated code uses recent JavaScript features:
   `using`/`Symbol.dispose` (Drop), typed arrays, `BigInt`, `WeakMap`, and
   `FinalizationRegistry`. The minimum target is configurable,
   with downleveling or polyfills for older environments; the `using`/`Symbol.dispose`

@@ -6,7 +6,7 @@
 ## Context
 
 The spec has no worked examples with expected output, and the language's value is
-in *rejecting* bad programs. The test harness is also the means of validating
+in _rejecting_ bad programs. The test harness is also the means of validating
 self-hosting.
 
 ## Decision

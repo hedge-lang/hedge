@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    /* ===== Core correctness ===== */
+    "strict": true,
+    "noImplicitAny": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "useUnknownInCatchVariables": true,
+
+    /* ===== Runtime safety discipline ===== */
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noFallthroughCasesInSwitch": true,
+
+    /* ===== Module system ===== */
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+
+    /* ===== Output discipline ===== */
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+
+    /* Each package owns its own dist */
+    "outDir": "./dist",
+    "rootDir": "./src",
+
+    /* ===== Interop hygiene ===== */
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+
+    /* ===== Build ergonomics ===== */
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  }
+}

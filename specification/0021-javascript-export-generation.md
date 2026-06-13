@@ -46,12 +46,12 @@ export "js" area_of
 
 ## Values
 
-* Owned values handed out become plain JavaScript objects; Hedge gives up
+- Owned values handed out become plain JavaScript objects; Hedge gives up
   ownership (see [Safe/Unsafe Boundaries](0023-safe-unsafe-boundaries.md)).
-* `Option` maps to the value or `null`.
-* `Result` throws its `Err` synchronously, or rejects the returned promise for an
+- `Option` maps to the value or `null`.
+- `Result` throws its `Err` synchronously, or rejects the returned promise for an
   `async` function, and unwraps `Ok`.
-* An `async fn` is a `Promise`-returning function.
+- An `async fn` is a `Promise`-returning function.
 
 ## Guards
 

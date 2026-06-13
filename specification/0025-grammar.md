@@ -9,7 +9,7 @@ own it and this appendix only fixes its shape.
 
 Productions are written in EBNF:
 
-```
+```txt
 ::=        defines a production
 |          alternation
 ( )        grouping
@@ -32,7 +32,7 @@ semicolon insertion.
 
 ### Whitespace and comments
 
-```
+```txt
 LineComment  ::= "//" (* any character except newline *)*
 BlockComment ::= "/*" ( BlockComment | (* any character *) )* "*/"
 DocComment   ::= "///" (* to newline *) | "//!" (* to newline *)
@@ -46,7 +46,7 @@ module; both are otherwise ordinary comments that tooling may consume.
 An identifier is an ECMAScript `IdentifierName`, so every Hedge identifier is a
 valid JavaScript identifier and can be exported verbatim.
 
-```
+```txt
 Identifier   ::= RawIdentifier | IdentStart IdentContinue*
 IdentStart   ::= UnicodeIDStart | "_" | "$"
 IdentContinue::= UnicodeIDContinue | "$" | ZWNJ | ZWJ
@@ -64,7 +64,7 @@ error; rename it at the boundary with `as` (see [Modules](0018-modules.md) and
 Hard keywords are always reserved and may appear as identifiers only through the
 `r#` form:
 
-```
+```txt
 as     async  await  break  const  continue  dyn    else   enum
 export extern false  fn     for    if        impl   in     let
 loop   match  move   pub    return self  Self  static struct super
@@ -74,7 +74,7 @@ trait  true   type   unsafe use    where     while
 Contextual keywords are keywords only in their syntactic slot and are ordinary
 identifiers elsewhere (so `socket.write(buf)` and `fn test()` are valid):
 
-```
+```txt
 write  bind  package  unchecked
 ```
 
@@ -85,7 +85,7 @@ keywords.
 The following are reserved but unused, held back for diagnostics and future use.
 They are not valid identifiers except through `r#`:
 
-```
+```txt
 mut  mod  box  macro  yield
 ```
 
@@ -97,7 +97,7 @@ form keeps any such addition from breaking existing code.
 
 ### Literals
 
-```
+```txt
 Literal ::= IntLiteral | FloatLiteral | CharLiteral | StringLiteral | BoolLiteral
 
 BoolLiteral ::= "true" | "false"
@@ -122,7 +122,7 @@ and `.5` are not; this keeps `5.method()` an unambiguous method call. An
 unsuffixed integer literal defaults to `i32` and an unsuffixed float to `f64`
 (see [Primitive Types](0010-primitive-types.md)).
 
-```
+```txt
 CharLiteral ::= "'" ( CharChar | EscapeSeq ) "'"
 CharChar    ::= (* any character except "'", "\", or newline *)
 
@@ -143,7 +143,7 @@ An `${ Expression }` interpolation requires the expression to implement the
 format trait (`Display`) and lowers to a JavaScript template literal. A literal
 `${` is written `\${`. Raw strings take no escapes and no interpolation.
 
-```
+```txt
 Digit    ::= '0'..'9'
 HexDigit ::= '0'..'9' | 'a'..'f' | 'A'..'F'
 OctDigit ::= '0'..'7'
@@ -151,7 +151,7 @@ OctDigit ::= '0'..'7'
 
 ### Lifetimes and labels
 
-```
+```txt
 Lifetime ::= "'" Identifier   (* not immediately followed by "'" *)
 Label    ::= "'" Identifier ":"
 ```
@@ -167,22 +167,22 @@ and bit-and/multiply as infix; `|` is a closure or pattern delimiter by position
 and bit-or as infix. In expression context `<` is always comparison, so explicit
 type arguments to a value use the turbofish `::<...>`.
 
-| Prec | Operators                              | Associativity |
-| ---- | -------------------------------------- | ------------- |
-| 1    | `.` `()` `[]` `?` (postfix)            | left          |
-| 2    | `-` `!` `*` `&` `&write` (prefix)      | right         |
-| 3    | `*` `/` `%`                            | left          |
-| 4    | `+` `-`                                | left          |
-| 5    | `<<` `>>`                              | left          |
-| 6    | `&` (bit-and)                          | left          |
-| 7    | `^`                                    | left          |
-| 8    | `\|` (bit-or)                          | left          |
-| 9    | `==` `!=` `<` `>` `<=` `>=`            | none          |
-| 10   | `&&`                                   | left          |
-| 11   | `\|\|`                                 | left          |
-| 12   | `..` `..=`                             | none          |
-| 13   | `=` `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` | right |
-| 14   | closure body, `return`, `break`        | —             |
+| Prec | Operators                                                | Associativity |
+| ---- | -------------------------------------------------------- | ------------- |
+| 1    | `.` `()` `[]` `?` (postfix)                              | left          |
+| 2    | `-` `!` `*` `&` `&write` (prefix)                        | right         |
+| 3    | `*` `/` `%`                                              | left          |
+| 4    | `+` `-`                                                  | left          |
+| 5    | `<<` `>>`                                                | left          |
+| 6    | `&` (bit-and)                                            | left          |
+| 7    | `^`                                                      | left          |
+| 8    | `\|` (bit-or)                                            | left          |
+| 9    | `==` `!=` `<` `>` `<=` `>=`                              | none          |
+| 10   | `&&`                                                     | left          |
+| 11   | `\|\|`                                                   | left          |
+| 12   | `..` `..=`                                               | none          |
+| 13   | `=` `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` | right         |
+| 14   | closure body, `return`, `break`                          | —             |
 
 Comparison is non-associative, so `a < b < c` is a syntax error. Assignment is an
 expression of type `()`, so `if x = y { }` is a type error rather than a silent
@@ -193,7 +193,7 @@ the grammar allows.
 
 ### Items
 
-```
+```txt
 Item        ::= Attribute* Visibility? ItemKind
 Attribute   ::= "#[" Path ( "(" AttrArgs? ")" )? "]"
 AttrArgs    ::= AttrArg ( "," AttrArg )* ","?
@@ -250,7 +250,7 @@ linkage. The semantic constraints on `export`/`extern` are in
 
 ### Generics
 
-```
+```txt
 Generics     ::= "<" GenericParam ( "," GenericParam )* ","? ">"
 GenericParam ::= Lifetime | Identifier ( ":" TraitBounds )?
 TraitBounds  ::= TraitBound ( "+" TraitBound )*
@@ -261,7 +261,7 @@ WherePredicate ::= Type ":" TraitBounds
 
 ### Types
 
-```
+```txt
 Type ::= "&" Lifetime? "write"? Type
        | "[" Type ";" Expression "]"
        | "[" Type "]"
@@ -279,7 +279,7 @@ least one comma. `!` is the never type (see
 
 ### Patterns
 
-```
+```txt
 Pattern    ::= OrPattern
 OrPattern  ::= PatternNoAlt ( "|" PatternNoAlt )*
 PatternNoAlt ::= "_"
@@ -306,7 +306,7 @@ Binding modes, refutability, and exhaustiveness are specified in
 
 ### Statements and blocks
 
-```
+```txt
 Block        ::= "{" Statement* Expression? "}"
 Statement    ::= ";"
               | Item
@@ -325,7 +325,7 @@ statement. Binding capabilities are declared `bind` before `write`
 The expression grammar is layered by the precedence table above. The leaf and
 compound forms are:
 
-```
+```txt
 Expression ::= Literal
             | Path GenericArgs?
             | "(" ( Expression ( "," Expression )* ","? )? ")"   (* tuple / group *)
@@ -369,7 +369,7 @@ ClosureParam::= Pattern ( ":" Type )?
 
 ### Loops and labels
 
-```
+```txt
 LoopExpr    ::= Label? "loop" Block
 WhileExpr   ::= Label? ( "while" Expression | "while" "let" Pattern "=" Expression ) Block
 ForExpr     ::= Label? "for" Pattern "in" Expression Block
@@ -391,7 +391,7 @@ target any enclosing loop. See
 
 ### Paths
 
-```
+```txt
 Path        ::= "::"? PathSegment ( "::" PathSegment )*
 PathSegment ::= Identifier | "self" | "super" | "Self"
 ```

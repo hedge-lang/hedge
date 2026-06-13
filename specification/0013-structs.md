@@ -80,7 +80,7 @@ impl Point {
 A receiver composes from the borrow and capability vocabulary:
 
 | Receiver      | Meaning                      |
-|---------------|------------------------------|
+| ------------- | ---------------------------- |
 | `self`        | consume (move in), read-only |
 | `write self`  | consume (move in), writable  |
 | `&self`       | shared (read) borrow         |

@@ -10,7 +10,7 @@ Names are emitted as written, with no case conversion.
 ## Type mapping
 
 | Hedge                                            | TypeScript                                                     |
-|--------------------------------------------------|----------------------------------------------------------------|
+| ------------------------------------------------ | -------------------------------------------------------------- |
 | `bool`                                           | `boolean`                                                      |
 | `i8`–`i32`, `u8`–`u32`, `usize`, `isize`         | `number`                                                       |
 | `i64`, `u64`                                     | `bigint`                                                       |
@@ -45,7 +45,10 @@ declaration. See [Safe/Unsafe Boundaries](0023-safe-unsafe-boundaries.md).
 A struct becomes an `interface` of its public fields:
 
 ```ts
-interface Point { x: number; y: number }
+interface Point {
+  x: number;
+  y: number;
+}
 ```
 
 An enum becomes a discriminated union:

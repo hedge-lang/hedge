@@ -1,0 +1,10 @@
+{
+  "name": "@hedge-lang/stdlib",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Hedge standard library, written in Hedge and compiled by the Hedge compiler. Populated from slice 5 onward (see ROADMAP.md).",
+  "scripts": {
+    "build": "echo \"stdlib is compiled by the Hedge compiler (slice 5+); nothing to build yet\"",
+    "check": "echo \"stdlib has no checks yet\""
+  }
+}

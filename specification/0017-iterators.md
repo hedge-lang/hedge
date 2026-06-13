@@ -14,9 +14,9 @@ trait Iterator {
 
 A `for` loop consumes anything that implements `IntoIterator`, in three flavors:
 
-* `for x in v` consumes `v` (`x: T`),
-* `for x in &v` borrows it shared (`x: &T`),
-* `for x in &write v` borrows it exclusively (`x: &write T`).
+- `for x in v` consumes `v` (`x: T`),
+- `for x in &v` borrows it shared (`x: &T`),
+- `for x in &write v` borrows it exclusively (`x: &write T`).
 
 `for x in iter { body }` desugars to repeated `next()` calls until `None`.
 

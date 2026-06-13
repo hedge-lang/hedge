@@ -20,10 +20,10 @@ if (r > 2147483647 || r < -2147483648) throw new HedgePanic("i32 overflow");
 
 For a defined out-of-range result, use the explicit method families:
 
-* `wrapping_add`, `wrapping_mul`, and so on wrap around the type's width.
-* `saturating_add` and its kin clamp to the type's bounds.
-* `checked_add` and its kin return `Option`, yielding `None` on overflow.
-* `overflowing_add` and its kin return a `(value, overflowed)` pair.
+- `wrapping_add`, `wrapping_mul`, and so on wrap around the type's width.
+- `saturating_add` and its kin clamp to the type's bounds.
+- `checked_add` and its kin return `Option`, yielding `None` on overflow.
+- `overflowing_add` and its kin return a `(value, overflowed)` pair.
 
 A check is never silently dropped, so a debug build and a release build behave
 identically. The compiler removes a check only when it can prove the check can

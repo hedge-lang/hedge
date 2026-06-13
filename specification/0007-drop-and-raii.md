@@ -32,7 +32,7 @@ cleanup at the end of the scope, including when the scope exits through a thrown
 error:
 
 ```ts
-using a = File.open("a");   // a[Symbol.dispose]() runs on the way out
+using a = File.open("a"); // a[Symbol.dispose]() runs on the way out
 ```
 
 ## Conditional moves

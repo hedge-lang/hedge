@@ -1,0 +1,41 @@
+{
+  "name": "hedge-lang",
+  "private": true,
+  "workspaces": [
+    "toolchain/*",
+    "stdlib"
+  ],
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"No tests configured yet\" && exit 0",
+    "build": "npm -ws run build",
+    "clean": "rimraf node_modules toolchain/**/dist stdlib/dist",
+    "check": "npm-run-all --parallel --print-label --continue-on-error --print-name build check:*",
+    "check:ws": "npm -ws run check",
+    "check:lint": "eslint --max-warnings=0 .",
+    "check:types": "tsc --noEmit",
+    "check:format": "prettier --check .",
+    "check:deps": "knip",
+    "fix": "npm-run-all --print-label --print-name fix:*",
+    "fix:lint": "eslint --fix --max-warnings=0 .",
+    "fix:format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@eslint/json": "^2.0.0",
+    "@eslint/markdown": "^8.0.2",
+    "eslint": "^10.5.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-boundaries": "^6.0.2",
+    "jsonc-eslint-parser": "^3.1.0",
+    "knip": "^6.16.1",
+    "npm-run-all2": "^8.0.4",
+    "prettier": "^3.8.4",
+    "rimraf": "^6.1.3",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.61.0",
+    "vitest": "^4.1.8"
+  }
+}

@@ -39,7 +39,7 @@ How a closure captures determines how it may be called, paralleling method
 receivers:
 
 | Captures                       | Trait     | Call receiver |
-|--------------------------------|-----------|---------------|
+| ------------------------------ | --------- | ------------- |
 | only `&` (or `Copy`)           | `Fn`      | `&self`       |
 | any `&write`                   | `FnWrite` | `&write self` |
 | anything by move (consumes it) | `FnOnce`  | `self`        |

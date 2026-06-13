@@ -7,14 +7,14 @@ such region.
 
 At any point a region is in exactly one of four states:
 
-* **OWNED**: the region is reachable through a single binding, subdivided by
+- **OWNED**: the region is reachable through a single binding, subdivided by
   capability in [Mutability](0004-mutability.md).
-* **SHARED**: one or more immutable references (`&`) refer to the region, and no
+- **SHARED**: one or more immutable references (`&`) refer to the region, and no
   binding may mutate it while they live.
-* **EXCLUSIVE-BORROW**: a single mutable reference (`&write`) holds the region,
+- **EXCLUSIVE-BORROW**: a single mutable reference (`&write`) holds the region,
   the owning binding is frozen, and the reference is the only path to the value
   until the borrow ends.
-* **UNBOUND**: the region has been moved or invalidated and can no longer be
+- **UNBOUND**: the region has been moved or invalidated and can no longer be
   accessed.
 
 A region's state determines what may be done with it: whether its value may be

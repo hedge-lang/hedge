@@ -88,10 +88,10 @@ link in its `source()` chain, so the chain reads as idiomatic nested JS errors.
 Inside Hedge, errors are values. Across an `export "js"` boundary they take the
 shape JavaScript expects:
 
-* A returned `Result` throws its `Err` synchronously, or rejects the promise for
+- A returned `Result` throws its `Err` synchronously, or rejects the promise for
   an `async` function, and unwraps `Ok` to the plain value, the idiomatic
   JavaScript error handling.
-* `Option` maps to the value or `null`: `Some(x)` becomes `x`, `None` becomes
+- `Option` maps to the value or `null`: `Some(x)` becomes `x`, `None` becomes
   `null`.
 
 A consumer that wants errors as values instead of exceptions can opt into the

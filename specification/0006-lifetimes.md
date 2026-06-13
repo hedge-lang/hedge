@@ -62,15 +62,15 @@ type uses each parameter; it is never annotated. A position is covariant when a
 longer lifetime may be supplied where a shorter one is expected, contravariant
 when only a shorter one may, and invariant when neither substitution is sound.
 
-* `&'a T` is covariant in both `'a` and `T`.
-* `&'a write T` is covariant in `'a` but invariant in `T`. This is the
+- `&'a T` is covariant in both `'a` and `T`.
+- `&'a write T` is covariant in `'a` but invariant in `T`. This is the
   load-bearing case: were a mutable borrow covariant in `T`, a shorter-lived
   reference could be stored through it into a longer-lived slot.
-* Owned containers and structs are covariant in their parameters where those
+- Owned containers and structs are covariant in their parameters where those
   parameters are used covariantly, with a type's variance derived field by field.
-* Function types are covariant in their return and contravariant in their
+- Function types are covariant in their return and contravariant in their
   arguments.
-* Interior-mutability types, once added, are invariant.
+- Interior-mutability types, once added, are invariant.
 
 Variance is a purely compile-time property, unaffected by the JavaScript target
 because lifetimes are erased. It still matters under garbage collection: unsound

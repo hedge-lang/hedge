@@ -29,7 +29,7 @@ allocator to manage, since the runtime reclaims memory; a guarded boundary to
 untrusted JS; and no WASM layer to design around. Borrowing lives in a function's signature, never in
 its body, so a type's rules can be read without reading its code.
 
-# Design Principles
+## Design Principles
 
 1. [Compilation](0001-compilation.md)
 2. [Execution Model](0002-execution-model.md)
@@ -57,22 +57,22 @@ its body, so a type's rules can be read without reading its code.
 
 Deferred/Considered:
 
-* Macros
-* Compile-time code generation
-* Generic associated types (GATs)
-* Trait specialization (overlapping impls)
-* Const generics
-* Interior mutability
-* Async mutex / RW-lock (for shared state, with interior mutability)
-* Shared-memory numeric buffers (SharedArrayBuffer) with atomics
-* User-defined unsafe blocks
-* Custom allocators
-* Pinning
+- Macros
+- Compile-time code generation
+- Generic associated types (GATs)
+- Trait specialization (overlapping impls)
+- Const generics
+- Interior mutability
+- Async mutex / RW-lock (for shared state, with interior mutability)
+- Shared-memory numeric buffers (SharedArrayBuffer) with atomics
+- User-defined unsafe blocks
+- Custom allocators
+- Pinning
 
 ## Beyond the Language
 
-* [Toolchain & Packaging](0024-toolchain-and-packaging.md)
+- [Toolchain & Packaging](0024-toolchain-and-packaging.md)
 
 ## Appendix
 
-* [Grammar](0025-grammar.md)
+- [Grammar](0025-grammar.md)

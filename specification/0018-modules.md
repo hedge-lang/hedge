@@ -18,9 +18,9 @@ maps to an npm package on output.
 
 Items are private to their module by default. Three levels:
 
-* *(default)*: visible only within the defining module.
-* `pub(package)`: visible to other modules in the same package.
-* `pub`: visible to any module that can reach this one, including other
+- _(default)_: visible only within the defining module.
+- `pub(package)`: visible to other modules in the same package.
+- `pub`: visible to any module that can reach this one, including other
   packages.
 
 Module visibility is separate from the JavaScript boundary. `pub` controls what

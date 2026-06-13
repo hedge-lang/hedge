@@ -29,6 +29,6 @@ until the language is usable.
 
 ## Consequences
 
-- A single normative source (the spec), with the *why* in ADRs and exploration in
+- A single normative source (the spec), with the _why_ in ADRs and exploration in
   design notes.
 - Dual MIT/Apache-2.0 license chosen while sole authorship makes it free to set.

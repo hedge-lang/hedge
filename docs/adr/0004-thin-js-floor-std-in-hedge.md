@@ -29,7 +29,7 @@ compile it.
 ## Consequences
 
 - The JS surface stays minimal; std-in-Hedge is the single source of truth.
-- This is the feasible path that *converges on* a pure-Hedge end state rather than a
+- This is the feasible path that _converges on_ a pure-Hedge end state rather than a
   detour from it.
 - The trusted intrinsic layer is distinct from the untrusted, primitive-only user
   `extern "js"` boundary.

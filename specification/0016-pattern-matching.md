@@ -8,11 +8,11 @@ function parameters.
 
 The form of the scrutinee sets the default mode for the bindings in its patterns:
 
-* `match x { … }` binds from an owned scrutinee, so bindings **move** out (a
+- `match x { … }` binds from an owned scrutinee, so bindings **move** out (a
   partial move of `x`; Copy types copy).
-* `match &x { … }` matches a read-borrow, so bindings are **read-borrows**; `x`
+- `match &x { … }` matches a read-borrow, so bindings are **read-borrows**; `x`
   is untouched.
-* `match &write x { … }` matches a write-borrow, so bindings are
+- `match &write x { … }` matches a write-borrow, so bindings are
   **write-borrows**; `x` must hold `write`.
 
 Pattern bindings use the same vocabulary as `let`: `name` is read-only,
@@ -36,8 +36,8 @@ A `match` must cover every possible value, or it is a compile error;
 exhaustiveness is the point of having sum types. `_` is the catch-all that closes
 a match.
 
-* An arm that can never match (already covered by earlier arms) is an error.
-* A guarded arm (`pattern if cond`) does not count toward exhaustiveness, since
+- An arm that can never match (already covered by earlier arms) is an error.
+- A guarded arm (`pattern if cond`) does not count toward exhaustiveness, since
   it is conditional; an unguarded arm or `_` must still cover its pattern.
 
 An enum marked `#[non_exhaustive]` (see [Enums](0014-enums.md)) is open to future
@@ -66,20 +66,20 @@ patterns over it are refutable.
 
 ## Pattern kinds
 
-* **Literals:** numbers, bools, chars, strings, and named constants.
-* **Wildcard:** `_`.
-* **Bindings:** `name`, with the capability sigils above.
-* **Structs:** `Point { x, y }`, shorthand fields, `Point { x, .. }`.
-* **Tuples and tuple structs:** `(a, b)`, `Pair(a, b)`.
-* **Enum variants:** `Some(x)`, `Message::Move(a, b)`, `Message::Quit`.
-* **Or-patterns:** `1 | 2 | 3`, `Ok(x) | Recovered(x)`. Every alternative must
+- **Literals:** numbers, bools, chars, strings, and named constants.
+- **Wildcard:** `_`.
+- **Bindings:** `name`, with the capability sigils above.
+- **Structs:** `Point { x, y }`, shorthand fields, `Point { x, .. }`.
+- **Tuples and tuple structs:** `(a, b)`, `Pair(a, b)`.
+- **Enum variants:** `Some(x)`, `Message::Move(a, b)`, `Message::Quit`.
+- **Or-patterns:** `1 | 2 | 3`, `Ok(x) | Recovered(x)`. Every alternative must
   bind the same names with the same types and modes.
-* **Ranges:** inclusive only, `1..=5`, `'a'..='z'`.
-* **`@` bindings:** `n @ 1..=5` binds `n` while testing the subpattern.
-* **Slices:** `[first, .., last]`, `[head, ..tail]`. A borrowing rest binding
+- **Ranges:** inclusive only, `1..=5`, `'a'..='z'`.
+- **`@` bindings:** `n @ 1..=5` binds `n` while testing the subpattern.
+- **Slices:** `[first, .., last]`, `[head, ..tail]`. A borrowing rest binding
   borrows a contiguous sub-slice; it does not yield independently writable
   elements.
-* **Guards:** `pattern if cond`.
+- **Guards:** `pattern if cond`.
 
 There is no separate reference pattern. The scrutinee form already drives binding
 modes, and `&`/`&write` in a pattern mean "bind by borrow"; a second meaning for

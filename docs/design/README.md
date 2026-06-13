@@ -1,6 +1,6 @@
 # Design notes
 
-Design notes are *just-in-time* working documents. A note is written when its
+Design notes are _just-in-time_ working documents. A note is written when its
 slice (see [`ROADMAP.md`](../../ROADMAP.md)) is reached, never before, to avoid
 specifying ahead of implementation. The design is worked out here against real
 code; once it settles, the normative content **graduates into the
@@ -14,7 +14,7 @@ note.
 ## Pending notes (write when the slice needs them)
 
 | Note                                                     | Needed by                   | Status      |
-|----------------------------------------------------------|-----------------------------|-------------|
+| -------------------------------------------------------- | --------------------------- | ----------- |
 | Diagnostics model and renderer                           | before Slice 1              | Not started |
 | Witness / `dyn Trait` / closure runtime ABI              | Slice 4 (generics & traits) | Not started |
 | Operator → trait mapping table                           | Slice 5–6                   | Not started |
