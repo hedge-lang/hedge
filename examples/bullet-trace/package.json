@@ -1,0 +1,12 @@
+{
+  "name": "@hedge-lang/example.bullet-trace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "hedge build src/bullet-trace.hed",
+    "start": "node src/bullet-trace.js"
+  },
+  "dependencies": {
+    "@hedge-lang/cli": "*"
+  }
+}
