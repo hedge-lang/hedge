@@ -11,7 +11,7 @@
   },
   "scripts": {
     "build": "tsc -b tsconfig.json",
-    "check": "tsc -b --noEmit tsconfig.json"
+    "check": "tsc --noEmit -p tsconfig.check.json"
   },
   "dependencies": {
     "@hedge-lang/compiler": "*"
