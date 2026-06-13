@@ -3,6 +3,18 @@ import { parse } from "./parser.js";
 import { tokenize } from "../lexer/lexer.js";
 
 describe("parser", (): void => {
+    it("parses a string literal", (): void => {
+        const tokens = tokenize('"Hello, world!"');
+        const ast = parse(tokens);
+        expect(ast).toMatchObject({
+            kind: "Program",
+            items: [{
+                kind: "StringLiteral",
+                value: "Hello, world!",
+            }]
+        });
+    });
+
     it("parses the tracer bullet", (): void => {
         const tokens = tokenize(`
           fn main() {
