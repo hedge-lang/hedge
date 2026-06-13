@@ -12,6 +12,9 @@ export { checkBorrows } from "./ownership/borrowck.js";
 
 export { optimize } from "./optimization/optimizer.js";
 
+export { generate } from "./codegen/generator.js";
+export type { Code } from "./codegen/output.js";
+
 export function version(): string {
   return "0.0.0";
 }
