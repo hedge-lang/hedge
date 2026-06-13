@@ -8,6 +8,8 @@ export { analyze } from "./semantics/analyzer.js";
 export type { AnalysisResult } from "./semantics/analyzer.js";
 export type { Diagnostic } from "./diagnostics.js";
 
+export { checkBorrows } from "./ownership/borrowck.js";
+
 export function version(): string {
   return "0.0.0";
 }
