@@ -10,6 +10,8 @@ export type { Diagnostic } from "./diagnostics.js";
 
 export { checkBorrows } from "./ownership/borrowck.js";
 
+export { optimize } from "./optimization/optimizer.js";
+
 export function version(): string {
   return "0.0.0";
 }
