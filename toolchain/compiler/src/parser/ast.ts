@@ -1,3 +1,5 @@
+import type { Option } from "../option.js";
+
 /** Every AST node carries the index of the token that begins it. */
 export interface AstNode {
   readonly tokenId: number;
@@ -6,6 +8,14 @@ export interface AstNode {
 export interface Program {
   readonly kind: "Program";
   readonly items: Item[];
+}
+
+export interface Attribute {
+  readonly kind: "Attribute";
+  readonly name: Identifier;
+  readonly arguments: Option<
+    { path: Option<Path>; literal: Option<StringLiteral | IntLiteral> }[]
+  >;
 }
 
 /** A top-level entry. Slice 1 is lenient and also accepts bare statements. */

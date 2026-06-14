@@ -6,6 +6,6 @@
  * unconsumed token.
  */
 export interface Parsed<T> {
-    readonly node: T;
-    readonly next: number;
+  readonly node: T;
+  readonly next: number;
 }
