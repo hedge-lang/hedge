@@ -162,3 +162,156 @@ describe("parser", (): void => {
     });
   });
 });
+
+describe("attributes", (): void => {
+  it("parses a marker attribute on a function (no argument list)", (): void => {
+    const tokens = tokenize("#[test] fn f() {}");
+    const ast = parse(tokens);
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          attributes: [
+            {
+              kind: "Attribute",
+              name: { absolute: false, segments: ["test"] },
+              arguments: { kind: "None" },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses path arguments with a trailing comma", (): void => {
+    const tokens = tokenize("#[derive(Clone, Debug,)] fn f() {}");
+    const ast = parse(tokens);
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          attributes: [
+            {
+              kind: "Attribute",
+              name: { segments: ["derive"] },
+              arguments: {
+                kind: "Some",
+                value: [
+                  { kind: "Path", path: { segments: ["Clone"] } },
+                  { kind: "Path", path: { segments: ["Debug"] } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("distinguishes an empty argument list from none", (): void => {
+    const tokens = tokenize("#[derive()] fn f() {}");
+    const ast = parse(tokens);
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          attributes: [{ arguments: { kind: "Some", value: [] } }],
+        },
+      ],
+    });
+  });
+
+  it("parses a key-value argument", (): void => {
+    const tokens = tokenize('#[cfg(target = "wasm")] fn f() {}');
+    const ast = parse(tokens);
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          attributes: [
+            {
+              name: { segments: ["cfg"] },
+              arguments: {
+                kind: "Some",
+                value: [
+                  {
+                    kind: "KeyValue",
+                    path: { segments: ["target"] },
+                    literal: { kind: "StringLiteral", value: "wasm" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("lowers a doc comment into a doc attribute", (): void => {
+    const tokens = tokenize("/// Greeting\nfn f() {}");
+    const ast = parse(tokens);
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          attributes: [
+            {
+              name: { segments: ["doc"] },
+              arguments: {
+                kind: "Some",
+                value: [
+                  {
+                    kind: "Literal",
+                    literal: { kind: "StringLiteral", value: "Greeting" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("attaches an attribute to a top-level let statement", (): void => {
+    const tokens = tokenize("#[attr] let x = 1;");
+    const ast = parse(tokens);
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "LetStatement",
+          attributes: [{ name: { segments: ["attr"] } }],
+        },
+      ],
+    });
+  });
+
+  it("attaches an attribute to a let statement inside a block", (): void => {
+    const tokens = tokenize("fn f() { #[attr] let x = 1; }");
+    const ast = parse(tokens);
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: {
+            statements: [
+              {
+                kind: "LetStatement",
+                attributes: [{ name: { segments: ["attr"] } }],
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("rejects an attribute with no path", (): void => {
+    expect(() => parse(tokenize("#[] fn f() {}"))).toThrow(SyntaxError);
+  });
+
+  it("rejects an attribute on a bare expression", (): void => {
+    expect(() => parse(tokenize("#[attr] foo();"))).toThrow(SyntaxError);
+  });
+});

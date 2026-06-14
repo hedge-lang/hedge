@@ -1,5 +1,7 @@
 import type { Token } from "../lexer/token.js";
 import type {
+  AttrArg,
+  Attribute,
   BindingPattern,
   Block,
   CallExpression,
@@ -7,13 +9,17 @@ import type {
   ExpressionStatement,
   FunctionDecl,
   Identifier,
+  IntLiteral,
   Item,
   LetStatement,
+  Path,
   PathExpression,
   Program,
   ReferenceExpression,
   Statement,
+  StringLiteral,
 } from "./ast.js";
+import { type Option, none, some } from "../option.js";
 
 /**
  * Result of a successful parse operation.
@@ -144,6 +150,175 @@ function parsePath(
     path: { absolute: false, segments: [ident.node.text] },
   };
   return { node: pathExpr, next: ident.next };
+}
+
+/**
+ * Parses a bare {@link Path} (without wrapping it in a path expression).
+ *
+ * Used by attribute parsing, where the grammar's `Attribute` and `AttrArg`
+ * productions reference `Path` directly. Single-segment only in slice 1.
+ */
+function parsePathNode(tokens: readonly Token[], pos: number): Parsed<Path> {
+  const ident = parseIdentifier(tokens, pos);
+  return {
+    node: { absolute: false, segments: [ident.node.text] },
+    next: ident.next,
+  };
+}
+
+/**
+ * @returns `true` if an attribute (`#[`) begins at {@link pos}.
+ *
+ * The lexer emits `#` and `[` as two separate punctuation tokens, so the start
+ * of an attribute is a `#` immediately followed by a `[`.
+ */
+function looksLikeAttribute(tokens: readonly Token[], pos: number): boolean {
+  return (
+    isPunct(tokenAt(tokens, pos), "#") && isPunct(tokenAt(tokens, pos + 1), "[")
+  );
+}
+
+/**
+ * Parses a string or integer literal as an attribute argument value.
+ *
+ * @throws SyntaxError if the token is neither a string nor an integer literal.
+ */
+function parseAttrLiteral(
+  tokens: readonly Token[],
+  pos: number,
+): Parsed<StringLiteral | IntLiteral> {
+  const token = tokenAt(tokens, pos);
+  if (token.kind === "string") {
+    const literal: StringLiteral = {
+      kind: "StringLiteral",
+      tokenId: pos,
+      value: token.text,
+    };
+    return { node: literal, next: pos + 1 };
+  }
+  if (token.kind === "int") {
+    const literal: IntLiteral = {
+      kind: "IntLiteral",
+      tokenId: pos,
+      text: token.text,
+    };
+    return { node: literal, next: pos + 1 };
+  }
+  throw new SyntaxError(
+    `Expected a literal, found "${token.text}" at offset ${token.span.start}`,
+  );
+}
+
+/**
+ * Parses a single attribute argument.
+ *
+ * Grammar:
+ *
+ * ```text
+ * AttrArg ::= Path | Literal | Path "=" Literal
+ * ```
+ */
+function parseAttrArg(tokens: readonly Token[], pos: number): Parsed<AttrArg> {
+  const token = tokenAt(tokens, pos);
+  if (token.kind === "string" || token.kind === "int") {
+    const literal = parseAttrLiteral(tokens, pos);
+    return {
+      node: { kind: "Literal", literal: literal.node },
+      next: literal.next,
+    };
+  }
+  const path = parsePathNode(tokens, pos);
+  if (isPunct(tokenAt(tokens, path.next), "=")) {
+    const literal = parseAttrLiteral(tokens, path.next + 1);
+    return {
+      node: { kind: "KeyValue", path: path.node, literal: literal.node },
+      next: literal.next,
+    };
+  }
+  return { node: { kind: "Path", path: path.node }, next: path.next };
+}
+
+/**
+ * Parses a parenthesized attribute argument list.
+ *
+ * Grammar:
+ *
+ * ```text
+ * AttrArgs ::= AttrArg ("," AttrArg)* ","?
+ * ```
+ *
+ * Assumes the opening `(` is at {@link pos}; returns after the closing `)`.
+ */
+function parseAttrArgs(
+  tokens: readonly Token[],
+  pos: number,
+): Parsed<AttrArg[]> {
+  let cursor = expectPunct(tokens, pos, "(");
+  const args: AttrArg[] = [];
+  while (!isPunct(tokenAt(tokens, cursor), ")")) {
+    const arg = parseAttrArg(tokens, cursor);
+    args.push(arg.node);
+    cursor = arg.next;
+    if (!isPunct(tokenAt(tokens, cursor), ",")) {
+      break;
+    }
+    cursor += 1;
+  }
+  return { node: args, next: expectPunct(tokens, cursor, ")") };
+}
+
+/**
+ * Parses a single attribute.
+ *
+ * Grammar:
+ *
+ * ```text
+ * Attribute ::= "#[" Path ("(" AttrArgs? ")")? "]"
+ * ```
+ *
+ * Doc comments are lowered by the lexer into `#[doc("...")]` token sequences,
+ * so they flow through here as ordinary `doc` attributes.
+ */
+function parseAttribute(
+  tokens: readonly Token[],
+  pos: number,
+): Parsed<Attribute> {
+  const start = pos;
+  let cursor = expectPunct(tokens, pos, "#");
+  cursor = expectPunct(tokens, cursor, "[");
+  const name = parsePathNode(tokens, cursor);
+  cursor = name.next;
+  let args: Option<AttrArg[]> = none();
+  if (isPunct(tokenAt(tokens, cursor), "(")) {
+    const parsed = parseAttrArgs(tokens, cursor);
+    args = some(parsed.node);
+    cursor = parsed.next;
+  }
+  cursor = expectPunct(tokens, cursor, "]");
+  const attribute: Attribute = {
+    kind: "Attribute",
+    tokenId: start,
+    name: name.node,
+    arguments: args,
+  };
+  return { node: attribute, next: cursor };
+}
+
+/**
+ * Parses zero or more leading attributes (`Attribute*`).
+ */
+function parseAttributes(
+  tokens: readonly Token[],
+  pos: number,
+): Parsed<Attribute[]> {
+  const attributes: Attribute[] = [];
+  let cursor = pos;
+  while (looksLikeAttribute(tokens, cursor)) {
+    const attribute = parseAttribute(tokens, cursor);
+    attributes.push(attribute.node);
+    cursor = attribute.next;
+  }
+  return { node: attributes, next: cursor };
 }
 
 /**
@@ -343,6 +518,7 @@ function parseBindingPattern(
 function parseLetStatement(
   tokens: readonly Token[],
   pos: number,
+  attributes: Attribute[] = [],
 ): Parsed<LetStatement> {
   const start = pos;
   let cursor = expectKeyword(tokens, pos, "let");
@@ -368,6 +544,7 @@ function parseLetStatement(
   const letStmt: LetStatement = {
     kind: "LetStatement",
     tokenId: start,
+    attributes,
     bind,
     write,
     pattern: pattern.node,
@@ -422,14 +599,23 @@ function parseBlock(tokens: readonly Token[], pos: number): Parsed<Block> {
   const statements: Statement[] = [];
   let trailing: Expression | null = null;
   while (!isPunct(tokenAt(tokens, cursor), "}")) {
-    const token = tokenAt(tokens, cursor);
+    const { node: attributes, next: afterAttrs } = parseAttributes(
+      tokens,
+      cursor,
+    );
+    const token = tokenAt(tokens, afterAttrs);
     if (token.kind === "keyword" && token.text === "let") {
-      const letParsed = parseLetStatement(tokens, cursor);
+      const letParsed = parseLetStatement(tokens, afterAttrs, attributes);
       statements.push(letParsed.node);
       cursor = letParsed.next;
       continue;
     }
-    const parsed = parseExpression(tokens, cursor);
+    if (attributes.length > 0) {
+      throw new SyntaxError(
+        `Attributes are not allowed here, found "${token.text}" at offset ${token.span.start}`,
+      );
+    }
+    const parsed = parseExpression(tokens, afterAttrs);
     cursor = parsed.next;
     if (isPunct(tokenAt(tokens, cursor), ";")) {
       statements.push(expressionStatement(parsed.node));
@@ -467,6 +653,7 @@ function parseBlock(tokens: readonly Token[], pos: number): Parsed<Block> {
 function parseFunction(
   tokens: readonly Token[],
   pos: number,
+  attributes: Attribute[] = [],
 ): Parsed<FunctionDecl> {
   const start = pos;
   const afterFn = expectKeyword(tokens, pos, "fn");
@@ -477,6 +664,7 @@ function parseFunction(
   const fn: FunctionDecl = {
     kind: "Function",
     tokenId: start,
+    attributes,
     name: name.node,
     generics: [],
     params: [],
@@ -498,14 +686,20 @@ function parseFunction(
  * - Bare expressions
  */
 function parseItem(tokens: readonly Token[], pos: number): Parsed<Item> {
-  const token = tokenAt(tokens, pos);
+  const { node: attributes, next: cursor } = parseAttributes(tokens, pos);
+  const token = tokenAt(tokens, cursor);
   if (token.kind === "keyword" && token.text === "fn") {
-    return parseFunction(tokens, pos);
+    return parseFunction(tokens, cursor, attributes);
   }
   if (token.kind === "keyword" && token.text === "let") {
-    return parseLetStatement(tokens, pos);
+    return parseLetStatement(tokens, cursor, attributes);
   }
-  const parsed = parseExpression(tokens, pos);
+  if (attributes.length > 0) {
+    throw new SyntaxError(
+      `Attributes are not allowed here, found "${token.text}" at offset ${token.span.start}`,
+    );
+  }
+  const parsed = parseExpression(tokens, cursor);
   if (isPunct(tokenAt(tokens, parsed.next), ";")) {
     return { node: expressionStatement(parsed.node), next: parsed.next + 1 };
   }

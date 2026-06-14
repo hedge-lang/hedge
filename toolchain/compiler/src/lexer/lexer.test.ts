@@ -241,4 +241,48 @@ describe("lexer", (): void => {
       });
     });
   });
+
+  describe("attributes", () => {
+    it("tokenizes #[derive(Clone)] as discrete punctuation and identifiers", () => {
+      const tokens = tokenize("#[derive(Clone)] fn f() {}");
+
+      expect(tokens).toMatchObject([
+        { kind: "punct", text: "#" },
+        { kind: "punct", text: "[" },
+        { kind: "ident", text: "derive" },
+        { kind: "punct", text: "(" },
+        { kind: "ident", text: "Clone" },
+        { kind: "punct", text: ")" },
+        { kind: "punct", text: "]" },
+        { kind: "keyword", text: "fn" },
+        { kind: "ident", text: "f" },
+        { kind: "punct", text: "(" },
+        { kind: "punct", text: ")" },
+        { kind: "punct", text: "{" },
+        { kind: "punct", text: "}" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("lowers a single-line doc comment into a #[doc(...)] sequence", () => {
+      const tokens = tokenize("/// Greeting\nfn f() {}");
+
+      expect(tokens).toMatchObject([
+        { kind: "punct", text: "#" },
+        { kind: "punct", text: "[" },
+        { kind: "ident", text: "doc" },
+        { kind: "punct", text: "(" },
+        { kind: "string", text: "Greeting" },
+        { kind: "punct", text: ")" },
+        { kind: "punct", text: "]" },
+        { kind: "keyword", text: "fn" },
+        { kind: "ident", text: "f" },
+        { kind: "punct", text: "(" },
+        { kind: "punct", text: ")" },
+        { kind: "punct", text: "{" },
+        { kind: "punct", text: "}" },
+        { kind: "eof" },
+      ]);
+    });
+  });
 });

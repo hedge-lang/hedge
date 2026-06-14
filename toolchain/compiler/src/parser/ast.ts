@@ -10,13 +10,28 @@ export interface Program {
   readonly items: Item[];
 }
 
-export interface Attribute {
+export interface Attribute extends AstNode {
   readonly kind: "Attribute";
-  readonly name: Identifier;
-  readonly arguments: Option<
-    { path: Option<Path>; literal: Option<StringLiteral | IntLiteral> }[]
-  >;
+  readonly name: Path;
+  /**
+   * `None` when the attribute has no argument list (`#[derive]`); `Some([])`
+   * for an empty list (`#[derive()]`).
+   */
+  readonly arguments: Option<AttrArg[]>;
 }
+
+/**
+ * A single attribute argument. Mirrors the grammar's three alternatives:
+ * `AttrArg ::= Path | Literal | Path "=" Literal`.
+ */
+export type AttrArg =
+  | { readonly kind: "Path"; readonly path: Path }
+  | { readonly kind: "Literal"; readonly literal: StringLiteral | IntLiteral }
+  | {
+      readonly kind: "KeyValue";
+      readonly path: Path;
+      readonly literal: StringLiteral | IntLiteral;
+    };
 
 /** A top-level entry. Slice 1 is lenient and also accepts bare statements. */
 export type Item = FunctionDecl | Statement | Expression;
@@ -32,6 +47,7 @@ export type Expression =
 
 export interface FunctionDecl extends AstNode {
   readonly kind: "Function";
+  readonly attributes: Attribute[];
   readonly name: Identifier;
   readonly generics: readonly never[];
   readonly params: readonly never[];
@@ -48,6 +64,7 @@ export interface Block extends AstNode {
 
 export interface LetStatement extends AstNode {
   readonly kind: "LetStatement";
+  readonly attributes: Attribute[];
   readonly bind: boolean;
   readonly write: boolean;
   readonly pattern: BindingPattern;
