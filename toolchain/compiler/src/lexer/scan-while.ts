@@ -15,7 +15,7 @@ export function scanWhile(
 ): number {
   let j = start;
   while (j < source.length) {
-    const ch = source[j];
+    const ch = source[j] ?? "";
     if (!pred(ch, j, source)) {
       break;
     }
