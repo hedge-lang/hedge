@@ -35,6 +35,8 @@ describe("generator", (): void => {
     expect(code.typedef).toBe("");
     expect(code.javascript).toBe(
       [
+        "#!/usr/bin/env node",
+        "",
         "function main() {",
         '  const greeting = "Hello, world!";',
         "  print(greeting);",
@@ -43,5 +45,12 @@ describe("generator", (): void => {
         "main();",
       ].join("\n"),
     );
+  });
+
+  it("generates libraries without the shebang", () => {
+    const code = gen(`
+      fn lib() { 0 }
+    `);
+    expect(code.javascript).toBe(["function lib() {", "  0;", "}"].join("\n"));
   });
 });
