@@ -11,7 +11,6 @@ export type TokenKind =
   | "int"
   | "string"
   | "punct"
-  | `doc-${"inner" | "outer"}`
   | "eof";
 
 /** A single lexical token: its category, its source text, and where it sits. */

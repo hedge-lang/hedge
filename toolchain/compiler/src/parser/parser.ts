@@ -15,12 +15,23 @@ import type {
   Statement,
 } from "./ast.js";
 
-/** A parsed node together with the index of the next unconsumed token. */
+/**
+ * Result of a successful parse operation.
+ *
+ * Parsers are implemented as pure functions that consume tokens starting at a
+ * given position and return both the parsed AST node and the index of the next
+ * unconsumed token.
+ */
 interface Parsed<T> {
   readonly node: T;
   readonly next: number;
 }
 
+/**
+ * @returns the token at {@link pos}.
+ *
+ * @throws if the parser attempts to read beyond the end of the token stream.
+ */
 function tokenAt(tokens: readonly Token[], pos: number): Token {
   const token = tokens[pos];
   if (token === undefined) {
@@ -29,14 +40,28 @@ function tokenAt(tokens: readonly Token[], pos: number): Token {
   return token;
 }
 
+/**
+ * @returns `true` if the token is the given punctuation token.
+ */
 function isPunct(token: Token, text: string): boolean {
   return token.kind === "punct" && token.text === text;
 }
 
+/**
+ * Contextual keywords are lexed as identifiers and interpreted by the parser.
+ *
+ * @returns `true` if the token is an identifier whose text matches a contextual keyword.
+ */
 function isContextual(token: Token, text: string): boolean {
   return token.kind === "ident" && token.text === text;
 }
 
+/**
+ * Consumes a required punctuation token.
+ *
+ * @returns Index of the next token after the punctuation.
+ * @throws SyntaxError if the expected punctuation is not present.
+ */
 function expectPunct(
   tokens: readonly Token[],
   pos: number,
@@ -51,6 +76,12 @@ function expectPunct(
   return pos + 1;
 }
 
+/**
+ * Consumes a required keyword token.
+ *
+ * @returns Index of the next token after the keyword.
+ * @throws SyntaxError if the expected keyword is not present.
+ */
 function expectKeyword(
   tokens: readonly Token[],
   pos: number,
@@ -65,6 +96,15 @@ function expectKeyword(
   return pos + 1;
 }
 
+/**
+ * Parses an identifier expression.
+ *
+ * Grammar:
+ *
+ * ```text
+ * Identifier ::= IDENT
+ * ```
+ */
 function parseIdentifier(
   tokens: readonly Token[],
   pos: number,
@@ -83,6 +123,15 @@ function parseIdentifier(
   return { node: ident, next: pos + 1 };
 }
 
+/**
+ * Parses a path expression.
+ *
+ * Grammar:
+ *
+ * ```text
+ * PathExpression ::= Identifier
+ * ```
+ */
 function parsePath(
   tokens: readonly Token[],
   pos: number,
@@ -97,6 +146,22 @@ function parsePath(
   return { node: pathExpr, next: ident.next };
 }
 
+/**
+ * Parses a reference expression.
+ *
+ * Grammar:
+ *
+ * ```text
+ * ReferenceExpression ::= "&" "write"? PrimaryExpression
+ * ```
+ *
+ * Examples:
+ *
+ * ```hedge
+ * &value
+ * &write counter
+ * ```
+ */
 function parseReference(
   tokens: readonly Token[],
   pos: number,
@@ -117,6 +182,26 @@ function parseReference(
   return { node: reference, next: operand.next };
 }
 
+/**
+ * Parses a primary expression.
+ *
+ * Supported slice-1 forms:
+ *
+ * - String literals
+ * - Integer literals
+ * - Path expressions
+ * - Reference expressions
+ *
+ * Grammar:
+ *
+ * ```text
+ * PrimaryExpression ::=
+ *     StringLiteral
+ *   | IntLiteral
+ *   | PathExpression
+ *   | ReferenceExpression
+ * ```
+ */
 function parsePrimary(
   tokens: readonly Token[],
   pos: number,
@@ -145,6 +230,15 @@ function parsePrimary(
   );
 }
 
+/**
+ * Parses a parenthesized argument list.
+ *
+ * Grammar:
+ *
+ * ```text
+ * Arguments ::= "(" (Expression ("," Expression)*)? ")"
+ * ```
+ */
 function parseArguments(
   tokens: readonly Token[],
   pos: number,
@@ -163,6 +257,25 @@ function parseArguments(
   return { node: args, next: expectPunct(tokens, cursor, ")") };
 }
 
+/**
+ * Parses an expression.
+ *
+ * Slice-1 supports postfix call chaining on top of primary expressions.
+ *
+ * Grammar:
+ *
+ * ```text
+ * Expression ::= PrimaryExpression ("(" Arguments? ")")*
+ * ```
+ *
+ * Examples:
+ *
+ * ```hedge
+ * print()
+ * print(name)
+ * foo()(bar)
+ * ```
+ */
 function parseExpression(
   tokens: readonly Token[],
   pos: number,
@@ -181,6 +294,17 @@ function parseExpression(
   return result;
 }
 
+/**
+ * Parses a binding pattern.
+ *
+ * Slice-1 only supports simple identifier bindings.
+ *
+ * Grammar:
+ *
+ * ```text
+ * BindingPattern ::= Identifier
+ * ```
+ */
 function parseBindingPattern(
   tokens: readonly Token[],
   pos: number,
@@ -192,6 +316,30 @@ function parseBindingPattern(
   };
 }
 
+/**
+ * Parses a `let` statement.
+ *
+ * Grammar:
+ *
+ * ```text
+ * LetStatement ::=
+ *   "let"
+ *   "bind"?
+ *   "write"?
+ *   BindingPattern
+ *   ("=" Expression)?
+ *   ";"
+ * ```
+ *
+ * Examples:
+ *
+ * ```hedge
+ * let value;
+ * let value = 42;
+ * let write counter = 0;
+ * let bind resource = open();
+ * ```
+ */
 function parseLetStatement(
   tokens: readonly Token[],
   pos: number,
@@ -229,6 +377,12 @@ function parseLetStatement(
   return { node: letStmt, next: cursor };
 }
 
+/**
+ * Wraps an expression as an expression statement.
+ *
+ * Expression statements are represented explicitly in the AST rather than
+ * reusing expression nodes directly.
+ */
 function expressionStatement(expression: Expression): ExpressionStatement {
   return {
     kind: "ExpressionStatement",
@@ -237,6 +391,31 @@ function expressionStatement(expression: Expression): ExpressionStatement {
   };
 }
 
+/**
+ * Parses a block expression.
+ *
+ * A block may contain zero or more statements followed by an optional trailing
+ * expression whose value becomes the value of the block.
+ *
+ * Grammar:
+ *
+ * ```text
+ * Block ::= "{"
+ *             Statement*
+ *             Expression?
+ *           "}"
+ * ```
+ *
+ * Example:
+ *
+ * ```hedge
+ * {
+ *   let x = 1;
+ *   let y = 2;
+ *   add(x, y)
+ * }
+ * ```
+ */
 function parseBlock(tokens: readonly Token[], pos: number): Parsed<Block> {
   const start = pos;
   let cursor = expectPunct(tokens, pos, "{");
@@ -269,6 +448,22 @@ function parseBlock(tokens: readonly Token[], pos: number): Parsed<Block> {
   return { node: block, next: expectPunct(tokens, cursor, "}") };
 }
 
+/**
+ * Parses a function declaration.
+ *
+ * Slice-1 supports only:
+ *
+ * - No parameters
+ * - No generics
+ * - No return type
+ * - A required block body
+ *
+ * Grammar:
+ *
+ * ```text
+ * FunctionDecl ::= "fn" Identifier "(" ")" Block
+ * ```
+ */
 function parseFunction(
   tokens: readonly Token[],
   pos: number,
@@ -292,6 +487,16 @@ function parseFunction(
   return { node: fn, next: body.next };
 }
 
+/**
+ * Parses a top-level item.
+ *
+ * Supported slice-1 items:
+ *
+ * - Function declarations
+ * - Let statements
+ * - Expression statements
+ * - Bare expressions
+ */
 function parseItem(tokens: readonly Token[], pos: number): Parsed<Item> {
   const token = tokenAt(tokens, pos);
   if (token.kind === "keyword" && token.text === "fn") {
@@ -308,11 +513,27 @@ function parseItem(tokens: readonly Token[], pos: number): Parsed<Item> {
 }
 
 /**
- * Parse a token list into a {@link Program}. Slice-1 subset: functions, `let`
- * statements, call and path expressions, string/int literals, and blocks. Grows
- * toward the full grammar in `specification/0025-grammar.md`.
+ * Parse a token stream into a {@link Program}.
+ *
+ * Current slice support:
+ *
+ * - Function declarations
+ * - Let statements
+ * - Blocks
+ * - Path expressions
+ * - Call expressions
+ * - Reference expressions
+ * - String literals
+ * - Integer literals
+ *
+ * The parser is intentionally implemented as a small recursive-descent parser
+ * that grows incrementally toward the complete grammar defined in
+ * `specification/0025-grammar.md`.
+ *
+ * @throws SyntaxError if the token stream does not conform to the supported
+ * grammar.
  */
-export function parse(tokens: Token[]): Program {
+export function parse(tokens: readonly Token[]): Program {
   const items: Item[] = [];
   let cursor = 0;
   while (tokenAt(tokens, cursor).kind !== "eof") {

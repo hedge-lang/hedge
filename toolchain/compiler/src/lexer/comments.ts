@@ -177,6 +177,29 @@ function parseBlockOuterDocComment(
   const OFFSET_START = 3;
   const OFFSET_END = 2;
 
+  tokens.push(
+    {
+      kind: "punct",
+      text: "#",
+      span: { start, end: start },
+    },
+    {
+      kind: "punct",
+      text: "[",
+      span: { start, end: start },
+    },
+    {
+      kind: "ident",
+      text: "doc",
+      span: { start, end: start },
+    },
+    {
+      kind: "punct",
+      text: "(",
+      span: { start, end: start },
+    },
+  );
+
   for (let i = start + OFFSET_START; i < source.length; i++) {
     if (source[i] === "*" && source[i + 1] === "/") {
       const end = i + OFFSET_END;
@@ -184,14 +207,35 @@ function parseBlockOuterDocComment(
       if (source[sliceStart] === " ") {
         sliceStart += 1;
       }
-      tokens.push({
-        kind: "doc-outer",
-        text: normalizeComment(source.slice(sliceStart, i)),
-        span: {
-          start,
-          end,
+
+      const normalizedComments = normalizeComment(source.slice(sliceStart, i));
+      for (let j = 0; j < normalizedComments.length; j++) {
+        if (j !== 0) {
+          tokens.push({
+            kind: "punct",
+            text: ",",
+            span: { start, end },
+          });
+        }
+        tokens.push({
+          kind: "string",
+          text: normalizedComments[j] ?? "",
+          span: { start, end },
+        });
+      }
+
+      tokens.push(
+        {
+          kind: "punct",
+          text: ")",
+          span: { start: end, end },
         },
-      });
+        {
+          kind: "punct",
+          text: "]",
+          span: { start: end, end },
+        },
+      );
       return end;
     }
   }
@@ -233,6 +277,34 @@ function parseBlockInnerDocComment(
   const OFFSET_START = 3;
   const OFFSET_END = 2;
 
+  tokens.push(
+    {
+      kind: "punct",
+      text: "#",
+      span: { start, end: start },
+    },
+    {
+      kind: "punct",
+      text: "!",
+      span: { start, end: start },
+    },
+    {
+      kind: "punct",
+      text: "[",
+      span: { start, end: start },
+    },
+    {
+      kind: "ident",
+      text: "doc",
+      span: { start, end: start },
+    },
+    {
+      kind: "punct",
+      text: "(",
+      span: { start, end: start },
+    },
+  );
+
   for (let i = start + OFFSET_START; i < source.length; i++) {
     if (source[i] === "*" && source[i + 1] === "/") {
       const end = i + OFFSET_END;
@@ -240,14 +312,35 @@ function parseBlockInnerDocComment(
       if (source[sliceStart] === " ") {
         sliceStart += 1;
       }
-      tokens.push({
-        kind: "doc-inner",
-        text: normalizeComment(source.slice(sliceStart, i)),
-        span: {
-          start,
-          end,
+
+      const normalizedComments = normalizeComment(source.slice(sliceStart, i));
+      for (let j = 0; j < normalizedComments.length; j++) {
+        if (j !== 0) {
+          tokens.push({
+            kind: "punct",
+            text: ",",
+            span: { start, end },
+          });
+        }
+        tokens.push({
+          kind: "string",
+          text: normalizedComments[j] ?? "",
+          span: { start, end },
+        });
+      }
+
+      tokens.push(
+        {
+          kind: "punct",
+          text: ")",
+          span: { start: end, end },
         },
-      });
+        {
+          kind: "punct",
+          text: "]",
+          span: { start: end, end },
+        },
+      );
       return end;
     }
   }
@@ -288,6 +381,29 @@ function parseOuterDocComment(
 ): number {
   const OFFSET_START = 3;
 
+  tokens.push(
+    {
+      kind: "punct",
+      text: "#",
+      span: { start, end: start },
+    },
+    {
+      kind: "punct",
+      text: "[",
+      span: { start, end: start },
+    },
+    {
+      kind: "ident",
+      text: "doc",
+      span: { start, end: start },
+    },
+    {
+      kind: "punct",
+      text: "(",
+      span: { start, end: start },
+    },
+  );
+
   const lines: string[] = [];
   let end = source.length;
   for (let i = start; i < source.length; ) {
@@ -310,14 +426,34 @@ function parseOuterDocComment(
   }
 
   const text = lines.join("\n");
-  tokens.push({
-    kind: "doc-outer",
-    text: normalizeComment(text),
-    span: {
-      start,
-      end,
+  const normalizedComments = normalizeComment(text);
+  for (let j = 0; j < normalizedComments.length; j++) {
+    if (j !== 0) {
+      tokens.push({
+        kind: "punct",
+        text: ",",
+        span: { start, end },
+      });
+    }
+    tokens.push({
+      kind: "string",
+      text: normalizedComments[j] ?? "",
+      span: { start, end },
+    });
+  }
+
+  tokens.push(
+    {
+      kind: "punct",
+      text: ")",
+      span: { start: end, end },
     },
-  });
+    {
+      kind: "punct",
+      text: "]",
+      span: { start: end, end },
+    },
+  );
   return end;
 }
 
@@ -344,6 +480,34 @@ function parseInnerDocComment(
 ): number {
   const OFFSET_START = 3;
 
+  tokens.push(
+    {
+      kind: "punct",
+      text: "#",
+      span: { start, end: start },
+    },
+    {
+      kind: "punct",
+      text: "!",
+      span: { start, end: start },
+    },
+    {
+      kind: "punct",
+      text: "[",
+      span: { start, end: start },
+    },
+    {
+      kind: "ident",
+      text: "doc",
+      span: { start, end: start },
+    },
+    {
+      kind: "punct",
+      text: "(",
+      span: { start, end: start },
+    },
+  );
+
   const lines: string[] = [];
   let end = source.length;
   for (let i = start; i < source.length; ) {
@@ -366,14 +530,35 @@ function parseInnerDocComment(
   }
 
   const text = lines.join("\n");
-  tokens.push({
-    kind: "doc-inner",
-    text: normalizeComment(text),
-    span: {
-      start,
-      end,
+
+  const normalizedComments = normalizeComment(text);
+  for (let j = 0; j < normalizedComments.length; j++) {
+    if (j !== 0) {
+      tokens.push({
+        kind: "punct",
+        text: ",",
+        span: { start, end },
+      });
+    }
+    tokens.push({
+      kind: "string",
+      text: normalizedComments[j] ?? "",
+      span: { start, end },
+    });
+  }
+
+  tokens.push(
+    {
+      kind: "punct",
+      text: ")",
+      span: { start: end, end },
     },
-  });
+    {
+      kind: "punct",
+      text: "]",
+      span: { start: end, end },
+    },
+  );
   return end;
 }
 
@@ -384,7 +569,7 @@ function parseInnerDocComment(
  *
  * @returns The normalized comment text.
  */
-function normalizeComment(text: string): string {
+function normalizeComment(text: string): string[] {
   const lines = text.split("\n");
   let minIndent: number | null = null;
   for (const line of lines) {
@@ -397,5 +582,5 @@ function normalizeComment(text: string): string {
   }
 
   const indent = minIndent ?? 0;
-  return lines.map((line) => line.slice(indent)).join("\n");
+  return lines.map((line) => line.slice(indent));
 }
