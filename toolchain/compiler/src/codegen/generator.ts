@@ -104,6 +104,7 @@ function hasMain(program: Program): boolean {
 export function generate(program: Program): Code {
   const parts = program.items.map(emitItem);
   if (hasMain(program)) {
+    parts.unshift("#!/usr/bin/env node");
     parts.push("main();");
   }
   return { javascript: parts.join("\n\n"), typedef: "" };
