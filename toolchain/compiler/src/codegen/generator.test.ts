@@ -53,4 +53,48 @@ describe("generator", (): void => {
     `);
     expect(code.javascript).toBe(["function lib() {", "  0;", "}"].join("\n"));
   });
+
+  it("generates code with comments", () => {
+    const code = gen(`
+      //! This is a doc-comment for the main module.
+
+      fn lib() {
+        //! This is a doc-comment for the lib function.
+      }
+
+      /// This is a doc-comment for the main function.
+      fn main() {
+        /// This is a doc-comment for the greeting variable.
+        let greeting = "Hello, world!";
+        print(greeting);
+      }
+    `);
+
+    expect(code.javascript).toBe(
+      [
+        "#!/usr/bin/env node",
+        "",
+        "/**",
+        " * @module",
+        " * This is a doc-comment for the main module.",
+        " */",
+        "",
+        "/**",
+        " * This is a doc-comment for the lib function.",
+        " */",
+        "function lib() {",
+        "}",
+        "",
+        "/**",
+        " * This is a doc-comment for the main function.",
+        " */",
+        "function main() {",
+        '  const greeting = "Hello, world!";',
+        "  print(greeting);",
+        "}",
+        "",
+        "main();",
+      ].join("\n"),
+    );
+  });
 });
