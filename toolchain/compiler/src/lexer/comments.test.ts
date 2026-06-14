@@ -13,9 +13,7 @@ describe("LineComment", (): void => {
     const tokens: Token[] = [];
     expect(isLineComment(lineComment, 0)).toBe(true);
     const nextIndex = parseLineComment(tokens, lineComment, 0);
-    expect(lineComment.slice(3, nextIndex)).toBe(
-      lineComment.slice(3, nextIndex),
-    );
+    expect(lineComment.slice(3, nextIndex)).toBe("foo bar");
     expect(lineComment[nextIndex]).toBeUndefined();
     expect(lineComment[nextIndex - 1]).not.toBeUndefined();
     expect(nextIndex).toBe(lineComment.length);

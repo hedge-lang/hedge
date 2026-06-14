@@ -156,7 +156,7 @@ function isBlockOuterDocComment(source: string, index: number): boolean {
   return (
     source[index] === "/" &&
     source[index + 1] === "*" &&
-    source[index + 2] == "*"
+    source[index + 2] === "*"
   );
 }
 
@@ -180,9 +180,13 @@ function parseBlockOuterDocComment(
   for (let i = start + OFFSET_START; i < source.length; i++) {
     if (source[i] === "*" && source[i + 1] === "/") {
       const end = i + OFFSET_END;
+      let sliceStart = start + OFFSET_START;
+      if (source[sliceStart] === " ") {
+        sliceStart += 1;
+      }
       tokens.push({
         kind: "doc-outer",
-        text: normalizeComment(source.slice(start + OFFSET_START + 1, i)),
+        text: normalizeComment(source.slice(sliceStart, i)),
         span: {
           start,
           end,
@@ -208,7 +212,7 @@ function isBlockInnerDocComment(source: string, index: number): boolean {
   return (
     source[index] === "/" &&
     source[index + 1] === "*" &&
-    source[index + 2] == "!"
+    source[index + 2] === "!"
   );
 }
 
@@ -232,9 +236,13 @@ function parseBlockInnerDocComment(
   for (let i = start + OFFSET_START; i < source.length; i++) {
     if (source[i] === "*" && source[i + 1] === "/") {
       const end = i + OFFSET_END;
+      let sliceStart = start + OFFSET_START;
+      if (source[sliceStart] === " ") {
+        sliceStart += 1;
+      }
       tokens.push({
         kind: "doc-inner",
-        text: normalizeComment(source.slice(start + OFFSET_START + 1, i)),
+        text: normalizeComment(source.slice(sliceStart, i)),
         span: {
           start,
           end,
@@ -282,7 +290,7 @@ function parseOuterDocComment(
 
   const lines: string[] = [];
   let end = source.length;
-  for (let i = start; i < source.length; i++) {
+  for (let i = start; i < source.length; ) {
     while (i < source.length && isWhitespace(source, i)) {
       i += 1;
     }
@@ -338,7 +346,7 @@ function parseInnerDocComment(
 
   const lines: string[] = [];
   let end = source.length;
-  for (let i = start; i < source.length; i++) {
+  for (let i = start; i < source.length; ) {
     while (i < source.length && isWhitespace(source, i)) {
       i += 1;
     }

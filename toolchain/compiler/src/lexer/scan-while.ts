@@ -16,9 +16,6 @@ export function scanWhile(
   let j = start;
   while (j < source.length) {
     const ch = source[j];
-    if (ch === undefined) {
-      throw new Error("Unexpected end of source");
-    }
     if (!pred(ch, j, source)) {
       break;
     }
