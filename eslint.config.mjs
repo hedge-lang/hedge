@@ -168,7 +168,10 @@ export default defineConfig([
        IGNORE PATTERNS
     ========================================================= */
   {
-    ignores: ["**/{coverage,dist,node_modules}/**", "**/examples/**/*.js"],
+    ignores: [
+      "**/{coverage,dist,node_modules}/**",
+      "**/examples/**/*.{d.ts,js}",
+    ],
   },
 
   /* =========================================================
