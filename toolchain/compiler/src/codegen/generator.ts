@@ -34,7 +34,7 @@ function emitExpression(expression: Expression): string {
     case "StringLiteral":
       return JSON.stringify(expression.value);
     case "NumberLiteral":
-      return String(expression.value);
+      return expression.value;
     case "PathExpression":
       return expression.path.join(".");
     case "CallExpression": {
@@ -69,7 +69,7 @@ function emitStatement(statement: Statement): string {
   }
 }
 
-function emitFunction(decl: FunctionDecl, exported: boolean = false): string {
+function emitFunction(decl: FunctionDecl): string {
   const bodyLines = decl.body.map(emitStatement);
   const hasDoc = isSome(decl.docComment);
   // Documented functions use explicit braces on separate lines for readability.
@@ -79,7 +79,7 @@ function emitFunction(decl: FunctionDecl, exported: boolean = false): string {
       : bodyLines.length === 0
         ? "{\n}"
         : `{\n${bodyLines.map(indent).join("\n")}\n}`;
-  const keyword = exported ? "export function" : "function";
+  const keyword = isSome(decl.scope) ? "export function" : "function";
   const fn = `${keyword} ${decl.name}() ${bodyStr}`;
   if (hasDoc) {
     return `${emitDocComment(decl.docComment.value)}\n${fn}`;
@@ -91,8 +91,6 @@ function emitItem(item: Item): string {
   switch (item.kind) {
     case "FunctionDecl":
       return emitFunction(item);
-    case "Export":
-      return emitFunction(item.target, true);
     case "LetStatement":
       return emitLet(item);
     case "StringLiteral":
@@ -130,10 +128,10 @@ function emitDtsFunction(
 }
 
 function emitDtsItem(item: Item): string | null {
-  if (item.kind !== "Export") {
+  if (item.kind !== "FunctionDecl" || !isSome(item.scope)) {
     return null;
   }
-  return emitDtsFunction(item.target, item.scope);
+  return emitDtsFunction(item, item.scope.value);
 }
 
 function hasMain(program: Program): boolean {

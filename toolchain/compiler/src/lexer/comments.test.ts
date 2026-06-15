@@ -15,7 +15,6 @@ describe("LineComment", (): void => {
     const nextIndex = parseLineComment(tokens, lineComment, 0);
     expect(lineComment.slice(3, nextIndex)).toBe("foo bar");
     expect(lineComment[nextIndex]).toBeUndefined();
-    expect(lineComment[nextIndex - 1]).not.toBeUndefined();
     expect(nextIndex).toBe(lineComment.length);
     expect(tokens).toEqual([]);
   });
@@ -42,6 +41,15 @@ describe("BlockComment", () => {
     expect(blockComment.slice(0, nextIndex)).toBe(blockComment);
     expect(blockComment[nextIndex]).toBeUndefined();
     expect(blockComment[nextIndex - 1]).not.toBeUndefined();
+    expect(nextIndex).toBe(blockComment.length);
+    expect(tokens).toEqual([]);
+  });
+
+  it("supports nested block comments opened with /**", () => {
+    const blockComment = "/* foo /** bar */ baz */";
+    const tokens: Token[] = [];
+    const nextIndex = parseBlockComment(tokens, blockComment + "  ", 0);
+    expect(blockComment.slice(0, nextIndex)).toBe(blockComment);
     expect(nextIndex).toBe(blockComment.length);
     expect(tokens).toEqual([]);
   });

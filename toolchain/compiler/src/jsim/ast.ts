@@ -6,16 +6,7 @@ export interface Program {
   readonly docComment: Option<DocComment>;
 }
 
-export type Item = Export | FunctionDecl | Statement;
-
-interface Export {
-  readonly kind: "Export";
-  /** `"public"` for bare `pub`; `"package"` for `pub(package)`. */
-  readonly scope: "public" | "package";
-  readonly target: FunctionDecl;
-  readonly alias: Option<string>;
-  readonly docComment: Option<DocComment>;
-}
+export type Item = FunctionDecl | Statement;
 
 export interface DocComment {
   readonly kind: "DocComment";
@@ -24,6 +15,8 @@ export interface DocComment {
 
 export interface FunctionDecl {
   readonly kind: "FunctionDecl";
+  /** `none()` = module-private; `some("public")` = `pub`; `some("package")` = `pub(package)`. */
+  readonly scope: Option<"public" | "package">;
   readonly name: string;
   readonly params: readonly FunctionParam[];
   readonly returnType: Option<Type>;
@@ -53,7 +46,7 @@ interface StringLiteral {
 
 interface NumberLiteral {
   readonly kind: "NumberLiteral";
-  readonly value: number;
+  readonly value: string;
 }
 
 interface PathExpression {

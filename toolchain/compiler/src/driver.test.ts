@@ -13,12 +13,9 @@ describe("driver", (): void => {
     `);
     expect(result.diagnostics).toEqual([]);
     expect(isSome(result.code)).toBe(true);
-    expect(isSome(result.code) && result.code.value.javascript).toContain(
-      "function main()",
-    );
-    expect(isSome(result.code) && result.code.value.javascript).toContain(
-      "main();",
-    );
+    const js = isSome(result.code) ? result.code.value.javascript : "";
+    expect(js).toContain("function main()");
+    expect(js).toContain("main()");
   });
 
   it("reports a semantic error and produces no code", (): void => {

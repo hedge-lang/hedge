@@ -213,7 +213,7 @@ function parsePrimary(
       node: {
         kind: "IntLiteral",
         tokenId: pos,
-        value: Number.parseInt(token.text),
+        value: token.text.replaceAll("_", ""),
       },
       next: pos + 1,
     };
@@ -509,7 +509,10 @@ function parseAttributeArg(
     };
     return { node: { path: none(), literal: some(lit) }, next: pos + 1 };
   }
-  // Skip unrecognised tokens (e.g. paths) as empty args
+  if (token.kind === "ident") {
+    const path: Path = { absolute: false, segments: [token.text] };
+    return { node: { path: some(path), literal: none() }, next: pos + 1 };
+  }
   return { node: { path: none(), literal: none() }, next: pos + 1 };
 }
 

@@ -87,7 +87,7 @@ export interface StringLiteral extends AstNode {
 
 export interface IntLiteral extends AstNode {
   readonly kind: "IntLiteral";
-  readonly value: number;
+  readonly value: string;
 }
 
 export interface Path {

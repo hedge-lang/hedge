@@ -23,7 +23,7 @@ function parseItem(item: Parser.Item): JSIM.Item {
   return parseExpression(item);
 }
 
-function parseFunction(fn: Parser.FunctionDecl): JSIM.Item {
+function parseFunction(fn: Parser.FunctionDecl): JSIM.FunctionDecl {
   const innerDoc = toDocComment(fn.body.innerAttributes);
   const outerDoc = toDocComment(fn.attributes);
   const docComment = isSome(innerDoc) ? innerDoc : outerDoc;
@@ -33,29 +33,24 @@ function parseFunction(fn: Parser.FunctionDecl): JSIM.Item {
     statements.push(parseExpression(fn.body.trailingExpression.value));
   }
 
-  const decl: JSIM.FunctionDecl = {
+  const scope: JSIM.FunctionDecl["scope"] = isSome(fn.visibility)
+    ? some(
+        isSome(fn.visibility.value.scope) &&
+          fn.visibility.value.scope.value === "package"
+          ? "package"
+          : "public",
+      )
+    : none();
+
+  return {
     kind: "FunctionDecl",
+    scope,
     name: fn.name.text,
     params: [],
     returnType: none(),
     body: statements,
     docComment,
   };
-
-  if (isSome(fn.visibility)) {
-    const scope = isSome(fn.visibility.value.scope)
-      ? fn.visibility.value.scope.value
-      : "public";
-    return {
-      kind: "Export",
-      scope: scope === "package" ? "package" : "public",
-      target: decl,
-      alias: none(),
-      docComment: none(),
-    };
-  }
-
-  return decl;
 }
 
 function parseStatement(statement: Parser.Statement): JSIM.Statement {
@@ -79,8 +74,7 @@ function parseExpression(expression: Parser.Expression): JSIM.Expression {
     case "StringLiteral":
       return { kind: "StringLiteral", value: expression.value };
     case "IntLiteral":
-      // The parser stores the raw token text on IntLiteral at runtime
-      // even though the AST type declares `value: number`.
+      // IntLiteral carries the numeric string (underscores stripped); pass through directly.
       return { kind: "NumberLiteral", value: expression.value };
     case "PathExpression":
       return { kind: "PathExpression", path: expression.path.segments };
