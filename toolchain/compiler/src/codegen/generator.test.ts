@@ -55,6 +55,51 @@ describe("generator", (): void => {
     expect(code.javascript).toBe(["function lib() {", "  0;", "}"].join("\n"));
   });
 
+  it("exports a pub fn in JS and declares it in the .d.ts", () => {
+    const code = gen("pub fn lib() {}");
+    expect(code.javascript).toBe("export function lib() {}");
+    expect(code.typedef).toBe("export declare function lib(): void;");
+  });
+
+  it("marks pub(package) fn as @internal in the .d.ts", () => {
+    const code = gen("pub(package) fn lib() {}");
+    expect(code.javascript).toBe("export function lib() {}");
+    expect(code.typedef).toBe(
+      [
+        "/**",
+        " * @internal",
+        " */",
+        "export declare function lib(): void;",
+      ].join("\n"),
+    );
+  });
+
+  it("includes the function doc comment in the .d.ts declaration", () => {
+    const code = gen("/// A library function.\npub fn lib() {}");
+    expect(code.typedef).toBe(
+      [
+        "/**",
+        " * A library function.",
+        " */",
+        "export declare function lib(): void;",
+      ].join("\n"),
+    );
+  });
+
+  it("includes the module doc comment in the .d.ts when exports exist", () => {
+    const code = gen("//! My module.\npub fn lib() {}");
+    expect(code.typedef).toBe(
+      [
+        "/**",
+        " * @module",
+        " * My module.",
+        " */",
+        "",
+        "export declare function lib(): void;",
+      ].join("\n"),
+    );
+  });
+
   it("generates code with comments", () => {
     const code = gen(`
       //! This is a doc-comment for the main module.
