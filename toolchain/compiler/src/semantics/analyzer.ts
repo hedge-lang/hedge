@@ -1,4 +1,5 @@
 import type { Diagnostic } from "../diagnostics.js";
+import { isSome } from "../option.js";
 import type {
   Block,
   CallExpression,
@@ -61,8 +62,8 @@ class Analyzer {
     for (const statement of block.statements) {
       this.statement(statement);
     }
-    if (block.trailingExpression !== null) {
-      this.expression(block.trailingExpression);
+    if (isSome(block.trailingExpression)) {
+      this.expression(block.trailingExpression.value);
     }
     this.scopes.pop();
   }

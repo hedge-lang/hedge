@@ -110,8 +110,8 @@ describe("parser", (): void => {
           },
           generics: [],
           params: [],
-          returnType: null,
-          whereClause: null,
+          returnType: { kind: "None" },
+          whereClause: { kind: "None" },
           body: {
             kind: "Block",
             statements: [
@@ -155,7 +155,7 @@ describe("parser", (): void => {
                 },
               },
             ],
-            trailingExpression: null,
+            trailingExpression: { kind: "None" },
           },
         },
       ],

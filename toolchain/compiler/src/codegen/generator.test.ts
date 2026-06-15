@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import { toJsim } from "../jsim/jsim.js";
 import { tokenize } from "../lexer/lexer.js";
 import { parse } from "../parser/parser.js";
 import { generate } from "./generator.js";
 import type { Code } from "./output.js";
 
 function gen(source: string): Code {
-  return generate(parse(tokenize(source)));
+  return generate(toJsim(parse(tokenize(source))));
 }
 
 describe("generator", (): void => {

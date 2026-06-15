@@ -1,6 +1,7 @@
 import type { Code } from "./codegen/output.js";
 import { generate } from "./codegen/generator.js";
 import type { Diagnostic } from "./diagnostics.js";
+import { toJsim } from "./jsim/jsim.js";
 import { tokenize } from "./lexer/lexer.js";
 import { optimize } from "./optimization/optimizer.js";
 import { checkBorrows } from "./ownership/borrowck.js";
@@ -58,5 +59,5 @@ export function compile(source: string): CompileResult {
   if (hasError(diagnostics)) {
     return { diagnostics, code: null };
   }
-  return { diagnostics, code: generate(optimize(program)) };
+  return { diagnostics, code: generate(toJsim(optimize(program))) };
 }

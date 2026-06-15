@@ -1,5 +1,7 @@
 import type { Token } from "../lexer/token.js";
+import { none, some, type Option } from "../option.js";
 import type {
+  Attribute,
   BindingPattern,
   Block,
   CallExpression,
@@ -7,25 +9,17 @@ import type {
   ExpressionStatement,
   FunctionDecl,
   Identifier,
+  IntLiteral,
   Item,
   LetStatement,
+  Path,
   PathExpression,
   Program,
   ReferenceExpression,
   Statement,
+  StringLiteral,
 } from "./ast.js";
-
-/**
- * Result of a successful parse operation.
- *
- * Parsers are implemented as pure functions that consume tokens starting at a
- * given position and return both the parsed AST node and the index of the next
- * unconsumed token.
- */
-interface Parsed<T> {
-  readonly node: T;
-  readonly next: number;
-}
+import type { Parsed } from "./parse.js";
 
 /**
  * @returns the token at {@link pos}.
@@ -215,7 +209,11 @@ function parsePrimary(
   }
   if (token.kind === "int") {
     return {
-      node: { kind: "IntLiteral", tokenId: pos, text: token.text },
+      node: {
+        kind: "IntLiteral",
+        tokenId: pos,
+        value: Number.parseInt(token.text),
+      },
       next: pos + 1,
     };
   }
@@ -419,9 +417,23 @@ function expressionStatement(expression: Expression): ExpressionStatement {
 function parseBlock(tokens: readonly Token[], pos: number): Parsed<Block> {
   const start = pos;
   let cursor = expectPunct(tokens, pos, "{");
+
+  // Inner attributes at the start of a block document the enclosing function.
+  const inner = collectInnerAttributes(tokens, cursor);
+  const innerAttributes = inner.attributes;
+  cursor = inner.next;
+
   const statements: Statement[] = [];
   let trailing: Expression | null = null;
   while (!isPunct(tokenAt(tokens, cursor), "}")) {
+    // Outer attributes before statements (e.g. `/// doc` before `let x`) are
+    // collected and discarded — variable-level docs are not emitted in JS output.
+    while (isOuterAttribute(tokens, cursor)) {
+      cursor = parseAttribute(tokens, cursor).next;
+    }
+    if (isPunct(tokenAt(tokens, cursor), "}")) {
+      break;
+    }
     const token = tokenAt(tokens, cursor);
     if (token.kind === "keyword" && token.text === "let") {
       const letParsed = parseLetStatement(tokens, cursor);
@@ -443,9 +455,144 @@ function parseBlock(tokens: readonly Token[], pos: number): Parsed<Block> {
     kind: "Block",
     tokenId: start,
     statements,
-    trailingExpression: trailing,
+    trailingExpression: trailing !== null ? some(trailing) : none(),
+    innerAttributes,
   };
   return { node: block, next: expectPunct(tokens, cursor, "}") };
+}
+
+/**
+ * Checks if the tokens at `pos` start an outer attribute (`#[`).
+ */
+function isOuterAttribute(tokens: readonly Token[], pos: number): boolean {
+  return (
+    isPunct(tokenAt(tokens, pos), "#") && isPunct(tokenAt(tokens, pos + 1), "[")
+  );
+}
+
+/**
+ * Checks if the tokens at `pos` start an inner attribute (`#![`).
+ */
+function isInnerAttribute(tokens: readonly Token[], pos: number): boolean {
+  return (
+    isPunct(tokenAt(tokens, pos), "#") &&
+    isPunct(tokenAt(tokens, pos + 1), "!") &&
+    isPunct(tokenAt(tokens, pos + 2), "[")
+  );
+}
+
+type AttributeArg = {
+  path: Option<Path>;
+  literal: Option<StringLiteral | IntLiteral>;
+};
+
+/**
+ * Parses a single attribute argument: either a string literal or a path.
+ *
+ * Grammar:
+ *
+ * ```text
+ * AttributeArg ::= StringLiteral | Identifier
+ * ```
+ */
+function parseAttributeArg(
+  tokens: readonly Token[],
+  pos: number,
+): { node: AttributeArg; next: number } {
+  const token = tokenAt(tokens, pos);
+  if (token.kind === "string") {
+    const lit: StringLiteral = {
+      kind: "StringLiteral",
+      tokenId: pos,
+      value: token.text,
+    };
+    return { node: { path: none(), literal: some(lit) }, next: pos + 1 };
+  }
+  // Skip unrecognised tokens (e.g. paths) as empty args
+  return { node: { path: none(), literal: none() }, next: pos + 1 };
+}
+
+/**
+ * Parses a complete attribute token sequence.
+ *
+ * Outer form: `#[name(arg, arg)]`
+ * Inner form: `#![name(arg, arg)]`
+ *
+ * @returns The parsed Attribute and whether it was an inner attribute.
+ */
+function parseAttribute(
+  tokens: readonly Token[],
+  pos: number,
+): { node: Attribute; isInner: boolean; next: number } {
+  let cursor = pos + 1; // skip `#`
+  let isInner = false;
+  if (isPunct(tokenAt(tokens, cursor), "!")) {
+    isInner = true;
+    cursor += 1; // skip `!`
+  }
+  cursor += 1; // skip `[`
+  const name = parseIdentifier(tokens, cursor);
+  cursor = name.next;
+
+  const args: AttributeArg[] = [];
+  if (isPunct(tokenAt(tokens, cursor), "(")) {
+    cursor += 1; // skip `(`
+    while (!isPunct(tokenAt(tokens, cursor), ")")) {
+      const arg = parseAttributeArg(tokens, cursor);
+      args.push(arg.node);
+      cursor = arg.next;
+      if (isPunct(tokenAt(tokens, cursor), ",")) {
+        cursor += 1;
+      }
+    }
+    cursor += 1; // skip `)`
+  }
+  cursor += 1; // skip `]`
+
+  const attr: Attribute = {
+    kind: "Attribute",
+    name: name.node,
+    arguments: args.length > 0 ? some(args) : none(),
+  };
+  return { node: attr, isInner, next: cursor };
+}
+
+/**
+ * Collects all consecutive outer attributes (`#[...]`) starting at `pos`.
+ *
+ * @returns The collected attributes and the position after the last one.
+ */
+function collectOuterAttributes(
+  tokens: readonly Token[],
+  pos: number,
+): { attributes: Attribute[]; next: number } {
+  const attributes: Attribute[] = [];
+  let cursor = pos;
+  while (isOuterAttribute(tokens, cursor)) {
+    const parsed = parseAttribute(tokens, cursor);
+    attributes.push(parsed.node);
+    cursor = parsed.next;
+  }
+  return { attributes, next: cursor };
+}
+
+/**
+ * Collects all consecutive inner attributes (`#![...]`) starting at `pos`.
+ *
+ * @returns The collected attributes and the position after the last one.
+ */
+function collectInnerAttributes(
+  tokens: readonly Token[],
+  pos: number,
+): { attributes: Attribute[]; next: number } {
+  const attributes: Attribute[] = [];
+  let cursor = pos;
+  while (isInnerAttribute(tokens, cursor)) {
+    const parsed = parseAttribute(tokens, cursor);
+    attributes.push(parsed.node);
+    cursor = parsed.next;
+  }
+  return { attributes, next: cursor };
 }
 
 /**
@@ -467,6 +614,7 @@ function parseBlock(tokens: readonly Token[], pos: number): Parsed<Block> {
 function parseFunction(
   tokens: readonly Token[],
   pos: number,
+  attributes: readonly Attribute[] = [],
 ): Parsed<FunctionDecl> {
   const start = pos;
   const afterFn = expectKeyword(tokens, pos, "fn");
@@ -480,8 +628,9 @@ function parseFunction(
     name: name.node,
     generics: [],
     params: [],
-    returnType: null,
-    whereClause: null,
+    returnType: none(),
+    whereClause: none(),
+    attributes,
     body: body.node,
   };
   return { node: fn, next: body.next };
@@ -498,14 +647,19 @@ function parseFunction(
  * - Bare expressions
  */
 function parseItem(tokens: readonly Token[], pos: number): Parsed<Item> {
-  const token = tokenAt(tokens, pos);
+  // Collect outer attributes (#[...]) before the item and attach to functions.
+  const outer = collectOuterAttributes(tokens, pos);
+  const attributes = outer.attributes;
+  const cursor = outer.next;
+
+  const token = tokenAt(tokens, cursor);
   if (token.kind === "keyword" && token.text === "fn") {
-    return parseFunction(tokens, pos);
+    return parseFunction(tokens, cursor, attributes);
   }
   if (token.kind === "keyword" && token.text === "let") {
-    return parseLetStatement(tokens, pos);
+    return parseLetStatement(tokens, cursor);
   }
-  const parsed = parseExpression(tokens, pos);
+  const parsed = parseExpression(tokens, cursor);
   if (isPunct(tokenAt(tokens, parsed.next), ";")) {
     return { node: expressionStatement(parsed.node), next: parsed.next + 1 };
   }
@@ -534,12 +688,18 @@ function parseItem(tokens: readonly Token[], pos: number): Parsed<Item> {
  * grammar.
  */
 export function parse(tokens: readonly Token[]): Program {
-  const items: Item[] = [];
   let cursor = 0;
+
+  // Program-level inner attributes (#![...]) apply to the module itself.
+  const inner = collectInnerAttributes(tokens, cursor);
+  const attributes = inner.attributes;
+  cursor = inner.next;
+
+  const items: Item[] = [];
   while (tokenAt(tokens, cursor).kind !== "eof") {
     const item = parseItem(tokens, cursor);
     items.push(item.node);
     cursor = item.next;
   }
-  return { kind: "Program", items };
+  return { kind: "Program", items, attributes };
 }

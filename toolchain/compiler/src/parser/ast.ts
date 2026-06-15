@@ -8,6 +8,7 @@ export interface AstNode {
 export interface Program {
   readonly kind: "Program";
   readonly items: Item[];
+  readonly attributes: readonly Attribute[];
 }
 
 export interface Attribute {
@@ -35,15 +36,17 @@ export interface FunctionDecl extends AstNode {
   readonly name: Identifier;
   readonly generics: readonly never[];
   readonly params: readonly never[];
-  readonly returnType: null;
-  readonly whereClause: null;
+  readonly returnType: Option<never>;
+  readonly whereClause: Option<never>;
+  readonly attributes: readonly Attribute[];
   readonly body: Block;
 }
 
 export interface Block extends AstNode {
   readonly kind: "Block";
   readonly statements: Statement[];
-  readonly trailingExpression: Expression | null;
+  readonly trailingExpression: Option<Expression>;
+  readonly innerAttributes: readonly Attribute[];
 }
 
 export interface LetStatement extends AstNode {
@@ -77,7 +80,7 @@ export interface StringLiteral extends AstNode {
 
 export interface IntLiteral extends AstNode {
   readonly kind: "IntLiteral";
-  readonly text: string;
+  readonly value: number;
 }
 
 export interface Path {
