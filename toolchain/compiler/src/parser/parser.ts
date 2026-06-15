@@ -18,6 +18,7 @@ import type {
   ReferenceExpression,
   Statement,
   StringLiteral,
+  Visibility,
 } from "./ast.js";
 import type { Parsed } from "./parse.js";
 
@@ -608,13 +609,14 @@ function collectInnerAttributes(
  * Grammar:
  *
  * ```text
- * FunctionDecl ::= "fn" Identifier "(" ")" Block
+ * FunctionDecl ::= ["pub"] "fn" Identifier "(" ")" Block
  * ```
  */
 function parseFunction(
   tokens: readonly Token[],
   pos: number,
   attributes: readonly Attribute[] = [],
+  visibility: Option<Visibility> = none(),
 ): Parsed<FunctionDecl> {
   const start = pos;
   const afterFn = expectKeyword(tokens, pos, "fn");
@@ -625,6 +627,7 @@ function parseFunction(
   const fn: FunctionDecl = {
     kind: "Function",
     tokenId: start,
+    visibility,
     name: name.node,
     generics: [],
     params: [],
@@ -634,6 +637,30 @@ function parseFunction(
     body: body.node,
   };
   return { node: fn, next: body.next };
+}
+
+/** Parses an optional `pub` or `pub(scope)` visibility prefix. */
+function parseVisibility(
+  tokens: readonly Token[],
+  pos: number,
+): Parsed<Option<Visibility>> {
+  const token = tokenAt(tokens, pos);
+  if (token.kind !== "keyword" || token.text !== "pub") {
+    return { node: none(), next: pos };
+  }
+  // Check for `pub(scope)`.
+  const maybeParen = tokenAt(tokens, pos + 1);
+  if (isPunct(maybeParen, "(")) {
+    const scopeToken = tokenAt(tokens, pos + 2);
+    const closeParen = tokenAt(tokens, pos + 3);
+    if (scopeToken.kind === "ident" && isPunct(closeParen, ")")) {
+      return {
+        node: some({ kind: "Visibility", scope: some(scopeToken.text) }),
+        next: pos + 4,
+      };
+    }
+  }
+  return { node: some({ kind: "Visibility", scope: none() }), next: pos + 1 };
 }
 
 /**
@@ -652,9 +679,11 @@ function parseItem(tokens: readonly Token[], pos: number): Parsed<Item> {
   const attributes = outer.attributes;
   const cursor = outer.next;
 
-  const token = tokenAt(tokens, cursor);
+  const vis = parseVisibility(tokens, cursor);
+  const afterVis = vis.next;
+  const token = tokenAt(tokens, afterVis);
   if (token.kind === "keyword" && token.text === "fn") {
-    return parseFunction(tokens, cursor, attributes);
+    return parseFunction(tokens, afterVis, attributes, vis.node);
   }
   if (token.kind === "keyword" && token.text === "let") {
     return parseLetStatement(tokens, cursor);

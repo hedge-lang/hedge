@@ -69,7 +69,7 @@ function emitStatement(statement: Statement): string {
   }
 }
 
-function emitFunction(decl: FunctionDecl): string {
+function emitFunction(decl: FunctionDecl, exported: boolean = false): string {
   const bodyLines = decl.body.map(emitStatement);
   const hasDoc = isSome(decl.docComment);
   // Documented functions use explicit braces on separate lines for readability.
@@ -79,7 +79,8 @@ function emitFunction(decl: FunctionDecl): string {
       : bodyLines.length === 0
         ? "{\n}"
         : `{\n${bodyLines.map(indent).join("\n")}\n}`;
-  const fn = `function ${decl.name}() ${bodyStr}`;
+  const keyword = exported ? "export function" : "function";
+  const fn = `${keyword} ${decl.name}() ${bodyStr}`;
   if (hasDoc) {
     return `${emitDocComment(decl.docComment.value)}\n${fn}`;
   }
@@ -91,7 +92,7 @@ function emitItem(item: Item): string {
     case "FunctionDecl":
       return emitFunction(item);
     case "Export":
-      return emitFunction(item.target);
+      return emitFunction(item.target, true);
     case "LetStatement":
       return emitLet(item);
     case "StringLiteral":
@@ -102,6 +103,37 @@ function emitItem(item: Item): string {
     default:
       return assertNever(item);
   }
+}
+
+function emitDtsFunction(
+  decl: FunctionDecl,
+  scope: "public" | "package",
+): string {
+  const params = decl.params
+    .map((p) => `${p.name}: ${p.type.value}`)
+    .join(", ");
+  const returnType = isSome(decl.returnType)
+    ? decl.returnType.value.value
+    : "void";
+  const declaration = `export declare function ${decl.name}(${params}): ${returnType};`;
+  const parts: string[] = [];
+  if (scope === "package") {
+    const text = isSome(decl.docComment)
+      ? `@internal\n${decl.docComment.value.text}`
+      : "@internal";
+    parts.push(emitDocComment({ kind: "DocComment", text }));
+  } else if (isSome(decl.docComment)) {
+    parts.push(emitDocComment(decl.docComment.value));
+  }
+  parts.push(declaration);
+  return parts.join("\n");
+}
+
+function emitDtsItem(item: Item): string | null {
+  if (item.kind !== "Export") {
+    return null;
+  }
+  return emitDtsFunction(item.target, item.scope);
 }
 
 function hasMain(program: Program): boolean {
@@ -132,5 +164,19 @@ export function generate(program: Program): Code {
     parts.push("main();");
   }
 
-  return { javascript: parts.join("\n\n"), typedef: "" };
+  const dtsParts: string[] = [];
+  if (isSome(program.docComment)) {
+    dtsParts.push(emitDocComment(program.docComment.value, true));
+  }
+  for (const item of program.items) {
+    const dts = emitDtsItem(item);
+    if (dts !== null) {
+      dtsParts.push(dts);
+    }
+  }
+
+  return {
+    javascript: parts.join("\n\n"),
+    typedef: dtsParts.join("\n\n"),
+  };
 }

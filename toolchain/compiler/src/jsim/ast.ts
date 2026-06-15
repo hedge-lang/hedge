@@ -10,6 +10,8 @@ export type Item = Export | FunctionDecl | Statement;
 
 interface Export {
   readonly kind: "Export";
+  /** `"public"` for bare `pub`; `"package"` for `pub(package)`. */
+  readonly scope: "public" | "package";
   readonly target: FunctionDecl;
   readonly alias: Option<string>;
   readonly docComment: Option<DocComment>;

@@ -23,7 +23,7 @@ function parseItem(item: Parser.Item): JSIM.Item {
   return parseExpression(item);
 }
 
-function parseFunction(fn: Parser.FunctionDecl): JSIM.FunctionDecl {
+function parseFunction(fn: Parser.FunctionDecl): JSIM.Item {
   const innerDoc = toDocComment(fn.body.innerAttributes);
   const outerDoc = toDocComment(fn.attributes);
   const docComment = isSome(innerDoc) ? innerDoc : outerDoc;
@@ -33,7 +33,7 @@ function parseFunction(fn: Parser.FunctionDecl): JSIM.FunctionDecl {
     statements.push(parseExpression(fn.body.trailingExpression.value));
   }
 
-  return {
+  const decl: JSIM.FunctionDecl = {
     kind: "FunctionDecl",
     name: fn.name.text,
     params: [],
@@ -41,6 +41,21 @@ function parseFunction(fn: Parser.FunctionDecl): JSIM.FunctionDecl {
     body: statements,
     docComment,
   };
+
+  if (isSome(fn.visibility)) {
+    const scope = isSome(fn.visibility.value.scope)
+      ? fn.visibility.value.scope.value
+      : "public";
+    return {
+      kind: "Export",
+      scope: scope === "package" ? "package" : "public",
+      target: decl,
+      alias: none(),
+      docComment: none(),
+    };
+  }
+
+  return decl;
 }
 
 function parseStatement(statement: Parser.Statement): JSIM.Statement {

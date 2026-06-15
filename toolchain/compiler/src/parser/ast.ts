@@ -31,8 +31,15 @@ export type Expression =
   | CallExpression
   | ReferenceExpression;
 
+export interface Visibility {
+  readonly kind: "Visibility";
+  /** `none()` for bare `pub`; `some("package")` for `pub(package)`, etc. */
+  readonly scope: Option<string>;
+}
+
 export interface FunctionDecl extends AstNode {
   readonly kind: "Function";
+  readonly visibility: Option<Visibility>;
   readonly name: Identifier;
   readonly generics: readonly never[];
   readonly params: readonly never[];
