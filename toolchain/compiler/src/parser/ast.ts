@@ -8,30 +8,16 @@ export interface AstNode {
 export interface Program {
   readonly kind: "Program";
   readonly items: Item[];
+  readonly attributes: readonly Attribute[];
 }
 
-export interface Attribute extends AstNode {
+export interface Attribute {
   readonly kind: "Attribute";
-  readonly name: Path;
-  /**
-   * `None` when the attribute has no argument list (`#[derive]`); `Some([])`
-   * for an empty list (`#[derive()]`).
-   */
-  readonly arguments: Option<AttrArg[]>;
+  readonly name: Identifier;
+  readonly arguments: Option<
+    { path: Option<Path>; literal: Option<StringLiteral | IntLiteral> }[]
+  >;
 }
-
-/**
- * A single attribute argument. Mirrors the grammar's three alternatives:
- * `AttrArg ::= Path | Literal | Path "=" Literal`.
- */
-export type AttrArg =
-  | { readonly kind: "Path"; readonly path: Path }
-  | { readonly kind: "Literal"; readonly literal: StringLiteral | IntLiteral }
-  | {
-      readonly kind: "KeyValue";
-      readonly path: Path;
-      readonly literal: StringLiteral | IntLiteral;
-    };
 
 /** A top-level entry. Slice 1 is lenient and also accepts bare statements. */
 export type Item = FunctionDecl | Statement | Expression;
@@ -45,31 +31,39 @@ export type Expression =
   | CallExpression
   | ReferenceExpression;
 
+export interface Visibility {
+  readonly kind: "Visibility";
+  /** `none()` for bare `pub`; `some("package")` for `pub(package)`, etc. */
+  readonly scope: Option<string>;
+}
+
 export interface FunctionDecl extends AstNode {
   readonly kind: "Function";
-  readonly attributes: Attribute[];
+  readonly visibility: Option<Visibility>;
   readonly name: Identifier;
   readonly generics: readonly never[];
   readonly params: readonly never[];
-  readonly returnType: null;
-  readonly whereClause: null;
+  readonly returnType: Option<never>;
+  readonly whereClause: Option<never>;
+  readonly attributes: readonly Attribute[];
   readonly body: Block;
 }
 
 export interface Block extends AstNode {
   readonly kind: "Block";
   readonly statements: Statement[];
-  readonly trailingExpression: Expression | null;
+  readonly trailingExpression: Option<Expression>;
+  readonly innerAttributes: readonly Attribute[];
 }
 
 export interface LetStatement extends AstNode {
   readonly kind: "LetStatement";
-  readonly attributes: Attribute[];
+  readonly attributes: readonly Attribute[];
   readonly bind: boolean;
   readonly write: boolean;
   readonly pattern: BindingPattern;
   readonly type: null;
-  readonly initializer: Expression | null;
+  readonly initializer: Option<Expression>;
 }
 
 export interface BindingPattern {
@@ -94,7 +88,7 @@ export interface StringLiteral extends AstNode {
 
 export interface IntLiteral extends AstNode {
   readonly kind: "IntLiteral";
-  readonly text: string;
+  readonly value: string;
 }
 
 export interface Path {

@@ -129,7 +129,7 @@ export function parseBlockComment(
 
   let nesting = 0;
   for (let i = start + OFFSET_START; i < source.length; i++) {
-    if (isBlockComment(source, i)) {
+    if (source[i] === "/" && source[i + 1] === "*") {
       nesting += 1;
     }
     if (source[i] === "*" && source[i + 1] === "/") {
