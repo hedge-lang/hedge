@@ -55,7 +55,7 @@ export interface LetStatement extends AstNode {
   readonly write: boolean;
   readonly pattern: BindingPattern;
   readonly type: null;
-  readonly initializer: Expression | null;
+  readonly initializer: Option<Expression>;
 }
 
 export interface BindingPattern {

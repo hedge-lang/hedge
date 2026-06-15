@@ -2,7 +2,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { stderr, stdout } from "node:process";
 
-import { compile } from "@hedge-lang/compiler";
+import { compile, isSome } from "@hedge-lang/compiler";
 
 import { renderDiagnostics } from "../util/render.js";
 
@@ -12,13 +12,15 @@ export async function build(file: string): Promise<number> {
   if (result.diagnostics.length > 0) {
     stderr.write(`${renderDiagnostics(result.diagnostics)}\n`);
   }
-  if (result.code === null) {
+  const codeOption = result.code;
+  if (!isSome(codeOption)) {
     return 1;
   }
+  const code = codeOption.value;
   const base = file.replace(/\.hed(ge)?$/u, "");
-  await writeFile(`${base}.js`, result.code.javascript, "utf8");
-  if (result.code.typedef !== "") {
-    await writeFile(`${base}.d.ts`, result.code.typedef, "utf8");
+  await writeFile(`${base}.js`, code.javascript, "utf8");
+  if (code.typedef !== "") {
+    await writeFile(`${base}.d.ts`, code.typedef, "utf8");
   }
   stdout.write(`Compiled ${file} -> ${base}.js\n`);
   return 0;

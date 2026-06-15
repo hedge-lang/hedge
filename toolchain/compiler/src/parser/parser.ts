@@ -356,10 +356,10 @@ function parseLetStatement(
   }
   const pattern = parseBindingPattern(tokens, cursor);
   cursor = pattern.next;
-  let initializer: Expression | null = null;
+  let initializer: Option<Expression> = none();
   if (isPunct(tokenAt(tokens, cursor), "=")) {
     const init = parseExpression(tokens, cursor + 1);
-    initializer = init.node;
+    initializer = some(init.node);
     cursor = init.next;
   }
   cursor = expectPunct(tokens, cursor, ";");

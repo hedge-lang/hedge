@@ -48,10 +48,11 @@ function emitExpression(expression: Expression): string {
 
 function emitLet(statement: LetStatement): string {
   const keyword = statement.mutable ? "let" : "const";
-  if (!isSome(statement.value)) {
-    return `${keyword} ${statement.name};`;
+  const value = statement.value;
+  if (isSome(value)) {
+    return `${keyword} ${statement.name} = ${emitExpression(value.value)};`;
   }
-  return `${keyword} ${statement.name} = ${emitExpression(statement.value.value)};`;
+  return `${keyword} ${statement.name};`;
 }
 
 function emitStatement(statement: Statement): string {

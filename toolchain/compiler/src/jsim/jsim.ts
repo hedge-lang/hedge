@@ -50,10 +50,9 @@ function parseStatement(statement: Parser.Statement): JSIM.Statement {
         kind: "LetStatement",
         name: statement.pattern.name.text,
         mutable: statement.bind || statement.write,
-        value:
-          statement.initializer !== null
-            ? some(parseExpression(statement.initializer))
-            : none(),
+        value: isSome(statement.initializer)
+          ? some(parseExpression(statement.initializer.value))
+          : none(),
       };
     case "ExpressionStatement":
       return parseExpression(statement.expression);

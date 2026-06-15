@@ -18,6 +18,9 @@ export type { Code } from "./codegen/output.js";
 export { compile } from "./driver.js";
 export type { CompileResult } from "./driver.js";
 
+export type { Option } from "./option.js";
+export { some, none, isSome, isNone } from "./option.js";
+
 export type { Result } from "./result.js";
 export { ok, err, isOk, isErr } from "./result.js";
 

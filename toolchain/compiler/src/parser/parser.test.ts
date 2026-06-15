@@ -36,8 +36,11 @@ describe("parser", (): void => {
           },
           type: null,
           initializer: {
-            kind: "StringLiteral",
-            value: "string literal",
+            kind: "Some",
+            value: {
+              kind: "StringLiteral",
+              value: "string literal",
+            },
           },
         },
       ],
@@ -128,8 +131,11 @@ describe("parser", (): void => {
                 },
                 type: null,
                 initializer: {
-                  kind: "StringLiteral",
-                  value: "Hello, world!",
+                  kind: "Some",
+                  value: {
+                    kind: "StringLiteral",
+                    value: "Hello, world!",
+                  },
                 },
               },
               {
