@@ -36,8 +36,11 @@ describe("parser", (): void => {
           },
           type: null,
           initializer: {
-            kind: "StringLiteral",
-            value: "string literal",
+            kind: "Some",
+            value: {
+              kind: "StringLiteral",
+              value: "string literal",
+            },
           },
         },
       ],
@@ -110,8 +113,8 @@ describe("parser", (): void => {
           },
           generics: [],
           params: [],
-          returnType: null,
-          whereClause: null,
+          returnType: { kind: "None" },
+          whereClause: { kind: "None" },
           body: {
             kind: "Block",
             statements: [
@@ -128,8 +131,11 @@ describe("parser", (): void => {
                 },
                 type: null,
                 initializer: {
-                  kind: "StringLiteral",
-                  value: "Hello, world!",
+                  kind: "Some",
+                  value: {
+                    kind: "StringLiteral",
+                    value: "Hello, world!",
+                  },
                 },
               },
               {
@@ -155,7 +161,7 @@ describe("parser", (): void => {
                 },
               },
             ],
-            trailingExpression: null,
+            trailingExpression: { kind: "None" },
           },
         },
       ],

@@ -1,4 +1,8 @@
+//! This is a doc-comment for the main module.
+
+/// This is a doc-comment for the main function.
 fn main() {
+  /// This is a doc-comment for the greeting variable.
   let greeting = "Hello, world!";
   print(greeting);
 }

@@ -1,4 +1,5 @@
 import type { Diagnostic } from "../diagnostics.js";
+import { isSome } from "../option.js";
 import type {
   Expression,
   FunctionDecl,
@@ -51,8 +52,8 @@ function collectUses(expression: Expression, out: Set<string>): void {
 function statementUses(statement: Statement, out: Set<string>): void {
   switch (statement.kind) {
     case "LetStatement":
-      if (statement.initializer !== null) {
-        collectUses(statement.initializer, out);
+      if (isSome(statement.initializer)) {
+        collectUses(statement.initializer.value, out);
       }
       return;
     case "ExpressionStatement":
@@ -85,10 +86,14 @@ function collectBorrows(statements: readonly Statement[]): Borrow[] {
       continue;
     }
     const { initializer } = statement;
-    if (initializer === null || initializer.kind !== "ReferenceExpression") {
+    if (!isSome(initializer)) {
       continue;
     }
-    const { operand } = initializer;
+    const init = initializer.value;
+    if (init.kind !== "ReferenceExpression") {
+      continue;
+    }
+    const { operand } = init;
     if (operand.kind !== "PathExpression") {
       continue;
     }
@@ -100,9 +105,9 @@ function collectBorrows(statements: readonly Statement[]): Borrow[] {
     borrows.push({
       name: statement.pattern.name.text,
       base,
-      mutable: initializer.mutable,
+      mutable: init.mutable,
       declIndex: index,
-      tokenId: initializer.tokenId,
+      tokenId: init.tokenId,
     });
   }
   return borrows;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { isNone, isSome } from "./option.js";
 import { compile } from "./driver.js";
 
 describe("driver", (): void => {
@@ -11,14 +12,15 @@ describe("driver", (): void => {
       }
     `);
     expect(result.diagnostics).toEqual([]);
-    expect(result.code).not.toBeNull();
-    expect(result.code?.javascript).toContain("function main()");
-    expect(result.code?.javascript).toContain("main();");
+    expect(isSome(result.code)).toBe(true);
+    const js = isSome(result.code) ? result.code.value.javascript : "";
+    expect(js).toContain("function main()");
+    expect(js).toContain("main()");
   });
 
   it("reports a semantic error and produces no code", (): void => {
     const result = compile("fn main() { print(missing); }");
-    expect(result.code).toBeNull();
+    expect(isNone(result.code)).toBe(true);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.message).toContain("missing");
   });
@@ -27,14 +29,14 @@ describe("driver", (): void => {
     const result = compile(
       'fn main() { let x = "a"; let r = &write x; print(r); }',
     );
-    expect(result.code).toBeNull();
+    expect(isNone(result.code)).toBe(true);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.message).toContain("not declared write");
   });
 
   it("reports a syntax error and produces no code", (): void => {
     const result = compile("fn main(");
-    expect(result.code).toBeNull();
+    expect(isNone(result.code)).toBe(true);
     expect(result.diagnostics).toHaveLength(1);
   });
 });

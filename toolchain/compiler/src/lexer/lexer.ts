@@ -1,4 +1,7 @@
+import { isComment, parseComment } from "./comments.js";
+import { scanWhile } from "./scan-while.js";
 import type { Token, TokenKind } from "./token.js";
+import { isWhitespace } from "./whitespace.js";
 
 /**
  * The hard keywords (grammar appendix). Contextual keywords (`write`, `bind`,
@@ -42,10 +45,6 @@ const HARD_KEYWORDS: ReadonlySet<string> = new Set([
   "while",
 ]);
 
-function isWhitespace(ch: string): boolean {
-  return ch === " " || ch === "\t" || ch === "\n" || ch === "\r";
-}
-
 // NOTE: ASCII subset of ECMAScript IdentifierName for now; full Unicode
 // ID_Start / ID_Continue (grammar appendix) is a later refinement.
 function isIdentStart(ch: string): boolean {
@@ -73,26 +72,6 @@ function isStringEnd(beginCh: string): (ch: string) => boolean {
 }
 
 /**
- * Advance from `start` while `pred` holds, returning the first index at which it
- * does not (or the end of the source).
- */
-function scanWhile(
-  source: string,
-  start: number,
-  pred: (ch: string) => boolean,
-): number {
-  let j = start;
-  while (j < source.length) {
-    const ch = source[j];
-    if (ch === undefined || !pred(ch)) {
-      break;
-    }
-    j += 1;
-  }
-  return j;
-}
-
-/**
  * Tokenize Hedge source into a flat token list terminated by an `eof` token.
  *
  * Slice-1 subset: ASCII identifiers and hard keywords, decimal integer
@@ -107,20 +86,20 @@ export function tokenize(source: string): Token[] {
     if (ch === undefined) {
       break;
     }
-    if (isWhitespace(ch)) {
+    if (isWhitespace(source, i)) {
       i += 1;
       continue;
     }
     const start = i;
-    if (isIdentStart(ch)) {
+    if (isComment(source, i)) {
+      i = parseComment(tokens, source, i);
+    } else if (isIdentStart(ch)) {
       const end = scanWhile(source, i + 1, isIdentContinue);
       const text = source.slice(start, end);
       const kind: TokenKind = HARD_KEYWORDS.has(text) ? "keyword" : "ident";
       tokens.push({ kind, text, span: { start, end } });
       i = end;
-      continue;
-    }
-    if (isDigit(ch)) {
+    } else if (isDigit(ch)) {
       const end = scanWhile(source, i + 1, isDigitOrSeparator);
       tokens.push({
         kind: "int",
@@ -128,9 +107,7 @@ export function tokenize(source: string): Token[] {
         span: { start, end },
       });
       i = end;
-      continue;
-    }
-    if (isStringBegin(ch)) {
+    } else if (isStringBegin(ch)) {
       const end = scanWhile(source, i + 1, isStringEnd(ch));
       if (end >= source.length) {
         throw new SyntaxError(
@@ -143,10 +120,10 @@ export function tokenize(source: string): Token[] {
         span: { start, end: end + 1 },
       });
       i = end + 1;
-      continue;
+    } else {
+      tokens.push({ kind: "punct", text: ch, span: { start, end: i + 1 } });
+      i += 1;
     }
-    tokens.push({ kind: "punct", text: ch, span: { start, end: i + 1 } });
-    i += 1;
   }
   tokens.push({
     kind: "eof",
