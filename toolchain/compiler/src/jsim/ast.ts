@@ -31,6 +31,7 @@ export interface LetStatement {
   readonly name: string;
   readonly mutable: boolean;
   readonly value: Option<Expression>;
+  readonly docComment: Option<DocComment>;
 }
 
 export type Expression =

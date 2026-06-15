@@ -368,6 +368,10 @@ function isOuterDocComment(source: string, index: number): boolean {
 /**
  * Parse an outer doc comment starting at `start` in `source`, appending it to `tokens`.
  *
+ * Doc comments are lowered into a synthetic `#[doc("...")]` token sequence so
+ * the parser assembles them into ordinary `doc` attributes (`///` is sugar for
+ * `#[doc = "..."]`); see `parseAttribute` in the parser.
+ *
  * @param tokens The token list to append to.
  * @param source The source to scan.
  * @param start The index to start scanning at.

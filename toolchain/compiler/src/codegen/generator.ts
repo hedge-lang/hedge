@@ -49,10 +49,13 @@ function emitExpression(expression: Expression): string {
 function emitLet(statement: LetStatement): string {
   const keyword = statement.mutable ? "let" : "const";
   const value = statement.value;
-  if (isSome(value)) {
-    return `${keyword} ${statement.name} = ${emitExpression(value.value)};`;
+  const declaration = isSome(value)
+    ? `${keyword} ${statement.name} = ${emitExpression(value.value)};`
+    : `${keyword} ${statement.name};`;
+  if (isSome(statement.docComment)) {
+    return `${emitDocComment(statement.docComment.value)}\n${declaration}`;
   }
-  return `${keyword} ${statement.name};`;
+  return declaration;
 }
 
 function emitStatement(statement: Statement): string {

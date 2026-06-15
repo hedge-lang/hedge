@@ -342,6 +342,7 @@ function parseBindingPattern(
 function parseLetStatement(
   tokens: readonly Token[],
   pos: number,
+  attributes: readonly Attribute[] = [],
 ): Parsed<LetStatement> {
   const start = pos;
   let cursor = expectKeyword(tokens, pos, "let");
@@ -367,6 +368,7 @@ function parseLetStatement(
   const letStmt: LetStatement = {
     kind: "LetStatement",
     tokenId: start,
+    attributes,
     bind,
     write,
     pattern: pattern.node,
@@ -427,17 +429,17 @@ function parseBlock(tokens: readonly Token[], pos: number): Parsed<Block> {
   const statements: Statement[] = [];
   let trailing: Expression | null = null;
   while (!isPunct(tokenAt(tokens, cursor), "}")) {
-    // Outer attributes before statements (e.g. `/// doc` before `let x`) are
-    // collected and discarded — variable-level docs are not emitted in JS output.
-    while (isOuterAttribute(tokens, cursor)) {
-      cursor = parseAttribute(tokens, cursor).next;
-    }
+    // Outer attributes (e.g. `/// doc`) before a statement attach to a following
+    // `let` — the only named target inside a block. Before anything else they
+    // have nothing to document and are discarded.
+    const outer = collectOuterAttributes(tokens, cursor);
+    cursor = outer.next;
     if (isPunct(tokenAt(tokens, cursor), "}")) {
       break;
     }
     const token = tokenAt(tokens, cursor);
     if (token.kind === "keyword" && token.text === "let") {
-      const letParsed = parseLetStatement(tokens, cursor);
+      const letParsed = parseLetStatement(tokens, cursor, outer.attributes);
       statements.push(letParsed.node);
       cursor = letParsed.next;
       continue;
@@ -677,7 +679,8 @@ function parseVisibility(
  * - Bare expressions
  */
 function parseItem(tokens: readonly Token[], pos: number): Parsed<Item> {
-  // Collect outer attributes (#[...]) before the item and attach to functions.
+  // Collect outer attributes (#[...]) before the item and attach them to the
+  // named declaration that follows (a function or a `let`).
   const outer = collectOuterAttributes(tokens, pos);
   const attributes = outer.attributes;
   const cursor = outer.next;
@@ -689,7 +692,7 @@ function parseItem(tokens: readonly Token[], pos: number): Parsed<Item> {
     return parseFunction(tokens, afterVis, attributes, vis.node);
   }
   if (token.kind === "keyword" && token.text === "let") {
-    return parseLetStatement(tokens, cursor);
+    return parseLetStatement(tokens, cursor, attributes);
   }
   const parsed = parseExpression(tokens, cursor);
   if (isPunct(tokenAt(tokens, parsed.next), ";")) {

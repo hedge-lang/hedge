@@ -63,6 +63,7 @@ function parseStatement(statement: Parser.Statement): JSIM.Statement {
         value: isSome(statement.initializer)
           ? some(parseExpression(statement.initializer.value))
           : none(),
+        docComment: toDocComment(statement.attributes),
       };
     case "ExpressionStatement":
       return parseExpression(statement.expression);

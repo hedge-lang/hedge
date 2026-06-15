@@ -168,3 +168,58 @@ describe("parser", (): void => {
     });
   });
 });
+
+describe("attributes on let statements", (): void => {
+  it("attaches an outer attribute to a top-level let", (): void => {
+    const tokens = tokenize("#[attr] let x = 1;");
+    const ast = parse(tokens);
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "LetStatement",
+          attributes: [
+            {
+              kind: "Attribute",
+              name: { kind: "Identifier", text: "attr" },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("attaches a doc comment to a let inside a block", (): void => {
+    const tokens = tokenize("fn f() { /// Counter\nlet x = 1; }");
+    const ast = parse(tokens);
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: {
+            statements: [
+              {
+                kind: "LetStatement",
+                attributes: [
+                  {
+                    name: { text: "doc" },
+                    arguments: {
+                      kind: "Some",
+                      value: [
+                        {
+                          literal: {
+                            kind: "Some",
+                            value: { value: "Counter" },
+                          },
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+});

@@ -58,6 +58,7 @@ export interface Block extends AstNode {
 
 export interface LetStatement extends AstNode {
   readonly kind: "LetStatement";
+  readonly attributes: readonly Attribute[];
   readonly bind: boolean;
   readonly write: boolean;
   readonly pattern: BindingPattern;
