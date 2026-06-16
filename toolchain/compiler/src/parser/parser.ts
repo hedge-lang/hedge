@@ -141,7 +141,7 @@ function parsePathSegments(
     const next = tokenAt(tokens, afterSep);
     if (next.kind !== "ident") {
       throw new SyntaxError(
-        `Expected identifier after "::", found "${next.text}" at offset ${next.span.start}`,
+        `Expected identifier after "::", found "${next.kind}" at offset ${next.span.start}`,
       );
     }
     cursor = afterSep;
