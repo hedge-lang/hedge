@@ -179,12 +179,12 @@ function parseBlockOuterDocComment(
 
   tokens.push(
     {
-      kind: "punct",
+      kind: "hash",
       text: "#",
       span: { start, end: start },
     },
     {
-      kind: "punct",
+      kind: "lbracket",
       text: "[",
       span: { start, end: start },
     },
@@ -194,7 +194,7 @@ function parseBlockOuterDocComment(
       span: { start, end: start },
     },
     {
-      kind: "punct",
+      kind: "lparen",
       text: "(",
       span: { start, end: start },
     },
@@ -212,7 +212,7 @@ function parseBlockOuterDocComment(
       for (let j = 0; j < normalizedComments.length; j++) {
         if (j !== 0) {
           tokens.push({
-            kind: "punct",
+            kind: "comma",
             text: ",",
             span: { start, end },
           });
@@ -226,12 +226,12 @@ function parseBlockOuterDocComment(
 
       tokens.push(
         {
-          kind: "punct",
+          kind: "rparen",
           text: ")",
           span: { start: end, end },
         },
         {
-          kind: "punct",
+          kind: "rbracket",
           text: "]",
           span: { start: end, end },
         },
@@ -279,17 +279,17 @@ function parseBlockInnerDocComment(
 
   tokens.push(
     {
-      kind: "punct",
+      kind: "hash",
       text: "#",
       span: { start, end: start },
     },
     {
-      kind: "punct",
+      kind: "bang",
       text: "!",
       span: { start, end: start },
     },
     {
-      kind: "punct",
+      kind: "lbracket",
       text: "[",
       span: { start, end: start },
     },
@@ -299,7 +299,7 @@ function parseBlockInnerDocComment(
       span: { start, end: start },
     },
     {
-      kind: "punct",
+      kind: "lparen",
       text: "(",
       span: { start, end: start },
     },
@@ -317,7 +317,7 @@ function parseBlockInnerDocComment(
       for (let j = 0; j < normalizedComments.length; j++) {
         if (j !== 0) {
           tokens.push({
-            kind: "punct",
+            kind: "comma",
             text: ",",
             span: { start, end },
           });
@@ -331,12 +331,12 @@ function parseBlockInnerDocComment(
 
       tokens.push(
         {
-          kind: "punct",
+          kind: "rparen",
           text: ")",
           span: { start: end, end },
         },
         {
-          kind: "punct",
+          kind: "rbracket",
           text: "]",
           span: { start: end, end },
         },
@@ -387,12 +387,12 @@ function parseOuterDocComment(
 
   tokens.push(
     {
-      kind: "punct",
+      kind: "hash",
       text: "#",
       span: { start, end: start },
     },
     {
-      kind: "punct",
+      kind: "lbracket",
       text: "[",
       span: { start, end: start },
     },
@@ -402,7 +402,7 @@ function parseOuterDocComment(
       span: { start, end: start },
     },
     {
-      kind: "punct",
+      kind: "lparen",
       text: "(",
       span: { start, end: start },
     },
@@ -434,7 +434,7 @@ function parseOuterDocComment(
   for (let j = 0; j < normalizedComments.length; j++) {
     if (j !== 0) {
       tokens.push({
-        kind: "punct",
+        kind: "comma",
         text: ",",
         span: { start, end },
       });
@@ -448,12 +448,12 @@ function parseOuterDocComment(
 
   tokens.push(
     {
-      kind: "punct",
+      kind: "rparen",
       text: ")",
       span: { start: end, end },
     },
     {
-      kind: "punct",
+      kind: "rbracket",
       text: "]",
       span: { start: end, end },
     },
@@ -486,17 +486,17 @@ function parseInnerDocComment(
 
   tokens.push(
     {
-      kind: "punct",
+      kind: "hash",
       text: "#",
       span: { start, end: start },
     },
     {
-      kind: "punct",
+      kind: "bang",
       text: "!",
       span: { start, end: start },
     },
     {
-      kind: "punct",
+      kind: "lbracket",
       text: "[",
       span: { start, end: start },
     },
@@ -506,7 +506,7 @@ function parseInnerDocComment(
       span: { start, end: start },
     },
     {
-      kind: "punct",
+      kind: "lparen",
       text: "(",
       span: { start, end: start },
     },
@@ -539,7 +539,7 @@ function parseInnerDocComment(
   for (let j = 0; j < normalizedComments.length; j++) {
     if (j !== 0) {
       tokens.push({
-        kind: "punct",
+        kind: "comma",
         text: ",",
         span: { start, end },
       });
@@ -553,12 +553,12 @@ function parseInnerDocComment(
 
   tokens.push(
     {
-      kind: "punct",
+      kind: "rparen",
       text: ")",
       span: { start: end, end },
     },
     {
-      kind: "punct",
+      kind: "rbracket",
       text: "]",
       span: { start: end, end },
     },

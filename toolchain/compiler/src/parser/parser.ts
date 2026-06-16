@@ -1,4 +1,4 @@
-import type { Token } from "../lexer/token.js";
+import type { Token, TokenKind } from "../lexer/token.js";
 import { none, some, type Option } from "../option.js";
 import type {
   Attribute,
@@ -36,13 +36,6 @@ function tokenAt(tokens: readonly Token[], pos: number): Token {
 }
 
 /**
- * @returns `true` if the token is the given punctuation token.
- */
-function isPunct(token: Token, text: string): boolean {
-  return token.kind === "punct" && token.text === text;
-}
-
-/**
  * Contextual keywords are lexed as identifiers and interpreted by the parser.
  *
  * @returns `true` if the token is an identifier whose text matches a contextual keyword.
@@ -52,20 +45,20 @@ function isContextual(token: Token, text: string): boolean {
 }
 
 /**
- * Consumes a required punctuation token.
+ * Consumes a required token of the given kind.
  *
- * @returns Index of the next token after the punctuation.
- * @throws SyntaxError if the expected punctuation is not present.
+ * @returns Index of the next token.
+ * @throws SyntaxError if the token at `pos` is not of the expected kind.
  */
-function expectPunct(
+function expect(
   tokens: readonly Token[],
   pos: number,
-  text: string,
+  kind: TokenKind,
 ): number {
   const token = tokenAt(tokens, pos);
-  if (!isPunct(token, text)) {
+  if (token.kind !== kind) {
     throw new SyntaxError(
-      `Expected "${text}", found "${token.text}" at offset ${token.span.start}`,
+      `Expected ${kind}, found "${token.text}" at offset ${token.span.start}`,
     );
   }
   return pos + 1;
@@ -221,7 +214,7 @@ function parsePrimary(
   if (token.kind === "ident") {
     return parsePath(tokens, pos);
   }
-  if (token.kind === "punct" && token.text === "&") {
+  if (token.kind === "amp") {
     return parseReference(tokens, pos);
   }
   throw new SyntaxError(
@@ -242,18 +235,18 @@ function parseArguments(
   tokens: readonly Token[],
   pos: number,
 ): Parsed<Expression[]> {
-  let cursor = expectPunct(tokens, pos, "(");
+  let cursor = expect(tokens, pos, "lparen");
   const args: Expression[] = [];
-  while (!isPunct(tokenAt(tokens, cursor), ")")) {
+  while (tokenAt(tokens, cursor).kind !== "rparen") {
     const arg = parseExpression(tokens, cursor);
     args.push(arg.node);
     cursor = arg.next;
-    if (!isPunct(tokenAt(tokens, cursor), ",")) {
+    if (tokenAt(tokens, cursor).kind !== "comma") {
       break;
     }
     cursor += 1;
   }
-  return { node: args, next: expectPunct(tokens, cursor, ")") };
+  return { node: args, next: expect(tokens, cursor, "rparen") };
 }
 
 /**
@@ -280,7 +273,7 @@ function parseExpression(
   pos: number,
 ): Parsed<Expression> {
   let result = parsePrimary(tokens, pos);
-  while (isPunct(tokenAt(tokens, result.next), "(")) {
+  while (tokenAt(tokens, result.next).kind === "lparen") {
     const args = parseArguments(tokens, result.next);
     const call: CallExpression = {
       kind: "CallExpression",
@@ -359,12 +352,12 @@ function parseLetStatement(
   const pattern = parseBindingPattern(tokens, cursor);
   cursor = pattern.next;
   let initializer: Option<Expression> = none();
-  if (isPunct(tokenAt(tokens, cursor), "=")) {
+  if (tokenAt(tokens, cursor).kind === "eq") {
     const init = parseExpression(tokens, cursor + 1);
     initializer = some(init.node);
     cursor = init.next;
   }
-  cursor = expectPunct(tokens, cursor, ";");
+  cursor = expect(tokens, cursor, "semi");
   const letStmt: LetStatement = {
     kind: "LetStatement",
     tokenId: start,
@@ -419,7 +412,7 @@ function expressionStatement(expression: Expression): ExpressionStatement {
  */
 function parseBlock(tokens: readonly Token[], pos: number): Parsed<Block> {
   const start = pos;
-  let cursor = expectPunct(tokens, pos, "{");
+  let cursor = expect(tokens, pos, "lbrace");
 
   // Inner attributes at the start of a block document the enclosing function.
   const inner = collectInnerAttributes(tokens, cursor);
@@ -428,13 +421,13 @@ function parseBlock(tokens: readonly Token[], pos: number): Parsed<Block> {
 
   const statements: Statement[] = [];
   let trailing: Expression | null = null;
-  while (!isPunct(tokenAt(tokens, cursor), "}")) {
+  while (tokenAt(tokens, cursor).kind !== "rbrace") {
     // Outer attributes (e.g. `/// doc`) before a statement attach to a following
     // `let` — the only named target inside a block. Before anything else they
     // have nothing to document and are discarded.
     const outer = collectOuterAttributes(tokens, cursor);
     cursor = outer.next;
-    if (isPunct(tokenAt(tokens, cursor), "}")) {
+    if (tokenAt(tokens, cursor).kind === "rbrace") {
       break;
     }
     const token = tokenAt(tokens, cursor);
@@ -446,7 +439,7 @@ function parseBlock(tokens: readonly Token[], pos: number): Parsed<Block> {
     }
     const parsed = parseExpression(tokens, cursor);
     cursor = parsed.next;
-    if (isPunct(tokenAt(tokens, cursor), ";")) {
+    if (tokenAt(tokens, cursor).kind === "semi") {
       statements.push(expressionStatement(parsed.node));
       cursor += 1;
       continue;
@@ -461,7 +454,7 @@ function parseBlock(tokens: readonly Token[], pos: number): Parsed<Block> {
     trailingExpression: trailing !== null ? some(trailing) : none(),
     innerAttributes,
   };
-  return { node: block, next: expectPunct(tokens, cursor, "}") };
+  return { node: block, next: expect(tokens, cursor, "rbrace") };
 }
 
 /**
@@ -469,7 +462,8 @@ function parseBlock(tokens: readonly Token[], pos: number): Parsed<Block> {
  */
 function isOuterAttribute(tokens: readonly Token[], pos: number): boolean {
   return (
-    isPunct(tokenAt(tokens, pos), "#") && isPunct(tokenAt(tokens, pos + 1), "[")
+    tokenAt(tokens, pos).kind === "hash" &&
+    tokenAt(tokens, pos + 1).kind === "lbracket"
   );
 }
 
@@ -478,9 +472,9 @@ function isOuterAttribute(tokens: readonly Token[], pos: number): boolean {
  */
 function isInnerAttribute(tokens: readonly Token[], pos: number): boolean {
   return (
-    isPunct(tokenAt(tokens, pos), "#") &&
-    isPunct(tokenAt(tokens, pos + 1), "!") &&
-    isPunct(tokenAt(tokens, pos + 2), "[")
+    tokenAt(tokens, pos).kind === "hash" &&
+    tokenAt(tokens, pos + 1).kind === "bang" &&
+    tokenAt(tokens, pos + 2).kind === "lbracket"
   );
 }
 
@@ -532,7 +526,7 @@ function parseAttribute(
 ): { node: Attribute; isInner: boolean; next: number } {
   let cursor = pos + 1; // skip `#`
   let isInner = false;
-  if (isPunct(tokenAt(tokens, cursor), "!")) {
+  if (tokenAt(tokens, cursor).kind === "bang") {
     isInner = true;
     cursor += 1; // skip `!`
   }
@@ -541,13 +535,13 @@ function parseAttribute(
   cursor = name.next;
 
   const args: AttributeArg[] = [];
-  if (isPunct(tokenAt(tokens, cursor), "(")) {
+  if (tokenAt(tokens, cursor).kind === "lparen") {
     cursor += 1; // skip `(`
-    while (!isPunct(tokenAt(tokens, cursor), ")")) {
+    while (tokenAt(tokens, cursor).kind !== "rparen") {
       const arg = parseAttributeArg(tokens, cursor);
       args.push(arg.node);
       cursor = arg.next;
-      if (isPunct(tokenAt(tokens, cursor), ",")) {
+      if (tokenAt(tokens, cursor).kind === "comma") {
         cursor += 1;
       }
     }
@@ -626,8 +620,8 @@ function parseFunction(
   const start = pos;
   const afterFn = expectKeyword(tokens, pos, "fn");
   const name = parseIdentifier(tokens, afterFn);
-  const afterOpen = expectPunct(tokens, name.next, "(");
-  const afterClose = expectPunct(tokens, afterOpen, ")");
+  const afterOpen = expect(tokens, name.next, "lparen");
+  const afterClose = expect(tokens, afterOpen, "rparen");
   const body = parseBlock(tokens, afterClose);
   const fn: FunctionDecl = {
     kind: "Function",
@@ -655,10 +649,10 @@ function parseVisibility(
   }
   // Check for `pub(scope)`.
   const maybeParen = tokenAt(tokens, pos + 1);
-  if (isPunct(maybeParen, "(")) {
+  if (maybeParen.kind === "lparen") {
     const scopeToken = tokenAt(tokens, pos + 2);
     const closeParen = tokenAt(tokens, pos + 3);
-    if (scopeToken.kind === "ident" && isPunct(closeParen, ")")) {
+    if (scopeToken.kind === "ident" && closeParen.kind === "rparen") {
       return {
         node: some({ kind: "Visibility", scope: some(scopeToken.text) }),
         next: pos + 4,
@@ -695,7 +689,7 @@ function parseItem(tokens: readonly Token[], pos: number): Parsed<Item> {
     return parseLetStatement(tokens, cursor, attributes);
   }
   const parsed = parseExpression(tokens, cursor);
-  if (isPunct(tokenAt(tokens, parsed.next), ";")) {
+  if (tokenAt(tokens, parsed.next).kind === "semi") {
     return { node: expressionStatement(parsed.node), next: parsed.next + 1 };
   }
   return parsed;

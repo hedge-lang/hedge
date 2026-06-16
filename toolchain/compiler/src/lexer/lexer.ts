@@ -71,12 +71,128 @@ function isStringEnd(beginCh: string): (ch: string) => boolean {
   return (ch: string) => ch !== beginCh && ch !== "\\";
 }
 
+function push(
+  tokens: Token[],
+  kind: TokenKind,
+  text: string,
+  start: number,
+): number {
+  tokens.push({ kind, text, span: { start, end: start + text.length } });
+  return start + text.length;
+}
+
+function peek(source: string, i: number, offset: number = 1): string {
+  return source[i + offset] ?? "";
+}
+
+/**
+ * Scans a multi-char or single-char symbol token using a maximal-munch
+ * cascade grouped by leading character.
+ *
+ * @returns the position after the emitted token.
+ */
+function scanSymbol(tokens: Token[], source: string, i: number): number {
+  const ch = source[i]!;
+  const n1 = peek(source, i, 1);
+  const n2 = peek(source, i, 2);
+
+  switch (ch) {
+    case "=":
+      if (n1 === "=") return push(tokens, "eq_eq", "==", i);
+      if (n1 === ">") return push(tokens, "fat_arrow", "=>", i);
+      return push(tokens, "eq", "=", i);
+
+    case "!":
+      if (n1 === "=") return push(tokens, "bang_eq", "!=", i);
+      return push(tokens, "bang", "!", i);
+
+    case "<":
+      if (n1 === "<") {
+        if (n2 === "=") return push(tokens, "lt_lt_eq", "<<=", i);
+        return push(tokens, "lt_lt", "<<", i);
+      }
+      if (n1 === "=") return push(tokens, "lt_eq", "<=", i);
+      return push(tokens, "lt", "<", i);
+
+    case ">":
+      if (n1 === ">") {
+        if (n2 === "=") return push(tokens, "gt_gt_eq", ">>=", i);
+        return push(tokens, "gt_gt", ">>", i);
+      }
+      if (n1 === "=") return push(tokens, "gt_eq", ">=", i);
+      return push(tokens, "gt", ">", i);
+
+    case "&":
+      if (n1 === "&") return push(tokens, "amp_amp", "&&", i);
+      if (n1 === "=") return push(tokens, "amp_eq", "&=", i);
+      return push(tokens, "amp", "&", i);
+
+    case "|":
+      if (n1 === "|") return push(tokens, "pipe_pipe", "||", i);
+      if (n1 === "=") return push(tokens, "pipe_eq", "|=", i);
+      return push(tokens, "pipe", "|", i);
+
+    case "+":
+      if (n1 === "=") return push(tokens, "plus_eq", "+=", i);
+      return push(tokens, "plus", "+", i);
+
+    case "-":
+      if (n1 === ">") return push(tokens, "arrow", "->", i);
+      if (n1 === "=") return push(tokens, "minus_eq", "-=", i);
+      return push(tokens, "minus", "-", i);
+
+    case "*":
+      if (n1 === "=") return push(tokens, "star_eq", "*=", i);
+      return push(tokens, "star", "*", i);
+
+    case "/":
+      if (n1 === "=") return push(tokens, "slash_eq", "/=", i);
+      return push(tokens, "slash", "/", i);
+
+    case "%":
+      if (n1 === "=") return push(tokens, "percent_eq", "%=", i);
+      return push(tokens, "percent", "%", i);
+
+    case "^":
+      if (n1 === "=") return push(tokens, "caret_eq", "^=", i);
+      return push(tokens, "caret", "^", i);
+
+    case ":":
+      if (n1 === ":") return push(tokens, "path_sep", "::", i);
+      return push(tokens, "colon", ":", i);
+
+    case ".":
+      if (n1 === ".") {
+        if (n2 === "=") return push(tokens, "dot_dot_eq", "..=", i);
+        return push(tokens, "dot_dot", "..", i);
+      }
+      return push(tokens, "dot", ".", i);
+
+    case "(": return push(tokens, "lparen", "(", i);
+    case ")": return push(tokens, "rparen", ")", i);
+    case "{": return push(tokens, "lbrace", "{", i);
+    case "}": return push(tokens, "rbrace", "}", i);
+    case "[": return push(tokens, "lbracket", "[", i);
+    case "]": return push(tokens, "rbracket", "]", i);
+    case ",": return push(tokens, "comma", ",", i);
+    case ";": return push(tokens, "semi", ";", i);
+    case "#": return push(tokens, "hash", "#", i);
+    case "@": return push(tokens, "at", "@", i);
+    case "?": return push(tokens, "question", "?", i);
+
+    default:
+      throw new SyntaxError(
+        `Unexpected character "${ch}" at offset ${i}`,
+      );
+  }
+}
+
 /**
  * Tokenize Hedge source into a flat token list terminated by an `eof` token.
  *
- * Slice-1 subset: ASCII identifiers and hard keywords, decimal integer
- * literals, single-character punctuation, and whitespace. This grows to the
- * full lexical grammar in `specification/0025-grammar.md`.
+ * Covers the full Slice 1 lexical grammar: identifiers, hard keywords, decimal
+ * integer literals, string literals, lifetime tokens, and all operators and
+ * punctuation defined in `specification/0025-grammar.md`.
  */
 export function tokenize(source: string): Token[] {
   const tokens: Token[] = [];
@@ -93,6 +209,20 @@ export function tokenize(source: string): Token[] {
     const start = i;
     if (isComment(source, i)) {
       i = parseComment(tokens, source, i);
+    } else if (ch === "'") {
+      // Lifetime: 'ident (not immediately followed by another ' after one char)
+      const n1 = peek(source, i, 1);
+      if (isIdentStart(n1)) {
+        const end = scanWhile(source, i + 2, isIdentContinue);
+        tokens.push({
+          kind: "lifetime",
+          text: source.slice(i + 1, end),
+          span: { start, end },
+        });
+        i = end;
+      } else {
+        throw new SyntaxError(`Unexpected character "'" at offset ${start}`);
+      }
     } else if (isIdentStart(ch)) {
       const end = scanWhile(source, i + 1, isIdentContinue);
       const text = source.slice(start, end);
@@ -121,8 +251,7 @@ export function tokenize(source: string): Token[] {
       });
       i = end + 1;
     } else {
-      tokens.push({ kind: "punct", text: ch, span: { start, end: i + 1 } });
-      i += 1;
+      i = scanSymbol(tokens, source, i);
     }
   }
   tokens.push({
