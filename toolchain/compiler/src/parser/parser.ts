@@ -112,26 +112,65 @@ function parseIdentifier(
 }
 
 /**
+ * Parses a path (absolute or relative, one or more `::` separated segments).
+ *
+ * Grammar:
+ *
+ * ```text
+ * Path ::= "::"? Identifier ("::" Identifier)*
+ * ```
+ */
+function parsePathSegments(
+  tokens: readonly Token[],
+  pos: number,
+): Parsed<Path> {
+  let cursor = pos;
+  let absolute = false;
+
+  if (tokenAt(tokens, cursor).kind === "path_sep") {
+    absolute = true;
+    cursor += 1;
+  }
+
+  const first = parseIdentifier(tokens, cursor);
+  const segments: string[] = [first.node.text];
+  cursor = first.next;
+
+  while (tokenAt(tokens, cursor).kind === "path_sep") {
+    const afterSep = cursor + 1;
+    const next = tokenAt(tokens, afterSep);
+    if (next.kind !== "ident") {
+      throw new SyntaxError(
+        `Expected identifier after "::", found "${next.text}" at offset ${next.span.start}`,
+      );
+    }
+    cursor = afterSep;
+    const segment = parseIdentifier(tokens, cursor);
+    segments.push(segment.node.text);
+    cursor = segment.next;
+  }
+
+  return { node: { absolute, segments }, next: cursor };
+}
+
+/**
  * Parses a path expression.
  *
  * Grammar:
  *
  * ```text
- * PathExpression ::= Identifier
+ * PathExpression ::= Path
  * ```
  */
 function parsePath(
   tokens: readonly Token[],
   pos: number,
 ): Parsed<PathExpression> {
-  // Single-segment paths only in slice 1; `::` segments come later.
-  const ident = parseIdentifier(tokens, pos);
-  const pathExpr: PathExpression = {
-    kind: "PathExpression",
-    tokenId: pos,
-    path: { absolute: false, segments: [ident.node.text] },
+  const path = parsePathSegments(tokens, pos);
+  return {
+    node: { kind: "PathExpression", tokenId: pos, path: path.node },
+    next: path.next,
   };
-  return { node: pathExpr, next: ident.next };
 }
 
 /**
@@ -211,7 +250,7 @@ function parsePrimary(
       next: pos + 1,
     };
   }
-  if (token.kind === "ident") {
+  if (token.kind === "ident" || token.kind === "path_sep") {
     return parsePath(tokens, pos);
   }
   if (token.kind === "amp") {
@@ -506,9 +545,9 @@ function parseAttributeArg(
     };
     return { node: { path: none(), literal: some(lit) }, next: pos + 1 };
   }
-  if (token.kind === "ident") {
-    const path: Path = { absolute: false, segments: [token.text] };
-    return { node: { path: some(path), literal: none() }, next: pos + 1 };
+  if (token.kind === "ident" || token.kind === "path_sep") {
+    const parsed = parsePathSegments(tokens, pos);
+    return { node: { path: some(parsed.node), literal: none() }, next: parsed.next };
   }
   return { node: { path: none(), literal: none() }, next: pos + 1 };
 }
