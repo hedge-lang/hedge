@@ -176,7 +176,10 @@ describe("path expressions", (): void => {
       items: [
         {
           kind: "ExpressionStatement",
-          expression: { kind: "PathExpression", path: { absolute: false, segments: ["foo"] } },
+          expression: {
+            kind: "PathExpression",
+            path: { absolute: false, segments: ["foo"] },
+          },
         },
       ],
     });
@@ -232,7 +235,9 @@ describe("path expressions", (): void => {
   });
 
   it("throws on a trailing path separator", (): void => {
-    expect(() => parse(tokenize("foo::;"))).toThrow('Expected identifier after "::"');
+    expect(() => parse(tokenize("foo::;"))).toThrow(
+      'Expected identifier after "::"',
+    );
   });
 });
 

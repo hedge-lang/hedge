@@ -547,7 +547,10 @@ function parseAttributeArg(
   }
   if (token.kind === "ident" || token.kind === "path_sep") {
     const parsed = parsePathSegments(tokens, pos);
-    return { node: { path: some(parsed.node), literal: none() }, next: parsed.next };
+    return {
+      node: { path: some(parsed.node), literal: none() },
+      next: parsed.next,
+    };
   }
   return { node: { path: none(), literal: none() }, next: pos + 1 };
 }
