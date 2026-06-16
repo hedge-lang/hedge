@@ -169,6 +169,73 @@ describe("parser", (): void => {
   });
 });
 
+describe("path expressions", (): void => {
+  it("parses a single-segment path", (): void => {
+    const ast = parse(tokenize("foo;"));
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: { kind: "PathExpression", path: { absolute: false, segments: ["foo"] } },
+        },
+      ],
+    });
+  });
+
+  it("parses a multi-segment qualified path", (): void => {
+    const ast = parse(tokenize("std::io::print;"));
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "PathExpression",
+            path: { absolute: false, segments: ["std", "io", "print"] },
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses an absolute path", (): void => {
+    const ast = parse(tokenize("::std::io;"));
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "PathExpression",
+            path: { absolute: true, segments: ["std", "io"] },
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses a qualified path used as a call callee", (): void => {
+    const ast = parse(tokenize('std::io::print("hi");'));
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "CallExpression",
+            callee: {
+              kind: "PathExpression",
+              path: { absolute: false, segments: ["std", "io", "print"] },
+            },
+            arguments: [{ kind: "StringLiteral", value: "hi" }],
+          },
+        },
+      ],
+    });
+  });
+
+  it("throws on a trailing path separator", (): void => {
+    expect(() => parse(tokenize("foo::;"))).toThrow('Expected identifier after "::"');
+  });
+});
+
 describe("attributes on let statements", (): void => {
   it("attaches an outer attribute to a top-level let", (): void => {
     const tokens = tokenize("#[attr] let x = 1;");
