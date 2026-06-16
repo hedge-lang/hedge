@@ -10,10 +10,10 @@ describe("lexer", (): void => {
     expect(tokens).toMatchObject([
       { kind: "keyword", text: "let" },
       { kind: "ident", text: "x" },
-      { kind: "eq", text: "=" },
+      { kind: "eq" },
       { kind: "int", text: "1" },
-      { kind: "semi", text: ";" },
-      { kind: "eof", text: "" },
+      { kind: "semi" },
+      { kind: "eof" },
     ]);
   });
 
@@ -44,20 +44,20 @@ describe("lexer", (): void => {
     expect(tokens).toMatchObject([
       { kind: "keyword", text: "fn" },
       { kind: "ident", text: "main" },
-      { kind: "lparen", text: "(" },
-      { kind: "rparen", text: ")" },
-      { kind: "lbrace", text: "{" },
+      { kind: "lparen" },
+      { kind: "rparen" },
+      { kind: "lbrace" },
       { kind: "keyword", text: "let" },
       { kind: "ident", text: "greeting" },
-      { kind: "eq", text: "=" },
+      { kind: "eq" },
       { kind: "string", text: "Hello, world!" },
-      { kind: "semi", text: ";" },
+      { kind: "semi" },
       { kind: "ident", text: "print" },
-      { kind: "lparen", text: "(" },
+      { kind: "lparen" },
       { kind: "ident", text: "greeting" },
-      { kind: "rparen", text: ")" },
-      { kind: "semi", text: ";" },
-      { kind: "rbrace", text: "}" },
+      { kind: "rparen" },
+      { kind: "semi" },
+      { kind: "rbrace" },
       { kind: "eof" },
     ]);
   });
@@ -75,9 +75,9 @@ describe("lexer", (): void => {
 
         expect(tokens).toMatchObject([
           { kind: "ident", text: "a" },
-          { kind: "semi", text: ";" },
+          { kind: "semi" },
           { kind: "ident", text: "b" },
-          { kind: "semi", text: ";" },
+          { kind: "semi" },
           { kind: "eof" },
         ]);
       });
@@ -95,9 +95,9 @@ describe("lexer", (): void => {
 
         expect(tokens).toMatchObject([
           { kind: "ident", text: "a" },
-          { kind: "semi", text: ";" },
+          { kind: "semi" },
           { kind: "ident", text: "b" },
-          { kind: "semi", text: ";" },
+          { kind: "semi" },
           { kind: "eof" },
         ]);
       });
@@ -119,21 +119,21 @@ describe("lexer", (): void => {
             kind: "ident",
             text: "a",
           },
-          { kind: "semi", text: ";" },
-          { kind: "hash", text: "#" },
-          { kind: "lbracket", text: "[" },
+          { kind: "semi" },
+          { kind: "hash" },
+          { kind: "lbracket" },
           { kind: "ident", text: "doc" },
-          { kind: "lparen", text: "(" },
+          { kind: "lparen" },
           { kind: "string", text: "This is a comment" },
-          { kind: "comma", text: "," },
+          { kind: "comma" },
           {
             kind: "string",
             text: "            This is another comment with trailing whitespace   ",
           },
-          { kind: "rparen", text: ")" },
-          { kind: "rbracket", text: "]" },
+          { kind: "rparen" },
+          { kind: "rbracket" },
           { kind: "ident", text: "b" },
-          { kind: "semi", text: ";" },
+          { kind: "semi" },
           { kind: "eof" },
         ]);
       });
@@ -151,27 +151,27 @@ describe("lexer", (): void => {
         expect(tokens).toMatchObject([
           { kind: "keyword", text: "fn" },
           { kind: "ident", text: "example" },
-          { kind: "lparen", text: "(" },
-          { kind: "rparen", text: ")" },
-          { kind: "lbrace", text: "{" },
-          { kind: "hash", text: "#" },
-          { kind: "bang", text: "!" },
-          { kind: "lbracket", text: "[" },
+          { kind: "lparen" },
+          { kind: "rparen" },
+          { kind: "lbrace" },
+          { kind: "hash" },
+          { kind: "bang" },
+          { kind: "lbracket" },
           { kind: "ident", text: "doc" },
-          { kind: "lparen", text: "(" },
+          { kind: "lparen" },
           { kind: "string", text: "" },
-          { kind: "comma", text: "," },
+          { kind: "comma" },
           { kind: "string", text: "* This is a comment" },
-          { kind: "comma", text: "," },
+          { kind: "comma" },
           {
             kind: "string",
             text: "* This is another comment with trailing whitespace   ",
           },
-          { kind: "comma", text: "," },
+          { kind: "comma" },
           { kind: "string", text: "" },
-          { kind: "rparen", text: ")" },
-          { kind: "rbracket", text: "]" },
-          { kind: "rbrace", text: "}" },
+          { kind: "rparen" },
+          { kind: "rbracket" },
+          { kind: "rbrace" },
           { kind: "eof" },
         ]);
       });
@@ -187,23 +187,23 @@ describe("lexer", (): void => {
         `);
 
         expect(tokens).toMatchObject([
-          { kind: "hash", text: "#" },
-          { kind: "lbracket", text: "[" },
+          { kind: "hash" },
+          { kind: "lbracket" },
           { kind: "ident", text: "doc" },
-          { kind: "lparen", text: "(" },
+          { kind: "lparen" },
           { kind: "string", text: "This is a doc comment" },
-          { kind: "comma", text: "," },
+          { kind: "comma" },
           { kind: "string", text: "With two lines" },
-          { kind: "comma", text: "," },
+          { kind: "comma" },
           { kind: "string", text: "  And some indentation" },
-          { kind: "rparen", text: ")" },
-          { kind: "rbracket", text: "]" },
+          { kind: "rparen" },
+          { kind: "rbracket" },
           { kind: "keyword", text: "fn" },
           { kind: "ident", text: "example" },
-          { kind: "lparen", text: "(" },
-          { kind: "rparen", text: ")" },
-          { kind: "lbrace", text: "{" },
-          { kind: "rbrace", text: "}" },
+          { kind: "lparen" },
+          { kind: "rparen" },
+          { kind: "lbrace" },
+          { kind: "rbrace" },
           { kind: "eof" },
         ]);
       });
@@ -220,22 +220,22 @@ describe("lexer", (): void => {
         expect(tokens).toMatchObject([
           { kind: "keyword", text: "fn" },
           { kind: "ident", text: "example" },
-          { kind: "lparen", text: "(" },
-          { kind: "rparen", text: ")" },
-          { kind: "lbrace", text: "{" },
-          { kind: "hash", text: "#" },
-          { kind: "bang", text: "!" },
-          { kind: "lbracket", text: "[" },
+          { kind: "lparen" },
+          { kind: "rparen" },
+          { kind: "lbrace" },
+          { kind: "hash" },
+          { kind: "bang" },
+          { kind: "lbracket" },
           { kind: "ident", text: "doc" },
-          { kind: "lparen", text: "(" },
+          { kind: "lparen" },
           { kind: "string", text: "This is an internal doc comment" },
-          { kind: "comma", text: "," },
+          { kind: "comma" },
           { kind: "string", text: "With two lines" },
-          { kind: "comma", text: "," },
+          { kind: "comma" },
           { kind: "string", text: "  And some indentation" },
-          { kind: "rparen", text: ")" },
-          { kind: "rbracket", text: "]" },
-          { kind: "rbrace", text: "}" },
+          { kind: "rparen" },
+          { kind: "rbracket" },
+          { kind: "rbrace" },
           { kind: "eof" },
         ]);
       });
@@ -247,19 +247,19 @@ describe("lexer", (): void => {
       const tokens = tokenize("#[derive(Clone)] fn f() {}");
 
       expect(tokens).toMatchObject([
-        { kind: "hash", text: "#" },
-        { kind: "lbracket", text: "[" },
+        { kind: "hash" },
+        { kind: "lbracket" },
         { kind: "ident", text: "derive" },
-        { kind: "lparen", text: "(" },
+        { kind: "lparen" },
         { kind: "ident", text: "Clone" },
-        { kind: "rparen", text: ")" },
-        { kind: "rbracket", text: "]" },
+        { kind: "rparen" },
+        { kind: "rbracket" },
         { kind: "keyword", text: "fn" },
         { kind: "ident", text: "f" },
-        { kind: "lparen", text: "(" },
-        { kind: "rparen", text: ")" },
-        { kind: "lbrace", text: "{" },
-        { kind: "rbrace", text: "}" },
+        { kind: "lparen" },
+        { kind: "rparen" },
+        { kind: "lbrace" },
+        { kind: "rbrace" },
         { kind: "eof" },
       ]);
     });
@@ -268,19 +268,19 @@ describe("lexer", (): void => {
       const tokens = tokenize("/// Greeting\nfn f() {}");
 
       expect(tokens).toMatchObject([
-        { kind: "hash", text: "#" },
-        { kind: "lbracket", text: "[" },
+        { kind: "hash" },
+        { kind: "lbracket" },
         { kind: "ident", text: "doc" },
-        { kind: "lparen", text: "(" },
+        { kind: "lparen" },
         { kind: "string", text: "Greeting" },
-        { kind: "rparen", text: ")" },
-        { kind: "rbracket", text: "]" },
+        { kind: "rparen" },
+        { kind: "rbracket" },
         { kind: "keyword", text: "fn" },
         { kind: "ident", text: "f" },
-        { kind: "lparen", text: "(" },
-        { kind: "rparen", text: ")" },
-        { kind: "lbrace", text: "{" },
-        { kind: "rbrace", text: "}" },
+        { kind: "lparen" },
+        { kind: "rparen" },
+        { kind: "lbrace" },
+        { kind: "rbrace" },
         { kind: "eof" },
       ]);
     });
@@ -290,10 +290,10 @@ describe("lexer", (): void => {
     it("tokenizes comparison operators", () => {
       const tokens = tokenize("== != <= >=");
       expect(tokens).toMatchObject([
-        { kind: "eq_eq", text: "==" },
-        { kind: "bang_eq", text: "!=" },
-        { kind: "lt_eq", text: "<=" },
-        { kind: "gt_eq", text: ">=" },
+        { kind: "eq_eq" },
+        { kind: "bang_eq" },
+        { kind: "lt_eq" },
+        { kind: "gt_eq" },
         { kind: "eof" },
       ]);
     });
@@ -301,8 +301,8 @@ describe("lexer", (): void => {
     it("tokenizes logical operators", () => {
       const tokens = tokenize("&& ||");
       expect(tokens).toMatchObject([
-        { kind: "amp_amp", text: "&&" },
-        { kind: "pipe_pipe", text: "||" },
+        { kind: "amp_amp" },
+        { kind: "pipe_pipe" },
         { kind: "eof" },
       ]);
     });
@@ -310,10 +310,10 @@ describe("lexer", (): void => {
     it("tokenizes shift operators and their assign forms", () => {
       const tokens = tokenize("<< >> <<= >>=");
       expect(tokens).toMatchObject([
-        { kind: "lt_lt", text: "<<" },
-        { kind: "gt_gt", text: ">>" },
-        { kind: "lt_lt_eq", text: "<<=" },
-        { kind: "gt_gt_eq", text: ">>=" },
+        { kind: "lt_lt" },
+        { kind: "gt_gt" },
+        { kind: "lt_lt_eq" },
+        { kind: "gt_gt_eq" },
         { kind: "eof" },
       ]);
     });
@@ -321,14 +321,14 @@ describe("lexer", (): void => {
     it("tokenizes compound assignment operators", () => {
       const tokens = tokenize("+= -= *= /= %= &= |= ^=");
       expect(tokens).toMatchObject([
-        { kind: "plus_eq", text: "+=" },
-        { kind: "minus_eq", text: "-=" },
-        { kind: "star_eq", text: "*=" },
-        { kind: "slash_eq", text: "/=" },
-        { kind: "percent_eq", text: "%=" },
-        { kind: "amp_eq", text: "&=" },
-        { kind: "pipe_eq", text: "|=" },
-        { kind: "caret_eq", text: "^=" },
+        { kind: "plus_eq" },
+        { kind: "minus_eq" },
+        { kind: "star_eq" },
+        { kind: "slash_eq" },
+        { kind: "percent_eq" },
+        { kind: "amp_eq" },
+        { kind: "pipe_eq" },
+        { kind: "caret_eq" },
         { kind: "eof" },
       ]);
     });
@@ -336,9 +336,9 @@ describe("lexer", (): void => {
     it("tokenizes arrow, fat_arrow, and path_sep", () => {
       const tokens = tokenize("-> => ::");
       expect(tokens).toMatchObject([
-        { kind: "arrow", text: "->" },
-        { kind: "fat_arrow", text: "=>" },
-        { kind: "path_sep", text: "::" },
+        { kind: "arrow" },
+        { kind: "fat_arrow" },
+        { kind: "path_sep" },
         { kind: "eof" },
       ]);
     });
@@ -346,8 +346,8 @@ describe("lexer", (): void => {
     it("tokenizes range operators", () => {
       const tokens = tokenize(".. ..=");
       expect(tokens).toMatchObject([
-        { kind: "dot_dot", text: ".." },
-        { kind: "dot_dot_eq", text: "..=" },
+        { kind: "dot_dot" },
+        { kind: "dot_dot_eq" },
         { kind: "eof" },
       ]);
     });
@@ -355,12 +355,12 @@ describe("lexer", (): void => {
     it("does not greedily consume when single-char is correct", () => {
       const tokens = tokenize("< > = ! & |");
       expect(tokens).toMatchObject([
-        { kind: "lt", text: "<" },
-        { kind: "gt", text: ">" },
-        { kind: "eq", text: "=" },
-        { kind: "bang", text: "!" },
-        { kind: "amp", text: "&" },
-        { kind: "pipe", text: "|" },
+        { kind: "lt" },
+        { kind: "gt" },
+        { kind: "eq" },
+        { kind: "bang" },
+        { kind: "amp" },
+        { kind: "pipe" },
         { kind: "eof" },
       ]);
     });

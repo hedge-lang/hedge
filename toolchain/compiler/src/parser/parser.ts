@@ -1,4 +1,4 @@
-import type { Token, TokenKind } from "../lexer/token.js";
+import type { Token } from "../lexer/token.js";
 import { none, some, type Option } from "../option.js";
 import type {
   Attribute,
@@ -53,12 +53,12 @@ function isContextual(token: Token, text: string): boolean {
 function expect(
   tokens: readonly Token[],
   pos: number,
-  kind: TokenKind,
+  kind: Token["kind"],
 ): number {
   const token = tokenAt(tokens, pos);
   if (token.kind !== kind) {
     throw new SyntaxError(
-      `Expected ${kind}, found "${token.text}" at offset ${token.span.start}`,
+      `Expected ${kind}, found "${token.kind}" at offset ${token.span.start}`,
     );
   }
   return pos + 1;
@@ -78,7 +78,7 @@ function expectKeyword(
   const token = tokenAt(tokens, pos);
   if (token.kind !== "keyword" || token.text !== text) {
     throw new SyntaxError(
-      `Expected "${text}", found "${token.text}" at offset ${token.span.start}`,
+      `Expected "${text}", found "${token.kind}" at offset ${token.span.start}`,
     );
   }
   return pos + 1;
@@ -100,7 +100,7 @@ function parseIdentifier(
   const token = tokenAt(tokens, pos);
   if (token.kind !== "ident") {
     throw new SyntaxError(
-      `Expected an identifier, found "${token.text}" at offset ${token.span.start}`,
+      `Expected an identifier, found "${token.kind}" at offset ${token.span.start}`,
     );
   }
   const ident: Identifier = {
@@ -217,8 +217,9 @@ function parsePrimary(
   if (token.kind === "amp") {
     return parseReference(tokens, pos);
   }
+
   throw new SyntaxError(
-    `Expected an expression, found "${token.text}" at offset ${token.span.start}`,
+    `Expected an expression, found "${token.kind}" at offset ${token.span.start}`,
   );
 }
 

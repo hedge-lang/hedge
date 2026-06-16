@@ -180,12 +180,10 @@ function parseBlockOuterDocComment(
   tokens.push(
     {
       kind: "hash",
-      text: "#",
       span: { start, end: start },
     },
     {
       kind: "lbracket",
-      text: "[",
       span: { start, end: start },
     },
     {
@@ -195,7 +193,6 @@ function parseBlockOuterDocComment(
     },
     {
       kind: "lparen",
-      text: "(",
       span: { start, end: start },
     },
   );
@@ -213,7 +210,6 @@ function parseBlockOuterDocComment(
         if (j !== 0) {
           tokens.push({
             kind: "comma",
-            text: ",",
             span: { start, end },
           });
         }
@@ -227,12 +223,10 @@ function parseBlockOuterDocComment(
       tokens.push(
         {
           kind: "rparen",
-          text: ")",
           span: { start: end, end },
         },
         {
           kind: "rbracket",
-          text: "]",
           span: { start: end, end },
         },
       );
@@ -280,17 +274,14 @@ function parseBlockInnerDocComment(
   tokens.push(
     {
       kind: "hash",
-      text: "#",
       span: { start, end: start },
     },
     {
       kind: "bang",
-      text: "!",
       span: { start, end: start },
     },
     {
       kind: "lbracket",
-      text: "[",
       span: { start, end: start },
     },
     {
@@ -300,7 +291,6 @@ function parseBlockInnerDocComment(
     },
     {
       kind: "lparen",
-      text: "(",
       span: { start, end: start },
     },
   );
@@ -318,7 +308,6 @@ function parseBlockInnerDocComment(
         if (j !== 0) {
           tokens.push({
             kind: "comma",
-            text: ",",
             span: { start, end },
           });
         }
@@ -332,12 +321,10 @@ function parseBlockInnerDocComment(
       tokens.push(
         {
           kind: "rparen",
-          text: ")",
           span: { start: end, end },
         },
         {
           kind: "rbracket",
-          text: "]",
           span: { start: end, end },
         },
       );
@@ -388,12 +375,10 @@ function parseOuterDocComment(
   tokens.push(
     {
       kind: "hash",
-      text: "#",
       span: { start, end: start },
     },
     {
       kind: "lbracket",
-      text: "[",
       span: { start, end: start },
     },
     {
@@ -403,7 +388,6 @@ function parseOuterDocComment(
     },
     {
       kind: "lparen",
-      text: "(",
       span: { start, end: start },
     },
   );
@@ -435,7 +419,6 @@ function parseOuterDocComment(
     if (j !== 0) {
       tokens.push({
         kind: "comma",
-        text: ",",
         span: { start, end },
       });
     }
@@ -449,12 +432,10 @@ function parseOuterDocComment(
   tokens.push(
     {
       kind: "rparen",
-      text: ")",
       span: { start: end, end },
     },
     {
       kind: "rbracket",
-      text: "]",
       span: { start: end, end },
     },
   );
@@ -487,17 +468,14 @@ function parseInnerDocComment(
   tokens.push(
     {
       kind: "hash",
-      text: "#",
       span: { start, end: start },
     },
     {
       kind: "bang",
-      text: "!",
       span: { start, end: start },
     },
     {
       kind: "lbracket",
-      text: "[",
       span: { start, end: start },
     },
     {
@@ -507,7 +485,6 @@ function parseInnerDocComment(
     },
     {
       kind: "lparen",
-      text: "(",
       span: { start, end: start },
     },
   );
@@ -540,7 +517,6 @@ function parseInnerDocComment(
     if (j !== 0) {
       tokens.push({
         kind: "comma",
-        text: ",",
         span: { start, end },
       });
     }
@@ -554,12 +530,10 @@ function parseInnerDocComment(
   tokens.push(
     {
       kind: "rparen",
-      text: ")",
       span: { start: end, end },
     },
     {
       kind: "rbracket",
-      text: "]",
       span: { start: end, end },
     },
   );
