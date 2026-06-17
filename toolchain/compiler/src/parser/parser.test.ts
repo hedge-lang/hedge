@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isNone, none, some } from "../option.js";
+import { none, some } from "../option.js";
 import { compile } from "../driver.js";
 import { parse } from "./parser.js";
 import { isErr } from "../result.js";
@@ -364,60 +364,59 @@ describe("type annotations", (): void => {
 
 describe("type annotation error diagnostics", (): void => {
   it("produces an error diagnostic for a reference type", (): void => {
-    const source = "let x: &i32;";
-    const amp = tokenize(source).tokens.find((t) => t.kind === "amp");
-    if (!amp) {
-      expect(amp).toBeDefined(); // fail the test if the amp token isn't found
-      return;
+    const { tokens } = tokenize("let x: &i32;");
+    const amp = tokens.find((t) => t.kind === "amp");
+    expect(amp).toBeDefined();
+    if (!amp) return;
+    const result = parse(tokens);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.severity).toBe("error");
+      expect(result.error.message).toContain("Slice 2");
+      expect(result.error.span).toEqual(some(amp.span));
     }
-    const result = compile(source);
-    expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toContain("Slice 2");
-    expect(result.diagnostics[0]?.span).toEqual(some(amp.span));
-    expect(isNone(result.code)).toBe(true);
   });
 
   it("produces an error diagnostic for an exclusive reference type", (): void => {
-    const source = "let x: &write i32;";
-    const amp = tokenize(source).tokens.find((t) => t.kind === "amp");
-    if (!amp) {
-      expect(amp).toBeDefined(); // fail the test if the amp token isn't found
-      return;
+    const { tokens } = tokenize("let x: &write i32;");
+    const amp = tokens.find((t) => t.kind === "amp");
+    expect(amp).toBeDefined();
+    if (!amp) return;
+    const result = parse(tokens);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.severity).toBe("error");
+      expect(result.error.message).toContain("Slice 2");
+      expect(result.error.span).toEqual(some(amp.span));
     }
-    const result = compile(source);
-    expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toContain("Slice 2");
-    expect(result.diagnostics[0]?.span).toEqual(some(amp.span));
   });
 
   it("produces an error diagnostic for a slice type", (): void => {
-    const source = "let xs: [i32];";
-    const lbracket = tokenize(source).tokens.find((t) => t.kind === "lbracket");
-    if (!lbracket) {
-      expect(lbracket).toBeDefined(); // fail the test if the lbracket token isn't found
-      return;
+    const { tokens } = tokenize("let xs: [i32];");
+    const lbracket = tokens.find((t) => t.kind === "lbracket");
+    expect(lbracket).toBeDefined();
+    if (!lbracket) return;
+    const result = parse(tokens);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.severity).toBe("error");
+      expect(result.error.message).toContain("[T]");
+      expect(result.error.span).toEqual(some(lbracket.span));
     }
-    const result = compile(source);
-    expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toContain("[T]");
-    expect(result.diagnostics[0]?.span).toEqual(some(lbracket.span));
   });
 
   it("produces an error diagnostic for the never type", (): void => {
-    const source = "fn f() -> ! {}";
-    const bang = tokenize(source).tokens.find((t) => t.kind === "bang");
-    if (!bang) {
-      expect(bang).toBeDefined(); // fail the test if the bang token isn't found
-      return;
+    const { tokens } = tokenize("fn f() -> ! {}");
+    const bang = tokens.find((t) => t.kind === "bang");
+    expect(bang).toBeDefined();
+    if (!bang) return;
+    const result = parse(tokens);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.severity).toBe("error");
+      expect(result.error.message).toContain("!");
+      expect(result.error.span).toEqual(some(bang.span));
     }
-    const result = compile(source);
-    expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toContain("!");
-    expect(result.diagnostics[0]?.span).toEqual(some(bang.span));
   });
 });
 
@@ -556,6 +555,9 @@ describe("attribute parsing guardrails", (): void => {
   it("returns an error when an attribute argument list is not closed", (): void => {
     const result = parse(tokenize("#[attr(").tokens);
     expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.message).toContain("unterminated");
+    }
   });
 
   it("returns an error when `]` is missing after attribute arguments", (): void => {
@@ -576,10 +578,29 @@ describe("tuple type guardrail", (): void => {
     }
   });
 
+  it("returns a clear error (not 'tuple types') for an unclosed ( in type position", (): void => {
+    const result = parse(tokenize("let x: (").tokens);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.message).not.toContain("tuple");
+      expect(result.error.message).toContain(")");
+    }
+  });
+
   it("still parses the unit type `()` successfully", (): void => {
     const ast = parseProgram("let x: ();");
     expect(ast).toMatchObject({
       items: [{ kind: "LetStatement", type: some({ kind: "UnitType" }) }],
     });
+  });
+});
+
+describe("visibility guardrails", (): void => {
+  it("returns an error for pub on a let statement", (): void => {
+    const result = parse(tokenize("pub let x = 1;").tokens);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.message).toContain("let");
+    }
   });
 });
