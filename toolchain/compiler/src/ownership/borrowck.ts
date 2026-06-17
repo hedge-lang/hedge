@@ -1,6 +1,6 @@
 import type { Diagnostic } from "../diagnostics.js";
-import type { Token } from "../lexer/token.js";
-import { isSome, none, some } from "../option.js";
+import type { Span, Token } from "../lexer/token.js";
+import { isSome, none, some, type Option } from "../option.js";
 import type {
   Expression,
   FunctionDecl,
@@ -149,6 +149,11 @@ function describeBorrow(borrow: Borrow): string {
   return borrow.mutable ? "&write" : "&";
 }
 
+function spanOf(tokens: readonly Token[], id: number): Option<Span> {
+  const token = tokens[id];
+  return token !== undefined ? some(token.span) : none();
+}
+
 function checkCapabilities(
   borrows: readonly Borrow[],
   capabilities: Map<string, boolean>,
@@ -157,11 +162,10 @@ function checkCapabilities(
 ): void {
   for (const borrow of borrows) {
     if (borrow.mutable && capabilities.get(borrow.base) === false) {
-      const token = tokens[borrow.tokenId];
       diagnostics.push({
         severity: "error",
         message: `Cannot borrow "${borrow.base}" as &write because it is not declared write.`,
-        span: token !== undefined ? some(token.span) : none(),
+        span: spanOf(tokens, borrow.tokenId),
       });
     }
   }
@@ -189,11 +193,10 @@ function checkExclusivity(
       if (!liveRangesOverlap(a, b, lastUse)) {
         continue; // the borrows are not simultaneously live
       }
-      const bToken = tokens[b.tokenId];
       diagnostics.push({
         severity: "error",
         message: `Conflicting borrows of "${a.base}": ${describeBorrow(a)} and ${describeBorrow(b)} are both live.`,
-        span: bToken !== undefined ? some(bToken.span) : none(),
+        span: spanOf(tokens, b.tokenId),
       });
     }
   }
