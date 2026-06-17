@@ -421,8 +421,9 @@ function parseExpression(
  * Parses a type.
  *
  * Slice-1 supports named types (path types) and the unit type `()`.
- * All other type forms (`&T`, `[T]`, `fn(T) -> T`, `dyn Trait`, `!`, `Self`)
- * are deferred and will produce a guardrail error.
+ * The forms `&T`, `&write T`, `[T]`, and `!` are recognized and produce
+ * specific guardrail errors; all other unsupported type syntax produces a
+ * generic guardrail error.
  *
  * Grammar:
  *
@@ -481,14 +482,27 @@ function parseType(
     });
   }
 
-  return err(
-    // TODO(Issue #105): Add to-string functionality for token kinds.
-    {
+  if (token.kind === "lbracket") {
+    return err({
       severity: "error",
-      message: `type syntax "${token.kind}" is not supported in Slice 1`,
+      message: "slice types ([T]) are not supported in Slice 1",
       span: some(token.span),
-    },
-  );
+    });
+  }
+
+  if (token.kind === "bang") {
+    return err({
+      severity: "error",
+      message: "the never type (!) is not supported in Slice 1",
+      span: some(token.span),
+    });
+  }
+
+  return err({
+    severity: "error",
+    message: `type syntax "${token.kind}" is not supported in Slice 1`,
+    span: some(token.span),
+  });
 }
 
 /**

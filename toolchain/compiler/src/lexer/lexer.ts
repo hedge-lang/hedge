@@ -390,7 +390,10 @@ function scanSymbol(
 }
 
 /**
- * Tokenize Hedge source into a flat token list terminated by an `eof` token.
+ * Tokenize Hedge source into a stream of tokens plus a sidecar diagnostic
+ * list. Unrecognized characters produce an `error` token in the stream and a
+ * corresponding entry in `diagnostics` rather than throwing, so the caller
+ * always receives a complete token sequence terminated by `eof`.
  *
  * @param source The source string to tokenize.
  *

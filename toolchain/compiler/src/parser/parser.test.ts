@@ -402,6 +402,7 @@ describe("type annotation error diagnostics", (): void => {
     const result = compile(source);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain("[T]");
     expect(result.diagnostics[0]?.span).toEqual(some(lbracket.span));
   });
 
@@ -415,6 +416,7 @@ describe("type annotation error diagnostics", (): void => {
     const result = compile(source);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain("!");
     expect(result.diagnostics[0]?.span).toEqual(some(bang.span));
   });
 });
