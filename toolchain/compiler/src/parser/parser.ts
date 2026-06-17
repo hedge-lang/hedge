@@ -502,6 +502,7 @@ function parseType(
   }
 
   return err(
+    // TODO(Issue #105): Add to-string functionality for token kinds.
     new ParserError(
       `type syntax "${token.kind}" is not supported in Slice 1`,
       some(token.span),
