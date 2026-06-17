@@ -95,9 +95,10 @@ function expectKeyword(
   }
   const token = tokenAtResult.value;
   if (token.kind !== "keyword" || token.text !== text) {
+    const found = token.kind === "keyword" ? token.text : token.kind;
     return err({
       severity: "error",
-      message: `Expected keyword "${text}", found "${token.kind}" at offset ${token.span.start}`,
+      message: `Expected keyword "${text}", found "${found}" at offset ${token.span.start}`,
       span: some(token.span),
     });
   }
@@ -1045,7 +1046,7 @@ function parseItem(
     return ok(fnResult.value);
   }
   if (token?.kind === "keyword" && token.text === "let") {
-    const letResult = parseLetStatement(tokens, cursor, attributes);
+    const letResult = parseLetStatement(tokens, afterVis, attributes);
     if (isErr(letResult)) {
       return letResult;
     }
