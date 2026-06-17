@@ -3,6 +3,7 @@ import { generate } from "./codegen/generator.js";
 import type { Diagnostic } from "./diagnostics.js";
 import { toJsim } from "./jsim/jsim.js";
 import { tokenize } from "./lexer/lexer.js";
+import type { Token } from "./lexer/token.js";
 import { optimize } from "./optimization/optimizer.js";
 import { none, some, type Option } from "./option.js";
 import { checkBorrows } from "./ownership/borrowck.js";
@@ -17,30 +18,17 @@ export interface CompileResult {
   readonly code: Option<Code>;
 }
 
-function toDiagnostic(error: unknown): Diagnostic {
-  return {
-    severity: "error",
-    message: error instanceof Error ? error.message : "Unknown compiler error.",
-    tokenId:
-      typeof error === "object" &&
-      error &&
-      "tokenId" in error &&
-      typeof error.tokenId === "number"
-        ? error.tokenId
-        : 0,
-  };
-}
-
 function parseSource(source: string): {
   outcome: Result<Program, Diagnostic>;
   lexDiagnostics: readonly Diagnostic[];
+  tokens: readonly Token[];
 } {
   const { tokens, diagnostics: lexDiagnostics } = tokenize(source);
   const result = parse(tokens);
   if (isErr(result)) {
-    return { outcome: err(toDiagnostic(result.error)), lexDiagnostics };
+    return { outcome: err(result.error), lexDiagnostics, tokens };
   }
-  return { outcome: ok(result.value), lexDiagnostics };
+  return { outcome: ok(result.value), lexDiagnostics, tokens };
 }
 
 function hasError(diagnostics: readonly Diagnostic[]): boolean {
@@ -55,7 +43,7 @@ function hasError(diagnostics: readonly Diagnostic[]): boolean {
  * is `none()` when any error diagnostic is reported.
  */
 export function compile(source: string): CompileResult {
-  const { outcome: parseOutcome, lexDiagnostics } = parseSource(source);
+  const { outcome: parseOutcome, lexDiagnostics, tokens } = parseSource(source);
   if (isErr(parseOutcome)) {
     return {
       diagnostics: [...lexDiagnostics, parseOutcome.error],
@@ -65,8 +53,8 @@ export function compile(source: string): CompileResult {
   const program = parseOutcome.value;
   const diagnostics = [
     ...lexDiagnostics,
-    ...analyze(program).diagnostics,
-    ...checkBorrows(program),
+    ...analyze(program, tokens).diagnostics,
+    ...checkBorrows(program, tokens),
   ];
   if (hasError(diagnostics)) {
     return { diagnostics, code: none() };

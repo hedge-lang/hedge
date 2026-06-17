@@ -7,11 +7,12 @@ import { isErr } from "../result.js";
 import { checkBorrows } from "./borrowck.js";
 
 function check(source: string): readonly Diagnostic[] {
-  const result = parse(tokenize(source).tokens);
+  const { tokens } = tokenize(source);
+  const result = parse(tokens);
   if (isErr(result)) {
-    throw result.error;
+    throw new Error(result.error.message, { cause: result.error });
   }
-  return checkBorrows(result.value);
+  return checkBorrows(result.value, tokens);
 }
 
 describe("borrow checker", (): void => {

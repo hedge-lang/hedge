@@ -7,11 +7,12 @@ import type { AnalysisResult } from "./analyzer.js";
 import { analyze } from "./analyzer.js";
 
 function diagnose(source: string): AnalysisResult {
-  const result = parse(tokenize(source).tokens);
+  const { tokens } = tokenize(source);
+  const result = parse(tokens);
   if (isErr(result)) {
-    throw result.error;
+    throw new Error(result.error.message, { cause: result.error });
   }
-  return analyze(result.value);
+  return analyze(result.value, tokens);
 }
 
 describe("semantic analysis", (): void => {

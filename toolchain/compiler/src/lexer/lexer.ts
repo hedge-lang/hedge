@@ -1,6 +1,7 @@
 import { isComment, parseComment } from "./comments.js";
 import { scanWhile } from "./scan-while.js";
 import type { Diagnostic } from "../diagnostics.js";
+import { some } from "../option.js";
 import type { Token } from "./token.js";
 import { isWhitespace } from "./whitespace.js";
 
@@ -380,7 +381,7 @@ function scanSymbol(
       diagnostics.push({
         severity: "error",
         message: `Unexpected character "${ch}" at offset ${start}`,
-        tokenId: tokens.length,
+        span: some({ start, end }),
       });
       tokens.push({ kind: "error", span: { start, end }, text: ch ?? "" });
       return end;
@@ -427,7 +428,7 @@ export function tokenize(source: string): TokenizeResult {
         diagnostics.push({
           severity: "error",
           message: `Unexpected character "'" at offset ${start}`,
-          tokenId: tokens.length,
+          span: some({ start, end }),
         });
         tokens.push({ kind: "error", span: { start, end }, text: "'" });
         i = end;
@@ -452,7 +453,7 @@ export function tokenize(source: string): TokenizeResult {
         diagnostics.push({
           severity: "error",
           message: `Unterminated string literal starting at ${start}`,
-          tokenId: tokens.length,
+          span: some({ start, end: source.length }),
         });
         tokens.push({
           kind: "error",

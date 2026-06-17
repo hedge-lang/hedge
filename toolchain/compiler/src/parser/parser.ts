@@ -1,3 +1,4 @@
+import type { Diagnostic } from "../diagnostics.js";
 import type { Span, Token } from "../lexer/token.js";
 import { none, some, type Option } from "../option.js";
 import { err, isErr, ok, type Result } from "../result.js";
@@ -26,28 +27,20 @@ import type {
 } from "./ast.js";
 import type { Parsed } from "./parse.js";
 
-class ParserError extends Error {
-  readonly span: Option<Span>;
-  readonly tokenId: number;
-  constructor(message: string, span: Option<Span>, tokenId: number = 0) {
-    super(message);
-    this.span = span;
-    this.tokenId = tokenId;
-  }
-}
-
-type ParseResult<T> = Result<T, ParserError>;
+type ParseResult<T> = Result<T, Diagnostic>;
 
 /**
- * @returns the token at {@link pos}, or else a {@link ParserError} if the
+ * @returns the token at {@link pos}, or else a {@link Diagnostic} if the
  * parser attempts to read beyond the end of the token stream.
  */
 function tokenAt(tokens: readonly Token[], pos: number): ParseResult<Token> {
   const token = tokens[pos];
   if (token === undefined) {
-    return err(
-      new ParserError(`Unexpected end of input at token ${pos}`, none(), pos),
-    );
+    return err({
+      severity: "error",
+      message: `Unexpected end of input at token ${pos}`,
+      span: none(),
+    });
   }
   return ok(token);
 }
@@ -77,13 +70,11 @@ function expect(
   }
   const token = tokenAtResult.value;
   if (token.kind !== kind) {
-    return err(
-      new ParserError(
-        `Expected ${kind}, found "${token.kind}" at offset ${token.span.start}`,
-        some(token.span),
-        pos,
-      ),
-    );
+    return err({
+      severity: "error",
+      message: `Expected ${kind}, found "${token.kind}" at offset ${token.span.start}`,
+      span: some(token.span),
+    });
   }
   return ok(pos + 1);
 }
@@ -104,13 +95,11 @@ function expectKeyword(
   }
   const token = tokenAtResult.value;
   if (token.kind !== "keyword" || token.text !== text) {
-    return err(
-      new ParserError(
-        `Expected keyword "${text}", found "${token.kind}" at offset ${token.span.start}`,
-        some(token.span),
-        pos,
-      ),
-    );
+    return err({
+      severity: "error",
+      message: `Expected keyword "${text}", found "${token.kind}" at offset ${token.span.start}`,
+      span: some(token.span),
+    });
   }
   return ok(pos + 1);
 }
@@ -134,13 +123,11 @@ function parseIdentifier(
   }
   const token = tokenAtResult.value;
   if (token.kind !== "ident") {
-    return err(
-      new ParserError(
-        `Expected an identifier, found "${token.kind}" at offset ${token.span.start}`,
-        some(token.span),
-        pos,
-      ),
-    );
+    return err({
+      severity: "error",
+      message: `Expected an identifier, found "${token.kind}" at offset ${token.span.start}`,
+      span: some(token.span),
+    });
   }
   const ident: Identifier = {
     kind: "Identifier",
@@ -195,13 +182,11 @@ function parsePathSegments(
       const kind = nextToken?.kind ?? "eof";
       const span =
         nextToken !== undefined ? some(nextToken.span) : none<Span>();
-      return err(
-        new ParserError(
-          `Expected identifier after "::", found "${kind}"`,
-          span,
-          cursor,
-        ),
-      );
+      return err({
+        severity: "error",
+        message: `Expected identifier after "::", found "${kind}"`,
+        span,
+      });
     }
     const segmentResult = parseIdentifier(tokens, cursor);
     if (isErr(segmentResult)) {
@@ -336,13 +321,11 @@ function parsePrimary(
     return parseReference(tokens, pos);
   }
 
-  return err(
-    new ParserError(
-      `Expected an expression, found "${token.kind}" at offset ${token.span.start}`,
-      some(token.span),
-      pos,
-    ),
-  );
+  return err({
+    severity: "error",
+    message: `Expected an expression, found "${token.kind}" at offset ${token.span.start}`,
+    span: some(token.span),
+  });
 }
 
 /**
@@ -469,13 +452,11 @@ function parseType(
       const unit: UnitType = { kind: "UnitType", tokenId: pos };
       return ok({ node: unit, next: pos + 2 });
     }
-    return err(
-      new ParserError(
-        "tuple types are not supported in Slice 1",
-        some(token.span),
-        pos,
-      ),
-    );
+    return err({
+      severity: "error",
+      message: "tuple types are not supported in Slice 1",
+      span: some(token.span),
+    });
   }
 
   if (token.kind === "ident" || token.kind === "path_sep") {
@@ -492,22 +473,21 @@ function parseType(
   }
 
   if (token.kind === "amp") {
-    return err(
-      new ParserError(
+    return err({
+      severity: "error",
+      message:
         "reference types are not supported in Slice 1; borrows are introduced in Slice 2",
-        some(token.span),
-        pos,
-      ),
-    );
+      span: some(token.span),
+    });
   }
 
   return err(
     // TODO(Issue #105): Add to-string functionality for token kinds.
-    new ParserError(
-      `type syntax "${token.kind}" is not supported in Slice 1`,
-      some(token.span),
-      pos,
-    ),
+    {
+      severity: "error",
+      message: `type syntax "${token.kind}" is not supported in Slice 1`,
+      span: some(token.span),
+    },
   );
 }
 
@@ -809,13 +789,11 @@ function parseAttributeArg(
       next: pathResult.value.next,
     });
   }
-  return err(
-    new ParserError(
-      `Expected attribute argument, found "${token.kind}" at offset ${token.span.start}`,
-      some(token.span),
-      pos,
-    ),
-  );
+  return err({
+    severity: "error",
+    message: `Expected attribute argument, found "${token.kind}" at offset ${token.span.start}`,
+    span: some(token.span),
+  });
 }
 
 /**

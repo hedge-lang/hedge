@@ -10,7 +10,7 @@ function parseProgram(source: string): Program {
   const { tokens } = tokenize(source);
   const result = parse(tokens);
   if (isErr(result)) {
-    throw result.error;
+    throw new Error(result.error.message, { cause: result.error });
   }
   return result.value;
 }
@@ -365,43 +365,57 @@ describe("type annotations", (): void => {
 describe("type annotation error diagnostics", (): void => {
   it("produces an error diagnostic for a reference type", (): void => {
     const source = "let x: &i32;";
-    const ampIdx = tokenize(source).tokens.findIndex((t) => t.kind === "amp");
+    const amp = tokenize(source).tokens.find((t) => t.kind === "amp");
+    if (!amp) {
+      expect(amp).toBeDefined(); // fail the test if the amp token isn't found
+      return;
+    }
     const result = compile(source);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.severity).toBe("error");
     expect(result.diagnostics[0]?.message).toContain("Slice 2");
-    expect(result.diagnostics[0]?.tokenId).toBe(ampIdx);
+    expect(result.diagnostics[0]?.span).toEqual(some(amp.span));
     expect(isNone(result.code)).toBe(true);
   });
 
   it("produces an error diagnostic for an exclusive reference type", (): void => {
     const source = "let x: &write i32;";
-    const ampIdx = tokenize(source).tokens.findIndex((t) => t.kind === "amp");
+    const amp = tokenize(source).tokens.find((t) => t.kind === "amp");
+    if (!amp) {
+      expect(amp).toBeDefined(); // fail the test if the amp token isn't found
+      return;
+    }
     const result = compile(source);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.severity).toBe("error");
     expect(result.diagnostics[0]?.message).toContain("Slice 2");
-    expect(result.diagnostics[0]?.tokenId).toBe(ampIdx);
+    expect(result.diagnostics[0]?.span).toEqual(some(amp.span));
   });
 
   it("produces an error diagnostic for a slice type", (): void => {
     const source = "let xs: [i32];";
-    const lbracketIdx = tokenize(source).tokens.findIndex(
-      (t) => t.kind === "lbracket",
-    );
+    const lbracket = tokenize(source).tokens.find((t) => t.kind === "lbracket");
+    if (!lbracket) {
+      expect(lbracket).toBeDefined(); // fail the test if the lbracket token isn't found
+      return;
+    }
     const result = compile(source);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.tokenId).toBe(lbracketIdx);
+    expect(result.diagnostics[0]?.span).toEqual(some(lbracket.span));
   });
 
   it("produces an error diagnostic for the never type", (): void => {
     const source = "fn f() -> ! {}";
-    const bangIdx = tokenize(source).tokens.findIndex((t) => t.kind === "bang");
+    const bang = tokenize(source).tokens.find((t) => t.kind === "bang");
+    if (!bang) {
+      expect(bang).toBeDefined(); // fail the test if the bang token isn't found
+      return;
+    }
     const result = compile(source);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.tokenId).toBe(bangIdx);
+    expect(result.diagnostics[0]?.span).toEqual(some(bang.span));
   });
 });
 

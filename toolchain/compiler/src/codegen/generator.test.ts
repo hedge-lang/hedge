@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { toJsim } from "../jsim/jsim.js";
 import { tokenize } from "../lexer/lexer.js";
+import { isSome, none } from "../option.js";
 import { parse } from "../parser/parser.js";
 import { isErr } from "../result.js";
 import { generate } from "./generator.js";
@@ -10,25 +11,31 @@ import type { Code } from "./output.js";
 function gen(source: string): Code {
   const result = parse(tokenize(source).tokens);
   if (isErr(result)) {
-    throw result.error;
+    throw new Error(result.error.message, { cause: result.error });
   }
   return generate(toJsim(result.value));
 }
 
+function js(code: Code): string | null {
+  return isSome(code.javascript) ? code.javascript.value : null;
+}
+
+function dts(code: Code): string | null {
+  return isSome(code.typedef) ? code.typedef.value : null;
+}
+
 describe("generator", (): void => {
   it("generates nothing for an empty program", (): void => {
-    expect(gen("")).toEqual({ javascript: "\n", typedef: "\n" });
+    expect(gen("")).toEqual({ javascript: none(), typedef: none() });
   });
 
   it("lowers a read-only let to const and `let write` to let", (): void => {
-    expect(gen('let greeting = "hi";').javascript).toBe(
-      'const greeting = "hi";\n',
-    );
-    expect(gen("let write n = 1;").javascript).toBe("let n = 1;\n");
+    expect(js(gen('let greeting = "hi";'))).toBe('const greeting = "hi";\n');
+    expect(js(gen("let write n = 1;"))).toBe("let n = 1;\n");
   });
 
   it("emits a bare (non-main) function with no entry call", (): void => {
-    expect(gen("fn helper() {}").javascript).toBe("function helper() {}\n");
+    expect(js(gen("fn helper() {}"))).toBe("function helper() {}\n");
   });
 
   it("generates the tracer bullet as runnable JavaScript", (): void => {
@@ -38,8 +45,8 @@ describe("generator", (): void => {
         print(greeting);
       }
     `);
-    expect(code.typedef).toBe("\n");
-    expect(code.javascript).toBe(
+    expect(code.typedef).toEqual(none());
+    expect(js(code)).toBe(
       [
         "#!/usr/bin/env node",
         "",
@@ -58,21 +65,19 @@ describe("generator", (): void => {
     const code = gen(`
       fn lib() { 0 }
     `);
-    expect(code.javascript).toBe(
-      ["function lib() {", "  0;", "}", ""].join("\n"),
-    );
+    expect(js(code)).toBe(["function lib() {", "  0;", "}", ""].join("\n"));
   });
 
   it("exports a pub fn in JS and declares it in the .d.ts", () => {
     const code = gen("pub fn lib() {}");
-    expect(code.javascript).toBe("export function lib() {}\n");
-    expect(code.typedef).toBe("export declare function lib(): void;\n");
+    expect(js(code)).toBe("export function lib() {}\n");
+    expect(dts(code)).toBe("export declare function lib(): void;\n");
   });
 
   it("marks pub(package) fn as @internal in the .d.ts", () => {
     const code = gen("pub(package) fn lib() {}");
-    expect(code.javascript).toBe("export function lib() {}\n");
-    expect(code.typedef).toBe(
+    expect(js(code)).toBe("export function lib() {}\n");
+    expect(dts(code)).toBe(
       [
         "/**",
         " * @internal",
@@ -85,8 +90,8 @@ describe("generator", (): void => {
 
   it("includes the function doc comment in the .d.ts declaration", () => {
     const code = gen("/// A library function.\npub fn lib() {}");
-    expect(code.javascript).toBe("export function lib() {}\n");
-    expect(code.typedef).toBe(
+    expect(js(code)).toBe("export function lib() {}\n");
+    expect(dts(code)).toBe(
       [
         "/**",
         " * A library function.",
@@ -99,8 +104,8 @@ describe("generator", (): void => {
 
   it("includes the module doc comment in the .d.ts when exports exist", () => {
     const code = gen("//! My module.\npub fn lib() {}");
-    expect(code.javascript).toBe("export function lib() {}\n");
-    expect(code.typedef).toBe(
+    expect(js(code)).toBe("export function lib() {}\n");
+    expect(dts(code)).toBe(
       [
         "/**",
         " * @module",
@@ -129,7 +134,7 @@ describe("generator", (): void => {
       }
     `);
 
-    expect(code.javascript).toBe(
+    expect(js(code)).toBe(
       [
         "#!/usr/bin/env node",
         "",
@@ -144,7 +149,7 @@ describe("generator", (): void => {
         "",
       ].join("\n"),
     );
-    expect(code.typedef).toBe(
+    expect(dts(code)).toBe(
       [
         "/**",
         " * @module",

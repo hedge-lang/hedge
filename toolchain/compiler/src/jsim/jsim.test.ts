@@ -9,7 +9,7 @@ import { isErr } from "../result.js";
 function parseOrThrow(source: string): Program {
   const result = parse(tokenize(source).tokens);
   if (isErr(result)) {
-    throw result.error;
+    throw new Error(result.error.message, { cause: result.error });
   }
   return result.value;
 }
