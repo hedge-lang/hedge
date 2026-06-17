@@ -450,9 +450,17 @@ function parseType(
     if (isErr(nextResult)) {
       return nextResult;
     }
-    if (nextResult.value.kind === "rparen") {
+    const next = nextResult.value;
+    if (next.kind === "rparen") {
       const unit: UnitType = { kind: "UnitType", tokenId: pos };
       return ok({ node: unit, next: pos + 2 });
+    }
+    if (next.kind === "eof") {
+      return err({
+        severity: "error",
+        message: "expected `)` to close type, found end of input",
+        span: some(token.span),
+      });
     }
     return err({
       severity: "error",
@@ -840,8 +848,16 @@ function parseAttribute(
 
   const args: AttributeArg[] = [];
   if (tokens[cursor]?.kind === "lparen") {
+    const lparenSpan = tokens[cursor]?.span;
     cursor += 1; // skip `(`
     while (tokens[cursor]?.kind !== "rparen") {
+      if (tokens[cursor]?.kind === "eof") {
+        return err({
+          severity: "error",
+          message: "unterminated attribute argument list",
+          span: lparenSpan !== undefined ? some(lparenSpan) : none(),
+        });
+      }
       const argResult = parseAttributeArg(tokens, cursor);
       if (isErr(argResult)) {
         return argResult;
@@ -1046,6 +1062,14 @@ function parseItem(
     return ok(fnResult.value);
   }
   if (token?.kind === "keyword" && token.text === "let") {
+    if (afterVis > cursor) {
+      const visToken = tokens[cursor];
+      return err({
+        severity: "error",
+        message: "visibility qualifiers are not allowed on let statements",
+        span: visToken !== undefined ? some(visToken.span) : none(),
+      });
+    }
     const letResult = parseLetStatement(tokens, afterVis, attributes);
     if (isErr(letResult)) {
       return letResult;
