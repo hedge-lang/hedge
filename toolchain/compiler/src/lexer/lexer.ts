@@ -2,7 +2,7 @@ import { isErr } from "../result.js";
 import { isComment, parseComment } from "./comments.js";
 import { scanWhile } from "./scan-while.js";
 import type { Diagnostic } from "../diagnostics.js";
-import { some } from "../option.js";
+import { isSome, some } from "../option.js";
 import type { Token } from "./token.js";
 import { isWhitespace } from "./whitespace.js";
 
@@ -419,7 +419,8 @@ export function tokenize(source: string): TokenizeResult {
       const maybeParseComment = parseComment(tokens, source, i);
       if (isErr(maybeParseComment)) {
         diagnostics.push(maybeParseComment.error);
-        i = start + 1;
+        const { span } = maybeParseComment.error;
+        i = isSome(span) ? span.value.end : source.length;
       } else {
         i = maybeParseComment.value;
       }
