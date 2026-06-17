@@ -421,11 +421,80 @@ describe("type annotation error diagnostics", (): void => {
   });
 });
 
-// Blocked by #11 (struct item parsing)
-describe("struct field type annotations", (): void => {
-  it.todo("parses a primitive type annotation on a struct field");
-  it.todo("parses a qualified named type annotation on a struct field");
-  it.todo("parses a unit type annotation on a struct field");
+// TODO(#11, #13): Fill in these tests when struct definitions and field syntax are supported
+describe.todo("struct field type annotations", (): void => {
+  it("parses a primitive type annotation on a struct field", () => {
+    const source = "struct Foo { field: u32 }";
+    const ast = parseProgram(source);
+    expect(ast).toMatchObject({
+      kind: "Program",
+      items: [
+        {
+          kind: "Struct",
+          name: { kind: "Identifier", text: "Foo" },
+          fields: [
+            {
+              name: { kind: "Identifier", text: "field" },
+              type: {
+                kind: "NamedType",
+                text: "u32",
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+  it("rejects a tuple type annotation on a struct field", () => {
+    const result = compile("struct Foo { field: (i32) }");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain(
+      "tuple types are not supported",
+    );
+  });
+  it("parses a qualified named type annotation on a struct field", () => {
+    const source = "struct Foo { field: std::io::File }";
+    const ast = parseProgram(source);
+    expect(ast).toMatchObject({
+      kind: "Program",
+      items: [
+        {
+          kind: "Struct",
+          name: { kind: "Identifier", text: "Foo" },
+          fields: [
+            {
+              name: { kind: "Identifier", text: "field" },
+              type: {
+                kind: "NamedType",
+                path: { absolute: false, segments: ["std", "io", "File"] },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a unit type annotation on a struct field", () => {
+    const source = "struct Foo { field: () }";
+    const ast = parseProgram(source);
+    expect(ast).toMatchObject({
+      kind: "Program",
+      items: [
+        {
+          kind: "Struct",
+          name: { kind: "Identifier", text: "Foo" },
+          fields: [
+            {
+              name: { kind: "Identifier", text: "field" },
+              type: { kind: "UnitType" },
+            },
+          ],
+        },
+      ],
+    });
+  });
 });
 
 describe("attributes on let statements", (): void => {
