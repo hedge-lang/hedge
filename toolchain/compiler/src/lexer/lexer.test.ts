@@ -117,6 +117,12 @@ describe("lexer", (): void => {
         expect(result.diagnostics[0]?.message).toContain("Unterminated");
       });
 
+      it("continues lexing after an unterminated block comment", () => {
+        const { tokens, diagnostics } = tokenize("/* unclosed\nlet x = 1;");
+        expect(diagnostics).toHaveLength(1);
+        expect(tokens.find((t) => t.kind === "keyword")).toBeDefined();
+      });
+
       it("includes block comments with a /** starter", () => {
         const { tokens } = tokenize(`
         a;
