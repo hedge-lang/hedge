@@ -111,6 +111,12 @@ describe("lexer", (): void => {
         ]);
       });
 
+      it("emits exactly one diagnostic for an unterminated block comment (no cascade)", () => {
+        const result = tokenize("/* unclosed\nlet x = 1;");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain("Unterminated");
+      });
+
       it("includes block comments with a /** starter", () => {
         const { tokens } = tokenize(`
         a;
