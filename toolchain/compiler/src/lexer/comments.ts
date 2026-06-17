@@ -1,3 +1,6 @@
+import { type Diagnostic } from "../diagnostics.js";
+import { some } from "../option.js";
+import { err, ok, type Result } from "../result.js";
 import type { Token } from "./token.js";
 import { isWhitespace } from "./whitespace.js";
 
@@ -32,15 +35,15 @@ export function parseComment(
   tokens: Token[],
   source: string,
   start: number,
-): number {
+): Result<number, Diagnostic> {
   if (isOuterDocComment(source, start)) {
-    return parseOuterDocComment(tokens, source, start);
+    return ok(parseOuterDocComment(tokens, source, start));
   }
   if (isInnerDocComment(source, start)) {
-    return parseInnerDocComment(tokens, source, start);
+    return ok(parseInnerDocComment(tokens, source, start));
   }
   if (isLineComment(source, start)) {
-    return parseLineComment(tokens, source, start);
+    return ok(parseLineComment(tokens, source, start));
   }
   if (isBlockComment(source, start)) {
     return parseBlockComment(tokens, source, start);
@@ -51,8 +54,10 @@ export function parseComment(
   if (isBlockInnerDocComment(source, start)) {
     return parseBlockInnerDocComment(tokens, source, start);
   }
-  throw new SyntaxError("Expected comment", {
-    cause: { start, end: start + 1 },
+  return err({
+    severity: "error",
+    message: "Expected comment",
+    span: some({ start, end: start + 1 }),
   });
 }
 
@@ -122,7 +127,7 @@ export function parseBlockComment(
   tokens: Token[],
   source: string,
   start: number,
-): number {
+): Result<number, Diagnostic> {
   const OFFSET_START = 2;
   const OFFSET_END = 2;
   void tokens;
@@ -134,13 +139,15 @@ export function parseBlockComment(
     }
     if (source[i] === "*" && source[i + 1] === "/") {
       if (nesting === 0) {
-        return i + OFFSET_END;
+        return ok(i + OFFSET_END);
       }
       nesting -= 1;
     }
   }
-  throw new SyntaxError("Unterminated block comment", {
-    cause: { start, end: source.length },
+  return err({
+    severity: "error",
+    message: "Unterminated block comment",
+    span: some({ start, end: source.length }),
   });
 }
 
@@ -173,7 +180,7 @@ function parseBlockOuterDocComment(
   tokens: Token[],
   source: string,
   start: number,
-): number {
+): Result<number, Diagnostic> {
   const OFFSET_START = 3;
   const OFFSET_END = 2;
 
@@ -230,11 +237,13 @@ function parseBlockOuterDocComment(
           span: { start: end, end },
         },
       );
-      return end;
+      return ok(end);
     }
   }
-  throw new SyntaxError("Unterminated block comment", {
-    cause: { start, end: source.length },
+  return err({
+    severity: "error",
+    message: "Unterminated block comment",
+    span: some({ start, end: source.length }),
   });
 }
 
@@ -267,7 +276,7 @@ function parseBlockInnerDocComment(
   tokens: Token[],
   source: string,
   start: number,
-): number {
+): Result<number, Diagnostic> {
   const OFFSET_START = 3;
   const OFFSET_END = 2;
 
@@ -328,11 +337,13 @@ function parseBlockInnerDocComment(
           span: { start: end, end },
         },
       );
-      return end;
+      return ok(end);
     }
   }
-  throw new SyntaxError("Unterminated block comment", {
-    cause: { start, end: source.length },
+  return err({
+    severity: "error",
+    message: "Unterminated block comment",
+    span: some({ start, end: source.length }),
   });
 }
 

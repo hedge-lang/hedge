@@ -4,7 +4,7 @@ import { tokenize } from "./lexer.js";
 
 describe("lexer", (): void => {
   it("tokenizes a simple let binding", (): void => {
-    const tokens = tokenize("let x = 1;");
+    const { tokens } = tokenize("let x = 1;");
 
     expect(tokens).toHaveLength(6);
     expect(tokens).toMatchObject([
@@ -18,7 +18,7 @@ describe("lexer", (): void => {
   });
 
   it("classifies hard keywords but not contextual ones", (): void => {
-    const tokens = tokenize("fn write");
+    const { tokens } = tokenize("fn write");
 
     expect(tokens).toMatchObject([
       { kind: "keyword", text: "fn" },
@@ -28,13 +28,14 @@ describe("lexer", (): void => {
   });
 
   it("records source spans", (): void => {
-    const [first] = tokenize("abc");
+    const { tokens } = tokenize("abc");
+    const [first] = tokens;
 
     expect(first).toMatchObject({ kind: "ident", span: { start: 0, end: 3 } });
   });
 
   it("parses the tracer bullet", (): void => {
-    const tokens = tokenize(`
+    const { tokens } = tokenize(`
       fn main() {
         let greeting = "Hello, world!";
         print(greeting);
@@ -65,7 +66,7 @@ describe("lexer", (): void => {
   describe("comments", () => {
     describe("line comments", () => {
       it("excludes normal comments", () => {
-        const tokens = tokenize(`
+        const { tokens } = tokenize(`
         a;
             // This is a comment
             // This is another comment with trailing whitespace  
@@ -85,7 +86,7 @@ describe("lexer", (): void => {
 
     describe("block comments", () => {
       it("excludes normal comments", () => {
-        const tokens = tokenize(`
+        const { tokens } = tokenize(`
         a;
             /* This is a comment
             This is another comment with trailing whitespace   */
@@ -101,14 +102,29 @@ describe("lexer", (): void => {
           { kind: "eof" },
         ]);
       });
-      it("throws an error if a block comment is not closed", () => {
-        expect(() =>
-          tokenize(`/* this is a block comment without a closing delimiter`),
-        ).toThrow("Unterminated block comment");
+      it("returns a diagnostic if a block comment is not closed", () => {
+        const tokens = tokenize(
+          `/* this is a block comment without a closing delimiter`,
+        );
+        expect(tokens.diagnostics).toMatchObject([
+          { severity: "error", message: "Unterminated block comment" },
+        ]);
+      });
+
+      it("emits exactly one diagnostic for an unterminated block comment (no cascade)", () => {
+        const result = tokenize("/* unclosed\nlet x = 1;");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain("Unterminated");
+      });
+
+      it("continues lexing after an unterminated block comment", () => {
+        const { tokens, diagnostics } = tokenize("/* unclosed\nlet x = 1;");
+        expect(diagnostics).toHaveLength(1);
+        expect(tokens.find((t) => t.kind === "keyword")).toBeDefined();
       });
 
       it("includes block comments with a /** starter", () => {
-        const tokens = tokenize(`
+        const { tokens } = tokenize(`
         a;
             /** This is a comment
             This is another comment with trailing whitespace   */
@@ -139,7 +155,7 @@ describe("lexer", (): void => {
       });
 
       it("includes block comments with a /*! starter", () => {
-        const tokens = tokenize(`
+        const { tokens } = tokenize(`
           fn example() {
             /*! 
              * This is a comment
@@ -179,7 +195,7 @@ describe("lexer", (): void => {
 
     describe("doc comments", () => {
       it("creates a comment object", () => {
-        const tokens = tokenize(`
+        const { tokens } = tokenize(`
           /// This is a doc comment
           /// With two lines
           ///   And some indentation
@@ -209,7 +225,7 @@ describe("lexer", (): void => {
       });
 
       it("parses internal doc comments", () => {
-        const tokens = tokenize(`
+        const { tokens } = tokenize(`
           fn example() {
             //! This is an internal doc comment
             //! With two lines
@@ -244,7 +260,7 @@ describe("lexer", (): void => {
 
   describe("attributes", () => {
     it("tokenizes #[derive(Clone)] as discrete punctuation and identifiers", () => {
-      const tokens = tokenize("#[derive(Clone)] fn f() {}");
+      const { tokens } = tokenize("#[derive(Clone)] fn f() {}");
 
       expect(tokens).toMatchObject([
         { kind: "hash" },
@@ -265,7 +281,7 @@ describe("lexer", (): void => {
     });
 
     it("lowers a single-line doc comment into a #[doc(...)] sequence", () => {
-      const tokens = tokenize("/// Greeting\nfn f() {}");
+      const { tokens } = tokenize("/// Greeting\nfn f() {}");
 
       expect(tokens).toMatchObject([
         { kind: "hash" },
@@ -288,7 +304,7 @@ describe("lexer", (): void => {
 
   describe("multi-char operators", () => {
     it("tokenizes comparison operators", () => {
-      const tokens = tokenize("== != <= >=");
+      const { tokens } = tokenize("== != <= >=");
       expect(tokens).toMatchObject([
         { kind: "eq_eq" },
         { kind: "bang_eq" },
@@ -299,7 +315,7 @@ describe("lexer", (): void => {
     });
 
     it("tokenizes logical operators", () => {
-      const tokens = tokenize("&& ||");
+      const { tokens } = tokenize("&& ||");
       expect(tokens).toMatchObject([
         { kind: "amp_amp" },
         { kind: "pipe_pipe" },
@@ -308,7 +324,7 @@ describe("lexer", (): void => {
     });
 
     it("tokenizes shift operators and their assign forms", () => {
-      const tokens = tokenize("<< >> <<= >>=");
+      const { tokens } = tokenize("<< >> <<= >>=");
       expect(tokens).toMatchObject([
         { kind: "lt_lt" },
         { kind: "gt_gt" },
@@ -319,7 +335,7 @@ describe("lexer", (): void => {
     });
 
     it("tokenizes compound assignment operators", () => {
-      const tokens = tokenize("+= -= *= /= %= &= |= ^=");
+      const { tokens } = tokenize("+= -= *= /= %= &= |= ^=");
       expect(tokens).toMatchObject([
         { kind: "plus_eq" },
         { kind: "minus_eq" },
@@ -334,7 +350,7 @@ describe("lexer", (): void => {
     });
 
     it("tokenizes arrow, fat_arrow, and path_sep", () => {
-      const tokens = tokenize("-> => ::");
+      const { tokens } = tokenize("-> => ::");
       expect(tokens).toMatchObject([
         { kind: "arrow" },
         { kind: "fat_arrow" },
@@ -344,7 +360,7 @@ describe("lexer", (): void => {
     });
 
     it("tokenizes range operators", () => {
-      const tokens = tokenize(".. ..=");
+      const { tokens } = tokenize(".. ..=");
       expect(tokens).toMatchObject([
         { kind: "dot_dot" },
         { kind: "dot_dot_eq" },
@@ -353,7 +369,7 @@ describe("lexer", (): void => {
     });
 
     it("does not greedily consume when single-char is correct", () => {
-      const tokens = tokenize("< > = ! & |");
+      const { tokens } = tokenize("< > = ! & |");
       expect(tokens).toMatchObject([
         { kind: "lt" },
         { kind: "gt" },
@@ -368,7 +384,7 @@ describe("lexer", (): void => {
 
   describe("lifetime tokens", () => {
     it("tokenizes a lifetime", () => {
-      const tokens = tokenize("'a");
+      const { tokens } = tokenize("'a");
       expect(tokens).toMatchObject([
         { kind: "lifetime", text: "a" },
         { kind: "eof" },
@@ -376,16 +392,186 @@ describe("lexer", (): void => {
     });
 
     it("tokenizes a named lifetime", () => {
-      const tokens = tokenize("'static");
+      const { tokens } = tokenize("'static");
       expect(tokens).toMatchObject([
         { kind: "lifetime", text: "static" },
         { kind: "eof" },
       ]);
     });
 
-    it("throws on a bare single quote not followed by an identifier", () => {
-      expect(() => tokenize("'")).toThrow("Unexpected character");
-      expect(() => tokenize("' ")).toThrow("Unexpected character");
+    it("emits an error token for a bare single quote not followed by an identifier", () => {
+      const result = tokenize("'");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(result.diagnostics[0]?.message).toContain("Unexpected character");
+      expect(result.tokens).toMatchObject([
+        { kind: "error", text: "'" },
+        { kind: "eof" },
+      ]);
+
+      const result2 = tokenize("' ");
+      expect(result2.diagnostics).toHaveLength(1);
+      expect(result2.diagnostics[0]?.message).toContain("Unexpected character");
+    });
+  });
+
+  describe("types", () => {
+    describe.each([
+      "i8",
+      "u8",
+      "i16",
+      "u16",
+      "i32",
+      "u32",
+      "i64",
+      "u64",
+      "f32",
+      "f64",
+      "str",
+    ])("%s", (t) => {
+      it(`parses \`let value: ${t};\``, () => {
+        expect(tokenize(`let value: ${t};`).tokens).toMatchObject([
+          { kind: "keyword", text: "let" },
+          { kind: "ident", text: "value" },
+          { kind: "colon" },
+          { kind: "ident", text: t },
+          { kind: "semi" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it(`parses \`let value: &${t};\``, () => {
+        expect(tokenize(`let value: &${t};`).tokens).toMatchObject([
+          { kind: "keyword", text: "let" },
+          { kind: "ident", text: "value" },
+          { kind: "colon" },
+          { kind: "amp" },
+          { kind: "ident", text: t },
+          { kind: "semi" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it(`parses \`fn foo() -> ${t} {}\``, () => {
+        expect(tokenize(`fn foo() -> ${t} {}`).tokens).toMatchObject([
+          { kind: "keyword", text: "fn" },
+          { kind: "ident", text: "foo" },
+          { kind: "lparen" },
+          { kind: "rparen" },
+          { kind: "arrow" },
+          { kind: "ident", text: t },
+          { kind: "lbrace" },
+          { kind: "rbrace" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it(`parses \`fn foo<'a>() -> &'a ${t} {}\``, () => {
+        expect(tokenize(`fn foo<'a>() -> &'a ${t} {}`).tokens).toMatchObject([
+          { kind: "keyword", text: "fn" },
+          { kind: "ident", text: "foo" },
+          { kind: "lt" },
+          { kind: "lifetime", text: "a" },
+          { kind: "gt" },
+          { kind: "lparen" },
+          { kind: "rparen" },
+          { kind: "arrow" },
+          { kind: "amp" },
+          { kind: "lifetime", text: "a" },
+          { kind: "ident", text: t },
+          { kind: "lbrace" },
+          { kind: "rbrace" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it(`parses \`fn foo(param: ${t}) {}`, () => {
+        expect(tokenize(`fn foo(param: ${t}) {}`).tokens).toMatchObject([
+          { kind: "keyword", text: "fn" },
+          { kind: "ident", text: "foo" },
+          { kind: "lparen" },
+          { kind: "ident", text: "param" },
+          { kind: "colon" },
+          { kind: "ident", text: t },
+          { kind: "rparen" },
+          { kind: "lbrace" },
+          { kind: "rbrace" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it(`parses \`fn foo(param: &${t}) {}`, () => {
+        expect(tokenize(`fn foo(param: &${t}) {}`).tokens).toMatchObject([
+          { kind: "keyword", text: "fn" },
+          { kind: "ident", text: "foo" },
+          { kind: "lparen" },
+          { kind: "ident", text: "param" },
+          { kind: "colon" },
+          { kind: "amp" },
+          { kind: "ident", text: t },
+          { kind: "rparen" },
+          { kind: "lbrace" },
+          { kind: "rbrace" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it(`parses \`struct Foo(${t});\``, () => {
+        expect(tokenize(`struct Foo(${t});`).tokens).toMatchObject([
+          { kind: "keyword", text: "struct" },
+          { kind: "ident", text: "Foo" },
+          { kind: "lparen" },
+          { kind: "ident", text: t },
+          { kind: "rparen" },
+          { kind: "semi" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it(`parses \`struct Foo { value: ${t} }\``, () => {
+        expect(tokenize(`struct Foo { value: ${t} }`).tokens).toMatchObject([
+          { kind: "keyword", text: "struct" },
+          { kind: "ident", text: "Foo" },
+          { kind: "lbrace" },
+          { kind: "ident", text: "value" },
+          { kind: "colon" },
+          { kind: "ident", text: t },
+          { kind: "rbrace" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it(`parses \`enum Foo { Variant(${t}) }\``, () => {
+        expect(tokenize(`enum Foo { Variant(${t}) }`).tokens).toMatchObject([
+          { kind: "keyword", text: "enum" },
+          { kind: "ident", text: "Foo" },
+          { kind: "lbrace" },
+          { kind: "ident", text: "Variant" },
+          { kind: "lparen" },
+          { kind: "ident", text: t },
+          { kind: "rparen" },
+          { kind: "rbrace" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it(`parses \`enum Foo { Variant { value: ${t} } }\``, () => {
+        expect(
+          tokenize(`enum Foo { Variant { value: ${t} } }`).tokens,
+        ).toMatchObject([
+          { kind: "keyword", text: "enum" },
+          { kind: "ident", text: "Foo" },
+          { kind: "lbrace" },
+          { kind: "ident", text: "Variant" },
+          { kind: "lbrace" },
+          { kind: "ident", text: "value" },
+          { kind: "colon" },
+          { kind: "ident", text: t },
+          { kind: "rbrace" },
+          { kind: "rbrace" },
+          { kind: "eof" },
+        ]);
+      });
     });
   });
 });

@@ -1,5 +1,6 @@
 import type { Diagnostic } from "../diagnostics.js";
-import { isSome } from "../option.js";
+import type { Token } from "../lexer/token.js";
+import { isSome, none, some } from "../option.js";
 import type {
   Block,
   CallExpression,
@@ -30,6 +31,7 @@ function assertNever(value: never): never {
 interface AnalysisContext {
   readonly scopes: Set<string>[];
   readonly diagnostics: Diagnostic[];
+  readonly tokens: readonly Token[];
 }
 
 function analyzeItem(ctx: AnalysisContext, item: Item): void {
@@ -145,7 +147,12 @@ function emitError(
   message: string,
   tokenId: number,
 ): void {
-  ctx.diagnostics.push({ severity: "error", message, tokenId });
+  const token = ctx.tokens[tokenId];
+  ctx.diagnostics.push({
+    severity: "error",
+    message,
+    span: token !== undefined ? some(token.span) : none(),
+  });
 }
 
 /**
@@ -154,10 +161,14 @@ function emitError(
  * Slice-1 scope: a builtin prelude, then per-function and per-block scopes;
  * `let` binds into the current scope after its initializer is analyzed.
  */
-export function analyze(program: Program): AnalysisResult {
+export function analyze(
+  program: Program,
+  tokens: readonly Token[],
+): AnalysisResult {
   const ctx: AnalysisContext = {
     scopes: [new Set(BUILTINS)],
     diagnostics: [],
+    tokens,
   };
   for (const item of program.items) {
     analyzeItem(ctx, item);

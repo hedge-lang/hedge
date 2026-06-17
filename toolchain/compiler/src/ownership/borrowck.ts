@@ -1,5 +1,6 @@
 import type { Diagnostic } from "../diagnostics.js";
-import { isSome } from "../option.js";
+import type { Span, Token } from "../lexer/token.js";
+import { isSome, none, some, type Option } from "../option.js";
 import type {
   Expression,
   FunctionDecl,
@@ -148,17 +149,23 @@ function describeBorrow(borrow: Borrow): string {
   return borrow.mutable ? "&write" : "&";
 }
 
+function spanOf(tokens: readonly Token[], id: number): Option<Span> {
+  const token = tokens[id];
+  return token !== undefined ? some(token.span) : none();
+}
+
 function checkCapabilities(
   borrows: readonly Borrow[],
   capabilities: Map<string, boolean>,
   diagnostics: Diagnostic[],
+  tokens: readonly Token[],
 ): void {
   for (const borrow of borrows) {
     if (borrow.mutable && capabilities.get(borrow.base) === false) {
       diagnostics.push({
         severity: "error",
         message: `Cannot borrow "${borrow.base}" as &write because it is not declared write.`,
-        tokenId: borrow.tokenId,
+        span: spanOf(tokens, borrow.tokenId),
       });
     }
   }
@@ -168,6 +175,7 @@ function checkExclusivity(
   borrows: readonly Borrow[],
   lastUse: Map<string, number>,
   diagnostics: Diagnostic[],
+  tokens: readonly Token[],
 ): void {
   for (let i = 0; i < borrows.length; i += 1) {
     const a = borrows[i];
@@ -188,29 +196,39 @@ function checkExclusivity(
       diagnostics.push({
         severity: "error",
         message: `Conflicting borrows of "${a.base}": ${describeBorrow(a)} and ${describeBorrow(b)} are both live.`,
-        tokenId: b.tokenId,
+        span: spanOf(tokens, b.tokenId),
       });
     }
   }
 }
 
-function checkFunction(decl: FunctionDecl, diagnostics: Diagnostic[]): void {
+function checkFunction(
+  decl: FunctionDecl,
+  diagnostics: Diagnostic[],
+  tokens: readonly Token[],
+): void {
   const statements = decl.body.statements;
   checkCapabilities(
     collectBorrows(statements),
     writeCapabilities(statements),
     diagnostics,
+    tokens,
   );
   checkExclusivity(
     collectBorrows(statements),
     computeLastUse(statements),
     diagnostics,
+    tokens,
   );
 }
 
-function checkItem(item: Item, diagnostics: Diagnostic[]): void {
+function checkItem(
+  item: Item,
+  diagnostics: Diagnostic[],
+  tokens: readonly Token[],
+): void {
   if (item.kind === "Function") {
-    checkFunction(item, diagnostics);
+    checkFunction(item, diagnostics, tokens);
   }
 }
 
@@ -220,10 +238,13 @@ function checkItem(item: Item, diagnostics: Diagnostic[]): void {
  * liveness. Each function body is a single straight-line basic block; the
  * explicit multi-block CFG arrives with control flow (ADR 0002).
  */
-export function checkBorrows(program: Program): readonly Diagnostic[] {
+export function checkBorrows(
+  program: Program,
+  tokens: readonly Token[],
+): readonly Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
   for (const item of program.items) {
-    checkItem(item, diagnostics);
+    checkItem(item, diagnostics, tokens);
   }
   return diagnostics;
 }

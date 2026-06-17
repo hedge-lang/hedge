@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isErr } from "../result.js";
 import {
   isLineComment,
   parseLineComment,
@@ -25,7 +26,13 @@ describe("BlockComment", () => {
     const blockComment = "/* foo bar */";
     const tokens: Token[] = [];
     expect(isBlockComment(blockComment, 0)).toBe(true);
-    const nextIndex = parseBlockComment(tokens, blockComment + "  ", 0);
+    const nextIndexResult = parseBlockComment(tokens, blockComment + "  ", 0);
+    if (isErr(nextIndexResult)) {
+      throw new Error(
+        `Unexpected parse error: ${nextIndexResult.error.message}`,
+      );
+    }
+    const nextIndex = nextIndexResult.value;
     expect(blockComment.slice(0, nextIndex)).toBe(blockComment);
     expect(blockComment[nextIndex]).toBeUndefined();
     expect(blockComment[nextIndex - 1]).not.toBeUndefined();
@@ -37,7 +44,13 @@ describe("BlockComment", () => {
     const blockComment = "/* foo /* bar */ baz */";
     const tokens: Token[] = [];
     expect(isBlockComment(blockComment, 0)).toBe(true);
-    const nextIndex = parseBlockComment(tokens, blockComment + "  ", 0);
+    const nextIndexResult = parseBlockComment(tokens, blockComment + "  ", 0);
+    if (isErr(nextIndexResult)) {
+      throw new Error(
+        `Unexpected parse error: ${nextIndexResult.error.message}`,
+      );
+    }
+    const nextIndex = nextIndexResult.value;
     expect(blockComment.slice(0, nextIndex)).toBe(blockComment);
     expect(blockComment[nextIndex]).toBeUndefined();
     expect(blockComment[nextIndex - 1]).not.toBeUndefined();
@@ -48,7 +61,13 @@ describe("BlockComment", () => {
   it("supports nested block comments opened with /**", () => {
     const blockComment = "/* foo /** bar */ baz */";
     const tokens: Token[] = [];
-    const nextIndex = parseBlockComment(tokens, blockComment + "  ", 0);
+    const nextIndexResult = parseBlockComment(tokens, blockComment + "  ", 0);
+    if (isErr(nextIndexResult)) {
+      throw new Error(
+        `Unexpected parse error: ${nextIndexResult.error.message}`,
+      );
+    }
+    const nextIndex = nextIndexResult.value;
     expect(blockComment.slice(0, nextIndex)).toBe(blockComment);
     expect(nextIndex).toBe(blockComment.length);
     expect(tokens).toEqual([]);

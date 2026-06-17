@@ -18,10 +18,12 @@ export async function build(file: string): Promise<number> {
   }
   const code = codeOption.value;
   const base = file.replace(/\.hed(ge)?$/u, "");
-  await writeFile(`${base}.js`, code.javascript, "utf8");
-  if (code.typedef !== "") {
-    await writeFile(`${base}.d.ts`, code.typedef, "utf8");
+  if (isSome(code.javascript)) {
+    await writeFile(`${base}.js`, code.javascript.value, "utf8");
+    stdout.write(`Compiled ${file} -> ${base}.js\n`);
   }
-  stdout.write(`Compiled ${file} -> ${base}.js\n`);
+  if (isSome(code.typedef)) {
+    await writeFile(`${base}.d.ts`, code.typedef.value, "utf8");
+  }
   return 0;
 }
