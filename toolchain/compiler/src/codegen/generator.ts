@@ -1,4 +1,4 @@
-import { isSome } from "../option.js";
+import { isSome, none, some } from "../option.js";
 import type {
   DocComment,
   Expression,
@@ -159,7 +159,7 @@ export function generate(program: Program): Code {
   }
 
   return {
-    javascript: `${parts.join("\n\n")}\n`,
-    typedef: `${dtsParts.join("\n\n")}\n`,
+    javascript: parts.length ? some(`${parts.join("\n\n")}\n`) : none(),
+    typedef: dtsParts.length ? some(`${dtsParts.join("\n\n")}\n`) : none(),
   };
 }
