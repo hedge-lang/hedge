@@ -391,9 +391,9 @@ function scanSymbol(
 /**
  * Tokenize Hedge source into a flat token list terminated by an `eof` token.
  *
- * Covers the full Slice 1 lexical grammar: identifiers, hard keywords, decimal
- * integer literals, string literals, lifetime tokens, and all operators and
- * punctuation defined in `specification/0025-grammar.md`.
+ * @param source The source string to tokenize.
+ *
+ * @returns the tokens and any lex-time diagnostics.
  */
 export function tokenize(source: string): TokenizeResult {
   const tokens: Token[] = [];
