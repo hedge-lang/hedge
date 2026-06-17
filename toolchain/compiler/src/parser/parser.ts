@@ -64,8 +64,7 @@ function isContextual(token: Token, text: string): boolean {
 /**
  * Consumes a required token of the given kind.
  *
- * @returns Index of the next token.
- * @throws SyntaxError if the token at `pos` is not of the expected kind.
+ * @returns Index of the next token, or `Err` if the token at `pos` is not of the expected kind.
  */
 function expect(
   tokens: readonly Token[],
@@ -92,8 +91,7 @@ function expect(
 /**
  * Consumes a required keyword token.
  *
- * @returns Index of the next token after the keyword.
- * @throws SyntaxError if the expected keyword is not present.
+ * @returns Index of the next token after the keyword, or `Err` if the expected keyword is not present.
  */
 function expectKeyword(
   tokens: readonly Token[],
@@ -448,6 +446,9 @@ function parseExpression(
  * ```text
  * Type ::= "()" | Path
  * ```
+ *
+ * `(Type)` (tuple syntax) is recognized and produces a guardrail diagnostic;
+ * tuple types are not supported in Slice 1.
  */
 function parseType(
   tokens: readonly Token[],
@@ -460,12 +461,21 @@ function parseType(
   const token = tokenResult.value;
 
   if (token.kind === "lparen") {
-    const afterRparen = expect(tokens, pos + 1, "rparen");
-    if (isErr(afterRparen)) {
-      return afterRparen;
+    const nextResult = tokenAt(tokens, pos + 1);
+    if (isErr(nextResult)) {
+      return nextResult;
     }
-    const unit: UnitType = { kind: "UnitType", tokenId: pos };
-    return ok({ node: unit, next: afterRparen.value });
+    if (nextResult.value.kind === "rparen") {
+      const unit: UnitType = { kind: "UnitType", tokenId: pos };
+      return ok({ node: unit, next: pos + 2 });
+    }
+    return err(
+      new ParserError(
+        "tuple types are not supported in Slice 1",
+        some(token.span),
+        pos,
+      ),
+    );
   }
 
   if (token.kind === "ident" || token.kind === "path_sep") {
@@ -775,8 +785,12 @@ function parseAttributeArg(
   tokens: readonly Token[],
   pos: number,
 ): ParseResult<Parsed<AttributeArg>> {
-  const token = tokens[pos];
-  if (token?.kind === "string") {
+  const tokenAtResult = tokenAt(tokens, pos);
+  if (isErr(tokenAtResult)) {
+    return tokenAtResult;
+  }
+  const token = tokenAtResult.value;
+  if (token.kind === "string") {
     const lit: StringLiteral = {
       kind: "StringLiteral",
       tokenId: pos,
@@ -784,7 +798,7 @@ function parseAttributeArg(
     };
     return ok({ node: { path: none(), literal: some(lit) }, next: pos + 1 });
   }
-  if (token?.kind === "ident" || token?.kind === "path_sep") {
+  if (token.kind === "ident" || token.kind === "path_sep") {
     const pathResult = parsePathSegments(tokens, pos);
     if (isErr(pathResult)) {
       return pathResult;
@@ -794,7 +808,13 @@ function parseAttributeArg(
       next: pathResult.value.next,
     });
   }
-  return ok({ node: { path: none(), literal: none() }, next: pos + 1 });
+  return err(
+    new ParserError(
+      `Expected attribute argument, found "${token.kind}" at offset ${token.span.start}`,
+      some(token.span),
+      pos,
+    ),
+  );
 }
 
 /**
@@ -805,6 +825,7 @@ function parseAttributeArg(
  *
  * @returns The parsed Attribute and whether it was an inner attribute.
  */
+// eslint-disable-next-line complexity -- Attribute parsing requires delimiter validation that adds necessary branches.
 function parseAttribute(
   tokens: readonly Token[],
   pos: number,
@@ -837,9 +858,17 @@ function parseAttribute(
         cursor += 1;
       }
     }
-    cursor += 1; // skip `)`
+    const afterRparen = expect(tokens, cursor, "rparen");
+    if (isErr(afterRparen)) {
+      return afterRparen;
+    }
+    cursor = afterRparen.value;
   }
-  cursor += 1; // skip `]`
+  const afterRbracket = expect(tokens, cursor, "rbracket");
+  if (isErr(afterRbracket)) {
+    return afterRbracket;
+  }
+  cursor = afterRbracket.value;
 
   const attr: Attribute = {
     kind: "Attribute",
@@ -1061,8 +1090,8 @@ function parseItem(
  * that grows incrementally toward the complete grammar defined in
  * `specification/0025-grammar.md`.
  *
- * @throws SyntaxError if the token stream does not conform to the supported
- * grammar.
+ * @returns `Ok(Program)` on success, or `Err(ParserError)` if the token stream
+ * does not conform to the supported grammar.
  */
 export function parse(tokens: readonly Token[]): ParseResult<Program> {
   let cursor = 0;

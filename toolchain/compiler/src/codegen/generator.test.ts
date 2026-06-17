@@ -8,7 +8,7 @@ import { generate } from "./generator.js";
 import type { Code } from "./output.js";
 
 function gen(source: string): Code {
-  const result = parse(tokenize(source));
+  const result = parse(tokenize(source).tokens);
   if (isErr(result)) {
     throw result.error;
   }

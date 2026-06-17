@@ -7,7 +7,7 @@ import type { AnalysisResult } from "./analyzer.js";
 import { analyze } from "./analyzer.js";
 
 function diagnose(source: string): AnalysisResult {
-  const result = parse(tokenize(source));
+  const result = parse(tokenize(source).tokens);
   if (isErr(result)) {
     throw result.error;
   }

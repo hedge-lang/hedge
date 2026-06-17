@@ -7,7 +7,7 @@ import { isErr } from "../result.js";
 import { checkBorrows } from "./borrowck.js";
 
 function check(source: string): readonly Diagnostic[] {
-  const result = parse(tokenize(source));
+  const result = parse(tokenize(source).tokens);
   if (isErr(result)) {
     throw result.error;
   }

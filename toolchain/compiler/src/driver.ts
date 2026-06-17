@@ -31,12 +31,16 @@ function toDiagnostic(error: unknown): Diagnostic {
   };
 }
 
-function parseSource(source: string): Result<Program, Diagnostic> {
-  const result = parse(tokenize(source));
+function parseSource(source: string): {
+  outcome: Result<Program, Diagnostic>;
+  lexDiagnostics: readonly Diagnostic[];
+} {
+  const { tokens, diagnostics: lexDiagnostics } = tokenize(source);
+  const result = parse(tokens);
   if (isErr(result)) {
-    return err(toDiagnostic(result.error));
+    return { outcome: err(toDiagnostic(result.error)), lexDiagnostics };
   }
-  return ok(result.value);
+  return { outcome: ok(result.value), lexDiagnostics };
 }
 
 function hasError(diagnostics: readonly Diagnostic[]): boolean {
@@ -48,15 +52,19 @@ function hasError(diagnostics: readonly Diagnostic[]): boolean {
 /**
  * Compile Hedge source to JavaScript. Runs the full pipeline — lex, parse,
  * resolve, borrow-check, optimize, generate — and collects diagnostics. `code`
- * is `none()` when lexing/parsing throws or any error diagnostic is reported.
+ * is `none()` when any error diagnostic is reported.
  */
 export function compile(source: string): CompileResult {
-  const parseOutcome = parseSource(source);
+  const { outcome: parseOutcome, lexDiagnostics } = parseSource(source);
   if (isErr(parseOutcome)) {
-    return { diagnostics: [parseOutcome.error], code: none() };
+    return {
+      diagnostics: [...lexDiagnostics, parseOutcome.error],
+      code: none(),
+    };
   }
   const program = parseOutcome.value;
   const diagnostics = [
+    ...lexDiagnostics,
     ...analyze(program).diagnostics,
     ...checkBorrows(program),
   ];

@@ -5,9 +5,9 @@ import { parse } from "./parser.js";
 import { isErr } from "../result.js";
 import { tokenize } from "../lexer/lexer.js";
 import type { Program } from "./ast.js";
-import type { Token } from "../lexer/token.js";
 
-function parseProgram(tokens: readonly Token[]): Program {
+function parseProgram(source: string): Program {
+  const { tokens } = tokenize(source);
   const result = parse(tokens);
   if (isErr(result)) {
     throw result.error;
@@ -17,8 +17,7 @@ function parseProgram(tokens: readonly Token[]): Program {
 
 describe("parser", (): void => {
   it("parses a string literal", (): void => {
-    const tokens = tokenize('"Hello, world!"');
-    const ast = parseProgram(tokens);
+    const ast = parseProgram('"Hello, world!"');
     expect(ast).toMatchObject({
       kind: "Program",
       items: [
@@ -31,8 +30,7 @@ describe("parser", (): void => {
   });
 
   it("parses a simple let binding", (): void => {
-    const tokens = tokenize('let x = "string literal";');
-    const ast = parseProgram(tokens);
+    const ast = parseProgram('let x = "string literal";');
     expect(ast).toMatchObject({
       kind: "Program",
       items: [
@@ -58,8 +56,7 @@ describe("parser", (): void => {
   });
 
   it("parses a simple function call", (): void => {
-    const tokens = tokenize('print("Hello, world!");');
-    const ast = parseProgram(tokens);
+    const ast = parseProgram('print("Hello, world!");');
     expect(ast).toMatchObject({
       kind: "Program",
       items: [
@@ -87,8 +84,7 @@ describe("parser", (): void => {
   });
 
   it("parses a simple function declaration", (): void => {
-    const tokens = tokenize("fn main() {}");
-    const ast = parseProgram(tokens);
+    const ast = parseProgram("fn main() {}");
     expect(ast).toMatchObject({
       kind: "Program",
       items: [
@@ -104,13 +100,12 @@ describe("parser", (): void => {
   });
 
   it("parses the tracer bullet", (): void => {
-    const tokens = tokenize(`
+    const ast = parseProgram(`
           fn main() {
             let greeting = "Hello, world!";
             print(greeting);
           }
         `);
-    const ast = parseProgram(tokens);
 
     expect(ast).toMatchObject({
       kind: "Program",
@@ -178,7 +173,7 @@ describe("parser", (): void => {
 
 describe("path expressions", (): void => {
   it("parses a single-segment path", (): void => {
-    const ast = parseProgram(tokenize("foo;"));
+    const ast = parseProgram("foo;");
     expect(ast).toMatchObject({
       items: [
         {
@@ -193,7 +188,7 @@ describe("path expressions", (): void => {
   });
 
   it("parses a multi-segment qualified path", (): void => {
-    const ast = parseProgram(tokenize("std::io::print;"));
+    const ast = parseProgram("std::io::print;");
     expect(ast).toMatchObject({
       items: [
         {
@@ -208,7 +203,7 @@ describe("path expressions", (): void => {
   });
 
   it("parses an absolute path", (): void => {
-    const ast = parseProgram(tokenize("::std::io;"));
+    const ast = parseProgram("::std::io;");
     expect(ast).toMatchObject({
       items: [
         {
@@ -223,7 +218,7 @@ describe("path expressions", (): void => {
   });
 
   it("parses a qualified path used as a call callee", (): void => {
-    const ast = parseProgram(tokenize('std::io::print("hi");'));
+    const ast = parseProgram('std::io::print("hi");');
     expect(ast).toMatchObject({
       items: [
         {
@@ -242,7 +237,7 @@ describe("path expressions", (): void => {
   });
 
   it("returns an error for a trailing path separator", (): void => {
-    const result = parse(tokenize("foo::;"));
+    const result = parse(tokenize("foo::;").tokens);
     expect(isErr(result)).toBe(true);
     if (isErr(result)) {
       expect(result.error.message).toContain('Expected identifier after "::"');
@@ -252,7 +247,7 @@ describe("path expressions", (): void => {
 
 describe("type annotations", (): void => {
   it("parses a named type annotation on a let binding", (): void => {
-    const ast = parseProgram(tokenize("let x: i32 = 0;"));
+    const ast = parseProgram("let x: i32 = 0;");
     expect(ast).toMatchObject({
       items: [
         {
@@ -267,7 +262,7 @@ describe("type annotations", (): void => {
   });
 
   it("parses a named type with no initializer", (): void => {
-    const ast = parseProgram(tokenize("let p: Point;"));
+    const ast = parseProgram("let p: Point;");
     expect(ast).toMatchObject({
       items: [
         {
@@ -283,7 +278,7 @@ describe("type annotations", (): void => {
   });
 
   it("parses a qualified named type", (): void => {
-    const ast = parseProgram(tokenize("let f: std::io::File;"));
+    const ast = parseProgram("let f: std::io::File;");
     expect(ast).toMatchObject({
       items: [
         {
@@ -298,7 +293,7 @@ describe("type annotations", (): void => {
   });
 
   it("parses a unit type annotation on a let binding", (): void => {
-    const ast = parseProgram(tokenize("let u: ();"));
+    const ast = parseProgram("let u: ();");
     expect(ast).toMatchObject({
       items: [
         {
@@ -312,7 +307,7 @@ describe("type annotations", (): void => {
 
   // TODO(#16): unit expression `()` is not yet parseable; unblock when #16 lands
   it.todo("parses a unit-typed let with a unit initializer", (): void => {
-    const ast = parseProgram(tokenize("let u: () = ();"));
+    const ast = parseProgram("let u: () = ();");
     expect(ast).toMatchObject({
       items: [
         {
@@ -325,7 +320,7 @@ describe("type annotations", (): void => {
   });
 
   it("parses a return type on a function", (): void => {
-    const ast = parseProgram(tokenize("fn add() -> i32 {}"));
+    const ast = parseProgram("fn add() -> i32 {}");
     expect(ast).toMatchObject({
       items: [
         {
@@ -340,7 +335,7 @@ describe("type annotations", (): void => {
   });
 
   it("parses a unit return type on a function", (): void => {
-    const ast = parseProgram(tokenize("fn nothing() -> () {}"));
+    const ast = parseProgram("fn nothing() -> () {}");
     expect(ast).toMatchObject({
       items: [
         {
@@ -352,14 +347,14 @@ describe("type annotations", (): void => {
   });
 
   it("records no return type when the arrow is absent", (): void => {
-    const ast = parseProgram(tokenize("fn f() {}"));
+    const ast = parseProgram("fn f() {}");
     expect(ast).toMatchObject({
       items: [{ kind: "Function", returnType: none() }],
     });
   });
 
   it("returns an error for an unsupported type syntax", (): void => {
-    const result = parse(tokenize("let x: &i32;"));
+    const result = parse(tokenize("let x: &i32;").tokens);
     expect(isErr(result)).toBe(true);
     if (isErr(result)) {
       expect(result.error.message).toContain("Slice 2");
@@ -370,7 +365,7 @@ describe("type annotations", (): void => {
 describe("type annotation error diagnostics", (): void => {
   it("produces an error diagnostic for a reference type", (): void => {
     const source = "let x: &i32;";
-    const ampIdx = tokenize(source).findIndex((t) => t.kind === "amp");
+    const ampIdx = tokenize(source).tokens.findIndex((t) => t.kind === "amp");
     const result = compile(source);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.severity).toBe("error");
@@ -381,7 +376,7 @@ describe("type annotation error diagnostics", (): void => {
 
   it("produces an error diagnostic for an exclusive reference type", (): void => {
     const source = "let x: &write i32;";
-    const ampIdx = tokenize(source).findIndex((t) => t.kind === "amp");
+    const ampIdx = tokenize(source).tokens.findIndex((t) => t.kind === "amp");
     const result = compile(source);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.severity).toBe("error");
@@ -391,7 +386,7 @@ describe("type annotation error diagnostics", (): void => {
 
   it("produces an error diagnostic for a slice type", (): void => {
     const source = "let xs: [i32];";
-    const lbracketIdx = tokenize(source).findIndex(
+    const lbracketIdx = tokenize(source).tokens.findIndex(
       (t) => t.kind === "lbracket",
     );
     const result = compile(source);
@@ -402,7 +397,7 @@ describe("type annotation error diagnostics", (): void => {
 
   it("produces an error diagnostic for the never type", (): void => {
     const source = "fn f() -> ! {}";
-    const bangIdx = tokenize(source).findIndex((t) => t.kind === "bang");
+    const bangIdx = tokenize(source).tokens.findIndex((t) => t.kind === "bang");
     const result = compile(source);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.severity).toBe("error");
@@ -419,8 +414,7 @@ describe("struct field type annotations", (): void => {
 
 describe("attributes on let statements", (): void => {
   it("attaches an outer attribute to a top-level let", (): void => {
-    const tokens = tokenize("#[attr] let x = 1;");
-    const ast = parseProgram(tokens);
+    const ast = parseProgram("#[attr] let x = 1;");
     expect(ast).toMatchObject({
       items: [
         {
@@ -437,8 +431,7 @@ describe("attributes on let statements", (): void => {
   });
 
   it("attaches a doc comment to a let inside a block", (): void => {
-    const tokens = tokenize("fn f() { /// Counter\nlet x = 1; }");
-    const ast = parseProgram(tokens);
+    const ast = parseProgram("fn f() { /// Counter\nlet x = 1; }");
     expect(ast).toMatchObject({
       items: [
         {
@@ -462,6 +455,46 @@ describe("attributes on let statements", (): void => {
           },
         },
       ],
+    });
+  });
+});
+
+describe("attribute parsing guardrails", (): void => {
+  it("returns an error for an attribute arg that is neither string nor path", (): void => {
+    const result = parse(tokenize("#[attr(42)] fn f() {}").tokens);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.message).toContain("Expected attribute argument");
+    }
+  });
+
+  it("returns an error when an attribute argument list is not closed", (): void => {
+    const result = parse(tokenize("#[attr(").tokens);
+    expect(isErr(result)).toBe(true);
+  });
+
+  it("returns an error when `]` is missing after attribute arguments", (): void => {
+    const result = parse(tokenize("#[attr(x) fn f() {}").tokens);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.message).toContain("rbracket");
+    }
+  });
+});
+
+describe("tuple type guardrail", (): void => {
+  it("returns an error for a parenthesized non-unit type", (): void => {
+    const result = parse(tokenize("let x: (i32);").tokens);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.message).toContain("tuple types are not supported");
+    }
+  });
+
+  it("still parses the unit type `()` successfully", (): void => {
+    const ast = parseProgram("let x: ();");
+    expect(ast).toMatchObject({
+      items: [{ kind: "LetStatement", type: some({ kind: "UnitType" }) }],
     });
   });
 });

@@ -7,7 +7,7 @@ import { parse } from "../parser/parser.js";
 import { isErr } from "../result.js";
 
 function parseOrThrow(source: string): Program {
-  const result = parse(tokenize(source));
+  const result = parse(tokenize(source).tokens);
   if (isErr(result)) {
     throw result.error;
   }

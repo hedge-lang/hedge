@@ -1,7 +1,14 @@
 import { isComment, parseComment } from "./comments.js";
 import { scanWhile } from "./scan-while.js";
+import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "./token.js";
 import { isWhitespace } from "./whitespace.js";
+
+/** The result of tokenizing a source string: tokens plus any lex-time diagnostics. */
+export interface TokenizeResult {
+  readonly tokens: readonly Token[];
+  readonly diagnostics: readonly Diagnostic[];
+}
 
 /**
  * The hard keywords (grammar appendix). Contextual keywords (`write`, `bind`,
@@ -82,7 +89,12 @@ function peek(source: string, i: number, offset: number = 1): string {
  * @returns the position after the emitted token.
  */
 // eslint-disable-next-line complexity -- Maximal-munch cascade is more readable as a single function.
-function scanSymbol(tokens: Token[], source: string, start: number): number {
+function scanSymbol(
+  tokens: Token[],
+  diagnostics: Diagnostic[],
+  source: string,
+  start: number,
+): number {
   const ch = source[start];
   const n1 = peek(source, start, 1);
   const n2 = peek(source, start, 2);
@@ -363,8 +375,16 @@ function scanSymbol(tokens: Token[], source: string, start: number): number {
       return end;
     }
 
-    default:
-      throw new SyntaxError(`Unexpected character "${ch}" at offset ${start}`);
+    default: {
+      const end = start + 1;
+      diagnostics.push({
+        severity: "error",
+        message: `Unexpected character "${ch}" at offset ${start}`,
+        tokenId: tokens.length,
+      });
+      tokens.push({ kind: "error", span: { start, end }, text: ch ?? "" });
+      return end;
+    }
   }
 }
 
@@ -375,8 +395,9 @@ function scanSymbol(tokens: Token[], source: string, start: number): number {
  * integer literals, string literals, lifetime tokens, and all operators and
  * punctuation defined in `specification/0025-grammar.md`.
  */
-export function tokenize(source: string): Token[] {
+export function tokenize(source: string): TokenizeResult {
   const tokens: Token[] = [];
+  const diagnostics: Diagnostic[] = [];
   let i = 0;
   while (i < source.length) {
     const ch = source[i];
@@ -402,7 +423,14 @@ export function tokenize(source: string): Token[] {
         });
         i = end;
       } else {
-        throw new SyntaxError(`Unexpected character "'" at offset ${start}`);
+        const end = start + 1;
+        diagnostics.push({
+          severity: "error",
+          message: `Unexpected character "'" at offset ${start}`,
+          tokenId: tokens.length,
+        });
+        tokens.push({ kind: "error", span: { start, end }, text: "'" });
+        i = end;
       }
     } else if (isIdentStart(ch)) {
       const end = scanWhile(source, i + 1, isIdentContinue);
@@ -421,23 +449,32 @@ export function tokenize(source: string): Token[] {
     } else if (isStringBegin(ch)) {
       const end = scanWhile(source, i + 1, isStringEnd(ch));
       if (end >= source.length) {
-        throw new SyntaxError(
-          `Unterminated string literal starting at ${start}`,
-        );
+        diagnostics.push({
+          severity: "error",
+          message: `Unterminated string literal starting at ${start}`,
+          tokenId: tokens.length,
+        });
+        tokens.push({
+          kind: "error",
+          span: { start, end: source.length },
+          text: source.slice(start),
+        });
+        i = source.length;
+      } else {
+        tokens.push({
+          kind: "string",
+          text: source.slice(start + 1, end),
+          span: { start, end: end + 1 },
+        });
+        i = end + 1;
       }
-      tokens.push({
-        kind: "string",
-        text: source.slice(start + 1, end),
-        span: { start, end: end + 1 },
-      });
-      i = end + 1;
     } else {
-      i = scanSymbol(tokens, source, i);
+      i = scanSymbol(tokens, diagnostics, source, i);
     }
   }
   tokens.push({
     kind: "eof",
     span: { start: source.length, end: source.length },
   });
-  return tokens;
+  return { tokens, diagnostics };
 }

@@ -12,6 +12,7 @@ export type Token =
   | { readonly kind: "int"; readonly span: Span; readonly text: string }
   | { readonly kind: "string"; readonly span: Span; readonly text: string }
   | { readonly kind: "lifetime"; readonly span: Span; readonly text: string }
+  | { readonly kind: "error"; readonly span: Span; readonly text: string }
   | { readonly kind: "eof"; readonly span: Span }
   // Delimiters
   | { readonly kind: "lparen"; readonly span: Span }
