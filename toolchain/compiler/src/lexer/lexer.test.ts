@@ -413,6 +413,18 @@ describe("lexer", (): void => {
         ]);
       });
 
+      it(`parses \`let value: &${t};\``, () => {
+        expect(tokenize(`let value: &${t};`)).toMatchObject([
+          { kind: "keyword", text: "let" },
+          { kind: "ident", text: "value" },
+          { kind: "colon" },
+          { kind: "amp" },
+          { kind: "ident", text: t },
+          { kind: "semi" },
+          { kind: "eof" },
+        ]);
+      })
+
       it(`parses \`fn foo() -> ${t} {}\``, () => {
         expect(tokenize(`fn foo() -> ${t} {}`)).toMatchObject([
           { kind: "keyword", text: "fn" },
@@ -427,6 +439,25 @@ describe("lexer", (): void => {
         ]);
       });
 
+      it(`parses \`fn foo<'a>() -> &'a ${t} {}\``, () => {
+        expect(tokenize(`fn foo<'a>() -> &'a ${t} {}`)).toMatchObject([
+          { kind: "keyword", text: "fn" },
+          { kind: "ident", text: "foo" },
+          { kind: "lt" },
+          { kind: "lifetime", text: "a" },
+          { kind: "gt" },
+          { kind: "lparen" },
+          { kind: "rparen" },
+          { kind: "arrow" },
+          { kind: "amp" },
+          { kind: "lifetime", text: "a" },
+          { kind: "ident", text: t },
+          { kind: "lbrace" },
+          { kind: "rbrace" },
+          { kind: "eof" },
+        ]);
+      });
+
       it(`parses \`fn foo(param: ${t}) {}`, () => {
         expect(tokenize(`fn foo(param: ${t}) {}`)).toMatchObject([
           { kind: "keyword", text: "fn" },
@@ -434,6 +465,22 @@ describe("lexer", (): void => {
           { kind: "lparen" },
           { kind: "ident", text: "param" },
           { kind: "colon" },
+          { kind: "ident", text: t },
+          { kind: "rparen" },
+          { kind: "lbrace" },
+          { kind: "rbrace" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it(`parses \`fn foo(param: &${t}) {}`, () => {
+        expect(tokenize(`fn foo(param: &${t}) {}`)).toMatchObject([
+          { kind: "keyword", text: "fn" },
+          { kind: "ident", text: "foo" },
+          { kind: "lparen" },
+          { kind: "ident", text: "param" },
+          { kind: "colon" },
+          { kind: "amp" },
           { kind: "ident", text: t },
           { kind: "rparen" },
           { kind: "lbrace" },
