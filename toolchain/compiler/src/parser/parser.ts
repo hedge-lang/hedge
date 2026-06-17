@@ -26,7 +26,7 @@ import type {
 } from "./ast.js";
 import type { Parsed } from "./parse.js";
 
-export class ParserError extends Error {
+class ParserError extends Error {
   readonly span: Option<Span>;
   readonly tokenId: number;
   constructor(message: string, span: Option<Span>, tokenId: number = 0) {
@@ -36,7 +36,7 @@ export class ParserError extends Error {
   }
 }
 
-export type ParseResult<T> = Result<T, ParserError>;
+type ParseResult<T> = Result<T, ParserError>;
 
 /**
  * @returns the token at {@link pos}, or else a {@link ParserError} if the
