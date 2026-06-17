@@ -8,7 +8,9 @@ import { checkBorrows } from "./borrowck.js";
 
 function check(source: string): readonly Diagnostic[] {
   const result = parse(tokenize(source));
-  if (isErr(result)) { throw result.error; }
+  if (isErr(result)) {
+    throw result.error;
+  }
   return checkBorrows(result.value);
 }
 

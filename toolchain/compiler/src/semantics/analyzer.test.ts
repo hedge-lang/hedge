@@ -8,7 +8,9 @@ import { analyze } from "./analyzer.js";
 
 function diagnose(source: string): AnalysisResult {
   const result = parse(tokenize(source));
-  if (isErr(result)) { throw result.error; }
+  if (isErr(result)) {
+    throw result.error;
+  }
   return analyze(result.value);
 }
 

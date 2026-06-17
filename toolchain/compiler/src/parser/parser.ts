@@ -1,6 +1,6 @@
 import type { Span, Token } from "../lexer/token.js";
 import { none, some, type Option } from "../option.js";
-import {err, isErr, ok, type Result} from '../result.js'
+import { err, isErr, ok, type Result } from "../result.js";
 import type {
   Attribute,
   BindingPattern,
@@ -36,7 +36,7 @@ export class ParserError extends Error {
   }
 }
 
-export type ParseResult<T> = Result<T, ParserError>
+export type ParseResult<T> = Result<T, ParserError>;
 
 /**
  * @returns the token at {@link pos}, or else a {@link ParserError} if the
@@ -45,7 +45,9 @@ export type ParseResult<T> = Result<T, ParserError>
 function tokenAt(tokens: readonly Token[], pos: number): ParseResult<Token> {
   const token = tokens[pos];
   if (token === undefined) {
-    return err(new ParserError(`Unexpected end of input at token ${pos}`, none(), pos));
+    return err(
+      new ParserError(`Unexpected end of input at token ${pos}`, none(), pos),
+    );
   }
   return ok(token);
 }
@@ -76,11 +78,13 @@ function expect(
   }
   const token = tokenAtResult.value;
   if (token.kind !== kind) {
-    return err(new ParserError(
-      `Expected ${kind}, found "${token.kind}" at offset ${token.span.start}`,
-      some(token.span),
-      pos,
-    ));
+    return err(
+      new ParserError(
+        `Expected ${kind}, found "${token.kind}" at offset ${token.span.start}`,
+        some(token.span),
+        pos,
+      ),
+    );
   }
   return ok(pos + 1);
 }
@@ -102,11 +106,13 @@ function expectKeyword(
   }
   const token = tokenAtResult.value;
   if (token.kind !== "keyword" || token.text !== text) {
-    return err(new ParserError(
-      `Expected keyword "${text}", found "${token.kind}" at offset ${token.span.start}`,
-      some(token.span),
-      pos,
-    ));
+    return err(
+      new ParserError(
+        `Expected keyword "${text}", found "${token.kind}" at offset ${token.span.start}`,
+        some(token.span),
+        pos,
+      ),
+    );
   }
   return ok(pos + 1);
 }
@@ -130,11 +136,13 @@ function parseIdentifier(
   }
   const token = tokenAtResult.value;
   if (token.kind !== "ident") {
-    return err(new ParserError(
-      `Expected an identifier, found "${token.kind}" at offset ${token.span.start}`,
-      some(token.span),
-      pos,
-    ));
+    return err(
+      new ParserError(
+        `Expected an identifier, found "${token.kind}" at offset ${token.span.start}`,
+        some(token.span),
+        pos,
+      ),
+    );
   }
   const ident: Identifier = {
     kind: "Identifier",
@@ -153,6 +161,7 @@ function parseIdentifier(
  * Path ::= "::"? Identifier ("::" Identifier)*
  * ```
  */
+// eslint-disable-next-line complexity -- Result-threading adds an isErr branch per step; extracting helpers would obscure the grammar structure.
 function parsePathSegments(
   tokens: readonly Token[],
   pos: number,
@@ -179,20 +188,27 @@ function parsePathSegments(
   cursor = first.next;
 
   for (;;) {
-    if (tokens[cursor]?.kind !== "path_sep") { break; }
+    if (tokens[cursor]?.kind !== "path_sep") {
+      break;
+    }
     cursor += 1; // skip `::`
     const nextToken = tokens[cursor];
     if (nextToken === undefined || nextToken.kind !== "ident") {
       const kind = nextToken?.kind ?? "eof";
-      const span = nextToken !== undefined ? some(nextToken.span) : none<Span>();
-      return err(new ParserError(
-        `Expected identifier after "::", found "${kind}"`,
-        span,
-        cursor,
-      ));
+      const span =
+        nextToken !== undefined ? some(nextToken.span) : none<Span>();
+      return err(
+        new ParserError(
+          `Expected identifier after "::", found "${kind}"`,
+          span,
+          cursor,
+        ),
+      );
     }
     const segmentResult = parseIdentifier(tokens, cursor);
-    if (isErr(segmentResult)) { return segmentResult; }
+    if (isErr(segmentResult)) {
+      return segmentResult;
+    }
     const segment = segmentResult.value;
     segments.push(segment.node.text);
     cursor = segment.next;
@@ -322,11 +338,13 @@ function parsePrimary(
     return parseReference(tokens, pos);
   }
 
-  return err(new ParserError(
-    `Expected an expression, found "${token.kind}" at offset ${token.span.start}`,
-    some(token.span),
-    pos,
-  ));
+  return err(
+    new ParserError(
+      `Expected an expression, found "${token.kind}" at offset ${token.span.start}`,
+      some(token.span),
+      pos,
+    ),
+  );
 }
 
 /**
@@ -343,20 +361,30 @@ function parseArguments(
   pos: number,
 ): ParseResult<Parsed<Expression[]>> {
   const afterLparen = expect(tokens, pos, "lparen");
-  if (isErr(afterLparen)) { return afterLparen; }
+  if (isErr(afterLparen)) {
+    return afterLparen;
+  }
   let cursor = afterLparen.value;
   const args: Expression[] = [];
   for (;;) {
-    if (tokens[cursor]?.kind === "rparen") { break; }
+    if (tokens[cursor]?.kind === "rparen") {
+      break;
+    }
     const argResult = parseExpression(tokens, cursor);
-    if (isErr(argResult)) { return argResult; }
+    if (isErr(argResult)) {
+      return argResult;
+    }
     args.push(argResult.value.node);
     cursor = argResult.value.next;
-    if (tokens[cursor]?.kind !== "comma") { break; }
+    if (tokens[cursor]?.kind !== "comma") {
+      break;
+    }
     cursor += 1;
   }
   const afterRparen = expect(tokens, cursor, "rparen");
-  if (isErr(afterRparen)) { return afterRparen; }
+  if (isErr(afterRparen)) {
+    return afterRparen;
+  }
   return ok({ node: args, next: afterRparen.value });
 }
 
@@ -384,12 +412,18 @@ function parseExpression(
   pos: number,
 ): ParseResult<Parsed<Expression>> {
   const resultResult = parsePrimary(tokens, pos);
-  if (isErr(resultResult)) { return resultResult; }
+  if (isErr(resultResult)) {
+    return resultResult;
+  }
   let result = resultResult.value;
   for (;;) {
-    if (tokens[result.next]?.kind !== "lparen") { break; }
+    if (tokens[result.next]?.kind !== "lparen") {
+      break;
+    }
     const argsResult = parseArguments(tokens, result.next);
-    if (isErr(argsResult)) { return argsResult; }
+    if (isErr(argsResult)) {
+      return argsResult;
+    }
     const args = argsResult.value;
     const call: CallExpression = {
       kind: "CallExpression",
@@ -415,21 +449,30 @@ function parseExpression(
  * Type ::= "()" | Path
  * ```
  */
-function parseType(tokens: readonly Token[], pos: number): ParseResult<Parsed<Type>> {
+function parseType(
+  tokens: readonly Token[],
+  pos: number,
+): ParseResult<Parsed<Type>> {
   const tokenResult = tokenAt(tokens, pos);
-  if (isErr(tokenResult)) { return tokenResult; }
+  if (isErr(tokenResult)) {
+    return tokenResult;
+  }
   const token = tokenResult.value;
 
   if (token.kind === "lparen") {
     const afterRparen = expect(tokens, pos + 1, "rparen");
-    if (isErr(afterRparen)) { return afterRparen; }
+    if (isErr(afterRparen)) {
+      return afterRparen;
+    }
     const unit: UnitType = { kind: "UnitType", tokenId: pos };
     return ok({ node: unit, next: afterRparen.value });
   }
 
   if (token.kind === "ident" || token.kind === "path_sep") {
     const pathResult = parsePathSegments(tokens, pos);
-    if (isErr(pathResult)) { return pathResult; }
+    if (isErr(pathResult)) {
+      return pathResult;
+    }
     const named: NamedType = {
       kind: "NamedType",
       tokenId: pos,
@@ -439,18 +482,22 @@ function parseType(tokens: readonly Token[], pos: number): ParseResult<Parsed<Ty
   }
 
   if (token.kind === "amp") {
-    return err(new ParserError(
-      "reference types are not supported in Slice 1; borrows are introduced in Slice 2",
-      some(token.span),
-      pos,
-    ));
+    return err(
+      new ParserError(
+        "reference types are not supported in Slice 1; borrows are introduced in Slice 2",
+        some(token.span),
+        pos,
+      ),
+    );
   }
 
-  return err(new ParserError(
-    `type syntax "${token.kind}" is not supported in Slice 1`,
-    some(token.span),
-    pos,
-  ));
+  return err(
+    new ParserError(
+      `type syntax "${token.kind}" is not supported in Slice 1`,
+      some(token.span),
+      pos,
+    ),
+  );
 }
 
 /**
@@ -469,7 +516,9 @@ function parseBindingPattern(
   pos: number,
 ): ParseResult<Parsed<BindingPattern>> {
   const identResult = parseIdentifier(tokens, pos);
-  if (isErr(identResult)) { return identResult; }
+  if (isErr(identResult)) {
+    return identResult;
+  }
   const ident = identResult.value;
   return ok({
     node: { kind: "BindingPattern", name: ident.node },
@@ -501,6 +550,7 @@ function parseBindingPattern(
  * let bind resource = open();
  * ```
  */
+// eslint-disable-next-line complexity -- Multiple optional clauses (bind, write, type, initializer) each contribute a branch; the grammar drives the complexity, not poor structure.
 function parseLetStatement(
   tokens: readonly Token[],
   pos: number,
@@ -508,7 +558,9 @@ function parseLetStatement(
 ): ParseResult<Parsed<LetStatement>> {
   const start = pos;
   const afterLet = expectKeyword(tokens, pos, "let");
-  if (isErr(afterLet)) { return afterLet; }
+  if (isErr(afterLet)) {
+    return afterLet;
+  }
   let cursor = afterLet.value;
 
   let bind = false;
@@ -525,7 +577,9 @@ function parseLetStatement(
   }
 
   const patternResult = parseBindingPattern(tokens, cursor);
-  if (isErr(patternResult)) { return patternResult; }
+  if (isErr(patternResult)) {
+    return patternResult;
+  }
   const pattern = patternResult.value;
   cursor = pattern.next;
 
@@ -533,7 +587,9 @@ function parseLetStatement(
   if (tokens[cursor]?.kind === "colon") {
     cursor += 1;
     const typeResult = parseType(tokens, cursor);
-    if (isErr(typeResult)) { return typeResult; }
+    if (isErr(typeResult)) {
+      return typeResult;
+    }
     typeAnnotation = some(typeResult.value.node);
     cursor = typeResult.value.next;
   }
@@ -541,13 +597,17 @@ function parseLetStatement(
   let initializer: Option<Expression> = none();
   if (tokens[cursor]?.kind === "eq") {
     const initResult = parseExpression(tokens, cursor + 1);
-    if (isErr(initResult)) { return initResult; }
+    if (isErr(initResult)) {
+      return initResult;
+    }
     initializer = some(initResult.value.node);
     cursor = initResult.value.next;
   }
 
   const afterSemi = expect(tokens, cursor, "semi");
-  if (isErr(afterSemi)) { return afterSemi; }
+  if (isErr(afterSemi)) {
+    return afterSemi;
+  }
 
   const letStmt: LetStatement = {
     kind: "LetStatement",
@@ -601,39 +661,61 @@ function expressionStatement(expression: Expression): ExpressionStatement {
  * }
  * ```
  */
-function parseBlock(tokens: readonly Token[], pos: number): ParseResult<Parsed<Block>> {
+// eslint-disable-next-line complexity -- Statement-dispatch loop with attribute collection and trailing-expression detection; splitting would obscure the grammar rule.
+function parseBlock(
+  tokens: readonly Token[],
+  pos: number,
+): ParseResult<Parsed<Block>> {
   const start = pos;
   const afterLbrace = expect(tokens, pos, "lbrace");
-  if (isErr(afterLbrace)) { return afterLbrace; }
+  if (isErr(afterLbrace)) {
+    return afterLbrace;
+  }
   let cursor = afterLbrace.value;
 
   // Inner attributes at the start of a block document the enclosing function.
   const innerResult = collectInnerAttributes(tokens, cursor);
-  if (isErr(innerResult)) { return innerResult; }
+  if (isErr(innerResult)) {
+    return innerResult;
+  }
   const innerAttributes = innerResult.value.attributes;
   cursor = innerResult.value.next;
 
   const statements: Statement[] = [];
   let trailing: Expression | null = null;
   for (;;) {
-    if (tokens[cursor]?.kind === "rbrace") { break; }
+    if (tokens[cursor]?.kind === "rbrace") {
+      break;
+    }
     // Outer attributes (e.g. `/// doc`) before a statement attach to a following
     // `let` — the only named target inside a block. Before anything else they
     // have nothing to document and are discarded.
     const outerResult = collectOuterAttributes(tokens, cursor);
-    if (isErr(outerResult)) { return outerResult; }
+    if (isErr(outerResult)) {
+      return outerResult;
+    }
     cursor = outerResult.value.next;
-    if (tokens[cursor]?.kind === "rbrace") { break; }
+    if (tokens[cursor]?.kind === "rbrace") {
+      break;
+    }
     const token = tokens[cursor];
     if (token?.kind === "keyword" && token.text === "let") {
-      const letResult = parseLetStatement(tokens, cursor, outerResult.value.attributes);
-      if (isErr(letResult)) { return letResult; }
+      const letResult = parseLetStatement(
+        tokens,
+        cursor,
+        outerResult.value.attributes,
+      );
+      if (isErr(letResult)) {
+        return letResult;
+      }
       statements.push(letResult.value.node);
       cursor = letResult.value.next;
       continue;
     }
     const exprResult = parseExpression(tokens, cursor);
-    if (isErr(exprResult)) { return exprResult; }
+    if (isErr(exprResult)) {
+      return exprResult;
+    }
     cursor = exprResult.value.next;
     if (tokens[cursor]?.kind === "semi") {
       statements.push(expressionStatement(exprResult.value.node));
@@ -651,7 +733,9 @@ function parseBlock(tokens: readonly Token[], pos: number): ParseResult<Parsed<B
     innerAttributes,
   };
   const afterRbrace = expect(tokens, cursor, "rbrace");
-  if (isErr(afterRbrace)) { return afterRbrace; }
+  if (isErr(afterRbrace)) {
+    return afterRbrace;
+  }
   return ok({ node: block, next: afterRbrace.value });
 }
 
@@ -693,13 +777,22 @@ function parseAttributeArg(
 ): ParseResult<Parsed<AttributeArg>> {
   const token = tokens[pos];
   if (token?.kind === "string") {
-    const lit: StringLiteral = { kind: "StringLiteral", tokenId: pos, value: token.text };
+    const lit: StringLiteral = {
+      kind: "StringLiteral",
+      tokenId: pos,
+      value: token.text,
+    };
     return ok({ node: { path: none(), literal: some(lit) }, next: pos + 1 });
   }
   if (token?.kind === "ident" || token?.kind === "path_sep") {
     const pathResult = parsePathSegments(tokens, pos);
-    if (isErr(pathResult)) { return pathResult; }
-    return ok({ node: { path: some(pathResult.value.node), literal: none() }, next: pathResult.value.next });
+    if (isErr(pathResult)) {
+      return pathResult;
+    }
+    return ok({
+      node: { path: some(pathResult.value.node), literal: none() },
+      next: pathResult.value.next,
+    });
   }
   return ok({ node: { path: none(), literal: none() }, next: pos + 1 });
 }
@@ -724,7 +817,9 @@ function parseAttribute(
   }
   cursor += 1; // skip `[`
   const nameResult = parseIdentifier(tokens, cursor);
-  if (isErr(nameResult)) { return nameResult; }
+  if (isErr(nameResult)) {
+    return nameResult;
+  }
   const name = nameResult.value;
   cursor = name.next;
 
@@ -733,7 +828,9 @@ function parseAttribute(
     cursor += 1; // skip `(`
     while (tokens[cursor]?.kind !== "rparen") {
       const argResult = parseAttributeArg(tokens, cursor);
-      if (isErr(argResult)) { return argResult; }
+      if (isErr(argResult)) {
+        return argResult;
+      }
       args.push(argResult.value.node);
       cursor = argResult.value.next;
       if (tokens[cursor]?.kind === "comma") {
@@ -765,7 +862,9 @@ function collectOuterAttributes(
   let cursor = pos;
   while (isOuterAttribute(tokens, cursor)) {
     const parsedResult = parseAttribute(tokens, cursor);
-    if (isErr(parsedResult)) { return parsedResult; }
+    if (isErr(parsedResult)) {
+      return parsedResult;
+    }
     attributes.push(parsedResult.value.node);
     cursor = parsedResult.value.next;
   }
@@ -785,7 +884,9 @@ function collectInnerAttributes(
   let cursor = pos;
   while (isInnerAttribute(tokens, cursor)) {
     const parsedResult = parseAttribute(tokens, cursor);
-    if (isErr(parsedResult)) { return parsedResult; }
+    if (isErr(parsedResult)) {
+      return parsedResult;
+    }
     attributes.push(parsedResult.value.node);
     cursor = parsedResult.value.next;
   }
@@ -816,25 +917,37 @@ function parseFunction(
 ): ParseResult<Parsed<FunctionDecl>> {
   const start = pos;
   const afterFn = expectKeyword(tokens, pos, "fn");
-  if (isErr(afterFn)) { return afterFn; }
+  if (isErr(afterFn)) {
+    return afterFn;
+  }
   const nameResult = parseIdentifier(tokens, afterFn.value);
-  if (isErr(nameResult)) { return nameResult; }
+  if (isErr(nameResult)) {
+    return nameResult;
+  }
   const name = nameResult.value;
   const afterOpen = expect(tokens, name.next, "lparen");
-  if (isErr(afterOpen)) { return afterOpen; }
+  if (isErr(afterOpen)) {
+    return afterOpen;
+  }
   const afterClose = expect(tokens, afterOpen.value, "rparen");
-  if (isErr(afterClose)) { return afterClose; }
+  if (isErr(afterClose)) {
+    return afterClose;
+  }
   let cursor = afterClose.value;
   let returnType: Option<Type> = none();
   if (tokens[cursor]?.kind === "arrow") {
     cursor += 1;
     const typeResult = parseType(tokens, cursor);
-    if (isErr(typeResult)) { return typeResult; }
+    if (isErr(typeResult)) {
+      return typeResult;
+    }
     returnType = some(typeResult.value.node);
     cursor = typeResult.value.next;
   }
   const bodyResult = parseBlock(tokens, cursor);
-  if (isErr(bodyResult)) { return bodyResult; }
+  if (isErr(bodyResult)) {
+    return bodyResult;
+  }
   const body = bodyResult.value;
   const fn: FunctionDecl = {
     kind: "Function",
@@ -885,11 +998,17 @@ function parseVisibility(
  * - Expression statements
  * - Bare expressions
  */
-function parseItem(tokens: readonly Token[], pos: number): ParseResult<Parsed<Item>> {
+// eslint-disable-next-line complexity -- Top-level item dispatch with visibility/attribute prefix; each item kind is a necessary branch.
+function parseItem(
+  tokens: readonly Token[],
+  pos: number,
+): ParseResult<Parsed<Item>> {
   // Collect outer attributes (#[...]) before the item and attach them to the
   // named declaration that follows (a function or a `let`).
   const outerResult = collectOuterAttributes(tokens, pos);
-  if (isErr(outerResult)) { return outerResult; }
+  if (isErr(outerResult)) {
+    return outerResult;
+  }
   const attributes = outerResult.value.attributes;
   const cursor = outerResult.value.next;
 
@@ -898,19 +1017,28 @@ function parseItem(tokens: readonly Token[], pos: number): ParseResult<Parsed<It
   const token = tokens[afterVis];
   if (token?.kind === "keyword" && token.text === "fn") {
     const fnResult = parseFunction(tokens, afterVis, attributes, vis.node);
-    if (isErr(fnResult)) { return fnResult; }
+    if (isErr(fnResult)) {
+      return fnResult;
+    }
     return ok(fnResult.value);
   }
   if (token?.kind === "keyword" && token.text === "let") {
     const letResult = parseLetStatement(tokens, cursor, attributes);
-    if (isErr(letResult)) { return letResult; }
+    if (isErr(letResult)) {
+      return letResult;
+    }
     return ok(letResult.value);
   }
   const exprResult = parseExpression(tokens, cursor);
-  if (isErr(exprResult)) { return exprResult; }
+  if (isErr(exprResult)) {
+    return exprResult;
+  }
   const parsed = exprResult.value;
   if (tokens[parsed.next]?.kind === "semi") {
-    return ok({ node: expressionStatement(parsed.node), next: parsed.next + 1 });
+    return ok({
+      node: expressionStatement(parsed.node),
+      next: parsed.next + 1,
+    });
   }
   return ok(parsed);
 }
@@ -941,17 +1069,25 @@ export function parse(tokens: readonly Token[]): ParseResult<Program> {
 
   // Program-level inner attributes (#![...]) apply to the module itself.
   const innerResult = collectInnerAttributes(tokens, cursor);
-  if (isErr(innerResult)) { return innerResult; }
+  if (isErr(innerResult)) {
+    return innerResult;
+  }
   const attributes = innerResult.value.attributes;
   cursor = innerResult.value.next;
 
   const items: Item[] = [];
   for (;;) {
     const peekResult = tokenAt(tokens, cursor);
-    if (isErr(peekResult)) { return peekResult; }
-    if (peekResult.value.kind === "eof") { break; }
+    if (isErr(peekResult)) {
+      return peekResult;
+    }
+    if (peekResult.value.kind === "eof") {
+      break;
+    }
     const itemResult = parseItem(tokens, cursor);
-    if (isErr(itemResult)) { return itemResult; }
+    if (isErr(itemResult)) {
+      return itemResult;
+    }
     items.push(itemResult.value.node);
     cursor = itemResult.value.next;
   }

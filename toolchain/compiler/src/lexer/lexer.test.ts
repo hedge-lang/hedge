@@ -424,7 +424,7 @@ describe("lexer", (): void => {
           { kind: "semi" },
           { kind: "eof" },
         ]);
-      })
+      });
 
       it(`parses \`fn foo() -> ${t} {}\``, () => {
         expect(tokenize(`fn foo() -> ${t} {}`)).toMatchObject([
@@ -504,7 +504,7 @@ describe("lexer", (): void => {
 
       it(`parses \`struct Foo { value: ${t} }\``, () => {
         expect(tokenize(`struct Foo { value: ${t} }`)).toMatchObject([
-          { kind: "keyword" , text: "struct" },
+          { kind: "keyword", text: "struct" },
           { kind: "ident", text: "Foo" },
           { kind: "lbrace" },
           { kind: "ident", text: "value" },
@@ -531,17 +531,17 @@ describe("lexer", (): void => {
 
       it(`parses \`enum Foo { Variant { value: ${t} } }\``, () => {
         expect(tokenize(`enum Foo { Variant { value: ${t} } }`)).toMatchObject([
-          {kind: "keyword", text: "enum"},
-          {kind: "ident", text: "Foo"},
-          {kind: "lbrace"},
-          {kind: "ident", text: "Variant"},
-          {kind: "lbrace"},
-          {kind: "ident", text: "value"},
-          {kind: "colon"},
-          {kind: "ident", text: t},
-          {kind: "rbrace"},
-          {kind: "rbrace"},
-          {kind: "eof"},
+          { kind: "keyword", text: "enum" },
+          { kind: "ident", text: "Foo" },
+          { kind: "lbrace" },
+          { kind: "ident", text: "Variant" },
+          { kind: "lbrace" },
+          { kind: "ident", text: "value" },
+          { kind: "colon" },
+          { kind: "ident", text: t },
+          { kind: "rbrace" },
+          { kind: "rbrace" },
+          { kind: "eof" },
         ]);
       });
     });

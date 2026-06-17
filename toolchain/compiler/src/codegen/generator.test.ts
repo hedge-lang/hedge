@@ -9,7 +9,9 @@ import type { Code } from "./output.js";
 
 function gen(source: string): Code {
   const result = parse(tokenize(source));
-  if (isErr(result)) { throw result.error; }
+  if (isErr(result)) {
+    throw result.error;
+  }
   return generate(toJsim(result.value));
 }
 

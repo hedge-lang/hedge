@@ -9,7 +9,9 @@ import type { Token } from "../lexer/token.js";
 
 function parseProgram(tokens: readonly Token[]): Program {
   const result = parse(tokens);
-  if (isErr(result)) { throw result.error; }
+  if (isErr(result)) {
+    throw result.error;
+  }
   return result.value;
 }
 
@@ -389,7 +391,9 @@ describe("type annotation error diagnostics", (): void => {
 
   it("produces an error diagnostic for a slice type", (): void => {
     const source = "let xs: [i32];";
-    const lbracketIdx = tokenize(source).findIndex((t) => t.kind === "lbracket");
+    const lbracketIdx = tokenize(source).findIndex(
+      (t) => t.kind === "lbracket",
+    );
     const result = compile(source);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.severity).toBe("error");
