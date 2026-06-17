@@ -1,3 +1,4 @@
+import { isErr } from "../result.js";
 import { isComment, parseComment } from "./comments.js";
 import { scanWhile } from "./scan-while.js";
 import type { Diagnostic } from "../diagnostics.js";
@@ -399,6 +400,7 @@ function scanSymbol(
  *
  * @returns the tokens and any lex-time diagnostics.
  */
+// eslint-disable-next-line complexity -- The main loop is more readable as a single function.
 export function tokenize(source: string): TokenizeResult {
   const tokens: Token[] = [];
   const diagnostics: Diagnostic[] = [];
@@ -414,7 +416,13 @@ export function tokenize(source: string): TokenizeResult {
     }
     const start = i;
     if (isComment(source, i)) {
-      i = parseComment(tokens, source, i);
+      const maybeParseComment = parseComment(tokens, source, i);
+      if (isErr(maybeParseComment)) {
+        diagnostics.push(maybeParseComment.error);
+        i = start + 1;
+      } else {
+        i = maybeParseComment.value;
+      }
     } else if (ch === "'") {
       // Lifetime: 'ident (not immediately followed by another ' after one char)
       const n1 = peek(source, i, 1);

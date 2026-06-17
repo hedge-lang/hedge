@@ -102,10 +102,13 @@ describe("lexer", (): void => {
           { kind: "eof" },
         ]);
       });
-      it("throws an error if a block comment is not closed", () => {
-        expect(() =>
-          tokenize(`/* this is a block comment without a closing delimiter`),
-        ).toThrow("Unterminated block comment");
+      it("returns a diagnostic if a block comment is not closed", () => {
+        const tokens = tokenize(
+          `/* this is a block comment without a closing delimiter`,
+        );
+        expect(tokens.diagnostics).toMatchObject([
+          { severity: "error", message: "Unterminated block comment" },
+        ]);
       });
 
       it("includes block comments with a /** starter", () => {
