@@ -401,6 +401,7 @@ describe("lexer", (): void => {
       "u64",
       "f32",
       "f64",
+      "str",
     ])("%s", (t) => {
       it(`parses \`let value: ${t};\``, () => {
         expect(tokenize(`let value: ${t};`)).toMatchObject([
@@ -486,6 +487,61 @@ describe("lexer", (): void => {
           { kind: "lbrace" },
           { kind: "rbrace" },
           { kind: "eof" },
+        ]);
+      });
+
+      it(`parses \`struct Foo(${t});\``, () => {
+        expect(tokenize(`struct Foo(${t});`)).toMatchObject([
+          { kind: "keyword", text: "struct" },
+          { kind: "ident", text: "Foo" },
+          { kind: "lparen" },
+          { kind: "ident", text: t },
+          { kind: "rparen" },
+          { kind: "semi" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it(`parses \`struct Foo { value: ${t} }\``, () => {
+        expect(tokenize(`struct Foo { value: ${t} }`)).toMatchObject([
+          { kind: "keyword" , text: "struct" },
+          { kind: "ident", text: "Foo" },
+          { kind: "lbrace" },
+          { kind: "ident", text: "value" },
+          { kind: "colon" },
+          { kind: "ident", text: t },
+          { kind: "rbrace" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it(`parses \`enum Foo { Variant(${t}) }\``, () => {
+        expect(tokenize(`enum Foo { Variant(${t}) }`)).toMatchObject([
+          { kind: "keyword", text: "enum" },
+          { kind: "ident", text: "Foo" },
+          { kind: "lbrace" },
+          { kind: "ident", text: "Variant" },
+          { kind: "lparen" },
+          { kind: "ident", text: t },
+          { kind: "rparen" },
+          { kind: "rbrace" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it(`parses \`enum Foo { Variant { value: ${t} } }\``, () => {
+        expect(tokenize(`enum Foo { Variant { value: ${t} } }`)).toMatchObject([
+          {kind: "keyword", text: "enum"},
+          {kind: "ident", text: "Foo"},
+          {kind: "lbrace"},
+          {kind: "ident", text: "Variant"},
+          {kind: "lbrace"},
+          {kind: "ident", text: "value"},
+          {kind: "colon"},
+          {kind: "ident", text: t},
+          {kind: "rbrace"},
+          {kind: "rbrace"},
+          {kind: "eof"},
         ]);
       });
     });
