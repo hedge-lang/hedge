@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import { tokenize } from "../lexer/lexer.js";
 import { parse } from "../parser/parser.js";
+import { isErr } from "../result.js";
 import type { AnalysisResult } from "./analyzer.js";
 import { analyze } from "./analyzer.js";
 
 function diagnose(source: string): AnalysisResult {
-  return analyze(parse(tokenize(source)));
+  const result = parse(tokenize(source));
+  if (isErr(result)) { throw result.error; }
+  return analyze(result.value);
 }
 
 describe("semantic analysis", (): void => {

@@ -3,10 +3,13 @@ import { describe, expect, it } from "vitest";
 import type { Diagnostic } from "../diagnostics.js";
 import { tokenize } from "../lexer/lexer.js";
 import { parse } from "../parser/parser.js";
+import { isErr } from "../result.js";
 import { checkBorrows } from "./borrowck.js";
 
 function check(source: string): readonly Diagnostic[] {
-  return checkBorrows(parse(tokenize(source)));
+  const result = parse(tokenize(source));
+  if (isErr(result)) { throw result.error; }
+  return checkBorrows(result.value);
 }
 
 describe("borrow checker", (): void => {

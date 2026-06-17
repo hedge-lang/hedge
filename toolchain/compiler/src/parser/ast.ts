@@ -43,7 +43,7 @@ export interface FunctionDecl extends AstNode {
   readonly name: Identifier;
   readonly generics: readonly never[];
   readonly params: readonly never[];
-  readonly returnType: Option<never>;
+  readonly returnType: Option<Type>;
   readonly whereClause: Option<never>;
   readonly attributes: readonly Attribute[];
   readonly body: Block;
@@ -62,7 +62,7 @@ export interface LetStatement extends AstNode {
   readonly bind: boolean;
   readonly write: boolean;
   readonly pattern: BindingPattern;
-  readonly type: null;
+  readonly type: Option<Type>;
   readonly initializer: Option<Expression>;
 }
 
@@ -94,6 +94,17 @@ export interface IntLiteral extends AstNode {
 export interface Path {
   readonly absolute: boolean;
   readonly segments: string[];
+}
+
+export type Type = NamedType | UnitType;
+
+export interface NamedType extends AstNode {
+  readonly kind: "NamedType";
+  readonly path: Path;
+}
+
+export interface UnitType extends AstNode {
+  readonly kind: "UnitType";
 }
 
 export interface PathExpression extends AstNode {

@@ -21,16 +21,16 @@ function toDiagnostic(error: unknown): Diagnostic {
   return {
     severity: "error",
     message: error instanceof Error ? error.message : "Unknown compiler error.",
-    tokenId: 0,
+    tokenId: typeof error === "object" && error &&  "tokenId" in error && typeof error.tokenId === "number" ? error.tokenId : 0,
   };
 }
 
 function parseSource(source: string): Result<Program, Diagnostic> {
-  try {
-    return ok(parse(tokenize(source)));
-  } catch (error) {
-    return err(toDiagnostic(error));
+  const result = parse(tokenize(source));
+  if (isErr(result)) {
+    return err(toDiagnostic(result.error));
   }
+  return ok(result.value);
 }
 
 function hasError(diagnostics: readonly Diagnostic[]): boolean {

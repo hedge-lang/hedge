@@ -3,11 +3,14 @@ import { describe, expect, it } from "vitest";
 import { toJsim } from "../jsim/jsim.js";
 import { tokenize } from "../lexer/lexer.js";
 import { parse } from "../parser/parser.js";
+import { isErr } from "../result.js";
 import { generate } from "./generator.js";
 import type { Code } from "./output.js";
 
 function gen(source: string): Code {
-  return generate(toJsim(parse(tokenize(source))));
+  const result = parse(tokenize(source));
+  if (isErr(result)) { throw result.error; }
+  return generate(toJsim(result.value));
 }
 
 describe("generator", (): void => {
