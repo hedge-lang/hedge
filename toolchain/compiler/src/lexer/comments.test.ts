@@ -28,8 +28,9 @@ describe("BlockComment", () => {
     expect(isBlockComment(blockComment, 0)).toBe(true);
     const nextIndexResult = parseBlockComment(tokens, blockComment + "  ", 0);
     if (isErr(nextIndexResult)) {
-      expect(isErr(nextIndexResult)).toBe(false);
-      return;
+      throw new Error(
+        `Unexpected parse error: ${nextIndexResult.error.message}`,
+      );
     }
     const nextIndex = nextIndexResult.value;
     expect(blockComment.slice(0, nextIndex)).toBe(blockComment);
@@ -45,8 +46,9 @@ describe("BlockComment", () => {
     expect(isBlockComment(blockComment, 0)).toBe(true);
     const nextIndexResult = parseBlockComment(tokens, blockComment + "  ", 0);
     if (isErr(nextIndexResult)) {
-      expect(isErr(nextIndexResult)).toBe(false);
-      return;
+      throw new Error(
+        `Unexpected parse error: ${nextIndexResult.error.message}`,
+      );
     }
     const nextIndex = nextIndexResult.value;
     expect(blockComment.slice(0, nextIndex)).toBe(blockComment);
@@ -61,9 +63,9 @@ describe("BlockComment", () => {
     const tokens: Token[] = [];
     const nextIndexResult = parseBlockComment(tokens, blockComment + "  ", 0);
     if (isErr(nextIndexResult)) {
-      // Terminate if it's an error.
-      expect(isErr(nextIndexResult)).toBe(false);
-      return;
+      throw new Error(
+        `Unexpected parse error: ${nextIndexResult.error.message}`,
+      );
     }
     const nextIndex = nextIndexResult.value;
     expect(blockComment.slice(0, nextIndex)).toBe(blockComment);
