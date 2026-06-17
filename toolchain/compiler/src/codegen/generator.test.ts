@@ -17,18 +17,18 @@ function gen(source: string): Code {
 
 describe("generator", (): void => {
   it("generates nothing for an empty program", (): void => {
-    expect(gen("")).toEqual({ javascript: "", typedef: "" });
+    expect(gen("")).toEqual({ javascript: "\n", typedef: "\n" });
   });
 
   it("lowers a read-only let to const and `let write` to let", (): void => {
     expect(gen('let greeting = "hi";').javascript).toBe(
-      'const greeting = "hi";',
+      'const greeting = "hi";\n',
     );
-    expect(gen("let write n = 1;").javascript).toBe("let n = 1;");
+    expect(gen("let write n = 1;").javascript).toBe("let n = 1;\n");
   });
 
   it("emits a bare (non-main) function with no entry call", (): void => {
-    expect(gen("fn helper() {}").javascript).toBe("function helper() {}");
+    expect(gen("fn helper() {}").javascript).toBe("function helper() {}\n");
   });
 
   it("generates the tracer bullet as runnable JavaScript", (): void => {
@@ -38,7 +38,7 @@ describe("generator", (): void => {
         print(greeting);
       }
     `);
-    expect(code.typedef).toBe("");
+    expect(code.typedef).toBe("\n");
     expect(code.javascript).toBe(
       [
         "#!/usr/bin/env node",
@@ -49,6 +49,7 @@ describe("generator", (): void => {
         "}",
         "",
         "main();",
+        "",
       ].join("\n"),
     );
   });
@@ -57,42 +58,48 @@ describe("generator", (): void => {
     const code = gen(`
       fn lib() { 0 }
     `);
-    expect(code.javascript).toBe(["function lib() {", "  0;", "}"].join("\n"));
+    expect(code.javascript).toBe(
+      ["function lib() {", "  0;", "}", ""].join("\n"),
+    );
   });
 
   it("exports a pub fn in JS and declares it in the .d.ts", () => {
     const code = gen("pub fn lib() {}");
-    expect(code.javascript).toBe("export function lib() {}");
-    expect(code.typedef).toBe("export declare function lib(): void;");
+    expect(code.javascript).toBe("export function lib() {}\n");
+    expect(code.typedef).toBe("export declare function lib(): void;\n");
   });
 
   it("marks pub(package) fn as @internal in the .d.ts", () => {
     const code = gen("pub(package) fn lib() {}");
-    expect(code.javascript).toBe("export function lib() {}");
+    expect(code.javascript).toBe("export function lib() {}\n");
     expect(code.typedef).toBe(
       [
         "/**",
         " * @internal",
         " */",
         "export declare function lib(): void;",
+        "",
       ].join("\n"),
     );
   });
 
   it("includes the function doc comment in the .d.ts declaration", () => {
     const code = gen("/// A library function.\npub fn lib() {}");
+    expect(code.javascript).toBe("export function lib() {}\n");
     expect(code.typedef).toBe(
       [
         "/**",
         " * A library function.",
         " */",
         "export declare function lib(): void;",
+        "",
       ].join("\n"),
     );
   });
 
   it("includes the module doc comment in the .d.ts when exports exist", () => {
     const code = gen("//! My module.\npub fn lib() {}");
+    expect(code.javascript).toBe("export function lib() {}\n");
     expect(code.typedef).toBe(
       [
         "/**",
@@ -101,6 +108,7 @@ describe("generator", (): void => {
         " */",
         "",
         "export declare function lib(): void;",
+        "",
       ].join("\n"),
     );
   });
@@ -125,29 +133,24 @@ describe("generator", (): void => {
       [
         "#!/usr/bin/env node",
         "",
-        "/**",
-        " * @module",
-        " * This is a doc-comment for the main module.",
-        " */",
+        "function lib() {}",
         "",
-        "/**",
-        " * This is a doc-comment for the lib function.",
-        " */",
-        "function lib() {",
-        "}",
-        "",
-        "/**",
-        " * This is a doc-comment for the main function.",
-        " */",
         "function main() {",
-        "  /**",
-        "   * This is a doc-comment for the greeting variable.",
-        "   */",
         '  const greeting = "Hello, world!";',
         "  print(greeting);",
         "}",
         "",
         "main();",
+        "",
+      ].join("\n"),
+    );
+    expect(code.typedef).toBe(
+      [
+        "/**",
+        " * @module",
+        " * This is a doc-comment for the main module.",
+        " */",
+        "",
       ].join("\n"),
     );
   });
