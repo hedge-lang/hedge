@@ -49,13 +49,9 @@ function emitExpression(expression: Expression): string {
 function emitLet(statement: LetStatement): string {
   const keyword = statement.mutable ? "let" : "const";
   const value = statement.value;
-  const declaration = isSome(value)
+  return isSome(value)
     ? `${keyword} ${statement.name} = ${emitExpression(value.value)};`
     : `${keyword} ${statement.name};`;
-  if (isSome(statement.docComment)) {
-    return `${emitDocComment(statement.docComment.value)}\n${declaration}`;
-  }
-  return declaration;
 }
 
 function emitStatement(statement: Statement): string {
@@ -74,20 +70,10 @@ function emitStatement(statement: Statement): string {
 
 function emitFunction(decl: FunctionDecl): string {
   const bodyLines = decl.body.map(emitStatement);
-  const hasDoc = isSome(decl.docComment);
-  // Documented functions use explicit braces on separate lines for readability.
   const bodyStr =
-    bodyLines.length === 0 && !hasDoc
-      ? "{}"
-      : bodyLines.length === 0
-        ? "{\n}"
-        : `{\n${bodyLines.map(indent).join("\n")}\n}`;
+    bodyLines.length === 0 ? "{}" : `{\n${bodyLines.map(indent).join("\n")}\n}`;
   const keyword = isSome(decl.scope) ? "export function" : "function";
-  const fn = `${keyword} ${decl.name}() ${bodyStr}`;
-  if (hasDoc) {
-    return `${emitDocComment(decl.docComment.value)}\n${fn}`;
-  }
-  return fn;
+  return `${keyword} ${decl.name}() ${bodyStr}`;
 }
 
 function emitItem(item: Item): string {
@@ -152,10 +138,6 @@ function hasMain(program: Program): boolean {
 export function generate(program: Program): Code {
   const parts: string[] = [];
 
-  if (isSome(program.docComment)) {
-    parts.push(emitDocComment(program.docComment.value, true));
-  }
-
   for (const item of program.items) {
     parts.push(emitItem(item));
   }
@@ -177,7 +159,7 @@ export function generate(program: Program): Code {
   }
 
   return {
-    javascript: parts.join("\n\n"),
-    typedef: dtsParts.join("\n\n"),
+    javascript: `${parts.join("\n\n")}\n`,
+    typedef: `${dtsParts.join("\n\n")}\n`,
   };
 }
