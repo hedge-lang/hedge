@@ -27,6 +27,49 @@ describe("lexer", (): void => {
     ]);
   });
 
+  describe("keywords", () => {
+    it.each([
+      "as",
+      "async",
+      "await",
+      "break",
+      "const",
+      "continue",
+      "dyn",
+      "else",
+      "enum",
+      "export",
+      "extern",
+      "false",
+      "fn",
+      "for",
+      "if",
+      "impl",
+      "in",
+      "let",
+      "loop",
+      "match",
+      "move",
+      "pub",
+      "return",
+      "self",
+      "Self",
+      "static",
+      "struct",
+      "super",
+      "trait",
+      "true",
+      "type",
+      "unsafe",
+      "use",
+      "where",
+      "while",
+    ])("%s", (keyword) => {
+      const [first] = tokenize(keyword);
+      expect(first).toMatchObject({ kind: "keyword", text: keyword });
+    })
+  })
+
   it("records source spans", (): void => {
     const [first] = tokenize("abc");
 
