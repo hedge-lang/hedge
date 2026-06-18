@@ -1040,10 +1040,7 @@ describe("multiple attributes", (): void => {
       items: [
         {
           kind: "Function",
-          attributes: [
-            { name: { text: "a" } },
-            { name: { text: "b" } },
-          ],
+          attributes: [{ name: { text: "a" } }, { name: { text: "b" } }],
         },
       ],
     });
