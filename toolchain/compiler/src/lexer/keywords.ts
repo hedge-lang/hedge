@@ -1,5 +1,5 @@
 import { type Diagnostic } from "../diagnostics.js";
-import { isIdentContinue } from "./ident.js";
+import {isIdentContinue, isIdentStart} from "./ident.js";
 import { some } from "../option.js";
 import { scanWhile } from "./scan-while.js";
 import { type Token } from "./token.js";
@@ -52,6 +52,10 @@ const HARD_KEYWORDS: ReadonlySet<string> = new Set([
 ]);
 
 export function isKeyword(source: string, start: number): boolean {
+  const ch = source.at(start);
+  if (ch === undefined || !isIdentStart(ch)) {
+    return false;
+  }
   const end = scanWhile(source, start + 1, isIdentContinue);
   return HARD_KEYWORDS.has(source.slice(start, end));
 }
