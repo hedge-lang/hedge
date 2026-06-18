@@ -1,5 +1,13 @@
 import { isErr } from "../result.js";
 import { isComment, parseComment } from "./comments.js";
+import {
+  isIdentContinue,
+  isIdentStart,
+  isRawIdentStart,
+  parseIdent,
+  parseRawIdent,
+} from "./ident.js";
+import { isKeyword, parseKeyword } from "./keywords.js";
 import { scanWhile } from "./scan-while.js";
 import type { Diagnostic } from "../diagnostics.js";
 import { some } from "../option.js";
@@ -10,58 +18,6 @@ import { isWhitespace } from "./whitespace.js";
 export interface TokenizeResult {
   readonly tokens: readonly Token[];
   readonly diagnostics: readonly Diagnostic[];
-}
-
-/**
- * The hard keywords (grammar appendix). Contextual keywords (`write`, `bind`,
- * `package`, `unchecked`) are lexed as identifiers and classified later.
- */
-const HARD_KEYWORDS: ReadonlySet<string> = new Set([
-  "as",
-  "async",
-  "await",
-  "break",
-  "const",
-  "continue",
-  "dyn",
-  "else",
-  "enum",
-  "export",
-  "extern",
-  "false",
-  "fn",
-  "for",
-  "if",
-  "impl",
-  "in",
-  "let",
-  "loop",
-  "match",
-  "move",
-  "pub",
-  "return",
-  "self",
-  "Self",
-  "static",
-  "struct",
-  "super",
-  "trait",
-  "true",
-  "type",
-  "unsafe",
-  "use",
-  "where",
-  "while",
-]);
-
-// NOTE: ASCII subset of ECMAScript IdentifierName for now; full Unicode
-// ID_Start / ID_Continue (grammar appendix) is a later refinement.
-function isIdentStart(ch: string): boolean {
-  return /[A-Za-z_$]/u.test(ch);
-}
-
-function isIdentContinue(ch: string): boolean {
-  return /[A-Za-z0-9_$]/u.test(ch);
 }
 
 function isDigit(ch: string): boolean {
@@ -423,6 +379,8 @@ export function tokenize(source: string): TokenizeResult {
       } else {
         i = maybeParseComment.value;
       }
+    } else if (isKeyword(source, i)) {
+      i = parseKeyword(tokens, diagnostics, source, i);
     } else if (ch === "'") {
       // Lifetime: 'ident (not immediately followed by another ' after one char)
       const n1 = peek(source, i, 1);
@@ -444,12 +402,10 @@ export function tokenize(source: string): TokenizeResult {
         tokens.push({ kind: "error", span: { start, end }, text: "'" });
         i = end;
       }
+    } else if (isRawIdentStart(source, i)) {
+      i = parseRawIdent(tokens, source, i);
     } else if (isIdentStart(ch)) {
-      const end = scanWhile(source, i + 1, isIdentContinue);
-      const text = source.slice(start, end);
-      const kind = HARD_KEYWORDS.has(text) ? "keyword" : "ident";
-      tokens.push({ kind, text, span: { start, end } });
-      i = end;
+      i = parseIdent(tokens, source, i);
     } else if (isDigit(ch)) {
       const end = scanWhile(source, i + 1, isDigitOrSeparator);
       tokens.push({

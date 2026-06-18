@@ -123,6 +123,15 @@ function parseIdentifier(
     return tokenAtResult;
   }
   const token = tokenAtResult.value;
+  if (token.kind === "keyword" && token.text === "mut") {
+    return err({
+      severity: "error",
+      span: some({ start: token.span.start, end: token.span.end }),
+      message:
+        "It looks like you're trying to declare a mutable variable; try replacing `mut` with `bind` if you want to be able to reassign it, or `write` if you want to be able to modify it.",
+    });
+  }
+
   if (token.kind !== "ident") {
     return err({
       severity: "error",
@@ -252,6 +261,15 @@ function parseReference(
     return aResult;
   }
   const a = aResult.value;
+  if (a.kind === "keyword" && a.text === "mut") {
+    return err({
+      severity: "error",
+      span: some({ start: a.span.start, end: a.span.end }),
+      message:
+        "It looks like you're trying to declare a mutable reference; try replacing `mut` with `bind` if you want to be able to reassign it, and/or `write` if you want to be able to modify it.",
+    });
+  }
+
   if (isContextual(a, "write")) {
     mutable = true;
     cursor += 1;
