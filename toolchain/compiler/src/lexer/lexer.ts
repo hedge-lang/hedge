@@ -375,7 +375,7 @@ export function tokenize(source: string): TokenizeResult {
       const maybeParseComment = parseComment(tokens, source, i);
       if (isErr(maybeParseComment)) {
         diagnostics.push(maybeParseComment.error);
-        i = start + 2; // advance past `/*` to allow lexing to continue
+        i = source.length;
       } else {
         i = maybeParseComment.value;
       }
