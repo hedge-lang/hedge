@@ -33,7 +33,7 @@ function isStringBegin(ch: string): boolean {
 }
 
 function isStringEnd(beginCh: string): (ch: string) => boolean {
-  return (ch: string) => ch !== beginCh && ch !== "\\";
+  return (ch: string) => ch !== beginCh;
 }
 
 function peek(source: string, i: number, offset: number = 1): string {

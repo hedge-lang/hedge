@@ -90,7 +90,7 @@ export function parseLineComment(
   void tokens;
   for (let i = start + 2; i < source.length; i++) {
     const ch = source[i];
-    if (ch === "\n") {
+    if (ch === "\n" || ch === "\r") {
       return i;
     }
   }
