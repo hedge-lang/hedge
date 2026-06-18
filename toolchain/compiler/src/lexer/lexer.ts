@@ -404,6 +404,15 @@ export function tokenize(source: string): TokenizeResult {
       }
     } else if (isRawIdentStart(source, i)) {
       i = parseRawIdent(tokens, source, i);
+    } else if (ch === "r" && source[i + 1] === "#") {
+      const end = i + 2;
+      diagnostics.push({
+        severity: "error",
+        message: "raw identifier prefix `r#` must be followed by an identifier",
+        span: some({ start, end }),
+      });
+      tokens.push({ kind: "error", span: { start, end }, text: "r#" });
+      i = end;
     } else if (isIdentStart(ch)) {
       i = parseIdent(tokens, source, i);
     } else if (isDigit(ch)) {

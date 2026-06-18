@@ -1,4 +1,5 @@
 import { type Diagnostic } from "../diagnostics.js";
+import { isIdentContinue } from "./ident.js";
 import { some } from "../option.js";
 import { scanWhile } from "./scan-while.js";
 import { type Token } from "./token.js";
@@ -50,14 +51,9 @@ export const HARD_KEYWORDS: ReadonlySet<string> = new Set([
   "yield",
 ]);
 
-const KEYWORD_CHARACTERS = new Set(
-  Array.from(HARD_KEYWORDS.values()).flatMap((keyword) => Array.from(keyword)),
-);
-
 export function isKeyword(source: string, start: number): boolean {
-  const end = scanWhile(source, start, (ch) => KEYWORD_CHARACTERS.has(ch));
-  const maybeKeyword = source.slice(start, end);
-  return HARD_KEYWORDS.has(maybeKeyword);
+  const end = scanWhile(source, start + 1, isIdentContinue);
+  return HARD_KEYWORDS.has(source.slice(start, end));
 }
 
 export function parseKeyword(
@@ -66,7 +62,7 @@ export function parseKeyword(
   source: string,
   start: number,
 ): number {
-  const end = scanWhile(source, start, (ch) => KEYWORD_CHARACTERS.has(ch));
+  const end = scanWhile(source, start + 1, isIdentContinue);
   const text = source.slice(start, end);
   if (!HARD_KEYWORDS.has(text)) {
     diagnostics.push({
