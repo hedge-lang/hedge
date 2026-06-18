@@ -11,7 +11,7 @@ export function isIdentContinue(ch: string): boolean {
   return /[\p{ID_Continue}_$]/u.test(ch);
 }
 
-export function getIdent(source: string, start: number, offset: number): Token {
+function getIdent(source: string, start: number, offset: number): Token {
   const end = scanWhile(source, start + 1 + offset, isIdentContinue);
   const text = source.slice(start + offset, end);
   return { kind: "ident", text, span: { start, end } };
