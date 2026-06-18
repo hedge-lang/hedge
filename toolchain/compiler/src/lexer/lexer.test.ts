@@ -442,10 +442,26 @@ describe("lexer", (): void => {
         ]);
       });
 
+      it("accepts ZWNJ via explicit \\u200C escape", () => {
+        const { tokens } = tokenize("a\u200Cb");
+        expect(tokens).toMatchObject([
+          { kind: "ident", text: "a\u200Cb" },
+          { kind: "eof" },
+        ]);
+      });
+
       it("accepts ZWJ (U+200D) as an identifier-continue character", () => {
         const { tokens } = tokenize("a‍b");
         expect(tokens).toMatchObject([
           { kind: "ident", text: "a‍b" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it("accepts ZWJ via explicit \\u200D escape", () => {
+        const { tokens } = tokenize("a\u200Db");
+        expect(tokens).toMatchObject([
+          { kind: "ident", text: "a\u200Db" },
           { kind: "eof" },
         ]);
       });
@@ -526,6 +542,20 @@ describe("lexer", (): void => {
           { kind: "hash" },
           { kind: "eof" },
         ]);
+      });
+
+      it("r#$ — raw ident starting with dollar sign", () => {
+        expect(tokenize("r#$").tokens[0]).toMatchObject({
+          kind: "ident",
+          text: "$",
+        });
+      });
+
+      it("r#_ — raw ident starting with underscore", () => {
+        expect(tokenize("r#_").tokens[0]).toMatchObject({
+          kind: "ident",
+          text: "_",
+        });
       });
     });
 
