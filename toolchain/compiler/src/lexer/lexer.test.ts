@@ -1053,8 +1053,8 @@ describe("whitespace handling", () => {
     });
   });
 
-  describe("BUG: CR-only line ending swallows code into comment body", () => {
-    it("CR-only line ending should terminate a line comment", () => {
+  describe("CR-only line endings in line comments", () => {
+    it("CR-only line ending terminates a line comment", () => {
       // parseLineComment only stops on \n; a bare \r causes the rest of source
       // to be silently consumed as comment content.
       const { tokens } = tokenize("// comment\rlet x = 1;");
