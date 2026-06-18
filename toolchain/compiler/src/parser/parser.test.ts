@@ -4,7 +4,7 @@ import { compile } from "../driver.js";
 import { parse } from "./parser.js";
 import { isErr } from "../result.js";
 import { tokenize } from "../lexer/lexer.js";
-import type { Program } from "./ast.js";
+import type { FunctionDecl, LetStatement, Program } from "./ast.js";
 
 function parseProgram(source: string): Program {
   const { tokens } = tokenize(source);
@@ -602,5 +602,101 @@ describe("visibility guardrails", (): void => {
     if (isErr(result)) {
       expect(result.error.message).toContain("let");
     }
+  });
+});
+
+describe("identifiers", (): void => {
+  describe("keyword in identifier position", (): void => {
+    it("rejects a hard keyword as a function name", (): void => {
+      const result = parse(tokenize("fn fn() {}").tokens);
+      expect(isErr(result)).toBe(true);
+      if (isErr(result)) {
+        expect(result.error.message).toContain("identifier");
+      }
+    });
+
+    it("rejects a hard keyword as a let binding name", (): void => {
+      const result = parse(tokenize("let fn = 1;").tokens);
+      expect(isErr(result)).toBe(true);
+      if (isErr(result)) {
+        expect(result.error.message).toContain("identifier");
+      }
+    });
+  });
+
+  describe("reserved keyword diagnostics", (): void => {
+    it("rejects mut in let binding position with a hint about write", (): void => {
+      const result = parse(tokenize("let mut = 1;").tokens);
+      expect(isErr(result)).toBe(true);
+      if (isErr(result)) {
+        expect(result.error.message).toContain("write");
+      }
+    });
+  });
+
+  describe("raw identifiers in parser positions", (): void => {
+    it("accepts r#fn as a function name", (): void => {
+      const ast = parseProgram("fn r#fn() {}");
+      expect(ast).toMatchObject({
+        items: [
+          { kind: "FunctionDecl", name: { kind: "Identifier", text: "fn" } },
+        ],
+      });
+    });
+
+    it("accepts r#let as a let binding name", (): void => {
+      const ast = parseProgram("let r#let = 1;");
+      expect(ast).toMatchObject({
+        items: [
+          {
+            kind: "LetStatement",
+            pattern: { kind: "BindingPattern", name: { kind: "Identifier", text: "let" } },
+          },
+        ],
+      });
+    });
+  });
+
+  describe("span stability across contexts", (): void => {
+    it("identifier tokenId in a let binding points to the name token", (): void => {
+      const { tokens } = tokenize("let foo = 1;");
+      const result = parse(tokens);
+      if (isErr(result)) throw new Error(result.error.message);
+      const stmt = result.value.items[0] as LetStatement;
+      const { tokenId } = stmt.pattern.name;
+      expect(tokens[tokenId]).toMatchObject({
+        kind: "ident",
+        text: "foo",
+        span: { start: 4, end: 7 },
+      });
+    });
+
+    it("identifier tokenId in a function declaration points to the name token", (): void => {
+      const { tokens } = tokenize("fn foo() {}");
+      const result = parse(tokens);
+      if (isErr(result)) throw new Error(result.error.message);
+      const fn_ = result.value.items[0] as FunctionDecl;
+      const { tokenId } = fn_.name;
+      expect(tokens[tokenId]).toMatchObject({
+        kind: "ident",
+        text: "foo",
+        span: { start: 3, end: 6 },
+      });
+    });
+
+    it("identifier tokenId in an expression points to the name token", (): void => {
+      const { tokens } = tokenize("foo;");
+      const result = parse(tokens);
+      if (isErr(result)) throw new Error(result.error.message);
+      const expr = result.value.items[0];
+      if (expr.kind !== "ExpressionStatement") throw new Error("expected ExpressionStatement");
+      const path = expr.expression;
+      if (path.kind !== "PathExpression") throw new Error("expected PathExpression");
+      expect(tokens[path.tokenId]).toMatchObject({
+        kind: "ident",
+        text: "foo",
+        span: { start: 0, end: 3 },
+      });
+    });
   });
 });

@@ -415,6 +415,110 @@ describe("lexer", (): void => {
     });
   });
 
+  describe("identifiers", () => {
+    describe("Unicode", () => {
+      it("accepts a Unicode letter as IdentStart", () => {
+        const { tokens } = tokenize("π");
+        expect(tokens).toMatchObject([
+          { kind: "ident", text: "π" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it("accepts Unicode identifier-continue characters", () => {
+        const { tokens } = tokenize("café");
+        expect(tokens[0]).toMatchObject({
+          kind: "ident",
+          text: "café",
+          span: { start: 0, end: 4 },
+        });
+      });
+
+      it("accepts ZWNJ (U+200C) as an identifier-continue character", () => {
+        const { tokens } = tokenize("a‌b");
+        expect(tokens).toMatchObject([
+          { kind: "ident", text: "a‌b" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it("accepts ZWJ (U+200D) as an identifier-continue character", () => {
+        const { tokens } = tokenize("a‍b");
+        expect(tokens).toMatchObject([
+          { kind: "ident", text: "a‍b" },
+          { kind: "eof" },
+        ]);
+      });
+    });
+
+    describe("raw identifiers", () => {
+      it("lexes r#fn as an ident token with text 'fn'", () => {
+        expect(tokenize("r#fn").tokens).toMatchObject([
+          { kind: "ident", text: "fn" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it("raw identifier span covers the r# prefix", () => {
+        expect(tokenize("r#fn").tokens[0]).toMatchObject({
+          span: { start: 0, end: 4 },
+        });
+      });
+
+      it("lexes r#let as an ident", () => {
+        expect(tokenize("r#let").tokens[0]).toMatchObject({
+          kind: "ident",
+          text: "let",
+        });
+      });
+
+      it("lexes r#write the same as write", () => {
+        const raw = tokenize("r#write").tokens[0];
+        const plain = tokenize("write").tokens[0];
+        expect(raw).toMatchObject({ kind: "ident", text: "write" });
+        expect(plain).toMatchObject({ kind: "ident", text: "write" });
+      });
+
+      it("r# not followed by an ident-start falls back to a plain ident 'r' + hash", () => {
+        const { tokens } = tokenize("r# ");
+        expect(tokens).toMatchObject([
+          { kind: "ident", text: "r" },
+          { kind: "hash" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it("r# followed by a digit falls back to plain ident 'r' + hash + int", () => {
+        const { tokens } = tokenize("r#1");
+        expect(tokens).toMatchObject([
+          { kind: "ident", text: "r" },
+          { kind: "hash" },
+          { kind: "int", text: "1" },
+          { kind: "eof" },
+        ]);
+      });
+    });
+
+    describe("reserved keywords", () => {
+      it.each(["mut", "mod", "box", "macro", "yield"])(
+        "classifies %s as a keyword token",
+        (kw) => {
+          expect(tokenize(kw).tokens[0]).toMatchObject({
+            kind: "keyword",
+            text: kw,
+          });
+        },
+      );
+
+      it("r#mut is a valid raw identifier", () => {
+        expect(tokenize("r#mut").tokens[0]).toMatchObject({
+          kind: "ident",
+          text: "mut",
+        });
+      });
+    });
+  });
+
   describe("types", () => {
     describe.each([
       "i8",
