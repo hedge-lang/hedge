@@ -105,6 +105,9 @@ function expectKeyword(
   return ok(pos + 1);
 }
 
+const MUT_MESSAGE: string =
+  "The keyword `mut` is reserved and cannot be used as an identifier. If you meant mutability, try `bind` for reassignment and/or `write` for mutation.";
+
 /**
  * Parses an identifier expression.
  *
@@ -123,6 +126,14 @@ function parseIdentifier(
     return tokenAtResult;
   }
   const token = tokenAtResult.value;
+  if (token.kind === "keyword" && token.text === "mut") {
+    return err({
+      severity: "error",
+      span: some({ start: token.span.start, end: token.span.end }),
+      message: MUT_MESSAGE,
+    });
+  }
+
   if (token.kind !== "ident") {
     return err({
       severity: "error",
@@ -180,12 +191,17 @@ function parsePathSegments(
     cursor += 1; // skip `::`
     const nextToken = tokens[cursor];
     if (nextToken === undefined || nextToken.kind !== "ident") {
-      const kind = nextToken?.kind ?? "eof";
+      const foundDesc =
+        nextToken === undefined
+          ? "eof"
+          : nextToken.kind === "keyword"
+            ? `keyword "${nextToken.text}"`
+            : nextToken.kind;
       const span =
         nextToken !== undefined ? some(nextToken.span) : none<Span>();
       return err({
         severity: "error",
-        message: `Expected identifier after "::", found "${kind}"`,
+        message: `Expected identifier after "::", found ${foundDesc}`,
         span,
       });
     }
@@ -252,6 +268,14 @@ function parseReference(
     return aResult;
   }
   const a = aResult.value;
+  if (a.kind === "keyword" && a.text === "mut") {
+    return err({
+      severity: "error",
+      span: some({ start: a.span.start, end: a.span.end }),
+      message: MUT_MESSAGE,
+    });
+  }
+
   if (isContextual(a, "write")) {
     mutable = true;
     cursor += 1;
