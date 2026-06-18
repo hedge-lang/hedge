@@ -867,10 +867,8 @@ describe("string literals", () => {
     expect(diagnostics[0]?.message).toContain("Unterminated");
   });
 
-  describe("BUG: backslash truncates string prematurely", () => {
+  describe("backslash inside strings", () => {
     it("backslash inside a string should not split it into multiple tokens", () => {
-      // isStringEnd stops on '\' with no continuation logic, so "hello\nworld"
-      // currently produces string("hello") + junk tokens instead of one string token.
       const { tokens } = tokenize('"hello\\nworld"');
       expect(tokens).toMatchObject([{ kind: "string" }, { kind: "eof" }]);
       expect(tokens).toHaveLength(2);
