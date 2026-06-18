@@ -191,12 +191,17 @@ function parsePathSegments(
     cursor += 1; // skip `::`
     const nextToken = tokens[cursor];
     if (nextToken === undefined || nextToken.kind !== "ident") {
-      const kind = nextToken?.kind ?? "eof";
+      const foundDesc =
+        nextToken === undefined
+          ? "eof"
+          : nextToken.kind === "keyword"
+            ? `keyword "${nextToken.text}"`
+            : nextToken.kind;
       const span =
         nextToken !== undefined ? some(nextToken.span) : none<Span>();
       return err({
         severity: "error",
-        message: `Expected identifier after "::", found "${kind}"`,
+        message: `Expected identifier after "::", found ${foundDesc}`,
         span,
       });
     }
