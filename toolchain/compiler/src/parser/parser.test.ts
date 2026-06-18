@@ -4,7 +4,7 @@ import { compile } from "../driver.js";
 import { parse } from "./parser.js";
 import { isErr } from "../result.js";
 import { tokenize } from "../lexer/lexer.js";
-import type { FunctionDecl, LetStatement, Program } from "./ast.js";
+import type { Program } from "./ast.js";
 
 function parseProgram(source: string): Program {
   const { tokens } = tokenize(source);
@@ -638,9 +638,7 @@ describe("identifiers", (): void => {
     it("accepts r#fn as a function name", (): void => {
       const ast = parseProgram("fn r#fn() {}");
       expect(ast).toMatchObject({
-        items: [
-          { kind: "FunctionDecl", name: { kind: "Identifier", text: "fn" } },
-        ],
+        items: [{ kind: "Function", name: { kind: "Identifier", text: "fn" } }],
       });
     });
 
@@ -650,7 +648,10 @@ describe("identifiers", (): void => {
         items: [
           {
             kind: "LetStatement",
-            pattern: { kind: "BindingPattern", name: { kind: "Identifier", text: "let" } },
+            pattern: {
+              kind: "BindingPattern",
+              name: { kind: "Identifier", text: "let" },
+            },
           },
         ],
       });
@@ -662,7 +663,10 @@ describe("identifiers", (): void => {
       const { tokens } = tokenize("let foo = 1;");
       const result = parse(tokens);
       if (isErr(result)) throw new Error(result.error.message);
-      const stmt = result.value.items[0] as LetStatement;
+      const stmt = result.value.items[0];
+      if (stmt?.kind !== "LetStatement") {
+        throw new Error("expected LetStatement");
+      }
       const { tokenId } = stmt.pattern.name;
       expect(tokens[tokenId]).toMatchObject({
         kind: "ident",
@@ -675,7 +679,10 @@ describe("identifiers", (): void => {
       const { tokens } = tokenize("fn foo() {}");
       const result = parse(tokens);
       if (isErr(result)) throw new Error(result.error.message);
-      const fn_ = result.value.items[0] as FunctionDecl;
+      const fn_ = result.value.items[0];
+      if (fn_?.kind !== "Function") {
+        throw new Error("expected Function");
+      }
       const { tokenId } = fn_.name;
       expect(tokens[tokenId]).toMatchObject({
         kind: "ident",
@@ -689,9 +696,11 @@ describe("identifiers", (): void => {
       const result = parse(tokens);
       if (isErr(result)) throw new Error(result.error.message);
       const expr = result.value.items[0];
-      if (expr.kind !== "ExpressionStatement") throw new Error("expected ExpressionStatement");
+      if (expr?.kind !== "ExpressionStatement")
+        throw new Error("expected ExpressionStatement");
       const path = expr.expression;
-      if (path.kind !== "PathExpression") throw new Error("expected PathExpression");
+      if (path.kind !== "PathExpression")
+        throw new Error("expected PathExpression");
       expect(tokens[path.tokenId]).toMatchObject({
         kind: "ident",
         text: "foo",
