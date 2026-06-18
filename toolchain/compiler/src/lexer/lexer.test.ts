@@ -449,6 +449,27 @@ describe("lexer", (): void => {
           { kind: "eof" },
         ]);
       });
+
+      it("accepts $ as IdentStart", () => {
+        expect(tokenize("$valid").tokens[0]).toMatchObject({
+          kind: "ident",
+          text: "$valid",
+        });
+      });
+
+      it("accepts _ alone as an identifier", () => {
+        expect(tokenize("_").tokens[0]).toMatchObject({
+          kind: "ident",
+          text: "_",
+        });
+      });
+
+      it("accepts a non-Latin Unicode IdentStart (Cyrillic)", () => {
+        expect(tokenize("б").tokens[0]).toMatchObject({
+          kind: "ident",
+          text: "б",
+        });
+      });
     });
 
     describe("raw identifiers", () => {
@@ -494,6 +515,65 @@ describe("lexer", (): void => {
           { kind: "ident", text: "r" },
           { kind: "hash" },
           { kind: "int", text: "1" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it("r# at end of input falls back to ident 'r' + hash", () => {
+        const { tokens } = tokenize("r#");
+        expect(tokens).toMatchObject([
+          { kind: "ident", text: "r" },
+          { kind: "hash" },
+          { kind: "eof" },
+        ]);
+      });
+    });
+
+    describe("keyword-prefix identifiers are not split", () => {
+      it("let_count is a single ident, not keyword(let) + ident(_count)", () => {
+        const { tokens } = tokenize("let_count");
+        expect(tokens).toMatchObject([
+          { kind: "ident", text: "let_count" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it("fn_helper is a single ident, not keyword(fn) + ident(_helper)", () => {
+        const { tokens } = tokenize("fn_helper");
+        expect(tokens).toMatchObject([
+          { kind: "ident", text: "fn_helper" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it("in_scope is a single ident, not keyword(in) + ident(_scope)", () => {
+        const { tokens } = tokenize("in_scope");
+        expect(tokens).toMatchObject([
+          { kind: "ident", text: "in_scope" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it("for_each is a single ident, not keyword(for) + ident(_each)", () => {
+        const { tokens } = tokenize("for_each");
+        expect(tokens).toMatchObject([
+          { kind: "ident", text: "for_each" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it("let1 is a single ident, not keyword(let) + int(1)", () => {
+        const { tokens } = tokenize("let1");
+        expect(tokens).toMatchObject([
+          { kind: "ident", text: "let1" },
+          { kind: "eof" },
+        ]);
+      });
+
+      it("fn1 is a single ident, not keyword(fn) + int(1)", () => {
+        const { tokens } = tokenize("fn1");
+        expect(tokens).toMatchObject([
+          { kind: "ident", text: "fn1" },
           { kind: "eof" },
         ]);
       });

@@ -606,6 +606,22 @@ describe("visibility guardrails", (): void => {
 });
 
 describe("identifiers", (): void => {
+  describe("keyword-prefix function names are valid identifiers", (): void => {
+    it("can define a function named fn_helper", (): void => {
+      const ast = parseProgram("fn fn_helper() {}");
+      expect(ast).toMatchObject({
+        items: [{ kind: "Function", name: { kind: "Identifier", text: "fn_helper" } }],
+      });
+    });
+
+    it("can define a function named let_count", (): void => {
+      const ast = parseProgram("fn let_count() {}");
+      expect(ast).toMatchObject({
+        items: [{ kind: "Function", name: { kind: "Identifier", text: "let_count" } }],
+      });
+    });
+  });
+
   describe("keyword in identifier position", (): void => {
     it("rejects a hard keyword as a function name", (): void => {
       const result = parse(tokenize("fn fn() {}").tokens);
@@ -632,6 +648,14 @@ describe("identifiers", (): void => {
         expect(result.error.message).toContain("write");
       }
     });
+
+    it("rejects mut as a function name with a hint about write", (): void => {
+      const result = parse(tokenize("fn mut() {}").tokens);
+      expect(isErr(result)).toBe(true);
+      if (isErr(result)) {
+        expect(result.error.message).toContain("write");
+      }
+    });
   });
 
   describe("raw identifiers in parser positions", (): void => {
@@ -651,6 +675,21 @@ describe("identifiers", (): void => {
             pattern: {
               kind: "BindingPattern",
               name: { kind: "Identifier", text: "let" },
+            },
+          },
+        ],
+      });
+    });
+
+    it("accepts r#match as a path expression", (): void => {
+      const ast = parseProgram("r#match;");
+      expect(ast).toMatchObject({
+        items: [
+          {
+            kind: "ExpressionStatement",
+            expression: {
+              kind: "PathExpression",
+              path: { absolute: false, segments: ["match"] },
             },
           },
         ],
