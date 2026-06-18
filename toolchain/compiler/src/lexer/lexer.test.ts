@@ -882,9 +882,9 @@ describe("string literals", () => {
       expect(tokens).toHaveLength(2);
     });
 
-    it("string containing only a backslash should be a single token", () => {
-      // Currently: string("") + unterminated-string error for the trailing "
-      const { tokens } = tokenize('"\\');
+    it("string containing only a backslash is a single terminated token", () => {
+      // source is the 3-char sequence  "\"  (opening-quote, backslash, closing-quote)
+      const { tokens } = tokenize(`"\\"`);
       expect(tokens).toMatchObject([{ kind: "string" }, { kind: "eof" }]);
       expect(tokens).toHaveLength(2);
     });
