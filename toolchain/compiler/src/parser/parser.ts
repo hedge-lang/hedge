@@ -105,7 +105,8 @@ function expectKeyword(
   return ok(pos + 1);
 }
 
-const MUT_MESSAGE: string = "The keyword `mut` is reserved and cannot be used as an identifier. If you meant mutability, try `bind` for reassignment and/or `write` for mutation.";
+const MUT_MESSAGE: string =
+  "The keyword `mut` is reserved and cannot be used as an identifier. If you meant mutability, try `bind` for reassignment and/or `write` for mutation.";
 
 /**
  * Parses an identifier expression.

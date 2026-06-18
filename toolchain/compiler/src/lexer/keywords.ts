@@ -1,5 +1,5 @@
 import { type Diagnostic } from "../diagnostics.js";
-import {isIdentContinue, isIdentStart} from "./ident.js";
+import { isIdentContinue, isIdentStart } from "./ident.js";
 import { some } from "../option.js";
 import { scanWhile } from "./scan-while.js";
 import { type Token } from "./token.js";
