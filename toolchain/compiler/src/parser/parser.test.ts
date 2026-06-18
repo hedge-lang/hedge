@@ -656,6 +656,17 @@ describe("identifiers", (): void => {
         expect(result.error.message).toContain("write");
       }
     });
+
+    it.each(["mod", "box", "macro", "yield"])(
+      "rejects %s in let binding position with a generic keyword error",
+      (kw) => {
+        const result = parse(tokenize(`let ${kw} = 1;`).tokens);
+        expect(isErr(result)).toBe(true);
+        if (isErr(result)) {
+          expect(result.error.message).toContain("keyword");
+        }
+      },
+    );
   });
 
   describe("raw identifiers in parser positions", (): void => {
@@ -679,6 +690,16 @@ describe("identifiers", (): void => {
           },
         ],
       });
+    });
+
+    it("accepts r#true as a let binding name", (): void => {
+      const result = parse(tokenize("let r#true = 1;").tokens);
+      expect(isErr(result)).toBe(false);
+      if (!isErr(result)) {
+        const stmt = result.value.items[0];
+        if (stmt?.kind !== "LetStatement") throw new Error("expected LetStatement");
+        expect(stmt.pattern.name.text).toBe("true");
+      }
     });
 
     it("accepts r#match as a path expression", (): void => {

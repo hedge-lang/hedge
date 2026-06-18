@@ -516,32 +516,36 @@ describe("lexer", (): void => {
         expect(plain).toMatchObject({ kind: "ident", text: "write" });
       });
 
-      it("r# not followed by an ident-start falls back to a plain ident 'r' + hash", () => {
-        const { tokens } = tokenize("r# ");
-        expect(tokens).toMatchObject([
-          { kind: "ident", text: "r" },
-          { kind: "hash" },
-          { kind: "eof" },
-        ]);
+      it("r# not followed by an ident-start is a lex error", () => {
+        const { tokens, diagnostics } = tokenize("r# ");
+        expect(tokens[0]).toMatchObject({
+          kind: "error",
+          text: "r#",
+          span: { start: 0, end: 2 },
+        });
+        expect(diagnostics[0]?.message).toContain("r#");
       });
 
-      it("r# followed by a digit falls back to plain ident 'r' + hash + int", () => {
-        const { tokens } = tokenize("r#1");
-        expect(tokens).toMatchObject([
-          { kind: "ident", text: "r" },
-          { kind: "hash" },
-          { kind: "int", text: "1" },
-          { kind: "eof" },
-        ]);
+      it("r# followed by a digit is a lex error (digits are not IdentStart)", () => {
+        const { tokens, diagnostics } = tokenize("r#1");
+        expect(tokens[0]).toMatchObject({
+          kind: "error",
+          text: "r#",
+          span: { start: 0, end: 2 },
+        });
+        expect(tokens[1]).toMatchObject({ kind: "int", text: "1" });
+        expect(diagnostics[0]?.message).toContain("r#");
       });
 
-      it("r# at end of input falls back to ident 'r' + hash", () => {
-        const { tokens } = tokenize("r#");
-        expect(tokens).toMatchObject([
-          { kind: "ident", text: "r" },
-          { kind: "hash" },
-          { kind: "eof" },
-        ]);
+      it("r# at end of input is a lex error", () => {
+        const { tokens, diagnostics } = tokenize("r#");
+        expect(tokens[0]).toMatchObject({
+          kind: "error",
+          text: "r#",
+          span: { start: 0, end: 2 },
+        });
+        expect(diagnostics).toHaveLength(1);
+        expect(diagnostics[0]?.message).toContain("r#");
       });
 
       it("r#$ — raw ident starting with dollar sign", () => {
@@ -555,6 +559,34 @@ describe("lexer", (): void => {
         expect(tokenize("r#_").tokens[0]).toMatchObject({
           kind: "ident",
           text: "_",
+        });
+      });
+
+      it("r#r — raw ident where the name is the sigil character", () => {
+        expect(tokenize("r#r").tokens[0]).toMatchObject({
+          kind: "ident",
+          text: "r",
+        });
+      });
+
+      it("r#true — boolean keyword escaped as raw ident", () => {
+        expect(tokenize("r#true").tokens[0]).toMatchObject({
+          kind: "ident",
+          text: "true",
+        });
+      });
+
+      it("r#false — boolean keyword escaped as raw ident", () => {
+        expect(tokenize("r#false").tokens[0]).toMatchObject({
+          kind: "ident",
+          text: "false",
+        });
+      });
+
+      it("r#π — raw ident with Unicode IdentStart", () => {
+        expect(tokenize("r#π").tokens[0]).toMatchObject({
+          kind: "ident",
+          text: "π",
         });
       });
     });
@@ -607,6 +639,24 @@ describe("lexer", (): void => {
           { kind: "eof" },
         ]);
       });
+
+      it("truefalse is a single ident, not keyword(true) + keyword(false)", () => {
+        const { tokens } = tokenize("truefalse");
+        expect(tokens).toMatchObject([
+          { kind: "ident", text: "truefalse" },
+          { kind: "eof" },
+        ]);
+      });
+    });
+
+    describe("lifetime tokens with keyword text", () => {
+      it.each(["fn", "let", "for", "while", "if"])(
+        "'%s produces a lifetime token, not a keyword",
+        (kw) => {
+          const { tokens } = tokenize(`'${kw}`);
+          expect(tokens[0]).toMatchObject({ kind: "lifetime", text: kw });
+        },
+      );
     });
 
     describe("reserved keywords", () => {
