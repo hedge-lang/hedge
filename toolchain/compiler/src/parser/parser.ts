@@ -105,6 +105,8 @@ function expectKeyword(
   return ok(pos + 1);
 }
 
+const MUT_MESSAGE: string = "The keyword `mut` is reserved and cannot be used as an identifier. If you meant mutability, try `bind` for reassignment and/or `write` for mutation.";
+
 /**
  * Parses an identifier expression.
  *
@@ -127,8 +129,7 @@ function parseIdentifier(
     return err({
       severity: "error",
       span: some({ start: token.span.start, end: token.span.end }),
-      message:
-        "It looks like you're trying to declare a mutable variable; try replacing `mut` with `bind` if you want to be able to reassign it, or `write` if you want to be able to modify it.",
+      message: MUT_MESSAGE,
     });
   }
 
@@ -265,8 +266,7 @@ function parseReference(
     return err({
       severity: "error",
       span: some({ start: a.span.start, end: a.span.end }),
-      message:
-        "It looks like you're trying to declare a mutable reference; try replacing `mut` with `bind` if you want to be able to reassign it, and/or `write` if you want to be able to modify it.",
+      message: MUT_MESSAGE,
     });
   }
 
