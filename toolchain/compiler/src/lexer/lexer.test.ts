@@ -678,4 +678,22 @@ describe("lexer", (): void => {
       });
     });
   });
+
+  it("tokenizes `pub(package) fn lib() {}`", () => {
+    const { tokens, diagnostics } = tokenize("pub(package) fn lib() {}");
+    expect(diagnostics).toHaveLength(0);
+    expect(tokens).toMatchObject([
+      { kind: "keyword", text: "pub" },
+      { kind: "lparen" },
+      { kind: "ident", text: "package" },
+      { kind: "rparen" },
+      { kind: "keyword", text: "fn" },
+      { kind: "ident", text: "lib" },
+      { kind: "lparen" },
+      { kind: "rparen" },
+      { kind: "lbrace" },
+      { kind: "rbrace" },
+      { kind: "eof" },
+    ]);
+  });
 });
