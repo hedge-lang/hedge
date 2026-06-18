@@ -610,14 +610,18 @@ describe("identifiers", (): void => {
     it("can define a function named fn_helper", (): void => {
       const ast = parseProgram("fn fn_helper() {}");
       expect(ast).toMatchObject({
-        items: [{ kind: "Function", name: { kind: "Identifier", text: "fn_helper" } }],
+        items: [
+          { kind: "Function", name: { kind: "Identifier", text: "fn_helper" } },
+        ],
       });
     });
 
     it("can define a function named let_count", (): void => {
       const ast = parseProgram("fn let_count() {}");
       expect(ast).toMatchObject({
-        items: [{ kind: "Function", name: { kind: "Identifier", text: "let_count" } }],
+        items: [
+          { kind: "Function", name: { kind: "Identifier", text: "let_count" } },
+        ],
       });
     });
   });
@@ -697,7 +701,8 @@ describe("identifiers", (): void => {
       expect(isErr(result)).toBe(false);
       if (!isErr(result)) {
         const stmt = result.value.items[0];
-        if (stmt?.kind !== "LetStatement") throw new Error("expected LetStatement");
+        if (stmt?.kind !== "LetStatement")
+          throw new Error("expected LetStatement");
         expect(stmt.pattern.name.text).toBe("true");
       }
     });
