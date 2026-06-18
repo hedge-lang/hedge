@@ -774,3 +774,301 @@ describe("identifiers", (): void => {
     });
   });
 });
+
+describe("reference expressions", (): void => {
+  it("parses a shared reference &value", (): void => {
+    const ast = parseProgram("&value;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "ReferenceExpression",
+            mutable: false,
+            operand: {
+              kind: "PathExpression",
+              path: { segments: ["value"] },
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses an exclusive reference &write counter", (): void => {
+    const ast = parseProgram("&write counter;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "ReferenceExpression",
+            mutable: true,
+            operand: {
+              kind: "PathExpression",
+              path: { segments: ["counter"] },
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("rejects &mut x with the mut→write hint", (): void => {
+    const result = parse(tokenize("&mut x;").tokens);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.message).toContain("write");
+    }
+  });
+});
+
+describe("let binding modifiers", (): void => {
+  it("parses let bind x = 1", (): void => {
+    const ast = parseProgram("let bind x = 1;");
+    expect(ast).toMatchObject({
+      items: [{ kind: "LetStatement", bind: true, write: false }],
+    });
+  });
+
+  it("parses let write x = 1", (): void => {
+    const ast = parseProgram("let write x = 1;");
+    expect(ast).toMatchObject({
+      items: [{ kind: "LetStatement", bind: false, write: true }],
+    });
+  });
+
+  it("parses let bind write x = 1", (): void => {
+    const ast = parseProgram("let bind write x = 1;");
+    expect(ast).toMatchObject({
+      items: [{ kind: "LetStatement", bind: true, write: true }],
+    });
+  });
+
+  it("parses let x; with no type and no initializer", (): void => {
+    const ast = parseProgram("let x;");
+    expect(ast).toMatchObject({
+      items: [{ kind: "LetStatement", type: none(), initializer: none() }],
+    });
+  });
+});
+
+describe("trailing expression in block", (): void => {
+  it("parses a trailing expression in a block (no semicolon)", (): void => {
+    const ast = parseProgram("fn f() { foo }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: {
+            kind: "Block",
+            statements: [],
+            trailingExpression: some({
+              kind: "PathExpression",
+              path: { segments: ["foo"] },
+            }),
+          },
+        },
+      ],
+    });
+  });
+
+  it("distinguishes a statement from a trailing expression by the presence of a semicolon", (): void => {
+    const ast = parseProgram("fn f() { foo; }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: {
+            kind: "Block",
+            statements: [{ kind: "ExpressionStatement" }],
+            trailingExpression: none(),
+          },
+        },
+      ],
+    });
+  });
+});
+
+describe("visibility on function declarations", (): void => {
+  it("parses pub fn f() {}", (): void => {
+    const ast = parseProgram("pub fn f() {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          visibility: some({ scope: none() }),
+          name: { text: "f" },
+        },
+      ],
+    });
+  });
+
+  it("parses pub(package) fn f() {}", (): void => {
+    const ast = parseProgram("pub(package) fn f() {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          visibility: some({ scope: some("package") }),
+          name: { text: "f" },
+        },
+      ],
+    });
+  });
+
+  it("rejects pub() fn f() {} as invalid scoped visibility", (): void => {
+    const result = parse(tokenize("pub() fn f() {}").tokens);
+    expect(isErr(result)).toBe(true);
+  });
+});
+
+describe("call expression edge cases", (): void => {
+  it("parses chained calls foo()()", (): void => {
+    const ast = parseProgram("foo()();");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "CallExpression",
+            callee: {
+              kind: "CallExpression",
+              callee: { kind: "PathExpression" },
+            },
+            arguments: [],
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses a call with multiple arguments", (): void => {
+    const ast = parseProgram("f(a, b, c);");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "CallExpression",
+            arguments: [
+              { kind: "PathExpression", path: { segments: ["a"] } },
+              { kind: "PathExpression", path: { segments: ["b"] } },
+              { kind: "PathExpression", path: { segments: ["c"] } },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses a call with a trailing comma foo(a,)", (): void => {
+    const ast = parseProgram("foo(a,);");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "CallExpression",
+            arguments: [{ kind: "PathExpression" }],
+          },
+        },
+      ],
+    });
+  });
+});
+
+describe("parse errors — missing tokens", (): void => {
+  it("errors on a let statement with no semicolon", (): void => {
+    const result = parse(tokenize("let x = 1").tokens);
+    expect(isErr(result)).toBe(true);
+  });
+
+  it("errors on a let statement with a non-identifier pattern", (): void => {
+    const result = parse(tokenize("let 42 = 1;").tokens);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.message).toContain("identifier");
+    }
+  });
+
+  it("errors on a function declaration with no body brace", (): void => {
+    const result = parse(tokenize("fn f();").tokens);
+    expect(isErr(result)).toBe(true);
+  });
+
+  it("errors on an unclosed argument list", (): void => {
+    const result = parse(tokenize("foo(a").tokens);
+    expect(isErr(result)).toBe(true);
+  });
+
+  it("errors on fn at EOF", (): void => {
+    const result = parse(tokenize("fn").tokens);
+    expect(isErr(result)).toBe(true);
+  });
+
+  it("foo::mut gives an 'expected identifier, found keyword' error", (): void => {
+    const result = parse(tokenize("foo::mut;").tokens);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.message).toContain("identifier");
+      expect(result.error.message).toContain("mut");
+    }
+  });
+});
+
+describe("empty and minimal programs", (): void => {
+  it("parses an empty program", (): void => {
+    const ast = parseProgram("");
+    expect(ast).toMatchObject({ kind: "Program", items: [] });
+  });
+
+  it("parses a program-level inner attribute", (): void => {
+    const ast = parseProgram("#![crate_name]");
+    expect(ast).toMatchObject({
+      kind: "Program",
+      attributes: [{ name: { text: "crate_name" } }],
+      items: [],
+    });
+  });
+});
+
+describe("multiple attributes", (): void => {
+  it("attaches multiple consecutive outer attributes to a function", (): void => {
+    const ast = parseProgram("#[a] #[b] fn f() {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          attributes: [
+            { name: { text: "a" } },
+            { name: { text: "b" } },
+          ],
+        },
+      ],
+    });
+  });
+});
+
+describe("unsupported type syntax in additional positions", (): void => {
+  it("rejects a pointer type *i32 in type position", (): void => {
+    const result = parse(tokenize("let x: *i32;").tokens);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.message).toContain("star");
+    }
+  });
+
+  it("rejects a lifetime 'a in type position", (): void => {
+    const result = parse(tokenize("let x: 'a;").tokens);
+    expect(isErr(result)).toBe(true);
+  });
+
+  it("rejects a reference return type fn f() -> &i32 {}", (): void => {
+    const result = parse(tokenize("fn f() -> &i32 {}").tokens);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.message).toContain("reference");
+    }
+  });
+});
