@@ -1,17 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { none } from "../option.js";
+import { isSome, none } from "../option.js";
 import { type Program } from "../parser/ast.js";
 import { toJsim } from "./jsim.js";
 import { tokenize } from "../lexer/lexer.js";
 import { parse } from "../parser/parser.js";
-import { isErr } from "../result.js";
-
 function parseOrThrow(source: string): Program {
-  const result = parse(tokenize(source).tokens);
-  if (isErr(result)) {
-    throw new Error(result.error.message, { cause: result.error });
+  const { program, diagnostics } = parse(tokenize(source).tokens);
+  if (isSome(program)) {
+    return program.value;
   }
-  return result.value;
+  throw new Error(diagnostics[0]?.message ?? "Parse failed");
 }
 
 describe("toJsim", () => {

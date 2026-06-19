@@ -1,5 +1,7 @@
+import { type Diagnostic } from "../diagnostics.js";
+import { none, type Option, some } from "../option.js";
 import { scanWhile } from "./scan-while.js";
-import type { Token } from "./token.js";
+import { type Token } from "./token.js";
 
 /**
  * Approximation of ECMAScript IdentifierName using Unicode property escapes.
@@ -46,60 +48,61 @@ function getIdent(source: string, start: number, offset: number): Token {
 }
 
 /**
- * Parse an identifier starting at `start` in `source`, appending it to `tokens`.
+ * Tokenize an identifier starting at `start` in `source`, appending it to `tokens`.
  *
  * @param tokens The token list to append to.
+ * @param diagnostics The diagnostic list to append to.
  * @param source The source to scan.
  * @param start The index to start scanning at.
  *
- * @returns The index of the first character after the identifier.
+ * @returns `Some(index)` with the index of the first character after the identifier.
+ * @returns `None` if the source does not start with an identifier.
  */
-export function parseIdent(
+export function tokenizeIdent(
   tokens: Token[],
+  diagnostics: Diagnostic[],
   source: string,
   start: number,
-): number {
+): Option<number> {
+  void diagnostics;
+  const ch = source.at(start);
+  if (ch === undefined || !isIdentStart(ch)) return none();
   const token = getIdent(source, start, 0);
-  const end = token.span.end;
   tokens.push(token);
-  return end;
+  return some(token.span.end);
 }
 
 /**
- * Check if the source at `start` is a raw identifier.
+ * Tokenize a raw identifier starting at `start` in `source`, appending it to `tokens`.
  *
- * @param source The source to scan.
- * @param start The index to start scanning at.
- *
- * @returns `true` if the source starts with a raw identifier.
- */
-export function isRawIdentStart(source: string, start: number): boolean {
-  const a = source[start];
-  const b = source[start + 1];
-  const c = source[start + 2];
-
-  if (a === undefined || b === undefined || c === undefined) {
-    return false;
-  }
-  return a === "r" && b === "#" && isIdentStart(c);
-}
-
-/**
- * Parse a raw identifier starting at `start` in `source`, appending it to `tokens`.
+ * Also handles the error case where `r#` is not followed by an identifier start.
  *
  * @param tokens The token list to append to.
+ * @param diagnostics The diagnostic list to append to.
  * @param source The source to scan.
  * @param start The index to start scanning at.
  *
- * @returns The index of the first character after the raw identifier.
+ * @returns `Some(index)` with the index of the first character after the raw identifier.
+ * @returns `None` if the source does not start with `r#`.
  */
-export function parseRawIdent(
+export function tokenizeRawIdent(
   tokens: Token[],
+  diagnostics: Diagnostic[],
   source: string,
   start: number,
-): number {
+): Option<number> {
+  if (source.at(start) !== "r" || source.at(start + 1) !== "#") return none();
+  if (!isIdentStart(source.at(start + 2) ?? "")) {
+    const end = start + 2;
+    diagnostics.push({
+      severity: "error",
+      message: "raw identifier prefix `r#` must be followed by an identifier",
+      span: some({ start, end }),
+    });
+    tokens.push({ kind: "error", span: { start, end }, text: "r#" });
+    return some(end);
+  }
   const token = getIdent(source, start, 2);
-  const end = token.span.end;
   tokens.push(token);
-  return end;
+  return some(token.span.end);
 }

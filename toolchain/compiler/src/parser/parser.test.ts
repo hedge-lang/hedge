@@ -1,19 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { none, some } from "../option.js";
+import { isSome, none, some } from "../option.js";
 import { compile } from "../driver.js";
 import { parse } from "./parser.js";
-import { isErr } from "../result.js";
 import { tokenize } from "../lexer/lexer.js";
 import { HARD_KEYWORDS } from "../lexer/keywords.js";
 import type { Program } from "./ast.js";
 
 function parseProgram(source: string): Program {
   const { tokens } = tokenize(source);
-  const result = parse(tokens);
-  if (isErr(result)) {
-    throw new Error(result.error.message, { cause: result.error });
+  const { program, diagnostics } = parse(tokens);
+  if (isSome(program)) {
+    return program.value;
   }
-  return result.value;
+  throw new Error(diagnostics[0]?.message ?? "Parse failed");
 }
 
 describe("parser", (): void => {
@@ -239,10 +238,10 @@ describe("path expressions", (): void => {
 
   it("returns an error for a trailing path separator", (): void => {
     const result = parse(tokenize("foo::;").tokens);
-    expect(isErr(result)).toBe(true);
-    if (isErr(result)) {
-      expect(result.error.message).toContain('Expected identifier after "::"');
-    }
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain(
+      'Expected identifier after "::"',
+    );
   });
 });
 
@@ -356,10 +355,8 @@ describe("type annotations", (): void => {
 
   it("returns an error for an unsupported type syntax", (): void => {
     const result = parse(tokenize("let x: &i32;").tokens);
-    expect(isErr(result)).toBe(true);
-    if (isErr(result)) {
-      expect(result.error.message).toContain("Slice 2");
-    }
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("Slice 2");
   });
 });
 
@@ -370,12 +367,10 @@ describe("type annotation error diagnostics", (): void => {
     expect(amp).toBeDefined();
     if (!amp) return;
     const result = parse(tokens);
-    expect(isErr(result)).toBe(true);
-    if (isErr(result)) {
-      expect(result.error.severity).toBe("error");
-      expect(result.error.message).toContain("Slice 2");
-      expect(result.error.span).toEqual(some(amp.span));
-    }
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain("Slice 2");
+    expect(result.diagnostics[0]?.span).toEqual(some(amp.span));
   });
 
   it("produces an error diagnostic for an exclusive reference type", (): void => {
@@ -384,12 +379,10 @@ describe("type annotation error diagnostics", (): void => {
     expect(amp).toBeDefined();
     if (!amp) return;
     const result = parse(tokens);
-    expect(isErr(result)).toBe(true);
-    if (isErr(result)) {
-      expect(result.error.severity).toBe("error");
-      expect(result.error.message).toContain("Slice 2");
-      expect(result.error.span).toEqual(some(amp.span));
-    }
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain("Slice 2");
+    expect(result.diagnostics[0]?.span).toEqual(some(amp.span));
   });
 
   it("produces an error diagnostic for a slice type", (): void => {
@@ -398,12 +391,10 @@ describe("type annotation error diagnostics", (): void => {
     expect(lbracket).toBeDefined();
     if (!lbracket) return;
     const result = parse(tokens);
-    expect(isErr(result)).toBe(true);
-    if (isErr(result)) {
-      expect(result.error.severity).toBe("error");
-      expect(result.error.message).toContain("[T]");
-      expect(result.error.span).toEqual(some(lbracket.span));
-    }
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain("[T]");
+    expect(result.diagnostics[0]?.span).toEqual(some(lbracket.span));
   });
 
   it("produces an error diagnostic for the never type", (): void => {
@@ -412,12 +403,10 @@ describe("type annotation error diagnostics", (): void => {
     expect(bang).toBeDefined();
     if (!bang) return;
     const result = parse(tokens);
-    expect(isErr(result)).toBe(true);
-    if (isErr(result)) {
-      expect(result.error.severity).toBe("error");
-      expect(result.error.message).toContain("!");
-      expect(result.error.span).toEqual(some(bang.span));
-    }
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain("!");
+    expect(result.diagnostics[0]?.span).toEqual(some(bang.span));
   });
 });
 
@@ -547,45 +536,39 @@ describe("attributes on let statements", (): void => {
 describe("attribute parsing guardrails", (): void => {
   it("returns an error for an attribute arg that is neither string nor path", (): void => {
     const result = parse(tokenize("#[attr(42)] fn f() {}").tokens);
-    expect(isErr(result)).toBe(true);
-    if (isErr(result)) {
-      expect(result.error.message).toContain("Expected attribute argument");
-    }
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain(
+      "Expected attribute argument",
+    );
   });
 
   it("returns an error when an attribute argument list is not closed", (): void => {
     const result = parse(tokenize("#[attr(").tokens);
-    expect(isErr(result)).toBe(true);
-    if (isErr(result)) {
-      expect(result.error.message).toContain("unterminated");
-    }
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("unterminated");
   });
 
   it("returns an error when `]` is missing after attribute arguments", (): void => {
     const result = parse(tokenize("#[attr(x) fn f() {}").tokens);
-    expect(isErr(result)).toBe(true);
-    if (isErr(result)) {
-      expect(result.error.message).toContain("rbracket");
-    }
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("rbracket");
   });
 });
 
 describe("tuple type guardrail", (): void => {
   it("returns an error for a parenthesized non-unit type", (): void => {
     const result = parse(tokenize("let x: (i32);").tokens);
-    expect(isErr(result)).toBe(true);
-    if (isErr(result)) {
-      expect(result.error.message).toContain("tuple types are not supported");
-    }
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain(
+      "tuple types are not supported",
+    );
   });
 
   it("returns a clear error (not 'tuple types') for an unclosed ( in type position", (): void => {
     const result = parse(tokenize("let x: (").tokens);
-    expect(isErr(result)).toBe(true);
-    if (isErr(result)) {
-      expect(result.error.message).not.toContain("tuple");
-      expect(result.error.message).toContain(")");
-    }
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).not.toContain("tuple");
+    expect(result.diagnostics[0]?.message).toContain(")");
   });
 
   it("still parses the unit type `()` successfully", (): void => {
@@ -599,10 +582,8 @@ describe("tuple type guardrail", (): void => {
 describe("visibility guardrails", (): void => {
   it("returns an error for pub on a let statement", (): void => {
     const result = parse(tokenize("pub let x = 1;").tokens);
-    expect(isErr(result)).toBe(true);
-    if (isErr(result)) {
-      expect(result.error.message).toContain("let");
-    }
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("let");
   });
 });
 
@@ -630,18 +611,14 @@ describe("identifiers", (): void => {
   describe("keyword in identifier position", (): void => {
     it("rejects a hard keyword as a function name", (): void => {
       const result = parse(tokenize("fn fn() {}").tokens);
-      expect(isErr(result)).toBe(true);
-      if (isErr(result)) {
-        expect(result.error.message).toContain("identifier");
-      }
+      expect(result.program).toEqual(none());
+      expect(result.diagnostics[0]?.message).toContain("identifier");
     });
 
     it("rejects a hard keyword as a let binding name", (): void => {
       const result = parse(tokenize("let fn = 1;").tokens);
-      expect(isErr(result)).toBe(true);
-      if (isErr(result)) {
-        expect(result.error.message).toContain("identifier");
-      }
+      expect(result.program).toEqual(none());
+      expect(result.diagnostics[0]?.message).toContain("identifier");
     });
 
     const ALL_HARD_KEYWORDS = Array.from(HARD_KEYWORDS);
@@ -650,9 +627,9 @@ describe("identifiers", (): void => {
       "rejects hard keyword %s as a function name with a diagnostic naming the keyword",
       (kw) => {
         const result = parse(tokenize(`fn ${kw}() {}`).tokens);
-        if (!isErr(result))
+        if (isSome(result.program))
           throw new Error(`expected parse("fn ${kw}() {}") to fail`);
-        expect(result.error.message).toContain(kw);
+        expect(result.diagnostics[0]?.message).toContain(kw);
       },
     );
 
@@ -660,9 +637,9 @@ describe("identifiers", (): void => {
       "rejects hard keyword %s as a let binding name with a diagnostic naming the keyword",
       (kw) => {
         const result = parse(tokenize(`let ${kw} = 1;`).tokens);
-        if (!isErr(result))
+        if (isSome(result.program))
           throw new Error(`expected parse("let ${kw} = 1;") to fail`);
-        expect(result.error.message).toContain(kw);
+        expect(result.diagnostics[0]?.message).toContain(kw);
       },
     );
   });
@@ -670,28 +647,22 @@ describe("identifiers", (): void => {
   describe("reserved keyword diagnostics", (): void => {
     it("rejects mut in let binding position with a hint about write", (): void => {
       const result = parse(tokenize("let mut = 1;").tokens);
-      expect(isErr(result)).toBe(true);
-      if (isErr(result)) {
-        expect(result.error.message).toContain("write");
-      }
+      expect(result.program).toEqual(none());
+      expect(result.diagnostics[0]?.message).toContain("write");
     });
 
     it("rejects mut as a function name with a hint about write", (): void => {
       const result = parse(tokenize("fn mut() {}").tokens);
-      expect(isErr(result)).toBe(true);
-      if (isErr(result)) {
-        expect(result.error.message).toContain("write");
-      }
+      expect(result.program).toEqual(none());
+      expect(result.diagnostics[0]?.message).toContain("write");
     });
 
     it.each(["mod", "box", "macro", "yield"])(
       "rejects %s in let binding position with a generic keyword error",
       (kw) => {
         const result = parse(tokenize(`let ${kw} = 1;`).tokens);
-        expect(isErr(result)).toBe(true);
-        if (isErr(result)) {
-          expect(result.error.message).toContain("keyword");
-        }
+        expect(result.program).toEqual(none());
+        expect(result.diagnostics[0]?.message).toContain("keyword");
       },
     );
   });
@@ -721,13 +692,13 @@ describe("identifiers", (): void => {
 
     it("accepts r#true as a let binding name", (): void => {
       const result = parse(tokenize("let r#true = 1;").tokens);
-      expect(isErr(result)).toBe(false);
-      if (!isErr(result)) {
-        const stmt = result.value.items[0];
-        if (stmt?.kind !== "LetStatement")
-          throw new Error("expected LetStatement");
-        expect(stmt.pattern.name.text).toBe("true");
+      if (!isSome(result.program)) {
+        throw new Error("expected program");
       }
+      const stmt = result.program.value.items[0];
+      if (stmt?.kind !== "LetStatement")
+        throw new Error("expected LetStatement");
+      expect(stmt.pattern.name.text).toBe("true");
     });
 
     it("accepts r#match as a path expression", (): void => {
@@ -749,9 +720,10 @@ describe("identifiers", (): void => {
   describe("span stability across contexts", (): void => {
     it("identifier tokenId in a let binding points to the name token", (): void => {
       const { tokens } = tokenize("let foo = 1;");
-      const result = parse(tokens);
-      if (isErr(result)) throw new Error(result.error.message);
-      const stmt = result.value.items[0];
+      const { program, diagnostics } = parse(tokens);
+      if (!isSome(program))
+        throw new Error(diagnostics[0]?.message ?? "Parse failed");
+      const stmt = program.value.items[0];
       if (stmt?.kind !== "LetStatement") {
         throw new Error("expected LetStatement");
       }
@@ -765,9 +737,10 @@ describe("identifiers", (): void => {
 
     it("identifier tokenId in a function declaration points to the name token", (): void => {
       const { tokens } = tokenize("fn foo() {}");
-      const result = parse(tokens);
-      if (isErr(result)) throw new Error(result.error.message);
-      const fn_ = result.value.items[0];
+      const { program, diagnostics } = parse(tokens);
+      if (!isSome(program))
+        throw new Error(diagnostics[0]?.message ?? "Parse failed");
+      const fn_ = program.value.items[0];
       if (fn_?.kind !== "Function") {
         throw new Error("expected Function");
       }
@@ -781,9 +754,10 @@ describe("identifiers", (): void => {
 
     it("identifier tokenId in an expression points to the name token", (): void => {
       const { tokens } = tokenize("foo;");
-      const result = parse(tokens);
-      if (isErr(result)) throw new Error(result.error.message);
-      const expr = result.value.items[0];
+      const { program, diagnostics } = parse(tokens);
+      if (!isSome(program))
+        throw new Error(diagnostics[0]?.message ?? "Parse failed");
+      const expr = program.value.items[0];
       if (expr?.kind !== "ExpressionStatement")
         throw new Error("expected ExpressionStatement");
       const path = expr.expression;
@@ -839,10 +813,8 @@ describe("reference expressions", (): void => {
 
   it("rejects &mut x with the mut→write hint", (): void => {
     const result = parse(tokenize("&mut x;").tokens);
-    expect(isErr(result)).toBe(true);
-    if (isErr(result)) {
-      expect(result.error.message).toContain("write");
-    }
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("write");
   });
 });
 
@@ -942,7 +914,7 @@ describe("visibility on function declarations", (): void => {
 
   it("rejects pub() fn f() {} as invalid scoped visibility", (): void => {
     const result = parse(tokenize("pub() fn f() {}").tokens);
-    expect(isErr(result)).toBe(true);
+    expect(result.program).toEqual(none());
   });
 });
 
@@ -1004,39 +976,35 @@ describe("call expression edge cases", (): void => {
 describe("parse errors — missing tokens", (): void => {
   it("errors on a let statement with no semicolon", (): void => {
     const result = parse(tokenize("let x = 1").tokens);
-    expect(isErr(result)).toBe(true);
+    expect(result.program).toEqual(none());
   });
 
   it("errors on a let statement with a non-identifier pattern", (): void => {
     const result = parse(tokenize("let 42 = 1;").tokens);
-    expect(isErr(result)).toBe(true);
-    if (isErr(result)) {
-      expect(result.error.message).toContain("identifier");
-    }
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("identifier");
   });
 
   it("errors on a function declaration with no body brace", (): void => {
     const result = parse(tokenize("fn f();").tokens);
-    expect(isErr(result)).toBe(true);
+    expect(result.program).toEqual(none());
   });
 
   it("errors on an unclosed argument list", (): void => {
     const result = parse(tokenize("foo(a").tokens);
-    expect(isErr(result)).toBe(true);
+    expect(result.program).toEqual(none());
   });
 
   it("errors on fn at EOF", (): void => {
     const result = parse(tokenize("fn").tokens);
-    expect(isErr(result)).toBe(true);
+    expect(result.program).toEqual(none());
   });
 
   it("foo::mut gives the mut hint about write/bind, not a generic keyword error", (): void => {
     const result = parse(tokenize("foo::mut;").tokens);
-    expect(isErr(result)).toBe(true);
-    if (isErr(result)) {
-      expect(result.error.message).toContain("write");
-      expect(result.error.message).toContain("mut");
-    }
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("write");
+    expect(result.diagnostics[0]?.message).toContain("mut");
   });
 });
 
@@ -1073,23 +1041,19 @@ describe("multiple attributes", (): void => {
 describe("unsupported type syntax in additional positions", (): void => {
   it("rejects a pointer type *i32 in type position", (): void => {
     const result = parse(tokenize("let x: *i32;").tokens);
-    expect(isErr(result)).toBe(true);
-    if (isErr(result)) {
-      expect(result.error.message).toContain("star");
-    }
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("star");
   });
 
   it("rejects a lifetime 'a in type position", (): void => {
     const result = parse(tokenize("let x: 'a;").tokens);
-    expect(isErr(result)).toBe(true);
+    expect(result.program).toEqual(none());
   });
 
   it("rejects a reference return type fn f() -> &i32 {}", (): void => {
     const result = parse(tokenize("fn f() -> &i32 {}").tokens);
-    expect(isErr(result)).toBe(true);
-    if (isErr(result)) {
-      expect(result.error.message).toContain("reference");
-    }
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("reference");
   });
 });
 
@@ -1108,7 +1072,7 @@ describe("keyword edge cases", (): void => {
     "contextual keyword %s is a valid identifier in expression position",
     (kw) => {
       const result = parse(tokenize(`let x = ${kw};`).tokens);
-      expect(isErr(result)).toBe(false);
+      expect(result.program).toEqual(some(parseProgram(`let x = ${kw};`)));
     },
   );
 
@@ -1121,9 +1085,7 @@ describe("keyword edge cases", (): void => {
 
   it("foo::fn gives a diagnostic naming fn", (): void => {
     const result = parse(tokenize("foo::fn;").tokens);
-    expect(isErr(result)).toBe(true);
-    if (isErr(result)) {
-      expect(result.error.message).toContain("fn");
-    }
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("fn");
   });
 });

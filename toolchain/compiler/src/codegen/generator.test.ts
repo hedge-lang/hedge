@@ -4,16 +4,15 @@ import { toJsim } from "../jsim/jsim.js";
 import { tokenize } from "../lexer/lexer.js";
 import { isSome, none } from "../option.js";
 import { parse } from "../parser/parser.js";
-import { isErr } from "../result.js";
 import { generate } from "./generator.js";
 import type { Code } from "./output.js";
 
 function gen(source: string): Code {
-  const result = parse(tokenize(source).tokens);
-  if (isErr(result)) {
-    throw new Error(result.error.message, { cause: result.error });
+  const { program, diagnostics } = parse(tokenize(source).tokens);
+  if (isSome(program)) {
+    return generate(toJsim(program.value));
   }
-  return generate(toJsim(result.value));
+  throw new Error(diagnostics[0]?.message ?? "Parse failed");
 }
 
 function js(code: Code): string | null {
