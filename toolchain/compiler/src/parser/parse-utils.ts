@@ -1,6 +1,7 @@
 import type { Diagnostic } from "../diagnostics.js";
 import { isSome, none, some, type Option } from "../option.js";
 import type { Token } from "../lexer/token.js";
+import { tokenToString } from "../lexer/token.js";
 
 /**
  * @returns `Some(token)` at {@link pos}, or pushes a {@link Diagnostic} and
@@ -52,7 +53,7 @@ export function expect(
   if (token.kind !== kind) {
     diagnostics.push({
       severity: "error",
-      message: `Expected ${kind}, found "${token.kind}" at offset ${token.span.start}`,
+      message: `Expected ${kind}, found "${tokenToString(token)}"`,
       span: some(token.span),
     });
     return none();
@@ -78,10 +79,9 @@ export function expectKeyword(
   }
   const token = tokenAtResult.value;
   if (token.kind !== "keyword" || token.text !== text) {
-    const found = token.kind === "keyword" ? token.text : token.kind;
     diagnostics.push({
       severity: "error",
-      message: `Expected keyword "${text}", found "${found}" at offset ${token.span.start}`,
+      message: `Expected keyword "${text}", found "${tokenToString(token)}"`,
       span: some(token.span),
     });
     return none();

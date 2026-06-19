@@ -66,3 +66,22 @@ export type Token =
   | { readonly kind: "path_sep"; readonly span: Span }
   | { readonly kind: "dot_dot"; readonly span: Span }
   | { readonly kind: "dot_dot_eq"; readonly span: Span };
+
+export function tokenToString(token: Token): string {
+  switch (token.kind) {
+    case "ident":
+      return `ident(${token.text})`;
+    case "keyword":
+      return `keyword(${token.text})`;
+    case "int":
+      return `int(${token.text})`;
+    case "string":
+      return `string(${token.text})`;
+    case "lifetime":
+      return `lifetime(${token.text})`;
+    case "error":
+      return `error(${token.text})`;
+    default:
+      return token.kind;
+  }
+}
