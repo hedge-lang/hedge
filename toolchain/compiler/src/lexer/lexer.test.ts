@@ -1140,9 +1140,12 @@ describe("keyword adversarial", () => {
   );
 
   it.each(["r#fn", "r#let", "r#Self", "r#true", "r#mut"])(
-    "%s raw-escape produces an ident token",
+    "%s raw-escape produces an ident token with the r# prefix stripped from text",
     (src) => {
-      expect(tokenize(src).tokens[0]).toMatchObject({ kind: "ident" });
+      expect(tokenize(src).tokens[0]).toMatchObject({
+        kind: "ident",
+        text: src.slice(2),
+      });
     },
   );
 });
