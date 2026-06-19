@@ -5,33 +5,6 @@ import { type Token } from "./token.js";
 import { isWhitespace } from "./whitespace.js";
 
 /**
- * Identify if the source at `index` is a comment.
- *
- * @param source The source to scan.
- * @param index The index to start scanning at.
- *
- * @returns `Ok(true)` if the source starts with a comment.
- * @returns `Ok(false)` if the source does not start with a comment.
- * @returns `Err(Diagnostic)` if the source is out of bounds.
- */
-export function isComment(
-  source: string,
-  index: number,
-): Result<boolean, Diagnostic> {
-  const ch = source.at(index);
-  if (ch === undefined) {
-    return err({
-      severity: "error",
-      message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
-      span: none(),
-    });
-  }
-  if (ch !== "/") return ok(false);
-  const ch1 = source.at(index + 1);
-  return ok(ch1 === "/" || ch1 === "*");
-}
-
-/**
  * Parse a comment starting at `start` in `source`, appending it to `tokens`.
  *
  * @param tokens The token list to append to.
