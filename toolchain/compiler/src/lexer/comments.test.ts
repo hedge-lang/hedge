@@ -18,7 +18,7 @@ describe("LineComment", (): void => {
     if (!isErr(maybeIsLine)) expect(maybeIsLine.value).toBe(true);
     const result = tokenizeLineComment(tokens, [], lineComment, 0);
     if (!isSome(result)) {
-      throw new Error("Unexpected: parseLineComment returned None");
+      throw new Error("Unexpected: tokenizeLineComment returned None");
     }
     const nextIndex = result.value;
     expect(lineComment.slice(3, nextIndex)).toBe("foo bar");
