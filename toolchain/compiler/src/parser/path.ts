@@ -109,7 +109,7 @@ export function parsePathSegments(
         return none();
       }
       const foundDesc =
-        nextToken === undefined ? "eof" : tokenToString(nextToken);
+        nextToken === undefined ? "end of input" : tokenToString(nextToken);
       const span =
         nextToken !== undefined ? some(nextToken.span) : none<Span>();
       diagnostics.push({
