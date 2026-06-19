@@ -66,3 +66,33 @@ export type Token =
   | { readonly kind: "path_sep"; readonly span: Span }
   | { readonly kind: "dot_dot"; readonly span: Span }
   | { readonly kind: "dot_dot_eq"; readonly span: Span };
+
+function escapeText(text: string): string {
+  return text
+    .replaceAll("\\", "\\\\")
+    .replaceAll("\n", "\\n")
+    .replaceAll("\r", "\\r")
+    .replaceAll("\t", "\\t")
+    .replaceAll('"', '\\"');
+}
+
+export function tokenToString(token: Token): string {
+  switch (token.kind) {
+    case "ident":
+      return `ident(${escapeText(token.text)})`;
+    case "keyword":
+      return `keyword(${escapeText(token.text)})`;
+    case "int":
+      return `int(${escapeText(token.text)})`;
+    case "string":
+      return `string(${escapeText(token.text)})`;
+    case "lifetime":
+      return `lifetime(${escapeText(token.text)})`;
+    case "error":
+      return `error(${escapeText(token.text)})`;
+    case "eof":
+      return "end of input";
+    default:
+      return token.kind;
+  }
+}

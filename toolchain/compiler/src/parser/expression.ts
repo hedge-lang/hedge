@@ -1,5 +1,6 @@
 import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
+import { tokenToString } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import type {
   CallExpression,
@@ -121,7 +122,7 @@ function parsePrimary(
 
   diagnostics.push({
     severity: "error",
-    message: `Expected an expression, found "${token.kind}" at offset ${token.span.start}`,
+    message: `Expected an expression, found "${tokenToString(token)}"`,
     span: some(token.span),
   });
   return none();

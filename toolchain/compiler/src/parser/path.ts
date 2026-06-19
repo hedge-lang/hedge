@@ -1,5 +1,6 @@
 import type { Diagnostic } from "../diagnostics.js";
 import type { Span, Token } from "../lexer/token.js";
+import { tokenToString } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import type { Identifier, Path, PathExpression } from "./ast.js";
 import type { Parsed } from "./parse.js";
@@ -37,11 +38,9 @@ export function parseIdentifier(
   }
 
   if (token.kind !== "ident") {
-    const found =
-      token.kind === "keyword" ? `keyword "${token.text}"` : `"${token.kind}"`;
     diagnostics.push({
       severity: "error",
-      message: `Expected an identifier, found ${found} at offset ${token.span.start}`,
+      message: `Expected an identifier, found ${tokenToString(token)}`,
       span: some(token.span),
     });
     return none();
@@ -97,7 +96,11 @@ export function parsePathSegments(
     cursor += 1; // skip `::`
     const nextToken = tokens[cursor];
     if (nextToken === undefined || nextToken.kind !== "ident") {
-      if (nextToken?.kind === "keyword" && nextToken.text === "mut") {
+      if (
+        nextToken &&
+        nextToken.kind === "keyword" &&
+        nextToken.text === "mut"
+      ) {
         diagnostics.push({
           severity: "error",
           message: MUT_MESSAGE,
@@ -106,11 +109,7 @@ export function parsePathSegments(
         return none();
       }
       const foundDesc =
-        nextToken === undefined
-          ? "eof"
-          : nextToken.kind === "keyword"
-            ? `keyword "${nextToken.text}"`
-            : nextToken.kind;
+        nextToken === undefined ? "end of input" : tokenToString(nextToken);
       const span =
         nextToken !== undefined ? some(nextToken.span) : none<Span>();
       diagnostics.push({

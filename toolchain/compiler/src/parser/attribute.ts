@@ -1,5 +1,6 @@
 import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
+import { tokenToString } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import type { Attribute, IntLiteral, Path, StringLiteral } from "./ast.js";
 import type { Parsed } from "./parse.js";
@@ -68,7 +69,7 @@ function parseAttributeArg(
   }
   diagnostics.push({
     severity: "error",
-    message: `Expected attribute argument, found "${token.kind}" at offset ${token.span.start}`,
+    message: `Expected attribute argument, found "${tokenToString(token)}"`,
     span: some(token.span),
   });
   return none();

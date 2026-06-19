@@ -1,5 +1,6 @@
 import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
+import { tokenToString } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import type { NamedType, Type, UnitType } from "./ast.js";
 import type { Parsed } from "./parse.js";
@@ -103,7 +104,7 @@ export function parseType(
 
   diagnostics.push({
     severity: "error",
-    message: `type syntax "${token.kind}" is not supported in Slice 1`,
+    message: `type syntax "${tokenToString(token)}" is not supported in Slice 1`,
     span: some(token.span),
   });
   return none();
