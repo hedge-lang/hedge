@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import { tokenize } from "../lexer/lexer.js";
+import { isSome } from "../option.js";
 import { parse } from "../parser/parser.js";
-import { isErr } from "../result.js";
 import type { AnalysisResult } from "./analyzer.js";
 import { analyze } from "./analyzer.js";
 
 function diagnose(source: string): AnalysisResult {
   const { tokens } = tokenize(source);
-  const result = parse(tokens);
-  if (isErr(result)) {
-    throw new Error(result.error.message, { cause: result.error });
+  const { program, diagnostics } = parse(tokens);
+  if (isSome(program)) {
+    return analyze(program.value, tokens);
   }
-  return analyze(result.value, tokens);
+  throw new Error(diagnostics[0]?.message ?? "Parse failed");
 }
 
 describe("semantic analysis", (): void => {

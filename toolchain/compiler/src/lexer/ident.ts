@@ -31,6 +31,16 @@ export function isIdentContinue(ch: string): boolean {
   return /[\p{ID_Continue}_$]/u.test(ch);
 }
 
+/**
+ * Get an identifier starting at `start` in `source`, with an offset of `offset`
+ * UTF-16 code units.
+ *
+ * @param source The source to scan.
+ * @param start The index to start scanning at.
+ * @param offset The offset to add to the start index.
+ *
+ * @returns The identifier token.
+ */
 function getIdent(source: string, start: number, offset: number): Token {
   const end = scanWhile(source, start + 1 + offset, isIdentContinue);
   const text = source.slice(start + offset, end);
