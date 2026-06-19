@@ -135,9 +135,11 @@ function parseIdentifier(
   }
 
   if (token.kind !== "ident") {
+    const found =
+      token.kind === "keyword" ? `keyword "${token.text}"` : `"${token.kind}"`;
     return err({
       severity: "error",
-      message: `Expected an identifier, found "${token.kind}" at offset ${token.span.start}`,
+      message: `Expected an identifier, found ${found} at offset ${token.span.start}`,
       span: some(token.span),
     });
   }
