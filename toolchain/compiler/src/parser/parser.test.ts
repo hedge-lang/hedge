@@ -4,6 +4,7 @@ import { compile } from "../driver.js";
 import { parse } from "./parser.js";
 import { isErr } from "../result.js";
 import { tokenize } from "../lexer/lexer.js";
+import { HARD_KEYWORDS } from "../lexer/keywords.js";
 import type { Program } from "./ast.js";
 
 function parseProgram(source: string): Program {
@@ -643,48 +644,7 @@ describe("identifiers", (): void => {
       }
     });
 
-    const ALL_HARD_KEYWORDS = [
-      "as",
-      "async",
-      "await",
-      "break",
-      "const",
-      "continue",
-      "dyn",
-      "else",
-      "enum",
-      "export",
-      "extern",
-      "false",
-      "fn",
-      "for",
-      "if",
-      "impl",
-      "in",
-      "let",
-      "loop",
-      "match",
-      "move",
-      "pub",
-      "return",
-      "self",
-      "Self",
-      "static",
-      "struct",
-      "super",
-      "trait",
-      "true",
-      "type",
-      "unsafe",
-      "use",
-      "where",
-      "while",
-      "mut",
-      "mod",
-      "box",
-      "macro",
-      "yield",
-    ];
+    const ALL_HARD_KEYWORDS = Array.from(HARD_KEYWORDS);
 
     it.each(ALL_HARD_KEYWORDS)(
       "rejects hard keyword %s as a function name with a diagnostic naming the keyword",
