@@ -67,20 +67,31 @@ export type Token =
   | { readonly kind: "dot_dot"; readonly span: Span }
   | { readonly kind: "dot_dot_eq"; readonly span: Span };
 
+function escapeText(text: string): string {
+  return text
+    .replaceAll("\\", "\\\\")
+    .replaceAll("\n", "\\n")
+    .replaceAll("\r", "\\r")
+    .replaceAll("\t", "\\t")
+    .replaceAll('"', '\\"');
+}
+
 export function tokenToString(token: Token): string {
   switch (token.kind) {
     case "ident":
-      return `ident(${token.text})`;
+      return `ident(${escapeText(token.text)})`;
     case "keyword":
-      return `keyword(${token.text})`;
+      return `keyword(${escapeText(token.text)})`;
     case "int":
-      return `int(${token.text})`;
+      return `int(${escapeText(token.text)})`;
     case "string":
-      return `string(${token.text})`;
+      return `string(${escapeText(token.text)})`;
     case "lifetime":
-      return `lifetime(${token.text})`;
+      return `lifetime(${escapeText(token.text)})`;
     case "error":
-      return `error(${token.text})`;
+      return `error(${escapeText(token.text)})`;
+    case "eof":
+      return "end of input";
     default:
       return token.kind;
   }
