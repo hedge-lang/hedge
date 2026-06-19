@@ -5,7 +5,7 @@ import {
   isLineComment,
   tokenizeLineComment,
   isBlockComment,
-  tokenizeBlockcomment,
+  tokenizeBlockComment,
 } from "./comments.js";
 import type { Token } from "./token.js";
 
@@ -35,7 +35,7 @@ describe("BlockComment", () => {
     const maybeIsBlock = isBlockComment(blockComment, 0);
     expect(isErr(maybeIsBlock)).toBe(false);
     if (!isErr(maybeIsBlock)) expect(maybeIsBlock.value).toBe(true);
-    const result = tokenizeBlockcomment(tokens, [], blockComment + "  ", 0);
+    const result = tokenizeBlockComment(tokens, [], blockComment + "  ", 0);
     if (!isSome(result)) {
       throw new Error("Unexpected parse failure");
     }
@@ -53,7 +53,7 @@ describe("BlockComment", () => {
     const maybeIsBlock = isBlockComment(blockComment, 0);
     expect(isErr(maybeIsBlock)).toBe(false);
     if (!isErr(maybeIsBlock)) expect(maybeIsBlock.value).toBe(true);
-    const result = tokenizeBlockcomment(tokens, [], blockComment + "  ", 0);
+    const result = tokenizeBlockComment(tokens, [], blockComment + "  ", 0);
     if (!isSome(result)) {
       throw new Error("Unexpected parse failure");
     }
@@ -68,7 +68,7 @@ describe("BlockComment", () => {
   it("supports nested block comments opened with /**", () => {
     const blockComment = "/* foo /** bar */ baz */";
     const tokens: Token[] = [];
-    const result = tokenizeBlockcomment(tokens, [], blockComment + "  ", 0);
+    const result = tokenizeBlockComment(tokens, [], blockComment + "  ", 0);
     if (!isSome(result)) {
       throw new Error("Unexpected parse failure");
     }

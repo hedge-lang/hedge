@@ -52,7 +52,7 @@ export function tokenizeComment(
     return none();
   }
   if (maybeBlock.value)
-    return tokenizeBlockcomment(tokens, diagnostics, source, start);
+    return tokenizeBlockComment(tokens, diagnostics, source, start);
 
   const maybeBlockOuter = isBlockOuterDocComment(source, start);
   if (isErr(maybeBlockOuter)) {
@@ -165,7 +165,7 @@ export function isBlockComment(
  *
  * @returns `Some(index)` with the index of the first character after the comment.
  */
-export function tokenizeBlockcomment(
+export function tokenizeBlockComment(
   tokens: Token[],
   diagnostics: Diagnostic[],
   source: string,
@@ -460,6 +460,7 @@ function isOuterDocComment(
  *
  * @returns `Some(index)` with the index of the first character after the comment.
  */
+// eslint-disable-next-line complexity -- This is easier to read than splitting it out
 function tokenizeOuterDocComment(
   tokens: Token[],
   diagnostics: Diagnostic[],
@@ -594,6 +595,7 @@ function isInnerDocComment(
  *
  * @returns `Some(index)` with the index of the first character after the comment.
  */
+// eslint-disable-next-line complexity -- This is easier to read than splitting it out
 function tokenizeInnerDocComment(
   tokens: Token[],
   diagnostics: Diagnostic[],
