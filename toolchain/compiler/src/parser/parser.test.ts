@@ -642,6 +642,71 @@ describe("identifiers", (): void => {
         expect(result.error.message).toContain("identifier");
       }
     });
+
+    const ALL_HARD_KEYWORDS = [
+      "as",
+      "async",
+      "await",
+      "break",
+      "const",
+      "continue",
+      "dyn",
+      "else",
+      "enum",
+      "export",
+      "extern",
+      "false",
+      "fn",
+      "for",
+      "if",
+      "impl",
+      "in",
+      "let",
+      "loop",
+      "match",
+      "move",
+      "pub",
+      "return",
+      "self",
+      "Self",
+      "static",
+      "struct",
+      "super",
+      "trait",
+      "true",
+      "type",
+      "unsafe",
+      "use",
+      "where",
+      "while",
+      "mut",
+      "mod",
+      "box",
+      "macro",
+      "yield",
+    ];
+
+    it.each(ALL_HARD_KEYWORDS)(
+      "rejects hard keyword %s as a function name with a diagnostic naming the keyword",
+      (kw) => {
+        const result = parse(tokenize(`fn ${kw}() {}`).tokens);
+        expect(isErr(result)).toBe(true);
+        if (isErr(result)) {
+          expect(result.error.message).toContain(kw);
+        }
+      },
+    );
+
+    it.each(ALL_HARD_KEYWORDS)(
+      "rejects hard keyword %s as a let binding name with a diagnostic naming the keyword",
+      (kw) => {
+        const result = parse(tokenize(`let ${kw} = 1;`).tokens);
+        expect(isErr(result)).toBe(true);
+        if (isErr(result)) {
+          expect(result.error.message).toContain(kw);
+        }
+      },
+    );
   });
 
   describe("reserved keyword diagnostics", (): void => {
@@ -1066,6 +1131,41 @@ describe("unsupported type syntax in additional positions", (): void => {
     expect(isErr(result)).toBe(true);
     if (isErr(result)) {
       expect(result.error.message).toContain("reference");
+    }
+  });
+});
+
+describe("keyword edge cases", (): void => {
+  it.each(["write", "bind", "package", "unchecked"])(
+    "contextual keyword %s is valid as a function name",
+    (kw) => {
+      const ast = parseProgram(`fn ${kw}() {}`);
+      expect(ast).toMatchObject({
+        items: [{ kind: "Function", name: { kind: "Identifier", text: kw } }],
+      });
+    },
+  );
+
+  it.each(["write", "bind", "package", "unchecked"])(
+    "contextual keyword %s is a valid identifier in expression position",
+    (kw) => {
+      const result = parse(tokenize(`let x = ${kw};`).tokens);
+      expect(isErr(result)).toBe(false);
+    },
+  );
+
+  it("accepts r#mut as a function name", (): void => {
+    const ast = parseProgram("fn r#mut() {}");
+    expect(ast).toMatchObject({
+      items: [{ kind: "Function", name: { kind: "Identifier", text: "mut" } }],
+    });
+  });
+
+  it("foo::fn gives a diagnostic naming fn", (): void => {
+    const result = parse(tokenize("foo::fn;").tokens);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.message).toContain("fn");
     }
   });
 });
