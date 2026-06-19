@@ -193,6 +193,13 @@ function parsePathSegments(
     cursor += 1; // skip `::`
     const nextToken = tokens[cursor];
     if (nextToken === undefined || nextToken.kind !== "ident") {
+      if (nextToken?.kind === "keyword" && nextToken.text === "mut") {
+        return err({
+          severity: "error",
+          message: MUT_MESSAGE,
+          span: some(nextToken.span),
+        });
+      }
       const foundDesc =
         nextToken === undefined
           ? "eof"
