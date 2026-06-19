@@ -1,7 +1,7 @@
-import {type Diagnostic} from '../diagnostics.js'
-import {none, type Option, some} from '../option.js'
-import {err, isErr, ok, type Result} from '../result.js'
-import {type Token} from './token.js'
+import { type Diagnostic } from "../diagnostics.js";
+import { none, type Option, some } from "../option.js";
+import { err, isErr, ok, type Result } from "../result.js";
+import { type Token } from "./token.js";
 
 /**
  * Identify if the source at `index` is whitespace.
@@ -13,7 +13,10 @@ import {type Token} from './token.js'
  * @returns `Ok(false)` if the source does not start with whitespace.
  * @returns `Err(Diagnostic)` if the source is out of bounds.
  */
-export function isWhitespace(source: string, index: number): Result<boolean, Diagnostic> {
+export function isWhitespace(
+  source: string,
+  index: number,
+): Result<boolean, Diagnostic> {
   const ch = source.at(index);
   if (ch === undefined) {
     return err({
@@ -23,12 +26,7 @@ export function isWhitespace(source: string, index: number): Result<boolean, Dia
     });
   }
 
-  return ok(
-    ch === " " ||
-    ch === "\t" ||
-    ch === "\n" ||
-    ch === "\r"
-  );
+  return ok(ch === " " || ch === "\t" || ch === "\n" || ch === "\r");
 }
 
 /**
@@ -42,7 +40,12 @@ export function isWhitespace(source: string, index: number): Result<boolean, Dia
  * @returns `Some(index)` if the source starts with whitespace.
  * @returns `None` if the source does not start with whitespace.
  */
-export function tokenizeWhitespace(tokens: Token[], diagnostics: Diagnostic[], source: string, start: number): Option<number> {
+export function tokenizeWhitespace(
+  tokens: Token[],
+  diagnostics: Diagnostic[],
+  source: string,
+  start: number,
+): Option<number> {
   void tokens;
 
   let index = start;

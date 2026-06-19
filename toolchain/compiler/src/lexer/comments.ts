@@ -1,7 +1,7 @@
 import { type Diagnostic } from "../diagnostics.js";
-import { some } from "../option.js";
-import {err, isOk, ok, type Result} from "../result.js";
-import type { Token } from "./token.js";
+import { none, type Option, some } from "../option.js";
+import { err, isErr, ok, type Result } from "../result.js";
+import { type Token } from "./token.js";
 import { isWhitespace } from "./whitespace.js";
 
 /**
@@ -10,55 +10,94 @@ import { isWhitespace } from "./whitespace.js";
  * @param source The source to scan.
  * @param index The index to start scanning at.
  *
- * @returns `true` if the source starts with a comment.
+ * @returns `Ok(true)` if the source starts with a comment.
+ * @returns `Ok(false)` if the source does not start with a comment.
+ * @returns `Err(Diagnostic)` if the source is out of bounds.
  */
-export function isComment(source: string, index: number): boolean {
-  return (
-    isBlockComment(source, index) ||
-    isBlockOuterDocComment(source, index) ||
-    isBlockInnerDocComment(source, index) ||
-    isLineComment(source, index) ||
-    isOuterDocComment(source, index)
-  );
+export function isComment(
+  source: string,
+  index: number,
+): Result<boolean, Diagnostic> {
+  const ch = source.at(index);
+  if (ch === undefined) {
+    return err({
+      severity: "error",
+      message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+      span: none(),
+    });
+  }
+  if (ch !== "/") return ok(false);
+  const ch1 = source.at(index + 1);
+  return ok(ch1 === "/" || ch1 === "*");
 }
 
 /**
  * Parse a comment starting at `start` in `source`, appending it to `tokens`.
  *
  * @param tokens The token list to append to.
+ * @param diagnostics The diagnostic list to append to.
  * @param source The source to scan.
  * @param start The index to start scanning at.
  *
- * @returns The index of the first character after the comment.
+ * @returns `Some(index)` if the source starts with a comment.
+ * @returns `None` if the source does not start with a comment.
  */
-export function parseComment(
+// eslint-disable-next-line complexity -- The main loop is more readable as a single function.
+export function tokenizeComment(
   tokens: Token[],
+  diagnostics: Diagnostic[],
   source: string,
   start: number,
-): Result<number, Diagnostic> {
-  if (isOuterDocComment(source, start)) {
-    return ok(parseOuterDocComment(tokens, source, start));
+): Option<number> {
+  const maybeOuter = isOuterDocComment(source, start);
+  if (isErr(maybeOuter)) {
+    diagnostics.push(maybeOuter.error);
+    return none();
   }
-  if (isInnerDocComment(source, start)) {
-    return ok(parseInnerDocComment(tokens, source, start));
+  if (maybeOuter.value)
+    return tokenizeOuterDocComment(tokens, diagnostics, source, start);
+
+  const maybeInner = isInnerDocComment(source, start);
+  if (isErr(maybeInner)) {
+    diagnostics.push(maybeInner.error);
+    return none();
   }
-  if (isLineComment(source, start)) {
-    return ok(parseLineComment(tokens, source, start));
+  if (maybeInner.value)
+    return tokenizeInnerDocComment(tokens, diagnostics, source, start);
+
+  const maybeLine = isLineComment(source, start);
+  if (isErr(maybeLine)) {
+    diagnostics.push(maybeLine.error);
+    return none();
   }
-  if (isBlockComment(source, start)) {
-    return parseBlockComment(tokens, source, start);
+  if (maybeLine.value)
+    return tokenizeLineComment(tokens, diagnostics, source, start);
+
+  const maybeBlock = isBlockComment(source, start);
+  if (isErr(maybeBlock)) {
+    diagnostics.push(maybeBlock.error);
+    return none();
   }
-  if (isBlockOuterDocComment(source, start)) {
-    return parseBlockOuterDocComment(tokens, source, start);
+  if (maybeBlock.value)
+    return tokenizeBlockcomment(tokens, diagnostics, source, start);
+
+  const maybeBlockOuter = isBlockOuterDocComment(source, start);
+  if (isErr(maybeBlockOuter)) {
+    diagnostics.push(maybeBlockOuter.error);
+    return none();
   }
-  if (isBlockInnerDocComment(source, start)) {
-    return parseBlockInnerDocComment(tokens, source, start);
+  if (maybeBlockOuter.value)
+    return tokenizeBlockOuterDocComment(tokens, diagnostics, source, start);
+
+  const maybeBlockInner = isBlockInnerDocComment(source, start);
+  if (isErr(maybeBlockInner)) {
+    diagnostics.push(maybeBlockInner.error);
+    return none();
   }
-  return err({
-    severity: "error",
-    message: "Expected comment",
-    span: some({ start, end: start + 1 }),
-  });
+  if (maybeBlockInner.value)
+    return tokenizeBlockInnerDocComment(tokens, diagnostics, source, start);
+
+  return none();
 }
 
 /**
@@ -67,34 +106,50 @@ export function parseComment(
  * @param source The source to scan.
  * @param index The index to start scanning at.
  *
- * @returns `true` if the source starts with a line comment.
+ * @returns `Ok(true)` if the source starts with a line comment.
+ * @returns `Ok(false)` if the source does not start with a line comment.
+ * @returns `Err(Diagnostic)` if the source is out of bounds.
  */
-export function isLineComment(source: string, index: number): boolean {
-  return source[index] === "/" && source[index + 1] === "/";
+export function isLineComment(
+  source: string,
+  index: number,
+): Result<boolean, Diagnostic> {
+  const ch = source.at(index);
+  if (ch === undefined) {
+    return err({
+      severity: "error",
+      message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+      span: none(),
+    });
+  }
+  return ok(ch === "/" && source.at(index + 1) === "/");
 }
 
 /**
  * Parse a line comment starting at `start` in `source`, appending it to `tokens`.
  *
  * @param tokens The token list to append to.
+ * @param diagnostics The diagnostic list to append to.
  * @param source The source to scan.
  * @param start The index to start scanning at.
  *
- * @returns The index of the first character after the comment.
+ * @returns `Some(index)` with the index of the first character after the comment.
  */
-export function parseLineComment(
+export function tokenizeLineComment(
   tokens: Token[],
+  diagnostics: Diagnostic[],
   source: string,
   start: number,
-): number {
+): Option<number> {
   void tokens;
+  void diagnostics;
   for (let i = start + 2; i < source.length; i++) {
     const ch = source[i];
     if (ch === "\n" || ch === "\r") {
-      return i;
+      return some(i);
     }
   }
-  return source.length;
+  return some(source.length);
 }
 
 /**
@@ -103,14 +158,27 @@ export function parseLineComment(
  * @param source The source to scan.
  * @param index The index to start scanning at.
  *
- * @returns `true` if the source starts with a block comment.
+ * @returns `Ok(true)` if the source starts with a block comment.
+ * @returns `Ok(false)` if the source does not start with a block comment.
+ * @returns `Err(Diagnostic)` if the source is out of bounds.
  */
-export function isBlockComment(source: string, index: number): boolean {
-  return (
-    source[index] === "/" &&
-    source[index + 1] === "*" &&
-    source[index + 2] !== "*" &&
-    source[index + 2] !== "!"
+export function isBlockComment(
+  source: string,
+  index: number,
+): Result<boolean, Diagnostic> {
+  const ch = source.at(index);
+  if (ch === undefined) {
+    return err({
+      severity: "error",
+      message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+      span: none(),
+    });
+  }
+  return ok(
+    ch === "/" &&
+      source.at(index + 1) === "*" &&
+      source.at(index + 2) !== "*" &&
+      source.at(index + 2) !== "!",
   );
 }
 
@@ -118,16 +186,18 @@ export function isBlockComment(source: string, index: number): boolean {
  * Parse a block comment starting at `start` in `source`, appending it to `tokens`.
  *
  * @param tokens The token list to append to.
+ * @param diagnostics The diagnostic list to append to.
  * @param source The source to scan.
  * @param start The index to start scanning at.
  *
- * @returns The index of the first character after the comment.
+ * @returns `Some(index)` with the index of the first character after the comment.
  */
-export function parseBlockComment(
+export function tokenizeBlockcomment(
   tokens: Token[],
+  diagnostics: Diagnostic[],
   source: string,
   start: number,
-): Result<number, Diagnostic> {
+): Option<number> {
   const OFFSET_START = 2;
   const OFFSET_END = 2;
   void tokens;
@@ -139,48 +209,62 @@ export function parseBlockComment(
     }
     if (source[i] === "*" && source[i + 1] === "/") {
       if (nesting === 0) {
-        return ok(i + OFFSET_END);
+        return some(i + OFFSET_END);
       }
       nesting -= 1;
     }
   }
-  return err({
+  diagnostics.push({
     severity: "error",
     message: "Unterminated block comment",
     span: some({ start, end: source.length }),
   });
+  return some(source.length);
 }
 
 /**
- * Identify a block comment starting at `index` in `source`.
+ * Identify a block outer doc comment starting at `index` in `source`.
  *
  * @param source The source to scan.
  * @param index The index to start scanning at.
  *
- * @returns `true` if the source starts with a block comment.
+ * @returns `Ok(true)` if the source starts with a block outer doc comment (`/**`).
+ * @returns `Ok(false)` if the source does not.
+ * @returns `Err(Diagnostic)` if the source is out of bounds.
  */
-function isBlockOuterDocComment(source: string, index: number): boolean {
-  return (
-    source[index] === "/" &&
-    source[index + 1] === "*" &&
-    source[index + 2] === "*"
+function isBlockOuterDocComment(
+  source: string,
+  index: number,
+): Result<boolean, Diagnostic> {
+  const ch = source.at(index);
+  if (ch === undefined) {
+    return err({
+      severity: "error",
+      message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+      span: none(),
+    });
+  }
+  return ok(
+    ch === "/" && source.at(index + 1) === "*" && source.at(index + 2) === "*",
   );
 }
 
 /**
- * Parse a block comment starting at `start` in `source`, appending it to `tokens`.
+ * Parse a block outer doc comment starting at `start` in `source`, appending it to `tokens`.
  *
  * @param tokens The token list to append to.
+ * @param diagnostics The diagnostic list to append to.
  * @param source The source to scan.
  * @param start The index to start scanning at.
  *
- * @returns The index of the first character after the comment.
+ * @returns `Some(index)` with the index of the first character after the comment.
  */
-function parseBlockOuterDocComment(
+function tokenizeBlockOuterDocComment(
   tokens: Token[],
+  diagnostics: Diagnostic[],
   source: string,
   start: number,
-): Result<number, Diagnostic> {
+): Option<number> {
   const OFFSET_START = 3;
   const OFFSET_END = 2;
 
@@ -237,46 +321,60 @@ function parseBlockOuterDocComment(
           span: { start: end, end },
         },
       );
-      return ok(end);
+      return some(end);
     }
   }
-  return err({
+  diagnostics.push({
     severity: "error",
     message: "Unterminated block comment",
     span: some({ start, end: source.length }),
   });
+  return some(source.length);
 }
 
 /**
- * Identify a block comment starting at `index` in `source`.
+ * Identify a block inner doc comment starting at `index` in `source`.
  *
  * @param source The source to scan.
  * @param index The index to start scanning at.
  *
- * @returns `true` if the source starts with a block comment.
+ * @returns `Ok(true)` if the source starts with a block inner doc comment (`/*!`).
+ * @returns `Ok(false)` if the source does not.
+ * @returns `Err(Diagnostic)` if the source is out of bounds.
  */
-function isBlockInnerDocComment(source: string, index: number): boolean {
-  return (
-    source[index] === "/" &&
-    source[index + 1] === "*" &&
-    source[index + 2] === "!"
+function isBlockInnerDocComment(
+  source: string,
+  index: number,
+): Result<boolean, Diagnostic> {
+  const ch = source.at(index);
+  if (ch === undefined) {
+    return err({
+      severity: "error",
+      message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+      span: none(),
+    });
+  }
+  return ok(
+    ch === "/" && source.at(index + 1) === "*" && source.at(index + 2) === "!",
   );
 }
 
 /**
- * Parse a block comment starting at `start` in `source`, appending it to `tokens`.
+ * Parse a block inner doc comment starting at `start` in `source`, appending it to `tokens`.
  *
  * @param tokens The token list to append to.
+ * @param diagnostics The diagnostic list to append to.
  * @param source The source to scan.
  * @param start The index to start scanning at.
  *
- * @returns The index of the first character after the comment.
+ * @returns `Some(index)` with the index of the first character after the comment.
  */
-function parseBlockInnerDocComment(
+function tokenizeBlockInnerDocComment(
   tokens: Token[],
+  diagnostics: Diagnostic[],
   source: string,
   start: number,
-): Result<number, Diagnostic> {
+): Option<number> {
   const OFFSET_START = 3;
   const OFFSET_END = 2;
 
@@ -337,14 +435,15 @@ function parseBlockInnerDocComment(
           span: { start: end, end },
         },
       );
-      return ok(end);
+      return some(end);
     }
   }
-  return err({
+  diagnostics.push({
     severity: "error",
     message: "Unterminated block comment",
     span: some({ start, end: source.length }),
   });
+  return some(source.length);
 }
 
 /**
@@ -353,13 +452,24 @@ function parseBlockInnerDocComment(
  * @param source The source to scan.
  * @param index The index to start scanning at.
  *
- * @returns `true` if the source starts with an outer doc comment.
+ * @returns `Ok(true)` if the source starts with an outer doc comment (`///`).
+ * @returns `Ok(false)` if the source does not.
+ * @returns `Err(Diagnostic)` if the source is out of bounds.
  */
-function isOuterDocComment(source: string, index: number): boolean {
-  return (
-    source[index] === "/" &&
-    source[index + 1] === "/" &&
-    source[index + 2] === "/"
+function isOuterDocComment(
+  source: string,
+  index: number,
+): Result<boolean, Diagnostic> {
+  const ch = source.at(index);
+  if (ch === undefined) {
+    return err({
+      severity: "error",
+      message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+      span: none(),
+    });
+  }
+  return ok(
+    ch === "/" && source.at(index + 1) === "/" && source.at(index + 2) === "/",
   );
 }
 
@@ -371,16 +481,18 @@ function isOuterDocComment(source: string, index: number): boolean {
  * `#[doc = "..."]`); see `parseAttribute` in the parser.
  *
  * @param tokens The token list to append to.
+ * @param diagnostics The diagnostic list to append to.
  * @param source The source to scan.
  * @param start The index to start scanning at.
  *
- * @returns The index of the first character after the comment.
+ * @returns `Some(index)` with the index of the first character after the comment.
  */
-function parseOuterDocComment(
+function tokenizeOuterDocComment(
   tokens: Token[],
+  diagnostics: Diagnostic[],
   source: string,
   start: number,
-): number {
+): Option<number> {
   const OFFSET_START = 3;
 
   tokens.push(
@@ -408,13 +520,22 @@ function parseOuterDocComment(
   for (let i = start; i < source.length; ) {
     while (i < source.length) {
       const maybeWhitespace = isWhitespace(source, i);
-      if (!isOk(maybeWhitespace) || !maybeWhitespace.value) {
+      if (isErr(maybeWhitespace)) {
+        diagnostics.push(maybeWhitespace.error);
+        break;
+      }
+      if (!maybeWhitespace.value) {
         break;
       }
       i += 1;
     }
 
-    if (!isOuterDocComment(source, i)) {
+    const maybeIsOuter = isOuterDocComment(source, i);
+    if (isErr(maybeIsOuter)) {
+      diagnostics.push(maybeIsOuter.error);
+      break;
+    }
+    if (!maybeIsOuter.value) {
       break;
     }
 
@@ -454,7 +575,7 @@ function parseOuterDocComment(
       span: { start: end, end },
     },
   );
-  return end;
+  return some(end);
 }
 
 /**
@@ -463,21 +584,47 @@ function parseOuterDocComment(
  * @param source The source to scan.
  * @param index The index to start scanning at.
  *
- * @returns `true` if the source starts with an inner doc comment.
+ * @returns `Ok(true)` if the source starts with an inner doc comment (`//!`).
+ * @returns `Ok(false)` if the source does not.
+ * @returns `Err(Diagnostic)` if the source is out of bounds.
  */
-function isInnerDocComment(source: string, index: number): boolean {
-  return (
-    source[index] === "/" &&
-    source[index + 1] === "/" &&
-    source[index + 2] === "!"
+function isInnerDocComment(
+  source: string,
+  index: number,
+): Result<boolean, Diagnostic> {
+  const ch = source.at(index);
+  if (ch === undefined) {
+    return err({
+      severity: "error",
+      message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+      span: none(),
+    });
+  }
+  return ok(
+    ch === "/" && source.at(index + 1) === "/" && source.at(index + 2) === "!",
   );
 }
 
-function parseInnerDocComment(
+/**
+ * Parse an inner doc comment starting at `start` in `source`, appending it to `tokens`.
+ *
+ * Doc comments are lowered into a synthetic `#![doc("...")]` token sequence so
+ * the parser assembles them into ordinary inner `doc` attributes (`//!` is sugar for
+ * `#![doc = "..."]`); see `parseAttribute` in the parser.
+ *
+ * @param tokens The token list to append to.
+ * @param diagnostics The diagnostic list to append to.
+ * @param source The source to scan.
+ * @param start The index to start scanning at.
+ *
+ * @returns `Some(index)` with the index of the first character after the comment.
+ */
+function tokenizeInnerDocComment(
   tokens: Token[],
+  diagnostics: Diagnostic[],
   source: string,
   start: number,
-): number {
+): Option<number> {
   const OFFSET_START = 3;
 
   tokens.push(
@@ -509,13 +656,22 @@ function parseInnerDocComment(
   for (let i = start; i < source.length; ) {
     while (i < source.length) {
       const maybeWhitespace = isWhitespace(source, i);
-      if (!isOk(maybeWhitespace) || !maybeWhitespace.value) {
+      if (isErr(maybeWhitespace)) {
+        diagnostics.push(maybeWhitespace.error);
+        break;
+      }
+      if (!maybeWhitespace.value) {
         break;
       }
       i += 1;
     }
 
-    if (!isInnerDocComment(source, i)) {
+    const maybeIsInner = isInnerDocComment(source, i);
+    if (isErr(maybeIsInner)) {
+      diagnostics.push(maybeIsInner.error);
+      break;
+    }
+    if (!maybeIsInner.value) {
       break;
     }
 
@@ -556,7 +712,7 @@ function parseInnerDocComment(
       span: { start: end, end },
     },
   );
-  return end;
+  return some(end);
 }
 
 /**
@@ -572,7 +728,7 @@ function normalizeComment(text: string): string[] {
   for (const line of lines) {
     for (let i = 0; i < line.length; i++) {
       const maybeWhitespace = isWhitespace(line, i);
-      if (!isOk(maybeWhitespace) || !maybeWhitespace.value) {
+      if (isErr(maybeWhitespace) || !maybeWhitespace.value) {
         minIndent = Math.min(minIndent ?? i, i);
         break;
       }

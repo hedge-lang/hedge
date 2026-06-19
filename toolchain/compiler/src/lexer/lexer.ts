@@ -1,5 +1,4 @@
-import { isErr } from "../result.js";
-import { isComment, parseComment } from "./comments.js";
+import { tokenizeComment } from "./comments.js";
 import {
   isIdentContinue,
   isIdentStart,
@@ -10,9 +9,9 @@ import {
 import { isKeyword, parseKeyword } from "./keywords.js";
 import { scanWhile } from "./scan-while.js";
 import type { Diagnostic } from "../diagnostics.js";
-import {isSome, some} from "../option.js";
+import { isSome, some } from "../option.js";
 import type { Token } from "./token.js";
-import {isWhitespace, tokenizeWhitespace} from "./whitespace.js";
+import { tokenizeWhitespace } from "./whitespace.js";
 
 /** The result of tokenizing a source string: tokens plus any lex-time diagnostics. */
 export interface TokenizeResult {
@@ -372,16 +371,15 @@ export function tokenize(source: string): TokenizeResult {
       i = whitespaceOption.value;
       continue;
     }
+
+    const commentOption = tokenizeComment(tokens, diagnostics, source, i);
+    if (isSome(commentOption)) {
+      i = commentOption.value;
+      continue;
+    }
+
     const start = i;
-    if (isComment(source, i)) {
-      const maybeParseComment = parseComment(tokens, source, i);
-      if (isErr(maybeParseComment)) {
-        diagnostics.push(maybeParseComment.error);
-        i = source.length;
-      } else {
-        i = maybeParseComment.value;
-      }
-    } else if (isKeyword(source, i)) {
+    if (isKeyword(source, i)) {
       i = parseKeyword(tokens, diagnostics, source, i);
     } else if (ch === "'") {
       // Lifetime: 'ident (not immediately followed by another ' after one char)
