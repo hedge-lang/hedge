@@ -1072,7 +1072,7 @@ describe("keyword edge cases", (): void => {
     "contextual keyword %s is a valid identifier in expression position",
     (kw) => {
       const result = parse(tokenize(`let x = ${kw};`).tokens);
-      expect(result.program).toBeDefined();
+      expect(result.program).toEqual(some(parseProgram(`let x = ${kw};`)));
     },
   );
 
