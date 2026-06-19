@@ -503,6 +503,8 @@ function tokenizeOuterDocComment(
       i += 1;
     }
 
+    if (i >= source.length) break;
+
     const maybeIsOuter = isOuterDocComment(source, i);
     if (isErr(maybeIsOuter)) {
       diagnostics.push(maybeIsOuter.error);
@@ -638,6 +640,8 @@ function tokenizeInnerDocComment(
       }
       i += 1;
     }
+
+    if (i >= source.length) break;
 
     const maybeIsInner = isInnerDocComment(source, i);
     if (isErr(maybeIsInner)) {
