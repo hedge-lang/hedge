@@ -4,6 +4,7 @@ import { compile } from "../driver.js";
 import { parse } from "./parser.js";
 import { isErr } from "../result.js";
 import { tokenize } from "../lexer/lexer.js";
+import { HARD_KEYWORDS } from "../lexer/keywords.js";
 import type { Program } from "./ast.js";
 
 function parseProgram(source: string): Program {
@@ -642,6 +643,28 @@ describe("identifiers", (): void => {
         expect(result.error.message).toContain("identifier");
       }
     });
+
+    const ALL_HARD_KEYWORDS = Array.from(HARD_KEYWORDS);
+
+    it.each(ALL_HARD_KEYWORDS)(
+      "rejects hard keyword %s as a function name with a diagnostic naming the keyword",
+      (kw) => {
+        const result = parse(tokenize(`fn ${kw}() {}`).tokens);
+        if (!isErr(result))
+          throw new Error(`expected parse("fn ${kw}() {}") to fail`);
+        expect(result.error.message).toContain(kw);
+      },
+    );
+
+    it.each(ALL_HARD_KEYWORDS)(
+      "rejects hard keyword %s as a let binding name with a diagnostic naming the keyword",
+      (kw) => {
+        const result = parse(tokenize(`let ${kw} = 1;`).tokens);
+        if (!isErr(result))
+          throw new Error(`expected parse("let ${kw} = 1;") to fail`);
+        expect(result.error.message).toContain(kw);
+      },
+    );
   });
 
   describe("reserved keyword diagnostics", (): void => {
@@ -1007,11 +1030,11 @@ describe("parse errors — missing tokens", (): void => {
     expect(isErr(result)).toBe(true);
   });
 
-  it("foo::mut gives an 'expected identifier, found keyword' error", (): void => {
+  it("foo::mut gives the mut hint about write/bind, not a generic keyword error", (): void => {
     const result = parse(tokenize("foo::mut;").tokens);
     expect(isErr(result)).toBe(true);
     if (isErr(result)) {
-      expect(result.error.message).toContain("identifier");
+      expect(result.error.message).toContain("write");
       expect(result.error.message).toContain("mut");
     }
   });
@@ -1066,6 +1089,41 @@ describe("unsupported type syntax in additional positions", (): void => {
     expect(isErr(result)).toBe(true);
     if (isErr(result)) {
       expect(result.error.message).toContain("reference");
+    }
+  });
+});
+
+describe("keyword edge cases", (): void => {
+  it.each(["write", "bind", "package", "unchecked"])(
+    "contextual keyword %s is valid as a function name",
+    (kw) => {
+      const ast = parseProgram(`fn ${kw}() {}`);
+      expect(ast).toMatchObject({
+        items: [{ kind: "Function", name: { kind: "Identifier", text: kw } }],
+      });
+    },
+  );
+
+  it.each(["write", "bind", "package", "unchecked"])(
+    "contextual keyword %s is a valid identifier in expression position",
+    (kw) => {
+      const result = parse(tokenize(`let x = ${kw};`).tokens);
+      expect(isErr(result)).toBe(false);
+    },
+  );
+
+  it("accepts r#mut as a function name", (): void => {
+    const ast = parseProgram("fn r#mut() {}");
+    expect(ast).toMatchObject({
+      items: [{ kind: "Function", name: { kind: "Identifier", text: "mut" } }],
+    });
+  });
+
+  it("foo::fn gives a diagnostic naming fn", (): void => {
+    const result = parse(tokenize("foo::fn;").tokens);
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.error.message).toContain("fn");
     }
   });
 });

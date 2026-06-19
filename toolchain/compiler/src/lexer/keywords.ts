@@ -8,7 +8,7 @@ import { type Token } from "./token.js";
  * The hard keywords (grammar appendix). Contextual keywords (`write`, `bind`,
  * `package`, `unchecked`) are lexed as identifiers and classified later.
  */
-const HARD_KEYWORDS: ReadonlySet<string> = new Set([
+export const HARD_KEYWORDS: ReadonlySet<string> = new Set([
   "as",
   "async",
   "await",

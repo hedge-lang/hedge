@@ -135,9 +135,11 @@ function parseIdentifier(
   }
 
   if (token.kind !== "ident") {
+    const found =
+      token.kind === "keyword" ? `keyword "${token.text}"` : `"${token.kind}"`;
     return err({
       severity: "error",
-      message: `Expected an identifier, found "${token.kind}" at offset ${token.span.start}`,
+      message: `Expected an identifier, found ${found} at offset ${token.span.start}`,
       span: some(token.span),
     });
   }
@@ -191,6 +193,13 @@ function parsePathSegments(
     cursor += 1; // skip `::`
     const nextToken = tokens[cursor];
     if (nextToken === undefined || nextToken.kind !== "ident") {
+      if (nextToken?.kind === "keyword" && nextToken.text === "mut") {
+        return err({
+          severity: "error",
+          message: MUT_MESSAGE,
+          span: some(nextToken.span),
+        });
+      }
       const foundDesc =
         nextToken === undefined
           ? "eof"
