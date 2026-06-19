@@ -650,10 +650,8 @@ describe("identifiers", (): void => {
       "rejects hard keyword %s as a function name with a diagnostic naming the keyword",
       (kw) => {
         const result = parse(tokenize(`fn ${kw}() {}`).tokens);
-        expect(isErr(result)).toBe(true);
-        if (isErr(result)) {
-          expect(result.error.message).toContain(kw);
-        }
+        if (!isErr(result)) throw new Error(`expected parse("fn ${kw}() {}") to fail`);
+        expect(result.error.message).toContain(kw);
       },
     );
 
@@ -661,10 +659,8 @@ describe("identifiers", (): void => {
       "rejects hard keyword %s as a let binding name with a diagnostic naming the keyword",
       (kw) => {
         const result = parse(tokenize(`let ${kw} = 1;`).tokens);
-        expect(isErr(result)).toBe(true);
-        if (isErr(result)) {
-          expect(result.error.message).toContain(kw);
-        }
+        if (!isErr(result)) throw new Error(`expected parse("let ${kw} = 1;") to fail`);
+        expect(result.error.message).toContain(kw);
       },
     );
   });
