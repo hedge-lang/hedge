@@ -30,7 +30,7 @@ export function isWhitespace(
 }
 
 /**
- * Tokenize whitespace starting at `start` in `source`, appending it to `tokens`.
+ * Consumes whitespace starting at `start` in `source` (whitespace is skipped; no tokens are emitted).
  *
  * @param tokens The token list to append to.
  * @param diagnostics The diagnostic list to append to.
