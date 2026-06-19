@@ -1072,11 +1072,11 @@ describe("parse errors — missing tokens", (): void => {
     expect(isErr(result)).toBe(true);
   });
 
-  it("foo::mut gives an 'expected identifier, found keyword' error", (): void => {
+  it("foo::mut gives the mut hint about write/bind, not a generic keyword error", (): void => {
     const result = parse(tokenize("foo::mut;").tokens);
     expect(isErr(result)).toBe(true);
     if (isErr(result)) {
-      expect(result.error.message).toContain("identifier");
+      expect(result.error.message).toContain("write");
       expect(result.error.message).toContain("mut");
     }
   });
