@@ -1,6 +1,6 @@
 import { type Diagnostic } from "../diagnostics.js";
 import { some } from "../option.js";
-import { err, ok, type Result } from "../result.js";
+import {err, isOk, ok, type Result} from "../result.js";
 import type { Token } from "./token.js";
 import { isWhitespace } from "./whitespace.js";
 
@@ -406,7 +406,11 @@ function parseOuterDocComment(
   const lines: string[] = [];
   let end = source.length;
   for (let i = start; i < source.length; ) {
-    while (i < source.length && isWhitespace(source, i)) {
+    while (i < source.length) {
+      const maybeWhitespace = isWhitespace(source, i);
+      if (!isOk(maybeWhitespace) || !maybeWhitespace.value) {
+        break;
+      }
       i += 1;
     }
 
@@ -503,7 +507,11 @@ function parseInnerDocComment(
   const lines: string[] = [];
   let end = source.length;
   for (let i = start; i < source.length; ) {
-    while (i < source.length && isWhitespace(source, i)) {
+    while (i < source.length) {
+      const maybeWhitespace = isWhitespace(source, i);
+      if (!isOk(maybeWhitespace) || !maybeWhitespace.value) {
+        break;
+      }
       i += 1;
     }
 
@@ -563,7 +571,8 @@ function normalizeComment(text: string): string[] {
   let minIndent: number | null = null;
   for (const line of lines) {
     for (let i = 0; i < line.length; i++) {
-      if (!isWhitespace(line, i)) {
+      const maybeWhitespace = isWhitespace(line, i);
+      if (!isOk(maybeWhitespace) || !maybeWhitespace.value) {
         minIndent = Math.min(minIndent ?? i, i);
         break;
       }

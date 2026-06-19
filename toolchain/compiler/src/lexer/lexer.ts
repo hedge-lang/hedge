@@ -10,9 +10,9 @@ import {
 import { isKeyword, parseKeyword } from "./keywords.js";
 import { scanWhile } from "./scan-while.js";
 import type { Diagnostic } from "../diagnostics.js";
-import { some } from "../option.js";
+import {isSome, some} from "../option.js";
 import type { Token } from "./token.js";
-import { isWhitespace } from "./whitespace.js";
+import {isWhitespace, tokenizeWhitespace} from "./whitespace.js";
 
 /** The result of tokenizing a source string: tokens plus any lex-time diagnostics. */
 export interface TokenizeResult {
@@ -366,8 +366,10 @@ export function tokenize(source: string): TokenizeResult {
     if (ch === undefined) {
       break;
     }
-    if (isWhitespace(source, i)) {
-      i += 1;
+
+    const whitespaceOption = tokenizeWhitespace(tokens, diagnostics, source, i);
+    if (isSome(whitespaceOption)) {
+      i = whitespaceOption.value;
       continue;
     }
     const start = i;
