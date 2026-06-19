@@ -1004,22 +1004,32 @@ describe("keyword completeness", () => {
     "continue",
     "dyn",
     "else",
+    "enum",
     "export",
     "extern",
+    "false",
+    "fn",
+    "for",
+    "if",
     "impl",
     "in",
+    "let",
     "loop",
     "match",
     "move",
+    "pub",
     "return",
     "self",
     "static",
+    "struct",
     "super",
     "trait",
+    "true",
     "type",
     "unsafe",
     "use",
     "where",
+    "while",
   ])("%s lexes as a keyword", (kw) => {
     expect(tokenize(kw).tokens[0]).toMatchObject({ kind: "keyword", text: kw });
   });
@@ -1099,4 +1109,40 @@ describe("raw identifier additional cases", () => {
       { kind: "eof" },
     ]);
   });
+});
+
+describe("keyword adversarial", () => {
+  it.each(["fn_write", "let_bind", "loop_package"])(
+    "%s is a single ident token — keyword prefix must not split",
+    (src) => {
+      const { tokens } = tokenize(src);
+      expect(tokens[0]).toMatchObject({ kind: "ident", text: src });
+      expect(tokens).toHaveLength(2);
+    },
+  );
+
+  it("fn immediately followed by ( produces keyword then lparen", () => {
+    expect(tokenize("fn(").tokens).toMatchObject([
+      { kind: "keyword", text: "fn" },
+      { kind: "lparen" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it.each(["write", "bind", "package", "unchecked"])(
+    "contextual keyword %s lexes as an ident token",
+    (src) => {
+      expect(tokenize(src).tokens[0]).toMatchObject({
+        kind: "ident",
+        text: src,
+      });
+    },
+  );
+
+  it.each(["r#fn", "r#let", "r#Self", "r#true", "r#mut"])(
+    "%s raw-escape produces an ident token",
+    (src) => {
+      expect(tokenize(src).tokens[0]).toMatchObject({ kind: "ident" });
+    },
+  );
 });
