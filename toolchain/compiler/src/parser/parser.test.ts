@@ -1093,6 +1093,154 @@ describe("unsupported type syntax in additional positions", (): void => {
   });
 });
 
+describe("literal expressions", (): void => {
+  describe("float literals", (): void => {
+    it("parses 1.0 as FloatLiteral with f64 default suffix", (): void => {
+      const ast = parseProgram("1.0");
+      expect(ast).toMatchObject({
+        items: [{ kind: "FloatLiteral", value: "1.0", suffix: "f64" }],
+      });
+    });
+
+    it("parses 1.5f32 as FloatLiteral with f32 suffix", (): void => {
+      const ast = parseProgram("1.5f32");
+      expect(ast).toMatchObject({
+        items: [{ kind: "FloatLiteral", value: "1.5", suffix: "f32" }],
+      });
+    });
+
+    it("parses 1e10 as FloatLiteral with f64 default suffix", (): void => {
+      const ast = parseProgram("1e10");
+      expect(ast).toMatchObject({
+        items: [{ kind: "FloatLiteral", value: "1e10", suffix: "f64" }],
+      });
+    });
+
+    it("parses 42f64 (bare integer with float suffix) as FloatLiteral", (): void => {
+      const ast = parseProgram("42f64");
+      expect(ast).toMatchObject({
+        items: [{ kind: "FloatLiteral", value: "42", suffix: "f64" }],
+      });
+    });
+  });
+
+  describe("bool literals", (): void => {
+    it("parses true as BoolLiteral with value true", (): void => {
+      const ast = parseProgram("true");
+      expect(ast).toMatchObject({
+        items: [{ kind: "BoolLiteral", value: true }],
+      });
+    });
+
+    it("parses false as BoolLiteral with value false", (): void => {
+      const ast = parseProgram("false");
+      expect(ast).toMatchObject({
+        items: [{ kind: "BoolLiteral", value: false }],
+      });
+    });
+
+    it("bool literal in let binding initializer", (): void => {
+      const ast = parseProgram("let flag = true;");
+      expect(ast).toMatchObject({
+        items: [
+          {
+            kind: "LetStatement",
+            initializer: some({ kind: "BoolLiteral", value: true }),
+          },
+        ],
+      });
+    });
+  });
+
+  describe("char literals", (): void => {
+    it("parses 'a' as CharLiteral with value a", (): void => {
+      const ast = parseProgram("'a'");
+      expect(ast).toMatchObject({
+        items: [{ kind: "CharLiteral", value: "a" }],
+      });
+    });
+
+    it("resolves \\n escape to newline character", (): void => {
+      const ast = parseProgram("'\\n'");
+      expect(ast).toMatchObject({
+        items: [{ kind: "CharLiteral", value: "\n" }],
+      });
+    });
+
+    it("resolves \\t escape to tab character", (): void => {
+      const ast = parseProgram("'\\t'");
+      expect(ast).toMatchObject({
+        items: [{ kind: "CharLiteral", value: "\t" }],
+      });
+    });
+
+    it("resolves \\\\ escape to single backslash", (): void => {
+      const ast = parseProgram("'\\\\'");
+      expect(ast).toMatchObject({
+        items: [{ kind: "CharLiteral", value: "\\" }],
+      });
+    });
+
+    it("resolves \\x41 hex escape to 'A'", (): void => {
+      const ast = parseProgram("'\\x41'");
+      expect(ast).toMatchObject({
+        items: [{ kind: "CharLiteral", value: "A" }],
+      });
+    });
+
+    it("resolves \\u{41} unicode escape to 'A'", (): void => {
+      const ast = parseProgram("'\\u{41}'");
+      expect(ast).toMatchObject({
+        items: [{ kind: "CharLiteral", value: "A" }],
+      });
+    });
+  });
+
+  describe("int literals with base and suffix", (): void => {
+    it("decimal with u8 suffix", (): void => {
+      const ast = parseProgram("42u8");
+      expect(ast).toMatchObject({
+        items: [{ kind: "IntLiteral", value: "42", base: 10, suffix: "u8" }],
+      });
+    });
+
+    it("decimal with no suffix defaults to i32", (): void => {
+      const ast = parseProgram("42");
+      expect(ast).toMatchObject({
+        items: [{ kind: "IntLiteral", value: "42", base: 10, suffix: "i32" }],
+      });
+    });
+
+    it("hex literal stores digits without prefix", (): void => {
+      const ast = parseProgram("0xFF");
+      expect(ast).toMatchObject({
+        items: [{ kind: "IntLiteral", value: "FF", base: 16, suffix: "i32" }],
+      });
+    });
+
+    it("octal literal stores digits without prefix", (): void => {
+      const ast = parseProgram("0o77");
+      expect(ast).toMatchObject({
+        items: [{ kind: "IntLiteral", value: "77", base: 8, suffix: "i32" }],
+      });
+    });
+
+    it("binary literal stores digits without prefix", (): void => {
+      const ast = parseProgram("0b1010");
+      expect(ast).toMatchObject({
+        items: [{ kind: "IntLiteral", value: "1010", base: 2, suffix: "i32" }],
+      });
+    });
+
+    it("hex with suffix", (): void => {
+      const ast = parseProgram("0xFFu8");
+      expect(ast).toMatchObject({
+        items: [{ kind: "IntLiteral", value: "FF", base: 16, suffix: "u8" }],
+      });
+    });
+  });
+});
+
 describe("keyword edge cases", (): void => {
   it.each(["write", "bind", "package", "unchecked"])(
     "contextual keyword %s is valid as a function name",
