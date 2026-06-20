@@ -1,6 +1,7 @@
 import type { Diagnostic } from "../diagnostics.js";
+import { resolveEscape } from "../lexer/escape.js";
 import type { Span, Token } from "../lexer/token.js";
-import { none, some, type Option } from "../option.js";
+import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok, type Result } from "../result.js";
 import type {
   Attribute,
@@ -9,6 +10,7 @@ import type {
   CallExpression,
   Expression,
   ExpressionStatement,
+  FloatLiteral,
   FunctionDecl,
   Identifier,
   IntLiteral,
@@ -103,6 +105,15 @@ function expectKeyword(
     });
   }
   return ok(pos + 1);
+}
+
+function stripPrefix(text: string, radix: 2 | 8 | 10 | 16): string {
+  if (radix !== 10) return text.slice(2); // strip 0x / 0o / 0b
+  return text;
+}
+
+function stripUnderscores(text: string): string {
+  return text.replaceAll("_", "");
 }
 
 const MUT_MESSAGE: string =
@@ -308,8 +319,7 @@ function parseReference(
  *
  * Supported slice-1 forms:
  *
- * - String literals
- * - Integer literals
+ * - String / integer / float / bool / char literals
  * - Path expressions
  * - Reference expressions
  *
@@ -319,42 +329,82 @@ function parseReference(
  * PrimaryExpression ::=
  *     StringLiteral
  *   | IntLiteral
+ *   | FloatLiteral
+ *   | BoolLiteral
+ *   | CharLiteral
  *   | PathExpression
  *   | ReferenceExpression
  * ```
  */
+function parseIntLiteral(
+  pos: number,
+  token: Extract<Token, { kind: "int" }>,
+): Parsed<IntLiteral> {
+  const rawDigits = stripPrefix(token.text, token.radix);
+  const digits = isSome(token.suffix)
+    ? rawDigits.slice(0, -token.suffix.value.length)
+    : rawDigits;
+  const value = stripUnderscores(digits);
+  return {
+    node: {
+      kind: "IntLiteral",
+      tokenId: pos,
+      value,
+      base: token.radix,
+      suffix: token.suffix,
+    },
+    next: pos + 1,
+  };
+}
+
+function parseFloatLiteral(
+  pos: number,
+  token: Extract<Token, { kind: "float" }>,
+): Parsed<FloatLiteral> {
+  const floatText = isSome(token.suffix)
+    ? token.text.slice(0, -token.suffix.value.length)
+    : token.text;
+  const value = stripUnderscores(floatText);
+  return {
+    node: { kind: "FloatLiteral", tokenId: pos, value, suffix: token.suffix },
+    next: pos + 1,
+  };
+}
+
 function parsePrimary(
   tokens: readonly Token[],
   pos: number,
 ): ParseResult<Parsed<Expression>> {
   const tokenResult = tokenAt(tokens, pos);
-  if (isErr(tokenResult)) {
-    return tokenResult;
-  }
+  if (isErr(tokenResult)) return tokenResult;
   const token = tokenResult.value;
-  if (token.kind === "string") {
+  if (token.kind === "string")
     return ok({
       node: { kind: "StringLiteral", tokenId: pos, value: token.text },
       next: pos + 1,
     });
-  }
-  if (token.kind === "int") {
+  if (token.kind === "int") return ok(parseIntLiteral(pos, token));
+  if (token.kind === "float") return ok(parseFloatLiteral(pos, token));
+  if (token.kind === "char")
     return ok({
       node: {
-        kind: "IntLiteral",
+        kind: "CharLiteral",
         tokenId: pos,
-        value: token.text.replaceAll("_", ""),
+        value: resolveEscape(token.text),
       },
       next: pos + 1,
     });
-  }
-  if (token.kind === "ident" || token.kind === "path_sep") {
+  if (
+    token.kind === "keyword" &&
+    (token.text === "true" || token.text === "false")
+  )
+    return ok({
+      node: { kind: "BoolLiteral", tokenId: pos, value: token.text === "true" },
+      next: pos + 1,
+    });
+  if (token.kind === "ident" || token.kind === "path_sep")
     return parsePath(tokens, pos);
-  }
-  if (token.kind === "amp") {
-    return parseReference(tokens, pos);
-  }
-
+  if (token.kind === "amp") return parseReference(tokens, pos);
   return err({
     severity: "error",
     message: `Expected an expression, found "${token.kind}" at offset ${token.span.start}`,
@@ -834,6 +884,12 @@ function parseAttributeArg(
       value: token.text,
     };
     return ok({ node: { path: none(), literal: some(lit) }, next: pos + 1 });
+  }
+  if (token.kind === "int") {
+    return ok({
+      node: { path: none(), literal: some(parseIntLiteral(pos, token).node) },
+      next: pos + 1,
+    });
   }
   if (token.kind === "ident" || token.kind === "path_sep") {
     const pathResult = parsePathSegments(tokens, pos);
