@@ -559,7 +559,9 @@ describe("attribute parsing guardrails", (): void => {
   it("returns an error for an attribute arg that is neither string, int, nor path", (): void => {
     const result = parse(tokenize("#[attr(1.5)] fn f() {}").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("Expected attribute argument");
+    expect(result.diagnostics[0]?.message).toContain(
+      "Expected attribute argument",
+    );
   });
 
   it("returns an error when an attribute argument list is not closed", (): void => {

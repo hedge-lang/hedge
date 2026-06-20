@@ -104,8 +104,7 @@ function parsePrimary(
     });
   }
   if (token.kind === "int") {
-    const rawDigits =
-      token.radix !== 10 ? token.text.slice(2) : token.text;
+    const rawDigits = token.radix !== 10 ? token.text.slice(2) : token.text;
     const digits = isSome(token.suffix)
       ? rawDigits.slice(0, -token.suffix.value.length)
       : rawDigits;

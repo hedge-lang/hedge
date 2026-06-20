@@ -519,10 +519,7 @@ function parseExpression(
  * `(Type)` (tuple syntax) is recognized and produces a guardrail diagnostic;
  * tuple types are not supported in Slice 1.
  */
-function parseType(
-  tokens: readonly Token[],
-  pos: number,
-): PR<Parsed<Type>> {
+function parseType(tokens: readonly Token[], pos: number): PR<Parsed<Type>> {
   const tokenResult = tokenAt(tokens, pos);
   if (isErr(tokenResult)) {
     return tokenResult;
@@ -760,10 +757,7 @@ function expressionStatement(expression: Expression): ExpressionStatement {
  * ```
  */
 // eslint-disable-next-line complexity -- Statement-dispatch loop with attribute collection and trailing-expression detection; splitting would obscure the grammar rule.
-function parseBlock(
-  tokens: readonly Token[],
-  pos: number,
-): PR<Parsed<Block>> {
+function parseBlock(tokens: readonly Token[], pos: number): PR<Parsed<Block>> {
   const start = pos;
   const afterLbrace = expect(tokens, pos, "lbrace");
   if (isErr(afterLbrace)) {
@@ -1128,10 +1122,7 @@ function parseVisibility(
  * - Bare expressions
  */
 // eslint-disable-next-line complexity -- Top-level item dispatch with visibility/attribute prefix; each item kind is a necessary branch.
-function parseItem(
-  tokens: readonly Token[],
-  pos: number,
-): PR<Parsed<Item>> {
+function parseItem(tokens: readonly Token[], pos: number): PR<Parsed<Item>> {
   // Collect outer attributes (#[...]) before the item and attach them to the
   // named declaration that follows (a function or a `let`).
   const outerResult = collectOuterAttributes(tokens, pos);
