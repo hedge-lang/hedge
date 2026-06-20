@@ -1,21 +1,43 @@
-import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
-import { isSome, none, some, type Option } from "../option.js";
+import { none, some, type Option } from "../option.js";
+import { isErr, ok } from "../result.js";
 import type {
   Attribute,
   BindingPattern,
   Block,
   Expression,
+  ExpressionStatement,
   LetStatement,
   Statement,
   Type,
 } from "./ast.js";
 import type { Parsed } from "./parse.js";
-import { expect, expectKeyword, isContextual } from "./parse-utils.js";
+import {
+  expect,
+  expectKeyword,
+  isContextual,
+  parseIdentifier,
+  type PR,
+} from "./parse-utils.js";
 import { collectInnerAttributes, collectOuterAttributes } from "./attribute.js";
-import { expressionStatement, parseExpression } from "./expression.js";
-import { parseIdentifier } from "./path.js";
+import { parseExpression } from "./expression.js";
 import { parseType } from "./type.js";
+
+/**
+ * Wraps an expression as an expression statement.
+ *
+ * Expression statements are represented explicitly in the AST rather than
+ * reusing expression nodes directly.
+ */
+export function expressionStatement(
+  expression: Expression,
+): ExpressionStatement {
+  return {
+    kind: "ExpressionStatement",
+    tokenId: expression.tokenId,
+    expression,
+  };
+}
 
 /**
  * Parses a binding pattern.
@@ -30,15 +52,14 @@ import { parseType } from "./type.js";
  */
 function parseBindingPattern(
   tokens: readonly Token[],
-  diagnostics: Diagnostic[],
   pos: number,
-): Option<Parsed<BindingPattern>> {
-  const identResult = parseIdentifier(tokens, diagnostics, pos);
-  if (!isSome(identResult)) {
-    return none();
+): PR<Parsed<BindingPattern>> {
+  const identResult = parseIdentifier(tokens, pos);
+  if (isErr(identResult)) {
+    return identResult;
   }
   const ident = identResult.value;
-  return some({
+  return ok({
     node: { kind: "BindingPattern", name: ident.node },
     next: ident.next,
   });
@@ -71,14 +92,13 @@ function parseBindingPattern(
 // eslint-disable-next-line complexity -- Multiple optional clauses (bind, write, type, initializer) each contribute a branch; the grammar drives the complexity, not poor structure.
 export function parseLetStatement(
   tokens: readonly Token[],
-  diagnostics: Diagnostic[],
   pos: number,
   attributes: readonly Attribute[] = [],
-): Option<Parsed<LetStatement>> {
+): PR<Parsed<LetStatement>> {
   const start = pos;
-  const afterLet = expectKeyword(tokens, diagnostics, pos, "let");
-  if (!isSome(afterLet)) {
-    return none();
+  const afterLet = expectKeyword(tokens, pos, "let");
+  if (isErr(afterLet)) {
+    return afterLet;
   }
   let cursor = afterLet.value;
 
@@ -95,9 +115,9 @@ export function parseLetStatement(
     cursor += 1;
   }
 
-  const patternResult = parseBindingPattern(tokens, diagnostics, cursor);
-  if (!isSome(patternResult)) {
-    return none();
+  const patternResult = parseBindingPattern(tokens, cursor);
+  if (isErr(patternResult)) {
+    return patternResult;
   }
   const pattern = patternResult.value;
   cursor = pattern.next;
@@ -105,9 +125,9 @@ export function parseLetStatement(
   let typeAnnotation: Option<Type> = none();
   if (tokens[cursor]?.kind === "colon") {
     cursor += 1;
-    const typeResult = parseType(tokens, diagnostics, cursor);
-    if (!isSome(typeResult)) {
-      return none();
+    const typeResult = parseType(tokens, cursor);
+    if (isErr(typeResult)) {
+      return typeResult;
     }
     typeAnnotation = some(typeResult.value.node);
     cursor = typeResult.value.next;
@@ -115,17 +135,17 @@ export function parseLetStatement(
 
   let initializer: Option<Expression> = none();
   if (tokens[cursor]?.kind === "eq") {
-    const initResult = parseExpression(tokens, diagnostics, cursor + 1);
-    if (!isSome(initResult)) {
-      return none();
+    const initResult = parseExpression(tokens, cursor + 1);
+    if (isErr(initResult)) {
+      return initResult;
     }
     initializer = some(initResult.value.node);
     cursor = initResult.value.next;
   }
 
-  const afterSemi = expect(tokens, diagnostics, cursor, "semi");
-  if (!isSome(afterSemi)) {
-    return none();
+  const afterSemi = expect(tokens, cursor, "semi");
+  if (isErr(afterSemi)) {
+    return afterSemi;
   }
 
   const letStmt: LetStatement = {
@@ -138,7 +158,7 @@ export function parseLetStatement(
     type: typeAnnotation,
     initializer,
   };
-  return some({ node: letStmt, next: afterSemi.value });
+  return ok({ node: letStmt, next: afterSemi.value });
 }
 
 /**
@@ -169,20 +189,19 @@ export function parseLetStatement(
 // eslint-disable-next-line complexity -- Statement-dispatch loop with attribute collection and trailing-expression detection; splitting would obscure the grammar rule.
 export function parseBlock(
   tokens: readonly Token[],
-  diagnostics: Diagnostic[],
   pos: number,
-): Option<Parsed<Block>> {
+): PR<Parsed<Block>> {
   const start = pos;
-  const afterLbrace = expect(tokens, diagnostics, pos, "lbrace");
-  if (!isSome(afterLbrace)) {
-    return none();
+  const afterLbrace = expect(tokens, pos, "lbrace");
+  if (isErr(afterLbrace)) {
+    return afterLbrace;
   }
   let cursor = afterLbrace.value;
 
   // Inner attributes at the start of a block document the enclosing function.
-  const innerResult = collectInnerAttributes(tokens, diagnostics, cursor);
-  if (!isSome(innerResult)) {
-    return none();
+  const innerResult = collectInnerAttributes(tokens, cursor);
+  if (isErr(innerResult)) {
+    return innerResult;
   }
   const innerAttributes = innerResult.value.attributes;
   cursor = innerResult.value.next;
@@ -196,9 +215,9 @@ export function parseBlock(
     // Outer attributes (e.g. `/// doc`) before a statement attach to a following
     // `let` — the only named target inside a block. Before anything else they
     // have nothing to document and are discarded.
-    const outerResult = collectOuterAttributes(tokens, diagnostics, cursor);
-    if (!isSome(outerResult)) {
-      return none();
+    const outerResult = collectOuterAttributes(tokens, cursor);
+    if (isErr(outerResult)) {
+      return outerResult;
     }
     cursor = outerResult.value.next;
     if (tokens[cursor]?.kind === "rbrace") {
@@ -208,20 +227,19 @@ export function parseBlock(
     if (token?.kind === "keyword" && token.text === "let") {
       const letResult = parseLetStatement(
         tokens,
-        diagnostics,
         cursor,
         outerResult.value.attributes,
       );
-      if (!isSome(letResult)) {
-        return none();
+      if (isErr(letResult)) {
+        return letResult;
       }
       statements.push(letResult.value.node);
       cursor = letResult.value.next;
       continue;
     }
-    const exprResult = parseExpression(tokens, diagnostics, cursor);
-    if (!isSome(exprResult)) {
-      return none();
+    const exprResult = parseExpression(tokens, cursor);
+    if (isErr(exprResult)) {
+      return exprResult;
     }
     cursor = exprResult.value.next;
     if (tokens[cursor]?.kind === "semi") {
@@ -239,9 +257,9 @@ export function parseBlock(
     trailingExpression: trailing !== null ? some(trailing) : none(),
     innerAttributes,
   };
-  const afterRbrace = expect(tokens, diagnostics, cursor, "rbrace");
-  if (!isSome(afterRbrace)) {
-    return none();
+  const afterRbrace = expect(tokens, cursor, "rbrace");
+  if (isErr(afterRbrace)) {
+    return afterRbrace;
   }
-  return some({ node: block, next: afterRbrace.value });
+  return ok({ node: block, next: afterRbrace.value });
 }

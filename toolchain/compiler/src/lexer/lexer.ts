@@ -7,7 +7,8 @@ import { tokenizeKeyword } from "./keywords.js";
 import { tokenizeSymbol } from "./symbol.js";
 import { tokenizeWhitespace } from "./whitespace.js";
 import { scanCharOrLifetime } from "./char.js";
-import { isDigit, scanNumberLiteral } from "./number.js";
+import { isDigit } from "./int.js";
+import { scanNumberLiteral } from "./number.js";
 import { scanRawString, scanStringLiteral } from "./string.js";
 
 /** The result of tokenizing a source string: tokens plus any lex-time diagnostics. */

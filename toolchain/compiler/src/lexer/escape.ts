@@ -1,6 +1,6 @@
 import type { Diagnostic } from "../diagnostics.js";
 import { some } from "../option.js";
-import { isHexDigit } from "./number.js";
+import { isHexDigit } from "./int.js";
 import type { Token } from "./token.js";
 
 function escapeError(

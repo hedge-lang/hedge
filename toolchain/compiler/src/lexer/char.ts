@@ -1,8 +1,8 @@
 import type { Diagnostic } from "../diagnostics.js";
 import { some } from "../option.js";
 import { scanEscapeSeq } from "./escape.js";
-import { isIdentContinue, isIdentStart } from "./ident.js";
-import { scanWhile } from "./scan-while.js";
+import { isIdentStart } from "./ident.js";
+import { scanLifetime } from "./lifetime.js";
 import type { Token } from "./token.js";
 
 /**
@@ -119,13 +119,7 @@ export function scanCharOrLifetime(
       return scanCharLiteral(tokens, diagnostics, source, start);
     }
     // Lifetime: 'ident
-    const end = scanWhile(source, start + 2, isIdentContinue);
-    tokens.push({
-      kind: "lifetime",
-      text: source.slice(start + 1, end),
-      span: { start, end },
-    });
-    return end;
+    return scanLifetime(tokens, source, start);
   }
 
   // Unrecognised

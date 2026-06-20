@@ -1,27 +1,27 @@
 import type { Diagnostic } from "../diagnostics.js";
-import { isSome, none, some, type Option } from "../option.js";
 import type { Token } from "../lexer/token.js";
-import { tokenToString } from "../lexer/token.js";
+import { none, some } from "../option.js";
+import { err, isErr, ok, type Result } from "../result.js";
+import type { Identifier } from "./ast.js";
+import type { Parsed } from "./parse.js";
+
+/** Internal shorthand for Result-threaded parser returns. */
+export type PR<T> = Result<T, Diagnostic>;
 
 /**
- * @returns `Some(token)` at {@link pos}, or pushes a {@link Diagnostic} and
- * returns `None` if the parser attempts to read beyond the end of the token stream.
+ * @returns the token at {@link pos}, or else a {@link Diagnostic} if the
+ * parser attempts to read beyond the end of the token stream.
  */
-export function tokenAt(
-  tokens: readonly Token[],
-  diagnostics: Diagnostic[],
-  pos: number,
-): Option<Token> {
+export function tokenAt(tokens: readonly Token[], pos: number): PR<Token> {
   const token = tokens[pos];
   if (token === undefined) {
-    diagnostics.push({
+    return err({
       severity: "error",
       message: `Unexpected end of input at token ${pos}`,
       span: none(),
     });
-    return none();
   }
-  return some(token);
+  return ok(token);
 }
 
 /**
@@ -36,55 +36,105 @@ export function isContextual(token: Token, text: string): boolean {
 /**
  * Consumes a required token of the given kind.
  *
- * @returns `Some(next)` with the index of the next token, or `None` if the
- * token at `pos` is not of the expected kind.
+ * @returns Index of the next token, or `Err` if the token at `pos` is not of the expected kind.
  */
 export function expect(
   tokens: readonly Token[],
-  diagnostics: Diagnostic[],
   pos: number,
   kind: Token["kind"],
-): Option<number> {
-  const tokenAtResult = tokenAt(tokens, diagnostics, pos);
-  if (!isSome(tokenAtResult)) {
-    return none();
+): PR<number> {
+  const tokenAtResult = tokenAt(tokens, pos);
+  if (isErr(tokenAtResult)) {
+    return tokenAtResult;
   }
   const token = tokenAtResult.value;
   if (token.kind !== kind) {
-    diagnostics.push({
+    return err({
       severity: "error",
-      message: `Expected ${kind}, found "${tokenToString(token)}"`,
+      message: `Expected ${kind}, found "${token.kind}" at offset ${token.span.start}`,
       span: some(token.span),
     });
-    return none();
   }
-  return some(pos + 1);
+  return ok(pos + 1);
 }
 
 /**
  * Consumes a required keyword token.
  *
- * @returns `Some(next)` with the index after the keyword, or `None` if the
- * expected keyword is not present.
+ * @returns Index of the next token after the keyword, or `Err` if the expected keyword is not present.
  */
 export function expectKeyword(
   tokens: readonly Token[],
-  diagnostics: Diagnostic[],
   pos: number,
   text: string,
-): Option<number> {
-  const tokenAtResult = tokenAt(tokens, diagnostics, pos);
-  if (!isSome(tokenAtResult)) {
-    return none();
+): PR<number> {
+  const tokenAtResult = tokenAt(tokens, pos);
+  if (isErr(tokenAtResult)) {
+    return tokenAtResult;
   }
   const token = tokenAtResult.value;
   if (token.kind !== "keyword" || token.text !== text) {
-    diagnostics.push({
+    const found = token.kind === "keyword" ? token.text : token.kind;
+    return err({
       severity: "error",
-      message: `Expected keyword "${text}", found "${tokenToString(token)}"`,
+      message: `Expected keyword "${text}", found "${found}" at offset ${token.span.start}`,
       span: some(token.span),
     });
-    return none();
   }
-  return some(pos + 1);
+  return ok(pos + 1);
+}
+
+export function stripPrefix(text: string, radix: 2 | 8 | 10 | 16): string {
+  if (radix !== 10) return text.slice(2); // strip 0x / 0o / 0b
+  return text;
+}
+
+export function stripUnderscores(text: string): string {
+  return text.replaceAll("_", "");
+}
+
+export const MUT_MESSAGE: string =
+  "The keyword `mut` is reserved and cannot be used as an identifier. If you meant mutability, try `bind` for reassignment and/or `write` for mutation.";
+
+/**
+ * Parses an identifier expression.
+ *
+ * Grammar:
+ *
+ * ```text
+ * Identifier ::= IDENT
+ * ```
+ */
+export function parseIdentifier(
+  tokens: readonly Token[],
+  pos: number,
+): PR<Parsed<Identifier>> {
+  const tokenAtResult = tokenAt(tokens, pos);
+  if (isErr(tokenAtResult)) {
+    return tokenAtResult;
+  }
+  const token = tokenAtResult.value;
+  if (token.kind === "keyword" && token.text === "mut") {
+    return err({
+      severity: "error",
+      span: some({ start: token.span.start, end: token.span.end }),
+      message: MUT_MESSAGE,
+    });
+  }
+
+  if (token.kind !== "ident") {
+    const found =
+      token.kind === "keyword" ? `keyword "${token.text}"` : `"${token.kind}"`;
+    return err({
+      severity: "error",
+      message: `Expected an identifier, found ${found} at offset ${token.span.start}`,
+      span: some(token.span),
+    });
+  }
+  const ident: Identifier = {
+    kind: "Identifier",
+    tokenId: pos,
+    text: token.text,
+  };
+  return ok({ node: ident, next: pos + 1 });
 }

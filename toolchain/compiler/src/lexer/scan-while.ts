@@ -1,8 +1,3 @@
-/** Returns the character `offset` positions ahead of `i`, or `""` at end of source. */
-export function peek(source: string, i: number, offset: number = 1): string {
-  return source[i + offset] ?? "";
-}
-
 /**
  * Advance from `start` while `pred` holds, returning the first index at which it
  * does not (or the end of the source).
