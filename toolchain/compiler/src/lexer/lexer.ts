@@ -1,20 +1,14 @@
-import { isErr } from "../result.js";
-import { isComment, parseComment } from "./comments.js";
-import {
-  isIdentStart,
-  isRawIdentStart,
-  parseIdent,
-  parseRawIdent,
-} from "./ident.js";
-import { isKeyword, parseKeyword } from "./keywords.js";
 import type { Diagnostic } from "../diagnostics.js";
-import { some } from "../option.js";
+import { isSome, some } from "../option.js";
 import type { Token } from "./token.js";
-import { isWhitespace } from "./whitespace.js";
+import { tokenizeComment } from "./comments.js";
+import { tokenizeIdent, tokenizeRawIdent } from "./ident.js";
+import { tokenizeKeyword } from "./keywords.js";
+import { tokenizeSymbol } from "./symbol.js";
+import { tokenizeWhitespace } from "./whitespace.js";
 import { scanCharOrLifetime } from "./char.js";
 import { isDigit, scanNumberLiteral } from "./number.js";
 import { scanRawString, scanStringLiteral } from "./string.js";
-import { scanSymbol } from "./symbol.js";
 
 /** The result of tokenizing a source string: tokens plus any lex-time diagnostics. */
 export interface TokenizeResult {
@@ -32,38 +26,67 @@ export interface TokenizeResult {
  *
  * @returns the tokens and any lex-time diagnostics.
  */
-// eslint-disable-next-line complexity -- This is mostly a routing function
 export function tokenize(source: string): TokenizeResult {
   const tokens: Token[] = [];
   const diagnostics: Diagnostic[] = [];
   let i = 0;
   while (i < source.length) {
-    const ch = source[i];
-    if (ch === undefined) break;
-    if (isWhitespace(source, i)) {
-      i += 1;
+    if (source[i] === undefined) break;
+
+    const ws = tokenizeWhitespace(tokens, diagnostics, source, i);
+    if (isSome(ws)) {
+      i = ws.value;
       continue;
     }
-    const start = i;
-    if (isComment(source, i)) {
-      i = lexComment(tokens, diagnostics, source, start);
-    } else if (isKeyword(source, i)) {
-      i = parseKeyword(tokens, diagnostics, source, i);
-    } else if (ch === "'") {
-      i = scanCharOrLifetime(tokens, diagnostics, source, start);
-    } else if (isRawIdentStart(source, i)) {
-      i = parseRawIdent(tokens, source, i);
-    } else if (ch === "r" && (source[i + 1] === '"' || source[i + 1] === "#")) {
-      i = tokenizeRString(tokens, diagnostics, source, start);
-    } else if (isIdentStart(ch)) {
-      i = parseIdent(tokens, source, i);
-    } else if (isDigit(ch)) {
-      i = scanNumberLiteral(tokens, diagnostics, source, start);
-    } else if (ch === '"') {
-      i = scanStringLiteral(tokens, diagnostics, source, start);
-    } else {
-      i = scanSymbol(tokens, diagnostics, source, i);
+
+    const comment = tokenizeComment(tokens, diagnostics, source, i);
+    if (isSome(comment)) {
+      i = comment.value;
+      continue;
     }
+
+    const keyword = tokenizeKeyword(tokens, diagnostics, source, i);
+    if (isSome(keyword)) {
+      i = keyword.value;
+      continue;
+    }
+
+    if (source[i] === "'") {
+      i = scanCharOrLifetime(tokens, diagnostics, source, i);
+      continue;
+    }
+
+    // Raw strings (r"..." or r##"..."##) must be checked before tokenizeRawIdent
+    // because tokenizeRawIdent would consume r# followed by a non-ident-start as an error.
+    if (isRawStringStart(source, i)) {
+      i = tokenizeRString(tokens, diagnostics, source, i);
+      continue;
+    }
+
+    const rawIdent = tokenizeRawIdent(tokens, diagnostics, source, i);
+    if (isSome(rawIdent)) {
+      i = rawIdent.value;
+      continue;
+    }
+
+    const ident = tokenizeIdent(tokens, diagnostics, source, i);
+    if (isSome(ident)) {
+      i = ident.value;
+      continue;
+    }
+
+    const ch = source[i] ?? "";
+    if (isDigit(ch)) {
+      i = scanNumberLiteral(tokens, diagnostics, source, i);
+      continue;
+    }
+
+    if (ch === '"') {
+      i = scanStringLiteral(tokens, diagnostics, source, i);
+      continue;
+    }
+
+    i = tokenizeSymbol(tokens, diagnostics, source, i);
   }
   tokens.push({
     kind: "eof",
@@ -73,36 +96,20 @@ export function tokenize(source: string): TokenizeResult {
 }
 
 /**
- * Lex a comment starting at `start`.
- *
- * @param tokens The token list to append to.
- * @param diagnostics The diagnostic list to append to.
- * @param source The source to scan.
- * @param start The index to start scanning at.
- *
- * @returns The index of the first character after the comment.
+ * Returns true if the source at `i` begins a raw string literal: `r"` or
+ * `r` followed by one or more `#` characters then `"`.
  */
-function lexComment(
-  tokens: Token[],
-  diagnostics: Diagnostic[],
-  source: string,
-  start: number,
-): number {
-  const result = parseComment(tokens, source, start);
-  if (isErr(result)) {
-    diagnostics.push(result.error);
-    return source.length;
-  }
-  return result.value;
+function isRawStringStart(source: string, i: number): boolean {
+  if (source[i] !== "r") return false;
+  if (source[i + 1] === '"') return true;
+  if (source[i + 1] !== "#") return false;
+  let hc = 0;
+  while (source[i + 1 + hc] === "#") hc++;
+  return source[i + 1 + hc] === '"';
 }
 
 /**
  * Tokenize a raw string literal starting at `start`.
- *
- * @param tokens The token list to append to.
- * @param diagnostics The diagnostic list to append to.
- * @param source The source to scan.
- * @param start The index to start scanning at.
  *
  * @returns The index of the first character after the raw string literal.
  */

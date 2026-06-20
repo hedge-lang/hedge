@@ -2,6 +2,7 @@ export { tokenize } from "./lexer/lexer.js";
 export type { Span, Token } from "./lexer/token.js";
 
 export { parse } from "./parser/parser.js";
+export type { ParseResult } from "./parser/parser.js";
 export type * from "./parser/ast.js";
 
 export { analyze } from "./semantics/analyzer.js";

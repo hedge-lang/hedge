@@ -1,16 +1,25 @@
-import type { Diagnostic } from "../diagnostics.js";
+import { type Diagnostic } from "../diagnostics.js";
 import { some } from "../option.js";
-import { peek } from "./scan-while.js";
-import type { Token } from "./token.js";
+import { type Token } from "./token.js";
+
+function peek(source: string, i: number, offset: number = 1): string {
+  return source[i + offset] ?? "";
+}
 
 /**
- * Scans a multi-char or single-char symbol token using a maximal-munch
- * cascade grouped by leading character.
+ * Tokenize the next symbol token using a maximal-munch cascade grouped by
+ * leading character. This is the catch-all tokenizer: it always emits a token
+ * (either a valid symbol or an `error` token for unrecognized characters).
  *
- * @returns the position after the emitted token.
+ * @param tokens The token list to append to.
+ * @param diagnostics The diagnostic list to append to.
+ * @param source The source to scan.
+ * @param start The index to start scanning at.
+ *
+ * @returns The index of the first character after the token.
  */
 // eslint-disable-next-line complexity -- Maximal-munch cascade is more readable as a single function.
-export function scanSymbol(
+export function tokenizeSymbol(
   tokens: Token[],
   diagnostics: Diagnostic[],
   source: string,

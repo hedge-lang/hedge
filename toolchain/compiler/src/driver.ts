@@ -5,7 +5,7 @@ import { toJsim } from "./jsim/jsim.js";
 import { tokenize } from "./lexer/lexer.js";
 import type { Token } from "./lexer/token.js";
 import { optimize } from "./optimization/optimizer.js";
-import { none, some, type Option } from "./option.js";
+import { none, some, type Option, isSome } from "./option.js";
 import { checkBorrows } from "./ownership/borrowck.js";
 import type { Program } from "./parser/ast.js";
 import { parse } from "./parser/parser.js";
@@ -24,11 +24,21 @@ function parseSource(source: string): {
   tokens: readonly Token[];
 } {
   const { tokens, diagnostics: lexDiagnostics } = tokenize(source);
-  const result = parse(tokens);
-  if (isErr(result)) {
-    return { outcome: err(result.error), lexDiagnostics, tokens };
+  const { program, diagnostics: parseDiagnostics } = parse(tokens);
+  if (isSome(program)) {
+    return { outcome: ok(program.value), lexDiagnostics, tokens };
   }
-  return { outcome: ok(result.value), lexDiagnostics, tokens };
+  return {
+    outcome: err(
+      parseDiagnostics[0] ?? {
+        severity: "error",
+        message: "Parse failed",
+        span: none(),
+      },
+    ),
+    lexDiagnostics,
+    tokens,
+  };
 }
 
 function hasError(diagnostics: readonly Diagnostic[]): boolean {

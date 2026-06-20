@@ -29,13 +29,14 @@ import type {
 } from "./ast.js";
 import type { Parsed } from "./parse.js";
 
-type ParseResult<T> = Result<T, Diagnostic>;
+/** Internal shorthand for Result-threaded parser returns. */
+type PR<T> = Result<T, Diagnostic>;
 
 /**
  * @returns the token at {@link pos}, or else a {@link Diagnostic} if the
  * parser attempts to read beyond the end of the token stream.
  */
-function tokenAt(tokens: readonly Token[], pos: number): ParseResult<Token> {
+function tokenAt(tokens: readonly Token[], pos: number): PR<Token> {
   const token = tokens[pos];
   if (token === undefined) {
     return err({
@@ -65,7 +66,7 @@ function expect(
   tokens: readonly Token[],
   pos: number,
   kind: Token["kind"],
-): ParseResult<number> {
+): PR<number> {
   const tokenAtResult = tokenAt(tokens, pos);
   if (isErr(tokenAtResult)) {
     return tokenAtResult;
@@ -90,7 +91,7 @@ function expectKeyword(
   tokens: readonly Token[],
   pos: number,
   text: string,
-): ParseResult<number> {
+): PR<number> {
   const tokenAtResult = tokenAt(tokens, pos);
   if (isErr(tokenAtResult)) {
     return tokenAtResult;
@@ -131,7 +132,7 @@ const MUT_MESSAGE: string =
 function parseIdentifier(
   tokens: readonly Token[],
   pos: number,
-): ParseResult<Parsed<Identifier>> {
+): PR<Parsed<Identifier>> {
   const tokenAtResult = tokenAt(tokens, pos);
   if (isErr(tokenAtResult)) {
     return tokenAtResult;
@@ -175,7 +176,7 @@ function parseIdentifier(
 function parsePathSegments(
   tokens: readonly Token[],
   pos: number,
-): ParseResult<Parsed<Path>> {
+): PR<Parsed<Path>> {
   let cursor = pos;
   let absolute = false;
 
@@ -249,7 +250,7 @@ function parsePathSegments(
 function parsePath(
   tokens: readonly Token[],
   pos: number,
-): ParseResult<Parsed<PathExpression>> {
+): PR<Parsed<PathExpression>> {
   const pathResult = parsePathSegments(tokens, pos);
   if (isErr(pathResult)) {
     return pathResult;
@@ -280,7 +281,7 @@ function parsePath(
 function parseReference(
   tokens: readonly Token[],
   pos: number,
-): ParseResult<Parsed<ReferenceExpression>> {
+): PR<Parsed<ReferenceExpression>> {
   let cursor = pos + 1;
   let mutable = false;
   const aResult = tokenAt(tokens, cursor);
@@ -374,7 +375,7 @@ function parseFloatLiteral(
 function parsePrimary(
   tokens: readonly Token[],
   pos: number,
-): ParseResult<Parsed<Expression>> {
+): PR<Parsed<Expression>> {
   const tokenResult = tokenAt(tokens, pos);
   if (isErr(tokenResult)) return tokenResult;
   const token = tokenResult.value;
@@ -424,7 +425,7 @@ function parsePrimary(
 function parseArguments(
   tokens: readonly Token[],
   pos: number,
-): ParseResult<Parsed<Expression[]>> {
+): PR<Parsed<Expression[]>> {
   const afterLparen = expect(tokens, pos, "lparen");
   if (isErr(afterLparen)) {
     return afterLparen;
@@ -475,7 +476,7 @@ function parseArguments(
 function parseExpression(
   tokens: readonly Token[],
   pos: number,
-): ParseResult<Parsed<Expression>> {
+): PR<Parsed<Expression>> {
   const resultResult = parsePrimary(tokens, pos);
   if (isErr(resultResult)) {
     return resultResult;
@@ -521,7 +522,7 @@ function parseExpression(
 function parseType(
   tokens: readonly Token[],
   pos: number,
-): ParseResult<Parsed<Type>> {
+): PR<Parsed<Type>> {
   const tokenResult = tokenAt(tokens, pos);
   if (isErr(tokenResult)) {
     return tokenResult;
@@ -611,7 +612,7 @@ function parseType(
 function parseBindingPattern(
   tokens: readonly Token[],
   pos: number,
-): ParseResult<Parsed<BindingPattern>> {
+): PR<Parsed<BindingPattern>> {
   const identResult = parseIdentifier(tokens, pos);
   if (isErr(identResult)) {
     return identResult;
@@ -652,7 +653,7 @@ function parseLetStatement(
   tokens: readonly Token[],
   pos: number,
   attributes: readonly Attribute[] = [],
-): ParseResult<Parsed<LetStatement>> {
+): PR<Parsed<LetStatement>> {
   const start = pos;
   const afterLet = expectKeyword(tokens, pos, "let");
   if (isErr(afterLet)) {
@@ -762,7 +763,7 @@ function expressionStatement(expression: Expression): ExpressionStatement {
 function parseBlock(
   tokens: readonly Token[],
   pos: number,
-): ParseResult<Parsed<Block>> {
+): PR<Parsed<Block>> {
   const start = pos;
   const afterLbrace = expect(tokens, pos, "lbrace");
   if (isErr(afterLbrace)) {
@@ -871,7 +872,7 @@ type AttributeArg = {
 function parseAttributeArg(
   tokens: readonly Token[],
   pos: number,
-): ParseResult<Parsed<AttributeArg>> {
+): PR<Parsed<AttributeArg>> {
   const tokenAtResult = tokenAt(tokens, pos);
   if (isErr(tokenAtResult)) {
     return tokenAtResult;
@@ -920,7 +921,7 @@ function parseAttributeArg(
 function parseAttribute(
   tokens: readonly Token[],
   pos: number,
-): ParseResult<{ node: Attribute; isInner: boolean; next: number }> {
+): PR<{ node: Attribute; isInner: boolean; next: number }> {
   let cursor = pos + 1; // skip `#`
   let isInner = false;
   if (tokens[cursor]?.kind === "bang") {
@@ -985,7 +986,7 @@ function parseAttribute(
 function collectOuterAttributes(
   tokens: readonly Token[],
   pos: number,
-): ParseResult<{ attributes: Attribute[]; next: number }> {
+): PR<{ attributes: Attribute[]; next: number }> {
   const attributes: Attribute[] = [];
   let cursor = pos;
   while (isOuterAttribute(tokens, cursor)) {
@@ -1007,7 +1008,7 @@ function collectOuterAttributes(
 function collectInnerAttributes(
   tokens: readonly Token[],
   pos: number,
-): ParseResult<{ attributes: Attribute[]; next: number }> {
+): PR<{ attributes: Attribute[]; next: number }> {
   const attributes: Attribute[] = [];
   let cursor = pos;
   while (isInnerAttribute(tokens, cursor)) {
@@ -1042,7 +1043,7 @@ function parseFunction(
   pos: number,
   attributes: readonly Attribute[] = [],
   visibility: Option<Visibility> = none(),
-): ParseResult<Parsed<FunctionDecl>> {
+): PR<Parsed<FunctionDecl>> {
   const start = pos;
   const afterFn = expectKeyword(tokens, pos, "fn");
   if (isErr(afterFn)) {
@@ -1130,7 +1131,7 @@ function parseVisibility(
 function parseItem(
   tokens: readonly Token[],
   pos: number,
-): ParseResult<Parsed<Item>> {
+): PR<Parsed<Item>> {
   // Collect outer attributes (#[...]) before the item and attach them to the
   // named declaration that follows (a function or a `let`).
   const outerResult = collectOuterAttributes(tokens, pos);
@@ -1197,16 +1198,21 @@ function parseItem(
  * that grows incrementally toward the complete grammar defined in
  * `specification/0025-grammar.md`.
  *
- * @returns `Ok(Program)` on success, or `Err(ParserError)` if the token stream
- * does not conform to the supported grammar.
  */
-export function parse(tokens: readonly Token[]): ParseResult<Program> {
+export interface ParseResult {
+  readonly program: Option<Program>;
+  readonly diagnostics: readonly Diagnostic[];
+}
+
+export function parse(tokens: readonly Token[]): ParseResult {
+  const diagnostics: Diagnostic[] = [];
   let cursor = 0;
 
   // Program-level inner attributes (#![...]) apply to the module itself.
   const innerResult = collectInnerAttributes(tokens, cursor);
   if (isErr(innerResult)) {
-    return innerResult;
+    diagnostics.push(innerResult.error);
+    return { program: none(), diagnostics };
   }
   const attributes = innerResult.value.attributes;
   cursor = innerResult.value.next;
@@ -1215,17 +1221,19 @@ export function parse(tokens: readonly Token[]): ParseResult<Program> {
   for (;;) {
     const peekResult = tokenAt(tokens, cursor);
     if (isErr(peekResult)) {
-      return peekResult;
+      diagnostics.push(peekResult.error);
+      return { program: none(), diagnostics };
     }
     if (peekResult.value.kind === "eof") {
       break;
     }
     const itemResult = parseItem(tokens, cursor);
     if (isErr(itemResult)) {
-      return itemResult;
+      diagnostics.push(itemResult.error);
+      return { program: none(), diagnostics };
     }
     items.push(itemResult.value.node);
     cursor = itemResult.value.next;
   }
-  return ok({ kind: "Program", items, attributes });
+  return { program: some({ kind: "Program", items, attributes }), diagnostics };
 }
