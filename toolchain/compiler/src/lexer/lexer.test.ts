@@ -960,10 +960,34 @@ describe("string literals", () => {
       ]);
     });
 
-    it("r## (multi-hash) emits a descriptive error, not the raw-ident message", () => {
-      const { tokens, diagnostics } = tokenize('r##"hello"##');
+    it('r##"hello"## is a valid raw string token', () => {
+      const { tokens } = tokenize('r##"hello"##');
+      expect(tokens).toMatchObject([
+        { kind: "string", text: "hello" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it('r##"say "# world"## preserves inner quote-hash that does not match closing delimiter', () => {
+      const { tokens } = tokenize('r##"say "# world"##');
+      expect(tokens).toMatchObject([
+        { kind: "string", text: 'say "# world' },
+        { kind: "eof" },
+      ]);
+    });
+
+    it('r###"hey"### is a valid three-hash raw string', () => {
+      const { tokens } = tokenize('r###"hey"###');
+      expect(tokens).toMatchObject([
+        { kind: "string", text: "hey" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it('r##"unclosed"# emits an unterminated error (closing delimiter needs two hashes)', () => {
+      const { tokens, diagnostics } = tokenize('r##"unclosed"#');
       expect(tokens[0]).toMatchObject({ kind: "error" });
-      expect(diagnostics[0]?.message).toContain("multi-hash");
+      expect(diagnostics[0]?.message).toContain("Unterminated raw string");
     });
   });
 });
