@@ -877,7 +877,10 @@ describe("string literals", () => {
 
     it("\\t escape", () => {
       const { tokens } = tokenize('"\\t"');
-      expect(tokens).toMatchObject([{ kind: "string", text: "\\t" }, { kind: "eof" }]);
+      expect(tokens).toMatchObject([
+        { kind: "string", text: "\\t" },
+        { kind: "eof" },
+      ]);
     });
 
     it("escaped backslash \\\\", () => {
@@ -887,7 +890,7 @@ describe("string literals", () => {
       expect(tokens).toHaveLength(2);
     });
 
-    it("escaped double quote \\\"", () => {
+    it('escaped double quote \\"', () => {
       // Hedge source: "\"hello\"" — escapes preserved in token text
       const { tokens } = tokenize(`"\\"hello\\""`);
       expect(tokens).toMatchObject([{ kind: "string" }, { kind: "eof" }]);
@@ -994,27 +997,57 @@ describe("string literals", () => {
 
 describe("integer literals", () => {
   it("zero", () => {
-    expect(tokenize("0").tokens[0]).toMatchObject({ kind: "int", text: "0", radix: 10, suffix: none() });
+    expect(tokenize("0").tokens[0]).toMatchObject({
+      kind: "int",
+      text: "0",
+      radix: 10,
+      suffix: none(),
+    });
   });
 
   it("multi-digit", () => {
-    expect(tokenize("123").tokens[0]).toMatchObject({ kind: "int", text: "123", radix: 10, suffix: none() });
+    expect(tokenize("123").tokens[0]).toMatchObject({
+      kind: "int",
+      text: "123",
+      radix: 10,
+      suffix: none(),
+    });
   });
 
   it("numeric separator 1_000", () => {
-    expect(tokenize("1_000").tokens[0]).toMatchObject({ kind: "int", text: "1_000", radix: 10, suffix: none() });
+    expect(tokenize("1_000").tokens[0]).toMatchObject({
+      kind: "int",
+      text: "1_000",
+      radix: 10,
+      suffix: none(),
+    });
   });
 
   it("leading zero (no validation at lex time)", () => {
-    expect(tokenize("007").tokens[0]).toMatchObject({ kind: "int", text: "007", radix: 10, suffix: none() });
+    expect(tokenize("007").tokens[0]).toMatchObject({
+      kind: "int",
+      text: "007",
+      radix: 10,
+      suffix: none(),
+    });
   });
 
   it("trailing separator", () => {
-    expect(tokenize("1_").tokens[0]).toMatchObject({ kind: "int", text: "1_", radix: 10, suffix: none() });
+    expect(tokenize("1_").tokens[0]).toMatchObject({
+      kind: "int",
+      text: "1_",
+      radix: 10,
+      suffix: none(),
+    });
   });
 
   it("consecutive separators", () => {
-    expect(tokenize("1__2").tokens[0]).toMatchObject({ kind: "int", text: "1__2", radix: 10, suffix: none() });
+    expect(tokenize("1__2").tokens[0]).toMatchObject({
+      kind: "int",
+      text: "1__2",
+      radix: 10,
+      suffix: none(),
+    });
   });
 
   it("integer followed immediately by an identifier splits into two tokens", () => {
@@ -1056,7 +1089,10 @@ describe("integer literals", () => {
 
     it("0x with no digits is a lex error", () => {
       const { tokens, diagnostics } = tokenize("0x");
-      expect(tokens[0]).toMatchObject({ kind: "error", span: { start: 0, end: 2 } });
+      expect(tokens[0]).toMatchObject({
+        kind: "error",
+        span: { start: 0, end: 2 },
+      });
       expect(diagnostics[0]?.message).toContain("hex literal");
     });
 
@@ -1142,15 +1178,23 @@ describe("integer literals", () => {
   });
 
   describe("integer suffixes", () => {
-    it.each(["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize", "isize"])(
-      "decimal with %s suffix",
-      (suffix) => {
-        expect(tokenize(`42${suffix}`).tokens).toMatchObject([
-          { kind: "int", text: `42${suffix}`, radix: 10, suffix: some(suffix) },
-          { kind: "eof" },
-        ]);
-      },
-    );
+    it.each([
+      "i8",
+      "i16",
+      "i32",
+      "i64",
+      "u8",
+      "u16",
+      "u32",
+      "u64",
+      "usize",
+      "isize",
+    ])("decimal with %s suffix", (suffix) => {
+      expect(tokenize(`42${suffix}`).tokens).toMatchObject([
+        { kind: "int", text: `42${suffix}`, radix: 10, suffix: some(suffix) },
+        { kind: "eof" },
+      ]);
+    });
 
     it("hex with u8 suffix", () => {
       expect(tokenize("0xFFu8").tokens).toMatchObject([
@@ -1405,7 +1449,7 @@ describe("char literals", () => {
       ]);
     });
 
-    it("double-quote escape \\\"", () => {
+    it('double-quote escape \\"', () => {
       expect(tokenize("'\\\"'").tokens).toMatchObject([
         { kind: "char", text: '\\"' },
         { kind: "eof" },
@@ -1456,7 +1500,10 @@ describe("char literals", () => {
     });
 
     it("'\\u{10FFFF}' (max valid code point) is valid", () => {
-      expect(tokenize("'\\u{10FFFF}'").tokens[0]).toMatchObject({ kind: "char", text: "\\u{10FFFF}" });
+      expect(tokenize("'\\u{10FFFF}'").tokens[0]).toMatchObject({
+        kind: "char",
+        text: "\\u{10FFFF}",
+      });
     });
 
     it("'ab' does not form a char literal — falls back to lifetime 'ab", () => {
