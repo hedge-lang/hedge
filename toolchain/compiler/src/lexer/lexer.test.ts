@@ -1517,6 +1517,16 @@ describe("char literals", () => {
       const { tokens } = tokenize("'\n'");
       expect(tokens[0]).toMatchObject({ kind: "error" });
     });
+
+    it("astral-plane char '🦔' (U+1F994, 2 UTF-16 units) is a single char token", () => {
+      const { tokens } = tokenize("'🦔'");
+      expect(tokens).toMatchObject([
+        { kind: "char", text: "🦔" },
+        { kind: "eof" },
+      ]);
+      // span must cover ' + 🦔 (2 units) + ' = 4 source chars
+      expect(tokens[0]?.span).toEqual({ start: 0, end: 4 });
+    });
   });
 });
 

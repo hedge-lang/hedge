@@ -544,9 +544,31 @@ describe("attributes on let statements", (): void => {
   });
 });
 
+describe("attribute int literal arguments", (): void => {
+  it("#[align(8)] parses the int arg as an IntLiteral", (): void => {
+    const ast = parseProgram("#[align(8)] fn f() {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          attributes: [
+            {
+              kind: "Attribute",
+              name: { kind: "Identifier", text: "align" },
+              arguments: some([
+                { literal: some({ kind: "IntLiteral", value: "8", base: 10 }) },
+              ]),
+            },
+          ],
+        },
+      ],
+    });
+  });
+});
+
 describe("attribute parsing guardrails", (): void => {
-  it("returns an error for an attribute arg that is neither string nor path", (): void => {
-    const result = parse(tokenize("#[attr(42)] fn f() {}").tokens);
+  it("returns an error for an attribute arg that is neither string, int, nor path", (): void => {
+    const result = parse(tokenize("#[attr(1.5)] fn f() {}").tokens);
     expect(isErr(result)).toBe(true);
     if (isErr(result)) {
       expect(result.error.message).toContain("Expected attribute argument");
@@ -1095,31 +1117,31 @@ describe("unsupported type syntax in additional positions", (): void => {
 
 describe("literal expressions", (): void => {
   describe("float literals", (): void => {
-    it("parses 1.0 as FloatLiteral with f64 default suffix", (): void => {
+    it("parses 1.0 as FloatLiteral with no suffix", (): void => {
       const ast = parseProgram("1.0");
       expect(ast).toMatchObject({
-        items: [{ kind: "FloatLiteral", value: "1.0", suffix: "f64" }],
+        items: [{ kind: "FloatLiteral", value: "1.0", suffix: none() }],
       });
     });
 
     it("parses 1.5f32 as FloatLiteral with f32 suffix", (): void => {
       const ast = parseProgram("1.5f32");
       expect(ast).toMatchObject({
-        items: [{ kind: "FloatLiteral", value: "1.5", suffix: "f32" }],
+        items: [{ kind: "FloatLiteral", value: "1.5", suffix: some("f32") }],
       });
     });
 
-    it("parses 1e10 as FloatLiteral with f64 default suffix", (): void => {
+    it("parses 1e10 as FloatLiteral with no suffix", (): void => {
       const ast = parseProgram("1e10");
       expect(ast).toMatchObject({
-        items: [{ kind: "FloatLiteral", value: "1e10", suffix: "f64" }],
+        items: [{ kind: "FloatLiteral", value: "1e10", suffix: none() }],
       });
     });
 
     it("parses 42f64 (bare integer with float suffix) as FloatLiteral", (): void => {
       const ast = parseProgram("42f64");
       expect(ast).toMatchObject({
-        items: [{ kind: "FloatLiteral", value: "42", suffix: "f64" }],
+        items: [{ kind: "FloatLiteral", value: "42", suffix: some("f64") }],
       });
     });
   });
@@ -1200,42 +1222,46 @@ describe("literal expressions", (): void => {
     it("decimal with u8 suffix", (): void => {
       const ast = parseProgram("42u8");
       expect(ast).toMatchObject({
-        items: [{ kind: "IntLiteral", value: "42", base: 10, suffix: "u8" }],
+        items: [
+          { kind: "IntLiteral", value: "42", base: 10, suffix: some("u8") },
+        ],
       });
     });
 
-    it("decimal with no suffix defaults to i32", (): void => {
+    it("decimal with no suffix", (): void => {
       const ast = parseProgram("42");
       expect(ast).toMatchObject({
-        items: [{ kind: "IntLiteral", value: "42", base: 10, suffix: "i32" }],
+        items: [{ kind: "IntLiteral", value: "42", base: 10, suffix: none() }],
       });
     });
 
     it("hex literal stores digits without prefix", (): void => {
       const ast = parseProgram("0xFF");
       expect(ast).toMatchObject({
-        items: [{ kind: "IntLiteral", value: "FF", base: 16, suffix: "i32" }],
+        items: [{ kind: "IntLiteral", value: "FF", base: 16, suffix: none() }],
       });
     });
 
     it("octal literal stores digits without prefix", (): void => {
       const ast = parseProgram("0o77");
       expect(ast).toMatchObject({
-        items: [{ kind: "IntLiteral", value: "77", base: 8, suffix: "i32" }],
+        items: [{ kind: "IntLiteral", value: "77", base: 8, suffix: none() }],
       });
     });
 
     it("binary literal stores digits without prefix", (): void => {
       const ast = parseProgram("0b1010");
       expect(ast).toMatchObject({
-        items: [{ kind: "IntLiteral", value: "1010", base: 2, suffix: "i32" }],
+        items: [{ kind: "IntLiteral", value: "1010", base: 2, suffix: none() }],
       });
     });
 
     it("hex with suffix", (): void => {
       const ast = parseProgram("0xFFu8");
       expect(ast).toMatchObject({
-        items: [{ kind: "IntLiteral", value: "FF", base: 16, suffix: "u8" }],
+        items: [
+          { kind: "IntLiteral", value: "FF", base: 16, suffix: some("u8") },
+        ],
       });
     });
   });
