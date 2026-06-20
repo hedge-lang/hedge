@@ -26,6 +26,7 @@ export interface TokenizeResult {
  *
  * @returns the tokens and any lex-time diagnostics.
  */
+// eslint-disable-next-line complexity -- This makes sense to all be one chain
 export function tokenize(source: string): TokenizeResult {
   const tokens: Token[] = [];
   const diagnostics: Diagnostic[] = [];
