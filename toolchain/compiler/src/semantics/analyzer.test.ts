@@ -6,6 +6,17 @@ import { parse } from "../parser/parser.js";
 import type { AnalysisResult } from "./analyzer.js";
 import { analyze } from "./analyzer.js";
 
+function analyzeWithTokens(
+  source: string,
+): { result: AnalysisResult; tokens: ReturnType<typeof tokenize>["tokens"] } {
+  const { tokens } = tokenize(source);
+  const { program, diagnostics } = parse(tokens);
+  if (isSome(program)) {
+    return { result: analyze(program.value, tokens), tokens };
+  }
+  throw new Error(diagnostics[0]?.message ?? "Parse failed");
+}
+
 function diagnose(source: string): AnalysisResult {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
@@ -67,5 +78,23 @@ describe("semantic analysis", (): void => {
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.severity).toBe("error");
     expect(result.diagnostics[0]?.message).toContain("Slice 1");
+  });
+
+  it("rejects a qualified type in a param position with a Slice 1 diagnostic", (): void => {
+    const result = diagnose("fn f(x: i32::Foo) {}");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+  });
+
+  it("unsupported param type diagnostic span points at the type token", (): void => {
+    const source = "fn f(x: UnknownType) {}";
+    const { result } = analyzeWithTokens(source);
+    expect(result.diagnostics).toHaveLength(1);
+    const span = result.diagnostics[0]?.span;
+    expect(isSome(span)).toBe(true);
+    if (isSome(span)) {
+      expect(span.value.start).toBe(source.indexOf("UnknownType"));
+    }
   });
 });
