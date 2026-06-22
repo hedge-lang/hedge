@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { none } from "../option.js";
 import { tokenToString } from "./token.js";
 import type { Token } from "./token.js";
 
@@ -17,7 +18,13 @@ describe("tokenToString", (): void => {
   });
 
   it("formats int tokens", (): void => {
-    const token: Token = { kind: "int", span, text: "42" };
+    const token: Token = {
+      kind: "int",
+      span,
+      text: "42",
+      radix: 10,
+      suffix: none(),
+    };
     expect(tokenToString(token)).toBe("int(42)");
   });
 

@@ -44,6 +44,9 @@ function collectUses(expression: Expression, out: Set<string>): void {
       return;
     case "StringLiteral":
     case "IntLiteral":
+    case "FloatLiteral":
+    case "BoolLiteral":
+    case "CharLiteral":
       return;
     default:
       assertNever(expression);

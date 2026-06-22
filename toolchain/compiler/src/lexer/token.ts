@@ -1,3 +1,8 @@
+import type { Option } from "../option.js";
+
+export type IntSuffix = `${"u" | "i"}${8 | 16 | 32 | 64 | "size"}`;
+export type FloatSuffix = "f32" | "f64";
+
 /** A half-open source range, measured in UTF-16 code units, 0-based. */
 export interface Span {
   readonly start: number;
@@ -9,7 +14,20 @@ export type Token =
   // Non-symbol tokens
   | { readonly kind: "ident"; readonly span: Span; readonly text: string }
   | { readonly kind: "keyword"; readonly span: Span; readonly text: string }
-  | { readonly kind: "int"; readonly span: Span; readonly text: string }
+  | {
+      readonly kind: "int";
+      readonly span: Span;
+      readonly text: string;
+      readonly radix: 2 | 8 | 10 | 16;
+      readonly suffix: Option<IntSuffix>;
+    }
+  | {
+      readonly kind: "float";
+      readonly span: Span;
+      readonly text: string;
+      readonly suffix: Option<FloatSuffix>;
+    }
+  | { readonly kind: "char"; readonly span: Span; readonly text: string }
   | { readonly kind: "string"; readonly span: Span; readonly text: string }
   | { readonly kind: "lifetime"; readonly span: Span; readonly text: string }
   | { readonly kind: "error"; readonly span: Span; readonly text: string }

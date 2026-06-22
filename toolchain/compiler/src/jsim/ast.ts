@@ -35,10 +35,16 @@ export interface LetStatement {
 }
 
 export type Expression =
+  | BooleanLiteral
   | StringLiteral
   | NumberLiteral
   | PathExpression
   | CallExpression;
+
+interface BooleanLiteral {
+  readonly kind: "BooleanLiteral";
+  readonly value: boolean;
+}
 
 interface StringLiteral {
   readonly kind: "StringLiteral";

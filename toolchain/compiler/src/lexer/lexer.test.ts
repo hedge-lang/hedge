@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { none, some } from "../option.js";
 import { tokenize } from "./lexer.js";
+import { type Token } from "./token.js";
 
 describe("lexer", (): void => {
   it("tokenizes a simple let binding", (): void => {
@@ -11,7 +13,7 @@ describe("lexer", (): void => {
       { kind: "keyword", text: "let" },
       { kind: "ident", text: "x" },
       { kind: "eq" },
-      { kind: "int", text: "1" },
+      { kind: "int", text: "1", radix: 10, suffix: none() },
       { kind: "semi" },
       { kind: "eof" },
     ]);
@@ -867,31 +869,155 @@ describe("string literals", () => {
     expect(diagnostics[0]?.message).toContain("Unterminated");
   });
 
-  describe("backslash inside strings", () => {
-    it("backslash inside a string should not split it into multiple tokens", () => {
+  describe("escape sequences", () => {
+    it("\\n escape inside a string produces a single string token", () => {
       const { tokens } = tokenize('"hello\\nworld"');
       expect(tokens).toMatchObject([{ kind: "string" }, { kind: "eof" }]);
       expect(tokens).toHaveLength(2);
     });
 
-    it("string containing only a backslash is a single terminated token", () => {
-      // source is the 3-char sequence  "\"  (opening-quote, backslash, closing-quote)
-      const { tokens } = tokenize(`"\\"`);
+    it("\\t escape", () => {
+      const { tokens } = tokenize('"\\t"');
+      expect(tokens).toMatchObject([
+        { kind: "string", text: "\\t" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("escaped backslash \\\\", () => {
+      // Hedge source: "\\" — a string containing one backslash
+      const { tokens } = tokenize(`"\\\\"`);
       expect(tokens).toMatchObject([{ kind: "string" }, { kind: "eof" }]);
       expect(tokens).toHaveLength(2);
+    });
+
+    it('escaped double quote \\"', () => {
+      // Hedge source: "\"hello\"" — escapes preserved in token text
+      const { tokens } = tokenize(`"\\"hello\\""`);
+      expect(tokens).toMatchObject([{ kind: "string" }, { kind: "eof" }]);
+    });
+
+    it("invalid escape \\q produces an error token and diagnostic", () => {
+      const { tokens, diagnostics } = tokenize('"\\q"');
+      expect(tokens[0]).toMatchObject({ kind: "error" });
+      expect(diagnostics[0]?.message).toContain("escape");
+    });
+
+    it("invalid escape \\q does not produce a second 'unterminated' diagnostic", () => {
+      const { diagnostics } = tokenize('"\\q"');
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.message).toContain("escape");
+    });
+
+    it("\\x escape needs exactly 2 hex digits", () => {
+      const { tokens, diagnostics } = tokenize('"\\x4"');
+      expect(tokens[0]).toMatchObject({ kind: "error" });
+      expect(diagnostics[0]?.message).toContain("hex");
+    });
+
+    it("\\u{} with no digits is an error", () => {
+      const { tokens, diagnostics } = tokenize('"\\u{}"');
+      expect(tokens[0]).toMatchObject({ kind: "error" });
+      expect(diagnostics[0]?.message).toContain("unicode");
+    });
+
+    describe("unicode escape range validation", () => {
+      it("\\u{10FFFF} is the max valid code point", () => {
+        const { tokens } = tokenize('"\\u{10FFFF}"');
+        expect(tokens[0]).toMatchObject({ kind: "string" });
+      });
+
+      it("\\u{110000} (above max) is a lex error", () => {
+        const { tokens, diagnostics } = tokenize('"\\u{110000}"');
+        expect(tokens[0]).toMatchObject({ kind: "error" });
+        expect(diagnostics[0]?.message).toContain("range");
+      });
+
+      it("\\u{D800} (low surrogate) is a lex error", () => {
+        const { tokens, diagnostics } = tokenize('"\\u{D800}"');
+        expect(tokens[0]).toMatchObject({ kind: "error" });
+        expect(diagnostics[0]?.message).toContain("surrogate");
+      });
+
+      it("\\u{DFFF} (high surrogate) is a lex error", () => {
+        const { tokens, diagnostics } = tokenize('"\\u{DFFF}"');
+        expect(tokens[0]).toMatchObject({ kind: "error" });
+        expect(diagnostics[0]?.message).toContain("surrogate");
+      });
+
+      it("\\u{1234567} (too many digits) is a lex error", () => {
+        const { tokens, diagnostics } = tokenize('"\\u{1234567}"');
+        expect(tokens[0]).toMatchObject({ kind: "error" });
+        expect(diagnostics[0]?.message).toContain("too many digits");
+      });
+    });
+  });
+
+  describe("raw strings", () => {
+    it('r"hello" is a string token with text hello', () => {
+      const { tokens } = tokenize('r"hello"');
+      expect(tokens).toMatchObject([
+        { kind: "string", text: "hello" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it('r#"say "hi""# is a string token preserving inner quotes', () => {
+      const { tokens } = tokenize('r#"say "hi""#');
+      expect(tokens).toMatchObject([
+        { kind: "string", text: 'say "hi"' },
+        { kind: "eof" },
+      ]);
+    });
+
+    it('r##"hello"## is a valid raw string token', () => {
+      const { tokens } = tokenize('r##"hello"##');
+      expect(tokens).toMatchObject([
+        { kind: "string", text: "hello" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it('r##"say "# world"## preserves inner quote-hash that does not match closing delimiter', () => {
+      const { tokens } = tokenize('r##"say "# world"##');
+      expect(tokens).toMatchObject([
+        { kind: "string", text: 'say "# world' },
+        { kind: "eof" },
+      ]);
+    });
+
+    it('r###"hey"### is a valid three-hash raw string', () => {
+      const { tokens } = tokenize('r###"hey"###');
+      expect(tokens).toMatchObject([
+        { kind: "string", text: "hey" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it('r##"unclosed"# emits an unterminated error (closing delimiter needs two hashes)', () => {
+      const { tokens, diagnostics } = tokenize('r##"unclosed"#');
+      expect(tokens[0]).toMatchObject({ kind: "error" });
+      expect(diagnostics[0]?.message).toContain("Unterminated raw string");
     });
   });
 });
 
 describe("integer literals", () => {
   it("zero", () => {
-    expect(tokenize("0").tokens[0]).toMatchObject({ kind: "int", text: "0" });
+    expect(tokenize("0").tokens[0]).toMatchObject({
+      kind: "int",
+      text: "0",
+      radix: 10,
+      suffix: none(),
+    });
   });
 
   it("multi-digit", () => {
     expect(tokenize("123").tokens[0]).toMatchObject({
       kind: "int",
       text: "123",
+      radix: 10,
+      suffix: none(),
     });
   });
 
@@ -899,6 +1025,8 @@ describe("integer literals", () => {
     expect(tokenize("1_000").tokens[0]).toMatchObject({
       kind: "int",
       text: "1_000",
+      radix: 10,
+      suffix: none(),
     });
   });
 
@@ -906,26 +1034,536 @@ describe("integer literals", () => {
     expect(tokenize("007").tokens[0]).toMatchObject({
       kind: "int",
       text: "007",
+      radix: 10,
+      suffix: none(),
     });
   });
 
-  it("trailing separator (no validation at lex time)", () => {
-    expect(tokenize("1_").tokens[0]).toMatchObject({ kind: "int", text: "1_" });
+  it("trailing separator", () => {
+    expect(tokenize("1_").tokens[0]).toMatchObject({
+      kind: "int",
+      text: "1_",
+      radix: 10,
+      suffix: none(),
+    });
   });
 
-  it("consecutive separators (no validation at lex time)", () => {
+  it("consecutive separators", () => {
     expect(tokenize("1__2").tokens[0]).toMatchObject({
       kind: "int",
       text: "1__2",
+      radix: 10,
+      suffix: none(),
     });
   });
 
   it("integer followed immediately by an identifier splits into two tokens", () => {
     expect(tokenize("42foo").tokens).toMatchObject([
-      { kind: "int", text: "42" },
+      { kind: "int", text: "42", radix: 10, suffix: none() },
       { kind: "ident", text: "foo" },
       { kind: "eof" },
     ]);
+  });
+
+  describe("hex literals", () => {
+    it("basic hex uppercase", () => {
+      expect(tokenize("0xFF").tokens).toMatchObject([
+        { kind: "int", text: "0xFF", radix: 16, suffix: none() },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("hex with separators", () => {
+      expect(tokenize("0xDEAD_BEEF").tokens).toMatchObject([
+        { kind: "int", text: "0xDEAD_BEEF", radix: 16, suffix: none() },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("hex lowercase", () => {
+      expect(tokenize("0xdeadbeef").tokens).toMatchObject([
+        { kind: "int", text: "0xdeadbeef", radix: 16, suffix: none() },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("hex zero", () => {
+      expect(tokenize("0x0").tokens).toMatchObject([
+        { kind: "int", text: "0x0", radix: 16, suffix: none() },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("0x with no digits is a lex error", () => {
+      const { tokens, diagnostics } = tokenize("0x");
+      expect(tokens[0]).toMatchObject({
+        kind: "error",
+        span: { start: 0, end: 2 },
+      });
+      expect(diagnostics[0]?.message).toContain("hex literal");
+    });
+
+    it("0x_ (leading separator) is a lex error", () => {
+      const { tokens, diagnostics } = tokenize("0x_F");
+      expect(tokens[0]).toMatchObject({ kind: "error" });
+      expect(diagnostics[0]?.message).toContain("hex");
+    });
+
+    it("0x_ with nothing after is a lex error", () => {
+      const { tokens, diagnostics } = tokenize("0x_");
+      expect(tokens[0]).toMatchObject({ kind: "error" });
+      expect(diagnostics[0]?.message).toContain("hex");
+    });
+  });
+
+  describe("octal literals", () => {
+    it("basic octal", () => {
+      expect(tokenize("0o77").tokens).toMatchObject([
+        { kind: "int", text: "0o77", radix: 8, suffix: none() },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("octal with separator", () => {
+      expect(tokenize("0o7_7").tokens).toMatchObject([
+        { kind: "int", text: "0o7_7", radix: 8, suffix: none() },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("0o with no digits is a lex error", () => {
+      const { tokens, diagnostics } = tokenize("0o");
+      expect(tokens[0]).toMatchObject({ kind: "error" });
+      expect(diagnostics[0]?.message).toContain("octal literal");
+    });
+
+    it("digit 8 in octal is a lex error", () => {
+      const { tokens, diagnostics } = tokenize("0o9");
+      expect(tokens[0]).toMatchObject({ kind: "error" });
+      expect(diagnostics[0]?.message).toContain("octal");
+    });
+
+    it("0o_ (leading separator) is a lex error", () => {
+      const { tokens, diagnostics } = tokenize("0o_7");
+      expect(tokens[0]).toMatchObject({ kind: "error" });
+      expect(diagnostics[0]?.message).toContain("octal");
+    });
+  });
+
+  describe("binary literals", () => {
+    it("basic binary", () => {
+      expect(tokenize("0b1010").tokens).toMatchObject([
+        { kind: "int", text: "0b1010", radix: 2, suffix: none() },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("binary with separator", () => {
+      expect(tokenize("0b1_010").tokens).toMatchObject([
+        { kind: "int", text: "0b1_010", radix: 2, suffix: none() },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("0b with no digits is a lex error", () => {
+      const { tokens, diagnostics } = tokenize("0b");
+      expect(tokens[0]).toMatchObject({ kind: "error" });
+      expect(diagnostics[0]?.message).toContain("binary literal");
+    });
+
+    it("digit 2 in binary is a lex error", () => {
+      const { tokens, diagnostics } = tokenize("0b2");
+      expect(tokens[0]).toMatchObject({ kind: "error" });
+      expect(diagnostics[0]?.message).toContain("binary");
+    });
+
+    it("0b_ (leading separator) is a lex error", () => {
+      const { tokens, diagnostics } = tokenize("0b_1");
+      expect(tokens[0]).toMatchObject({ kind: "error" });
+      expect(diagnostics[0]?.message).toContain("binary");
+    });
+  });
+
+  describe("integer suffixes", () => {
+    it.each([
+      "i8",
+      "i16",
+      "i32",
+      "i64",
+      "u8",
+      "u16",
+      "u32",
+      "u64",
+      "usize",
+      "isize",
+    ])("decimal with %s suffix", (suffix) => {
+      expect(tokenize(`42${suffix}`).tokens).toMatchObject([
+        { kind: "int", text: `42${suffix}`, radix: 10, suffix: some(suffix) },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("hex with u8 suffix", () => {
+      expect(tokenize("0xFFu8").tokens).toMatchObject([
+        { kind: "int", text: "0xFFu8", radix: 16, suffix: some("u8") },
+        { kind: "eof" },
+      ]);
+    });
+  });
+});
+
+describe("float literals", () => {
+  it("basic float 1.0", () => {
+    expect(tokenize("1.0").tokens).toMatchObject([
+      { kind: "float", text: "1.0", suffix: none() },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("multi-digit float 3.14", () => {
+    expect(tokenize("3.14").tokens).toMatchObject([
+      { kind: "float", text: "3.14", suffix: none() },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("zero integer part: 0.5", () => {
+    expect(tokenize("0.5").tokens).toMatchObject([
+      { kind: "float", text: "0.5", suffix: none() },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("float with underscore in integer part: 1_000.5", () => {
+    expect(tokenize("1_000.5").tokens).toMatchObject([
+      { kind: "float", text: "1_000.5", suffix: none() },
+      { kind: "eof" },
+    ]);
+  });
+
+  describe("exponent forms", () => {
+    it("lowercase e exponent", () => {
+      expect(tokenize("1e10").tokens).toMatchObject([
+        { kind: "float", text: "1e10", suffix: none() },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("uppercase E exponent", () => {
+      expect(tokenize("1E10").tokens).toMatchObject([
+        { kind: "float", text: "1E10", suffix: none() },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("exponent with negative sign", () => {
+      expect(tokenize("1.5e-3").tokens).toMatchObject([
+        { kind: "float", text: "1.5e-3", suffix: none() },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("exponent with positive sign", () => {
+      expect(tokenize("1.5e+3").tokens).toMatchObject([
+        { kind: "float", text: "1.5e+3", suffix: none() },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("dot form with exponent: 0.0e0", () => {
+      expect(tokenize("0.0e0").tokens).toMatchObject([
+        { kind: "float", text: "0.0e0", suffix: none() },
+        { kind: "eof" },
+      ]);
+    });
+  });
+
+  describe("float suffixes", () => {
+    it("f32 suffix on dot form", () => {
+      expect(tokenize("1.0f32").tokens).toMatchObject([
+        { kind: "float", text: "1.0f32", suffix: some("f32") },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("f64 suffix on dot form", () => {
+      expect(tokenize("1.5f64").tokens).toMatchObject([
+        { kind: "float", text: "1.5f64", suffix: some("f64") },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("f32 suffix on exponent form", () => {
+      expect(tokenize("1e10f32").tokens).toMatchObject([
+        { kind: "float", text: "1e10f32", suffix: some("f32") },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("f64 suffix on bare integer form (DecInt FloatSuffix)", () => {
+      expect(tokenize("42f64").tokens).toMatchObject([
+        { kind: "float", text: "42f64", suffix: some("f64") },
+        { kind: "eof" },
+      ]);
+    });
+  });
+
+  describe("float disambiguation", () => {
+    it("trailing dot is int + dot, not a float", () => {
+      expect(tokenize("1.")).toMatchObject({
+        tokens: [
+          { kind: "int", text: "1", radix: 10, suffix: none() },
+          { kind: "dot" },
+          { kind: "eof" },
+        ],
+      });
+    });
+
+    it("method call on int: 1.method → int dot ident", () => {
+      expect(tokenize("1.method").tokens).toMatchObject([
+        { kind: "int", text: "1", radix: 10, suffix: none() },
+        { kind: "dot" },
+        { kind: "ident", text: "method" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("method call on float: 1.5.method → float dot ident", () => {
+      expect(tokenize("1.5.method").tokens).toMatchObject([
+        { kind: "float", text: "1.5", suffix: none() },
+        { kind: "dot" },
+        { kind: "ident", text: "method" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("leading dot is not a float", () => {
+      expect(tokenize(".5").tokens).toMatchObject([
+        { kind: "dot" },
+        { kind: "int", text: "5", radix: 10, suffix: none() },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("1.e10 is int + dot + ident, not float (dot needs digits on both sides)", () => {
+      expect(tokenize("1.e10").tokens).toMatchObject([
+        { kind: "int", text: "1", radix: 10, suffix: none() },
+        { kind: "dot" },
+        { kind: "ident", text: "e10" },
+        { kind: "eof" },
+      ]);
+    });
+  });
+
+  describe("malformed float exponents", () => {
+    it("1e with no digits is a lex error", () => {
+      const { tokens, diagnostics } = tokenize("1e");
+      expect(tokens[0]).toMatchObject({ kind: "error" });
+      expect(diagnostics[0]?.message).toContain("exponent");
+    });
+
+    it("1.0e with no digits is a lex error", () => {
+      const { tokens, diagnostics } = tokenize("1.0e");
+      expect(tokens[0]).toMatchObject({ kind: "error" });
+      expect(diagnostics[0]?.message).toContain("exponent");
+    });
+
+    it("1e+ emits one diagnostic and no overlapping tokens", () => {
+      const { tokens, diagnostics } = tokenize("1e+");
+      expect(diagnostics).toHaveLength(1);
+      let prevToken: Token | null = null;
+      for (const token of tokens) {
+        if (prevToken) {
+          expect(token.span.start).toBeGreaterThanOrEqual(prevToken.span.end);
+        }
+        prevToken = token;
+      }
+    });
+
+    it("1.0e- emits one diagnostic and no overlapping tokens", () => {
+      const { tokens, diagnostics } = tokenize("1.0e-");
+      expect(diagnostics).toHaveLength(1);
+      let prevToken: Token | null = null;
+      for (const token of tokens) {
+        if (prevToken) {
+          expect(token.span.start).toBeGreaterThanOrEqual(prevToken.span.end);
+        }
+        prevToken = token;
+      }
+    });
+  });
+});
+
+describe("char literals", () => {
+  it("simple letter", () => {
+    expect(tokenize("'a'").tokens).toMatchObject([
+      { kind: "char", text: "a" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("uppercase letter", () => {
+    expect(tokenize("'Z'").tokens).toMatchObject([
+      { kind: "char", text: "Z" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("digit character", () => {
+    expect(tokenize("'0'").tokens).toMatchObject([
+      { kind: "char", text: "0" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("space character", () => {
+    expect(tokenize("' '").tokens).toMatchObject([
+      { kind: "char", text: " " },
+      { kind: "eof" },
+    ]);
+  });
+
+  describe("escape sequences", () => {
+    it("newline escape", () => {
+      expect(tokenize("'\\n'").tokens).toMatchObject([
+        { kind: "char", text: "\\n" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("tab escape", () => {
+      expect(tokenize("'\\t'").tokens).toMatchObject([
+        { kind: "char", text: "\\t" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("backslash escape", () => {
+      expect(tokenize("'\\\\'").tokens).toMatchObject([
+        { kind: "char", text: "\\\\" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("single-quote escape", () => {
+      expect(tokenize("'\\''").tokens).toMatchObject([
+        { kind: "char", text: "\\'" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("hex escape \\x41", () => {
+      expect(tokenize("'\\x41'").tokens).toMatchObject([
+        { kind: "char", text: "\\x41" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("unicode escape \\u{41}", () => {
+      expect(tokenize("'\\u{41}'").tokens).toMatchObject([
+        { kind: "char", text: "\\u{41}" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("null escape \\0", () => {
+      expect(tokenize("'\\0'").tokens).toMatchObject([
+        { kind: "char", text: "\\0" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("carriage return escape \\r", () => {
+      expect(tokenize("'\\r'").tokens).toMatchObject([
+        { kind: "char", text: "\\r" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it('double-quote escape \\"', () => {
+      expect(tokenize("'\\\"'").tokens).toMatchObject([
+        { kind: "char", text: '\\"' },
+        { kind: "eof" },
+      ]);
+    });
+  });
+
+  describe("char/lifetime disambiguation", () => {
+    it("'a (no closing quote) is still a lifetime", () => {
+      expect(tokenize("'a").tokens).toMatchObject([
+        { kind: "lifetime", text: "a" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("'static is a lifetime, not a char", () => {
+      expect(tokenize("'static").tokens).toMatchObject([
+        { kind: "lifetime", text: "static" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("'0' (digit) is a char literal", () => {
+      expect(tokenize("'0'").tokens).toMatchObject([
+        { kind: "char", text: "0" },
+        { kind: "eof" },
+      ]);
+    });
+  });
+
+  describe("malformed char literals", () => {
+    it("empty char literal '' is a lex error", () => {
+      const { tokens, diagnostics } = tokenize("''");
+      expect(tokens[0]).toMatchObject({ kind: "error" });
+      expect(diagnostics[0]?.message).toContain("empty char");
+    });
+
+    it("unknown escape sequence is a lex error", () => {
+      const { tokens, diagnostics } = tokenize("'\\q'");
+      expect(tokens[0]).toMatchObject({ kind: "error" });
+      expect(diagnostics[0]?.message).toContain("escape");
+    });
+
+    it("unknown escape in char literal does not produce a second error", () => {
+      const { diagnostics } = tokenize("'\\q'");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.message).toContain("escape");
+    });
+
+    it("'\\u{110000}' (above max code point) is a lex error", () => {
+      const { tokens, diagnostics } = tokenize("'\\u{110000}'");
+      expect(tokens[0]).toMatchObject({ kind: "error" });
+      expect(diagnostics[0]?.message).toContain("range");
+    });
+
+    it("'\\u{10FFFF}' (max valid code point) is valid", () => {
+      expect(tokenize("'\\u{10FFFF}'").tokens[0]).toMatchObject({
+        kind: "char",
+        text: "\\u{10FFFF}",
+      });
+    });
+
+    it("'ab' does not form a char literal — falls back to lifetime 'ab", () => {
+      const { tokens } = tokenize("'ab'");
+      // 'ab' is a lifetime named "ab" (whole ident body), then ' is an error
+      expect(tokens[0]).toMatchObject({ kind: "lifetime", text: "ab" });
+    });
+
+    it("literal newline in char position is rejected — ' with \\n as n1 falls to error path", () => {
+      // Source: '  newline  '  — n1 === "\n" blocks the single-char branch
+      const { tokens } = tokenize("'\n'");
+      expect(tokens[0]).toMatchObject({ kind: "error" });
+    });
+
+    it("astral-plane char '🦔' (U+1F994, 2 UTF-16 units) is a single char token", () => {
+      const { tokens } = tokenize("'🦔'");
+      expect(tokens).toMatchObject([
+        { kind: "char", text: "🦔" },
+        { kind: "eof" },
+      ]);
+      // span must cover ' + 🦔 (2 units) + ' = 4 source chars
+      expect(tokens[0]?.span).toEqual({ start: 0, end: 4 });
+    });
   });
 });
 

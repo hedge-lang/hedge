@@ -70,13 +70,37 @@ function parseStatement(statement: Parser.Statement): JSIM.Statement {
   }
 }
 
+/**
+ * Parse an expression into a JSIM AST.
+ *
+ * @param expression The expression to parse.
+ *
+ * @returns The parsed expression.
+ */
 function parseExpression(expression: Parser.Expression): JSIM.Expression {
   switch (expression.kind) {
     case "StringLiteral":
       return { kind: "StringLiteral", value: expression.value };
-    case "IntLiteral":
-      // IntLiteral carries the numeric string (underscores stripped); pass through directly.
+    case "IntLiteral": {
+      const basePrefix =
+        expression.base === 2
+          ? "0b"
+          : expression.base === 8
+            ? "0o"
+            : expression.base === 16
+              ? "0x"
+              : "";
+      return {
+        kind: "NumberLiteral",
+        value: String(BigInt(basePrefix + expression.value)),
+      };
+    }
+    case "FloatLiteral":
       return { kind: "NumberLiteral", value: expression.value };
+    case "BoolLiteral":
+      return { kind: "BooleanLiteral", value: expression.value };
+    case "CharLiteral":
+      return { kind: "StringLiteral", value: expression.value };
     case "PathExpression":
       return { kind: "PathExpression", path: expression.path.segments };
     case "CallExpression":

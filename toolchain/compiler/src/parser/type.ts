@@ -1,10 +1,9 @@
-import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
-import { tokenToString } from "../lexer/token.js";
-import { isSome, none, some, type Option } from "../option.js";
+import { some } from "../option.js";
+import { err, isErr, ok } from "../result.js";
 import type { NamedType, Type, UnitType } from "./ast.js";
 import type { Parsed } from "./parse.js";
-import { tokenAt } from "./parse-utils.js";
+import { tokenAt, type PR } from "./parse-utils.js";
 import { parsePathSegments } from "./path.js";
 
 /**
@@ -26,86 +25,79 @@ import { parsePathSegments } from "./path.js";
  */
 export function parseType(
   tokens: readonly Token[],
-  diagnostics: Diagnostic[],
   pos: number,
-): Option<Parsed<Type>> {
-  const tokenResult = tokenAt(tokens, diagnostics, pos);
-  if (!isSome(tokenResult)) {
-    return none();
+): PR<Parsed<Type>> {
+  const tokenResult = tokenAt(tokens, pos);
+  if (isErr(tokenResult)) {
+    return tokenResult;
   }
   const token = tokenResult.value;
 
   if (token.kind === "lparen") {
-    const nextResult = tokenAt(tokens, diagnostics, pos + 1);
-    if (!isSome(nextResult)) {
-      return none();
+    const nextResult = tokenAt(tokens, pos + 1);
+    if (isErr(nextResult)) {
+      return nextResult;
     }
     const next = nextResult.value;
     if (next.kind === "rparen") {
       const unit: UnitType = { kind: "UnitType", tokenId: pos };
-      return some({ node: unit, next: pos + 2 });
+      return ok({ node: unit, next: pos + 2 });
     }
     if (next.kind === "eof") {
-      diagnostics.push({
+      return err({
         severity: "error",
         message: "expected `)` to close type, found end of input",
         span: some(token.span),
       });
-      return none();
     }
-    diagnostics.push({
+    return err({
       severity: "error",
       message: "tuple types are not supported in Slice 1",
       span: some(token.span),
     });
-    return none();
   }
 
   if (token.kind === "ident" || token.kind === "path_sep") {
-    const pathResult = parsePathSegments(tokens, diagnostics, pos);
-    if (!isSome(pathResult)) {
-      return none();
+    const pathResult = parsePathSegments(tokens, pos);
+    if (isErr(pathResult)) {
+      return pathResult;
     }
     const named: NamedType = {
       kind: "NamedType",
       tokenId: pos,
       path: pathResult.value.node,
     };
-    return some({ node: named, next: pathResult.value.next });
+    return ok({ node: named, next: pathResult.value.next });
   }
 
   if (token.kind === "amp") {
-    diagnostics.push({
+    return err({
       severity: "error",
       message:
         "reference types are not supported in Slice 1; borrows are introduced in Slice 2",
       span: some(token.span),
     });
-    return none();
   }
 
   if (token.kind === "lbracket") {
-    diagnostics.push({
+    return err({
       severity: "error",
       message: "slice types ([T]) are not supported in Slice 1",
       span: some(token.span),
     });
-    return none();
   }
 
   if (token.kind === "bang") {
-    diagnostics.push({
+    return err({
       severity: "error",
       message: "the never type (!) is not supported in Slice 1",
       span: some(token.span),
     });
-    return none();
   }
 
-  diagnostics.push({
+  return err({
     severity: "error",
-    message: `type syntax "${tokenToString(token)}" is not supported in Slice 1`,
+    message: `type syntax "${token.kind}" is not supported in Slice 1`,
     span: some(token.span),
   });
-  return none();
 }

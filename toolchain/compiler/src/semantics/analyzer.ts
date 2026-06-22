@@ -90,6 +90,9 @@ function analyzeExpression(ctx: AnalysisContext, expression: Expression): void {
   switch (expression.kind) {
     case "StringLiteral":
     case "IntLiteral":
+    case "FloatLiteral":
+    case "BoolLiteral":
+    case "CharLiteral":
       return;
     case "PathExpression":
       analyzePath(ctx, expression);

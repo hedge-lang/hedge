@@ -1,14 +1,15 @@
-import { type Diagnostic } from "../diagnostics.js";
-import { isSome } from "../option.js";
-import { type Token } from "./token.js";
+import type { Diagnostic } from "../diagnostics.js";
+import { isSome, some } from "../option.js";
+import type { Token } from "./token.js";
 import { tokenizeComment } from "./comments.js";
 import { tokenizeIdent, tokenizeRawIdent } from "./ident.js";
-import { tokenizeInt } from "./int.js";
 import { tokenizeKeyword } from "./keywords.js";
-import { tokenizeLifetime } from "./lifetime.js";
-import { tokenizeString } from "./string.js";
 import { tokenizeSymbol } from "./symbol.js";
 import { tokenizeWhitespace } from "./whitespace.js";
+import { scanCharOrLifetime } from "./char.js";
+import { isDigit } from "./int.js";
+import { scanNumberLiteral } from "./number.js";
+import { scanRawString, scanStringLiteral } from "./string.js";
 
 /** The result of tokenizing a source string: tokens plus any lex-time diagnostics. */
 export interface TokenizeResult {
@@ -26,6 +27,7 @@ export interface TokenizeResult {
  *
  * @returns the tokens and any lex-time diagnostics.
  */
+// eslint-disable-next-line complexity -- This makes sense to all be one chain
 export function tokenize(source: string): TokenizeResult {
   const tokens: Token[] = [];
   const diagnostics: Diagnostic[] = [];
@@ -51,9 +53,15 @@ export function tokenize(source: string): TokenizeResult {
       continue;
     }
 
-    const lifetime = tokenizeLifetime(tokens, diagnostics, source, i);
-    if (isSome(lifetime)) {
-      i = lifetime.value;
+    if (source[i] === "'") {
+      i = scanCharOrLifetime(tokens, diagnostics, source, i);
+      continue;
+    }
+
+    // Raw strings (r"..." or r##"..."##) must be checked before tokenizeRawIdent
+    // because tokenizeRawIdent would consume r# followed by a non-ident-start as an error.
+    if (isRawStringStart(source, i)) {
+      i = tokenizeRString(tokens, diagnostics, source, i);
       continue;
     }
 
@@ -69,15 +77,14 @@ export function tokenize(source: string): TokenizeResult {
       continue;
     }
 
-    const int = tokenizeInt(tokens, diagnostics, source, i);
-    if (isSome(int)) {
-      i = int.value;
+    const ch = source[i] ?? "";
+    if (isDigit(ch)) {
+      i = scanNumberLiteral(tokens, diagnostics, source, i);
       continue;
     }
 
-    const str = tokenizeString(tokens, diagnostics, source, i);
-    if (isSome(str)) {
-      i = str.value;
+    if (ch === '"') {
+      i = scanStringLiteral(tokens, diagnostics, source, i);
       continue;
     }
 
@@ -88,4 +95,48 @@ export function tokenize(source: string): TokenizeResult {
     span: { start: source.length, end: source.length },
   });
   return { tokens, diagnostics };
+}
+
+/**
+ * Returns true if the source at `i` begins a raw string literal: `r"` or
+ * `r` followed by one or more `#` characters then `"`.
+ */
+function isRawStringStart(source: string, i: number): boolean {
+  if (source[i] !== "r") return false;
+  if (source[i + 1] === '"') return true;
+  if (source[i + 1] !== "#") return false;
+  let hc = 0;
+  while (source[i + 1 + hc] === "#") hc++;
+  return source[i + 1 + hc] === '"';
+}
+
+/**
+ * Tokenize a raw string literal starting at `start`.
+ *
+ * @returns The index of the first character after the raw string literal.
+ */
+function tokenizeRString(
+  tokens: Token[],
+  diagnostics: Diagnostic[],
+  source: string,
+  start: number,
+): number {
+  let hashCount = 0;
+  while (source[start + 1 + hashCount] === "#") hashCount++;
+  if (source[start + 1 + hashCount] === '"') {
+    return scanRawString(tokens, diagnostics, source, start, hashCount);
+  }
+
+  const end = start + 1 + hashCount;
+  diagnostics.push({
+    severity: "error",
+    message: `raw string prefix \`r${"#".repeat(hashCount || 1)}\` must be followed by '"'`,
+    span: some({ start, end }),
+  });
+  tokens.push({
+    kind: "error",
+    span: { start, end },
+    text: source.slice(start, end),
+  });
+  return end;
 }

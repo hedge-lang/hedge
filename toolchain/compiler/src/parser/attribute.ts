@@ -1,11 +1,11 @@
-import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
-import { tokenToString } from "../lexer/token.js";
-import { isSome, none, some, type Option } from "../option.js";
+import { none, some, type Option } from "../option.js";
+import { err, isErr, ok } from "../result.js";
 import type { Attribute, IntLiteral, Path, StringLiteral } from "./ast.js";
 import type { Parsed } from "./parse.js";
-import { expect, tokenAt } from "./parse-utils.js";
-import { parseIdentifier, parsePathSegments } from "./path.js";
+import { expect, parseIdentifier, tokenAt, type PR } from "./parse-utils.js";
+import { parseIntLiteral } from "./expression.js";
+import { parsePathSegments } from "./path.js";
 
 type AttributeArg = {
   path: Option<Path>;
@@ -36,17 +36,16 @@ function isInnerAttribute(tokens: readonly Token[], pos: number): boolean {
  * Grammar:
  *
  * ```text
- * AttributeArg ::= StringLiteral | Identifier
+ * AttributeArg ::= StringLiteral | IntLiteral | Identifier
  * ```
  */
 function parseAttributeArg(
   tokens: readonly Token[],
-  diagnostics: Diagnostic[],
   pos: number,
-): Option<Parsed<AttributeArg>> {
-  const tokenAtResult = tokenAt(tokens, diagnostics, pos);
-  if (!isSome(tokenAtResult)) {
-    return none();
+): PR<Parsed<AttributeArg>> {
+  const tokenAtResult = tokenAt(tokens, pos);
+  if (isErr(tokenAtResult)) {
+    return tokenAtResult;
   }
   const token = tokenAtResult.value;
   if (token.kind === "string") {
@@ -55,24 +54,29 @@ function parseAttributeArg(
       tokenId: pos,
       value: token.text,
     };
-    return some({ node: { path: none(), literal: some(lit) }, next: pos + 1 });
+    return ok({ node: { path: none(), literal: some(lit) }, next: pos + 1 });
+  }
+  if (token.kind === "int") {
+    return ok({
+      node: { path: none(), literal: some(parseIntLiteral(pos, token).node) },
+      next: pos + 1,
+    });
   }
   if (token.kind === "ident" || token.kind === "path_sep") {
-    const pathResult = parsePathSegments(tokens, diagnostics, pos);
-    if (!isSome(pathResult)) {
-      return none();
+    const pathResult = parsePathSegments(tokens, pos);
+    if (isErr(pathResult)) {
+      return pathResult;
     }
-    return some({
+    return ok({
       node: { path: some(pathResult.value.node), literal: none() },
       next: pathResult.value.next,
     });
   }
-  diagnostics.push({
+  return err({
     severity: "error",
-    message: `Expected attribute argument, found "${tokenToString(token)}"`,
+    message: `Expected attribute argument, found "${token.kind}" at offset ${token.span.start}`,
     span: some(token.span),
   });
-  return none();
 }
 
 /**
@@ -86,9 +90,8 @@ function parseAttributeArg(
 // eslint-disable-next-line complexity -- Attribute parsing requires delimiter validation that adds necessary branches.
 function parseAttribute(
   tokens: readonly Token[],
-  diagnostics: Diagnostic[],
   pos: number,
-): Option<{ node: Attribute; isInner: boolean; next: number }> {
+): PR<{ node: Attribute; isInner: boolean; next: number }> {
   let cursor = pos + 1; // skip `#`
   let isInner = false;
   if (tokens[cursor]?.kind === "bang") {
@@ -96,9 +99,9 @@ function parseAttribute(
     cursor += 1; // skip `!`
   }
   cursor += 1; // skip `[`
-  const nameResult = parseIdentifier(tokens, diagnostics, cursor);
-  if (!isSome(nameResult)) {
-    return none();
+  const nameResult = parseIdentifier(tokens, cursor);
+  if (isErr(nameResult)) {
+    return nameResult;
   }
   const name = nameResult.value;
   cursor = name.next;
@@ -109,16 +112,15 @@ function parseAttribute(
     cursor += 1; // skip `(`
     while (tokens[cursor]?.kind !== "rparen") {
       if (tokens[cursor]?.kind === "eof") {
-        diagnostics.push({
+        return err({
           severity: "error",
           message: "unterminated attribute argument list",
           span: lparenSpan !== undefined ? some(lparenSpan) : none(),
         });
-        return none();
       }
-      const argResult = parseAttributeArg(tokens, diagnostics, cursor);
-      if (!isSome(argResult)) {
-        return none();
+      const argResult = parseAttributeArg(tokens, cursor);
+      if (isErr(argResult)) {
+        return argResult;
       }
       args.push(argResult.value.node);
       cursor = argResult.value.next;
@@ -126,15 +128,15 @@ function parseAttribute(
         cursor += 1;
       }
     }
-    const afterRparen = expect(tokens, diagnostics, cursor, "rparen");
-    if (!isSome(afterRparen)) {
-      return none();
+    const afterRparen = expect(tokens, cursor, "rparen");
+    if (isErr(afterRparen)) {
+      return afterRparen;
     }
     cursor = afterRparen.value;
   }
-  const afterRbracket = expect(tokens, diagnostics, cursor, "rbracket");
-  if (!isSome(afterRbracket)) {
-    return none();
+  const afterRbracket = expect(tokens, cursor, "rbracket");
+  if (isErr(afterRbracket)) {
+    return afterRbracket;
   }
   cursor = afterRbracket.value;
 
@@ -143,51 +145,49 @@ function parseAttribute(
     name: name.node,
     arguments: args.length > 0 ? some(args) : none(),
   };
-  return some({ node: attr, isInner, next: cursor });
+  return ok({ node: attr, isInner, next: cursor });
 }
 
 /**
  * Collects all consecutive outer attributes (`#[...]`) starting at `pos`.
  *
- * @returns `Some` with the collected attributes and the position after the last one.
+ * @returns The collected attributes and the position after the last one.
  */
 export function collectOuterAttributes(
   tokens: readonly Token[],
-  diagnostics: Diagnostic[],
   pos: number,
-): Option<{ attributes: Attribute[]; next: number }> {
+): PR<{ attributes: Attribute[]; next: number }> {
   const attributes: Attribute[] = [];
   let cursor = pos;
   while (isOuterAttribute(tokens, cursor)) {
-    const parsedResult = parseAttribute(tokens, diagnostics, cursor);
-    if (!isSome(parsedResult)) {
-      return none();
+    const parsedResult = parseAttribute(tokens, cursor);
+    if (isErr(parsedResult)) {
+      return parsedResult;
     }
     attributes.push(parsedResult.value.node);
     cursor = parsedResult.value.next;
   }
-  return some({ attributes, next: cursor });
+  return ok({ attributes, next: cursor });
 }
 
 /**
  * Collects all consecutive inner attributes (`#![...]`) starting at `pos`.
  *
- * @returns `Some` with the collected attributes and the position after the last one.
+ * @returns The collected attributes and the position after the last one.
  */
 export function collectInnerAttributes(
   tokens: readonly Token[],
-  diagnostics: Diagnostic[],
   pos: number,
-): Option<{ attributes: Attribute[]; next: number }> {
+): PR<{ attributes: Attribute[]; next: number }> {
   const attributes: Attribute[] = [];
   let cursor = pos;
   while (isInnerAttribute(tokens, cursor)) {
-    const parsedResult = parseAttribute(tokens, diagnostics, cursor);
-    if (!isSome(parsedResult)) {
-      return none();
+    const parsedResult = parseAttribute(tokens, cursor);
+    if (isErr(parsedResult)) {
+      return parsedResult;
     }
     attributes.push(parsedResult.value.node);
     cursor = parsedResult.value.next;
   }
-  return some({ attributes, next: cursor });
+  return ok({ attributes, next: cursor });
 }

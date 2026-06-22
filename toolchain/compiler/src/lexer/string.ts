@@ -1,54 +1,101 @@
-import { type Diagnostic } from "../diagnostics.js";
-import { none, type Option, some } from "../option.js";
-import { scanWhile } from "./scan-while.js";
-import { type Token } from "./token.js";
+import type { Diagnostic } from "../diagnostics.js";
+import { some } from "../option.js";
+import { scanEscapeSeq } from "./escape.js";
+import type { Token } from "./token.js";
 
-/**
- * @param ch The character to test.
- *
- * @returns `true` if `ch` opens a string literal.
- */
-function isStringBegin(ch: string): boolean {
-  return ch === '"';
-}
-
-/**
- * Tokenize a string literal starting at `start` in `source`, appending it to `tokens`.
- *
- * @param tokens The token list to append to.
- * @param diagnostics The diagnostic list to append to.
- * @param source The source to scan.
- * @param start The index to start scanning at.
- *
- * @returns `Some(index)` with the index of the first character after the string literal.
- * @returns `None` if the source does not start with a string delimiter.
- */
-export function tokenizeString(
+export function scanStringLiteral(
   tokens: Token[],
   diagnostics: Diagnostic[],
   source: string,
   start: number,
-): Option<number> {
-  const ch = source.at(start);
-  if (ch === undefined || !isStringBegin(ch)) return none();
-  const end = scanWhile(source, start + 1, (c) => c !== ch);
-  if (end >= source.length) {
-    diagnostics.push({
-      severity: "error",
-      message: `Unterminated string literal starting at ${start}`,
-      span: some({ start, end: source.length }),
-    });
-    tokens.push({
-      kind: "error",
-      span: { start, end: source.length },
-      text: source.slice(start),
-    });
-    return some(source.length);
+): number {
+  let i = start + 1; // skip opening "
+  while (i < source.length) {
+    const ch = source[i] ?? "";
+    if (ch === '"') {
+      tokens.push({
+        kind: "string",
+        span: { start, end: i + 1 },
+        text: source.slice(start + 1, i),
+      });
+      return i + 1;
+    }
+    if (ch === "\\") {
+      const escEnd = scanEscapeSeq(tokens, diagnostics, source, start, i);
+      if (escEnd === null) {
+        const lastToken = tokens.at(-1);
+        if (lastToken === undefined) {
+          diagnostics.push({
+            severity: "error",
+            message: `Unterminated string literal starting at ${start}`,
+            span: some({ start, end: source.length }),
+          });
+          tokens.push({
+            kind: "error",
+            span: { start, end: source.length },
+            text: source.slice(start),
+          });
+          return source.length;
+        }
+        let j = lastToken.span.end;
+        while (j < source.length && source[j] !== '"') j++;
+        return j < source.length ? j + 1 : j;
+      }
+      i = escEnd;
+      continue;
+    }
+    i++;
   }
-  tokens.push({
-    kind: "string",
-    text: source.slice(start + 1, end),
-    span: { start, end: end + 1 },
+  diagnostics.push({
+    severity: "error",
+    message: `Unterminated string literal starting at ${start}`,
+    span: some({ start, end: source.length }),
   });
-  return some(end + 1);
+  tokens.push({
+    kind: "error",
+    span: { start, end: source.length },
+    text: source.slice(start),
+  });
+  return source.length;
+}
+
+/**
+ * Scans a raw string literal `r#*"..."#*` starting at `start` (the `r`).
+ * The caller has already confirmed `source[start] === 'r'` and that after
+ * counting consecutive `#` chars the next character is `"`.
+ * The opening and closing hash counts must match exactly.
+ */
+export function scanRawString(
+  tokens: Token[],
+  diagnostics: Diagnostic[],
+  source: string,
+  start: number,
+  hashCount: number,
+): number {
+  const contentStart = start + 1 + hashCount + 1; // skip r, N×#, "
+  const close = '"' + "#".repeat(hashCount);
+  let i = contentStart;
+  while (i < source.length) {
+    if (source.slice(i, i + 1 + hashCount) === close) {
+      const end = i + 1 + hashCount;
+      tokens.push({
+        kind: "string",
+        span: { start, end },
+        text: source.slice(contentStart, i),
+      });
+      return end;
+    }
+    i++;
+  }
+  diagnostics.push({
+    severity: "error",
+    message: `Unterminated raw string literal starting at ${start}`,
+    span: some({ start, end: source.length }),
+  });
+  tokens.push({
+    kind: "error",
+    span: { start, end: source.length },
+    text: source.slice(start),
+  });
+  return source.length;
 }

@@ -1,16 +1,60 @@
-import type { Diagnostic } from "../diagnostics.js";
+import { resolveEscape } from "../lexer/escape.js";
 import type { Token } from "../lexer/token.js";
-import { tokenToString } from "../lexer/token.js";
-import { isSome, none, some, type Option } from "../option.js";
+import { isSome, some } from "../option.js";
+import { err, isErr, ok } from "../result.js";
 import type {
   CallExpression,
   Expression,
-  ExpressionStatement,
+  FloatLiteral,
+  IntLiteral,
   ReferenceExpression,
 } from "./ast.js";
 import type { Parsed } from "./parse.js";
-import { expect, isContextual, tokenAt } from "./parse-utils.js";
-import { MUT_MESSAGE, parsePath } from "./path.js";
+import {
+  expect,
+  isContextual,
+  MUT_MESSAGE,
+  stripPrefix,
+  stripUnderscores,
+  tokenAt,
+  type PR,
+} from "./parse-utils.js";
+import { parsePath } from "./path.js";
+
+export function parseIntLiteral(
+  pos: number,
+  token: Extract<Token, { kind: "int" }>,
+): Parsed<IntLiteral> {
+  const rawDigits = stripPrefix(token.text, token.radix);
+  const digits = isSome(token.suffix)
+    ? rawDigits.slice(0, -token.suffix.value.length)
+    : rawDigits;
+  const value = stripUnderscores(digits);
+  return {
+    node: {
+      kind: "IntLiteral",
+      tokenId: pos,
+      value,
+      base: token.radix,
+      suffix: token.suffix,
+    },
+    next: pos + 1,
+  };
+}
+
+function parseFloatLiteral(
+  pos: number,
+  token: Extract<Token, { kind: "float" }>,
+): Parsed<FloatLiteral> {
+  const floatText = isSome(token.suffix)
+    ? token.text.slice(0, -token.suffix.value.length)
+    : token.text;
+  const value = stripUnderscores(floatText);
+  return {
+    node: { kind: "FloatLiteral", tokenId: pos, value, suffix: token.suffix },
+    next: pos + 1,
+  };
+}
 
 /**
  * Parses a reference expression.
@@ -30,32 +74,30 @@ import { MUT_MESSAGE, parsePath } from "./path.js";
  */
 function parseReference(
   tokens: readonly Token[],
-  diagnostics: Diagnostic[],
   pos: number,
-): Option<Parsed<ReferenceExpression>> {
+): PR<Parsed<ReferenceExpression>> {
   let cursor = pos + 1;
   let mutable = false;
-  const aResult = tokenAt(tokens, diagnostics, cursor);
-  if (!isSome(aResult)) {
-    return none();
+  const aResult = tokenAt(tokens, cursor);
+  if (isErr(aResult)) {
+    return aResult;
   }
   const a = aResult.value;
   if (a.kind === "keyword" && a.text === "mut") {
-    diagnostics.push({
+    return err({
       severity: "error",
       span: some({ start: a.span.start, end: a.span.end }),
       message: MUT_MESSAGE,
     });
-    return none();
   }
 
   if (isContextual(a, "write")) {
     mutable = true;
     cursor += 1;
   }
-  const operandResult = parsePrimary(tokens, diagnostics, cursor);
-  if (!isSome(operandResult)) {
-    return none();
+  const operandResult = parsePrimary(tokens, cursor);
+  if (isErr(operandResult)) {
+    return operandResult;
   }
   const operand = operandResult.value;
   const reference: ReferenceExpression = {
@@ -64,7 +106,7 @@ function parseReference(
     mutable,
     operand: operand.node,
   };
-  return some({ node: reference, next: operand.next });
+  return ok({ node: reference, next: operand.next });
 }
 
 /**
@@ -72,8 +114,7 @@ function parseReference(
  *
  * Supported slice-1 forms:
  *
- * - String literals
- * - Integer literals
+ * - String / integer / float / bool / char literals
  * - Path expressions
  * - Reference expressions
  *
@@ -83,49 +124,52 @@ function parseReference(
  * PrimaryExpression ::=
  *     StringLiteral
  *   | IntLiteral
+ *   | FloatLiteral
+ *   | BoolLiteral
+ *   | CharLiteral
  *   | PathExpression
  *   | ReferenceExpression
  * ```
  */
 function parsePrimary(
   tokens: readonly Token[],
-  diagnostics: Diagnostic[],
   pos: number,
-): Option<Parsed<Expression>> {
-  const tokenResult = tokenAt(tokens, diagnostics, pos);
-  if (!isSome(tokenResult)) {
-    return none();
-  }
+): PR<Parsed<Expression>> {
+  const tokenResult = tokenAt(tokens, pos);
+  if (isErr(tokenResult)) return tokenResult;
   const token = tokenResult.value;
-  if (token.kind === "string") {
-    return some({
+  if (token.kind === "string")
+    return ok({
       node: { kind: "StringLiteral", tokenId: pos, value: token.text },
       next: pos + 1,
     });
-  }
-  if (token.kind === "int") {
-    return some({
+  if (token.kind === "int") return ok(parseIntLiteral(pos, token));
+  if (token.kind === "float") return ok(parseFloatLiteral(pos, token));
+  if (token.kind === "char")
+    return ok({
       node: {
-        kind: "IntLiteral",
+        kind: "CharLiteral",
         tokenId: pos,
-        value: token.text.replaceAll("_", ""),
+        value: resolveEscape(token.text),
       },
       next: pos + 1,
     });
-  }
-  if (token.kind === "ident" || token.kind === "path_sep") {
-    return parsePath(tokens, diagnostics, pos);
-  }
-  if (token.kind === "amp") {
-    return parseReference(tokens, diagnostics, pos);
-  }
-
-  diagnostics.push({
+  if (
+    token.kind === "keyword" &&
+    (token.text === "true" || token.text === "false")
+  )
+    return ok({
+      node: { kind: "BoolLiteral", tokenId: pos, value: token.text === "true" },
+      next: pos + 1,
+    });
+  if (token.kind === "ident" || token.kind === "path_sep")
+    return parsePath(tokens, pos);
+  if (token.kind === "amp") return parseReference(tokens, pos);
+  return err({
     severity: "error",
-    message: `Expected an expression, found "${tokenToString(token)}"`,
+    message: `Expected an expression, found "${token.kind}" at offset ${token.span.start}`,
     span: some(token.span),
   });
-  return none();
 }
 
 /**
@@ -139,12 +183,11 @@ function parsePrimary(
  */
 function parseArguments(
   tokens: readonly Token[],
-  diagnostics: Diagnostic[],
   pos: number,
-): Option<Parsed<Expression[]>> {
-  const afterLparen = expect(tokens, diagnostics, pos, "lparen");
-  if (!isSome(afterLparen)) {
-    return none();
+): PR<Parsed<Expression[]>> {
+  const afterLparen = expect(tokens, pos, "lparen");
+  if (isErr(afterLparen)) {
+    return afterLparen;
   }
   let cursor = afterLparen.value;
   const args: Expression[] = [];
@@ -152,9 +195,9 @@ function parseArguments(
     if (tokens[cursor]?.kind === "rparen") {
       break;
     }
-    const argResult = parseExpression(tokens, diagnostics, cursor);
-    if (!isSome(argResult)) {
-      return none();
+    const argResult = parseExpression(tokens, cursor);
+    if (isErr(argResult)) {
+      return argResult;
     }
     args.push(argResult.value.node);
     cursor = argResult.value.next;
@@ -163,11 +206,11 @@ function parseArguments(
     }
     cursor += 1;
   }
-  const afterRparen = expect(tokens, diagnostics, cursor, "rparen");
-  if (!isSome(afterRparen)) {
-    return none();
+  const afterRparen = expect(tokens, cursor, "rparen");
+  if (isErr(afterRparen)) {
+    return afterRparen;
   }
-  return some({ node: args, next: afterRparen.value });
+  return ok({ node: args, next: afterRparen.value });
 }
 
 /**
@@ -191,21 +234,20 @@ function parseArguments(
  */
 export function parseExpression(
   tokens: readonly Token[],
-  diagnostics: Diagnostic[],
   pos: number,
-): Option<Parsed<Expression>> {
-  const primaryResult = parsePrimary(tokens, diagnostics, pos);
-  if (!isSome(primaryResult)) {
-    return none();
+): PR<Parsed<Expression>> {
+  const resultResult = parsePrimary(tokens, pos);
+  if (isErr(resultResult)) {
+    return resultResult;
   }
-  let result = primaryResult.value;
+  let result = resultResult.value;
   for (;;) {
     if (tokens[result.next]?.kind !== "lparen") {
       break;
     }
-    const argsResult = parseArguments(tokens, diagnostics, result.next);
-    if (!isSome(argsResult)) {
-      return none();
+    const argsResult = parseArguments(tokens, result.next);
+    if (isErr(argsResult)) {
+      return argsResult;
     }
     const args = argsResult.value;
     const call: CallExpression = {
@@ -216,21 +258,5 @@ export function parseExpression(
     };
     result = { node: call, next: args.next };
   }
-  return some(result);
-}
-
-/**
- * Wraps an expression as an expression statement.
- *
- * Expression statements are represented explicitly in the AST rather than
- * reusing expression nodes directly.
- */
-export function expressionStatement(
-  expression: Expression,
-): ExpressionStatement {
-  return {
-    kind: "ExpressionStatement",
-    tokenId: expression.tokenId,
-    expression,
-  };
+  return ok(result);
 }

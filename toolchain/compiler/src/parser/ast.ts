@@ -1,4 +1,6 @@
 import type { Option } from "../option.js";
+import type { FloatSuffix, IntSuffix } from "../lexer/token.js";
+export type { IntSuffix, FloatSuffix } from "../lexer/token.js";
 
 /** Every AST node carries the index of the token that begins it. */
 export interface AstNode {
@@ -27,6 +29,9 @@ export type Statement = LetStatement | ExpressionStatement;
 export type Expression =
   | StringLiteral
   | IntLiteral
+  | FloatLiteral
+  | BoolLiteral
+  | CharLiteral
   | PathExpression
   | CallExpression
   | ReferenceExpression;
@@ -88,6 +93,27 @@ export interface StringLiteral extends AstNode {
 
 export interface IntLiteral extends AstNode {
   readonly kind: "IntLiteral";
+  /** Digits only — no prefix, underscores stripped. */
+  readonly value: string;
+  readonly base: 10 | 16 | 8 | 2;
+  readonly suffix: Option<IntSuffix>;
+}
+
+export interface FloatLiteral extends AstNode {
+  readonly kind: "FloatLiteral";
+  /** Full normalized text, underscores stripped. */
+  readonly value: string;
+  readonly suffix: Option<FloatSuffix>;
+}
+
+export interface BoolLiteral extends AstNode {
+  readonly kind: "BoolLiteral";
+  readonly value: boolean;
+}
+
+export interface CharLiteral extends AstNode {
+  readonly kind: "CharLiteral";
+  /** Resolved character (after escape decoding). */
   readonly value: string;
 }
 
