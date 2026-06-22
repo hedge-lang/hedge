@@ -62,7 +62,23 @@ export function scanExponentFloat(
   i: number,
 ): number {
   const expEnd = scanExponent(tokens, diagnostics, source, start, i);
-  if (expEnd === null) return i + 1;
+  if (expEnd === null) {
+    const token = tokens.at(-1);
+    if (!token) {
+      diagnostics.push({
+        severity: "error",
+        message: `Unterminated float literal starting at ${start}`,
+        span: some({ start, end: source.length }),
+      });
+      tokens.push({
+        kind: "error",
+        span: { start, end: source.length },
+        text: source.slice(start),
+      });
+      return source.length;
+    }
+    return token.span.end;
+  }
   const { end: suffixEnd, suffix: floatSuffix } = matchFloatSuffix(
     source,
     expEnd,
@@ -87,7 +103,23 @@ export function scanDotFloat(
   while (isDigit(source[i] ?? "") || source[i] === "_") i++;
   if (source[i] === "e" || source[i] === "E") {
     const expEnd = scanExponent(tokens, diagnostics, source, start, i);
-    if (expEnd === null) return i + 1;
+    if (expEnd === null) {
+      const lastToken = tokens.at(-1);
+      if (lastToken === undefined) {
+        diagnostics.push({
+          severity: "error",
+          message: `Unterminated float literal starting at ${start}`,
+          span: some({ start, end: source.length }),
+        });
+        tokens.push({
+          kind: "error",
+          span: { start, end: source.length },
+          text: source.slice(start),
+        });
+        return source.length;
+      }
+      return lastToken.span.end;
+    }
     i = expEnd;
   }
   const { end: suffixEnd, suffix: floatSuffix } = matchFloatSuffix(source, i);

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { none, some } from "../option.js";
 import { tokenize } from "./lexer.js";
+import { type Token } from "./token.js";
 
 describe("lexer", (): void => {
   it("tokenizes a simple let binding", (): void => {
@@ -902,6 +903,12 @@ describe("string literals", () => {
       expect(diagnostics[0]?.message).toContain("escape");
     });
 
+    it("invalid escape \\q does not produce a second 'unterminated' diagnostic", () => {
+      const { diagnostics } = tokenize('"\\q"');
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.message).toContain("escape");
+    });
+
     it("\\x escape needs exactly 2 hex digits", () => {
       const { tokens, diagnostics } = tokenize('"\\x4"');
       expect(tokens[0]).toMatchObject({ kind: "error" });
@@ -1360,6 +1367,30 @@ describe("float literals", () => {
       expect(tokens[0]).toMatchObject({ kind: "error" });
       expect(diagnostics[0]?.message).toContain("exponent");
     });
+
+    it("1e+ emits one diagnostic and no overlapping tokens", () => {
+      const { tokens, diagnostics } = tokenize("1e+");
+      expect(diagnostics).toHaveLength(1);
+      let prevToken: Token | null = null;
+      for (const token of tokens) {
+        if (prevToken) {
+          expect(token.span.start).toBeGreaterThanOrEqual(prevToken.span.end);
+        }
+        prevToken = token;
+      }
+    });
+
+    it("1.0e- emits one diagnostic and no overlapping tokens", () => {
+      const { tokens, diagnostics } = tokenize("1.0e-");
+      expect(diagnostics).toHaveLength(1);
+      let prevToken: Token | null = null;
+      for (const token of tokens) {
+        if (prevToken) {
+          expect(token.span.start).toBeGreaterThanOrEqual(prevToken.span.end);
+        }
+        prevToken = token;
+      }
+    });
   });
 });
 
@@ -1490,6 +1521,12 @@ describe("char literals", () => {
     it("unknown escape sequence is a lex error", () => {
       const { tokens, diagnostics } = tokenize("'\\q'");
       expect(tokens[0]).toMatchObject({ kind: "error" });
+      expect(diagnostics[0]?.message).toContain("escape");
+    });
+
+    it("unknown escape in char literal does not produce a second error", () => {
+      const { diagnostics } = tokenize("'\\q'");
+      expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0]?.message).toContain("escape");
     });
 

@@ -39,7 +39,9 @@ function scanCharLiteral(
         });
         return source.length;
       }
-      return lastToken.span.end;
+      let j = lastToken.span.end;
+      while (j < source.length && source[j] !== "'") j++;
+      return j < source.length ? j + 1 : j;
     }
     if (source[escEnd] !== "'") {
       diagnostics.push({
