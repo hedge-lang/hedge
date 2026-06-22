@@ -595,7 +595,10 @@ describe("struct declarations", (): void => {
             kind: "NamedFields",
             fields: [
               {
-                visibility: some({ kind: "Visibility", scope: some("package") }),
+                visibility: some({
+                  kind: "Visibility",
+                  scope: some("package"),
+                }),
                 name: { kind: "Identifier", text: "x" },
               },
             ],
@@ -698,6 +701,30 @@ describe("struct declarations", (): void => {
     expect(result.diagnostics[0]?.message).toContain(
       "tuple types are not supported",
     );
+  });
+
+  it("tokenId on a pub named field points to the field name, not pub", (): void => {
+    const { tokens } = tokenize("struct Foo { pub x: i32 }");
+    const { program } = parse(tokens);
+    if (!isSome(program)) {
+      throw new Error("expected program to compile");
+    }
+    const struct = program.value.items[0];
+    if (struct?.kind !== "Struct" || struct.body.kind !== "NamedFields") {
+      throw new Error("expected Struct with NamedFields");
+    }
+    const field = struct.body.fields[0];
+    if (!field) {
+      throw new Error("expected field to exist");
+    }
+    const token = tokens[field.tokenId];
+    if (!token) {
+      throw new Error("expected token to exist");
+    }
+    expect(token).toMatchObject({
+      kind: "ident",
+      text: "x",
+    });
   });
 });
 
@@ -821,6 +848,24 @@ describe("visibility guardrails", (): void => {
     const result = parse(tokenize("pub let x = 1;").tokens);
     expect(result.program).toEqual(none());
     expect(result.diagnostics[0]?.message).toContain("let");
+  });
+
+  it("rejects pub(self) with a Slice 1 diagnostic", (): void => {
+    const result = parse(tokenize("pub(self) struct Foo;").tokens);
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+  });
+
+  it("rejects pub(super) with a Slice 1 diagnostic", (): void => {
+    const result = parse(tokenize("pub(super) struct Foo;").tokens);
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+  });
+
+  it("rejects a visibility qualifier before a bare expression", (): void => {
+    const result = parse(tokenize("pub 42;").tokens);
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain("visibility");
   });
 });
 
