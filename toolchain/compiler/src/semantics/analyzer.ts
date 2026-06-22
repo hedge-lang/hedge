@@ -75,11 +75,15 @@ function validateSlice1Type(
 function analyzeFunctionDecl(ctx: AnalysisContext, decl: FunctionDecl): void {
   ctx.scopes.push(new Set());
   for (const param of decl.params) {
-    validateSlice1Type(ctx, param.type, param.tokenId);
+    validateSlice1Type(ctx, param.type, param.type.tokenId);
     bind(ctx, param.pattern.name.text);
   }
   if (isSome(decl.returnType)) {
-    validateSlice1Type(ctx, decl.returnType.value, decl.tokenId);
+    validateSlice1Type(
+      ctx,
+      decl.returnType.value,
+      decl.returnType.value.tokenId,
+    );
   }
   analyzeBlock(ctx, decl.body);
   ctx.scopes.pop();
