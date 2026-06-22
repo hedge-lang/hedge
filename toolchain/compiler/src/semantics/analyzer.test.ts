@@ -6,9 +6,10 @@ import { parse } from "../parser/parser.js";
 import type { AnalysisResult } from "./analyzer.js";
 import { analyze } from "./analyzer.js";
 
-function analyzeWithTokens(
-  source: string,
-): { result: AnalysisResult; tokens: ReturnType<typeof tokenize>["tokens"] } {
+function analyzeWithTokens(source: string): {
+  result: AnalysisResult;
+  tokens: ReturnType<typeof tokenize>["tokens"];
+} {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
   if (isSome(program)) {
@@ -91,7 +92,10 @@ describe("semantic analysis", (): void => {
     const source = "fn f(x: UnknownType) {}";
     const { result } = analyzeWithTokens(source);
     expect(result.diagnostics).toHaveLength(1);
-    const span = result.diagnostics[0]?.span;
+    if (!result.diagnostics[0]) {
+      throw new Error("Expected diagnostics");
+    }
+    const span = result.diagnostics[0].span;
     expect(isSome(span)).toBe(true);
     if (isSome(span)) {
       expect(span.value.start).toBe(source.indexOf("UnknownType"));
