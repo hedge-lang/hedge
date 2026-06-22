@@ -23,6 +23,26 @@ describe("driver", (): void => {
     }
   });
 
+  it("compiles variable expressions", (): void => {
+    const result = compile(`
+      fn main() {
+        let b_true: bool = true;
+        let b_false = false;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(isSome(result.code)).toBe(true);
+    if (isSome(result.code)) {
+      const { javascript } = result.code.value;
+      expect(isSome(javascript)).toBe(true);
+      if (isSome(javascript)) {
+        expect(javascript.value).toContain("function main()");
+        expect(javascript.value).toContain("b_true = true;");
+        expect(javascript.value).toContain("b_false = false;");
+      }
+    }
+  });
+
   it("reports a semantic error and produces no code", (): void => {
     const result = compile("fn main() { print(missing); }");
     expect(isNone(result.code)).toBe(true);

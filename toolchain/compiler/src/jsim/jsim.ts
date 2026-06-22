@@ -98,7 +98,7 @@ function parseExpression(expression: Parser.Expression): JSIM.Expression {
     case "FloatLiteral":
       return { kind: "NumberLiteral", value: expression.value };
     case "BoolLiteral":
-      return { kind: "StringLiteral", value: String(expression.value) };
+      return { kind: "BooleanLiteral", value: expression.value };
     case "CharLiteral":
       return { kind: "StringLiteral", value: expression.value };
     case "PathExpression":

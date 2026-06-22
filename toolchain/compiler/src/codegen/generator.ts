@@ -31,6 +31,8 @@ function emitDocComment(doc: DocComment, isModule: boolean = false): string {
 
 function emitExpression(expression: Expression): string {
   switch (expression.kind) {
+    case "BooleanLiteral":
+      return expression.value ? "true" : "false";
     case "StringLiteral":
       return JSON.stringify(expression.value);
     case "NumberLiteral":
@@ -58,6 +60,7 @@ function emitStatement(statement: Statement): string {
   switch (statement.kind) {
     case "LetStatement":
       return emitLet(statement);
+    case "BooleanLiteral":
     case "StringLiteral":
     case "NumberLiteral":
     case "PathExpression":
@@ -82,6 +85,7 @@ function emitItem(item: Item): string {
       return emitFunction(item);
     case "LetStatement":
       return emitLet(item);
+    case "BooleanLiteral":
     case "StringLiteral":
     case "NumberLiteral":
     case "PathExpression":

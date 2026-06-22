@@ -31,6 +31,7 @@ describe("generator", (): void => {
   it("lowers a read-only let to const and `let write` to let", (): void => {
     expect(js(gen('let greeting = "hi";'))).toBe('const greeting = "hi";\n');
     expect(js(gen("let write n = 1;"))).toBe("let n = 1;\n");
+    expect(js(gen("let b_true = true;"))).toBe("const b_true = true;\n");
   });
 
   it("emits a bare (non-main) function with no entry call", (): void => {
