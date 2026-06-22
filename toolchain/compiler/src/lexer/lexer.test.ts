@@ -1820,15 +1820,12 @@ describe("operator token spans", () => {
     ["&=", "amp_eq", 2],
     ["|=", "pipe_eq", 2],
     ["^=", "caret_eq", 2],
-  ])(
-    '"%s" → %s with span {0, %i}',
-    (src, kind, length) => {
-      expect(tokenize(src).tokens[0]).toMatchObject({
-        kind,
-        span: { start: 0, end: length },
-      });
-    },
-  );
+  ])('"%s" → %s with span {0, %i}', (src, kind, length) => {
+    expect(tokenize(src).tokens[0]).toMatchObject({
+      kind,
+      span: { start: 0, end: length },
+    });
+  });
 });
 
 describe("operator tokens in expression contexts", () => {
