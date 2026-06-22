@@ -1,6 +1,7 @@
 import { isSome, none, type Option, some } from "../option.js";
 import { HEDGE_PRIMITIVE_TYPES } from "../primitives.js";
 import type * as Parser from "../parser/ast.js";
+import { type FunctionParam } from "./ast.js";
 import type * as JSIM from "./ast.js";
 import { toDocComment } from "./parts/doc-comment.js";
 
@@ -76,15 +77,15 @@ function parseFunction(fn: Parser.FunctionDecl): JSIM.FunctionDecl {
     kind: "FunctionDecl",
     scope,
     name: fn.name.text,
-    params: fn.params.flatMap((p) => {
-      const type =
+    params: fn.params.flatMap((p): FunctionParam[] => {
+      const type: Option<PrimitiveType> =
         p.type.kind === "UnitType"
-          ? some({ kind: "PrimitiveType" as const, value: "null" as const })
+          ? some({ kind: "PrimitiveType", value: "null" })
           : parsePrimitiveType(p.type);
       return isSome(type)
         ? [
             {
-              kind: "FunctionParam" as const,
+              kind: "FunctionParam",
               name: p.pattern.name.text,
               type: type.value,
             },

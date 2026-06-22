@@ -67,7 +67,7 @@ interface CallExpression {
   readonly arguments: readonly Expression[];
 }
 
-interface FunctionParam {
+export interface FunctionParam {
   readonly kind: "FunctionParam";
   readonly name: string;
   readonly type: Type;
