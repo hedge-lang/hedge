@@ -1787,3 +1787,372 @@ describe("keyword adversarial", () => {
     },
   );
 });
+
+describe("operator token spans", () => {
+  it.each([
+    ["<", "lt", 1],
+    [">", "gt", 1],
+    ["=", "eq", 1],
+    ["!", "bang", 1],
+    ["&", "amp", 1],
+    ["|", "pipe", 1],
+    ["+", "plus", 1],
+    ["-", "minus", 1],
+    ["*", "star", 1],
+    ["/", "slash", 1],
+    ["%", "percent", 1],
+    ["^", "caret", 1],
+    ["==", "eq_eq", 2],
+    ["!=", "bang_eq", 2],
+    ["<=", "lt_eq", 2],
+    [">=", "gt_eq", 2],
+    ["&&", "amp_amp", 2],
+    ["||", "pipe_pipe", 2],
+    ["<<", "lt_lt", 2],
+    [">>", "gt_gt", 2],
+    ["<<=", "lt_lt_eq", 3],
+    [">>=", "gt_gt_eq", 3],
+    ["+=", "plus_eq", 2],
+    ["-=", "minus_eq", 2],
+    ["*=", "star_eq", 2],
+    ["/=", "slash_eq", 2],
+    ["%=", "percent_eq", 2],
+    ["&=", "amp_eq", 2],
+    ["|=", "pipe_eq", 2],
+    ["^=", "caret_eq", 2],
+  ] as const)(
+    '"%s" → %s with span {0, %i}',
+    (src, kind, length) => {
+      expect(tokenize(src).tokens[0]).toMatchObject({
+        kind,
+        span: { start: 0, end: length },
+      });
+    },
+  );
+});
+
+describe("operator tokens in expression contexts", () => {
+  it("arithmetic: a + b", () => {
+    expect(tokenize("a + b").tokens).toMatchObject([
+      { kind: "ident", text: "a" },
+      { kind: "plus" },
+      { kind: "ident", text: "b" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("arithmetic: a - b", () => {
+    expect(tokenize("a - b").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "minus" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("arithmetic: a * b", () => {
+    expect(tokenize("a * b").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "star" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("arithmetic: a / b", () => {
+    expect(tokenize("a / b").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "slash" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("arithmetic: a % b", () => {
+    expect(tokenize("a % b").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "percent" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("comparison: 1 == 2", () => {
+    expect(tokenize("1 == 2").tokens).toMatchObject([
+      { kind: "int" },
+      { kind: "eq_eq" },
+      { kind: "int" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("comparison: 1 != 2", () => {
+    expect(tokenize("1 != 2").tokens).toMatchObject([
+      { kind: "int" },
+      { kind: "bang_eq" },
+      { kind: "int" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("comparison: a < b", () => {
+    expect(tokenize("a < b").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "lt" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("comparison: a > b", () => {
+    expect(tokenize("a > b").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "gt" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("comparison: a <= b", () => {
+    expect(tokenize("a <= b").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "lt_eq" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("comparison: a >= b", () => {
+    expect(tokenize("a >= b").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "gt_eq" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("logical: a && b", () => {
+    expect(tokenize("a && b").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "amp_amp" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("logical: a || b", () => {
+    expect(tokenize("a || b").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "pipe_pipe" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("bitwise: a & b", () => {
+    expect(tokenize("a & b").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "amp" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("bitwise: a ^ b", () => {
+    expect(tokenize("a ^ b").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "caret" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("bitwise: a | b", () => {
+    expect(tokenize("a | b").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "pipe" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("shift: a << b", () => {
+    expect(tokenize("a << b").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "lt_lt" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("shift: a >> b", () => {
+    expect(tokenize("a >> b").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "gt_gt" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("assignment: x = 1", () => {
+    expect(tokenize("x = 1").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "eq" },
+      { kind: "int" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it.each([
+    ["x += 1", "plus_eq"],
+    ["x -= 1", "minus_eq"],
+    ["x *= 2", "star_eq"],
+    ["x /= 2", "slash_eq"],
+    ["x %= 3", "percent_eq"],
+    ["x &= y", "amp_eq"],
+    ["x |= y", "pipe_eq"],
+    ["x ^= y", "caret_eq"],
+    ["x <<= 1", "lt_lt_eq"],
+    ["x >>= 1", "gt_gt_eq"],
+  ] as const)("compound assignment: %s", (src, opKind) => {
+    expect(tokenize(src).tokens[1]).toMatchObject({ kind: opKind });
+  });
+
+  it("mixed logical: a && b || c", () => {
+    expect(tokenize("a && b || c").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "amp_amp" },
+      { kind: "ident" },
+      { kind: "pipe_pipe" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("mixed bitwise: a & b ^ c | d", () => {
+    expect(tokenize("a & b ^ c | d").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "amp" },
+      { kind: "ident" },
+      { kind: "caret" },
+      { kind: "ident" },
+      { kind: "pipe" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("mixed arithmetic: a * b + c", () => {
+    expect(tokenize("a * b + c").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "star" },
+      { kind: "ident" },
+      { kind: "plus" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+});
+
+describe("operator token disambiguation — adversarial", () => {
+  it("=== splits as eq_eq then eq (no triple-equals token)", () => {
+    expect(tokenize("===").tokens).toMatchObject([
+      { kind: "eq_eq" },
+      { kind: "eq" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("!== splits as bang_eq then eq", () => {
+    expect(tokenize("!==").tokens).toMatchObject([
+      { kind: "bang_eq" },
+      { kind: "eq" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("&&= splits as amp_amp then eq (no logical-and-assign token)", () => {
+    expect(tokenize("&&=").tokens).toMatchObject([
+      { kind: "amp_amp" },
+      { kind: "eq" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("||= splits as pipe_pipe then eq (no logical-or-assign token)", () => {
+    expect(tokenize("||=").tokens).toMatchObject([
+      { kind: "pipe_pipe" },
+      { kind: "eq" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("** splits as star then star (no exponentiation token)", () => {
+    expect(tokenize("**").tokens).toMatchObject([
+      { kind: "star" },
+      { kind: "star" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("-- splits as minus then minus (no decrement token)", () => {
+    expect(tokenize("--").tokens).toMatchObject([
+      { kind: "minus" },
+      { kind: "minus" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("++ splits as plus then plus (no increment token)", () => {
+    expect(tokenize("++").tokens).toMatchObject([
+      { kind: "plus" },
+      { kind: "plus" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("... splits as dot_dot then dot (no JS spread/rest token)", () => {
+    expect(tokenize("...").tokens).toMatchObject([
+      { kind: "dot_dot" },
+      { kind: "dot" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("adjacent operators without whitespace: 1+-2", () => {
+    expect(tokenize("1+-2").tokens).toMatchObject([
+      { kind: "int" },
+      { kind: "plus" },
+      { kind: "minus" },
+      { kind: "int" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("comparison without whitespace: a>=b", () => {
+    expect(tokenize("a>=b").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "gt_eq" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("shift without whitespace: a<<b", () => {
+    expect(tokenize("a<<b").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "lt_lt" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+
+  it("compound shift-assign without whitespace: a<<=b", () => {
+    expect(tokenize("a<<=b").tokens).toMatchObject([
+      { kind: "ident" },
+      { kind: "lt_lt_eq" },
+      { kind: "ident" },
+      { kind: "eof" },
+    ]);
+  });
+});
