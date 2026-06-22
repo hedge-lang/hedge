@@ -76,5 +76,5 @@ interface FunctionParam {
 type Type = PrimitiveType;
 interface PrimitiveType {
   readonly kind: "PrimitiveType";
-  readonly value: "string" | "number" | "boolean" | "null";
+  readonly value: "string" | "number" | "bigint" | "boolean" | "null";
 }
