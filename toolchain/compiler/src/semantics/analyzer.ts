@@ -1,6 +1,7 @@
 import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
 import { isSome, none, some } from "../option.js";
+import { HEDGE_PRIMITIVE_TYPES } from "../primitives.js";
 import type {
   Block,
   CallExpression,
@@ -11,6 +12,7 @@ import type {
   PathExpression,
   Program,
   Statement,
+  Type,
 } from "../parser/ast.js";
 
 export interface AnalysisResult {
@@ -39,6 +41,8 @@ function analyzeItem(ctx: AnalysisContext, item: Item): void {
     case "Function":
       analyzeFunctionDecl(ctx, item);
       return;
+    case "Struct":
+      return;
     case "LetStatement":
     case "ExpressionStatement":
       analyzeStatement(ctx, item);
@@ -48,8 +52,37 @@ function analyzeItem(ctx: AnalysisContext, item: Item): void {
   }
 }
 
+function validateSlice1Type(
+  ctx: AnalysisContext,
+  type: Type,
+  tokenId: number,
+): void {
+  if (
+    type.kind === "NamedType" &&
+    type.path.segments[0] &&
+    type.path.segments[0] in HEDGE_PRIMITIVE_TYPES
+  ) {
+    return;
+  }
+  if (type.kind === "UnitType") return;
+  emitError(
+    ctx,
+    "type is not supported in Slice 1 function signatures",
+    tokenId,
+  );
+}
+
 function analyzeFunctionDecl(ctx: AnalysisContext, decl: FunctionDecl): void {
+  ctx.scopes.push(new Set());
+  for (const param of decl.params) {
+    validateSlice1Type(ctx, param.type, param.tokenId);
+    bind(ctx, param.pattern.name.text);
+  }
+  if (isSome(decl.returnType)) {
+    validateSlice1Type(ctx, decl.returnType.value, decl.tokenId);
+  }
   analyzeBlock(ctx, decl.body);
+  ctx.scopes.pop();
 }
 
 function analyzeBlock(ctx: AnalysisContext, block: Block): void {
