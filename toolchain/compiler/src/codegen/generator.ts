@@ -76,7 +76,8 @@ function emitFunction(decl: FunctionDecl): string {
   const bodyStr =
     bodyLines.length === 0 ? "{}" : `{\n${bodyLines.map(indent).join("\n")}\n}`;
   const keyword = isSome(decl.scope) ? "export function" : "function";
-  return `${keyword} ${decl.name}() ${bodyStr}`;
+  const params = decl.params.map((p) => p.name).join(", ");
+  return `${keyword} ${decl.name}(${params}) ${bodyStr}`;
 }
 
 function emitItem(item: Item): string {
