@@ -22,7 +22,7 @@ export interface Attribute {
 }
 
 /** A top-level entry. Slice 1 is lenient and also accepts bare statements. */
-export type Item = FunctionDecl | Statement | Expression;
+export type Item = FunctionDecl | StructDecl | Statement | Expression;
 
 export type Statement = LetStatement | ExpressionStatement;
 
@@ -42,16 +42,61 @@ export interface Visibility {
   readonly scope: Option<string>;
 }
 
+export interface Param extends AstNode {
+  readonly kind: "Param";
+  readonly pattern: BindingPattern;
+  readonly type: Type;
+}
+
 export interface FunctionDecl extends AstNode {
   readonly kind: "Function";
   readonly visibility: Option<Visibility>;
   readonly name: Identifier;
   readonly generics: readonly never[];
-  readonly params: readonly never[];
+  readonly params: readonly Param[];
   readonly returnType: Option<Type>;
   readonly whereClause: Option<never>;
   readonly attributes: readonly Attribute[];
   readonly body: Block;
+}
+
+export interface StructDecl extends AstNode {
+  readonly kind: "Struct";
+  readonly visibility: Option<Visibility>;
+  readonly name: Identifier;
+  readonly body: StructBody;
+  readonly attributes: readonly Attribute[];
+}
+
+export type StructBody = NamedFieldsBody | TupleFieldsBody | UnitBody;
+
+export interface NamedFieldsBody {
+  readonly kind: "NamedFields";
+  readonly fields: readonly StructField[];
+}
+
+export interface TupleFieldsBody {
+  readonly kind: "TupleFields";
+  readonly fields: readonly TupleField[];
+}
+
+export interface UnitBody {
+  readonly kind: "Unit";
+}
+
+export interface StructField extends AstNode {
+  readonly kind: "StructField";
+  readonly attributes: readonly Attribute[];
+  readonly visibility: Option<Visibility>;
+  readonly name: Identifier;
+  readonly type: Type;
+}
+
+export interface TupleField extends AstNode {
+  readonly kind: "TupleField";
+  readonly attributes: readonly Attribute[];
+  readonly visibility: Option<Visibility>;
+  readonly type: Type;
 }
 
 export interface Block extends AstNode {
