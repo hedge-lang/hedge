@@ -45,4 +45,27 @@ describe("semantic analysis", (): void => {
     const first = result.diagnostics[0];
     expect(first?.message).toContain("x");
   });
+
+  it("resolves a function parameter name inside the function body", (): void => {
+    const result = diagnose("fn f(x: i32) { print(x); }");
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("reports an error for a name that does not match any parameter", (): void => {
+    const result = diagnose("fn f(x: i32) { print(y); }");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toContain("y");
+  });
+
+  it("struct declaration does not crash the analyzer", (): void => {
+    const result = diagnose("struct Foo;");
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects an unsupported param type with a Slice 1 diagnostic", (): void => {
+    const result = diagnose("fn f(x: UnknownType) {}");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+  });
 });
