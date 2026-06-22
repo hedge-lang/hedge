@@ -98,4 +98,22 @@ describe("toJsim", () => {
     const program = toJsim(parseOrThrow("struct Foo;"));
     expect(program.items).toEqual([]);
   });
+
+  it("unit-typed param is kept in JSIM output with null type", () => {
+    const program = toJsim(parseOrThrow("fn f(x: ()) {}"));
+    expect(program).toMatchObject({
+      items: [
+        {
+          kind: "FunctionDecl",
+          params: [
+            {
+              kind: "FunctionParam",
+              name: "x",
+              type: { kind: "PrimitiveType", value: "null" },
+            },
+          ],
+        },
+      ],
+    });
+  });
 });
