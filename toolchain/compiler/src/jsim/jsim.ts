@@ -77,11 +77,14 @@ function parseFunction(fn: Parser.FunctionDecl): JSIM.FunctionDecl {
     scope,
     name: fn.name.text,
     params: fn.params.flatMap((p) => {
-      const type = parsePrimitiveType(p.type);
+      const type =
+        p.type.kind === "UnitType"
+          ? some({ kind: "PrimitiveType" as const, value: "null" as const })
+          : parsePrimitiveType(p.type);
       return isSome(type)
         ? [
             {
-              kind: "FunctionParam",
+              kind: "FunctionParam" as const,
               name: p.pattern.name.text,
               type: type.value,
             },
