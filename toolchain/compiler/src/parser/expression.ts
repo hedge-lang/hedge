@@ -131,6 +131,7 @@ function parseReference(
  *   | ReferenceExpression
  * ```
  */
+// eslint-disable-next-line complexity -- This is a dispatch function and more readable this way.
 function parsePrimary(
   tokens: readonly Token[],
   pos: number,

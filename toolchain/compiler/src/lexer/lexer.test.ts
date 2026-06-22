@@ -1820,7 +1820,7 @@ describe("operator token spans", () => {
     ["&=", "amp_eq", 2],
     ["|=", "pipe_eq", 2],
     ["^=", "caret_eq", 2],
-  ] as const)(
+  ])(
     '"%s" → %s with span {0, %i}',
     (src, kind, length) => {
       expect(tokenize(src).tokens[0]).toMatchObject({
@@ -2014,7 +2014,7 @@ describe("operator tokens in expression contexts", () => {
     ["x ^= y", "caret_eq"],
     ["x <<= 1", "lt_lt_eq"],
     ["x >>= 1", "gt_gt_eq"],
-  ] as const)("compound assignment: %s", (src, opKind) => {
+  ])("compound assignment: %s", (src, opKind) => {
     expect(tokenize(src).tokens[1]).toMatchObject({ kind: opKind });
   });
 
