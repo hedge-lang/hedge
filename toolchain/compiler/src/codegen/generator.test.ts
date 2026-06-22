@@ -118,6 +118,16 @@ describe("generator", (): void => {
     );
   });
 
+  it("emits function parameters in JS output", (): void => {
+    expect(js(gen("fn f(x: i32, y: bool) {}"))).toBe("function f(x, y) {}\n");
+  });
+
+  it("emits param types in .d.ts for pub fn", (): void => {
+    expect(dts(gen("pub fn add(x: i32, y: i32) -> i32 {}"))).toBe(
+      "export declare function add(x: number, y: number): number;\n",
+    );
+  });
+
   it("generates code with comments", () => {
     const code = gen(`
       //! This is a doc-comment for the main module.
