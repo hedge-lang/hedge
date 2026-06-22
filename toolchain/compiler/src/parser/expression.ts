@@ -131,6 +131,7 @@ function parseReference(
  *   | ReferenceExpression
  * ```
  */
+// eslint-disable-next-line complexity -- This is a dispatch function and more readable this way.
 function parsePrimary(
   tokens: readonly Token[],
   pos: number,
@@ -165,6 +166,12 @@ function parsePrimary(
   if (token.kind === "ident" || token.kind === "path_sep")
     return parsePath(tokens, pos);
   if (token.kind === "amp") return parseReference(tokens, pos);
+  if (token.kind === "star")
+    return err({
+      severity: "error",
+      message: "dereference (*) is not supported in Slice 1",
+      span: some(token.span),
+    });
   return err({
     severity: "error",
     message: `Expected an expression, found "${token.kind}" at offset ${token.span.start}`,

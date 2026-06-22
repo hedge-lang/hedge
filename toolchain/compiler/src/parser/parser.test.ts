@@ -1263,3 +1263,36 @@ describe("keyword edge cases", (): void => {
     expect(result.diagnostics[0]?.message).toContain("fn");
   });
 });
+
+describe("deref expression guardrail", (): void => {
+  it("*x produces a Slice-1 diagnostic, not a generic 'expected expression' error", (): void => {
+    const result = parse(tokenize("*x;").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+    expect(result.diagnostics[0]?.message).toContain("dereference");
+  });
+
+  it("*1 in expression position produces the deref Slice-1 diagnostic", (): void => {
+    const result = parse(tokenize("*1;").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+  });
+
+  it("let y = *x; produces the deref Slice-1 diagnostic", (): void => {
+    const result = parse(tokenize("let y = *x;").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+    expect(result.diagnostics[0]?.message).toContain("dereference");
+  });
+
+  it("fn f() { *x } produces the deref Slice-1 diagnostic", (): void => {
+    const result = parse(tokenize("fn f() { *x }").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+  });
+
+  it("deref diagnostic span covers the * token", (): void => {
+    const result = parse(tokenize("*value;").tokens);
+    expect(result.diagnostics[0]?.span).toEqual(some({ start: 0, end: 1 }));
+  });
+});
