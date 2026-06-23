@@ -11,18 +11,47 @@ import type {
 
 /** A borrow introduced by `let r = &[write] base`. */
 interface Borrow {
-  readonly name: string; // the borrowing binding
-  readonly base: string; // the borrowed variable
+  /**
+   * The borrowing binding.
+   */
+  readonly name: string;
+
+  /**
+   * The borrowed variable.
+   */
+  readonly base: string;
+
+  /**
+   * Whether the variable is mutable.
+   */
   readonly mutable: boolean;
-  readonly declIndex: number; // statement index where the borrow is created
-  readonly tokenId: number; // the reference token, for diagnostics
+
+  /**
+   * The index of the statement where the borrow is created.
+   */
+  readonly declIndex: number;
+
+  /**
+   * The token ID of the reference, used for diagnostics.
+   */
+  readonly tokenId: number;
 }
 
+/**
+ * Ensures that the {@link value} is of type `never`, which should be unreachable in a well-typed program.
+ * @param value The value that should be of type `never`.
+ */
 function assertNever(value: never): never {
   throw new Error(`Unexpected AST node: ${JSON.stringify(value)}`);
 }
 
-/** Collect the names of single-segment paths referenced in an expression. */
+/**
+ * Collect the names of single-segment paths referenced in an expression.
+ *
+ * @param expression The expression to analyze.
+ * @param out A set to which the names of referenced paths will be added.
+ */
+// eslint-disable-next-line complexity -- This is a routing function
 function collectUses(expression: Expression, out: Set<string>): void {
   switch (expression.kind) {
     case "PathExpression": {
@@ -42,6 +71,21 @@ function collectUses(expression: Expression, out: Set<string>): void {
     case "ReferenceExpression":
       collectUses(expression.operand, out);
       return;
+    case "BinaryExpression":
+      collectUses(expression.left, out);
+      collectUses(expression.right, out);
+      return;
+    case "UnaryExpression":
+      collectUses(expression.operand, out);
+      return;
+    case "AssignExpression":
+    case "CompoundAssignExpression":
+      collectUses(expression.lhs, out);
+      collectUses(expression.rhs, out);
+      return;
+    case "FieldAccessExpression":
+      collectUses(expression.object, out);
+      return;
     case "StringLiteral":
     case "IntLiteral":
     case "FloatLiteral":
@@ -53,6 +97,12 @@ function collectUses(expression: Expression, out: Set<string>): void {
   }
 }
 
+/**
+ * Collect the names of single-segment paths referenced in a statement.
+ *
+ * @param statement The statement to analyze.
+ * @param out A set to which the names of referenced paths will be added.
+ */
 function statementUses(statement: Statement, out: Set<string>): void {
   switch (statement.kind) {
     case "LetStatement":
@@ -68,7 +118,12 @@ function statementUses(statement: Statement, out: Set<string>): void {
   }
 }
 
-/** Map each binding to whether it was declared with the `write` capability. */
+/**
+ * Map each binding to whether it was declared with the `write` capability.
+ *
+ * @param statements The statements to analyze.
+ * @returns A map from binding names to whether they were declared with the `write` capability.
+ */
 function writeCapabilities(
   statements: readonly Statement[],
 ): Map<string, boolean> {
@@ -81,7 +136,12 @@ function writeCapabilities(
   return capabilities;
 }
 
-/** Collect borrows created by `let r = &[write] base;`. */
+/**
+ * Collect borrows created by `let r = &[write] base;`.
+ *
+ * @param statements The statements to analyze.
+ * @returns An array of borrows found in the statements.
+ */
 function collectBorrows(statements: readonly Statement[]): Borrow[] {
   const borrows: Borrow[] = [];
   for (let index = 0; index < statements.length; index += 1) {
@@ -117,7 +177,12 @@ function collectBorrows(statements: readonly Statement[]): Borrow[] {
   return borrows;
 }
 
-/** Last statement index at which each binding is used: its NLL end-of-life. */
+/**
+ * Last statement index at which each binding is used: its NLL end-of-life.
+ *
+ * @param statements The statements to analyze.
+ * @returns A map from binding names to the last statement index at which they are used.
+ */
 function computeLastUse(statements: readonly Statement[]): Map<string, number> {
   const lastUse = new Map<string, number>();
   for (let index = 0; index < statements.length; index += 1) {
@@ -134,10 +199,26 @@ function computeLastUse(statements: readonly Statement[]): Map<string, number> {
   return lastUse;
 }
 
+/**
+ * Compute the end of a borrow's lifetime.
+ *
+ * @param borrow The borrow to analyze.
+ * @param lastUse A map from binding names to the last statement index at which they are used.
+ * @returns The index of the last statement at which the borrow is used.
+ */
 function borrowEnd(borrow: Borrow, lastUse: Map<string, number>): number {
   return lastUse.get(borrow.name) ?? borrow.declIndex;
 }
 
+/**
+ * Determines whether two live ranges overlap based on their declaration indices
+ * and the last use information.
+ *
+ * @param a The first borrow object, containing information about its live range.
+ * @param b The second borrow object, containing information about its live range.
+ * @param lastUse A map associating variable names with their last use index.
+ * @returns Returns true if the live ranges of `a` and `b` overlap, otherwise false.
+ */
 function liveRangesOverlap(
   a: Borrow,
   b: Borrow,
@@ -148,10 +229,23 @@ function liveRangesOverlap(
   );
 }
 
+/**
+ * Describe a borrow for diagnostic messages.
+ *
+ * @param borrow The borrow to describe.
+ * @returns A string representation of the borrow.
+ */
 function describeBorrow(borrow: Borrow): string {
   return borrow.mutable ? "&write" : "&";
 }
 
+/**
+ * Get the span of a token by its ID.
+ *
+ * @param tokens The array of tokens.
+ * @param id The ID of the token.
+ * @returns The span of the token, or `none` if the token is not found.
+ */
 function spanOf(tokens: readonly Token[], id: number): Option<Span> {
   const token = tokens[id];
   return token !== undefined ? some(token.span) : none();
@@ -240,6 +334,11 @@ function checkItem(
  * exclusivity (at most one `&write` xor any number of `&`) using last-use
  * liveness. Each function body is a single straight-line basic block; the
  * explicit multi-block CFG arrives with control flow (ADR 0002).
+ *
+ * @param program The parsed program.
+ * @param tokens The array of tokens.
+ *
+ * @returns An array of diagnostics indicating any borrow-checking violations found in the program.
  */
 export function checkBorrows(
   program: Program,
