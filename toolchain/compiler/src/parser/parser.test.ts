@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { isSome, none, some } from "../option.js";
-import { compile } from "../driver.js";
 import { parse } from "./parser.js";
 import { tokenize } from "../lexer/lexer.js";
 import { HARD_KEYWORDS } from "../lexer/keywords.js";
@@ -410,78 +409,321 @@ describe("type annotation error diagnostics", (): void => {
   });
 });
 
-// TODO(#11, #13): Fill in these tests when struct definitions and field syntax are supported
-describe.todo("struct field type annotations", (): void => {
-  it("parses a primitive type annotation on a struct field", () => {
-    const source = "struct Foo { field: u32 }";
-    const ast = parseProgram(source);
+describe("struct declarations", (): void => {
+  it("parses a unit struct", (): void => {
+    const ast = parseProgram("struct Foo;");
     expect(ast).toMatchObject({
       kind: "Program",
       items: [
         {
           kind: "Struct",
           name: { kind: "Identifier", text: "Foo" },
-          fields: [
-            {
-              name: { kind: "Identifier", text: "field" },
-              type: {
-                kind: "NamedType",
-                text: "u32",
-              },
-            },
-          ],
+          body: { kind: "Unit" },
         },
       ],
     });
   });
-  it("rejects a tuple type annotation on a struct field", () => {
-    const result = compile("struct Foo { field: (i32) }");
+
+  it("parses an empty named-field struct body", (): void => {
+    const ast = parseProgram("struct Foo {}");
+    expect(ast).toMatchObject({
+      kind: "Program",
+      items: [
+        {
+          kind: "Struct",
+          name: { kind: "Identifier", text: "Foo" },
+          body: { kind: "NamedFields", fields: [] },
+        },
+      ],
+    });
+  });
+
+  it("parses an empty tuple struct body", (): void => {
+    const ast = parseProgram("struct Foo();");
+    expect(ast).toMatchObject({
+      kind: "Program",
+      items: [
+        {
+          kind: "Struct",
+          name: { kind: "Identifier", text: "Foo" },
+          body: { kind: "TupleFields", fields: [] },
+        },
+      ],
+    });
+  });
+
+  it("parses a struct with two named fields", (): void => {
+    const ast = parseProgram("struct Point { x: i32, y: i32 }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Struct",
+          name: { kind: "Identifier", text: "Point" },
+          body: {
+            kind: "NamedFields",
+            fields: [
+              {
+                kind: "StructField",
+                name: { kind: "Identifier", text: "x" },
+                type: {
+                  kind: "NamedType",
+                  path: { absolute: false, segments: ["i32"] },
+                },
+              },
+              {
+                kind: "StructField",
+                name: { kind: "Identifier", text: "y" },
+                type: {
+                  kind: "NamedType",
+                  path: { absolute: false, segments: ["i32"] },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("accepts a trailing comma in the named-field list", (): void => {
+    const ast = parseProgram("struct Foo { x: i32, }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Struct",
+          body: {
+            kind: "NamedFields",
+            fields: [{ name: { text: "x" } }],
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses a tuple struct with fields", (): void => {
+    const ast = parseProgram("struct Pair(i32, u64);");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Struct",
+          name: { kind: "Identifier", text: "Pair" },
+          body: {
+            kind: "TupleFields",
+            fields: [
+              {
+                kind: "TupleField",
+                type: { kind: "NamedType", path: { segments: ["i32"] } },
+              },
+              {
+                kind: "TupleField",
+                type: { kind: "NamedType", path: { segments: ["u64"] } },
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("accepts a trailing comma in the tuple-field list", (): void => {
+    const ast = parseProgram("struct Foo(i32,);");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Struct",
+          body: {
+            kind: "TupleFields",
+            fields: [
+              { type: { kind: "NamedType", path: { segments: ["i32"] } } },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses pub visibility on a struct", (): void => {
+    const ast = parseProgram("pub struct Foo {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Struct",
+          visibility: some({ kind: "Visibility", scope: none() }),
+          body: { kind: "NamedFields", fields: [] },
+        },
+      ],
+    });
+  });
+
+  it("parses pub(package) visibility on a struct", (): void => {
+    const ast = parseProgram("pub(package) struct Foo {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Struct",
+          visibility: some({ kind: "Visibility", scope: some("package") }),
+        },
+      ],
+    });
+  });
+
+  it("parses pub visibility on a named field", (): void => {
+    const ast = parseProgram("struct Foo { pub x: i32 }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          body: {
+            kind: "NamedFields",
+            fields: [
+              {
+                visibility: some({ kind: "Visibility", scope: none() }),
+                name: { kind: "Identifier", text: "x" },
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses pub(package) visibility on a named field", (): void => {
+    const ast = parseProgram("struct Foo { pub(package) x: i32 }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          body: {
+            kind: "NamedFields",
+            fields: [
+              {
+                visibility: some({
+                  kind: "Visibility",
+                  scope: some("package"),
+                }),
+                name: { kind: "Identifier", text: "x" },
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses pub visibility on a tuple field", (): void => {
+    const ast = parseProgram("struct Foo(pub i32);");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          body: {
+            kind: "TupleFields",
+            fields: [
+              {
+                kind: "TupleField",
+                visibility: some({ kind: "Visibility", scope: none() }),
+                type: { kind: "NamedType" },
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses a primitive named type on a struct field", (): void => {
+    const ast = parseProgram("struct Foo { field: u32 }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Struct",
+          name: { kind: "Identifier", text: "Foo" },
+          body: {
+            kind: "NamedFields",
+            fields: [
+              {
+                name: { kind: "Identifier", text: "field" },
+                type: {
+                  kind: "NamedType",
+                  path: { absolute: false, segments: ["u32"] },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses a qualified named type on a struct field", (): void => {
+    const ast = parseProgram("struct Foo { field: std::io::File }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          body: {
+            kind: "NamedFields",
+            fields: [
+              {
+                name: { kind: "Identifier", text: "field" },
+                type: {
+                  kind: "NamedType",
+                  path: { absolute: false, segments: ["std", "io", "File"] },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses a unit type annotation on a struct field", (): void => {
+    const ast = parseProgram("struct Foo { field: () }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          body: {
+            kind: "NamedFields",
+            fields: [
+              {
+                name: { kind: "Identifier", text: "field" },
+                type: { kind: "UnitType" },
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("rejects a tuple type annotation on a struct field", (): void => {
+    const { tokens } = tokenize("struct Foo { field: (i32) }");
+    const result = parse(tokens);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.severity).toBe("error");
     expect(result.diagnostics[0]?.message).toContain(
       "tuple types are not supported",
     );
   });
-  it("parses a qualified named type annotation on a struct field", () => {
-    const source = "struct Foo { field: std::io::File }";
-    const ast = parseProgram(source);
-    expect(ast).toMatchObject({
-      kind: "Program",
-      items: [
-        {
-          kind: "Struct",
-          name: { kind: "Identifier", text: "Foo" },
-          fields: [
-            {
-              name: { kind: "Identifier", text: "field" },
-              type: {
-                kind: "NamedType",
-                path: { absolute: false, segments: ["std", "io", "File"] },
-              },
-            },
-          ],
-        },
-      ],
-    });
-  });
 
-  it("parses a unit type annotation on a struct field", () => {
-    const source = "struct Foo { field: () }";
-    const ast = parseProgram(source);
-    expect(ast).toMatchObject({
-      kind: "Program",
-      items: [
-        {
-          kind: "Struct",
-          name: { kind: "Identifier", text: "Foo" },
-          fields: [
-            {
-              name: { kind: "Identifier", text: "field" },
-              type: { kind: "UnitType" },
-            },
-          ],
-        },
-      ],
+  it("tokenId on a pub named field points to the field name, not pub", (): void => {
+    const { tokens } = tokenize("struct Foo { pub x: i32 }");
+    const { program } = parse(tokens);
+    if (!isSome(program)) {
+      throw new Error("expected program to compile");
+    }
+    const struct = program.value.items[0];
+    if (struct?.kind !== "Struct" || struct.body.kind !== "NamedFields") {
+      throw new Error("expected Struct with NamedFields");
+    }
+    const field = struct.body.fields[0];
+    if (!field) {
+      throw new Error("expected field to exist");
+    }
+    const token = tokens[field.tokenId];
+    if (!token) {
+      throw new Error("expected token to exist");
+    }
+    expect(token).toMatchObject({
+      kind: "ident",
+      text: "x",
     });
   });
 });
@@ -606,6 +848,24 @@ describe("visibility guardrails", (): void => {
     const result = parse(tokenize("pub let x = 1;").tokens);
     expect(result.program).toEqual(none());
     expect(result.diagnostics[0]?.message).toContain("let");
+  });
+
+  it("rejects pub(self) with a Slice 1 diagnostic", (): void => {
+    const result = parse(tokenize("pub(self) struct Foo;").tokens);
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+  });
+
+  it("rejects pub(super) with a Slice 1 diagnostic", (): void => {
+    const result = parse(tokenize("pub(super) struct Foo;").tokens);
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+  });
+
+  it("rejects a visibility qualifier before a bare expression", (): void => {
+    const result = parse(tokenize("pub 42;").tokens);
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain("visibility");
   });
 });
 
@@ -1294,5 +1554,163 @@ describe("deref expression guardrail", (): void => {
   it("deref diagnostic span covers the * token", (): void => {
     const result = parse(tokenize("*value;").tokens);
     expect(result.diagnostics[0]?.span).toEqual(some({ start: 0, end: 1 }));
+  });
+});
+
+describe("function parameters", (): void => {
+  it("zero parameters produce an empty params list", (): void => {
+    const ast = parseProgram("fn f() {}");
+    expect(ast).toMatchObject({
+      items: [{ kind: "Function", params: [] }],
+    });
+  });
+
+  it("parses a single typed parameter", (): void => {
+    const ast = parseProgram("fn add(x: i32) -> i32 { x }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          name: { text: "add" },
+          params: [
+            {
+              kind: "Param",
+              pattern: {
+                kind: "BindingPattern",
+                name: { kind: "Identifier", text: "x" },
+              },
+              type: {
+                kind: "NamedType",
+                path: { absolute: false, segments: ["i32"] },
+              },
+            },
+          ],
+          returnType: some({ kind: "NamedType", path: { segments: ["i32"] } }),
+        },
+      ],
+    });
+  });
+
+  it("parses two typed parameters", (): void => {
+    const ast = parseProgram("fn add(x: i32, y: i32) -> i32 { x }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          params: [
+            {
+              kind: "Param",
+              pattern: { name: { text: "x" } },
+            },
+            {
+              kind: "Param",
+              pattern: { name: { text: "y" } },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("accepts a trailing comma in the parameter list", (): void => {
+    const ast = parseProgram("fn f(x: i32,) {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          params: [{ kind: "Param", pattern: { name: { text: "x" } } }],
+        },
+      ],
+    });
+  });
+
+  it("parses a parameter with a qualified type", (): void => {
+    const ast = parseProgram("fn f(v: std::Vec) {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          params: [
+            {
+              kind: "Param",
+              type: {
+                kind: "NamedType",
+                path: { segments: ["std", "Vec"] },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a parameter with the unit type", (): void => {
+    const ast = parseProgram("fn f(x: ()) {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          params: [{ kind: "Param", type: { kind: "UnitType" } }],
+        },
+      ],
+    });
+  });
+});
+
+describe("unsupported item keywords", (): void => {
+  it.each(["enum", "export", "extern", "impl", "trait"])(
+    "rejects `%s` with a Slice 1 diagnostic",
+    (keyword): void => {
+      const { tokens } = tokenize(`${keyword} Foo {}`);
+      const { diagnostics } = parse(tokens);
+      expect(diagnostics[0]?.severity).toBe("error");
+      expect(diagnostics[0]?.message).toContain("Slice 1");
+      expect(diagnostics[0]?.message).toContain(keyword);
+    },
+  );
+});
+
+describe("item error recovery", (): void => {
+  it("reports an error for a parameter missing its type annotation", (): void => {
+    const { tokens } = tokenize("fn f(x) {}");
+    const { diagnostics } = parse(tokens);
+    expect(diagnostics[0]?.severity).toBe("error");
+    expect(diagnostics[0]?.message).toContain(":");
+  });
+
+  it("reports an error for a parameter missing its name", (): void => {
+    const { tokens } = tokenize("fn f(: i32) {}");
+    const { diagnostics } = parse(tokens);
+    expect(diagnostics[0]?.severity).toBe("error");
+  });
+
+  it("reports an error for a struct missing its name", (): void => {
+    const { tokens } = tokenize("struct { x: i32 }");
+    const { diagnostics } = parse(tokens);
+    expect(diagnostics[0]?.severity).toBe("error");
+  });
+
+  it("reports an error for a struct field missing its colon", (): void => {
+    const { tokens } = tokenize("struct Foo { x i32 }");
+    const { diagnostics } = parse(tokens);
+    expect(diagnostics[0]?.severity).toBe("error");
+    expect(diagnostics[0]?.message).toContain(":");
+  });
+
+  it("reports an error for a struct field missing its type", (): void => {
+    const { tokens } = tokenize("struct Foo { x: }");
+    const { diagnostics } = parse(tokens);
+    expect(diagnostics[0]?.severity).toBe("error");
+  });
+
+  it("reports an error for a struct field missing its colon and type", (): void => {
+    const { tokens } = tokenize("struct Foo { x }");
+    const { diagnostics } = parse(tokens);
+    expect(diagnostics[0]?.severity).toBe("error");
+    expect(diagnostics[0]?.message).toContain(":");
+  });
+
+  it("reports an error for a tuple field missing its type", (): void => {
+    const { tokens } = tokenize("struct Foo(:);");
+    const { diagnostics } = parse(tokens);
+    expect(diagnostics[0]?.severity).toBe("error");
   });
 });

@@ -34,4 +34,86 @@ describe("toJsim", () => {
       ],
     });
   });
+
+  it("maps function params with known primitive types to FunctionParam nodes", () => {
+    const program = toJsim(parseOrThrow("fn f(x: i32, b: bool) {}"));
+    expect(program).toMatchObject({
+      items: [
+        {
+          kind: "FunctionDecl",
+          params: [
+            {
+              kind: "FunctionParam",
+              name: "x",
+              type: { kind: "PrimitiveType", value: "number" },
+            },
+            {
+              kind: "FunctionParam",
+              name: "b",
+              type: { kind: "PrimitiveType", value: "boolean" },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("maps a function return type to a JSIM PrimitiveType", () => {
+    const program = toJsim(parseOrThrow("fn f() -> bool {}"));
+    expect(program).toMatchObject({
+      items: [
+        {
+          kind: "FunctionDecl",
+          returnType: { value: { kind: "PrimitiveType", value: "boolean" } },
+        },
+      ],
+    });
+  });
+
+  it("maps an i64 param to bigint", () => {
+    const program = toJsim(parseOrThrow("fn f(x: i64) {}"));
+    expect(program).toMatchObject({
+      items: [
+        {
+          params: [
+            {
+              kind: "FunctionParam",
+              name: "x",
+              type: { kind: "PrimitiveType", value: "bigint" },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("maps a unit return type to none()", () => {
+    const program = toJsim(parseOrThrow("fn f() -> () {}"));
+    expect(program).toMatchObject({
+      items: [{ kind: "FunctionDecl", returnType: none() }],
+    });
+  });
+
+  it("struct declaration produces no JSIM items", () => {
+    const program = toJsim(parseOrThrow("struct Foo;"));
+    expect(program.items).toEqual([]);
+  });
+
+  it("unit-typed param is kept in JSIM output with null type", () => {
+    const program = toJsim(parseOrThrow("fn f(x: ()) {}"));
+    expect(program).toMatchObject({
+      items: [
+        {
+          kind: "FunctionDecl",
+          params: [
+            {
+              kind: "FunctionParam",
+              name: "x",
+              type: { kind: "PrimitiveType", value: "null" },
+            },
+          ],
+        },
+      ],
+    });
+  });
 });
