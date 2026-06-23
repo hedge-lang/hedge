@@ -123,6 +123,7 @@ function analyzeLetStatement(
   bind(ctx, statement.pattern.name.text);
 }
 
+// eslint-disable-next-line complexity -- This is a routing function
 function analyzeExpression(ctx: AnalysisContext, expression: Expression): void {
   switch (expression.kind) {
     case "StringLiteral":
@@ -139,6 +140,21 @@ function analyzeExpression(ctx: AnalysisContext, expression: Expression): void {
       return;
     case "ReferenceExpression":
       analyzeExpression(ctx, expression.operand);
+      return;
+    case "BinaryExpression":
+      analyzeExpression(ctx, expression.left);
+      analyzeExpression(ctx, expression.right);
+      return;
+    case "UnaryExpression":
+      analyzeExpression(ctx, expression.operand);
+      return;
+    case "AssignExpression":
+    case "CompoundAssignExpression":
+      analyzeExpression(ctx, expression.lhs);
+      analyzeExpression(ctx, expression.rhs);
+      return;
+    case "FieldAccessExpression":
+      analyzeExpression(ctx, expression.object);
       return;
     default:
       assertNever(expression);

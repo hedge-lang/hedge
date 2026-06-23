@@ -26,6 +26,38 @@ export type Item = FunctionDecl | StructDecl | Statement | Expression;
 
 export type Statement = LetStatement | ExpressionStatement;
 
+export type BinaryOperator =
+  | "Add"
+  | "Sub"
+  | "Mul"
+  | "Div"
+  | "Rem"
+  | "Shl"
+  | "Shr"
+  | "BitAnd"
+  | "BitXor"
+  | "BitOr"
+  | "Eq"
+  | "Ne"
+  | "Lt"
+  | "Gt"
+  | "Le"
+  | "Ge"
+  | "And"
+  | "Or";
+
+export type CompoundAssignOperator =
+  | "AddAssign"
+  | "SubAssign"
+  | "MulAssign"
+  | "DivAssign"
+  | "RemAssign"
+  | "BitAndAssign"
+  | "BitOrAssign"
+  | "BitXorAssign"
+  | "ShlAssign"
+  | "ShrAssign";
+
 export type Expression =
   | StringLiteral
   | IntLiteral
@@ -34,7 +66,12 @@ export type Expression =
   | CharLiteral
   | PathExpression
   | CallExpression
-  | ReferenceExpression;
+  | ReferenceExpression
+  | BinaryExpression
+  | UnaryExpression
+  | AssignExpression
+  | CompoundAssignExpression
+  | FieldAccessExpression;
 
 export interface Visibility {
   readonly kind: "Visibility";
@@ -194,4 +231,36 @@ export interface ReferenceExpression extends AstNode {
   /** `true` for `&write` (exclusive), `false` for `&` (shared). */
   readonly mutable: boolean;
   readonly operand: Expression;
+}
+
+export interface BinaryExpression extends AstNode {
+  readonly kind: "BinaryExpression";
+  readonly operator: BinaryOperator;
+  readonly left: Expression;
+  readonly right: Expression;
+}
+
+export interface UnaryExpression extends AstNode {
+  readonly kind: "UnaryExpression";
+  readonly operator: "Neg" | "Not";
+  readonly operand: Expression;
+}
+
+export interface AssignExpression extends AstNode {
+  readonly kind: "AssignExpression";
+  readonly lhs: Expression;
+  readonly rhs: Expression;
+}
+
+export interface CompoundAssignExpression extends AstNode {
+  readonly kind: "CompoundAssignExpression";
+  readonly operator: CompoundAssignOperator;
+  readonly lhs: Expression;
+  readonly rhs: Expression;
+}
+
+export interface FieldAccessExpression extends AstNode {
+  readonly kind: "FieldAccessExpression";
+  readonly object: Expression;
+  readonly field: Identifier;
 }
