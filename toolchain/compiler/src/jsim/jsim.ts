@@ -159,5 +159,9 @@ function parseExpression(expression: Parser.Expression): JSIM.Expression {
     case "ReferenceExpression":
       // References are transparent in JS — emit the operand directly.
       return parseExpression(expression.operand);
+    default:
+      throw new Error(
+        `JSIM codegen for "${expression.kind}" is not yet implemented`,
+      );
   }
 }
