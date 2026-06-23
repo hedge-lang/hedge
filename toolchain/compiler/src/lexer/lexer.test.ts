@@ -67,10 +67,11 @@ describe("lexer", (): void => {
       "where",
       "while",
     ])("%s", (keyword) => {
-      const [first] = tokenize(keyword);
+      const { tokens } = tokenize(keyword);
+      const [first] = tokens;
       expect(first).toMatchObject({ kind: "keyword", text: keyword });
-    })
-  })
+    });
+  });
 
   it("records source spans", (): void => {
     const { tokens } = tokenize("abc");
