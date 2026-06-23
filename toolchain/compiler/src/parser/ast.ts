@@ -1,4 +1,6 @@
 import type { Option } from "../option.js";
+import type { FloatSuffix, IntSuffix } from "../lexer/token.js";
+export type { IntSuffix, FloatSuffix } from "../lexer/token.js";
 
 /** Every AST node carries the index of the token that begins it. */
 export interface AstNode {
@@ -20,13 +22,16 @@ export interface Attribute {
 }
 
 /** A top-level entry. Slice 1 is lenient and also accepts bare statements. */
-export type Item = FunctionDecl | Statement | Expression;
+export type Item = FunctionDecl | StructDecl | Statement | Expression;
 
 export type Statement = LetStatement | ExpressionStatement;
 
 export type Expression =
   | StringLiteral
   | IntLiteral
+  | FloatLiteral
+  | BoolLiteral
+  | CharLiteral
   | PathExpression
   | CallExpression
   | ReferenceExpression;
@@ -37,16 +42,61 @@ export interface Visibility {
   readonly scope: Option<string>;
 }
 
+export interface Param extends AstNode {
+  readonly kind: "Param";
+  readonly pattern: BindingPattern;
+  readonly type: Type;
+}
+
 export interface FunctionDecl extends AstNode {
   readonly kind: "Function";
   readonly visibility: Option<Visibility>;
   readonly name: Identifier;
   readonly generics: readonly never[];
-  readonly params: readonly never[];
-  readonly returnType: Option<never>;
+  readonly params: readonly Param[];
+  readonly returnType: Option<Type>;
   readonly whereClause: Option<never>;
   readonly attributes: readonly Attribute[];
   readonly body: Block;
+}
+
+export interface StructDecl extends AstNode {
+  readonly kind: "Struct";
+  readonly visibility: Option<Visibility>;
+  readonly name: Identifier;
+  readonly body: StructBody;
+  readonly attributes: readonly Attribute[];
+}
+
+export type StructBody = NamedFieldsBody | TupleFieldsBody | UnitBody;
+
+export interface NamedFieldsBody {
+  readonly kind: "NamedFields";
+  readonly fields: readonly StructField[];
+}
+
+export interface TupleFieldsBody {
+  readonly kind: "TupleFields";
+  readonly fields: readonly TupleField[];
+}
+
+export interface UnitBody {
+  readonly kind: "Unit";
+}
+
+export interface StructField extends AstNode {
+  readonly kind: "StructField";
+  readonly attributes: readonly Attribute[];
+  readonly visibility: Option<Visibility>;
+  readonly name: Identifier;
+  readonly type: Type;
+}
+
+export interface TupleField extends AstNode {
+  readonly kind: "TupleField";
+  readonly attributes: readonly Attribute[];
+  readonly visibility: Option<Visibility>;
+  readonly type: Type;
 }
 
 export interface Block extends AstNode {
@@ -62,7 +112,7 @@ export interface LetStatement extends AstNode {
   readonly bind: boolean;
   readonly write: boolean;
   readonly pattern: BindingPattern;
-  readonly type: null;
+  readonly type: Option<Type>;
   readonly initializer: Option<Expression>;
 }
 
@@ -88,12 +138,44 @@ export interface StringLiteral extends AstNode {
 
 export interface IntLiteral extends AstNode {
   readonly kind: "IntLiteral";
+  /** Digits only — no prefix, underscores stripped. */
+  readonly value: string;
+  readonly base: 10 | 16 | 8 | 2;
+  readonly suffix: Option<IntSuffix>;
+}
+
+export interface FloatLiteral extends AstNode {
+  readonly kind: "FloatLiteral";
+  /** Full normalized text, underscores stripped. */
+  readonly value: string;
+  readonly suffix: Option<FloatSuffix>;
+}
+
+export interface BoolLiteral extends AstNode {
+  readonly kind: "BoolLiteral";
+  readonly value: boolean;
+}
+
+export interface CharLiteral extends AstNode {
+  readonly kind: "CharLiteral";
+  /** Resolved character (after escape decoding). */
   readonly value: string;
 }
 
 export interface Path {
   readonly absolute: boolean;
   readonly segments: string[];
+}
+
+export type Type = NamedType | UnitType;
+
+export interface NamedType extends AstNode {
+  readonly kind: "NamedType";
+  readonly path: Path;
+}
+
+export interface UnitType extends AstNode {
+  readonly kind: "UnitType";
 }
 
 export interface PathExpression extends AstNode {

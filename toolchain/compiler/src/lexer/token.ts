@@ -1,3 +1,8 @@
+import type { Option } from "../option.js";
+
+export type IntSuffix = `${"u" | "i"}${8 | 16 | 32 | 64 | "size"}`;
+export type FloatSuffix = "f32" | "f64";
+
 /** A half-open source range, measured in UTF-16 code units, 0-based. */
 export interface Span {
   readonly start: number;
@@ -9,9 +14,23 @@ export type Token =
   // Non-symbol tokens
   | { readonly kind: "ident"; readonly span: Span; readonly text: string }
   | { readonly kind: "keyword"; readonly span: Span; readonly text: string }
-  | { readonly kind: "int"; readonly span: Span; readonly text: string }
+  | {
+      readonly kind: "int";
+      readonly span: Span;
+      readonly text: string;
+      readonly radix: 2 | 8 | 10 | 16;
+      readonly suffix: Option<IntSuffix>;
+    }
+  | {
+      readonly kind: "float";
+      readonly span: Span;
+      readonly text: string;
+      readonly suffix: Option<FloatSuffix>;
+    }
+  | { readonly kind: "char"; readonly span: Span; readonly text: string }
   | { readonly kind: "string"; readonly span: Span; readonly text: string }
   | { readonly kind: "lifetime"; readonly span: Span; readonly text: string }
+  | { readonly kind: "error"; readonly span: Span; readonly text: string }
   | { readonly kind: "eof"; readonly span: Span }
   // Delimiters
   | { readonly kind: "lparen"; readonly span: Span }
@@ -65,3 +84,33 @@ export type Token =
   | { readonly kind: "path_sep"; readonly span: Span }
   | { readonly kind: "dot_dot"; readonly span: Span }
   | { readonly kind: "dot_dot_eq"; readonly span: Span };
+
+function escapeText(text: string): string {
+  return text
+    .replaceAll("\\", "\\\\")
+    .replaceAll("\n", "\\n")
+    .replaceAll("\r", "\\r")
+    .replaceAll("\t", "\\t")
+    .replaceAll('"', '\\"');
+}
+
+export function tokenToString(token: Token): string {
+  switch (token.kind) {
+    case "ident":
+      return `ident(${escapeText(token.text)})`;
+    case "keyword":
+      return `keyword(${escapeText(token.text)})`;
+    case "int":
+      return `int(${escapeText(token.text)})`;
+    case "string":
+      return `string(${escapeText(token.text)})`;
+    case "lifetime":
+      return `lifetime(${escapeText(token.text)})`;
+    case "error":
+      return `error(${escapeText(token.text)})`;
+    case "eof":
+      return "end of input";
+    default:
+      return token.kind;
+  }
+}

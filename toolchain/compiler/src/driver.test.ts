@@ -13,9 +13,34 @@ describe("driver", (): void => {
     `);
     expect(result.diagnostics).toEqual([]);
     expect(isSome(result.code)).toBe(true);
-    const js = isSome(result.code) ? result.code.value.javascript : "";
-    expect(js).toContain("function main()");
-    expect(js).toContain("main()");
+    if (isSome(result.code)) {
+      const { javascript } = result.code.value;
+      expect(isSome(javascript)).toBe(true);
+      if (isSome(javascript)) {
+        expect(javascript.value).toContain("function main()");
+        expect(javascript.value).toContain("main()");
+      }
+    }
+  });
+
+  it("compiles variable expressions", (): void => {
+    const result = compile(`
+      fn main() {
+        let b_true: bool = true;
+        let b_false = false;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(isSome(result.code)).toBe(true);
+    if (isSome(result.code)) {
+      const { javascript } = result.code.value;
+      expect(isSome(javascript)).toBe(true);
+      if (isSome(javascript)) {
+        expect(javascript.value).toContain("function main()");
+        expect(javascript.value).toContain("b_true = true;");
+        expect(javascript.value).toContain("b_false = false;");
+      }
+    }
   });
 
   it("reports a semantic error and produces no code", (): void => {

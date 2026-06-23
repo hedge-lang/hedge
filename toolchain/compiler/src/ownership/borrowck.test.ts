@@ -2,11 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import type { Diagnostic } from "../diagnostics.js";
 import { tokenize } from "../lexer/lexer.js";
+import { isSome } from "../option.js";
 import { parse } from "../parser/parser.js";
 import { checkBorrows } from "./borrowck.js";
 
 function check(source: string): readonly Diagnostic[] {
-  return checkBorrows(parse(tokenize(source)));
+  const { tokens } = tokenize(source);
+  const { program, diagnostics } = parse(tokens);
+  if (isSome(program)) {
+    return checkBorrows(program.value, tokens);
+  }
+  throw new Error(diagnostics[0]?.message ?? "Parse failed");
 }
 
 describe("borrow checker", (): void => {

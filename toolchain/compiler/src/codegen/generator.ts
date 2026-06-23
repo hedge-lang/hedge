@@ -1,4 +1,4 @@
-import { isSome } from "../option.js";
+import { isSome, none, some } from "../option.js";
 import type {
   DocComment,
   Expression,
@@ -31,6 +31,8 @@ function emitDocComment(doc: DocComment, isModule: boolean = false): string {
 
 function emitExpression(expression: Expression): string {
   switch (expression.kind) {
+    case "BooleanLiteral":
+      return expression.value ? "true" : "false";
     case "StringLiteral":
       return JSON.stringify(expression.value);
     case "NumberLiteral":
@@ -49,19 +51,16 @@ function emitExpression(expression: Expression): string {
 function emitLet(statement: LetStatement): string {
   const keyword = statement.mutable ? "let" : "const";
   const value = statement.value;
-  const declaration = isSome(value)
+  return isSome(value)
     ? `${keyword} ${statement.name} = ${emitExpression(value.value)};`
     : `${keyword} ${statement.name};`;
-  if (isSome(statement.docComment)) {
-    return `${emitDocComment(statement.docComment.value)}\n${declaration}`;
-  }
-  return declaration;
 }
 
 function emitStatement(statement: Statement): string {
   switch (statement.kind) {
     case "LetStatement":
       return emitLet(statement);
+    case "BooleanLiteral":
     case "StringLiteral":
     case "NumberLiteral":
     case "PathExpression":
@@ -74,20 +73,11 @@ function emitStatement(statement: Statement): string {
 
 function emitFunction(decl: FunctionDecl): string {
   const bodyLines = decl.body.map(emitStatement);
-  const hasDoc = isSome(decl.docComment);
-  // Documented functions use explicit braces on separate lines for readability.
   const bodyStr =
-    bodyLines.length === 0 && !hasDoc
-      ? "{}"
-      : bodyLines.length === 0
-        ? "{\n}"
-        : `{\n${bodyLines.map(indent).join("\n")}\n}`;
+    bodyLines.length === 0 ? "{}" : `{\n${bodyLines.map(indent).join("\n")}\n}`;
   const keyword = isSome(decl.scope) ? "export function" : "function";
-  const fn = `${keyword} ${decl.name}() ${bodyStr}`;
-  if (hasDoc) {
-    return `${emitDocComment(decl.docComment.value)}\n${fn}`;
-  }
-  return fn;
+  const params = decl.params.map((p) => p.name).join(", ");
+  return `${keyword} ${decl.name}(${params}) ${bodyStr}`;
 }
 
 function emitItem(item: Item): string {
@@ -96,6 +86,7 @@ function emitItem(item: Item): string {
       return emitFunction(item);
     case "LetStatement":
       return emitLet(item);
+    case "BooleanLiteral":
     case "StringLiteral":
     case "NumberLiteral":
     case "PathExpression":
@@ -152,10 +143,6 @@ function hasMain(program: Program): boolean {
 export function generate(program: Program): Code {
   const parts: string[] = [];
 
-  if (isSome(program.docComment)) {
-    parts.push(emitDocComment(program.docComment.value, true));
-  }
-
   for (const item of program.items) {
     parts.push(emitItem(item));
   }
@@ -177,7 +164,7 @@ export function generate(program: Program): Code {
   }
 
   return {
-    javascript: parts.join("\n\n"),
-    typedef: dtsParts.join("\n\n"),
+    javascript: parts.length ? some(`${parts.join("\n\n")}\n`) : none(),
+    typedef: dtsParts.length ? some(`${dtsParts.join("\n\n")}\n`) : none(),
   };
 }

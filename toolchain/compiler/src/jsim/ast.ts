@@ -35,10 +35,16 @@ export interface LetStatement {
 }
 
 export type Expression =
+  | BooleanLiteral
   | StringLiteral
   | NumberLiteral
   | PathExpression
   | CallExpression;
+
+interface BooleanLiteral {
+  readonly kind: "BooleanLiteral";
+  readonly value: boolean;
+}
 
 interface StringLiteral {
   readonly kind: "StringLiteral";
@@ -61,7 +67,7 @@ interface CallExpression {
   readonly arguments: readonly Expression[];
 }
 
-interface FunctionParam {
+export interface FunctionParam {
   readonly kind: "FunctionParam";
   readonly name: string;
   readonly type: Type;
@@ -70,5 +76,5 @@ interface FunctionParam {
 type Type = PrimitiveType;
 interface PrimitiveType {
   readonly kind: "PrimitiveType";
-  readonly value: "string" | "number" | "boolean" | "null";
+  readonly value: "string" | "number" | "bigint" | "boolean" | "null";
 }

@@ -1,5 +1,7 @@
 import type { Diagnostic } from "../diagnostics.js";
-import { isSome } from "../option.js";
+import type { Token } from "../lexer/token.js";
+import { isSome, none, some } from "../option.js";
+import { HEDGE_PRIMITIVE_TYPES } from "../primitives.js";
 import type {
   Block,
   CallExpression,
@@ -10,6 +12,7 @@ import type {
   PathExpression,
   Program,
   Statement,
+  Type,
 } from "../parser/ast.js";
 
 export interface AnalysisResult {
@@ -30,12 +33,15 @@ function assertNever(value: never): never {
 interface AnalysisContext {
   readonly scopes: Set<string>[];
   readonly diagnostics: Diagnostic[];
+  readonly tokens: readonly Token[];
 }
 
 function analyzeItem(ctx: AnalysisContext, item: Item): void {
   switch (item.kind) {
     case "Function":
       analyzeFunctionDecl(ctx, item);
+      return;
+    case "Struct":
       return;
     case "LetStatement":
     case "ExpressionStatement":
@@ -46,8 +52,41 @@ function analyzeItem(ctx: AnalysisContext, item: Item): void {
   }
 }
 
+function validateSlice1Type(
+  ctx: AnalysisContext,
+  type: Type,
+  tokenId: number,
+): void {
+  if (
+    type.kind === "NamedType" &&
+    type.path.segments.length === 1 &&
+    HEDGE_PRIMITIVE_TYPES.has(String(type.path.segments[0]))
+  ) {
+    return;
+  }
+  if (type.kind === "UnitType") return;
+  emitError(
+    ctx,
+    "type is not supported in Slice 1 function signatures",
+    tokenId,
+  );
+}
+
 function analyzeFunctionDecl(ctx: AnalysisContext, decl: FunctionDecl): void {
+  ctx.scopes.push(new Set());
+  for (const param of decl.params) {
+    validateSlice1Type(ctx, param.type, param.type.tokenId);
+    bind(ctx, param.pattern.name.text);
+  }
+  if (isSome(decl.returnType)) {
+    validateSlice1Type(
+      ctx,
+      decl.returnType.value,
+      decl.returnType.value.tokenId,
+    );
+  }
   analyzeBlock(ctx, decl.body);
+  ctx.scopes.pop();
 }
 
 function analyzeBlock(ctx: AnalysisContext, block: Block): void {
@@ -88,6 +127,9 @@ function analyzeExpression(ctx: AnalysisContext, expression: Expression): void {
   switch (expression.kind) {
     case "StringLiteral":
     case "IntLiteral":
+    case "FloatLiteral":
+    case "BoolLiteral":
+    case "CharLiteral":
       return;
     case "PathExpression":
       analyzePath(ctx, expression);
@@ -145,7 +187,12 @@ function emitError(
   message: string,
   tokenId: number,
 ): void {
-  ctx.diagnostics.push({ severity: "error", message, tokenId });
+  const token = ctx.tokens[tokenId];
+  ctx.diagnostics.push({
+    severity: "error",
+    message,
+    span: token !== undefined ? some(token.span) : none(),
+  });
 }
 
 /**
@@ -154,10 +201,14 @@ function emitError(
  * Slice-1 scope: a builtin prelude, then per-function and per-block scopes;
  * `let` binds into the current scope after its initializer is analyzed.
  */
-export function analyze(program: Program): AnalysisResult {
+export function analyze(
+  program: Program,
+  tokens: readonly Token[],
+): AnalysisResult {
   const ctx: AnalysisContext = {
     scopes: [new Set(BUILTINS)],
     diagnostics: [],
+    tokens,
   };
   for (const item of program.items) {
     analyzeItem(ctx, item);

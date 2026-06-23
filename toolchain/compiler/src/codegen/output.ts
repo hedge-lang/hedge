@@ -1,4 +1,6 @@
+import { type Option } from "../option.js";
+
 export interface Code {
-  javascript: string;
-  typedef: string;
+  javascript: Option<string>;
+  typedef: Option<string>;
 }

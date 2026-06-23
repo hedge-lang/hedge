@@ -4,6 +4,9 @@
     "rootDir": "src",
     "outDir": "dist",
     "types": ["node"],
+    "paths": {
+      "@hedge-lang/compiler": ["../compiler/src/index.ts"]
+    },
     "composite": true
   },
   "include": ["src/**/*"],
