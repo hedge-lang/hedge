@@ -1288,6 +1288,10 @@ describe("parse errors — missing tokens", (): void => {
     expect(result.diagnostics[0]?.message).toContain("write");
     expect(result.diagnostics[0]?.message).toContain("mut");
   });
+
+  it.todo(
+    "let x = y = 5 and let x = (y = 5) produce type errors — assignment returns () and cannot initialize a non-unit binding",
+  );
 });
 
 describe("empty and minimal programs", (): void => {
