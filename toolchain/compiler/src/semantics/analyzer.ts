@@ -59,8 +59,8 @@ function validateSlice1Type(
 ): void {
   if (
     type.kind === "NamedType" &&
-    type.path.segments[0] &&
-    type.path.segments[0] in HEDGE_PRIMITIVE_TYPES
+    type.path.segments.length === 1 &&
+    HEDGE_PRIMITIVE_TYPES.has(String(type.path.segments[0]))
   ) {
     return;
   }

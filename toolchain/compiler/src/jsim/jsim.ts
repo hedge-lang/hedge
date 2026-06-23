@@ -26,7 +26,7 @@ function parsePrimitiveType(type: Parser.Type): Option<PrimitiveType> {
     if (segment === undefined) {
       return none();
     }
-    const value = HEDGE_PRIMITIVE_TYPES[segment];
+    const value = HEDGE_PRIMITIVE_TYPES.get(segment);
     if (value !== undefined) return some({ kind: "PrimitiveType", value });
   }
   return none();
