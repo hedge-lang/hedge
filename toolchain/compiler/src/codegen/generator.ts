@@ -88,7 +88,7 @@ function emitExpression(expression: Expression): string {
     case "BinaryExpression":
       return `(${emitExpression(expression.left)} ${BINARY_OPS[expression.operator]} ${emitExpression(expression.right)})`;
     case "UnaryExpression":
-      return `${UNARY_OPS[expression.operator]}${emitExpression(expression.operand)}`;
+      return `(${UNARY_OPS[expression.operator]}${emitExpression(expression.operand)})`;
     case "AssignExpression":
       return `${emitExpression(expression.lhs)} ${ASSIGN_OPS[expression.operator]} ${emitExpression(expression.rhs)}`;
     case "FieldAccessExpression":
