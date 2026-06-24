@@ -1,5 +1,8 @@
 import { isSome, none, some } from "../option.js";
 import type {
+  AssignOperator,
+  BinaryOperator,
+  UnaryOperator,
   DocComment,
   Expression,
   FunctionDecl,
@@ -13,6 +16,46 @@ import type { Code } from "./output.js";
 function assertNever(value: never): never {
   throw new Error(`Unexpected AST node: ${JSON.stringify(value)}`);
 }
+
+const BINARY_OPS: Record<BinaryOperator, string> = {
+  Add: "+",
+  Sub: "-",
+  Mul: "*",
+  Div: "/",
+  Rem: "%",
+  Shl: "<<",
+  Shr: ">>",
+  BitAnd: "&",
+  BitXor: "^",
+  BitOr: "|",
+  Eq: "===",
+  Ne: "!==",
+  Lt: "<",
+  Gt: ">",
+  Le: "<=",
+  Ge: ">=",
+  And: "&&",
+  Or: "||",
+};
+
+const UNARY_OPS: Record<UnaryOperator, string> = {
+  Neg: "-",
+  Not: "!",
+};
+
+const ASSIGN_OPS: Record<AssignOperator, string> = {
+  Assign: "=",
+  AddAssign: "+=",
+  SubAssign: "-=",
+  MulAssign: "*=",
+  DivAssign: "/=",
+  RemAssign: "%=",
+  BitAndAssign: "&=",
+  BitOrAssign: "|=",
+  BitXorAssign: "^=",
+  ShlAssign: "<<=",
+  ShrAssign: ">>=",
+};
 
 function indent(text: string): string {
   return text
@@ -37,23 +80,34 @@ function emitExpression(expression: Expression): string {
       return JSON.stringify(expression.value);
     case "NumberLiteral":
       return expression.value;
+    case "Identifier":
+      return expression.value;
     case "PathExpression":
       return expression.path.join(".");
     case "CallExpression": {
       const args = expression.arguments.map(emitExpression).join(", ");
       return `${emitExpression(expression.callee)}(${args})`;
     }
+    case "BinaryExpression":
+      return `(${emitExpression(expression.left)} ${BINARY_OPS[expression.operator]} ${emitExpression(expression.right)})`;
+    case "UnaryExpression":
+      return `${UNARY_OPS[expression.operator]}${emitExpression(expression.operand)}`;
+    case "AssignExpression":
+      return `${emitExpression(expression.lhs)} ${ASSIGN_OPS[expression.operator]} ${emitExpression(expression.rhs)}`;
+    case "FieldAccessExpression":
+      return `${emitExpression(expression.object)}.${expression.field}`;
     default:
       return assertNever(expression);
   }
 }
 
 function emitLet(statement: LetStatement): string {
+  if (!statement.mutable && !isSome(statement.value)) return "";
   const keyword = statement.mutable ? "let" : "const";
   const value = statement.value;
   return isSome(value)
     ? `${keyword} ${statement.name} = ${emitExpression(value.value)};`
-    : `${keyword} ${statement.name};`;
+    : `let ${statement.name};`;
 }
 
 function emitStatement(statement: Statement): string {
@@ -63,8 +117,13 @@ function emitStatement(statement: Statement): string {
     case "BooleanLiteral":
     case "StringLiteral":
     case "NumberLiteral":
+    case "Identifier":
     case "PathExpression":
     case "CallExpression":
+    case "BinaryExpression":
+    case "UnaryExpression":
+    case "AssignExpression":
+    case "FieldAccessExpression":
       return `${emitExpression(statement)};`;
     default:
       return assertNever(statement);
@@ -72,7 +131,7 @@ function emitStatement(statement: Statement): string {
 }
 
 function emitFunction(decl: FunctionDecl): string {
-  const bodyLines = decl.body.map(emitStatement);
+  const bodyLines = decl.body.map(emitStatement).filter((s) => s.length > 0);
   const bodyStr =
     bodyLines.length === 0 ? "{}" : `{\n${bodyLines.map(indent).join("\n")}\n}`;
   const keyword = isSome(decl.scope) ? "export function" : "function";
@@ -80,6 +139,13 @@ function emitFunction(decl: FunctionDecl): string {
   return `${keyword} ${decl.name}(${params}) ${bodyStr}`;
 }
 
+/**
+ * Emits the appropriate string representation for a given item based on its kind.
+ *
+ * @param item The item to be emitted, containing a kind property that determines how it is processed.
+ * @return A string representation of the given item based on its kind.
+ */
+// eslint-disable-next-line complexity -- This is a routing function
 function emitItem(item: Item): string {
   switch (item.kind) {
     case "FunctionDecl":
@@ -89,8 +155,13 @@ function emitItem(item: Item): string {
     case "BooleanLiteral":
     case "StringLiteral":
     case "NumberLiteral":
+    case "Identifier":
     case "PathExpression":
     case "CallExpression":
+    case "BinaryExpression":
+    case "UnaryExpression":
+    case "AssignExpression":
+    case "FieldAccessExpression":
       return `${emitExpression(item)};`;
     default:
       return assertNever(item);
@@ -144,7 +215,8 @@ export function generate(program: Program): Code {
   const parts: string[] = [];
 
   for (const item of program.items) {
-    parts.push(emitItem(item));
+    const emitted = emitItem(item);
+    if (emitted.length > 0) parts.push(emitted);
   }
 
   if (hasMain(program)) {
