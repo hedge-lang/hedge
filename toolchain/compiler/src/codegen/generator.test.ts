@@ -201,8 +201,8 @@ describe("binary expression codegen", () => {
 
 describe("unary expression codegen", () => {
   it.each([
-    ["Neg", "-x", "-x"],
-    ["Not", "!x", "!x"],
+    ["Neg", "-x", "(-x)"],
+    ["Not", "!x", "(!x)"],
   ])("%s emits correct JS operator", (_, source, expected) => {
     expect(js(gen(source))).toBe(`${expected};\n`);
   });
