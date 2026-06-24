@@ -39,7 +39,12 @@ export type Expression =
   | StringLiteral
   | NumberLiteral
   | PathExpression
-  | CallExpression;
+  | CallExpression
+  | BinaryExpression
+  | UnaryExpression
+  | AssignExpression
+  | FieldAccessExpression
+  | Identifier;
 
 interface BooleanLiteral {
   readonly kind: "BooleanLiteral";
@@ -77,4 +82,67 @@ type Type = PrimitiveType;
 interface PrimitiveType {
   readonly kind: "PrimitiveType";
   readonly value: "string" | "number" | "bigint" | "boolean" | "null";
+}
+
+export type BinaryOperator =
+  | "Add"
+  | "Sub"
+  | "Mul"
+  | "Div"
+  | "Rem"
+  | "Shl"
+  | "Shr"
+  | "BitAnd"
+  | "BitXor"
+  | "BitOr"
+  | "Eq"
+  | "Ne"
+  | "Lt"
+  | "Gt"
+  | "Le"
+  | "Ge"
+  | "And"
+  | "Or";
+interface BinaryExpression {
+  readonly kind: "BinaryExpression";
+  readonly operator: BinaryOperator;
+  readonly left: Expression;
+  readonly right: Expression;
+}
+
+export type UnaryOperator = "Neg" | "Not";
+interface UnaryExpression {
+  readonly kind: "UnaryExpression";
+  readonly operator: UnaryOperator;
+  readonly operand: Expression;
+}
+
+export type AssignOperator =
+  | "Assign"
+  | "AddAssign"
+  | "SubAssign"
+  | "MulAssign"
+  | "DivAssign"
+  | "RemAssign"
+  | "BitAndAssign"
+  | "BitOrAssign"
+  | "BitXorAssign"
+  | "ShlAssign"
+  | "ShrAssign";
+interface AssignExpression {
+  readonly kind: "AssignExpression";
+  readonly operator: AssignOperator;
+  readonly lhs: Expression;
+  readonly rhs: Expression;
+}
+
+interface FieldAccessExpression {
+  readonly kind: "FieldAccessExpression";
+  readonly object: Expression;
+  readonly field: string;
+}
+
+interface Identifier {
+  readonly kind: "Identifier";
+  readonly value: string;
 }

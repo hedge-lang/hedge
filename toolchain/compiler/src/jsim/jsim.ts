@@ -1,4 +1,5 @@
 import { isSome, none, type Option, some } from "../option.js";
+import { type BinaryExpression, type IntLiteral } from "../parser/ast.js";
 import { HEDGE_PRIMITIVE_TYPES } from "../primitives.js";
 import type * as Parser from "../parser/ast.js";
 import { type FunctionParam } from "./ast.js";
@@ -124,24 +125,13 @@ function parseStatement(statement: Parser.Statement): JSIM.Statement {
  *
  * @returns The parsed expression.
  */
+// eslint-disable-next-line complexity -- This is a routing function
 function parseExpression(expression: Parser.Expression): JSIM.Expression {
   switch (expression.kind) {
     case "StringLiteral":
       return { kind: "StringLiteral", value: expression.value };
-    case "IntLiteral": {
-      const basePrefix =
-        expression.base === 2
-          ? "0b"
-          : expression.base === 8
-            ? "0o"
-            : expression.base === 16
-              ? "0x"
-              : "";
-      return {
-        kind: "NumberLiteral",
-        value: String(BigInt(basePrefix + expression.value)),
-      };
-    }
+    case "IntLiteral":
+      return jsimIntLiteral(expression);
     case "FloatLiteral":
       return { kind: "NumberLiteral", value: expression.value };
     case "BoolLiteral":
@@ -149,6 +139,13 @@ function parseExpression(expression: Parser.Expression): JSIM.Expression {
     case "CharLiteral":
       return { kind: "StringLiteral", value: expression.value };
     case "PathExpression":
+      if (expression.path.segments.length === 1 && !expression.path.absolute) {
+        const value = expression.path.segments[0];
+        if (value === undefined) {
+          throw new Error("Unexpected undefined segment");
+        }
+        return { kind: "Identifier", value };
+      }
       return { kind: "PathExpression", path: expression.path.segments };
     case "CallExpression":
       return {
@@ -159,9 +156,89 @@ function parseExpression(expression: Parser.Expression): JSIM.Expression {
     case "ReferenceExpression":
       // References are transparent in JS — emit the operand directly.
       return parseExpression(expression.operand);
+    case "BinaryExpression":
+      return parseBinaryExpression(expression);
+    case "UnaryExpression":
+      return parseUnaryExpression(expression);
+    case "AssignExpression":
+      return parseAssignExpression(expression);
+    case "CompoundAssignExpression":
+      return parseCompoundAssignExpression(expression);
+    case "FieldAccessExpression":
+      return parseFieldAccessExpression(expression);
+    case "Identifier":
+      return parseIdentifier(expression);
     default:
+      const _exhaustive: never = expression;
       throw new Error(
-        `JSIM codegen for "${expression.kind}" is not yet implemented`,
+        `JSIM codegen for "${JSON.stringify(_exhaustive)}" is not yet implemented`,
       );
   }
+}
+
+function jsimIntLiteral({ base, value }: IntLiteral): JSIM.Expression {
+  const basePrefix =
+    base === 2 ? "0b" : base === 8 ? "0o" : base === 16 ? "0x" : "";
+  return {
+    kind: "NumberLiteral",
+    value: String(BigInt(basePrefix + value)),
+  };
+}
+
+function parseBinaryExpression(binExp: BinaryExpression): JSIM.Expression {
+  return {
+    kind: binExp.kind,
+    operator: binExp.operator,
+    left: parseExpression(binExp.left),
+    right: parseExpression(binExp.right),
+  };
+}
+
+function parseUnaryExpression(
+  unaryExp: Parser.UnaryExpression,
+): JSIM.Expression {
+  return {
+    kind: unaryExp.kind,
+    operator: unaryExp.operator,
+    operand: parseExpression(unaryExp.operand),
+  };
+}
+
+function parseAssignExpression(
+  assignExp: Parser.AssignExpression,
+): JSIM.Expression {
+  return {
+    kind: "AssignExpression",
+    operator: "Assign",
+    lhs: parseExpression(assignExp.lhs),
+    rhs: parseExpression(assignExp.rhs),
+  };
+}
+
+function parseCompoundAssignExpression(
+  compoundAssignExp: Parser.CompoundAssignExpression,
+): JSIM.Expression {
+  return {
+    kind: "AssignExpression",
+    operator: compoundAssignExp.operator,
+    lhs: parseExpression(compoundAssignExp.lhs),
+    rhs: parseExpression(compoundAssignExp.rhs),
+  };
+}
+
+function parseFieldAccessExpression(
+  fieldAccessExp: Parser.FieldAccessExpression,
+): JSIM.Expression {
+  return {
+    kind: "FieldAccessExpression",
+    object: parseExpression(fieldAccessExp.object),
+    field: fieldAccessExp.field.text,
+  };
+}
+
+function parseIdentifier(identifier: Parser.Identifier): JSIM.Expression {
+  return {
+    kind: "Identifier",
+    value: identifier.text,
+  };
 }
