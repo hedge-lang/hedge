@@ -1718,3 +1718,44 @@ describe("item error recovery", (): void => {
     expect(diagnostics[0]?.severity).toBe("error");
   });
 });
+
+describe("no-op let warnings", (): void => {
+  it("let x; with no initializer emits a warning diagnostic", (): void => {
+    const { program, diagnostics } = parse(tokenize("let x;").tokens);
+    expect(isSome(program)).toBe(true);
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({ severity: "warning" }),
+    );
+  });
+
+  it("let write x; with no initializer does not warn", (): void => {
+    const { diagnostics } = parse(tokenize("let write x;").tokens);
+    const warnings = diagnostics.filter((d) => d.severity === "warning");
+    expect(warnings).toHaveLength(0);
+  });
+
+  it("let bind x; with no initializer does not warn", (): void => {
+    const { diagnostics } = parse(tokenize("let bind x;").tokens);
+    const warnings = diagnostics.filter((d) => d.severity === "warning");
+    expect(warnings).toHaveLength(0);
+  });
+
+  it("let x = 1; with an initializer does not warn", (): void => {
+    const { diagnostics } = parse(tokenize("let x = 1;").tokens);
+    const warnings = diagnostics.filter((d) => d.severity === "warning");
+    expect(warnings).toHaveLength(0);
+  });
+
+  it("warning span covers the let token", (): void => {
+    const { tokens } = tokenize("let x;");
+    const { diagnostics } = parse(tokens);
+    const warning = diagnostics.find((d) => d.severity === "warning");
+    const firstToken = tokens[0];
+    if (!firstToken) {
+      throw new Error("Expected to get token");
+    }
+    expect(warning).toMatchObject({
+      span: some(firstToken.span),
+    });
+  });
+});
