@@ -305,15 +305,14 @@ describe("type annotations", (): void => {
 
   it.todo("let x: i32 = y = 5 is a parse success and a type error");
 
-  // TODO(#16): unit expression `()` is not yet parseable; unblock when #16 lands
-  it.todo("parses a unit-typed let with a unit initializer", (): void => {
+  it("parses a unit-typed let with a unit initializer", (): void => {
     const ast = parseProgram("let u: () = ();");
     expect(ast).toMatchObject({
       items: [
         {
           kind: "LetStatement",
           type: some({ kind: "UnitType" }),
-          initializer: some({ kind: "UnitExpression" }),
+          initializer: some({ kind: "TupleExpression", elements: [] }),
         },
       ],
     });
