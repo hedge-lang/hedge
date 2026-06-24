@@ -412,7 +412,7 @@ function parseReference(
   }
   // Parse the operand at unary precedence (24) so postfix ops like . and () bind to
   // the operand rather than the surrounding expression: &a.b ⟹ &(a.b), &f() ⟹ &(f())
-  const operandResult = parseExpression(tokens, cursor, 24);
+  const operandResult = parseExpressionWithBindingPower(tokens, cursor, 24);
   if (isErr(operandResult)) return operandResult;
   const operand = operandResult.value;
   const reference: ReferenceExpression = {
@@ -484,7 +484,7 @@ function parsePrimary(
 
   // Prefix unary: - and !
   if (token.kind === "minus") {
-    const operandResult = parseExpression(tokens, pos + 1, 24);
+    const operandResult = parseExpressionWithBindingPower(tokens, pos + 1, 24);
     if (isErr(operandResult)) return operandResult;
     const unary: UnaryExpression = {
       kind: "UnaryExpression",
@@ -495,7 +495,7 @@ function parsePrimary(
     return ok({ node: unary, next: operandResult.value.next });
   }
   if (token.kind === "bang") {
-    const operandResult = parseExpression(tokens, pos + 1, 24);
+    const operandResult = parseExpressionWithBindingPower(tokens, pos + 1, 24);
     if (isErr(operandResult)) return operandResult;
     const unary: UnaryExpression = {
       kind: "UnaryExpression",
@@ -508,7 +508,7 @@ function parsePrimary(
 
   // Grouping: (expr) — transparent, no AST node emitted
   if (token.kind === "lparen") {
-    const innerResult = parseExpression(tokens, pos + 1, 0);
+    const innerResult = parseExpressionWithBindingPower(tokens, pos + 1, 0);
     if (isErr(innerResult)) return innerResult;
     const closeToken = tokens[innerResult.value.next];
     if (closeToken === undefined || closeToken.kind !== "rparen") {
@@ -558,7 +558,7 @@ function parseArguments(
   const args: Expression[] = [];
   for (;;) {
     if (tokens[cursor]?.kind === "rparen") break;
-    const argResult = parseExpression(tokens, cursor, 0);
+    const argResult = parseExpressionWithBindingPower(tokens, cursor, 0);
     if (isErr(argResult)) return argResult;
     args.push(argResult.value.node);
     cursor = argResult.value.next;
@@ -612,7 +612,11 @@ function parseInfixBinary(
   opPos: number,
   infix: Extract<InfixEntry, { kind: "binary" }>,
 ): PR<Parsed<Expression>> {
-  const rhsResult = parseExpression(tokens, opPos + 1, infix.rightBp);
+  const rhsResult = parseExpressionWithBindingPower(
+    tokens,
+    opPos + 1,
+    infix.rightBp,
+  );
   if (isErr(rhsResult)) return rhsResult;
   const node: BinaryExpression = {
     kind: "BinaryExpression",
@@ -634,7 +638,7 @@ function parseInfixBinary(
       ) {
         return err({
           severity: "error",
-          message: `operator '${infix.sigil}' is non-associative and cannot be chained`,
+          message: `cannot chain '${infix.sigil}' with '${nextInfix.sigil}'`,
           span: some(peek.span),
         });
       }
@@ -649,7 +653,11 @@ function parseInfixAssign(
   opPos: number,
   infix: Extract<InfixEntry, { kind: "assign" }>,
 ): PR<Parsed<Expression>> {
-  const rhsResult = parseExpression(tokens, opPos + 1, infix.rightBp);
+  const rhsResult = parseExpressionWithBindingPower(
+    tokens,
+    opPos + 1,
+    infix.rightBp,
+  );
   if (isErr(rhsResult)) return rhsResult;
   return ok({
     node: {
@@ -668,7 +676,11 @@ function parseInfixCompoundAssign(
   opPos: number,
   infix: Extract<InfixEntry, { kind: "compound-assign" }>,
 ): PR<Parsed<Expression>> {
-  const rhsResult = parseExpression(tokens, opPos + 1, infix.rightBp);
+  const rhsResult = parseExpressionWithBindingPower(
+    tokens,
+    opPos + 1,
+    infix.rightBp,
+  );
   if (isErr(rhsResult)) return rhsResult;
   return ok({
     node: {
@@ -683,15 +695,26 @@ function parseInfixCompoundAssign(
 }
 
 /**
- * Parses an expression from a sequence of tokens based on operator precedence.
+ * Parses an expression from a sequence of tokens starting at `pos`.
+ */
+export function parseExpression(
+  tokens: readonly Token[],
+  pos: number,
+): PR<Parsed<Expression>> {
+  return parseExpressionWithBindingPower(tokens, pos, 0);
+}
+
+/**
+ * Parses an expression from a sequence of tokens starting at `pos` with the
+ * given minimum binding power. Internal recursive entry point for the Pratt loop.
  *
  * @param tokens The sequence of tokens to parse.
  * @param pos The current position in the token sequence to start parsing.
- * @param minBp The minimum binding precedence to consider while parsing.
+ * @param minBp The minimum binding power; operators with leftBp ≤ minBp are not consumed.
  * @return The result of parsing, which includes either the parsed expression or an error.
  */
 // eslint-disable-next-line complexity -- This is a dispatch function and more readable this way.
-export function parseExpression(
+function parseExpressionWithBindingPower(
   tokens: readonly Token[],
   pos: number,
   minBp: number,

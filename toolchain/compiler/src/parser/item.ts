@@ -519,7 +519,7 @@ export function parseItem(
       span: visToken !== undefined ? some(visToken.span) : none(),
     });
   }
-  const exprResult = parseExpression(tokens, cursor, 0);
+  const exprResult = parseExpression(tokens, cursor);
   if (isErr(exprResult)) {
     return exprResult;
   }
