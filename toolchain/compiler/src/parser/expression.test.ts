@@ -493,19 +493,25 @@ describe("non-associative operators — comparison", (): void => {
   it("a < b > c is a syntax error — chaining different comparison operators", (): void => {
     const result = parse(tokenize("a < b > c").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("cannot chain '<' with '>'");
+    expect(result.diagnostics[0]?.message).toContain(
+      "cannot chain '<' with '>'",
+    );
   });
 
   it("a < b == c is a syntax error — mixing non-associative operators at the same precedence level", (): void => {
     const result = parse(tokenize("a < b == c").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("cannot chain '<' with '=='");
+    expect(result.diagnostics[0]?.message).toContain(
+      "cannot chain '<' with '=='",
+    );
   });
 
   it("a == b != c is a syntax error", (): void => {
     const result = parse(tokenize("a == b != c").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("cannot chain '==' with '!='");
+    expect(result.diagnostics[0]?.message).toContain(
+      "cannot chain '==' with '!='",
+    );
   });
 });
 
