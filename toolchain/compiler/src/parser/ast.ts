@@ -71,7 +71,8 @@ export type Expression =
   | UnaryExpression
   | AssignExpression
   | CompoundAssignExpression
-  | FieldAccessExpression;
+  | FieldAccessExpression
+  | Identifier;
 
 export interface Visibility {
   readonly kind: "Visibility";
