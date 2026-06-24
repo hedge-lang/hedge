@@ -1,3 +1,4 @@
+import { assertNever } from "../assert.js";
 import { isSome, none, some } from "../option.js";
 import type {
   AssignOperator,
@@ -12,10 +13,6 @@ import type {
   Statement,
 } from "../jsim/ast.js";
 import type { Code } from "./output.js";
-
-function assertNever(value: never): never {
-  throw new Error(`Unexpected AST node: ${JSON.stringify(value)}`);
-}
 
 const BINARY_OPS: Record<BinaryOperator, string> = {
   Add: "+",
@@ -97,7 +94,10 @@ function emitExpression(expression: Expression): string {
     case "FieldAccessExpression":
       return `${emitExpression(expression.object)}.${expression.field}`;
     default:
-      return assertNever(expression);
+      assertNever(
+        expression,
+        `Unexpected AST node: ${JSON.stringify(expression)}`,
+      );
   }
 }
 
@@ -126,7 +126,10 @@ function emitStatement(statement: Statement): string {
     case "FieldAccessExpression":
       return `${emitExpression(statement)};`;
     default:
-      return assertNever(statement);
+      assertNever(
+        statement,
+        `Unexpected AST node: ${JSON.stringify(statement)}`,
+      );
   }
 }
 
@@ -164,7 +167,7 @@ function emitItem(item: Item): string {
     case "FieldAccessExpression":
       return `${emitExpression(item)};`;
     default:
-      return assertNever(item);
+      assertNever(item, `Unexpected AST node: ${JSON.stringify(item)}`);
   }
 }
 

@@ -1,3 +1,4 @@
+import { assertNever } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
@@ -35,14 +36,6 @@ interface Borrow {
    * The token ID of the reference, used for diagnostics.
    */
   readonly tokenId: number;
-}
-
-/**
- * Ensures that the {@link value} is of type `never`, which should be unreachable in a well-typed program.
- * @param value The value that should be of type `never`.
- */
-function assertNever(value: never): never {
-  throw new Error(`Unexpected AST node: ${JSON.stringify(value)}`);
 }
 
 /**
@@ -94,7 +87,10 @@ function collectUses(expression: Expression, out: Set<string>): void {
     case "Identifier":
       return;
     default:
-      assertNever(expression);
+      assertNever(
+        expression,
+        `Unexpected AST node: ${JSON.stringify(expression)}`,
+      );
   }
 }
 
@@ -115,7 +111,10 @@ function statementUses(statement: Statement, out: Set<string>): void {
       collectUses(statement.expression, out);
       return;
     default:
-      assertNever(statement);
+      assertNever(
+        statement,
+        `Unexpected AST node: ${JSON.stringify(statement)}`,
+      );
   }
 }
 

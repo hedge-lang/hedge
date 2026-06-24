@@ -8,6 +8,7 @@ import {
   tokenizeBlockComment,
 } from "./comments.js";
 import type { Token } from "./token.js";
+import { assert } from "../assert.js";
 
 describe("LineComment", (): void => {
   it("processes a line comment", (): void => {
@@ -17,9 +18,7 @@ describe("LineComment", (): void => {
     expect(isErr(maybeIsLine)).toBe(false);
     if (!isErr(maybeIsLine)) expect(maybeIsLine.value).toBe(true);
     const result = tokenizeLineComment(tokens, [], lineComment, 0);
-    if (!isSome(result)) {
-      throw new Error("Unexpected: tokenizeLineComment returned None");
-    }
+    assert(isSome(result), "tokenizeLineComment returned None");
     const nextIndex = result.value;
     expect(lineComment.slice(3, nextIndex)).toBe("foo bar");
     expect(lineComment[nextIndex]).toBeUndefined();
@@ -36,9 +35,7 @@ describe("BlockComment", () => {
     expect(isErr(maybeIsBlock)).toBe(false);
     if (!isErr(maybeIsBlock)) expect(maybeIsBlock.value).toBe(true);
     const result = tokenizeBlockComment(tokens, [], blockComment + "  ", 0);
-    if (!isSome(result)) {
-      throw new Error("Unexpected parse failure");
-    }
+    assert(isSome(result), "tokenizeBlockComment returned None");
     const nextIndex = result.value;
     expect(blockComment.slice(0, nextIndex)).toBe(blockComment);
     expect(blockComment[nextIndex]).toBeUndefined();
@@ -54,9 +51,7 @@ describe("BlockComment", () => {
     expect(isErr(maybeIsBlock)).toBe(false);
     if (!isErr(maybeIsBlock)) expect(maybeIsBlock.value).toBe(true);
     const result = tokenizeBlockComment(tokens, [], blockComment + "  ", 0);
-    if (!isSome(result)) {
-      throw new Error("Unexpected parse failure");
-    }
+    assert(isSome(result), "tokenizeBlockComment returned None");
     const nextIndex = result.value;
     expect(blockComment.slice(0, nextIndex)).toBe(blockComment);
     expect(blockComment[nextIndex]).toBeUndefined();
@@ -69,9 +64,7 @@ describe("BlockComment", () => {
     const blockComment = "/* foo /** bar */ baz */";
     const tokens: Token[] = [];
     const result = tokenizeBlockComment(tokens, [], blockComment + "  ", 0);
-    if (!isSome(result)) {
-      throw new Error("Unexpected parse failure");
-    }
+    assert(isSome(result), "tokenizeBlockComment returned None");
     const nextIndex = result.value;
     expect(blockComment.slice(0, nextIndex)).toBe(blockComment);
     expect(nextIndex).toBe(blockComment.length);

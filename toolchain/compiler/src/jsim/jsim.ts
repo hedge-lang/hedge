@@ -5,6 +5,7 @@ import type * as Parser from "../parser/ast.js";
 import { type FunctionParam } from "./ast.js";
 import type * as JSIM from "./ast.js";
 import { toDocComment } from "./parts/doc-comment.js";
+import { assert, assertNever } from "../assert.js";
 
 export function toJsim(program: Parser.Program): JSIM.Program {
   return {
@@ -141,9 +142,7 @@ function parseExpression(expression: Parser.Expression): JSIM.Expression {
     case "PathExpression":
       if (expression.path.segments.length === 1 && !expression.path.absolute) {
         const value = expression.path.segments[0];
-        if (value === undefined) {
-          throw new Error("Unexpected undefined segment");
-        }
+        assert(value !== undefined, "Unexpected undefined segment");
         return { kind: "Identifier", value };
       }
       return { kind: "PathExpression", path: expression.path.segments };
@@ -169,9 +168,9 @@ function parseExpression(expression: Parser.Expression): JSIM.Expression {
     case "Identifier":
       return parseIdentifier(expression);
     default:
-      const _exhaustive: never = expression;
-      throw new Error(
-        `JSIM codegen for "${JSON.stringify(_exhaustive)}" is not yet implemented`,
+      assertNever(
+        expression,
+        `JSIM codegen for "${JSON.stringify(expression)}" is not yet implemented`,
       );
   }
 }

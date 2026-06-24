@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { assert } from "../assert.js";
 import { isSome, none } from "../option.js";
 import { parse } from "./parser.js";
 import { tokenize } from "../lexer/lexer.js";
@@ -7,10 +8,8 @@ import type { Program } from "./ast.js";
 function parseProgram(source: string): Program {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
-  if (isSome(program)) {
-    return program.value;
-  }
-  throw new Error(diagnostics[0]?.message ?? "Parse failed");
+  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  return program.value;
 }
 
 describe("binary expressions — smoke tests", (): void => {

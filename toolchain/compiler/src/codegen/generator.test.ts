@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { assert } from "../assert.js";
 
 import { toJsim } from "../jsim/jsim.js";
 import { tokenize } from "../lexer/lexer.js";
@@ -9,10 +10,8 @@ import type { Code } from "./output.js";
 
 function gen(source: string): Code {
   const { program, diagnostics } = parse(tokenize(source).tokens);
-  if (isSome(program)) {
-    return generate(toJsim(program.value));
-  }
-  throw new Error(diagnostics[0]?.message ?? "Parse failed");
+  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  return generate(toJsim(program.value));
 }
 
 function js(code: Code): string | null {

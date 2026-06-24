@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { assert } from "../assert.js";
 import { isSome, none } from "../option.js";
 import { type Program } from "../parser/ast.js";
 import { toJsim } from "./jsim.js";
@@ -6,10 +7,8 @@ import { tokenize } from "../lexer/lexer.js";
 import { parse } from "../parser/parser.js";
 function parseOrThrow(source: string): Program {
   const { program, diagnostics } = parse(tokenize(source).tokens);
-  if (isSome(program)) {
-    return program.value;
-  }
-  throw new Error(diagnostics[0]?.message ?? "Parse failed");
+  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  return program.value;
 }
 
 describe("toJsim", () => {

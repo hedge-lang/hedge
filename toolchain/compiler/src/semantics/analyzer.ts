@@ -1,3 +1,4 @@
+import { assertNever } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
 import { isSome, none, some } from "../option.js";
@@ -22,10 +23,6 @@ export interface AnalysisResult {
 
 /** Names available before any user code. A slice-1 stand-in for the prelude. */
 const BUILTINS: readonly string[] = ["print"];
-
-function assertNever(value: never): never {
-  throw new Error(`Unexpected AST node: ${JSON.stringify(value)}`);
-}
 
 /**
  * Mutable analysis context threaded explicitly through every pass function.
@@ -110,7 +107,10 @@ function analyzeStatement(ctx: AnalysisContext, statement: Statement): void {
       analyzeExpression(ctx, statement.expression);
       return;
     default:
-      assertNever(statement);
+      assertNever(
+        statement,
+        `Unexpected AST node: ${JSON.stringify(statement)}`,
+      );
   }
 }
 
@@ -161,7 +161,10 @@ function analyzeExpression(ctx: AnalysisContext, expression: Expression): void {
       analyzeIdentifier(ctx, expression);
       return;
     default:
-      assertNever(expression);
+      assertNever(
+        expression,
+        `Unexpected AST node: ${JSON.stringify(expression)}`,
+      );
   }
 }
 

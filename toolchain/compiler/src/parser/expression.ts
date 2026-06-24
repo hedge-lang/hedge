@@ -1,3 +1,4 @@
+import { assertNever } from "../assert.js";
 import { resolveEscape } from "../lexer/escape.js";
 import type { Token } from "../lexer/token.js";
 import { isSome, none, some } from "../option.js";
@@ -726,8 +727,9 @@ export function parseExpression(
         stepResult = parseInfixCompoundAssign(tokens, result, opPos, infix);
         break;
       default:
-        throw new Error(
-          `Unhandled InfixEntry kind: ${JSON.stringify(infix satisfies never)}`,
+        assertNever(
+          infix,
+          `Unhandled InfixEntry kind: ${JSON.stringify(infix)}`,
         );
     }
 
