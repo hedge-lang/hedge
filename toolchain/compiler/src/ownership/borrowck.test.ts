@@ -5,14 +5,13 @@ import { tokenize } from "../lexer/lexer.js";
 import { isSome } from "../option.js";
 import { parse } from "../parser/parser.js";
 import { checkBorrows } from "./borrowck.js";
+import { assert } from "../assert.js";
 
 function check(source: string): readonly Diagnostic[] {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
-  if (isSome(program)) {
-    return checkBorrows(program.value, tokens);
-  }
-  throw new Error(diagnostics[0]?.message ?? "Parse failed");
+  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  return checkBorrows(program.value, tokens);
 }
 
 describe("borrow checker", (): void => {

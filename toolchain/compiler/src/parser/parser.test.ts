@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { isSome, none, some } from "../option.js";
+import { assert } from "../assert.js";
+import { isNone, isSome, none, some } from "../option.js";
 import { parse } from "./parser.js";
 import { tokenize } from "../lexer/lexer.js";
 import { HARD_KEYWORDS } from "../lexer/keywords.js";
@@ -8,10 +9,8 @@ import type { Program } from "./ast.js";
 function parseProgram(source: string): Program {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
-  if (isSome(program)) {
-    return program.value;
-  }
-  throw new Error(diagnostics[0]?.message ?? "Parse failed");
+  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  return program.value;
 }
 
 describe("parser", (): void => {
@@ -303,6 +302,8 @@ describe("type annotations", (): void => {
       ],
     });
   });
+
+  it.todo("let x: i32 = y = 5 is a parse success and a type error");
 
   // TODO(#16): unit expression `()` is not yet parseable; unblock when #16 lands
   it.todo("parses a unit-typed let with a unit initializer", (): void => {
@@ -706,21 +707,16 @@ describe("struct declarations", (): void => {
   it("tokenId on a pub named field points to the field name, not pub", (): void => {
     const { tokens } = tokenize("struct Foo { pub x: i32 }");
     const { program } = parse(tokens);
-    if (!isSome(program)) {
-      throw new Error("expected program to compile");
-    }
+    assert(isSome(program), "expected program to compile");
     const struct = program.value.items[0];
-    if (struct?.kind !== "Struct" || struct.body.kind !== "NamedFields") {
-      throw new Error("expected Struct with NamedFields");
-    }
+    assert(
+      struct?.kind === "Struct" && struct.body.kind === "NamedFields",
+      "expected Struct with NamedFields",
+    );
     const field = struct.body.fields[0];
-    if (!field) {
-      throw new Error("expected field to exist");
-    }
+    assert(field !== undefined, "expected field to exist");
     const token = tokens[field.tokenId];
-    if (!token) {
-      throw new Error("expected token to exist");
-    }
+    assert(token !== undefined, "expected token to exist");
     expect(token).toMatchObject({
       kind: "ident",
       text: "x",
@@ -909,8 +905,10 @@ describe("identifiers", (): void => {
       "rejects hard keyword %s as a function name with a diagnostic naming the keyword",
       (kw) => {
         const result = parse(tokenize(`fn ${kw}() {}`).tokens);
-        if (isSome(result.program))
-          throw new Error(`expected parse("fn ${kw}() {}") to fail`);
+        assert(
+          isNone(result.program),
+          `expected parse("fn ${kw}() {}") to fail`,
+        );
         expect(result.diagnostics[0]?.message).toContain(kw);
       },
     );
@@ -919,8 +917,10 @@ describe("identifiers", (): void => {
       "rejects hard keyword %s as a let binding name with a diagnostic naming the keyword",
       (kw) => {
         const result = parse(tokenize(`let ${kw} = 1;`).tokens);
-        if (isSome(result.program))
-          throw new Error(`expected parse("let ${kw} = 1;") to fail`);
+        assert(
+          isNone(result.program),
+          `expected parse("let ${kw} = 1;") to fail`,
+        );
         expect(result.diagnostics[0]?.message).toContain(kw);
       },
     );
@@ -974,12 +974,9 @@ describe("identifiers", (): void => {
 
     it("accepts r#true as a let binding name", (): void => {
       const result = parse(tokenize("let r#true = 1;").tokens);
-      if (!isSome(result.program)) {
-        throw new Error("expected program");
-      }
+      assert(isSome(result.program), "expected program to compile");
       const stmt = result.program.value.items[0];
-      if (stmt?.kind !== "LetStatement")
-        throw new Error("expected LetStatement");
+      assert(stmt?.kind === "LetStatement", "expected LetStatement");
       expect(stmt.pattern.name.text).toBe("true");
     });
 
@@ -1003,12 +1000,12 @@ describe("identifiers", (): void => {
     it("identifier tokenId in a let binding points to the name token", (): void => {
       const { tokens } = tokenize("let foo = 1;");
       const { program, diagnostics } = parse(tokens);
-      if (!isSome(program))
-        throw new Error(diagnostics[0]?.message ?? "Parse failed");
+      assert(
+        isSome(program),
+        diagnostics[0]?.message ?? "expected program to compile",
+      );
       const stmt = program.value.items[0];
-      if (stmt?.kind !== "LetStatement") {
-        throw new Error("expected LetStatement");
-      }
+      assert(stmt?.kind === "LetStatement", "expected LetStatement");
       const { tokenId } = stmt.pattern.name;
       expect(tokens[tokenId]).toMatchObject({
         kind: "ident",
@@ -1020,12 +1017,9 @@ describe("identifiers", (): void => {
     it("identifier tokenId in a function declaration points to the name token", (): void => {
       const { tokens } = tokenize("fn foo() {}");
       const { program, diagnostics } = parse(tokens);
-      if (!isSome(program))
-        throw new Error(diagnostics[0]?.message ?? "Parse failed");
+      assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
       const fn_ = program.value.items[0];
-      if (fn_?.kind !== "Function") {
-        throw new Error("expected Function");
-      }
+      assert(fn_?.kind === "Function", "expected Function");
       const { tokenId } = fn_.name;
       expect(tokens[tokenId]).toMatchObject({
         kind: "ident",
@@ -1037,14 +1031,14 @@ describe("identifiers", (): void => {
     it("identifier tokenId in an expression points to the name token", (): void => {
       const { tokens } = tokenize("foo;");
       const { program, diagnostics } = parse(tokens);
-      if (!isSome(program))
-        throw new Error(diagnostics[0]?.message ?? "Parse failed");
+      assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
       const expr = program.value.items[0];
-      if (expr?.kind !== "ExpressionStatement")
-        throw new Error("expected ExpressionStatement");
+      assert(
+        expr?.kind === "ExpressionStatement",
+        "expected ExpressionStatement",
+      );
       const path = expr.expression;
-      if (path.kind !== "PathExpression")
-        throw new Error("expected PathExpression");
+      assert(path.kind === "PathExpression", "expected PathExpression");
       expect(tokens[path.tokenId]).toMatchObject({
         kind: "ident",
         text: "foo",
@@ -1288,6 +1282,10 @@ describe("parse errors — missing tokens", (): void => {
     expect(result.diagnostics[0]?.message).toContain("write");
     expect(result.diagnostics[0]?.message).toContain("mut");
   });
+
+  it.todo(
+    "let x = y = 5 and let x = (y = 5) produce type errors — assignment returns () and cannot initialize a non-unit binding",
+  );
 });
 
 describe("empty and minimal programs", (): void => {
@@ -1712,5 +1710,44 @@ describe("item error recovery", (): void => {
     const { tokens } = tokenize("struct Foo(:);");
     const { diagnostics } = parse(tokens);
     expect(diagnostics[0]?.severity).toBe("error");
+  });
+});
+
+describe("no-op let warnings", (): void => {
+  it("let x; with no initializer emits a warning diagnostic", (): void => {
+    const { program, diagnostics } = parse(tokenize("let x;").tokens);
+    expect(isSome(program)).toBe(true);
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({ severity: "warning" }),
+    );
+  });
+
+  it("let write x; with no initializer does not warn", (): void => {
+    const { diagnostics } = parse(tokenize("let write x;").tokens);
+    const warnings = diagnostics.filter((d) => d.severity === "warning");
+    expect(warnings).toHaveLength(0);
+  });
+
+  it("let bind x; with no initializer does not warn", (): void => {
+    const { diagnostics } = parse(tokenize("let bind x;").tokens);
+    const warnings = diagnostics.filter((d) => d.severity === "warning");
+    expect(warnings).toHaveLength(0);
+  });
+
+  it("let x = 1; with an initializer does not warn", (): void => {
+    const { diagnostics } = parse(tokenize("let x = 1;").tokens);
+    const warnings = diagnostics.filter((d) => d.severity === "warning");
+    expect(warnings).toHaveLength(0);
+  });
+
+  it("warning span covers the let token", (): void => {
+    const { tokens } = tokenize("let x;");
+    const { diagnostics } = parse(tokens);
+    const warning = diagnostics.find((d) => d.severity === "warning");
+    const firstToken = tokens[0];
+    assert(firstToken !== undefined, "Expected to get token");
+    expect(warning).toMatchObject({
+      span: some(firstToken.span),
+    });
   });
 });

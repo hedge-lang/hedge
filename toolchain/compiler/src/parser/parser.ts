@@ -1,6 +1,6 @@
 import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
-import { none, some, type Option } from "../option.js";
+import { isSome, none, some, type Option } from "../option.js";
 import { isErr } from "../result.js";
 import type { Program } from "./ast.js";
 import { collectInnerAttributes } from "./attribute.js";
@@ -59,7 +59,21 @@ export function parse(tokens: readonly Token[]): ParseResult {
       diagnostics.push(itemResult.error);
       return { program: none(), diagnostics };
     }
-    items.push(itemResult.value.node);
+    const node = itemResult.value.node;
+    items.push(node);
+    if (
+      node.kind === "LetStatement" &&
+      !node.bind &&
+      !node.write &&
+      !isSome(node.initializer)
+    ) {
+      const token = tokens[node.tokenId];
+      diagnostics.push({
+        severity: "warning",
+        message: "immutable binding declared without a value can never be used",
+        span: token !== undefined ? some(token.span) : none(),
+      });
+    }
     cursor = itemResult.value.next;
   }
   return { program: some({ kind: "Program", items, attributes }), diagnostics };

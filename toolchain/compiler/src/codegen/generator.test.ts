@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { assert } from "../assert.js";
 
 import { toJsim } from "../jsim/jsim.js";
 import { tokenize } from "../lexer/lexer.js";
@@ -9,10 +10,8 @@ import type { Code } from "./output.js";
 
 function gen(source: string): Code {
   const { program, diagnostics } = parse(tokenize(source).tokens);
-  if (isSome(program)) {
-    return generate(toJsim(program.value));
-  }
-  throw new Error(diagnostics[0]?.message ?? "Parse failed");
+  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  return generate(toJsim(program.value));
 }
 
 function js(code: Code): string | null {
@@ -168,5 +167,77 @@ describe("generator", (): void => {
         "",
       ].join("\n"),
     );
+  });
+});
+
+describe("binary expression codegen", () => {
+  it.each([
+    ["Add", "x + y", "(x + y)"],
+    ["Sub", "x - y", "(x - y)"],
+    ["Mul", "x * y", "(x * y)"],
+    ["Div", "x / y", "(x / y)"],
+    ["Rem", "x % y", "(x % y)"],
+    ["Shl", "x << y", "(x << y)"],
+    ["Shr", "x >> y", "(x >> y)"],
+    ["BitAnd", "x & y", "(x & y)"],
+    ["BitXor", "x ^ y", "(x ^ y)"],
+    ["BitOr", "x | y", "(x | y)"],
+    ["Eq", "x == y", "(x === y)"],
+    ["Ne", "x != y", "(x !== y)"],
+    ["Lt", "x < y", "(x < y)"],
+    ["Gt", "x > y", "(x > y)"],
+    ["Le", "x <= y", "(x <= y)"],
+    ["Ge", "x >= y", "(x >= y)"],
+    ["And", "x && y", "(x && y)"],
+    ["Or", "x || y", "(x || y)"],
+  ])("%s emits correct JS operator", (_, source, expected) => {
+    expect(js(gen(source))).toBe(`${expected};\n`);
+  });
+
+  it("preserves grouping: (x + y) * z emits ((x + y) * z)", () => {
+    expect(js(gen("(x + y) * z"))).toBe("((x + y) * z);\n");
+  });
+});
+
+describe("unary expression codegen", () => {
+  it.each([
+    ["Neg", "-x", "(-x)"],
+    ["Not", "!x", "(!x)"],
+  ])("%s emits correct JS operator", (_, source, expected) => {
+    expect(js(gen(source))).toBe(`${expected};\n`);
+  });
+});
+
+describe("assign expression codegen", () => {
+  it.each([
+    ["Assign", "x = 1;", "x = 1"],
+    ["AddAssign", "x += 1;", "x += 1"],
+    ["SubAssign", "x -= 1;", "x -= 1"],
+    ["MulAssign", "x *= 1;", "x *= 1"],
+    ["DivAssign", "x /= 1;", "x /= 1"],
+    ["RemAssign", "x %= 1;", "x %= 1"],
+    ["BitAndAssign", "x &= 1;", "x &= 1"],
+    ["BitOrAssign", "x |= 1;", "x |= 1"],
+    ["BitXorAssign", "x ^= 1;", "x ^= 1"],
+    ["ShlAssign", "x <<= 1;", "x <<= 1"],
+    ["ShrAssign", "x >>= 1;", "x >>= 1"],
+  ])("%s emits correct JS operator", (_, source, expected) => {
+    expect(js(gen(source))).toBe(`${expected};\n`);
+  });
+});
+
+describe("field access expression codegen", () => {
+  it("emits object.field", () => {
+    expect(js(gen("foo.bar;"))).toBe("foo.bar;\n");
+  });
+});
+
+describe("no-init let codegen", () => {
+  it("immutable let with no initializer is omitted from output", () => {
+    expect(js(gen("let x;"))).toBeNull();
+  });
+
+  it("mutable let with no initializer emits let x;", () => {
+    expect(js(gen("let write x;"))).toBe("let x;\n");
   });
 });

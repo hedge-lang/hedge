@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { assert } from "../assert.js";
 
 import { tokenize } from "../lexer/lexer.js";
 import { isSome } from "../option.js";
@@ -12,19 +13,15 @@ function analyzeWithTokens(source: string): {
 } {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
-  if (isSome(program)) {
-    return { result: analyze(program.value, tokens), tokens };
-  }
-  throw new Error(diagnostics[0]?.message ?? "Parse failed");
+  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  return { result: analyze(program.value, tokens), tokens };
 }
 
 function diagnose(source: string): AnalysisResult {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
-  if (isSome(program)) {
-    return analyze(program.value, tokens);
-  }
-  throw new Error(diagnostics[0]?.message ?? "Parse failed");
+  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  return analyze(program.value, tokens);
 }
 
 describe("semantic analysis", (): void => {
@@ -92,13 +89,9 @@ describe("semantic analysis", (): void => {
     const source = "fn f(x: UnknownType) {}";
     const { result } = analyzeWithTokens(source);
     expect(result.diagnostics).toHaveLength(1);
-    if (!result.diagnostics[0]) {
-      throw new Error("Expected diagnostics");
-    }
+    assert(result.diagnostics[0] !== undefined, "Expected diagnostics");
     const span = result.diagnostics[0].span;
-    expect(isSome(span)).toBe(true);
-    if (isSome(span)) {
-      expect(span.value.start).toBe(source.indexOf("UnknownType"));
-    }
+    assert(isSome(span), "Expected span");
+    expect(span.value.start).toBe(source.indexOf("UnknownType"));
   });
 });

@@ -1,3 +1,4 @@
+import { assertNever } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
 import { isSome, none, some } from "../option.js";
@@ -7,6 +8,7 @@ import type {
   CallExpression,
   Expression,
   FunctionDecl,
+  Identifier,
   Item,
   LetStatement,
   PathExpression,
@@ -21,10 +23,6 @@ export interface AnalysisResult {
 
 /** Names available before any user code. A slice-1 stand-in for the prelude. */
 const BUILTINS: readonly string[] = ["print"];
-
-function assertNever(value: never): never {
-  throw new Error(`Unexpected AST node: ${JSON.stringify(value)}`);
-}
 
 /**
  * Mutable analysis context threaded explicitly through every pass function.
@@ -109,7 +107,10 @@ function analyzeStatement(ctx: AnalysisContext, statement: Statement): void {
       analyzeExpression(ctx, statement.expression);
       return;
     default:
-      assertNever(statement);
+      assertNever(
+        statement,
+        `Unexpected AST node: ${JSON.stringify(statement)}`,
+      );
   }
 }
 
@@ -123,6 +124,7 @@ function analyzeLetStatement(
   bind(ctx, statement.pattern.name.text);
 }
 
+// eslint-disable-next-line complexity -- This is a routing function
 function analyzeExpression(ctx: AnalysisContext, expression: Expression): void {
   switch (expression.kind) {
     case "StringLiteral":
@@ -140,9 +142,41 @@ function analyzeExpression(ctx: AnalysisContext, expression: Expression): void {
     case "ReferenceExpression":
       analyzeExpression(ctx, expression.operand);
       return;
+    case "BinaryExpression":
+      analyzeExpression(ctx, expression.left);
+      analyzeExpression(ctx, expression.right);
+      return;
+    case "UnaryExpression":
+      analyzeExpression(ctx, expression.operand);
+      return;
+    case "AssignExpression":
+    case "CompoundAssignExpression":
+      analyzeExpression(ctx, expression.lhs);
+      analyzeExpression(ctx, expression.rhs);
+      return;
+    case "FieldAccessExpression":
+      analyzeExpression(ctx, expression.object);
+      return;
+    case "Identifier":
+      analyzeIdentifier(ctx, expression);
+      return;
     default:
-      assertNever(expression);
+      assertNever(
+        expression,
+        `Unexpected AST node: ${JSON.stringify(expression)}`,
+      );
   }
+}
+
+function analyzeIdentifier(ctx: AnalysisContext, identifier: Identifier): void {
+  if (resolve(ctx, identifier.text)) {
+    return;
+  }
+  emitError(
+    ctx,
+    `Cannot find name "${identifier.text}" in this scope.`,
+    identifier.tokenId,
+  );
 }
 
 function analyzeCall(ctx: AnalysisContext, call: CallExpression): void {

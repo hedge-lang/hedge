@@ -135,6 +135,8 @@ export function parseLetStatement(
 
   let initializer: Option<Expression> = none();
   if (tokens[cursor]?.kind === "eq") {
+    // Assignment expressions are valid let initializers syntactically — they return `()`.
+    // TODO: misuse (e.g. `let x: i32 = y = 5`) is not yet validated; will be caught by the type checker.
     const initResult = parseExpression(tokens, cursor + 1);
     if (isErr(initResult)) {
       return initResult;
