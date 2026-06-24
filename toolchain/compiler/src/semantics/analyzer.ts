@@ -7,6 +7,7 @@ import type {
   CallExpression,
   Expression,
   FunctionDecl,
+  Identifier,
   Item,
   LetStatement,
   PathExpression,
@@ -156,9 +157,23 @@ function analyzeExpression(ctx: AnalysisContext, expression: Expression): void {
     case "FieldAccessExpression":
       analyzeExpression(ctx, expression.object);
       return;
+    case "Identifier":
+      analyzeIdentifier(ctx, expression);
+      return;
     default:
       assertNever(expression);
   }
+}
+
+function analyzeIdentifier(ctx: AnalysisContext, identifier: Identifier): void {
+  if (resolve(ctx, identifier.text)) {
+    return;
+  }
+  emitError(
+    ctx,
+    `Cannot find name "${identifier.text}" in this scope.`,
+    identifier.tokenId,
+  );
 }
 
 function analyzeCall(ctx: AnalysisContext, call: CallExpression): void {
