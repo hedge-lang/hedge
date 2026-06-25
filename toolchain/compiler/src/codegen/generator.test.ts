@@ -274,6 +274,9 @@ describe("field access expression codegen", () => {
   it("emits object.field", () => {
     expect(stmts(gen("fn _(foo: ()) { foo.bar; }"))).toBe("foo.bar;");
   });
+  it("calling a field value wraps the callee in parens to avoid implicit method-call shape", () => {
+    expect(stmts(gen("fn _(foo: (), x: ()) { (foo.bar)(x); }"))).toBe("(foo.bar)(x);");
+  });
 });
 
 describe("no-init let codegen", () => {
