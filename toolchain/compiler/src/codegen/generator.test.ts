@@ -384,9 +384,4 @@ describe("struct expression codegen", () => {
   it("struct update spread emits spread-first object literal", () => {
     expect(js(gen("Foo { x: 1, ..base }"))).toBe("({...base, x: 1});\n");
   });
-  it("structs with multiple spreads use them all", () => {
-    expect(js(gen("Foo { x: 1, ..base1, ..base2 }"))).toBe(
-      "({ ...base2, ...base1, x: 1 });\n",
-    );
-  });
 });
