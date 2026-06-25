@@ -172,30 +172,42 @@ describe("generator", (): void => {
 
 describe("binary expression codegen", () => {
   it.each([
-    ["Add", "x + y", "(x + y)"],
-    ["Sub", "x - y", "(x - y)"],
-    ["Mul", "x * y", "(x * y)"],
-    ["Div", "x / y", "(x / y)"],
-    ["Rem", "x % y", "(x % y)"],
-    ["Shl", "x << y", "(x << y)"],
-    ["Shr", "x >> y", "(x >> y)"],
-    ["BitAnd", "x & y", "(x & y)"],
-    ["BitXor", "x ^ y", "(x ^ y)"],
-    ["BitOr", "x | y", "(x | y)"],
-    ["Eq", "x == y", "(x === y)"],
-    ["Ne", "x != y", "(x !== y)"],
-    ["Lt", "x < y", "(x < y)"],
-    ["Gt", "x > y", "(x > y)"],
-    ["Le", "x <= y", "(x <= y)"],
-    ["Ge", "x >= y", "(x >= y)"],
-    ["And", "x && y", "(x && y)"],
-    ["Or", "x || y", "(x || y)"],
+    ["Add", "x + y", "x + y"],
+    ["Sub", "x - y", "x - y"],
+    ["Mul", "x * y", "x * y"],
+    ["Div", "x / y", "x / y"],
+    ["Rem", "x % y", "x % y"],
+    ["Shl", "x << y", "x << y"],
+    ["Shr", "x >> y", "x >> y"],
+    ["BitAnd", "x & y", "x & y"],
+    ["BitXor", "x ^ y", "x ^ y"],
+    ["BitOr", "x | y", "x | y"],
+    ["Eq", "x == y", "x === y"],
+    ["Ne", "x != y", "x !== y"],
+    ["Lt", "x < y", "x < y"],
+    ["Gt", "x > y", "x > y"],
+    ["Le", "x <= y", "x <= y"],
+    ["Ge", "x >= y", "x >= y"],
+    ["And", "x && y", "x && y"],
+    ["Or", "x || y", "x || y"],
   ])("%s emits correct JS operator", (_, source, expected) => {
     expect(js(gen(source))).toBe(`${expected};\n`);
   });
 
-  it("preserves grouping: (x + y) * z emits ((x + y) * z)", () => {
-    expect(js(gen("(x + y) * z"))).toBe("((x + y) * z);\n");
+  it("(x + y) * z — parens preserved because + binds looser than *", () => {
+    expect(js(gen("(x + y) * z"))).toBe("(x + y) * z;\n");
+  });
+
+  it("x + y * z — no parens needed, * binds tighter", () => {
+    expect(js(gen("x + y * z"))).toBe("x + y * z;\n");
+  });
+
+  it("x - (y - z) — right-side same-precedence op is parenthesised", () => {
+    expect(js(gen("x - (y - z)"))).toBe("x - (y - z);\n");
+  });
+
+  it("x || y && z — && binds tighter than ||, no parens needed", () => {
+    expect(js(gen("x || y && z"))).toBe("x || y && z;\n");
   });
 });
 
@@ -239,5 +251,142 @@ describe("no-init let codegen", () => {
 
   it("mutable let with no initializer emits let x;", () => {
     expect(js(gen("let write x;"))).toBe("let x;\n");
+  });
+});
+
+describe("method call expression codegen", () => {
+  it("no-arg method call", () => {
+    expect(js(gen("a.method()"))).toBe("a.method();\n");
+  });
+  it("method call with arguments", () => {
+    expect(js(gen("a.method(b, c)"))).toBe("a.method(b, c);\n");
+  });
+  it("method call with arguments and trailing comma", () => {
+    expect(js(gen("a.method(b, c, )"))).toBe("a.method(b, c);\n");
+  });
+  it("chained method calls", () => {
+    expect(js(gen("a.foo().bar()"))).toBe("a.foo().bar();\n");
+  });
+});
+
+describe("index expression codegen", () => {
+  it("a[0] emits a[0]", () => {
+    expect(js(gen("a[0]"))).toBe("a[0];\n");
+  });
+  it("a[b + c] emits a[b + c]", () => {
+    expect(js(gen("a[b + c]"))).toBe("a[b + c];\n");
+  });
+  it("a[b][c] chains left-to-right", () => {
+    expect(js(gen("a[b][c]"))).toBe("a[b][c];\n");
+  });
+  it("a[b[c]] nests properly", () => {
+    expect(js(gen("a[b[c]]"))).toBe("a[b[c]];\n");
+  });
+});
+
+describe("tuple expression codegen", () => {
+  it("() lowers to [] (unit)", () => {
+    expect(js(gen("()"))).toBe("[];\n");
+  });
+  it("(1,) lowers to [1]", () => {
+    expect(js(gen("(1,)"))).toBe("[1];\n");
+  });
+  it("(1, 2) lowers to [1, 2]", () => {
+    expect(js(gen("(1, 2)"))).toBe("[1, 2];\n");
+  });
+  it("(1) is transparent grouping, not a tuple", () => {
+    expect(js(gen("(1)"))).toBe("1;\n");
+  });
+});
+
+describe("block expression codegen", () => {
+  it("empty block emits nothing", () => {
+    expect(js(gen("{ }"))).toBe("\n");
+  });
+  it("block without trailing expressions creates a block", () => {
+    expect(js(gen("{ 1; }"))).toBe("{ 1; }\n");
+  });
+  it("block with trailing expression returns that value", () => {
+    expect(js(gen("{ 1 }"))).toBe(
+      ["(() => {", "  return 1;", "})();", ""].join("\n"),
+    );
+  });
+  it("block with statements and trailing expression", () => {
+    expect(js(gen("{ let x = 1; x }"))).toBe(
+      ["(() => {", "  const x = 1;", "  return x;", "})();", ""].join("\n"),
+    );
+  });
+  it("block as let initializer", () => {
+    expect(js(gen("let result = { 1 + 2 };"))).toBe(
+      ["const result = (() => {", "  return 1 + 2;", "})();", ""].join("\n"),
+    );
+  });
+});
+
+describe("if expression codegen", () => {
+  it("if without else wraps in IIFE", () => {
+    expect(js(gen("if cond { foo }"))).toBe(
+      ["(() => {", "  if (cond) {", "    return foo;", "  }", "})();", ""].join(
+        "\n",
+      ),
+    );
+  });
+  it("if-else emits both branches", () => {
+    expect(js(gen("if cond { a } else { b }"))).toBe(
+      [
+        "(() => {",
+        "  if (cond) {",
+        "    return a;",
+        "  } else {",
+        "    return b;",
+        "  }",
+        "})();",
+        "",
+      ].join("\n"),
+    );
+  });
+  it("else-if chain emits inline else if", () => {
+    expect(js(gen("if a { 1 } else if b { 2 }"))).toBe(
+      [
+        "(() => {",
+        "  if (a) {",
+        "    return 1;",
+        "  } else if (b) {",
+        "    return 2;",
+        "  }",
+        "})();",
+        "",
+      ].join("\n"),
+    );
+  });
+  it("empty branches emit empty blocks", () => {
+    expect(js(gen("if cond { } else { }"))).toBe(
+      ["if (cond) {} else {}", ""].join("\n"),
+    );
+  });
+  it("branches without return values don't use IIFE", () => {
+    expect(js(gen("if cond { 2; } else { 1; }"))).toBe(
+      "if (cond) { 2; } else { 1; }\n",
+    );
+  });
+});
+
+describe("struct expression codegen", () => {
+  it("empty struct emits ({})", () => {
+    expect(js(gen("Foo {}"))).toBe("({});\n");
+  });
+  it("named fields emit object literal", () => {
+    expect(js(gen("Foo { x: 1, y: 2 }"))).toBe("({x: 1, y: 2});\n");
+  });
+  it("shorthand fields emit ES6 shorthand", () => {
+    expect(js(gen("Foo { x }"))).toBe("({x});\n");
+  });
+  it("struct update spread emits spread-first object literal", () => {
+    expect(js(gen("Foo { x: 1, ..base }"))).toBe("({...base, x: 1});\n");
+  });
+  it("structs with multiple spreads use them all", () => {
+    expect(js(gen("Foo { x: 1, ..base1, ..base2 }"))).toBe(
+      "({ ...base2, ...base1, x: 1 });\n",
+    );
   });
 });

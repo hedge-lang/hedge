@@ -998,11 +998,17 @@ describe("if expressions", (): void => {
           condition: { kind: "PathExpression", path: { segments: ["cond"] } },
           thenBranch: {
             kind: "Block",
-            trailingExpression: some({ kind: "PathExpression", path: { segments: ["a"] } }),
+            trailingExpression: some({
+              kind: "PathExpression",
+              path: { segments: ["a"] },
+            }),
           },
           elseBranch: some({
             kind: "Block",
-            trailingExpression: some({ kind: "PathExpression", path: { segments: ["b"] } }),
+            trailingExpression: some({
+              kind: "PathExpression",
+              path: { segments: ["b"] },
+            }),
           }),
         },
       ],
@@ -1088,7 +1094,11 @@ describe("if expressions", (): void => {
             operator: "Not",
             operand: { kind: "PathExpression", path: { segments: ["flag"] } },
           },
-          thenBranch: { kind: "Block", statements: [], trailingExpression: none() },
+          thenBranch: {
+            kind: "Block",
+            statements: [],
+            trailingExpression: none(),
+          },
         },
       ],
     });
@@ -1112,7 +1122,9 @@ describe("if expressions", (): void => {
   });
 
   it("if outer { if inner { 1 } else { 2 } } else { 3 } — nested if expressions", (): void => {
-    const ast = parseProgram("if outer { if inner { 1 } else { 2 } } else { 3 }");
+    const ast = parseProgram(
+      "if outer { if inner { 1 } else { 2 } } else { 3 }",
+    );
     expect(ast).toMatchObject({
       items: [
         {
@@ -1133,8 +1145,16 @@ describe("if expressions", (): void => {
       items: [
         {
           kind: "IfExpression",
-          thenBranch: { kind: "Block", statements: [], trailingExpression: none() },
-          elseBranch: some({ kind: "Block", statements: [], trailingExpression: none() }),
+          thenBranch: {
+            kind: "Block",
+            statements: [],
+            trailingExpression: none(),
+          },
+          elseBranch: some({
+            kind: "Block",
+            statements: [],
+            trailingExpression: none(),
+          }),
         },
       ],
     });
@@ -1148,7 +1168,10 @@ describe("if expressions", (): void => {
           kind: "IfExpression",
           condition: {
             kind: "Block",
-            trailingExpression: some({ kind: "BinaryExpression", operator: "Gt" }),
+            trailingExpression: some({
+              kind: "BinaryExpression",
+              operator: "Gt",
+            }),
           },
         },
       ],
@@ -1237,7 +1260,10 @@ describe("block expressions", (): void => {
         {
           kind: "Block",
           statements: [{ kind: "LetStatement" }],
-          trailingExpression: some({ kind: "PathExpression", path: { segments: ["x"] } }),
+          trailingExpression: some({
+            kind: "PathExpression",
+            path: { segments: ["x"] },
+          }),
         },
       ],
     });
@@ -1277,7 +1303,10 @@ describe("block expressions", (): void => {
           kind: "LetStatement",
           initializer: some({
             kind: "Block",
-            trailingExpression: some({ kind: "BinaryExpression", operator: "Add" }),
+            trailingExpression: some({
+              kind: "BinaryExpression",
+              operator: "Add",
+            }),
           }),
         },
       ],
@@ -1318,7 +1347,12 @@ describe("tuple expressions and unit", (): void => {
   it("(1,) — single-element tuple requires trailing comma to disambiguate from grouping", (): void => {
     const ast = parseProgram("(1,)");
     expect(ast).toMatchObject({
-      items: [{ kind: "TupleExpression", elements: [{ kind: "IntLiteral", value: "1" }] }],
+      items: [
+        {
+          kind: "TupleExpression",
+          elements: [{ kind: "IntLiteral", value: "1" }],
+        },
+      ],
     });
   });
 
@@ -1340,7 +1374,12 @@ describe("tuple expressions and unit", (): void => {
   it("(1, 2,) — trailing comma on multi-element tuple is accepted", (): void => {
     const ast = parseProgram("(1, 2,)");
     expect(ast).toMatchObject({
-      items: [{ kind: "TupleExpression", elements: [{ kind: "IntLiteral" }, { kind: "IntLiteral" }] }],
+      items: [
+        {
+          kind: "TupleExpression",
+          elements: [{ kind: "IntLiteral" }, { kind: "IntLiteral" }],
+        },
+      ],
     });
   });
 
@@ -1349,7 +1388,9 @@ describe("tuple expressions and unit", (): void => {
     expect(ast).toMatchObject({
       items: [{ kind: "IntLiteral", value: "1" }],
     });
-    expect((ast.items[0] as { kind: string }).kind).not.toBe("TupleExpression");
+    const item = ast.items[0];
+    assert(item !== undefined);
+    expect(item.kind).not.toBe("TupleExpression");
   });
 
   it("((1, 2), 3) — nested tuple", (): void => {
@@ -1359,7 +1400,10 @@ describe("tuple expressions and unit", (): void => {
         {
           kind: "TupleExpression",
           elements: [
-            { kind: "TupleExpression", elements: [{ kind: "IntLiteral" }, { kind: "IntLiteral" }] },
+            {
+              kind: "TupleExpression",
+              elements: [{ kind: "IntLiteral" }, { kind: "IntLiteral" }],
+            },
             { kind: "IntLiteral", value: "3" },
           ],
         },
@@ -1472,7 +1516,10 @@ describe("index expressions", (): void => {
       items: [
         {
           kind: "IndexExpression",
-          object: { kind: "CallExpression", callee: { path: { segments: ["f"] } } },
+          object: {
+            kind: "CallExpression",
+            callee: { path: { segments: ["f"] } },
+          },
           index: { kind: "IntLiteral", value: "0" },
         },
       ],
@@ -1572,7 +1619,11 @@ describe("method call expressions", (): void => {
       items: [
         {
           kind: "FieldAccessExpression",
-          object: { kind: "MethodCallExpression", receiver: { path: { segments: ["a"] } }, method: { text: "method" } },
+          object: {
+            kind: "MethodCallExpression",
+            receiver: { path: { segments: ["a"] } },
+            method: { text: "method" },
+          },
           field: { text: "field" },
         },
       ],
@@ -1661,8 +1712,14 @@ describe("struct expressions", (): void => {
         {
           kind: "StructExpression",
           fields: [
-            { name: { text: "x" }, value: some({ kind: "IntLiteral", value: "1" }) },
-            { name: { text: "y" }, value: some({ kind: "IntLiteral", value: "2" }) },
+            {
+              name: { text: "x" },
+              value: some({ kind: "IntLiteral", value: "1" }),
+            },
+            {
+              name: { text: "y" },
+              value: some({ kind: "IntLiteral", value: "2" }),
+            },
           ],
         },
       ],
@@ -1672,7 +1729,12 @@ describe("struct expressions", (): void => {
   it("Foo { x: 1, y: 2, } — trailing comma is accepted", (): void => {
     const ast = parseProgram("Foo { x: 1, y: 2, }");
     expect(ast).toMatchObject({
-      items: [{ kind: "StructExpression", fields: [{ name: { text: "x" } }, { name: { text: "y" } }] }],
+      items: [
+        {
+          kind: "StructExpression",
+          fields: [{ name: { text: "x" } }, { name: { text: "y" } }],
+        },
+      ],
     });
   });
 
@@ -1709,7 +1771,9 @@ describe("struct expressions", (): void => {
 
   it("Foo { x: 1, ..base } — struct update spread emits a not-yet-supported diagnostic", (): void => {
     const result = parse(tokenize("Foo { x: 1, ..base }").tokens);
-    expect(result.diagnostics.some((d) => d.message.toLowerCase().includes("not"))).toBe(true);
+    expect(
+      result.diagnostics.some((d) => d.message.toLowerCase().includes("not")),
+    ).toBe(true);
   });
 
   it("ns::Foo { x: 1 } — qualified path in struct expression", (): void => {
@@ -1774,7 +1838,9 @@ describe("composition / integration", (): void => {
         {
           kind: "IfExpression",
           thenBranch: { trailingExpression: some({ kind: "IndexExpression" }) },
-          elseBranch: some({ trailingExpression: some({ kind: "FieldAccessExpression" }) }),
+          elseBranch: some({
+            trailingExpression: some({ kind: "FieldAccessExpression" }),
+          }),
         },
       ],
     });
@@ -1789,7 +1855,10 @@ describe("composition / integration", (): void => {
           statements: [
             {
               kind: "LetStatement",
-              initializer: some({ kind: "TupleExpression", elements: [{}, {}] }),
+              initializer: some({
+                kind: "TupleExpression",
+                elements: [{}, {}],
+              }),
             },
           ],
           trailingExpression: some({ kind: "PathExpression" }),
@@ -1805,7 +1874,9 @@ describe("composition / integration", (): void => {
         {
           kind: "CallExpression",
           callee: { path: { segments: ["f"] } },
-          arguments: [{ kind: "StructExpression", path: { segments: ["Foo"] } }],
+          arguments: [
+            { kind: "StructExpression", path: { segments: ["Foo"] } },
+          ],
         },
       ],
     });
@@ -1826,5 +1897,7 @@ describe("composition / integration", (): void => {
     });
   });
 
-  it.todo("(1, 2).0 — tuple element access via DecInt field (requires FieldAccess to accept IntLiteral)");
+  it.todo(
+    "(1, 2).0 — tuple element access via DecInt field (requires FieldAccess to accept IntLiteral)",
+  );
 });
