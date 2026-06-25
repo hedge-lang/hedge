@@ -1,4 +1,5 @@
-import { assertNever } from "../assert.js";
+import { assert, assertNever } from "../assert.js";
+import type { Diagnostic } from "../diagnostics.js";
 import { resolveEscape } from "../lexer/escape.js";
 import type { Token } from "../lexer/token.js";
 import { isSome, none, some } from "../option.js";
@@ -8,9 +9,16 @@ import type {
   BinaryOperator,
   CompoundAssignOperator,
   Expression,
+  FieldInit,
   FloatLiteral,
+  IfExpression,
+  IndexExpression,
   IntLiteral,
+  MethodCallExpression,
+  PathExpression,
   ReferenceExpression,
+  StructExpression,
+  TupleExpression,
   UnaryExpression,
 } from "./ast.js";
 import type { Parsed } from "./parse.js";
@@ -25,6 +33,7 @@ import {
   type PR,
 } from "./parse-utils.js";
 import { parsePath } from "./path.js";
+import { parseBlock } from "./statement.js";
 
 export function parseIntLiteral(
   pos: number,
@@ -86,7 +95,8 @@ type InfixEntry =
       readonly sigil: string;
     }
   | { readonly kind: "postfix-call"; readonly leftBp: number }
-  | { readonly kind: "postfix-field"; readonly leftBp: number };
+  | { readonly kind: "postfix-field"; readonly leftBp: number }
+  | { readonly kind: "postfix-index"; readonly leftBp: number };
 
 // eslint-disable-next-line complexity -- dispatch table; more readable than alternatives
 function infixOp(token: Token): InfixEntry | null {
@@ -96,6 +106,8 @@ function infixOp(token: Token): InfixEntry | null {
       return { kind: "postfix-call", leftBp: 26 };
     case "dot":
       return { kind: "postfix-field", leftBp: 26 };
+    case "lbracket":
+      return { kind: "postfix-index", leftBp: 26 };
     // Prec 3 — multiplicative (bp 22, left-assoc)
     case "star":
       return {
@@ -389,7 +401,9 @@ function infixOp(token: Token): InfixEntry | null {
  */
 function parseReference(
   tokens: readonly Token[],
+  diagnostics: Diagnostic[],
   pos: number,
+  allowStruct: boolean,
 ): PR<Parsed<ReferenceExpression>> {
   let cursor = pos + 1;
   let mutable = false;
@@ -412,7 +426,13 @@ function parseReference(
   }
   // Parse the operand at unary precedence (24) so postfix ops like . and () bind to
   // the operand rather than the surrounding expression: &a.b ⟹ &(a.b), &f() ⟹ &(f())
-  const operandResult = parseExpressionWithBindingPower(tokens, cursor, 24);
+  const operandResult = parseExpressionWithBindingPower(
+    tokens,
+    diagnostics,
+    cursor,
+    24,
+    allowStruct,
+  );
   if (isErr(operandResult)) return operandResult;
   const operand = operandResult.value;
   const reference: ReferenceExpression = {
@@ -422,6 +442,252 @@ function parseReference(
     operand: operand.node,
   };
   return ok({ node: reference, next: operand.next });
+}
+
+/** Parses `()`, `(expr)` (grouping), or `(a, b, ...)` (tuple). */
+// eslint-disable-next-line complexity
+function parseTupleOrGroup(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<Expression>> {
+  const start = pos;
+  let cursor = pos + 1; // skip `(`
+
+  // Unit: ()
+  if (tokens[cursor]?.kind === "rparen") {
+    const tuple: TupleExpression = {
+      kind: "TupleExpression",
+      tokenId: start,
+      elements: [],
+    };
+    return ok({ node: tuple, next: cursor + 1 });
+  }
+
+  // Parse the first element; tuple elements are always in struct-ok position
+  const firstResult = parseExpressionWithBindingPower(
+    tokens,
+    diagnostics,
+    cursor,
+    0,
+    true,
+  );
+  if (isErr(firstResult)) return firstResult;
+  cursor = firstResult.value.next;
+
+  // No comma → transparent grouping (passes allowStruct through; no new node)
+  if (tokens[cursor]?.kind === "rparen") {
+    return ok({ node: firstResult.value.node, next: cursor + 1 });
+  }
+
+  if (tokens[cursor]?.kind !== "comma") {
+    const tok = tokens[cursor];
+    return err({
+      severity: "error",
+      message: `Expected ',' or ')' after expression in parentheses`,
+      span: tok !== undefined ? some(tok.span) : none(),
+    });
+  }
+
+  // Collect remaining tuple elements
+  const elements: Expression[] = [firstResult.value.node];
+  while (tokens[cursor]?.kind === "comma") {
+    cursor += 1; // skip comma
+    if (tokens[cursor]?.kind === "rparen") break; // trailing comma
+    const elemResult = parseExpressionWithBindingPower(
+      tokens,
+      diagnostics,
+      cursor,
+      0,
+      true,
+    );
+    if (isErr(elemResult)) return elemResult;
+    elements.push(elemResult.value.node);
+    cursor = elemResult.value.next;
+  }
+
+  const closeResult = expect(tokens, cursor, "rparen");
+  if (isErr(closeResult)) return closeResult;
+
+  const tuple: TupleExpression = {
+    kind: "TupleExpression",
+    tokenId: start,
+    elements,
+  };
+  return ok({ node: tuple, next: closeResult.value });
+}
+
+/** Parses `if cond { then } (else (if ... | { else }))?`. */
+// eslint-disable-next-line complexity -- This is mostly a routing function
+function parseIfExpression(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<IfExpression>> {
+  const start = pos;
+  // Token at pos is the `if` keyword — advance past it
+  const afterIf = pos + 1;
+
+  // Condition is ExpressionNoStruct — `{` always starts the then-block, never a struct literal
+  const condResult = parseExpressionWithBindingPower(
+    tokens,
+    diagnostics,
+    afterIf,
+    0,
+    false,
+  );
+  if (isErr(condResult)) return condResult;
+
+  const thenTok = tokens[condResult.value.next];
+  if (thenTok === undefined || thenTok.kind !== "lbrace") {
+    return err({
+      severity: "error",
+      message: `Expected '{' to start if body`,
+      span: thenTok !== undefined ? some(thenTok.span) : none(),
+    });
+  }
+  const thenResult = parseBlock(tokens, diagnostics, condResult.value.next);
+  if (isErr(thenResult)) return thenResult;
+
+  let cursor = thenResult.value.next;
+  let elseBranch: IfExpression["elseBranch"] = none();
+
+  const elseToken = tokens[cursor];
+  if (elseToken?.kind === "keyword" && elseToken.text === "else") {
+    cursor += 1; // skip `else`
+    const afterElse = tokens[cursor];
+    if (afterElse?.kind === "keyword" && afterElse.text === "if") {
+      const elseIfResult = parseIfExpression(tokens, diagnostics, cursor);
+      if (isErr(elseIfResult)) return elseIfResult;
+      elseBranch = some(elseIfResult.value.node);
+      cursor = elseIfResult.value.next;
+    } else if (afterElse?.kind === "lbrace") {
+      const elseBlockResult = parseBlock(tokens, diagnostics, cursor);
+      if (isErr(elseBlockResult)) return elseBlockResult;
+      elseBranch = some(elseBlockResult.value.node);
+      cursor = elseBlockResult.value.next;
+    } else {
+      return err({
+        severity: "error",
+        message: `Expected 'if' or '{' after 'else'`,
+        span: afterElse !== undefined ? some(afterElse.span) : none(),
+      });
+    }
+  }
+
+  const node: IfExpression = {
+    kind: "IfExpression",
+    tokenId: start,
+    condition: condResult.value.node,
+    thenBranch: thenResult.value.node,
+    elseBranch,
+  };
+  return ok({ node, next: cursor });
+}
+
+/** Parses `Path "{" FieldInits? (".." Expression)? "}"`. */
+// eslint-disable-next-line complexity
+function parseStructExpression(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  pathNode: PathExpression,
+): PR<Parsed<StructExpression>> {
+  let cursor = pos + 1; // skip `{`
+
+  const fields: FieldInit[] = [];
+  let base: StructExpression["base"] = none();
+
+  while (
+    tokens[cursor]?.kind !== "rbrace" &&
+    tokens[cursor]?.kind !== "eof" &&
+    tokens[cursor] !== undefined
+  ) {
+    // Struct update spread: `..expr`
+    if (tokens[cursor]?.kind === "dot_dot") {
+      const spreadTok = tokens[cursor];
+      assert(spreadTok !== undefined, "Expected spread token to be defined");
+      cursor += 1;
+      const baseResult = parseExpressionWithBindingPower(
+        tokens,
+        diagnostics,
+        cursor,
+        0,
+        true,
+      );
+      if (isErr(baseResult)) return baseResult;
+      base = some(baseResult.value.node);
+      cursor = baseResult.value.next;
+      diagnostics.push({
+        severity: "warning",
+        message:
+          "struct update expression (`..base`) is not yet supported in semantic analysis",
+        span: some(spreadTok.span),
+      });
+      if (tokens[cursor]?.kind === "comma") cursor += 1; // trailing comma after spread
+      if (tokens[cursor]?.kind !== "rbrace") {
+        const tok = tokens[cursor];
+        return err({
+          severity: "error",
+          message: `Expected '}' after struct update expression — spread must be last`,
+          span: tok !== undefined ? some(tok.span) : none(),
+        });
+      }
+      break;
+    }
+
+    // Field init: Identifier (":" Expression)?
+    const nameResult = parseIdentifier(tokens, cursor);
+    if (isErr(nameResult)) return nameResult;
+    cursor = nameResult.value.next;
+
+    let fieldValue: FieldInit["value"] = none();
+    if (tokens[cursor]?.kind === "colon") {
+      cursor += 1;
+      const valResult = parseExpressionWithBindingPower(
+        tokens,
+        diagnostics,
+        cursor,
+        0,
+        true,
+      );
+      if (isErr(valResult)) return valResult;
+      fieldValue = some(valResult.value.node);
+      cursor = valResult.value.next;
+    }
+
+    const fieldInit: FieldInit = {
+      kind: "FieldInit",
+      tokenId: nameResult.value.node.tokenId,
+      name: nameResult.value.node,
+      value: fieldValue,
+    };
+    fields.push(fieldInit);
+
+    if (tokens[cursor]?.kind === "comma") {
+      cursor += 1;
+    } else {
+      break;
+    }
+  }
+
+  const closeTok = tokens[cursor];
+  if (closeTok === undefined || closeTok.kind !== "rbrace") {
+    return err({
+      severity: "error",
+      message: `Expected '}' to close struct expression`,
+      span: closeTok !== undefined ? some(closeTok.span) : none(),
+    });
+  }
+
+  const node: StructExpression = {
+    kind: "StructExpression",
+    tokenId: pathNode.tokenId,
+    path: pathNode.path,
+    fields,
+    base,
+  };
+  return ok({ node, next: cursor + 1 });
 }
 
 /**
@@ -446,14 +712,17 @@ function parseReference(
  *   | ReferenceExpression
  * ```
  */
-// eslint-disable-next-line complexity -- This is a dispatch function and more readable this way.
+// eslint-disable-next-line complexity -- dispatch function; more readable this way
 function parsePrimary(
   tokens: readonly Token[],
+  diagnostics: Diagnostic[],
   pos: number,
+  allowStruct: boolean,
 ): PR<Parsed<Expression>> {
   const tokenResult = tokenAt(tokens, pos);
   if (isErr(tokenResult)) return tokenResult;
   const token = tokenResult.value;
+
   if (token.kind === "string")
     return ok({
       node: { kind: "StringLiteral", tokenId: pos, value: token.text },
@@ -478,13 +747,44 @@ function parsePrimary(
       node: { kind: "BoolLiteral", tokenId: pos, value: token.text === "true" },
       next: pos + 1,
     });
-  if (token.kind === "ident" || token.kind === "path_sep")
-    return parsePath(tokens, pos);
-  if (token.kind === "amp") return parseReference(tokens, pos);
+
+  // `if` expression
+  if (token.kind === "keyword" && token.text === "if") {
+    return parseIfExpression(tokens, diagnostics, pos);
+  }
+
+  // Block expression
+  if (token.kind === "lbrace") {
+    return parseBlock(tokens, diagnostics, pos);
+  }
+
+  // Path, or path followed by `{` (struct expression when allowed)
+  if (token.kind === "ident" || token.kind === "path_sep") {
+    const pathResult = parsePath(tokens, pos);
+    if (isErr(pathResult)) return pathResult;
+    if (allowStruct && tokens[pathResult.value.next]?.kind === "lbrace") {
+      return parseStructExpression(
+        tokens,
+        diagnostics,
+        pathResult.value.next,
+        pathResult.value.node,
+      );
+    }
+    return ok(pathResult.value);
+  }
+
+  if (token.kind === "amp")
+    return parseReference(tokens, diagnostics, pos, allowStruct);
 
   // Prefix unary: - and !
   if (token.kind === "minus") {
-    const operandResult = parseExpressionWithBindingPower(tokens, pos + 1, 24);
+    const operandResult = parseExpressionWithBindingPower(
+      tokens,
+      diagnostics,
+      pos + 1,
+      24,
+      allowStruct,
+    );
     if (isErr(operandResult)) return operandResult;
     const unary: UnaryExpression = {
       kind: "UnaryExpression",
@@ -495,7 +795,13 @@ function parsePrimary(
     return ok({ node: unary, next: operandResult.value.next });
   }
   if (token.kind === "bang") {
-    const operandResult = parseExpressionWithBindingPower(tokens, pos + 1, 24);
+    const operandResult = parseExpressionWithBindingPower(
+      tokens,
+      diagnostics,
+      pos + 1,
+      24,
+      allowStruct,
+    );
     if (isErr(operandResult)) return operandResult;
     const unary: UnaryExpression = {
       kind: "UnaryExpression",
@@ -506,22 +812,9 @@ function parsePrimary(
     return ok({ node: unary, next: operandResult.value.next });
   }
 
-  // Grouping: (expr) — transparent, no AST node emitted
+  // Tuple, grouping, or unit
   if (token.kind === "lparen") {
-    const innerResult = parseExpressionWithBindingPower(tokens, pos + 1, 0);
-    if (isErr(innerResult)) return innerResult;
-    const closeToken = tokens[innerResult.value.next];
-    if (closeToken === undefined || closeToken.kind !== "rparen") {
-      return err({
-        severity: "error",
-        message: `Expected ')' to close grouped expression`,
-        span: closeToken !== undefined ? some(closeToken.span) : none(),
-      });
-    }
-    return ok({
-      node: innerResult.value.node,
-      next: innerResult.value.next + 1,
-    });
+    return parseTupleOrGroup(tokens, diagnostics, pos);
   }
 
   // Guardrail: * in prefix position is dereference, not yet supported
@@ -550,6 +843,7 @@ function parsePrimary(
  */
 function parseArguments(
   tokens: readonly Token[],
+  diagnostics: Diagnostic[],
   pos: number,
 ): PR<Parsed<Expression[]>> {
   const afterLparen = expect(tokens, pos, "lparen");
@@ -558,7 +852,22 @@ function parseArguments(
   const args: Expression[] = [];
   for (;;) {
     if (tokens[cursor]?.kind === "rparen") break;
-    const argResult = parseExpressionWithBindingPower(tokens, cursor, 0);
+    const cur = tokens[cursor];
+    if (cur === undefined || cur.kind === "eof") {
+      return err({
+        severity: "error",
+        message: "Expected ')' to close argument list",
+        span: none(),
+      });
+    }
+    // Arguments are always in struct-ok position (they're inside parens)
+    const argResult = parseExpressionWithBindingPower(
+      tokens,
+      diagnostics,
+      cursor,
+      0,
+      true,
+    );
     if (isErr(argResult)) return argResult;
     args.push(argResult.value.node);
     cursor = argResult.value.next;
@@ -572,10 +881,11 @@ function parseArguments(
 
 function parseInfixCall(
   tokens: readonly Token[],
+  diagnostics: Diagnostic[],
   lhs: Parsed<Expression>,
   opPos: number,
 ): PR<Parsed<Expression>> {
-  const argsResult = parseArguments(tokens, opPos);
+  const argsResult = parseArguments(tokens, diagnostics, opPos);
   if (isErr(argsResult)) return argsResult;
   return ok({
     node: {
@@ -588,13 +898,36 @@ function parseInfixCall(
   });
 }
 
+/**
+ * Handles `.field` and `.method(args)`.
+ *
+ * When `(` immediately follows the field name, produces `MethodCallExpression`
+ * (preserving the `this` receiver for correct JS codegen). Otherwise produces
+ * `FieldAccessExpression`.
+ */
 function parseInfixField(
   tokens: readonly Token[],
+  diagnostics: Diagnostic[],
   lhs: Parsed<Expression>,
   opPos: number,
 ): PR<Parsed<Expression>> {
   const fieldResult = parseIdentifier(tokens, opPos + 1);
   if (isErr(fieldResult)) return fieldResult;
+  const afterIdent = fieldResult.value.next;
+
+  if (tokens[afterIdent]?.kind === "lparen") {
+    const argsResult = parseArguments(tokens, diagnostics, afterIdent);
+    if (isErr(argsResult)) return argsResult;
+    const node: MethodCallExpression = {
+      kind: "MethodCallExpression",
+      tokenId: lhs.node.tokenId,
+      receiver: lhs.node,
+      method: fieldResult.value.node,
+      arguments: argsResult.value.node,
+    };
+    return ok({ node, next: argsResult.value.next });
+  }
+
   return ok({
     node: {
       kind: "FieldAccessExpression",
@@ -602,20 +935,64 @@ function parseInfixField(
       object: lhs.node,
       field: fieldResult.value.node,
     },
-    next: fieldResult.value.next,
+    next: afterIdent,
   });
+}
+
+function parseInfixIndex(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  lhs: Parsed<Expression>,
+  opPos: number,
+): PR<Parsed<Expression>> {
+  let cursor = opPos + 1; // skip `[`
+
+  const tok = tokens[cursor];
+  if (tok === undefined || tok.kind === "eof" || tok.kind === "rbracket") {
+    return err({
+      severity: "error",
+      message: `Expected an expression inside '[...]'`,
+      span: tok !== undefined && tok.kind !== "eof" ? some(tok.span) : none(),
+    });
+  }
+
+  // Index expressions are always in struct-ok position
+  const indexResult = parseExpressionWithBindingPower(
+    tokens,
+    diagnostics,
+    cursor,
+    0,
+    true,
+  );
+  if (isErr(indexResult)) return indexResult;
+  cursor = indexResult.value.next;
+
+  const closeResult = expect(tokens, cursor, "rbracket");
+  if (isErr(closeResult)) return closeResult;
+
+  const node: IndexExpression = {
+    kind: "IndexExpression",
+    tokenId: lhs.node.tokenId,
+    object: lhs.node,
+    index: indexResult.value.node,
+  };
+  return ok({ node, next: closeResult.value });
 }
 
 function parseInfixBinary(
   tokens: readonly Token[],
+  diagnostics: Diagnostic[],
   lhs: Parsed<Expression>,
   opPos: number,
   infix: Extract<InfixEntry, { kind: "binary" }>,
+  allowStruct: boolean,
 ): PR<Parsed<Expression>> {
   const rhsResult = parseExpressionWithBindingPower(
     tokens,
+    diagnostics,
     opPos + 1,
     infix.rightBp,
+    allowStruct,
   );
   if (isErr(rhsResult)) return rhsResult;
   const node: BinaryExpression = {
@@ -649,14 +1026,18 @@ function parseInfixBinary(
 
 function parseInfixAssign(
   tokens: readonly Token[],
+  diagnostics: Diagnostic[],
   lhs: Parsed<Expression>,
   opPos: number,
   infix: Extract<InfixEntry, { kind: "assign" }>,
+  allowStruct: boolean,
 ): PR<Parsed<Expression>> {
   const rhsResult = parseExpressionWithBindingPower(
     tokens,
+    diagnostics,
     opPos + 1,
     infix.rightBp,
+    allowStruct,
   );
   if (isErr(rhsResult)) return rhsResult;
   return ok({
@@ -672,14 +1053,18 @@ function parseInfixAssign(
 
 function parseInfixCompoundAssign(
   tokens: readonly Token[],
+  diagnostics: Diagnostic[],
   lhs: Parsed<Expression>,
   opPos: number,
   infix: Extract<InfixEntry, { kind: "compound-assign" }>,
+  allowStruct: boolean,
 ): PR<Parsed<Expression>> {
   const rhsResult = parseExpressionWithBindingPower(
     tokens,
+    diagnostics,
     opPos + 1,
     infix.rightBp,
+    allowStruct,
   );
   if (isErr(rhsResult)) return rhsResult;
   return ok({
@@ -699,9 +1084,10 @@ function parseInfixCompoundAssign(
  */
 export function parseExpression(
   tokens: readonly Token[],
+  diagnostics: Diagnostic[],
   pos: number,
 ): PR<Parsed<Expression>> {
-  return parseExpressionWithBindingPower(tokens, pos, 0);
+  return parseExpressionWithBindingPower(tokens, diagnostics, pos, 0, true);
 }
 
 /**
@@ -709,17 +1095,22 @@ export function parseExpression(
  * given minimum binding power. Internal recursive entry point for the Pratt loop.
  *
  * @param tokens The sequence of tokens to parse.
+ * @param diagnostics The diagnostic warnings and errors array.
  * @param pos The current position in the token sequence to start parsing.
  * @param minBp The minimum binding power; operators with leftBp ≤ minBp are not consumed.
+ * @param allowStruct Whether structs are allowed in this space.
+ *
  * @return The result of parsing, which includes either the parsed expression or an error.
  */
-// eslint-disable-next-line complexity -- This is a dispatch function and more readable this way.
+// eslint-disable-next-line complexity -- dispatch function; more readable this way
 function parseExpressionWithBindingPower(
   tokens: readonly Token[],
+  diagnostics: Diagnostic[],
   pos: number,
   minBp: number,
+  allowStruct: boolean,
 ): PR<Parsed<Expression>> {
-  const primaryResult = parsePrimary(tokens, pos);
+  const primaryResult = parsePrimary(tokens, diagnostics, pos, allowStruct);
   if (isErr(primaryResult)) return primaryResult;
   let result = primaryResult.value;
 
@@ -735,19 +1126,43 @@ function parseExpressionWithBindingPower(
 
     switch (infix.kind) {
       case "postfix-call":
-        stepResult = parseInfixCall(tokens, result, opPos);
+        stepResult = parseInfixCall(tokens, diagnostics, result, opPos);
         break;
       case "postfix-field":
-        stepResult = parseInfixField(tokens, result, opPos);
+        stepResult = parseInfixField(tokens, diagnostics, result, opPos);
+        break;
+      case "postfix-index":
+        stepResult = parseInfixIndex(tokens, diagnostics, result, opPos);
         break;
       case "binary":
-        stepResult = parseInfixBinary(tokens, result, opPos, infix);
+        stepResult = parseInfixBinary(
+          tokens,
+          diagnostics,
+          result,
+          opPos,
+          infix,
+          allowStruct,
+        );
         break;
       case "assign":
-        stepResult = parseInfixAssign(tokens, result, opPos, infix);
+        stepResult = parseInfixAssign(
+          tokens,
+          diagnostics,
+          result,
+          opPos,
+          infix,
+          allowStruct,
+        );
         break;
       case "compound-assign":
-        stepResult = parseInfixCompoundAssign(tokens, result, opPos, infix);
+        stepResult = parseInfixCompoundAssign(
+          tokens,
+          diagnostics,
+          result,
+          opPos,
+          infix,
+          allowStruct,
+        );
         break;
       default:
         assertNever(

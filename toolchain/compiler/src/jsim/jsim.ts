@@ -2,7 +2,6 @@ import { isSome, none, type Option, some } from "../option.js";
 import { type BinaryExpression, type IntLiteral } from "../parser/ast.js";
 import { HEDGE_PRIMITIVE_TYPES } from "../primitives.js";
 import type * as Parser from "../parser/ast.js";
-import { type FunctionParam } from "./ast.js";
 import type * as JSIM from "./ast.js";
 import { toDocComment } from "./parts/doc-comment.js";
 import { assert, assertNever } from "../assert.js";
@@ -35,18 +34,10 @@ function parsePrimitiveType(type: Parser.Type): Option<PrimitiveType> {
 }
 
 function parseItem(item: Parser.Item): JSIM.Item | JSIM.Item[] {
-  if (item.kind === "Function") {
-    return parseFunction(item);
-  }
-
-  if (item.kind === "LetStatement" || item.kind === "ExpressionStatement") {
+  if (item.kind === "Function") return parseFunction(item);
+  if (item.kind === "LetStatement" || item.kind === "ExpressionStatement")
     return parseStatement(item);
-  }
-
-  if (item.kind === "Struct") {
-    return parseStruct(item);
-  }
-
+  if (item.kind === "Struct") return parseStruct(item);
   return parseExpression(item);
 }
 
@@ -79,7 +70,7 @@ function parseFunction(fn: Parser.FunctionDecl): JSIM.FunctionDecl {
     kind: "FunctionDecl",
     scope,
     name: fn.name.text,
-    params: fn.params.flatMap((p): FunctionParam[] => {
+    params: fn.params.flatMap((p): JSIM.FunctionParam[] => {
       const type: Option<PrimitiveType> =
         p.type.kind === "UnitType"
           ? some({ kind: "PrimitiveType", value: "null" })
@@ -115,8 +106,45 @@ function parseStatement(statement: Parser.Statement): JSIM.Statement {
         docComment: toDocComment(statement.attributes),
       };
     case "ExpressionStatement":
+      if (statement.expression.kind === "Block") {
+        return jsimBlockStatement(statement.expression);
+      }
+      if (statement.expression.kind === "IfExpression") {
+        return jsimIfExpressionAsStatement(statement.expression);
+      }
       return parseExpression(statement.expression);
   }
+}
+
+function jsimBranchHasResult(
+  branch: Parser.Block | Parser.IfExpression,
+): boolean {
+  if (branch.kind === "IfExpression") {
+    return (
+      jsimBranchHasResult(branch.thenBranch) ||
+      (isSome(branch.elseBranch) &&
+        jsimBranchHasResult(branch.elseBranch.value))
+    );
+  }
+  return isSome(branch.trailingExpression);
+}
+
+function jsimBlockStatement(block: Parser.Block): JSIM.Statement {
+  if (isSome(block.trailingExpression)) return jsimBlockExpression(block);
+  return {
+    kind: "BlockStatement",
+    body: block.statements.map(parseStatement),
+  };
+}
+
+function jsimIfExpressionAsStatement(
+  ifExpr: Parser.IfExpression,
+): JSIM.Statement {
+  const hasResult =
+    jsimBranchHasResult(ifExpr.thenBranch) ||
+    (isSome(ifExpr.elseBranch) && jsimBranchHasResult(ifExpr.elseBranch.value));
+  if (hasResult) return jsimIfExpression(ifExpr);
+  return jsimIfStatement(ifExpr);
 }
 
 /**
@@ -167,12 +195,138 @@ function parseExpression(expression: Parser.Expression): JSIM.Expression {
       return parseFieldAccessExpression(expression);
     case "Identifier":
       return parseIdentifier(expression);
+    case "MethodCallExpression":
+      return jsimMethodCallExpression(expression);
+    case "IndexExpression":
+      return jsimIndexExpression(expression);
+    case "TupleExpression":
+      return jsimTupleExpression(expression);
+    case "StructExpression":
+      return jsimStructExpression(expression);
+    case "IfExpression":
+      return jsimIfExpression(expression);
+    case "Block":
+      return jsimBlockExpression(expression);
+
     default:
       assertNever(
         expression,
         `JSIM codegen for "${JSON.stringify(expression)}" is not yet implemented`,
       );
   }
+}
+
+function jsimMethodCallExpression(
+  methodCallExpression: Parser.MethodCallExpression,
+): JSIM.Expression {
+  return {
+    kind: "MethodCallExpression",
+    receiver: parseExpression(methodCallExpression.receiver),
+    method: methodCallExpression.method.text,
+    arguments: methodCallExpression.arguments.map(parseExpression),
+  };
+}
+
+function jsimBlockExpression(block: Parser.Block): JSIM.Expression {
+  return {
+    kind: "CallExpression",
+    callee: {
+      kind: "ArrowFunctionExpression",
+      params: [],
+      body: jsimBranchBody(block),
+    },
+    arguments: [],
+  };
+}
+
+function jsimBranchBody(block: Parser.Block): JSIM.Statement[] {
+  const stmts: JSIM.Statement[] = block.statements.map(parseStatement);
+  if (isSome(block.trailingExpression)) {
+    stmts.push({
+      kind: "ReturnStatement",
+      value: some(parseExpression(block.trailingExpression.value)),
+    });
+  }
+  return stmts;
+}
+
+function jsimBranchElse(
+  branch: Parser.IfExpression | Parser.Block,
+): JSIM.Statement[] {
+  if (branch.kind === "IfExpression") return [jsimIfStatement(branch)];
+  return jsimBranchBody(branch);
+}
+
+function jsimIfStatement(ifExpr: Parser.IfExpression): JSIM.IfStatement {
+  return {
+    kind: "IfStatement",
+    condition: parseExpression(ifExpr.condition),
+    then: jsimBranchBody(ifExpr.thenBranch),
+    else: isSome(ifExpr.elseBranch)
+      ? some(jsimBranchElse(ifExpr.elseBranch.value))
+      : none(),
+  };
+}
+
+function jsimIndexExpression(
+  indexExpression: Parser.IndexExpression,
+): JSIM.Expression {
+  return {
+    kind: "IndexExpression",
+    object: parseExpression(indexExpression.object),
+    index: parseExpression(indexExpression.index),
+  };
+}
+
+function jsimTupleExpression(
+  tupleExpression: Parser.TupleExpression,
+): JSIM.Expression {
+  return {
+    kind: "TupleExpression",
+    elements: tupleExpression.elements.map(parseExpression),
+  };
+}
+
+function jsimStructExpression({
+  base,
+  fields,
+}: Parser.StructExpression): JSIM.Expression {
+  return {
+    kind: "StructExpression",
+    fields: [
+      ...[base]
+        .filter(isSome)
+        .map((b) => parseExpression(b.value))
+        .map(makeSpread),
+      ...fields.map(makeStructField),
+    ],
+  };
+}
+
+function makeStructField(field: Parser.FieldInit): JSIM.StructField {
+  return {
+    kind: "StructField",
+    name: field.name.text,
+    value: isSome(field.value)
+      ? some(parseExpression(field.value.value))
+      : none(),
+  };
+}
+
+function makeSpread(expression: JSIM.Expression): JSIM.SpreadExpression {
+  return { kind: "SpreadExpression", expression };
+}
+
+function jsimIfExpression(ifExpression: Parser.IfExpression): JSIM.Expression {
+  return {
+    kind: "CallExpression",
+    callee: {
+      kind: "ArrowFunctionExpression",
+      params: [],
+      body: [jsimIfStatement(ifExpression)],
+    },
+    arguments: [],
+  };
 }
 
 function jsimIntLiteral({ base, value }: IntLiteral): JSIM.Expression {

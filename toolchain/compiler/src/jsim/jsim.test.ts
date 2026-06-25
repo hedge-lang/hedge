@@ -277,4 +277,112 @@ describe("toJsim", () => {
         " — currently the param is silently dropped; correct behavior is to emit `unknown`",
     );
   });
+
+  describe("block lowering", () => {
+    it("empty block in statement position lowers to BlockStatement with empty body", () => {
+      const program = toJsim(parseOrThrow("fn _() { { }; }"));
+      expect(program).toMatchObject({
+        items: [
+          {
+            kind: "FunctionDecl",
+            body: [{ kind: "BlockStatement", body: [] }],
+          },
+        ],
+      });
+    });
+
+    it("block without trailing expression lowers to BlockStatement containing its statements", () => {
+      const program = toJsim(parseOrThrow("fn _() { { 1; }; }"));
+      expect(program).toMatchObject({
+        items: [
+          {
+            kind: "FunctionDecl",
+            body: [
+              {
+                kind: "BlockStatement",
+                body: [{ kind: "NumberLiteral", value: "1" }],
+              },
+            ],
+          },
+        ],
+      });
+    });
+
+    it("block with trailing expression lowers to IIFE (CallExpression of ArrowFunctionExpression)", () => {
+      const program = toJsim(parseOrThrow("fn _() { let x = { 1 }; }"));
+      expect(program).toMatchObject({
+        items: [
+          {
+            kind: "FunctionDecl",
+            body: [
+              {
+                kind: "LetStatement",
+                value: {
+                  value: {
+                    kind: "CallExpression",
+                    callee: {
+                      kind: "ArrowFunctionExpression",
+                      body: [{ kind: "ReturnStatement" }],
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      });
+    });
+  });
+
+  describe("if-expression lowering", () => {
+    it("if with no result in any branch lowers to bare IfStatement (no IIFE)", () => {
+      const program = toJsim(parseOrThrow("fn _() { if cond { }; }"));
+      expect(program).toMatchObject({
+        items: [{ kind: "FunctionDecl", body: [{ kind: "IfStatement" }] }],
+      });
+    });
+
+    it("if with a result in a branch lowers to IIFE wrapping IfStatement", () => {
+      const program = toJsim(
+        parseOrThrow("fn _() { let x = if cond { 1 } else { 2 }; }"),
+      );
+      expect(program).toMatchObject({
+        items: [
+          {
+            kind: "FunctionDecl",
+            body: [
+              {
+                kind: "LetStatement",
+                value: {
+                  value: {
+                    kind: "CallExpression",
+                    callee: { kind: "ArrowFunctionExpression" },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      });
+    });
+
+    it("else-if chain with no results lowers to nested bare IfStatements", () => {
+      const program = toJsim(
+        parseOrThrow("fn _() { if a { } else if b { }; }"),
+      );
+      expect(program).toMatchObject({
+        items: [
+          {
+            kind: "FunctionDecl",
+            body: [
+              {
+                kind: "IfStatement",
+                else: { value: [{ kind: "IfStatement" }] },
+              },
+            ],
+          },
+        ],
+      });
+    });
+  });
 });

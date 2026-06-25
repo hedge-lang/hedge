@@ -71,6 +71,50 @@ describe("semantic analysis", (): void => {
     expect(result.diagnostics).toEqual([]);
   });
 
+  describe("top-level item restriction", () => {
+    it("bare expression at top level is an error", () => {
+      const result = diagnose("x + y;");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(result.diagnostics[0]?.message).toContain(
+        "only function and struct declarations are allowed at the top level",
+      );
+    });
+
+    it("let statement at top level is an error", () => {
+      const result = diagnose("let x = 1;");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "only function and struct declarations are allowed at the top level",
+      );
+    });
+
+    it("block at top level is an error", () => {
+      const result = diagnose("{ 1; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "only function and struct declarations are allowed at the top level",
+      );
+    });
+
+    it("function declaration at top level is accepted", () => {
+      const result = diagnose("fn f() {}");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("struct declaration at top level is accepted", () => {
+      const result = diagnose("struct Foo;");
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
+  it("rejects &x with a Slice 1 diagnostic", (): void => {
+    const result = diagnose("fn f(x: i32) { &x; }");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+  });
+
   it("rejects an unsupported param type with a Slice 1 diagnostic", (): void => {
     const result = diagnose("fn f(x: UnknownType) {}");
     expect(result.diagnostics).toHaveLength(1);

@@ -24,7 +24,17 @@ export interface FunctionDecl {
   readonly docComment: Option<DocComment>;
 }
 
-export type Statement = LetStatement | Expression;
+export type Statement =
+  | LetStatement
+  | BlockStatement
+  | IfStatement
+  | ReturnStatement
+  | Expression;
+
+export interface BlockStatement {
+  readonly kind: "BlockStatement";
+  readonly body: readonly Statement[];
+}
 
 export interface LetStatement {
   readonly kind: "LetStatement";
@@ -32,6 +42,18 @@ export interface LetStatement {
   readonly mutable: boolean;
   readonly value: Option<Expression>;
   readonly docComment: Option<DocComment>;
+}
+
+export interface IfStatement {
+  readonly kind: "IfStatement";
+  readonly condition: Expression;
+  readonly then: readonly Statement[];
+  readonly else: Option<readonly Statement[]>;
+}
+
+export interface ReturnStatement {
+  readonly kind: "ReturnStatement";
+  readonly value: Option<Expression>;
 }
 
 export type Expression =
@@ -44,7 +66,12 @@ export type Expression =
   | UnaryExpression
   | AssignExpression
   | FieldAccessExpression
-  | Identifier;
+  | Identifier
+  | MethodCallExpression
+  | ArrowFunctionExpression
+  | IndexExpression
+  | TupleExpression
+  | StructExpression;
 
 interface BooleanLiteral {
   readonly kind: "BooleanLiteral";
@@ -145,4 +172,46 @@ interface FieldAccessExpression {
 interface Identifier {
   readonly kind: "Identifier";
   readonly value: string;
+}
+
+interface MethodCallExpression {
+  readonly kind: "MethodCallExpression";
+  readonly receiver: Expression;
+  readonly method: string;
+  readonly arguments: readonly Expression[];
+}
+
+interface ArrowFunctionExpression {
+  readonly kind: "ArrowFunctionExpression";
+  readonly params: readonly string[];
+  readonly body: readonly Statement[];
+}
+
+interface IndexExpression {
+  readonly kind: "IndexExpression";
+  readonly object: Expression;
+  readonly index: Expression;
+}
+
+interface TupleExpression {
+  readonly kind: "TupleExpression";
+  readonly elements: readonly Expression[];
+}
+
+interface StructExpression {
+  readonly kind: "StructExpression";
+  readonly fields: readonly StructExpressionField[];
+}
+
+type StructExpressionField = StructField | SpreadExpression;
+
+export interface StructField {
+  readonly kind: "StructField";
+  readonly name: string;
+  readonly value: Option<Expression>;
+}
+
+export interface SpreadExpression {
+  readonly kind: "SpreadExpression";
+  readonly expression: Expression;
 }

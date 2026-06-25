@@ -79,6 +79,39 @@ function collectUses(expression: Expression, out: Set<string>): void {
     case "FieldAccessExpression":
       collectUses(expression.object, out);
       return;
+    case "MethodCallExpression":
+      collectUses(expression.receiver, out);
+      for (const arg of expression.arguments) collectUses(arg, out);
+      return;
+    case "IndexExpression":
+      collectUses(expression.object, out);
+      collectUses(expression.index, out);
+      return;
+    case "TupleExpression":
+      for (const elem of expression.elements) collectUses(elem, out);
+      return;
+    case "StructExpression":
+      for (const field of expression.fields) {
+        if (isSome(field.value)) collectUses(field.value.value, out);
+      }
+      if (isSome(expression.base)) collectUses(expression.base.value, out);
+      return;
+    case "IfExpression":
+      collectUses(expression.condition, out);
+      for (const stmt of expression.thenBranch.statements)
+        statementUses(stmt, out);
+      if (isSome(expression.thenBranch.trailingExpression)) {
+        collectUses(expression.thenBranch.trailingExpression.value, out);
+      }
+      if (isSome(expression.elseBranch))
+        collectUses(expression.elseBranch.value, out);
+      return;
+    case "Block":
+      for (const stmt of expression.statements) statementUses(stmt, out);
+      if (isSome(expression.trailingExpression)) {
+        collectUses(expression.trailingExpression.value, out);
+      }
+      return;
     case "StringLiteral":
     case "IntLiteral":
     case "FloatLiteral":

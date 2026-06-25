@@ -55,8 +55,9 @@ describe("driver", (): void => {
       'fn main() { let x = "a"; let r = &write x; print(r); }',
     );
     expect(isNone(result.code)).toBe(true);
-    expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toContain("not declared write");
+    expect(result.diagnostics).toHaveLength(2);
+    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+    expect(result.diagnostics[1]?.message).toContain("not declared write");
   });
 
   it("reports a syntax error and produces no code", (): void => {
