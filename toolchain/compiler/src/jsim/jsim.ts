@@ -294,25 +294,27 @@ function jsimStructExpression({
   return {
     kind: "StructExpression",
     fields: [
-      ...(isSome(base)
-        ? [
-            {
-              kind: "SpreadExpression",
-              expression: parseExpression(base.value),
-            } satisfies JSIM.SpreadExpression,
-          ]
-        : []),
-      ...fields.map(
-        (field): JSIM.StructField => ({
-          kind: "StructField",
-          name: field.name.text,
-          value: isSome(field.value)
-            ? some(parseExpression(field.value.value))
-            : none(),
-        }),
-      ),
+      ...[base]
+        .filter(isSome)
+        .map((b) => parseExpression(b.value))
+        .map(makeSpread),
+      ...fields.map(makeStructField),
     ],
   };
+}
+
+function makeStructField(field: Parser.FieldInit): JSIM.StructField {
+  return {
+    kind: "StructField",
+    name: field.name.text,
+    value: isSome(field.value)
+      ? some(parseExpression(field.value.value))
+      : none(),
+  };
+}
+
+function makeSpread(expression: JSIM.Expression): JSIM.SpreadExpression {
+  return { kind: "SpreadExpression", expression };
 }
 
 function jsimIfExpression(ifExpression: Parser.IfExpression): JSIM.Expression {
