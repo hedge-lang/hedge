@@ -145,6 +145,7 @@ function analyzeExpression(ctx: AnalysisContext, expression: Expression): void {
         "borrow expressions are not supported in Slice 1",
         expression.tokenId,
       );
+      analyzeExpression(ctx, expression.operand);
       return;
     case "BinaryExpression":
       analyzeExpression(ctx, expression.left);
