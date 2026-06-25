@@ -72,6 +72,12 @@ export type Expression =
   | AssignExpression
   | CompoundAssignExpression
   | FieldAccessExpression
+  | MethodCallExpression
+  | IndexExpression
+  | TupleExpression
+  | StructExpression
+  | IfExpression
+  | Block
   | Identifier;
 
 export interface Visibility {
@@ -264,4 +270,45 @@ export interface FieldAccessExpression extends AstNode {
   readonly kind: "FieldAccessExpression";
   readonly object: Expression;
   readonly field: Identifier;
+}
+
+export interface MethodCallExpression extends AstNode {
+  readonly kind: "MethodCallExpression";
+  readonly receiver: Expression;
+  readonly method: Identifier;
+  readonly arguments: Expression[];
+}
+
+export interface IndexExpression extends AstNode {
+  readonly kind: "IndexExpression";
+  readonly object: Expression;
+  readonly index: Expression;
+}
+
+export interface TupleExpression extends AstNode {
+  readonly kind: "TupleExpression";
+  /** Zero elements = unit `()`. One element with trailing comma = single-element tuple. */
+  readonly elements: Expression[];
+}
+
+export interface FieldInit extends AstNode {
+  readonly kind: "FieldInit";
+  readonly name: Identifier;
+  /** `none()` for shorthand `Foo { x }` (value inferred from binding in scope). */
+  readonly value: Option<Expression>;
+}
+
+export interface StructExpression extends AstNode {
+  readonly kind: "StructExpression";
+  readonly path: Path;
+  readonly fields: FieldInit[];
+  /** `some(expr)` for `Foo { x: 1, ..base }` spread. Semantic analysis is deferred. */
+  readonly base: Option<Expression>;
+}
+
+export interface IfExpression extends AstNode {
+  readonly kind: "IfExpression";
+  readonly condition: Expression;
+  readonly thenBranch: Block;
+  readonly elseBranch: Option<IfExpression | Block>;
 }

@@ -54,7 +54,7 @@ export function parse(tokens: readonly Token[]): ParseResult {
     if (peekResult.value.kind === "eof") {
       break;
     }
-    const itemResult = parseItem(tokens, cursor);
+    const itemResult = parseItem(tokens, diagnostics, cursor);
     if (isErr(itemResult)) {
       diagnostics.push(itemResult.error);
       return { program: none(), diagnostics };

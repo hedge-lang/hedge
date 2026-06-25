@@ -1,3 +1,4 @@
+import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
 import { none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
@@ -156,6 +157,7 @@ function parseParams(
  */
 function parseFunction(
   tokens: readonly Token[],
+  diagnostics: Diagnostic[],
   pos: number,
   attributes: readonly Attribute[] = [],
   visibility: Option<Visibility> = none(),
@@ -184,7 +186,7 @@ function parseFunction(
     returnType = some(typeResult.value.node);
     cursor = typeResult.value.next;
   }
-  const bodyResult = parseBlock(tokens, cursor);
+  const bodyResult = parseBlock(tokens, diagnostics, cursor);
   if (isErr(bodyResult)) {
     return bodyResult;
   }
@@ -454,6 +456,7 @@ const UNSUPPORTED_SLICE1_KEYWORDS = new Set([
 // eslint-disable-next-line complexity -- Top-level item dispatch with visibility/attribute prefix; each item kind is a necessary branch.
 export function parseItem(
   tokens: readonly Token[],
+  diagnostics: Diagnostic[],
   pos: number,
 ): PR<Parsed<Item>> {
   // Collect outer attributes (#[...]) before the item and attach them to the
@@ -473,7 +476,13 @@ export function parseItem(
   const afterVis = vis.next;
   const token = tokens[afterVis];
   if (token?.kind === "keyword" && token.text === "fn") {
-    const fnResult = parseFunction(tokens, afterVis, attributes, vis.node);
+    const fnResult = parseFunction(
+      tokens,
+      diagnostics,
+      afterVis,
+      attributes,
+      vis.node,
+    );
     if (isErr(fnResult)) {
       return fnResult;
     }
@@ -495,7 +504,12 @@ export function parseItem(
         span: visToken !== undefined ? some(visToken.span) : none(),
       });
     }
-    const letResult = parseLetStatement(tokens, afterVis, attributes);
+    const letResult = parseLetStatement(
+      tokens,
+      diagnostics,
+      afterVis,
+      attributes,
+    );
     if (isErr(letResult)) {
       return letResult;
     }
@@ -519,7 +533,7 @@ export function parseItem(
       span: visToken !== undefined ? some(visToken.span) : none(),
     });
   }
-  const exprResult = parseExpression(tokens, cursor);
+  const exprResult = parseExpression(tokens, diagnostics, cursor);
   if (isErr(exprResult)) {
     return exprResult;
   }

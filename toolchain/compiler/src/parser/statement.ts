@@ -1,6 +1,7 @@
+import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
 import { none, some, type Option } from "../option.js";
-import { isErr, ok } from "../result.js";
+import { err, isErr, ok } from "../result.js";
 import type {
   Attribute,
   BindingPattern,
@@ -92,6 +93,7 @@ function parseBindingPattern(
 // eslint-disable-next-line complexity -- Multiple optional clauses (bind, write, type, initializer) each contribute a branch; the grammar drives the complexity, not poor structure.
 export function parseLetStatement(
   tokens: readonly Token[],
+  diagnostics: Diagnostic[],
   pos: number,
   attributes: readonly Attribute[] = [],
 ): PR<Parsed<LetStatement>> {
@@ -137,7 +139,7 @@ export function parseLetStatement(
   if (tokens[cursor]?.kind === "eq") {
     // Assignment expressions are valid let initializers syntactically — they return `()`.
     // TODO: misuse (e.g. `let x: i32 = y = 5`) is not yet validated; will be caught by the type checker.
-    const initResult = parseExpression(tokens, cursor + 1);
+    const initResult = parseExpression(tokens, diagnostics, cursor + 1);
     if (isErr(initResult)) {
       return initResult;
     }
@@ -191,6 +193,7 @@ export function parseLetStatement(
 // eslint-disable-next-line complexity -- Statement-dispatch loop with attribute collection and trailing-expression detection; splitting would obscure the grammar rule.
 export function parseBlock(
   tokens: readonly Token[],
+  diagnostics: Diagnostic[],
   pos: number,
 ): PR<Parsed<Block>> {
   const start = pos;
@@ -229,6 +232,7 @@ export function parseBlock(
     if (token?.kind === "keyword" && token.text === "let") {
       const letResult = parseLetStatement(
         tokens,
+        diagnostics,
         cursor,
         outerResult.value.attributes,
       );
@@ -239,7 +243,7 @@ export function parseBlock(
       cursor = letResult.value.next;
       continue;
     }
-    const exprResult = parseExpression(tokens, cursor);
+    const exprResult = parseExpression(tokens, diagnostics, cursor);
     if (isErr(exprResult)) {
       return exprResult;
     }
@@ -259,9 +263,13 @@ export function parseBlock(
     trailingExpression: trailing !== null ? some(trailing) : none(),
     innerAttributes,
   };
-  const afterRbrace = expect(tokens, cursor, "rbrace");
-  if (isErr(afterRbrace)) {
-    return afterRbrace;
+  const closeTok = tokens[cursor];
+  if (closeTok === undefined || closeTok.kind !== "rbrace") {
+    return err({
+      severity: "error",
+      message: `Expected '}' to close block`,
+      span: closeTok !== undefined ? some(closeTok.span) : none(),
+    });
   }
-  return ok({ node: block, next: afterRbrace.value });
+  return ok({ node: block, next: cursor + 1 });
 }

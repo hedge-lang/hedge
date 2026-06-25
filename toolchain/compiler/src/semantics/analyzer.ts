@@ -41,12 +41,12 @@ function analyzeItem(ctx: AnalysisContext, item: Item): void {
       return;
     case "Struct":
       return;
-    case "LetStatement":
-    case "ExpressionStatement":
-      analyzeStatement(ctx, item);
-      return;
     default:
-      analyzeExpression(ctx, item);
+      emitError(
+        ctx,
+        "only function and struct declarations are allowed at the top level",
+        item.tokenId,
+      );
   }
 }
 
@@ -156,6 +156,33 @@ function analyzeExpression(ctx: AnalysisContext, expression: Expression): void {
       return;
     case "FieldAccessExpression":
       analyzeExpression(ctx, expression.object);
+      return;
+    case "MethodCallExpression":
+      analyzeExpression(ctx, expression.receiver);
+      for (const arg of expression.arguments) analyzeExpression(ctx, arg);
+      return;
+    case "IndexExpression":
+      analyzeExpression(ctx, expression.object);
+      analyzeExpression(ctx, expression.index);
+      return;
+    case "TupleExpression":
+      for (const elem of expression.elements) analyzeExpression(ctx, elem);
+      return;
+    case "StructExpression":
+      for (const field of expression.fields) {
+        if (isSome(field.value)) analyzeExpression(ctx, field.value.value);
+      }
+      if (isSome(expression.base))
+        analyzeExpression(ctx, expression.base.value);
+      return;
+    case "IfExpression":
+      analyzeExpression(ctx, expression.condition);
+      analyzeBlock(ctx, expression.thenBranch);
+      if (isSome(expression.elseBranch))
+        analyzeExpression(ctx, expression.elseBranch.value);
+      return;
+    case "Block":
+      analyzeBlock(ctx, expression);
       return;
     case "Identifier":
       analyzeIdentifier(ctx, expression);

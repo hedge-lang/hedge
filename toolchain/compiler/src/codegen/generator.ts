@@ -4,12 +4,15 @@ import type {
   AssignOperator,
   BinaryOperator,
   UnaryOperator,
+  BlockStatement,
   DocComment,
   Expression,
   FunctionDecl,
+  IfStatement,
   Item,
   LetStatement,
   Program,
+  ReturnStatement,
   Statement,
 } from "../jsim/ast.js";
 import type { Code } from "./output.js";
@@ -54,6 +57,58 @@ const ASSIGN_OPS: Record<AssignOperator, string> = {
   ShrAssign: ">>=",
 };
 
+type PrecKey = Exclude<Expression["kind"], "BinaryExpression"> | BinaryOperator;
+
+function precGroup(...keys: PrecKey[]): readonly PrecKey[] {
+  return keys;
+}
+
+// Ascending precedence: earlier entries bind looser → more likely to need parens.
+// Atoms (literals, identifiers, etc.) are absent; levelOf returns PREC_LEVELS.length,
+// placing them above everything (they never need parens in any position).
+const PREC_LEVELS: ReadonlyArray<readonly PrecKey[]> = [
+  precGroup("ArrowFunctionExpression", "AssignExpression"),
+  precGroup("Or"),
+  precGroup("And"),
+  precGroup("BitOr"),
+  precGroup("BitXor"),
+  precGroup("BitAnd"),
+  precGroup("Eq", "Ne"),
+  precGroup("Lt", "Gt", "Le", "Ge"),
+  precGroup("Shl", "Shr"),
+  precGroup("Add", "Sub"),
+  precGroup("Mul", "Div", "Rem"),
+  precGroup("UnaryExpression"),
+  precGroup(
+    "CallExpression",
+    "MethodCallExpression",
+    "FieldAccessExpression",
+    "IndexExpression",
+  ),
+];
+
+function levelOf(key: PrecKey): number {
+  const idx = PREC_LEVELS.findIndex((group) => group.some((k) => k === key));
+  return idx === -1 ? PREC_LEVELS.length : idx;
+}
+
+function precKey(expr: Expression): PrecKey {
+  if (expr.kind === "BinaryExpression") return expr.operator;
+  return expr.kind;
+}
+
+// Left operand of a left-assoc op: same level is fine (x + y + z → no parens on `x + y`)
+function needsAtLeast(expr: Expression, levelKey: PrecKey): string {
+  const s = emitExpression(expr);
+  return levelOf(precKey(expr)) < levelOf(levelKey) ? `(${s})` : s;
+}
+
+// Right operand of a left-assoc op: same level must be parenthesised (x + (y + z))
+function needsStrictlyAbove(expr: Expression, levelKey: PrecKey): string {
+  const s = emitExpression(expr);
+  return levelOf(precKey(expr)) <= levelOf(levelKey) ? `(${s})` : s;
+}
+
 function indent(text: string): string {
   return text
     .split("\n")
@@ -69,6 +124,7 @@ function emitDocComment(doc: DocComment, isModule: boolean = false): string {
   return ["/**", ...body, " */"].join("\n");
 }
 
+// eslint-disable-next-line complexity -- This is a routing function
 function emitExpression(expression: Expression): string {
   switch (expression.kind) {
     case "BooleanLiteral":
@@ -83,22 +139,87 @@ function emitExpression(expression: Expression): string {
       return expression.path.join(".");
     case "CallExpression": {
       const args = expression.arguments.map(emitExpression).join(", ");
-      return `${emitExpression(expression.callee)}(${args})`;
+      return `${needsAtLeast(expression.callee, "CallExpression")}(${args})`;
     }
     case "BinaryExpression":
-      return `(${emitExpression(expression.left)} ${BINARY_OPS[expression.operator]} ${emitExpression(expression.right)})`;
+      return `${needsAtLeast(expression.left, expression.operator)} ${BINARY_OPS[expression.operator]} ${needsStrictlyAbove(expression.right, expression.operator)}`;
     case "UnaryExpression":
       return `(${UNARY_OPS[expression.operator]}${emitExpression(expression.operand)})`;
     case "AssignExpression":
       return `${emitExpression(expression.lhs)} ${ASSIGN_OPS[expression.operator]} ${emitExpression(expression.rhs)}`;
     case "FieldAccessExpression":
-      return `${emitExpression(expression.object)}.${expression.field}`;
+      return `${needsAtLeast(expression.object, "FieldAccessExpression")}.${expression.field}`;
+    case "MethodCallExpression":
+      return `${needsAtLeast(expression.receiver, "MethodCallExpression")}.${expression.method}(${expression.arguments.map(emitExpression).join(", ")})`;
+    case "ArrowFunctionExpression": {
+      const params = expression.params.join(", ");
+      const lines = expression.body
+        .map(emitStatement)
+        .filter((s) => s.length > 0);
+      const body =
+        lines.length === 0 ? "{}" : `{\n${lines.map(indent).join("\n")}\n}`;
+      return `(${params}) => ${body}`;
+    }
+    case "IndexExpression":
+      return `${needsAtLeast(expression.object, "IndexExpression")}[${emitExpression(expression.index)}]`;
+    case "TupleExpression":
+      return `[${expression.elements.map(emitExpression).join(", ")}]`;
+    case "StructExpression": {
+      const fields = expression.fields.map((f) =>
+        f.kind === "SpreadExpression"
+          ? `...${emitExpression(f.expression)}`
+          : isSome(f.value)
+            ? `${f.name}: ${emitExpression(f.value.value)}`
+            : f.name,
+      );
+      return `({${fields.join(", ")}})`;
+    }
     default:
       assertNever(
         expression,
         `Unexpected AST node: ${JSON.stringify(expression)}`,
       );
   }
+}
+
+function branchHasReturn(stmts: readonly Statement[]): boolean {
+  return stmts.some((s) => s.kind === "ReturnStatement");
+}
+
+function emitBranchBlock(
+  stmts: readonly Statement[],
+  multiline: boolean,
+): string {
+  const lines = stmts.map(emitStatement).filter((s) => s.length > 0);
+  if (lines.length === 0) return "{}";
+  if (multiline) return `{\n${lines.map(indent).join("\n")}\n}`;
+  return `{ ${lines.join(" ")} }`;
+}
+
+function emitIfStatement(stmt: IfStatement): string {
+  const cond = emitExpression(stmt.condition);
+  const multiline =
+    branchHasReturn(stmt.then) ||
+    (isSome(stmt.else) && branchHasReturn(stmt.else.value));
+  const thenStr = emitBranchBlock(stmt.then, multiline);
+  if (!isSome(stmt.else)) return `if (${cond}) ${thenStr}`;
+  const elseStmts = stmt.else.value;
+  if (elseStmts.length === 1 && elseStmts[0]?.kind === "IfStatement") {
+    return `if (${cond}) ${thenStr} else ${emitIfStatement(elseStmts[0])}`;
+  }
+  return `if (${cond}) ${thenStr} else ${emitBranchBlock(elseStmts, multiline)}`;
+}
+
+function emitBlockStatement(stmt: BlockStatement): string {
+  const lines = stmt.body.map(emitStatement).filter((s) => s.length > 0);
+  if (lines.length === 0) return "";
+  return `{ ${lines.join(" ")} }`;
+}
+
+function emitReturn(stmt: ReturnStatement): string {
+  return isSome(stmt.value)
+    ? `return ${emitExpression(stmt.value.value)};`
+    : `return;`;
 }
 
 function emitLet(statement: LetStatement): string {
@@ -114,22 +235,14 @@ function emitStatement(statement: Statement): string {
   switch (statement.kind) {
     case "LetStatement":
       return emitLet(statement);
-    case "BooleanLiteral":
-    case "StringLiteral":
-    case "NumberLiteral":
-    case "Identifier":
-    case "PathExpression":
-    case "CallExpression":
-    case "BinaryExpression":
-    case "UnaryExpression":
-    case "AssignExpression":
-    case "FieldAccessExpression":
-      return `${emitExpression(statement)};`;
+    case "BlockStatement":
+      return emitBlockStatement(statement);
+    case "IfStatement":
+      return emitIfStatement(statement);
+    case "ReturnStatement":
+      return emitReturn(statement);
     default:
-      assertNever(
-        statement,
-        `Unexpected AST node: ${JSON.stringify(statement)}`,
-      );
+      return `${emitExpression(statement)};`;
   }
 }
 
@@ -142,32 +255,20 @@ function emitFunction(decl: FunctionDecl): string {
   return `${keyword} ${decl.name}(${params}) ${bodyStr}`;
 }
 
-/**
- * Emits the appropriate string representation for a given item based on its kind.
- *
- * @param item The item to be emitted, containing a kind property that determines how it is processed.
- * @return A string representation of the given item based on its kind.
- */
-// eslint-disable-next-line complexity -- This is a routing function
 function emitItem(item: Item): string {
   switch (item.kind) {
     case "FunctionDecl":
       return emitFunction(item);
     case "LetStatement":
       return emitLet(item);
-    case "BooleanLiteral":
-    case "StringLiteral":
-    case "NumberLiteral":
-    case "Identifier":
-    case "PathExpression":
-    case "CallExpression":
-    case "BinaryExpression":
-    case "UnaryExpression":
-    case "AssignExpression":
-    case "FieldAccessExpression":
-      return `${emitExpression(item)};`;
+    case "BlockStatement":
+      return emitBlockStatement(item);
+    case "IfStatement":
+      return emitIfStatement(item);
+    case "ReturnStatement":
+      return emitReturn(item);
     default:
-      assertNever(item, `Unexpected AST node: ${JSON.stringify(item)}`);
+      return `${emitExpression(item)};`;
   }
 }
 
