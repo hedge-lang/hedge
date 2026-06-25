@@ -274,8 +274,35 @@ describe("field access expression codegen", () => {
   it("emits object.field", () => {
     expect(stmts(gen("fn _(foo: ()) { foo.bar; }"))).toBe("foo.bar;");
   });
-  it("calling a field value wraps the callee in parens to avoid implicit method-call shape", () => {
-    expect(stmts(gen("fn _(foo: (), x: ()) { (foo.bar)(x); }"))).toBe("(foo.bar)(x);");
+  it("calling a field value uses (0, a.b)(c) to detach this", () => {
+    const js = stmts(gen("fn _(foo: (), x: ()) { (foo.bar)(x); }"));
+    assert(js !== null, "JS output should not be null");
+
+    expect(js).toBe("(0, foo.bar)(x);");
+    expect(
+      eval(`
+      const foo = {
+        bar() { return this }
+      };
+      const x = "x";
+      ${js}
+    `),
+    ).toBeUndefined();
+  });
+  it("calling an index value uses (0, a[b])(c) to detach this", () => {
+    const js = stmts(gen("fn _(a: (), b: (), x: ()) { (a[b])(x); }"));
+    assert(js !== null, "JS output should not be null");
+    expect(js).toBe("(0, a[b])(x);");
+    expect(
+      eval(`
+      const b = "b";
+      const x = "x";
+      const a = {
+        b() { return this }
+      };
+      ${js}
+    `),
+    ).toBeUndefined();
   });
 });
 
@@ -350,6 +377,11 @@ describe("block expression codegen", () => {
   });
   it("block without trailing expressions creates a block", () => {
     expect(stmts(gen("fn _() { { 1; }; }"))).toBe("{ 1; }");
+  });
+  it("multi-statement block emits multiline", () => {
+    expect(stmts(gen("fn _(x: ()) { { let y = 1; x; }; }"))).toBe(
+      ["{\n  const y = 1;\n  x;\n}"].join("\n"),
+    );
   });
   it("block with trailing expression wraps in IIFE", () => {
     expect(stmts(gen("fn _() { { 1 }; }"))).toBe(
