@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "pretest": "npm run build --workspace=@hedge-lang/compiler",
+    "precheck": "npm run build --workspace=@hedge-lang/compiler",
     "test": "vitest run",
     "check": "tsc --noEmit -p tsconfig.json"
   },
