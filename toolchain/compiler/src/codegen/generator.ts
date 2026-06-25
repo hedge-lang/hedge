@@ -139,7 +139,14 @@ function emitExpression(expression: Expression): string {
       return expression.path.join(".");
     case "CallExpression": {
       const args = expression.arguments.map(emitExpression).join(", ");
-      return `${needsAtLeast(expression.callee, "CallExpression")}(${args})`;
+      // Hedge's `(a.b)(c)` is a call-as-value, not a method call; force parens
+      // so the emitted JS preserves that distinction from MethodCallExpression.
+      const k = expression.callee.kind;
+      const callee =
+        k === "FieldAccessExpression" || k === "IndexExpression"
+          ? `(${emitExpression(expression.callee)})`
+          : needsAtLeast(expression.callee, "CallExpression");
+      return `${callee}(${args})`;
     }
     case "BinaryExpression":
       return `${needsAtLeast(expression.left, expression.operator)} ${BINARY_OPS[expression.operator]} ${needsStrictlyAbove(expression.right, expression.operator)}`;
