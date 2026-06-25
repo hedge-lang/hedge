@@ -1451,7 +1451,7 @@ describe("tuple expressions and unit", (): void => {
       {
         severity: "error",
         message: "Expected ',' or ')' after expression in parentheses",
-      }
+      },
     ]);
   });
 });
