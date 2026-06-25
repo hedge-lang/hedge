@@ -140,7 +140,11 @@ function analyzeExpression(ctx: AnalysisContext, expression: Expression): void {
       analyzeCall(ctx, expression);
       return;
     case "ReferenceExpression":
-      analyzeExpression(ctx, expression.operand);
+      emitError(
+        ctx,
+        "borrow expressions are not supported in Slice 1",
+        expression.tokenId,
+      );
       return;
     case "BinaryExpression":
       analyzeExpression(ctx, expression.left);
