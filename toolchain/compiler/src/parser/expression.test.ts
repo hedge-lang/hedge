@@ -1447,6 +1447,12 @@ describe("tuple expressions and unit", (): void => {
   it("(1 2) — missing comma between tuple elements is an error", (): void => {
     const result = parse(tokenize("(1 2)").tokens);
     expect(result.program).toEqual(none());
+    expect(result.diagnostics).toMatchObject([
+      {
+        severity: "error",
+        message: "Expected ',' or ')' after expression in parentheses",
+      }
+    ]);
   });
 });
 

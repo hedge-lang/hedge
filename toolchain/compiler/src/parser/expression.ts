@@ -484,7 +484,7 @@ function parseTupleOrGroup(
     const tok = tokens[cursor];
     return err({
       severity: "error",
-      message: `Expected ')' to close grouped expression`,
+      message: `Expected ',' or ')' after expression in parentheses`,
       span: tok !== undefined ? some(tok.span) : none(),
     });
   }
