@@ -108,6 +108,13 @@ describe("semantic analysis", (): void => {
     });
   });
 
+  it("rejects &x with a Slice 1 diagnostic", (): void => {
+    const result = diagnose("fn f(x: i32) { &x; }");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+  });
+
   it("rejects an unsupported param type with a Slice 1 diagnostic", (): void => {
     const result = diagnose("fn f(x: UnknownType) {}");
     expect(result.diagnostics).toHaveLength(1);
