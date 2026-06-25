@@ -8,6 +8,7 @@
  * C) Conformance rule-to-test mapping table (fails if any rule has zero test IDs).
  */
 import { stdout } from "node:process";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { compile, isSome, parse, tokenize } from "@hedge-lang/compiler";
 import type {
@@ -301,8 +302,6 @@ function evalFunctionBody(program: Program): RefValue {
 //
 // The current compiler emits the trailing expression as an ExpressionStatement
 // rather than a ReturnStatement, so calling compute() would return undefined.
-// Instead we extract the function body text and eval() it directly — JavaScript
-// eval() returns the completion value of the last expression statement.
 // ---------------------------------------------------------------------------
 function runCompiledSource(source: string): RefValue | null {
   const compileResult = compile(source);
@@ -317,9 +316,8 @@ function runCompiledSource(source: string): RefValue | null {
   if (indented === undefined) return null;
   // Strip the two-space indent the generator adds to each line.
   const body = indented.replace(/^ {2}/gm, "");
-  // eval() returns the completion value of the last ExpressionStatement (or IIFE result).
   // Narrow the result at runtime — eval returns any, so we validate the type.
-  const evalResult: unknown = eval(body);
+  const evalResult: unknown = runInNewContext(body, { Math });
   if (typeof evalResult === "number" || typeof evalResult === "boolean")
     return evalResult;
   return null;
