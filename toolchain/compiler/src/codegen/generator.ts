@@ -57,7 +57,22 @@ const ASSIGN_OPS: Record<AssignOperator, string> = {
   ShrAssign: ">>=",
 };
 
-type PrecKey = Exclude<Expression["kind"], "BinaryExpression"> | BinaryOperator;
+type PrecKey =
+  | "BooleanLiteral"
+  | "StringLiteral"
+  | "NumberLiteral"
+  | "PathExpression"
+  | "CallExpression"
+  | "UnaryExpression"
+  | "AssignExpression"
+  | "FieldAccessExpression"
+  | "Identifier"
+  | "MethodCallExpression"
+  | "ArrowFunctionExpression"
+  | "IndexExpression"
+  | "TupleExpression"
+  | "StructExpression"
+  | BinaryOperator;
 
 function precGroup(...keys: PrecKey[]): readonly PrecKey[] {
   return keys;
@@ -139,12 +154,12 @@ function emitExpression(expression: Expression): string {
       return expression.path.join(".");
     case "CallExpression": {
       const args = expression.arguments.map(emitExpression).join(", ");
-      // Hedge's `(a.b)(c)` is a call-as-value, not a method call; force parens
-      // so the emitted JS preserves that distinction from MethodCallExpression.
+      // `(0, a.b)(c)` detaches `this` so the callee runs without an implicit
+      // receiver, distinguishing it from MethodCallExpression in JS semantics.
       const k = expression.callee.kind;
       const callee =
         k === "FieldAccessExpression" || k === "IndexExpression"
-          ? `(${emitExpression(expression.callee)})`
+          ? `(0, ${emitExpression(expression.callee)})`
           : needsAtLeast(expression.callee, "CallExpression");
       return `${callee}(${args})`;
     }
@@ -220,7 +235,8 @@ function emitIfStatement(stmt: IfStatement): string {
 function emitBlockStatement(stmt: BlockStatement): string {
   const lines = stmt.body.map(emitStatement).filter((s) => s.length > 0);
   if (lines.length === 0) return "";
-  return `{ ${lines.join(" ")} }`;
+  if (lines.length === 1) return `{ ${lines[0]} }`;
+  return `{\n${lines.map(indent).join("\n")}\n}`;
 }
 
 function emitReturn(stmt: ReturnStatement): string {
