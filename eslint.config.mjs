@@ -68,6 +68,10 @@ export default defineConfig([
         { type: "compiler", pattern: "toolchain/compiler/**" },
         { type: "runtime", pattern: "toolchain/runtime/**" },
         { type: "cli", pattern: "toolchain/cli/**" },
+        {
+          type: "compiler-conformance-tests",
+          pattern: "toolchain/compiler-conformance-tests/**",
+        },
       ],
     },
     rules: {
@@ -94,6 +98,10 @@ export default defineConfig([
                 { to: { type: "runtime" } },
                 { to: { type: "cli" } },
               ],
+            },
+            {
+              from: { type: "compiler-conformance-tests" },
+              allow: [{ to: { type: "compiler" } }],
             },
           ],
         },

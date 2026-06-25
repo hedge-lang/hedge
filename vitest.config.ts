@@ -14,7 +14,13 @@ export default defineConfig({
       "stdlib/**/*.{test,spec}.ts",
     ],
 
-    exclude: ["node_modules", "dist"],
+    exclude: [
+      "node_modules",
+      "dist",
+      // Conformance tests run against compiled dist/ and require a build step.
+      // Run them separately: npm run conformance
+      "toolchain/compiler-conformance-tests/**",
+    ],
 
     /* Compiler-grade discipline */
     globals: true,

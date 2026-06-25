@@ -30,3 +30,6 @@ jobs:
 
       - name: Run tests
         run: npm run test
+
+      - name: Run conformance checks
+        run: npm run conformance
