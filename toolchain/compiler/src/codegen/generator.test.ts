@@ -5,12 +5,19 @@ import { toJsim } from "../jsim/jsim.js";
 import { tokenize } from "../lexer/lexer.js";
 import { isSome, none } from "../option.js";
 import { parse } from "../parser/parser.js";
+import { analyze } from "../semantics/analyzer.js";
 import { generate } from "./generator.js";
 import type { Code } from "./output.js";
 
 function gen(source: string): Code {
-  const { program, diagnostics } = parse(tokenize(source).tokens);
-  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  const { tokens } = tokenize(source);
+  const { program, diagnostics: parseDiagnostics } = parse(tokens);
+  assert(isSome(program), parseDiagnostics[0]?.message ?? "Parse failed");
+  const { diagnostics } = analyze(program.value, tokens);
+  assert(
+    diagnostics.length === 0,
+    diagnostics[0]?.message ?? "Analysis failed",
+  );
   return generate(toJsim(program.value));
 }
 
@@ -22,15 +29,30 @@ function dts(code: Code): string | null {
   return isSome(code.typedef) ? code.typedef.value : null;
 }
 
+/** Extracts body statements from a single `function _()` wrapper, stripping one indent level. */
+function stmts(code: Code): string | null {
+  const output = js(code);
+  if (output === null) return null;
+  if (/^function _\([^)]*\) \{}\n$/.test(output)) return "";
+  const match = /^function _\([^)]*\) \{\n([\s\S]+)\n}\n$/.exec(output);
+  if (match === null) return null;
+  assert(match[1] !== undefined, "match[1] should be defined");
+  return match[1].replace(/^ {2}/gm, "");
+}
+
 describe("generator", (): void => {
   it("generates nothing for an empty program", (): void => {
     expect(gen("")).toEqual({ javascript: none(), typedef: none() });
   });
 
   it("lowers a read-only let to const and `let write` to let", (): void => {
-    expect(js(gen('let greeting = "hi";'))).toBe('const greeting = "hi";\n');
-    expect(js(gen("let write n = 1;"))).toBe("let n = 1;\n");
-    expect(js(gen("let b_true = true;"))).toBe("const b_true = true;\n");
+    expect(stmts(gen('fn _() { let greeting = "hi"; }'))).toBe(
+      'const greeting = "hi";',
+    );
+    expect(stmts(gen("fn _() { let write n = 1; }"))).toBe("let n = 1;");
+    expect(stmts(gen("fn _() { let b_true = true; }"))).toBe(
+      "const b_true = true;",
+    );
   });
 
   it("emits a bare (non-main) function with no entry call", (): void => {
@@ -191,23 +213,33 @@ describe("binary expression codegen", () => {
     ["And", "x && y", "x && y"],
     ["Or", "x || y", "x || y"],
   ])("%s emits correct JS operator", (_, source, expected) => {
-    expect(js(gen(source))).toBe(`${expected};\n`);
+    expect(stmts(gen(`fn _(x: (), y: ()) { ${source}; }`))).toBe(
+      `${expected};`,
+    );
   });
 
   it("(x + y) * z — parens preserved because + binds looser than *", () => {
-    expect(js(gen("(x + y) * z"))).toBe("(x + y) * z;\n");
+    expect(stmts(gen("fn _(x: (), y: (), z: ()) { (x + y) * z; }"))).toBe(
+      "(x + y) * z;",
+    );
   });
 
   it("x + y * z — no parens needed, * binds tighter", () => {
-    expect(js(gen("x + y * z"))).toBe("x + y * z;\n");
+    expect(stmts(gen("fn _(x: (), y: (), z: ()) { x + y * z; }"))).toBe(
+      "x + y * z;",
+    );
   });
 
   it("x - (y - z) — right-side same-precedence op is parenthesised", () => {
-    expect(js(gen("x - (y - z)"))).toBe("x - (y - z);\n");
+    expect(stmts(gen("fn _(x: (), y: (), z: ()) { x - (y - z); }"))).toBe(
+      "x - (y - z);",
+    );
   });
 
   it("x || y && z — && binds tighter than ||, no parens needed", () => {
-    expect(js(gen("x || y && z"))).toBe("x || y && z;\n");
+    expect(stmts(gen("fn _(x: (), y: (), z: ()) { x || y && z; }"))).toBe(
+      "x || y && z;",
+    );
   });
 });
 
@@ -216,7 +248,7 @@ describe("unary expression codegen", () => {
     ["Neg", "-x", "(-x)"],
     ["Not", "!x", "(!x)"],
   ])("%s emits correct JS operator", (_, source, expected) => {
-    expect(js(gen(source))).toBe(`${expected};\n`);
+    expect(stmts(gen(`fn _(x: ()) { ${source}; }`))).toBe(`${expected};`);
   });
 });
 
@@ -234,105 +266,117 @@ describe("assign expression codegen", () => {
     ["ShlAssign", "x <<= 1;", "x <<= 1"],
     ["ShrAssign", "x >>= 1;", "x >>= 1"],
   ])("%s emits correct JS operator", (_, source, expected) => {
-    expect(js(gen(source))).toBe(`${expected};\n`);
+    expect(stmts(gen(`fn _(x: ()) { ${source} }`))).toBe(`${expected};`);
   });
 });
 
 describe("field access expression codegen", () => {
   it("emits object.field", () => {
-    expect(js(gen("foo.bar;"))).toBe("foo.bar;\n");
+    expect(stmts(gen("fn _(foo: ()) { foo.bar; }"))).toBe("foo.bar;");
   });
 });
 
 describe("no-init let codegen", () => {
   it("immutable let with no initializer is omitted from output", () => {
-    expect(js(gen("let x;"))).toBeNull();
+    expect(stmts(gen("fn _() { let x; }"))).toBe("");
   });
 
   it("mutable let with no initializer emits let x;", () => {
-    expect(js(gen("let write x;"))).toBe("let x;\n");
+    expect(stmts(gen("fn _() { let write x; }"))).toBe("let x;");
   });
 });
 
 describe("method call expression codegen", () => {
   it("no-arg method call", () => {
-    expect(js(gen("a.method()"))).toBe("a.method();\n");
+    expect(stmts(gen("fn _(a: ()) { a.method() }"))).toBe("a.method();");
   });
   it("method call with arguments", () => {
-    expect(js(gen("a.method(b, c)"))).toBe("a.method(b, c);\n");
+    expect(stmts(gen("fn _(a: (), b: (), c: ()) { a.method(b, c) }"))).toBe(
+      "a.method(b, c);",
+    );
   });
   it("method call with arguments and trailing comma", () => {
-    expect(js(gen("a.method(b, c, )"))).toBe("a.method(b, c);\n");
+    expect(stmts(gen("fn _(a: (), b: (), c: ()) { a.method(b, c, ) }"))).toBe(
+      "a.method(b, c);",
+    );
   });
   it("chained method calls", () => {
-    expect(js(gen("a.foo().bar()"))).toBe("a.foo().bar();\n");
+    expect(stmts(gen("fn _(a: ()) { a.foo().bar() }"))).toBe("a.foo().bar();");
   });
 });
 
 describe("index expression codegen", () => {
   it("a[0] emits a[0]", () => {
-    expect(js(gen("a[0]"))).toBe("a[0];\n");
+    expect(stmts(gen("fn _(a: ()) { a[0] }"))).toBe("a[0];");
   });
   it("a[b + c] emits a[b + c]", () => {
-    expect(js(gen("a[b + c]"))).toBe("a[b + c];\n");
+    expect(stmts(gen("fn _(a: (), b: (), c: ()) { a[b + c] }"))).toBe(
+      "a[b + c];",
+    );
   });
   it("a[b][c] chains left-to-right", () => {
-    expect(js(gen("a[b][c]"))).toBe("a[b][c];\n");
+    expect(stmts(gen("fn _(a: (), b: (), c: ()) { a[b][c] }"))).toBe(
+      "a[b][c];",
+    );
   });
   it("a[b[c]] nests properly", () => {
-    expect(js(gen("a[b[c]]"))).toBe("a[b[c]];\n");
+    expect(stmts(gen("fn _(a: (), b: (), c: ()) { a[b[c]] }"))).toBe(
+      "a[b[c]];",
+    );
   });
 });
 
 describe("tuple expression codegen", () => {
   it("() lowers to [] (unit)", () => {
-    expect(js(gen("()"))).toBe("[];\n");
+    expect(stmts(gen("fn _() { (); }"))).toBe("[];");
   });
   it("(1,) lowers to [1]", () => {
-    expect(js(gen("(1,)"))).toBe("[1];\n");
+    expect(stmts(gen("fn _() { (1,); }"))).toBe("[1];");
   });
   it("(1, 2) lowers to [1, 2]", () => {
-    expect(js(gen("(1, 2)"))).toBe("[1, 2];\n");
+    expect(stmts(gen("fn _() { (1, 2); }"))).toBe("[1, 2];");
   });
   it("(1) is transparent grouping, not a tuple", () => {
-    expect(js(gen("(1)"))).toBe("1;\n");
+    expect(stmts(gen("fn _() { (1); }"))).toBe("1;");
   });
 });
 
 describe("block expression codegen", () => {
   it("empty block emits nothing", () => {
-    expect(js(gen("{ }"))).toBe("\n");
+    expect(stmts(gen("fn _() { { }; }"))).toBe("");
   });
   it("block without trailing expressions creates a block", () => {
-    expect(js(gen("{ 1; }"))).toBe("{ 1; }\n");
+    expect(stmts(gen("fn _() { { 1; }; }"))).toBe("{ 1; }");
   });
-  it("block with trailing expression returns that value", () => {
-    expect(js(gen("{ 1 }"))).toBe(
-      ["(() => {", "  return 1;", "})();", ""].join("\n"),
+  it("block with trailing expression wraps in IIFE", () => {
+    expect(stmts(gen("fn _() { { 1 }; }"))).toBe(
+      ["(() => {", "  return 1;", "})();"].join("\n"),
     );
   });
   it("block with statements and trailing expression", () => {
-    expect(js(gen("{ let x = 1; x }"))).toBe(
-      ["(() => {", "  const x = 1;", "  return x;", "})();", ""].join("\n"),
+    expect(stmts(gen("fn _() { { let x = 1; x }; }"))).toBe(
+      ["(() => {", "  const x = 1;", "  return x;", "})();"].join("\n"),
     );
   });
   it("block as let initializer", () => {
-    expect(js(gen("let result = { 1 + 2 };"))).toBe(
-      ["const result = (() => {", "  return 1 + 2;", "})();", ""].join("\n"),
+    expect(stmts(gen("fn _() { let result = { 1 + 2 }; }"))).toBe(
+      ["const result = (() => {", "  return 1 + 2;", "})();"].join("\n"),
     );
   });
 });
 
 describe("if expression codegen", () => {
   it("if without else wraps in IIFE", () => {
-    expect(js(gen("if cond { foo }"))).toBe(
-      ["(() => {", "  if (cond) {", "    return foo;", "  }", "})();", ""].join(
+    expect(stmts(gen("fn _(cond: (), foo: ()) { if cond { foo } }"))).toBe(
+      ["(() => {", "  if (cond) {", "    return foo;", "  }", "})();"].join(
         "\n",
       ),
     );
   });
   it("if-else emits both branches", () => {
-    expect(js(gen("if cond { a } else { b }"))).toBe(
+    expect(
+      stmts(gen("fn _(cond: (), a: (), b: ()) { if cond { a } else { b } }")),
+    ).toBe(
       [
         "(() => {",
         "  if (cond) {",
@@ -341,12 +385,13 @@ describe("if expression codegen", () => {
         "    return b;",
         "  }",
         "})();",
-        "",
       ].join("\n"),
     );
   });
   it("else-if chain emits inline else if", () => {
-    expect(js(gen("if a { 1 } else if b { 2 }"))).toBe(
+    expect(
+      stmts(gen("fn _(a: (), b: ()) { if a { 1 } else if b { 2 } }")),
+    ).toBe(
       [
         "(() => {",
         "  if (a) {",
@@ -355,33 +400,36 @@ describe("if expression codegen", () => {
         "    return 2;",
         "  }",
         "})();",
-        "",
       ].join("\n"),
     );
   });
   it("empty branches emit empty blocks", () => {
-    expect(js(gen("if cond { } else { }"))).toBe(
-      ["if (cond) {} else {}", ""].join("\n"),
+    expect(stmts(gen("fn _(cond: ()) { if cond { } else { }; }"))).toBe(
+      "if (cond) {} else {}",
     );
   });
   it("branches without return values don't use IIFE", () => {
-    expect(js(gen("if cond { 2; } else { 1; }"))).toBe(
-      "if (cond) { 2; } else { 1; }\n",
+    expect(stmts(gen("fn _(cond: ()) { if cond { 2; } else { 1; }; }"))).toBe(
+      "if (cond) { 2; } else { 1; }",
     );
   });
 });
 
 describe("struct expression codegen", () => {
   it("empty struct emits ({})", () => {
-    expect(js(gen("Foo {}"))).toBe("({});\n");
+    expect(stmts(gen("fn _() { Foo {}; }"))).toBe("({});");
   });
   it("named fields emit object literal", () => {
-    expect(js(gen("Foo { x: 1, y: 2 }"))).toBe("({x: 1, y: 2});\n");
+    expect(stmts(gen("fn _() { Foo { x: 1, y: 2 }; }"))).toBe(
+      "({x: 1, y: 2});",
+    );
   });
   it("shorthand fields emit ES6 shorthand", () => {
-    expect(js(gen("Foo { x }"))).toBe("({x});\n");
+    expect(stmts(gen("fn _(x: ()) { Foo { x }; }"))).toBe("({x});");
   });
   it("struct update spread emits spread-first object literal", () => {
-    expect(js(gen("Foo { x: 1, ..base }"))).toBe("({...base, x: 1});\n");
+    expect(stmts(gen("fn _(base: ()) { Foo { x: 1, ..base }; }"))).toBe(
+      "({...base, x: 1});",
+    );
   });
 });
