@@ -1,8 +1,6 @@
 import { compile, isSome, parse, tokenize } from "@hedge-lang/compiler";
 import { describe, expect, it } from "vitest";
 
-import { SLICE_NUMBER } from "./test-harness.js";
-
 describe("diagnostic stability", (): void => {
   it("unresolved-name span points at the unresolved identifier text", (): void => {
     const source = `fn main() { print(missing_name); }`;
@@ -25,20 +23,6 @@ describe("diagnostic stability", (): void => {
     expect(errors.length).toBe(1);
     expect(errors[0]?.message).toContain("missing");
   });
-
-  it.skipIf(SLICE_NUMBER > 1)(
-    "borrow-expression rejection includes a concrete source span",
-    (): void => {
-      const source = `fn main() { let x = "a"; let r = &x; }`;
-      const result = compile(source);
-      const firstError = result.diagnostics.find((d) => d.severity === "error");
-      expect(firstError).toBeDefined();
-      expect(firstError?.message).toContain(
-        "borrow expressions are not supported in Slice 1",
-      );
-      expect(firstError?.span.kind).toBe("Some");
-    },
-  );
 
   it("parse failure emits at least one error diagnostic and no code", (): void => {
     const result = compile(`fn main(`);

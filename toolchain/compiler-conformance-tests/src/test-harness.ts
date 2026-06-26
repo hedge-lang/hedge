@@ -1,4 +1,5 @@
 import { compile, type CompileResult, isSome } from "@hedge-lang/compiler";
+import { expect } from "vitest";
 
 export const SLICE_NUMBER: number = 1;
 
@@ -87,4 +88,41 @@ export function getErrorMessages(result: CompileResult): string[] {
   return result.diagnostics
     .filter((d) => d.severity === "error")
     .map((d) => d.message);
+}
+
+export function assertRunsTo(source: string, expectedStdout: string[]): void {
+  const result = executeHedgeCode(source);
+  expect(result, "program failed to compile").not.toBeNull();
+  expect(result?.exitCode, "program threw at runtime").toBe(0);
+  expect(result?.stdout).toEqual(expectedStdout);
+}
+
+export function assertRejects(source: string): void {
+  const result = compileHedgeCode(source);
+  expect(hasCompileErrors(result), "expected compile errors but got none").toBe(true);
+}
+
+export function assertRejectsWithMessage(source: string, messageFragment: string): void {
+  const result = compileHedgeCode(source);
+  expect(hasCompileErrors(result), "expected compile errors but got none").toBe(true);
+  expect(
+    getErrorMessages(result).some((m) => m.includes(messageFragment)),
+    `no error contained "${messageFragment}"`,
+  ).toBe(true);
+}
+
+export function assertNoCascade(source: string): void {
+  const result = compileHedgeCode(source);
+  const errors = getErrorMessages(result);
+  expect(hasCompileErrors(result)).toBe(true);
+  expect(errors.length, "expected exactly 1 error (no cascade)").toBe(1);
+}
+
+export function assertCompilesClean(source: string): CompileResult {
+  const result = compileHedgeCode(source);
+  expect(
+    result.diagnostics.filter((d) => d.severity === "error"),
+    "expected zero errors",
+  ).toHaveLength(0);
+  return result;
 }

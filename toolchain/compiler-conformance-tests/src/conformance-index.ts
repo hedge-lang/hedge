@@ -60,6 +60,12 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "diff-eq: equality comparison compiles and matches reference",
       "diff-lt: less-than comparison compiles and matches reference",
       "diff-gt: greater-than comparison compiles and matches reference",
+      "diff-ne: not-equal comparison compiles and matches reference",
+      "diff-le: less-than-or-equal comparison compiles and matches reference",
+      "diff-ge: greater-than-or-equal comparison compiles and matches reference",
+      "diff-and: logical and compiles and matches reference",
+      "diff-or: logical or compiles and matches reference",
+      "diff-rem: remainder compiles and matches reference",
     ],
   },
   {
@@ -89,6 +95,77 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "diff-generated-seed-3: generated program matches reference evaluator",
     ],
   },
+  {
+    id: "EXEC-ARITHMETIC",
+    description: "Arithmetic expressions execute correctly end-to-end",
+    testIds: [
+      "evaluates 1 + 2 correctly",
+      "respects operator precedence",
+      "handles subtraction",
+      "handles multiplication",
+      "handles division",
+      "handles modulo",
+      "handles unary negation",
+      "bitwise AND",
+      "bitwise OR",
+      "bitwise XOR",
+      "shift left",
+      "shift right",
+    ],
+  },
+  {
+    id: "EXEC-COMPARISONS",
+    description: "Comparison and logical expressions execute correctly end-to-end",
+    testIds: [
+      "evaluates == correctly",
+      "evaluates < correctly",
+      "evaluates > correctly",
+      "evaluates != correctly",
+      "evaluates <= correctly",
+      "evaluates >= correctly",
+      "evaluates && correctly",
+      "evaluates || correctly",
+    ],
+  },
+  {
+    id: "EXEC-CONTROL-FLOW",
+    description: "Control flow constructs execute correctly end-to-end",
+    testIds: [
+      "executes if-true branch",
+      "skips if-false branch",
+      "executes if-else correctly",
+      "chains else-if correctly",
+      "if expression as let initializer",
+    ],
+  },
+  {
+    id: "EXEC-BINDINGS",
+    description: "Let bindings and block scoping execute correctly end-to-end",
+    testIds: [
+      "executes block statements",
+      "block with trailing expression",
+      "let write rebinding updates the value",
+      "type annotation on let binding compiles correctly",
+      "compound assignment += updates a let write binding",
+      "compound assignment -= updates a let write binding",
+    ],
+  },
+  {
+    id: "EXEC-STRUCTS",
+    description: "Struct declarations and field access execute correctly end-to-end",
+    testIds: [
+      "struct declaration compiles alongside fn main",
+      "struct literal field access evaluates correctly",
+    ],
+  },
+  {
+    id: "EXEC-LITERALS",
+    description: "Literal types beyond integers execute correctly end-to-end",
+    testIds: [
+      "float literal prints correctly",
+      "char literal prints as its character",
+    ],
+  },
 ];
 
 export const CORE_REQUIRED_RULE_IDS: readonly string[] = [
@@ -101,6 +178,12 @@ export const CORE_REQUIRED_RULE_IDS: readonly string[] = [
   "DIFF-IF",
   "DIFF-LET",
   "DIFF-GENERATED",
+  "EXEC-ARITHMETIC",
+  "EXEC-COMPARISONS",
+  "EXEC-CONTROL-FLOW",
+  "EXEC-BINDINGS",
+  "EXEC-STRUCTS",
+  "EXEC-LITERALS",
 ];
 
 export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
@@ -142,7 +225,6 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     testIds: [
       "unresolved-name span points at the unresolved identifier text",
       "single unresolved name does not cascade into many errors",
-      "borrow-expression rejection includes a concrete source span",
       "parse failure emits at least one error diagnostic and no code",
       "parser emits warning for uninitialized immutable let",
     ],

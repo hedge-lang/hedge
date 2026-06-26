@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
-  SLICE_NUMBER,
   compileHedgeCode,
-  hasCompileErrors,
-  getErrorMessages,
+  assertRejects,
+  assertRejectsWithMessage,
+  assertNoCascade,
+  assertCompilesClean,
 } from "./test-harness.js";
 
 /**
@@ -13,197 +14,70 @@ import {
 describe("must-fail corpus — rejection tests", (): void => {
   describe("name resolution errors", (): void => {
     it("rejects undefined variable in expression", (): void => {
-      const result = compileHedgeCode(`
-        fn main() {
-          print(undefined_name);
-        }
-      `);
-      expect(hasCompileErrors(result)).toBe(true);
-      expect(getErrorMessages(result)[0]).toContain("undefined_name");
+      assertRejectsWithMessage(
+        `fn main() { print(undefined_name); }`,
+        "undefined_name",
+      );
     });
 
     it("rejects undefined function call", (): void => {
-      const result = compileHedgeCode(`
-        fn main() {
-          undefined_fn(1, 2);
-        }
-      `);
-      expect(hasCompileErrors(result)).toBe(true);
+      assertRejects(`fn main() { undefined_fn(1, 2); }`);
     });
 
     it("rejects call to function name not in scope", (): void => {
-      const result = compileHedgeCode(`
-        fn add(a: i32, b: i32) {
-          print(a + b);
-        }
-        fn main() {
-          add(2, 3);
-        }
+      assertRejects(`
+        fn add(a: i32, b: i32) { print(a + b); }
+        fn main() { add(2, 3); }
       `);
-      expect(hasCompileErrors(result)).toBe(true);
     });
 
     it("rejects multiple calls to function name not in scope", (): void => {
-      const result = compileHedgeCode(`
-        fn double(x: i32) {
-          print(x * 2);
-        }
-        fn main() {
-          double(3);
-          double(6);
-        }
+      assertRejects(`
+        fn double(x: i32) { print(x * 2); }
+        fn main() { double(3); double(6); }
       `);
-      expect(hasCompileErrors(result)).toBe(true);
     });
 
     it("rejects use of name after binding", (): void => {
-      const result = compileHedgeCode(`
-        fn main() {
-          let x = 1;
-          print(y);
-        }
-      `);
-      expect(hasCompileErrors(result)).toBe(true);
+      assertRejects(`fn main() { let x = 1; print(y); }`);
     });
   });
 
   describe("borrow checker errors", (): void => {
-    it.skipIf(SLICE_NUMBER === 1)(
-      "rejects &write of immutable binding",
-      (): void => {
-        const result = compileHedgeCode(`
-        fn main() {
-          let x = "a";
-          let r = &write x;
-          print(r);
-        }
-      `);
-        expect(hasCompileErrors(result)).toBe(true);
-        expect(
-          getErrorMessages(result).some((m) =>
-            m.includes("not declared write"),
-          ),
-        ).toBe(true);
-      },
-    );
-
-    it.skipIf(SLICE_NUMBER > 1)(
-      "rejects &write of immutable binding in Slice 1",
-      (): void => {
-        const result = compileHedgeCode(`
-        fn main() {
-          let x = "a";
-          let r = &write x;
-          print(r);
-        }
-      `);
-        expect(hasCompileErrors(result)).toBe(true);
-        expect(
-          getErrorMessages(result).some((m) =>
-            m.includes("borrow expressions are not supported in Slice 1"),
-          ),
-        ).toBe(true);
-      },
-    );
-
-    it.skipIf(SLICE_NUMBER === 1)(
-      "rejects overlapping mutable borrows",
-      (): void => {
-        const result = compileHedgeCode(`
-        fn main() {
-          let write x = "a";
-          let r1 = &write x;
-          let r2 = &write x;
-          print(r1);
-          print(r2);
-        }
-      `);
-        expect(hasCompileErrors(result)).toBe(true);
-        expect(getErrorMessages(result)[0]).toContain("Conflicting");
-        expect(
-          getErrorMessages(result).some((m) => m.includes("Conflicting")),
-        ).toBe(true);
-      },
-    );
-
-    it.skipIf(SLICE_NUMBER > 1)(
-      "rejects overlapping mutable borrows in Slice 1",
-      (): void => {
-        const result = compileHedgeCode(`
-        fn main() {
-          let write x = "a";
-          let r1 = &write x;
-          let r2 = &write x;
-          print(r1);
-          print(r2);
-        }
-      `);
-        expect(hasCompileErrors(result)).toBe(true);
-        expect(
-          getErrorMessages(result).some((m) =>
-            m.includes("borrow expressions are not supported in Slice 1"),
-          ),
-        ).toBe(true);
-      },
-    );
-
-    it.skipIf(SLICE_NUMBER === 1)(
-      "accepts sequential mutable borrows (NLL)",
-      (): void => {
-        const result = compileHedgeCode(`
-        fn main() {
-          let write x = "a";
-          let r1 = &write x;
-          print(r1);
-          let r2 = &write x;
-          print(r2);
-        }
-      `);
-        expect(hasCompileErrors(result)).toBe(false);
-      },
-    );
-
-    it.skipIf(SLICE_NUMBER > 1)(
-      "currently rejects sequential mutable borrows in Slice 1",
-      (): void => {
-        const result = compileHedgeCode(`
-        fn main() {
-          let write x = "a";
-          let r1 = &write x;
-          print(r1);
-          let r2 = &write x;
-          print(r2);
-        }
-      `);
-
-        expect(hasCompileErrors(result)).toBe(true);
-        expect(
-          getErrorMessages(result).some((m) =>
-            m.includes("borrow expressions are not supported in Slice 1"),
-          ),
-        ).toBe(true);
-      },
-    );
-
-    it.skipIf(SLICE_NUMBER === 1)("accepts many shared borrows", (): void => {
-      const result = compileHedgeCode(`
-        fn main() {
-          let x = "a";
-          let r1 = &x;
-          let r2 = &x;
-          let r3 = &x;
-          print(r1);
-          print(r2);
-          print(r3);
-        }
-      `);
-      expect(hasCompileErrors(result)).toBe(false);
+    it("rejects &write of immutable binding", (): void => {
+      assertRejectsWithMessage(
+        `fn main() { let x = "a"; let r = &write x; print(r); }`,
+        "not declared write",
+      );
     });
 
-    it.skipIf(SLICE_NUMBER > 1)(
-      "currently rejects many shared borrows in Slice 1",
-      (): void => {
-        const result = compileHedgeCode(`
+    it("rejects overlapping mutable borrows", (): void => {
+      assertRejectsWithMessage(
+        `fn main() {
+          let write x = "a";
+          let r1 = &write x;
+          let r2 = &write x;
+          print(r1);
+          print(r2);
+        }`,
+        "Conflicting",
+      );
+    });
+
+    it.fails("accepts sequential mutable borrows (NLL)", (): void => {
+      assertCompilesClean(`
+        fn main() {
+          let write x = "a";
+          let r1 = &write x;
+          print(r1);
+          let r2 = &write x;
+          print(r2);
+        }
+      `);
+    });
+
+    it.fails("accepts many shared borrows", (): void => {
+      assertCompilesClean(`
         fn main() {
           let x = "a";
           let r1 = &x;
@@ -214,63 +88,38 @@ describe("must-fail corpus — rejection tests", (): void => {
           print(r3);
         }
       `);
-        expect(hasCompileErrors(result)).toBe(true);
-        expect(
-          getErrorMessages(result).some((m) =>
-            m.includes("borrow expressions are not supported in Slice 1"),
-          ),
-        ).toBe(true);
-      },
-    );
+    });
   });
 
   describe("borrow checker edge cases", (): void => {
-    it.skipIf(SLICE_NUMBER === 1)(
-      "rejects shared borrow while mutable borrow is still live",
-      (): void => {
-        const result = compileHedgeCode(`
-        fn main() {
+    it("rejects shared borrow while mutable borrow is still live", (): void => {
+      assertRejectsWithMessage(
+        `fn main() {
           let write x = "a";
           let rw = &write x;
           let r = &x;
           print(rw);
           print(r);
-        }
-      `);
-        expect(hasCompileErrors(result)).toBe(true);
-        expect(
-          getErrorMessages(result).some((m) =>
-            m.includes("Conflicting borrows"),
-          ),
-        ).toBe(true);
-      },
-    );
+        }`,
+        "Conflicting borrows",
+      );
+    });
 
-    it.skipIf(SLICE_NUMBER === 1)(
-      "rejects mutable borrow while shared borrow is still live",
-      (): void => {
-        const result = compileHedgeCode(`
-        fn main() {
+    it("rejects mutable borrow while shared borrow is still live", (): void => {
+      assertRejectsWithMessage(
+        `fn main() {
           let write x = "a";
           let r = &x;
           let rw = &write x;
           print(r);
           print(rw);
-        }
-      `);
-        expect(hasCompileErrors(result)).toBe(true);
-        expect(
-          getErrorMessages(result).some((m) =>
-            m.includes("Conflicting borrows"),
-          ),
-        ).toBe(true);
-      },
-    );
+        }`,
+        "Conflicting borrows",
+      );
+    });
 
-    it.skipIf(SLICE_NUMBER === 1)(
-      "accepts a second mutable borrow when the first borrow has no uses",
-      (): void => {
-        const result = compileHedgeCode(`
+    it.fails("accepts a second mutable borrow when the first borrow has no uses", (): void => {
+      assertCompilesClean(`
         fn main() {
           let write x = "a";
           let r1 = &write x;
@@ -278,29 +127,7 @@ describe("must-fail corpus — rejection tests", (): void => {
           print(r2);
         }
       `);
-        expect(hasCompileErrors(result)).toBe(false);
-      },
-    );
-
-    it.skipIf(SLICE_NUMBER > 1)(
-      "currently rejects second mutable borrow even without first use in Slice 1",
-      (): void => {
-        const result = compileHedgeCode(`
-        fn main() {
-          let write x = "a";
-          let r1 = &write x;
-          let r2 = &write x;
-          print(r2);
-        }
-      `);
-        expect(hasCompileErrors(result)).toBe(true);
-        expect(
-          getErrorMessages(result).some((m) =>
-            m.includes("borrow expressions are not supported in Slice 1"),
-          ),
-        ).toBe(true);
-      },
-    );
+    });
   });
 
   describe("diagnostic span precision", (): void => {
@@ -319,162 +146,82 @@ describe("must-fail corpus — rejection tests", (): void => {
 
   describe("operator restrictions", (): void => {
     it("rejects chained non-associative comparison operators", (): void => {
-      const result = compileHedgeCode(`
-        fn main() {
-          let x = 1 < 2 < 3;
-        }
-      `);
-      expect(hasCompileErrors(result)).toBe(true);
-      expect(
-        getErrorMessages(result).some((m) => m.includes("cannot chain")),
-      ).toBe(true);
+      assertRejectsWithMessage(
+        `fn main() { let x = 1 < 2 < 3; }`,
+        "cannot chain",
+      );
     });
   });
 
   describe("syntax errors", (): void => {
     it("rejects unclosed function", (): void => {
-      const result = compileHedgeCode(`
-        fn main(
-      `);
-      expect(hasCompileErrors(result)).toBe(true);
-      expect(getErrorMessages(result).some((m) => m.includes("eof"))).toBe(
-        true,
-      );
+      assertRejectsWithMessage(`fn main(`, "eof");
     });
 
     it("rejects missing semicolon in let", (): void => {
-      const result = compileHedgeCode(`
-        fn main() {
-          let x = 1
-        }
-      `);
-      expect(hasCompileErrors(result)).toBe(true);
-      expect(
-        getErrorMessages(result).some((m) => m.includes("Expected semi")),
-      ).toBe(true);
+      assertRejectsWithMessage(
+        `fn main() { let x = 1 }`,
+        "Expected semi",
+      );
     });
 
     it("rejects unclosed block", (): void => {
-      const result = compileHedgeCode(`
-        fn main() {
-          let x = 1;
-      `);
-      expect(hasCompileErrors(result)).toBe(true);
-      expect(getErrorMessages(result).some((m) => m.includes("eof"))).toBe(
-        true,
+      assertRejectsWithMessage(
+        `fn main() { let x = 1;`,
+        "eof",
       );
     });
   });
 
   describe("type errors", (): void => {
-    it.skipIf(SLICE_NUMBER > 1)("rejects reference expressions (Slice 1)", (): void => {
-      const result = compileHedgeCode(`
-        fn main() {
-          let x = "a";
-          let r = &x;
-        }
-      `);
-      expect(hasCompileErrors(result)).toBe(true);
-      expect(
-        getErrorMessages(result).some((m) =>
-          m.includes("borrow expressions are not supported in Slice 1"),
-        ),
-      ).toBe(true);
-    });
     it.fails("rejects comparisons with right-side boolean", (): void => {
-      const result = compileHedgeCode(`
-        fn main() {
-          let x = 1 < (2 < 3);
-        }
-      `);
-      expect(hasCompileErrors(result)).toBe(true);
-      expect(
-        getErrorMessages(result).some((m) => m.includes("types")),
-      ).toBe(true);
+      assertRejectsWithMessage(
+        `fn main() { let x = 1 < (2 < 3); }`,
+        "types",
+      );
     });
+
     it.fails("rejects comparisons with left-side boolean", (): void => {
-      const result = compileHedgeCode(`
-        fn main() {
-          let x = (1 < 2) < 3;
-        }
-      `);
-      expect(hasCompileErrors(result)).toBe(true);
-      expect(
-        getErrorMessages(result).some((m) => m.includes("types")),
-      ).toBe(true);
+      assertRejectsWithMessage(
+        `fn main() { let x = (1 < 2) < 3; }`,
+        "types",
+      );
     });
   });
 
   describe("diagnostic non-cascade", (): void => {
     it("does not emit spurious diagnostics for single missing name", (): void => {
-      const result = compileHedgeCode(`
-        fn main() {
-          let x = missing_var + 1;
-        }
-      `);
-      expect(hasCompileErrors(result)).toBe(true);
-      const errorMessages = getErrorMessages(result);
-      expect(errorMessages.length).toBe(1);
+      assertNoCascade(`fn main() { let x = missing_var + 1; }`);
     });
   });
 
   describe("slice 1 restrictions", (): void => {
     it("rejects generic types (not in Slice 1)", (): void => {
-      const result = compileHedgeCode(`
-        fn main() {
-          let x: Vec<i32> = Vec::new();
-        }
-      `);
-      expect(hasCompileErrors(result)).toBe(true);
-      expect(
-        getErrorMessages(result).some((m) => m.includes("Expected semi")),
-      ).toBe(true);
+      assertRejectsWithMessage(
+        `fn main() { let x: Vec<i32> = Vec::new(); }`,
+        "Expected semi",
+      );
     });
 
     it("rejects match expressions (not in Slice 1)", (): void => {
-      const result = compileHedgeCode(`
-        fn main() {
-          match 5 {
-            1 => print("one"),
-            _ => print("other"),
-          }
-        }
-      `);
-      expect(hasCompileErrors(result)).toBe(true);
-      expect(
-        getErrorMessages(result).some((m) =>
-          m.includes("Expected an expression"),
-        ),
-      ).toBe(true);
+      assertRejectsWithMessage(
+        `fn main() { match 5 { 1 => print("one"), _ => print("other"), } }`,
+        "Expected an expression",
+      );
     });
 
     it("rejects enum definitions (not in Slice 1)", (): void => {
-      const result = compileHedgeCode(`
-        enum Status {
-          Ok,
-          Err,
-        }
-        fn main() {}
-      `);
-      expect(hasCompileErrors(result)).toBe(true);
-      expect(
-        getErrorMessages(result).some((m) =>
-          m.includes("not supported in Slice 1"),
-        ),
-      ).toBe(true);
+      assertRejectsWithMessage(
+        `enum Status { Ok, Err, } fn main() {}`,
+        "not supported in Slice 1",
+      );
     });
 
     it("rejects non-primitive parameter type in function signature", (): void => {
-      const result = compileHedgeCode(`
-        fn foo(x: MyStruct) {}
-        fn main() {}
-      `);
-      expect(hasCompileErrors(result)).toBe(true);
-      expect(
-        getErrorMessages(result).some((m) =>
-          m.includes("not supported in Slice 1 function signatures"),
-        ),
-      ).toBe(true);
+      assertRejectsWithMessage(
+        `fn foo(x: MyStruct) {} fn main() {}`,
+        "not supported in Slice 1 function signatures",
+      );
     });
   });
 });

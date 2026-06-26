@@ -22,6 +22,7 @@ import {
   CORE_CONFORMANCE_RULES,
   CORE_REQUIRED_RULE_IDS,
 } from "./conformance-index.js";
+import { assertCompilesClean } from "./test-harness.js";
 
 function assert(cond: boolean, msg?: string): asserts cond {
   if (!cond) throw new Error(msg);
@@ -384,10 +385,10 @@ describe("property: whitespace and comment invariance", (): void => {
 
 describe("property: alpha-renaming preserves diagnostics", (): void => {
   it("alpha-rename-preserves-diagnostics: renaming locals keeps diagnostic count", (): void => {
-    const original = compile(
+    const original = assertCompilesClean(
       `fn main() { let foo = 1; let bar = 2; foo + bar; }`,
     );
-    const renamed = compile(
+    const renamed = assertCompilesClean(
       `fn main() { let alpha = 1; let beta = 2; alpha + beta; }`,
     );
     expect(original.diagnostics.length).toBe(renamed.diagnostics.length);
@@ -517,6 +518,35 @@ describe("differential: formal subset hand-written programs", (): void => {
 
   it("chained arithmetic matches reference", (): void => {
     assertI32("let a = 3; let b = 4; (a * a) + (b * b)");
+  });
+
+  it("diff-ne: not-equal comparison compiles and matches reference", (): void => {
+    assertBool("3 != 4");
+    assertBool("5 != 5");
+  });
+
+  it("diff-le: less-than-or-equal comparison compiles and matches reference", (): void => {
+    assertBool("3 <= 3");
+    assertBool("4 <= 3");
+  });
+
+  it("diff-ge: greater-than-or-equal comparison compiles and matches reference", (): void => {
+    assertBool("5 >= 3");
+    assertBool("3 >= 5");
+  });
+
+  it("diff-and: logical and compiles and matches reference", (): void => {
+    assertBool("true && true");
+    assertBool("true && false");
+  });
+
+  it("diff-or: logical or compiles and matches reference", (): void => {
+    assertBool("false || true");
+    assertBool("false || false");
+  });
+
+  it("diff-rem: remainder compiles and matches reference", (): void => {
+    assertI32("10 % 3");
   });
 });
 
