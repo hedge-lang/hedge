@@ -115,7 +115,8 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   },
   {
     id: "EXEC-COMPARISONS",
-    description: "Comparison and logical expressions execute correctly end-to-end",
+    description:
+      "Comparison and logical expressions execute correctly end-to-end",
     testIds: [
       "evaluates == correctly",
       "evaluates < correctly",
@@ -152,7 +153,8 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   },
   {
     id: "EXEC-STRUCTS",
-    description: "Struct declarations and field access execute correctly end-to-end",
+    description:
+      "Struct declarations and field access execute correctly end-to-end",
     testIds: [
       "struct declaration compiles alongside fn main",
       "struct literal field access evaluates correctly",
@@ -164,6 +166,43 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     testIds: [
       "float literal prints correctly",
       "char literal prints as its character",
+    ],
+  },
+  {
+    id: "PROP-INT-SEMANTICS",
+    description:
+      "Integer arithmetic produces i32 truncating semantics, not JS float semantics",
+    testIds: [
+      "diff-div-truncate: integer division truncates toward zero",
+      "diff-div-negative: negative dividend truncates toward zero not floor",
+    ],
+  },
+  {
+    id: "PROP-ALGEBRAIC-LAWS",
+    description: "Integer and boolean operations satisfy algebraic invariants",
+    testIds: [
+      "prop-add-commutative: a + b = b + a for integer constants",
+      "prop-mul-commutative: a * b = b * a",
+      "prop-add-identity: a + 0 = a",
+      "prop-mul-identity: a * 1 = a",
+      "prop-mul-zero: a * 0 = 0",
+      "prop-demorgan-and: !(a && b) == (!a || !b)",
+      "prop-demorgan-or: !(a || b) == (!a && !b)",
+      "prop-double-neg-bool: !!a = a for booleans",
+      "prop-comparison-antisymmetric: (a < b) == !(a >= b)",
+      "prop-comparison-reflexive: a == a",
+    ],
+  },
+  {
+    id: "PROP-TYPE-SAFETY",
+    description: "Type system rejects ill-typed programs without coercion",
+    testIds: [
+      "rejects direct assignment to immutable let binding",
+      "rejects compound assignment to immutable let binding",
+      "rejects integer as boolean condition in if",
+      "rejects string as boolean condition in if",
+      "rejects arithmetic on boolean operands",
+      "rejects equality comparison between mismatched types",
     ],
   },
 ];
@@ -184,6 +223,9 @@ export const CORE_REQUIRED_RULE_IDS: readonly string[] = [
   "EXEC-BINDINGS",
   "EXEC-STRUCTS",
   "EXEC-LITERALS",
+  "PROP-INT-SEMANTICS",
+  "PROP-ALGEBRAIC-LAWS",
+  "PROP-TYPE-SAFETY",
 ];
 
 export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [

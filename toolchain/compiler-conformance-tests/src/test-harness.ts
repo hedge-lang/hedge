@@ -1,8 +1,6 @@
 import { compile, type CompileResult, isSome } from "@hedge-lang/compiler";
 import { expect } from "vitest";
 
-export const SLICE_NUMBER: number = 1;
-
 /**
  * A captured execution result from running compiled JS.
  */
@@ -84,7 +82,7 @@ export function hasCompileErrors(result: CompileResult): boolean {
  * @param result CompileResult
  * @returns Array of error messages
  */
-export function getErrorMessages(result: CompileResult): string[] {
+function getErrorMessages(result: CompileResult): string[] {
   return result.diagnostics
     .filter((d) => d.severity === "error")
     .map((d) => d.message);
@@ -99,12 +97,19 @@ export function assertRunsTo(source: string, expectedStdout: string[]): void {
 
 export function assertRejects(source: string): void {
   const result = compileHedgeCode(source);
-  expect(hasCompileErrors(result), "expected compile errors but got none").toBe(true);
+  expect(hasCompileErrors(result), "expected compile errors but got none").toBe(
+    true,
+  );
 }
 
-export function assertRejectsWithMessage(source: string, messageFragment: string): void {
+export function assertRejectsWithMessage(
+  source: string,
+  messageFragment: string,
+): void {
   const result = compileHedgeCode(source);
-  expect(hasCompileErrors(result), "expected compile errors but got none").toBe(true);
+  expect(hasCompileErrors(result), "expected compile errors but got none").toBe(
+    true,
+  );
   expect(
     getErrorMessages(result).some((m) => m.includes(messageFragment)),
     `no error contained "${messageFragment}"`,

@@ -9,17 +9,11 @@ import {
 describe("execution tests", (): void => {
   describe("basic output", (): void => {
     it("prints a string literal", (): void => {
-      assertRunsTo(
-        `fn main() { print("Hello"); }`,
-        ["Hello"],
-      );
+      assertRunsTo(`fn main() { print("Hello"); }`, ["Hello"]);
     });
 
     it("prints a variable", (): void => {
-      assertRunsTo(
-        `fn main() { let msg = "world"; print(msg); }`,
-        ["world"],
-      );
+      assertRunsTo(`fn main() { let msg = "world"; print(msg); }`, ["world"]);
     });
 
     it("prints multiple values", (): void => {
@@ -98,17 +92,13 @@ describe("execution tests", (): void => {
 
   describe("control flow", (): void => {
     it("executes if-true branch", (): void => {
-      assertRunsTo(
-        `fn main() { if true { print("yes"); } }`,
-        ["yes"],
-      );
+      assertRunsTo(`fn main() { if true { print("yes"); } }`, ["yes"]);
     });
 
     it("skips if-false branch", (): void => {
-      assertRunsTo(
-        `fn main() { if false { print("no"); }; print("after"); }`,
-        ["after"],
-      );
+      assertRunsTo(`fn main() { if false { print("no"); }; print("after"); }`, [
+        "after",
+      ]);
     });
 
     it("executes if-else correctly", (): void => {
@@ -175,10 +165,9 @@ describe("execution tests", (): void => {
 
   describe("blocks and scopes", (): void => {
     it("executes block statements", (): void => {
-      assertRunsTo(
-        `fn main() { let x = 1; { let y = 2; print(x + y); } }`,
-        ["3"],
-      );
+      assertRunsTo(`fn main() { let x = 1; { let y = 2; print(x + y); } }`, [
+        "3",
+      ]);
     });
 
     it("block with trailing expression", (): void => {
@@ -189,10 +178,7 @@ describe("execution tests", (): void => {
     });
 
     it("let write rebinding updates the value", (): void => {
-      assertRunsTo(
-        `fn main() { let write x = 1; x = 2; print(x); }`,
-        ["2"],
-      );
+      assertRunsTo(`fn main() { let write x = 1; x = 2; print(x); }`, ["2"]);
     });
 
     it("let bind modifier compiles and executes", (): void => {
@@ -204,16 +190,24 @@ describe("execution tests", (): void => {
     });
 
     it("compound assignment += updates a let write binding", (): void => {
-      assertRunsTo(
-        `fn main() { let write x = 1; x += 5; print(x); }`,
-        ["6"],
-      );
+      assertRunsTo(`fn main() { let write x = 1; x += 5; print(x); }`, ["6"]);
     });
 
     it("compound assignment -= updates a let write binding", (): void => {
+      assertRunsTo(`fn main() { let write x = 10; x -= 3; print(x); }`, ["7"]);
+    });
+
+    it.fails("inner scope shadow does not affect outer binding", (): void => {
       assertRunsTo(
-        `fn main() { let write x = 10; x -= 3; print(x); }`,
-        ["7"],
+        `fn main() {
+          let x = 1;
+          {
+            let x = 2;
+            print(x);
+          }
+          print(x);
+        }`,
+        ["2", "1"],
       );
     });
 
@@ -235,10 +229,7 @@ describe("execution tests", (): void => {
 
   describe("structs", (): void => {
     it("struct declaration compiles alongside fn main", (): void => {
-      assertRunsTo(
-        `struct Foo { x: i32 } fn main() { print(1); }`,
-        ["1"],
-      );
+      assertRunsTo(`struct Foo { x: i32 } fn main() { print(1); }`, ["1"]);
     });
 
     it("struct literal field access evaluates correctly", (): void => {

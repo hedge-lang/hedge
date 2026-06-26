@@ -15,8 +15,10 @@ function extractDiagnosticCode(diagnostic: unknown): string | null {
 }
 
 describe("JS interop boundary negative suite", (): void => {
-  it.fails("rejects non-primitive boundary payloads without explicit unsafe escape hatches", (): void => {
-    const source = `
+  it.fails(
+    "rejects non-primitive boundary payloads without explicit unsafe escape hatches",
+    (): void => {
+      const source = `
       struct Payload { value: i32 }
       extern "js" fn send_payload(payload: Payload) -> ();
       fn main() {
@@ -24,24 +26,25 @@ describe("JS interop boundary negative suite", (): void => {
         send_payload(payload);
       }
     `;
-    const result = compile(source);
-    const errors = result.diagnostics.filter((d) => d.severity === "error");
-    expect(errors.length).toBeGreaterThan(0);
-    for (const diagnostic of errors) {
-      const code = extractDiagnosticCode(diagnostic);
-      expect(code).not.toBeNull();
-      if (code === null) {
-        return;
-      }
-      expect(code).toMatch(INTEROP_CODE_PATTERN);
-    }
-    expect(
-      errors.some((diagnostic) => {
+      const result = compile(source);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors.length).toBeGreaterThan(0);
+      for (const diagnostic of errors) {
         const code = extractDiagnosticCode(diagnostic);
-        return typeof code === "string" && code.includes("BOUNDARY");
-      }),
-    ).toBe(true);
-  });
+        expect(code).not.toBeNull();
+        if (code === null) {
+          return;
+        }
+        expect(code).toMatch(INTEROP_CODE_PATTERN);
+      }
+      expect(
+        errors.some((diagnostic) => {
+          const code = extractDiagnosticCode(diagnostic);
+          return typeof code === "string" && code.includes("BOUNDARY");
+        }),
+      ).toBe(true);
+    },
+  );
 
   it.fails("rejects invalid unsafe boundary usage patterns", (): void => {
     const source = `

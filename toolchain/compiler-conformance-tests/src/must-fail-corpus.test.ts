@@ -41,6 +41,16 @@ describe("must-fail corpus — rejection tests", (): void => {
     it("rejects use of name after binding", (): void => {
       assertRejects(`fn main() { let x = 1; print(y); }`);
     });
+
+    it.fails(
+      "rejects access to block-scoped variable after block exits",
+      (): void => {
+        assertRejectsWithMessage(
+          `fn main() { { let inner = 1; } print(inner); }`,
+          "inner",
+        );
+      },
+    );
   });
 
   describe("borrow checker errors", (): void => {
@@ -118,8 +128,10 @@ describe("must-fail corpus — rejection tests", (): void => {
       );
     });
 
-    it.fails("accepts a second mutable borrow when the first borrow has no uses", (): void => {
-      assertCompilesClean(`
+    it.fails(
+      "accepts a second mutable borrow when the first borrow has no uses",
+      (): void => {
+        assertCompilesClean(`
         fn main() {
           let write x = "a";
           let r1 = &write x;
@@ -127,7 +139,8 @@ describe("must-fail corpus — rejection tests", (): void => {
           print(r2);
         }
       `);
-    });
+      },
+    );
   });
 
   describe("diagnostic span precision", (): void => {
@@ -159,34 +172,64 @@ describe("must-fail corpus — rejection tests", (): void => {
     });
 
     it("rejects missing semicolon in let", (): void => {
-      assertRejectsWithMessage(
-        `fn main() { let x = 1 }`,
-        "Expected semi",
-      );
+      assertRejectsWithMessage(`fn main() { let x = 1 }`, "Expected semi");
     });
 
     it("rejects unclosed block", (): void => {
-      assertRejectsWithMessage(
-        `fn main() { let x = 1;`,
-        "eof",
-      );
+      assertRejectsWithMessage(`fn main() { let x = 1;`, "eof");
     });
   });
 
   describe("type errors", (): void => {
     it.fails("rejects comparisons with right-side boolean", (): void => {
-      assertRejectsWithMessage(
-        `fn main() { let x = 1 < (2 < 3); }`,
-        "types",
-      );
+      assertRejectsWithMessage(`fn main() { let x = 1 < (2 < 3); }`, "types");
     });
 
     it.fails("rejects comparisons with left-side boolean", (): void => {
+      assertRejectsWithMessage(`fn main() { let x = (1 < 2) < 3; }`, "types");
+    });
+
+    it.fails("rejects direct assignment to immutable let binding", (): void => {
       assertRejectsWithMessage(
-        `fn main() { let x = (1 < 2) < 3; }`,
-        "types",
+        `fn main() { let x = 1; x = 2; print(x); }`,
+        "immutable",
       );
     });
+
+    it.fails(
+      "rejects compound assignment to immutable let binding",
+      (): void => {
+        assertRejectsWithMessage(
+          `fn main() { let x = 1; x += 1; print(x); }`,
+          "immutable",
+        );
+      },
+    );
+
+    it.fails("rejects integer as boolean condition in if", (): void => {
+      assertRejectsWithMessage(`fn main() { if 1 { print("yes"); } }`, "bool");
+    });
+
+    it.fails("rejects string as boolean condition in if", (): void => {
+      assertRejectsWithMessage(
+        `fn main() { if "yes" { print("yes"); } }`,
+        "bool",
+      );
+    });
+
+    it.fails("rejects arithmetic on boolean operands", (): void => {
+      assertRejectsWithMessage(
+        `fn main() { let x = true + 1; print(x); }`,
+        "bool",
+      );
+    });
+
+    it.fails(
+      "rejects equality comparison between mismatched types",
+      (): void => {
+        assertRejectsWithMessage(`fn main() { print(1 == "1"); }`, "type");
+      },
+    );
   });
 
   describe("diagnostic non-cascade", (): void => {
