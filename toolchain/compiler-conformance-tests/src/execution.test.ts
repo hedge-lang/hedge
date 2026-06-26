@@ -26,6 +26,7 @@ describe("execution tests", (): void => {
         }
       `);
       expect(result).not.toBeNull();
+      expect(result?.exitCode).toBe(0);
       expect(result?.stdout).toEqual(["world"]);
     });
 
@@ -37,6 +38,7 @@ describe("execution tests", (): void => {
           print("third");
         }
       `);
+      expect(result?.exitCode).toBe(0);
       expect(result?.stdout).toEqual(["first", "second", "third"]);
     });
   });
@@ -49,6 +51,7 @@ describe("execution tests", (): void => {
           print(x);
         }
       `);
+      expect(result?.exitCode).toBe(0);
       expect(result?.stdout[0]).toBe("3");
     });
 
@@ -59,6 +62,7 @@ describe("execution tests", (): void => {
           print(x);
         }
       `);
+      expect(result?.exitCode).toBe(0);
       expect(result?.stdout[0]).toBe("7");
     });
 
@@ -69,6 +73,7 @@ describe("execution tests", (): void => {
           print(x);
         }
       `);
+      expect(result?.exitCode).toBe(0);
       expect(result?.stdout[0]).toBe("7");
     });
 
@@ -79,6 +84,7 @@ describe("execution tests", (): void => {
           print(x);
         }
       `);
+      expect(result?.exitCode).toBe(0);
       expect(result?.stdout[0]).toBe("20");
     });
 
@@ -89,6 +95,69 @@ describe("execution tests", (): void => {
           print(x);
         }
       `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("5");
+    });
+
+    it("handles modulo", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          print(10 % 3);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("1");
+    });
+
+    it("handles unary negation", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          let x = 5;
+          print(-x);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("-5");
+    });
+
+    it("handles boolean not", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          print(!true);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("false");
+    });
+
+    it("handles negative integer literals", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          let x = -5;
+          print(x);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("-5");
+    });
+
+    it("division before addition in mixed expression", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          print(6 / 2 + 1);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("4");
+    });
+
+    it("subtraction is left-associative", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          print(10 - 3 - 2);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
       expect(result?.stdout[0]).toBe("5");
     });
   });
@@ -102,6 +171,7 @@ describe("execution tests", (): void => {
           }
         }
       `);
+      expect(result?.exitCode).toBe(0);
       expect(result?.stdout).toEqual(["yes"]);
     });
 
@@ -115,6 +185,7 @@ describe("execution tests", (): void => {
         }
       `);
       expect(result).not.toBeNull();
+      expect(result?.exitCode).toBe(0);
       expect(result?.stdout).toEqual(["after"]);
     });
 
@@ -128,6 +199,7 @@ describe("execution tests", (): void => {
           }
         }
       `);
+      expect(result?.exitCode).toBe(0);
       expect(result?.stdout).toEqual(["yes"]);
     });
 
@@ -144,34 +216,19 @@ describe("execution tests", (): void => {
           }
         }
       `);
+      expect(result?.exitCode).toBe(0);
       expect(result?.stdout).toEqual(["two"]);
     });
-  });
 
-  describe("function calls", (): void => {
-    it("currently rejects calling user-defined functions in Slice 1", (): void => {
-      const result = compileHedgeCode(`
-        fn add(a: i32, b: i32) {
-          print(a + b);
-        }
+    it("if expression as let initializer", (): void => {
+      const result = executeHedgeCode(`
         fn main() {
-          add(2, 3);
+          let x = if true { 1 } else { 2 };
+          print(x);
         }
       `);
-      expect(hasCompileErrors(result)).toBe(true);
-    });
-
-    it("currently rejects nested calls to user-defined functions in Slice 1", (): void => {
-      const result = compileHedgeCode(`
-        fn double(x: i32) {
-          print(x * 2);
-        }
-        fn main() {
-          double(3);
-          double(6);
-        }
-      `);
-      expect(hasCompileErrors(result)).toBe(true);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("1");
     });
   });
 
@@ -186,6 +243,7 @@ describe("execution tests", (): void => {
           }
         }
       `);
+      expect(result?.exitCode).toBe(0);
       expect(result?.stdout).toEqual(["equal"]);
     });
 
@@ -197,6 +255,7 @@ describe("execution tests", (): void => {
           }
         }
       `);
+      expect(result?.exitCode).toBe(0);
       expect(result?.stdout).toEqual(["yes"]);
     });
 
@@ -208,7 +267,58 @@ describe("execution tests", (): void => {
           }
         }
       `);
+      expect(result?.exitCode).toBe(0);
       expect(result?.stdout).toEqual(["yes"]);
+    });
+
+    it("evaluates != correctly", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          print(3 != 4);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("true");
+    });
+
+    it("evaluates <= correctly", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          print(3 <= 3);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("true");
+    });
+
+    it("evaluates >= correctly", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          print(5 >= 3);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("true");
+    });
+
+    it("evaluates && correctly", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          print(true && false);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("false");
+    });
+
+    it("evaluates || correctly", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          print(false || true);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("true");
     });
   });
 
@@ -223,6 +333,7 @@ describe("execution tests", (): void => {
           }
         }
       `);
+      expect(result?.exitCode).toBe(0);
       expect(result?.stdout[0]).toBe("3");
     });
 
@@ -237,7 +348,80 @@ describe("execution tests", (): void => {
           print(x);
         }
       `);
+      expect(result?.exitCode).toBe(0);
       expect(result?.stdout[0]).toBe("8");
+    });
+
+    it("let write rebinding updates the value", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          let write x = 1;
+          x = 2;
+          print(x);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("2");
+    });
+
+    it("let bind modifier compiles and executes", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          let bind x = 5;
+          print(x);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("5");
+    });
+
+    it("type annotation on let binding compiles correctly", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          let x: i32 = 5;
+          print(x);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("5");
+    });
+
+    it.fails("variable shadowing emits correct output", (): void => {
+      // compiler bug: JSIM lowers both bindings to `const`, which is illegal in JS block scope
+      const result = executeHedgeCode(`
+        fn main() {
+          let x = 1;
+          let x = 2;
+          print(x);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout).toEqual(["2"]);
+    });
+  });
+
+  describe("structs", (): void => {
+    it("struct declaration compiles alongside fn main", (): void => {
+      const result = executeHedgeCode(`
+        struct Foo { x: i32 }
+        fn main() {
+          print(1);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout).toEqual(["1"]);
+    });
+
+    it("struct literal field access evaluates correctly", (): void => {
+      const result = executeHedgeCode(`
+        struct Foo { x: i32 }
+        fn main() {
+          let f = Foo { x: 42 };
+          print(f.x);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("42");
     });
   });
 

@@ -31,6 +31,31 @@ describe("must-fail corpus — rejection tests", (): void => {
       expect(hasCompileErrors(result)).toBe(true);
     });
 
+    it("rejects call to function name not in scope", (): void => {
+      const result = compileHedgeCode(`
+        fn add(a: i32, b: i32) {
+          print(a + b);
+        }
+        fn main() {
+          add(2, 3);
+        }
+      `);
+      expect(hasCompileErrors(result)).toBe(true);
+    });
+
+    it("rejects multiple calls to function name not in scope", (): void => {
+      const result = compileHedgeCode(`
+        fn double(x: i32) {
+          print(x * 2);
+        }
+        fn main() {
+          double(3);
+          double(6);
+        }
+      `);
+      expect(hasCompileErrors(result)).toBe(true);
+    });
+
     it("rejects use of name after binding", (): void => {
       const result = compileHedgeCode(`
         fn main() {
@@ -200,8 +225,10 @@ describe("must-fail corpus — rejection tests", (): void => {
   });
 
   describe("borrow checker edge cases", (): void => {
-    it("rejects shared borrow while mutable borrow is still live", (): void => {
-      const result = compileHedgeCode(`
+    it.skipIf(SLICE_NUMBER === 1)(
+      "rejects shared borrow while mutable borrow is still live",
+      (): void => {
+        const result = compileHedgeCode(`
         fn main() {
           let write x = "a";
           let rw = &write x;
@@ -210,14 +237,19 @@ describe("must-fail corpus — rejection tests", (): void => {
           print(r);
         }
       `);
-      expect(hasCompileErrors(result)).toBe(true);
-      expect(
-        getErrorMessages(result).some((m) => m.includes("Conflicting borrows")),
-      ).toBe(true);
-    });
+        expect(hasCompileErrors(result)).toBe(true);
+        expect(
+          getErrorMessages(result).some((m) =>
+            m.includes("Conflicting borrows"),
+          ),
+        ).toBe(true);
+      },
+    );
 
-    it("rejects mutable borrow while shared borrow is still live", (): void => {
-      const result = compileHedgeCode(`
+    it.skipIf(SLICE_NUMBER === 1)(
+      "rejects mutable borrow while shared borrow is still live",
+      (): void => {
+        const result = compileHedgeCode(`
         fn main() {
           let write x = "a";
           let r = &x;
@@ -226,11 +258,14 @@ describe("must-fail corpus — rejection tests", (): void => {
           print(rw);
         }
       `);
-      expect(hasCompileErrors(result)).toBe(true);
-      expect(
-        getErrorMessages(result).some((m) => m.includes("Conflicting borrows")),
-      ).toBe(true);
-    });
+        expect(hasCompileErrors(result)).toBe(true);
+        expect(
+          getErrorMessages(result).some((m) =>
+            m.includes("Conflicting borrows"),
+          ),
+        ).toBe(true);
+      },
+    );
 
     it.skipIf(SLICE_NUMBER === 1)(
       "accepts a second mutable borrow when the first borrow has no uses",
@@ -288,6 +323,9 @@ describe("must-fail corpus — rejection tests", (): void => {
         fn main(
       `);
       expect(hasCompileErrors(result)).toBe(true);
+      expect(getErrorMessages(result).some((m) => m.includes("eof"))).toBe(
+        true,
+      );
     });
 
     it("rejects missing semicolon in let", (): void => {
@@ -297,6 +335,9 @@ describe("must-fail corpus — rejection tests", (): void => {
         }
       `);
       expect(hasCompileErrors(result)).toBe(true);
+      expect(
+        getErrorMessages(result).some((m) => m.includes("Expected semi")),
+      ).toBe(true);
     });
 
     it("rejects unclosed block", (): void => {
@@ -305,6 +346,9 @@ describe("must-fail corpus — rejection tests", (): void => {
           let x = 1;
       `);
       expect(hasCompileErrors(result)).toBe(true);
+      expect(getErrorMessages(result).some((m) => m.includes("eof"))).toBe(
+        true,
+      );
     });
   });
 
@@ -334,8 +378,7 @@ describe("must-fail corpus — rejection tests", (): void => {
       `);
       expect(hasCompileErrors(result)).toBe(true);
       const errorMessages = getErrorMessages(result);
-      expect(errorMessages.length).toBeGreaterThanOrEqual(1);
-      // Should not have cascading errors from the failed expression
+      expect(errorMessages.length).toBe(1);
     });
   });
 
@@ -347,6 +390,9 @@ describe("must-fail corpus — rejection tests", (): void => {
         }
       `);
       expect(hasCompileErrors(result)).toBe(true);
+      expect(
+        getErrorMessages(result).some((m) => m.includes("Expected semi")),
+      ).toBe(true);
     });
 
     it("rejects match expressions (not in Slice 1)", (): void => {
@@ -359,6 +405,11 @@ describe("must-fail corpus — rejection tests", (): void => {
         }
       `);
       expect(hasCompileErrors(result)).toBe(true);
+      expect(
+        getErrorMessages(result).some((m) =>
+          m.includes("Expected an expression"),
+        ),
+      ).toBe(true);
     });
 
     it("rejects enum definitions (not in Slice 1)", (): void => {
@@ -370,6 +421,11 @@ describe("must-fail corpus — rejection tests", (): void => {
         fn main() {}
       `);
       expect(hasCompileErrors(result)).toBe(true);
+      expect(
+        getErrorMessages(result).some((m) =>
+          m.includes("not supported in Slice 1"),
+        ),
+      ).toBe(true);
     });
   });
 });

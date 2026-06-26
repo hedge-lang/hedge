@@ -45,6 +45,11 @@ describe("diagnostic stability", (): void => {
     const errors = result.diagnostics.filter((d) => d.severity === "error");
     expect(errors.length).toBeGreaterThan(0);
     expect(result.code.kind).toBe("None");
+    expect(
+      errors.some(
+        (e) => e.message.includes("Expected") && e.message.includes("eof"),
+      ),
+    ).toBe(true);
   });
 
   it("parser emits warning for uninitialized immutable let", (): void => {

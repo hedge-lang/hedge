@@ -10,7 +10,7 @@
 import { stdout } from "node:process";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
-import { compile, isSome, parse, tokenize } from "@hedge-lang/compiler";
+import { compile, isSome, some, parse, tokenize } from "@hedge-lang/compiler";
 import type {
   BinaryOperator,
   Block,
@@ -416,27 +416,22 @@ describe("property: alpha-renaming preserves diagnostics", (): void => {
 
 describe("property: parenthesization invariance", (): void => {
   it("parens-atom-invariance: (42) and 42 parse to same AST", (): void => {
-    expect(stripTokenIds(parseProgram("(42)"))).toEqual(
-      stripTokenIds(parseProgram("42")),
+    expect(stripTokenIds(parseProgram("fn main() { (42) }"))).toEqual(
+      stripTokenIds(parseProgram("fn main() { 42 }")),
     );
   });
 
   it("parens-subexpr-invariance: redundant outer parens do not change AST", (): void => {
-    // (x + y) at the top level is the same AST as x + y.
-    expect(stripTokenIds(parseProgram("(x + y)"))).toEqual(
-      stripTokenIds(parseProgram("x + y")),
+    expect(stripTokenIds(parseProgram("fn main() { (x + y) }"))).toEqual(
+      stripTokenIds(parseProgram("fn main() { x + y }")),
     );
   });
 
   it("redundant parens on int literal: ((1)) compiles same as 1", (): void => {
     const r1 = compile("fn compute() -> i32 { 1 }");
     const r2 = compile("fn compute() -> i32 { ((1)) }");
-    expect(r1.diagnostics.filter((d) => d.severity === "error")).toHaveLength(
-      0,
-    );
-    expect(r2.diagnostics.filter((d) => d.severity === "error")).toHaveLength(
-      0,
-    );
+    expect(r1.code).toMatchObject(some({ javascript: expect.anything() }));
+    expect(r2.code).toMatchObject(some({ javascript: expect.anything() }));
     if (isSome(r1.code) && isSome(r2.code)) {
       expect(r1.code.value.javascript).toEqual(r2.code.value.javascript);
     }
@@ -447,12 +442,8 @@ describe("property: parenthesization invariance", (): void => {
     const r2 = compile(
       "fn compute() -> i32 { let x = 1; let y = 2; (x) + (y) }",
     );
-    expect(r1.diagnostics.filter((d) => d.severity === "error")).toHaveLength(
-      0,
-    );
-    expect(r2.diagnostics.filter((d) => d.severity === "error")).toHaveLength(
-      0,
-    );
+    expect(r1.code).toMatchObject(some({ javascript: expect.anything() }));
+    expect(r2.code).toMatchObject(some({ javascript: expect.anything() }));
     if (isSome(r1.code) && isSome(r2.code)) {
       expect(r1.code.value.javascript).toEqual(r2.code.value.javascript);
     }
