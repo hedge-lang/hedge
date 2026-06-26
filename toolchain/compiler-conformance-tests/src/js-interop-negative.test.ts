@@ -80,4 +80,44 @@ describe("JS interop boundary negative suite", (): void => {
     const errors = result.diagnostics.filter((d) => d.severity === "error");
     expect(errors.length).toBe(0);
   });
+
+  it("rejects crossing shared references over JS boundary", (): void => {
+    const source = `
+      extern "js" fn consume_ref(value: &str) -> ();
+      fn main() {
+        let msg = "x";
+        consume_ref(&msg);
+      }
+    `;
+    const result = compile(source);
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  it("rejects crossing mutable references over JS boundary", (): void => {
+    const source = `
+      extern "js" fn mutate_ref(value: &write i32) -> ();
+      fn main() {
+        let write x = 1;
+        mutate_ref(&write x);
+      }
+    `;
+    const result = compile(source);
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  it.fails("generated JS export includes runtime guard checks", (): void => {
+    const source = `
+      export "js"
+      fn greet(name: str) -> str { name }
+    `;
+    const result = compile(source);
+    const javascript =
+      result.code.kind === "Some" &&
+      result.code.value.javascript.kind === "Some"
+        ? result.code.value.javascript.value
+        : "";
+    expect(javascript).toMatch(/typeof|Array\.isArray|throw/);
+  });
 });

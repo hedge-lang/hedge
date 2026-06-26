@@ -115,6 +115,39 @@ describe("must-fail corpus — rejection tests", (): void => {
       );
     });
 
+    describe("ownership move errors", (): void => {
+      it.fails("rejects reading moved struct value", (): void => {
+        assertRejectsWithMessage(
+          `
+          struct Boxed { value: i32 }
+          fn main() {
+            let x = Boxed { value: 1 };
+            let y = x;
+            print(x.value);
+            print(y.value);
+          }
+        `,
+          "moved",
+        );
+      });
+
+      it.fails("rejects double move of the same owned binding", (): void => {
+        assertRejectsWithMessage(
+          `
+          struct Boxed { value: i32 }
+          fn main() {
+            let x = Boxed { value: 1 };
+            let y = x;
+            let z = x;
+            print(y.value);
+            print(z.value);
+          }
+        `,
+          "moved",
+        );
+      });
+    });
+
     it("rejects mutable borrow while shared borrow is still live", (): void => {
       assertRejectsWithMessage(
         `fn main() {
@@ -248,10 +281,7 @@ describe("must-fail corpus — rejection tests", (): void => {
     });
 
     it.fails("rejects string in cross-type equality comparison", (): void => {
-      assertRejectsWithMessage(
-        `fn main() { print("hello" == 1); }`,
-        "type",
-      );
+      assertRejectsWithMessage(`fn main() { print("hello" == 1); }`, "type");
     });
   });
 

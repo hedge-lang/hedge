@@ -305,13 +305,10 @@ describe("execution tests", (): void => {
       },
     );
 
-    it.fails(
-      "i32 addition wraps on overflow (two's complement)",
-      (): void => {
-        // Rust: 2147483647_i32.wrapping_add(1) = -2147483648
-        // JS: 2147483647 + 1 = 2147483648 (no wrap)
-        assertRunsTo(`fn main() { print(2147483647 + 1); }`, ["-2147483648"]);
-      },
-    );
+    it.fails("i32 addition wraps on overflow (two's complement)", (): void => {
+      // Rust: 2147483647_i32.wrapping_add(1) = -2147483648
+      // JS: 2147483647 + 1 = 2147483648 (no wrap)
+      assertRunsTo(`fn main() { print(2147483647 + 1); }`, ["-2147483648"]);
+    });
   });
 });

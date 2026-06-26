@@ -306,6 +306,9 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "single unresolved name does not cascade into many errors",
       "parse failure emits at least one error diagnostic and no code",
       "parser emits warning for uninitialized immutable let",
+      "diagnostic count and primary message are deterministic across runs",
+      "single unresolved identifier reused twice remains bounded in diagnostics",
+      "parse diagnostics remain actionable with expectation hints",
     ],
   },
   {
@@ -316,6 +319,16 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "defines a stable diagnostic code schema pattern",
       "emitted diagnostics expose a code field with schema-valid IDs",
       "all diagnostics in the core error corpus include schema-valid code ids",
+    ],
+  },
+  {
+    id: "DIAGNOSTICS-QUALITY",
+    description:
+      "Diagnostics quality contracts cover determinism, bounded cascade, and actionable parse errors",
+    testIds: [
+      "diagnostic count and primary message are deterministic across runs",
+      "single unresolved identifier reused twice remains bounded in diagnostics",
+      "parse diagnostics remain actionable with expectation hints",
     ],
   },
   {
@@ -344,7 +357,68 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "rejects non-primitive boundary payloads without explicit unsafe escape hatches",
       "rejects invalid unsafe boundary usage patterns",
       "permits primitive-only safe JS interop calls",
+      "rejects crossing shared references over JS boundary",
+      "rejects crossing mutable references over JS boundary",
+      "generated JS export includes runtime guard checks",
     ],
+  },
+  {
+    id: "MOVE-SEMANTICS",
+    description:
+      "Move semantics enforce ownership transfer and moved-value invalidation",
+    testIds: [
+      "copy types remain usable after assignment",
+      "moved struct binding is unusable after move",
+      "moving the same owned value twice is rejected",
+      "move in one branch invalidates use after merge",
+      "passing owned value by value consumes it",
+      "loop-carried move requires explicit reinitialization",
+      "rejects reading moved struct value",
+      "rejects double move of the same owned binding",
+    ],
+  },
+  {
+    id: "NLL-CORRECTNESS",
+    description:
+      "Non-lexical lifetime behavior is captured as executable borrow contracts",
+    testIds: [
+      "sequential mutable borrows are accepted after last use",
+      "last-use ends shared borrow before later mutable borrow",
+      "branch-local borrow release allows use after join",
+      "loop-scoped mutable borrow can be recreated each iteration",
+      "overlapping mutable and shared borrow is rejected",
+      "lifetime elision for returned reference prefers unambiguous input",
+    ],
+  },
+  {
+    id: "DROP-DETERMINISM",
+    description:
+      "Deterministic cleanup contracts and Symbol.dispose wiring are specified",
+    testIds: [
+      "generated JS emits Symbol.dispose wiring for owned cleanup paths",
+      "drop order for nested owned values is reverse declaration order",
+      "conditional initialization uses drop flags to avoid double-drop",
+      "drop cannot occur while mutable borrow is live",
+      "early drop occurs at last use instead of lexical scope end",
+    ],
+  },
+  {
+    id: "TYPE-SYSTEM-SOUNDNESS",
+    description:
+      "Type inference, narrowing, and rejection behavior are encoded as soundness contracts",
+    testIds: [
+      "type inference succeeds for simple let bindings",
+      "mismatched branch result types are rejected",
+      "struct field initialization enforces declared field types",
+      "arithmetic does not silently coerce bool to integer",
+      "function return type mismatch is rejected",
+    ],
+  },
+  {
+    id: "SKIP-BUDGET-GOVERNANCE",
+    description:
+      "Skip and skipIf usage remains within explicit conformance governance budget",
+    testIds: ["total skip and skipIf count stays within explicit budget"],
   },
   {
     id: "DUAL-COMPILER-PARITY-SPECS",
@@ -408,9 +482,15 @@ export const CROSS_DOMAIN_REQUIRED_RULE_IDS: readonly string[] = [
   "DTS-CONFORMANCE",
   "DIAG-CONTRACT",
   "DIAG-CODE-ID-PLAN",
+  "DIAGNOSTICS-QUALITY",
   "HARNESS-CONTRACT",
   "SOURCE-MAP-CONTRACT",
   "JS-INTEROP-NEGATIVE-SPECS",
+  "MOVE-SEMANTICS",
+  "NLL-CORRECTNESS",
+  "DROP-DETERMINISM",
+  "TYPE-SYSTEM-SOUNDNESS",
+  "SKIP-BUDGET-GOVERNANCE",
   "DUAL-COMPILER-PARITY-SPECS",
   "FIXTURE-MANIFEST",
   "FUZZ-STABILITY",

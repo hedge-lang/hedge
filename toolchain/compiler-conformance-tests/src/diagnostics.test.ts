@@ -46,4 +46,33 @@ describe("diagnostic stability", (): void => {
       "immutable binding declared without a value",
     );
   });
+
+  it("diagnostic count and primary message are deterministic across runs", (): void => {
+    const source = `fn main() { let x = missing + 1; }`;
+    const first = compile(source);
+    const second = compile(source);
+    expect(first.diagnostics.length).toBe(second.diagnostics.length);
+    expect(first.diagnostics[0]?.severity).toBe(
+      second.diagnostics[0]?.severity,
+    );
+    expect(first.diagnostics[0]?.message).toBe(second.diagnostics[0]?.message);
+  });
+
+  it("single unresolved identifier reused twice remains bounded in diagnostics", (): void => {
+    const source = `fn main() { print(missing); print(missing); }`;
+    const result = compile(source);
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors.length).toBeLessThanOrEqual(2);
+  });
+
+  it("parse diagnostics remain actionable with expectation hints", (): void => {
+    const result = compile(`fn main( {`);
+    const firstError = result.diagnostics.find((d) => d.severity === "error");
+    expect(firstError).toBeDefined();
+    expect(
+      firstError?.message.includes("Expected") ||
+        firstError?.message.includes("expected"),
+    ).toBe(true);
+  });
 });
