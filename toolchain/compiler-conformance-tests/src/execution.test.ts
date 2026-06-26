@@ -160,6 +160,56 @@ describe("execution tests", (): void => {
       expect(result?.exitCode).toBe(0);
       expect(result?.stdout[0]).toBe("5");
     });
+
+    it("bitwise AND", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          print(6 & 3);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("2");
+    });
+
+    it("bitwise OR", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          print(6 | 3);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("7");
+    });
+
+    it("bitwise XOR", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          print(6 ^ 3);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("5");
+    });
+
+    it("shift left", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          print(1 << 3);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("8");
+    });
+
+    it("shift right", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          print(16 >> 2);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("4");
+    });
   });
 
   describe("control flow", (): void => {
@@ -386,6 +436,30 @@ describe("execution tests", (): void => {
       expect(result?.stdout[0]).toBe("5");
     });
 
+    it("compound assignment += updates a let write binding", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          let write x = 1;
+          x += 5;
+          print(x);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("6");
+    });
+
+    it("compound assignment -= updates a let write binding", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          let write x = 10;
+          x -= 3;
+          print(x);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("7");
+    });
+
     it.fails("variable shadowing emits correct output", (): void => {
       // compiler bug: JSIM lowers both bindings to `const`, which is illegal in JS block scope
       const result = executeHedgeCode(`
@@ -397,6 +471,30 @@ describe("execution tests", (): void => {
       `);
       expect(result?.exitCode).toBe(0);
       expect(result?.stdout).toEqual(["2"]);
+    });
+  });
+
+  describe("literal types", (): void => {
+    it("float literal prints correctly", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          let x = 3.14;
+          print(x);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("3.14");
+    });
+
+    it("char literal prints as its character", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          let c = 'A';
+          print(c);
+        }
+      `);
+      expect(result?.exitCode).toBe(0);
+      expect(result?.stdout[0]).toBe("A");
     });
   });
 

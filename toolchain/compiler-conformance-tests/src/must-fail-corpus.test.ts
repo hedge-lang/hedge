@@ -317,6 +317,20 @@ describe("must-fail corpus — rejection tests", (): void => {
     });
   });
 
+  describe("operator restrictions", (): void => {
+    it("rejects chained non-associative comparison operators", (): void => {
+      const result = compileHedgeCode(`
+        fn main() {
+          let x = 1 < 2 < 3;
+        }
+      `);
+      expect(hasCompileErrors(result)).toBe(true);
+      expect(
+        getErrorMessages(result).some((m) => m.includes("cannot chain")),
+      ).toBe(true);
+    });
+  });
+
   describe("syntax errors", (): void => {
     it("rejects unclosed function", (): void => {
       const result = compileHedgeCode(`
@@ -352,8 +366,8 @@ describe("must-fail corpus — rejection tests", (): void => {
     });
   });
 
-  describe.skipIf(SLICE_NUMBER > 1)("type errors (Slice 1 only)", (): void => {
-    it("rejects reference expressions (Slice 1)", (): void => {
+  describe("type errors", (): void => {
+    it.skipIf(SLICE_NUMBER > 1)("rejects reference expressions (Slice 1)", (): void => {
       const result = compileHedgeCode(`
         fn main() {
           let x = "a";
@@ -365,6 +379,28 @@ describe("must-fail corpus — rejection tests", (): void => {
         getErrorMessages(result).some((m) =>
           m.includes("borrow expressions are not supported in Slice 1"),
         ),
+      ).toBe(true);
+    });
+    it.fails("rejects comparisons with right-side boolean", (): void => {
+      const result = compileHedgeCode(`
+        fn main() {
+          let x = 1 < (2 < 3);
+        }
+      `);
+      expect(hasCompileErrors(result)).toBe(true);
+      expect(
+        getErrorMessages(result).some((m) => m.includes("types")),
+      ).toBe(true);
+    });
+    it.fails("rejects comparisons with left-side boolean", (): void => {
+      const result = compileHedgeCode(`
+        fn main() {
+          let x = (1 < 2) < 3;
+        }
+      `);
+      expect(hasCompileErrors(result)).toBe(true);
+      expect(
+        getErrorMessages(result).some((m) => m.includes("types")),
       ).toBe(true);
     });
   });
@@ -424,6 +460,19 @@ describe("must-fail corpus — rejection tests", (): void => {
       expect(
         getErrorMessages(result).some((m) =>
           m.includes("not supported in Slice 1"),
+        ),
+      ).toBe(true);
+    });
+
+    it("rejects non-primitive parameter type in function signature", (): void => {
+      const result = compileHedgeCode(`
+        fn foo(x: MyStruct) {}
+        fn main() {}
+      `);
+      expect(hasCompileErrors(result)).toBe(true);
+      expect(
+        getErrorMessages(result).some((m) =>
+          m.includes("not supported in Slice 1 function signatures"),
         ),
       ).toBe(true);
     });

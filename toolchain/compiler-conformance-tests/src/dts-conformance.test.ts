@@ -29,6 +29,14 @@ describe(".d.ts conformance", (): void => {
     expect(dts).toContain("lib module");
   });
 
+  it("pub fn emits export function in JavaScript output", (): void => {
+    const result = compile(`pub fn add(a: i32, b: i32) -> i32 { a + b }`);
+    expect(result.code).toMatchObject(some({ javascript: some(expect.anything()) }));
+    if (isSome(result.code) && isSome(result.code.value.javascript)) {
+      expect(result.code.value.javascript.value).toContain("export function add");
+    }
+  });
+
   it.fails("pub struct emits a typedef declaration", (): void => {
     const result = compile(`pub struct Foo { pub x: i32 }\nfn main() { print(1); }`);
     expect(result.code).toMatchObject(some({ typedef: some(expect.anything()) }));
