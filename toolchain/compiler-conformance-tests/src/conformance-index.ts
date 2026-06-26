@@ -148,6 +148,15 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     ],
   },
   {
+    id: "DIAG-CODE-ID-PLAN",
+    description: "Diagnostic code ID schema and activation path are pinned",
+    testIds: [
+      "defines a stable diagnostic code schema pattern",
+      "documents current contract: diagnostics do not expose code IDs yet",
+      "asserts every emitted diagnostic has a schema-valid code id",
+    ],
+  },
+  {
     id: "HARNESS-CONTRACT",
     description: "Conformance harness behavior remains deterministic",
     testIds: [
@@ -162,6 +171,32 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "documents current contract: compile output does not expose source map artifacts yet",
       "defines activation fixtures for future round-trip validation",
       "maps generated JS locations back to Hedge source spans",
+    ],
+  },
+  {
+    id: "JS-INTEROP-NEGATIVE-STUBS",
+    description: "Negative JS interop boundary coverage is explicitly staged",
+    testIds: [
+      "rejects non-primitive boundary payloads without explicit unsafe escape hatches",
+      "rejects invalid unsafe boundary usage patterns",
+    ],
+  },
+  {
+    id: "DUAL-COMPILER-PARITY-STUBS",
+    description: "Dual-compiler parity harness is explicitly staged",
+    testIds: [
+      "compares bootstrap and self-hosted compiler outputs on shared corpus",
+      "compares bootstrap and self-hosted compiler diagnostics parity",
+    ],
+  },
+  {
+    id: "FIXTURE-MANIFEST",
+    description:
+      "Fixture corpus and seed/version pinning is explicit and stable",
+    testIds: [
+      "pins fixture manifest version",
+      "has stable fuzz seed/count and key lengths",
+      "has stable source-map activation fixture ids",
     ],
   },
   {
@@ -196,8 +231,12 @@ export const CROSS_DOMAIN_REQUIRED_RULE_IDS: readonly string[] = [
   "CLI-DETERMINISM",
   "DTS-CONFORMANCE",
   "DIAG-CONTRACT",
+  "DIAG-CODE-ID-PLAN",
   "HARNESS-CONTRACT",
   "SOURCE-MAP-CONTRACT",
+  "JS-INTEROP-NEGATIVE-STUBS",
+  "DUAL-COMPILER-PARITY-STUBS",
+  "FIXTURE-MANIFEST",
   "FUZZ-STABILITY",
   "PERF-GUARDRAIL",
   "FUTURE-SEMANTICS-STUBS",

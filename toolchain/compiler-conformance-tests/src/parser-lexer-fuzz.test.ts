@@ -1,6 +1,8 @@
 import { compile, parse, tokenize } from "@hedge-lang/compiler";
 import { describe, expect, it } from "vitest";
 
+import { CONFORMANCE_FIXTURE_MANIFEST } from "./fixtures/manifest.js";
+
 function mulberry32(seed: number): () => number {
   let s = seed >>> 0;
   return (): number => {
@@ -31,8 +33,11 @@ function severitySignature(source: string): string {
 
 describe("parser/lexer fuzz stability", (): void => {
   it("seeded fuzz inputs do not throw in tokenize/parse/compile pipeline", (): void => {
-    for (let seed = 1; seed <= 80; seed += 1) {
-      const source = fuzzSource(seed, 120);
+    for (const seed of CONFORMANCE_FIXTURE_MANIFEST.fuzz.seeds) {
+      const source = fuzzSource(
+        seed,
+        CONFORMANCE_FIXTURE_MANIFEST.fuzz.smokeLength,
+      );
       expect(() => {
         const { tokens } = tokenize(source);
         parse(tokens);
@@ -42,8 +47,11 @@ describe("parser/lexer fuzz stability", (): void => {
   });
 
   it("diagnostic severity signature is deterministic for fixed seeded inputs", (): void => {
-    for (const seed of [3, 7, 11, 19, 29, 47, 71]) {
-      const source = fuzzSource(seed, 180);
+    for (const seed of CONFORMANCE_FIXTURE_MANIFEST.fuzz.signatureSeeds) {
+      const source = fuzzSource(
+        seed,
+        CONFORMANCE_FIXTURE_MANIFEST.fuzz.signatureLength,
+      );
       const a = severitySignature(source);
       const b = severitySignature(source);
       expect(a).toBe(b);
