@@ -232,6 +232,29 @@ describe("must-fail corpus — rejection tests", (): void => {
     );
   });
 
+  describe("string type restrictions", (): void => {
+    it.fails("rejects string operand in arithmetic expression", (): void => {
+      assertRejectsWithMessage(
+        `fn main() { let x = "hello" + 1; print(x); }`,
+        "type",
+      );
+    });
+
+    it.fails("rejects string-to-string addition", (): void => {
+      assertRejectsWithMessage(
+        `fn main() { let x = "hello" + " world"; print(x); }`,
+        "type",
+      );
+    });
+
+    it.fails("rejects string in cross-type equality comparison", (): void => {
+      assertRejectsWithMessage(
+        `fn main() { print("hello" == 1); }`,
+        "type",
+      );
+    });
+  });
+
   describe("diagnostic non-cascade", (): void => {
     it("does not emit spurious diagnostics for single missing name", (): void => {
       assertNoCascade(`fn main() { let x = missing_var + 1; }`);

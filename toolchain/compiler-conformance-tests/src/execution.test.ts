@@ -88,6 +88,11 @@ describe("execution tests", (): void => {
     it("shift right", (): void => {
       assertRunsTo(`fn main() { print(16 >> 2); }`, ["4"]);
     });
+
+    it("double negation of integers returns original value", (): void => {
+      assertRunsTo(`fn main() { print(-(-5)); }`, ["5"]);
+      assertRunsTo(`fn main() { print(-(-42)); }`, ["42"]);
+    });
   });
 
   describe("control flow", (): void => {
@@ -160,6 +165,44 @@ describe("execution tests", (): void => {
 
     it("evaluates || correctly", (): void => {
       assertRunsTo(`fn main() { print(false || true); }`, ["true"]);
+    });
+  });
+
+  describe("operator precedence", (): void => {
+    it("logical-and binds tighter than logical-or", (): void => {
+      // true || (false && false) = true; wrong grouping gives false
+      assertRunsTo(`fn main() { print(true || false && false); }`, ["true"]);
+    });
+
+    it("comparison binds tighter than logical-and", (): void => {
+      // (1 + 1 == 2) && (3 > 1) = true && true = true
+      assertRunsTo(`fn main() { print(1 + 1 == 2 && 3 > 1); }`, ["true"]);
+    });
+
+    it("arithmetic binds tighter than comparison", (): void => {
+      // (1 + 2) == 3, not 1 + (2 == 3)
+      assertRunsTo(`fn main() { print(1 + 2 == 3); }`, ["true"]);
+    });
+
+    it("unary minus binds tighter than addition", (): void => {
+      // (-3) + 4 = 1, not -(3 + 4) = -7
+      assertRunsTo(`fn main() { print(-3 + 4); }`, ["1"]);
+    });
+
+    it("unary not binds tighter than logical-and", (): void => {
+      // (!true) && false = false; !(true && false) = true (wrong grouping)
+      assertRunsTo(`fn main() { print(!true && false); }`, ["false"]);
+    });
+
+    it("bitwise-and binds tighter than equality (Rust semantics)", (): void => {
+      // Rust: (6 & 3) == 2 = 2 == 2 = true
+      // JS-style grouping would give: 6 & (3 == 2) = 6 & false = 0
+      assertRunsTo(`fn main() { print(6 & 3 == 2); }`, ["true"]);
+    });
+
+    it("bitwise-or binds tighter than equality (Rust semantics)", (): void => {
+      // Rust: (5 | 2) == 7 = 7 == 7 = true
+      assertRunsTo(`fn main() { print(5 | 2 == 7); }`, ["true"]);
     });
   });
 
@@ -250,5 +293,25 @@ describe("execution tests", (): void => {
       const result = executeHedgeCode(`fn main() { print(unknown_var); }`);
       expect(result).toBeNull();
     });
+  });
+
+  describe("runtime behavior: integer safety", (): void => {
+    it.fails(
+      "integer division by zero causes runtime error, not Infinity",
+      (): void => {
+        // Rust: panics at runtime. JS: 1 / 0 = Infinity, exitCode 0.
+        const result = executeHedgeCode(`fn main() { print(1 / 0); }`);
+        expect(result?.exitCode).not.toBe(0);
+      },
+    );
+
+    it.fails(
+      "i32 addition wraps on overflow (two's complement)",
+      (): void => {
+        // Rust: 2147483647_i32.wrapping_add(1) = -2147483648
+        // JS: 2147483647 + 1 = 2147483648 (no wrap)
+        assertRunsTo(`fn main() { print(2147483647 + 1); }`, ["-2147483648"]);
+      },
+    );
   });
 });

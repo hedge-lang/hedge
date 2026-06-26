@@ -111,6 +111,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "bitwise XOR",
       "shift left",
       "shift right",
+      "double negation of integers returns original value",
     ],
   },
   {
@@ -205,6 +206,39 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "rejects equality comparison between mismatched types",
     ],
   },
+  {
+    id: "EXEC-PRECEDENCE",
+    description:
+      "Binary and unary operator precedence matches Rust semantics end-to-end",
+    testIds: [
+      "logical-and binds tighter than logical-or",
+      "comparison binds tighter than logical-and",
+      "arithmetic binds tighter than comparison",
+      "unary minus binds tighter than addition",
+      "unary not binds tighter than logical-and",
+      "bitwise-and binds tighter than equality (Rust semantics)",
+      "bitwise-or binds tighter than equality (Rust semantics)",
+    ],
+  },
+  {
+    id: "EXEC-INT-SAFETY",
+    description:
+      "Integer division traps on zero and addition wraps on overflow rather than producing floats",
+    testIds: [
+      "integer division by zero causes runtime error, not Infinity",
+      "i32 addition wraps on overflow (two's complement)",
+    ],
+  },
+  {
+    id: "PROP-STRING-SAFETY",
+    description:
+      "String type is not implicitly coerced in arithmetic or cross-type comparisons",
+    testIds: [
+      "rejects string operand in arithmetic expression",
+      "rejects string-to-string addition",
+      "rejects string in cross-type equality comparison",
+    ],
+  },
 ];
 
 export const CORE_REQUIRED_RULE_IDS: readonly string[] = [
@@ -226,6 +260,9 @@ export const CORE_REQUIRED_RULE_IDS: readonly string[] = [
   "PROP-INT-SEMANTICS",
   "PROP-ALGEBRAIC-LAWS",
   "PROP-TYPE-SAFETY",
+  "EXEC-PRECEDENCE",
+  "EXEC-INT-SAFETY",
+  "PROP-STRING-SAFETY",
 ];
 
 export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
