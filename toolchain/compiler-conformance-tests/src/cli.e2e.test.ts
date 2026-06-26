@@ -76,4 +76,31 @@ describe("cli e2e", (): void => {
     expect(result.status).toBe(1);
     expect(result.stderr.length).toBeGreaterThan(0);
   });
+
+  it("build output is deterministic across repeated runs", async (): Promise<void> => {
+    const dir = await mkdtemp(join(tmpdir(), "hedge-cli-determinism-"));
+    try {
+      const sourcePath = join(dir, "stable.hed");
+      await writeFile(
+        sourcePath,
+        `//! stable module\npub fn stable(x: i32) -> i32 { x + 1 }\n`,
+        "utf8",
+      );
+
+      const first = runCli(["build", sourcePath]);
+      expect(first.status).toBe(0);
+      const firstJs = await readFile(join(dir, "stable.js"), "utf8");
+      const firstDts = await readFile(join(dir, "stable.d.ts"), "utf8");
+
+      const second = runCli(["build", sourcePath]);
+      expect(second.status).toBe(0);
+      const secondJs = await readFile(join(dir, "stable.js"), "utf8");
+      const secondDts = await readFile(join(dir, "stable.d.ts"), "utf8");
+
+      expect(secondJs).toBe(firstJs);
+      expect(secondDts).toBe(firstDts);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

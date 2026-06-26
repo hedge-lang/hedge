@@ -26,16 +26,19 @@ describe("diagnostic stability", (): void => {
     expect(errors[0]?.message).toContain("missing");
   });
 
-  it.skipIf(SLICE_NUMBER > 1)("borrow-expression rejection includes a concrete source span", (): void => {
-    const source = `fn main() { let x = "a"; let r = &x; }`;
-    const result = compile(source);
-    const firstError = result.diagnostics.find((d) => d.severity === "error");
-    expect(firstError).toBeDefined();
-    expect(firstError?.message).toContain(
-      "borrow expressions are not supported in Slice 1",
-    );
-    expect(firstError?.span.kind).toBe("Some");
-  });
+  it.skipIf(SLICE_NUMBER > 1)(
+    "borrow-expression rejection includes a concrete source span",
+    (): void => {
+      const source = `fn main() { let x = "a"; let r = &x; }`;
+      const result = compile(source);
+      const firstError = result.diagnostics.find((d) => d.severity === "error");
+      expect(firstError).toBeDefined();
+      expect(firstError?.message).toContain(
+        "borrow expressions are not supported in Slice 1",
+      );
+      expect(firstError?.span.kind).toBe("Some");
+    },
+  );
 
   it("parse failure emits at least one error diagnostic and no code", (): void => {
     const result = compile(`fn main(`);
