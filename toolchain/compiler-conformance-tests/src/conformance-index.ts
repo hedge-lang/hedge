@@ -149,11 +149,12 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   },
   {
     id: "DIAG-CODE-ID-PLAN",
-    description: "Diagnostic code ID schema and activation path are pinned",
+    description:
+      "Diagnostic code IDs are schema-validated in active conformance",
     testIds: [
       "defines a stable diagnostic code schema pattern",
-      "documents current contract: diagnostics do not expose code IDs yet",
-      "asserts every emitted diagnostic has a schema-valid code id",
+      "emitted diagnostics expose a code field with schema-valid IDs",
+      "all diagnostics in the core error corpus include schema-valid code ids",
     ],
   },
   {
@@ -166,24 +167,28 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   },
   {
     id: "SOURCE-MAP-CONTRACT",
-    description: "Source-map status is explicitly tracked in conformance tests",
+    description:
+      "Source-map behavior is specified by active conformance assertions",
     testIds: [
-      "documents current contract: compile output does not expose source map artifacts yet",
-      "defines activation fixtures for future round-trip validation",
+      "compile output exposes source-map artifacts with mapping table",
+      "fixtures compile to JS snippets that have covering source-map mappings",
       "maps generated JS locations back to Hedge source spans",
     ],
   },
   {
-    id: "JS-INTEROP-NEGATIVE-STUBS",
-    description: "Negative JS interop boundary coverage is explicitly staged",
+    id: "JS-INTEROP-NEGATIVE-SPECS",
+    description:
+      "Negative JS interop boundary behavior is defined as executable specs",
     testIds: [
       "rejects non-primitive boundary payloads without explicit unsafe escape hatches",
       "rejects invalid unsafe boundary usage patterns",
+      "permits primitive-only safe JS interop calls",
     ],
   },
   {
-    id: "DUAL-COMPILER-PARITY-STUBS",
-    description: "Dual-compiler parity harness is explicitly staged",
+    id: "DUAL-COMPILER-PARITY-SPECS",
+    description:
+      "Dual-compiler parity assertions are active once harness prerequisites are configured",
     testIds: [
       "compares bootstrap and self-hosted compiler outputs on shared corpus",
       "compares bootstrap and self-hosted compiler diagnostics parity",
@@ -211,8 +216,18 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     id: "PERF-GUARDRAIL",
     description: "Compile performance stays within coarse guardrail thresholds",
     testIds: [
+      "pins performance baseline thresholds for explicit rebaseline review",
       "single corpus pass remains under a coarse budget",
       "repeated corpus compilation stays within regression guardrail budget",
+    ],
+  },
+  {
+    id: "SPEC-FIRST-GOVERNANCE",
+    description:
+      "Spec-first test suites avoid long-lived skips and keep harness-boundary skips explicit",
+    testIds: [
+      "source-map, diagnostic-code-id, and JS-interop suites avoid long-lived it.skip placeholders",
+      "dual-compiler parity keeps skip guards only at the harness boundary",
     ],
   },
   {
@@ -234,10 +249,11 @@ export const CROSS_DOMAIN_REQUIRED_RULE_IDS: readonly string[] = [
   "DIAG-CODE-ID-PLAN",
   "HARNESS-CONTRACT",
   "SOURCE-MAP-CONTRACT",
-  "JS-INTEROP-NEGATIVE-STUBS",
-  "DUAL-COMPILER-PARITY-STUBS",
+  "JS-INTEROP-NEGATIVE-SPECS",
+  "DUAL-COMPILER-PARITY-SPECS",
   "FIXTURE-MANIFEST",
   "FUZZ-STABILITY",
   "PERF-GUARDRAIL",
+  "SPEC-FIRST-GOVERNANCE",
   "FUTURE-SEMANTICS-STUBS",
 ];
