@@ -188,17 +188,17 @@ function evalIfExpr(expr: IfExpression, env: RefEnv): RefValue {
 function applyArithOp(op: BinaryOperator, l: number, r: number): RefValue {
   switch (op) {
     case "Add":
-      return ((l|0) + (r|0))|0;
+      return ((l | 0) + (r | 0)) | 0;
     case "Sub":
-      return ((l|0) - (r|0))|0;
+      return ((l | 0) - (r | 0)) | 0;
     case "Mul":
-      return ((l|0) * (r|0))|0;
+      return ((l | 0) * (r | 0)) | 0;
     case "Div":
       if (r === 0) throw new RangeError("attempt to divide by zero");
-      return Math.trunc((l|0) / (r|0)) | 0;
+      return Math.trunc((l | 0) / (r | 0)) | 0;
     case "Rem":
       if (r === 0) throw new RangeError("attempt to divide by zero");
-      return ((l|0) % (r|0)) | 0;
+      return ((l | 0) % (r | 0)) | 0;
     default:
       throw new Error(`SKIP: not an arithmetic op "${op}"`);
   }
@@ -285,17 +285,20 @@ function evalExpr(expr: Expression, env: RefEnv): RefValue {
       );
     case "UnaryExpression": {
       const val = evalExpr(expr.operand, env);
-      if (expr.operator === "Not") {
-        if (typeof val !== "boolean")
-          throw new Error("SKIP: Not applied to non-boolean");
-        return !val;
+      switch (expr.operator) {
+        case "Not": {
+          if (typeof val !== "boolean")
+            throw new Error("SKIP: Not applied to non-boolean");
+          return !val;
+        }
+        case "Neg": {
+          if (typeof val !== "number")
+            throw new Error("SKIP: Neg applied to non-number");
+          return -val | 0;
+        }
+        default:
+          throw new Error("Unexpected UnaryExpression");
       }
-      if (expr.operator === "Neg") {
-        if (typeof val !== "number")
-          throw new Error("SKIP: Neg applied to non-number");
-        return -val | 0;
-      }
-      throw new Error("Unexpected UnaryExpression");
     }
     case "IfExpression":
       return evalIfExpr(expr, env);
@@ -620,7 +623,12 @@ describe("differential: integer semantics", (): void => {
   });
 
   it("diff-div-zero: division by zero throws", (): void => {
-    expect(() => { assertI32("1 / 0"); }).toThrow("divide by zero");
+    expect(() => {
+      assertI32("1 / 0");
+    }).toThrow("divide by zero");
+    expect(() => {
+      assertI32("1 % 0");
+    }).toThrow("divide by zero");
   });
 });
 
