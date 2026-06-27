@@ -1,5 +1,5 @@
 import { isNone, isSome, none, type Option, some } from "../../option.js";
-import type { Attribute } from "../../parser/ast.js";
+import type { Attribute } from "../../semantics/ast.js";
 import type { DocComment } from "../ast.js";
 
 export function toDocComment(

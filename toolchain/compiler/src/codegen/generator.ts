@@ -3,6 +3,7 @@ import { isSome, none, some } from "../option.js";
 import type {
   AssignOperator,
   BinaryOperator,
+  NumericKind,
   UnaryOperator,
   BlockStatement,
   DocComment,
@@ -139,6 +140,40 @@ function emitDocComment(doc: DocComment, isModule: boolean = false): string {
   return ["/**", ...body, " */"].join("\n");
 }
 
+function emitNumericBinaryOp(
+  nk: NumericKind,
+  op: BinaryOperator,
+  l: string,
+  r: string,
+): string {
+  const isDivision = op === "Div" || op === "Rem";
+  const jsOp = BINARY_OPS[op];
+  const zero = nk.kind === "bigint" ? "0n" : "0";
+  const divGuard = isDivision
+    ? `(${r}) === ${zero} ? (() => { throw new RangeError("attempt to divide by zero"); })() : `
+    : "";
+  const inner = `${divGuard}${l} ${jsOp} ${r}`;
+
+  switch (nk.kind) {
+    case "signed":
+      if (nk.bits === 32) {
+        return `((${inner})|0)`;
+      }
+      return `(((${inner}) << ${32 - nk.bits}) >> ${32 - nk.bits})`;
+    case "unsigned":
+      if (nk.bits === 32) return `((${inner})>>>0)`;
+      return `((${inner})&${(1 << nk.bits) - 1})`;
+    case "bigint":
+      return nk.signed
+        ? `BigInt.asIntN(64,${inner})`
+        : `BigInt.asUintN(64,${inner})`;
+    case "float":
+      return nk.bits === 32 ? `Math.fround(${inner})` : `(${inner})`;
+    default:
+      assertNever(nk, `Unexpected numeric kind: ${JSON.stringify(nk)}`);
+  }
+}
+
 // eslint-disable-next-line complexity -- This is a routing function
 function emitExpression(expression: Expression): string {
   switch (expression.kind) {
@@ -163,8 +198,15 @@ function emitExpression(expression: Expression): string {
           : needsAtLeast(expression.callee, "CallExpression");
       return `${callee}(${args})`;
     }
-    case "BinaryExpression":
-      return `${needsAtLeast(expression.left, expression.operator)} ${BINARY_OPS[expression.operator]} ${needsStrictlyAbove(expression.right, expression.operator)}`;
+    case "BinaryExpression": {
+      const { operator: op, left, right, numericKind } = expression;
+      const l = needsAtLeast(left, op);
+      const r = needsStrictlyAbove(right, op);
+      if (isSome(numericKind)) {
+        return emitNumericBinaryOp(numericKind.value, op, l, r);
+      }
+      return `${l} ${BINARY_OPS[op]} ${r}`;
+    }
     case "UnaryExpression":
       return `(${UNARY_OPS[expression.operator]}${emitExpression(expression.operand)})`;
     case "AssignExpression":

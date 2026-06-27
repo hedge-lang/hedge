@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { none, some } from "../../option.js";
-import type { Attribute } from "../../parser/ast.js";
+import type { Attribute } from "../../semantics/ast.js";
 import { toDocComment } from "./doc-comment.js";
 
 describe("toDocComment", () => {
@@ -30,6 +30,7 @@ describe("toDocComment", () => {
               kind: "StringLiteral",
               tokenId: 1,
               value: "Hello, world!",
+              type: { kind: "PrimitiveStringType" as const },
             }),
           },
         ]),
@@ -49,6 +50,7 @@ describe("toDocComment", () => {
               kind: "StringLiteral",
               tokenId: 1,
               value: "Hello, world!",
+              type: { kind: "PrimitiveStringType" as const },
             }),
           },
           {
@@ -74,6 +76,7 @@ describe("toDocComment", () => {
               kind: "StringLiteral",
               tokenId: 1,
               value: "Exclude",
+              type: { kind: "PrimitiveStringType" as const },
             }),
           },
           {
@@ -85,6 +88,7 @@ describe("toDocComment", () => {
               kind: "StringLiteral",
               tokenId: 1,
               value: "Exclude",
+              type: { kind: "PrimitiveStringType" as const },
             }),
           },
           {
@@ -96,6 +100,7 @@ describe("toDocComment", () => {
               kind: "StringLiteral",
               tokenId: 1,
               value: "Exclude",
+              type: { kind: "PrimitiveStringType" as const },
             }),
           },
         ]),

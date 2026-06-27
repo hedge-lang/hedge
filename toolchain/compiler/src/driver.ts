@@ -61,13 +61,15 @@ export function compile(source: string): CompileResult {
     };
   }
   const program = parseOutcome.value;
+  const analysis = analyze(program, tokens);
+  const borrowChecked = checkBorrows(program, tokens);
   const diagnostics = [
     ...lexDiagnostics,
-    ...analyze(program, tokens).diagnostics,
-    ...checkBorrows(program, tokens),
+    ...analysis.diagnostics,
+    ...borrowChecked,
   ];
   if (hasError(diagnostics)) {
     return { diagnostics, code: none() };
   }
-  return { diagnostics, code: some(generate(toJsim(optimize(program)))) };
+  return { diagnostics, code: some(generate(toJsim(optimize(analysis.program)))) };
 }
