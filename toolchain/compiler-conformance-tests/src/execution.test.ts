@@ -325,6 +325,13 @@ describe("execution tests", (): void => {
       expect(result?.exitCode).not.toBe(0);
     });
 
+    it("float division by zero yields Infinity (IEEE 754)", (): void => {
+      assertRunsTo(
+        `fn main() { let a = 1.0f32; let b = 0.0f32; print(a / b); }`,
+        ["Infinity"],
+      );
+    });
+
     it("i32 addition wraps on overflow (two's complement)", (): void => {
       assertRunsTo(`fn main() { print(2147483647 + 1); }`, ["-2147483648"]);
     });

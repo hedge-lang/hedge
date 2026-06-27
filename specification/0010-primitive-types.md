@@ -9,26 +9,28 @@ are `bigint`. The index and size types `usize` and `isize` are `number`-backed
 integers within the JavaScript array range, where lengths and indices are at most
 2³²−1, and they are bounds-checked like the rest.
 
-Integer arithmetic is checked by default, so an operation that overflows its type
-panics:
+Integer arithmetic wraps on overflow using two's complement, the same in every
+build. There is no implicit overflow trap and no difference between a debug build
+and a release build. The compiled representation for `i32` arithmetic uses the
+JavaScript bitwise-OR trick to stay in range at zero cost:
 
 ```js
 // i32 a + b
-const r = a + b;
-if (r > 2147483647 || r < -2147483648) throw new HedgePanic("i32 overflow");
+(a + b) | 0;
 ```
 
-For a defined out-of-range result, use the explicit method families:
+Division by zero is a runtime error that throws regardless of build mode.
 
-- `wrapping_add`, `wrapping_mul`, and so on wrap around the type's width.
-- `saturating_add` and its kin clamp to the type's bounds.
-- `checked_add` and its kin return `Option`, yielding `None` on overflow.
-- `overflowing_add` and its kin return a `(value, overflowed)` pair.
+For explicit control over overflow, Hedge provides named method families that make
+the intent visible at the call site rather than relying on silent wraparound:
 
-A check is never silently dropped, so a debug build and a release build behave
-identically. The compiler removes a check only when it can prove the check can
-never fire, because the operands' ranges guarantee the result stays in bounds, and
-eliding a check that could never trigger cannot change behavior.
+- `wrapping_add`, `wrapping_mul`, and so on — explicit wrap, same as the default.
+- `saturating_add` and its kin — clamp to the type's bounds.
+- `checked_add` and its kin — return `Option`, yielding `None` on overflow.
+- `overflowing_add` and its kin — return a `(value, overflowed)` pair.
+
+These methods will be available once the standard library reaches the integer
+arithmetic slice.
 
 ## Floating point
 
@@ -104,18 +106,13 @@ boundary as a `string`.
 
 ## Performance
 
-A checked operation is the operation together with a comparison and a cold,
-never-taken throw branch, which is the same cost class as the bounds check
-JavaScript already performs on every `arr[i]`. Ordinary application code pays
-nothing measurable. An arithmetic-bound integer hot loop, where overflow is
-checked, runs roughly 1.2 to 2 times the cost of the unchecked equivalent; float
-arithmetic, both `f32`/`f64` and the `Finite` newtypes, is unchecked and runs at
-native speed, with `Finite` validating only at comparison or extraction.
-Operations on `i64` and `u64` are dominated by the cost of `bigint` regardless of
-checking, so they are best avoided in hot paths unless 64 bits are genuinely
-required.
+Integer arithmetic uses the bitwise-OR trick (`|0` for 32-bit, bit-shifts for
+narrower widths) to enforce range at the JS level, which is zero-cost after JIT
+warmup — engines recognize the pattern as a type hint and elide the operation.
+Float arithmetic (`f32`/`f64`) is raw IEEE at native speed; `Finite` newtypes add
+a check only at comparison or extraction, not after every operation. Operations on
+`i64` and `u64` are dominated by the cost of `bigint` regardless of any wrapping,
+so they are best avoided in hot paths unless 64 bits are genuinely required.
 
-For a kernel that needs native speed, drop to raw `f32`/`f64`, use the `wrapping_*`
-integer methods, or keep bulk data in typed-array [collections](0012-collections.md). The compiler also
-removes any check it can prove will never fire, so arithmetic on provably in-range
-values costs nothing.
+For bulk numeric work keep data in typed-array [collections](0012-collections.md),
+which avoid boxing and let the engine use SIMD paths.
