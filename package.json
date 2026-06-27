@@ -20,6 +20,7 @@
     "check:types": "tsc --noEmit",
     "check:format": "prettier --check .",
     "check:deps": "knip",
+    "check:proof-refs": "node --experimental-strip-types scripts/check-proof-refs.ts",
     "conformance": "npm test --workspace=@hedge-lang/compiler-conformance-tests",
     "fix": "npm-run-all --print-label --print-name fix:*",
     "fix:lint": "eslint --fix --max-warnings=0 .",
