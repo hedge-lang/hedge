@@ -319,18 +319,15 @@ describe("execution tests", (): void => {
   });
 
   describe("runtime behavior: integer safety", (): void => {
-    it.fails(
+    it(
       "integer division by zero causes runtime error, not Infinity",
       (): void => {
-        // Rust: panics at runtime. JS: 1 / 0 = Infinity, exitCode 0.
         const result = executeHedgeCode(`fn main() { print(1 / 0); }`);
         expect(result?.exitCode).not.toBe(0);
       },
     );
 
-    it.fails("i32 addition wraps on overflow (two's complement)", (): void => {
-      // Rust: 2147483647_i32.wrapping_add(1) = -2147483648
-      // JS: 2147483647 + 1 = 2147483648 (no wrap)
+    it("i32 addition wraps on overflow (two's complement)", (): void => {
       assertRunsTo(`fn main() { print(2147483647 + 1); }`, ["-2147483648"]);
     });
   });

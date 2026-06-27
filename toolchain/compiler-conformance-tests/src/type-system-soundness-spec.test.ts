@@ -44,7 +44,7 @@ describe("type system soundness spec", (): void => {
     },
   );
 
-  it.fails("arithmetic does not silently coerce bool to integer", (): void => {
+  it("arithmetic does not silently coerce bool to integer", (): void => {
     assertRejectsWithMessage(
       `
       fn main() {

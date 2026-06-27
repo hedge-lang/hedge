@@ -2,6 +2,8 @@ export interface ConformanceRule {
   readonly id: string;
   readonly description: string;
   readonly testIds: readonly string[];
+  readonly specRefs?: readonly string[];
+  readonly proofRefs?: readonly string[];
 }
 
 export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
@@ -9,6 +11,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     id: "PROP-WHITESPACE",
     description:
       "Extra whitespace and comments do not change the parsed AST shape",
+    specRefs: ["0008-expressions-and-control-flow.md"],
     testIds: [
       "whitespace-invariance: extra spaces/newlines do not change AST shape",
       "comment invariance: line comments between tokens do not change AST shape",
@@ -19,6 +22,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     id: "PROP-ALPHA-RENAME",
     description:
       "Alpha-renaming local identifiers preserves diagnostic count and severity",
+    specRefs: ["0008-expressions-and-control-flow.md"],
     testIds: [
       "alpha-rename-preserves-diagnostics: renaming locals keeps diagnostic count",
       "alpha-rename preserves error-free status across multiple generated seeds",
@@ -28,6 +32,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     id: "PROP-PARENS",
     description:
       "Redundant parentheses around atoms/expressions do not change the AST",
+    specRefs: ["0008-expressions-and-control-flow.md"],
     testIds: [
       "parens-atom-invariance: (42) and 42 parse to same AST",
       "parens-subexpr-invariance: redundant outer parens do not change AST",
@@ -38,12 +43,17 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   {
     id: "PROP-DETERMINISM",
     description: "Compiling the same source twice produces identical output",
+    specRefs: ["0002-execution-model.md"],
     testIds: ["determinism: same source compiles to identical output twice"],
   },
   {
     id: "DIFF-INT-ARITH",
     description:
       "Compiler result matches reference evaluator for integer arithmetic",
+    specRefs: [
+      "0008-expressions-and-control-flow.md",
+      "0010-primitive-types.md",
+    ],
     testIds: [
       "diff-literal: integer literal compiles and matches reference",
       "diff-add: addition compiles and matches reference",
@@ -56,6 +66,10 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     id: "DIFF-CMP",
     description:
       "Compiler result matches reference evaluator for comparison expressions",
+    specRefs: [
+      "0008-expressions-and-control-flow.md",
+      "0010-primitive-types.md",
+    ],
     testIds: [
       "diff-eq: equality comparison compiles and matches reference",
       "diff-lt: less-than comparison compiles and matches reference",
@@ -72,6 +86,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     id: "DIFF-IF",
     description:
       "Compiler result matches reference evaluator for if-else expressions",
+    specRefs: ["0008-expressions-and-control-flow.md"],
     testIds: [
       "diff-if-true: if true { 1 } else { 2 } evaluates to 1",
       "diff-if-false: if false { 1 } else { 2 } evaluates to 2",
@@ -81,6 +96,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   {
     id: "DIFF-LET",
     description: "Compiler result matches reference evaluator for let bindings",
+    specRefs: ["0008-expressions-and-control-flow.md"],
     testIds: [
       "diff-let-binding: let binding is available in trailing expression",
     ],
@@ -89,6 +105,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     id: "DIFF-GENERATED",
     description:
       "Compiler result matches reference evaluator on generated programs",
+    specRefs: ["0008-expressions-and-control-flow.md"],
     testIds: [
       "diff-generated-seed-1: generated program matches reference evaluator",
       "diff-generated-seed-2: generated program matches reference evaluator",
@@ -98,6 +115,10 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   {
     id: "EXEC-ARITHMETIC",
     description: "Arithmetic expressions execute correctly end-to-end",
+    specRefs: [
+      "0008-expressions-and-control-flow.md",
+      "0010-primitive-types.md",
+    ],
     testIds: [
       "evaluates 1 + 2 correctly",
       "respects operator precedence",
@@ -119,6 +140,10 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     id: "EXEC-COMPARISONS",
     description:
       "Comparison and logical expressions execute correctly end-to-end",
+    specRefs: [
+      "0008-expressions-and-control-flow.md",
+      "0010-primitive-types.md",
+    ],
     testIds: [
       "evaluates == correctly",
       "evaluates < correctly",
@@ -133,6 +158,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   {
     id: "EXEC-CONTROL-FLOW",
     description: "Control flow constructs execute correctly end-to-end",
+    specRefs: ["0008-expressions-and-control-flow.md"],
     testIds: [
       "executes if-true branch",
       "skips if-false branch",
@@ -144,6 +170,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   {
     id: "EXEC-BINDINGS",
     description: "Let bindings and block scoping execute correctly end-to-end",
+    specRefs: ["0008-expressions-and-control-flow.md", "0004-mutability.md"],
     testIds: [
       "executes block statements",
       "block with trailing expression",
@@ -158,6 +185,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     id: "EXEC-STRUCTS",
     description:
       "Struct declarations and field access execute correctly end-to-end",
+    specRefs: ["0013-structs.md"],
     testIds: [
       "struct declaration compiles alongside fn main",
       "struct literal field access evaluates correctly",
@@ -166,6 +194,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   {
     id: "EXEC-LITERALS",
     description: "Literal types beyond integers execute correctly end-to-end",
+    specRefs: ["0010-primitive-types.md"],
     testIds: [
       "float literal prints correctly",
       "char literal prints as its character",
@@ -175,6 +204,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     id: "PROP-INT-SEMANTICS",
     description:
       "Integer arithmetic produces i32 truncating semantics, not JS float semantics",
+    specRefs: ["0010-primitive-types.md", "0008-expressions-and-control-flow.md"],
     testIds: [
       "diff-div-truncate: integer division truncates toward zero",
       "diff-div-negative: negative dividend truncates toward zero not floor",
@@ -183,6 +213,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   {
     id: "PROP-ALGEBRAIC-LAWS",
     description: "Integer and boolean operations satisfy algebraic invariants",
+    specRefs: ["0008-expressions-and-control-flow.md", "0010-primitive-types.md"],
     testIds: [
       "prop-add-commutative: a + b = b + a for integer constants",
       "prop-mul-commutative: a * b = b * a",
@@ -199,6 +230,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   {
     id: "PROP-TYPE-SAFETY",
     description: "Type system rejects ill-typed programs without coercion",
+    specRefs: ["0010-primitive-types.md", "0008-expressions-and-control-flow.md"],
     testIds: [
       "rejects direct assignment to immutable let binding",
       "rejects compound assignment to immutable let binding",
@@ -214,6 +246,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     id: "EXEC-PRECEDENCE",
     description:
       "Binary and unary operator precedence matches Rust semantics end-to-end",
+    specRefs: ["0008-expressions-and-control-flow.md"],
     testIds: [
       "logical-and binds tighter than logical-or",
       "comparison binds tighter than logical-and",
@@ -230,6 +263,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     id: "EXEC-INT-SAFETY",
     description:
       "Integer division traps on zero and addition wraps on overflow rather than producing floats",
+    specRefs: ["0010-primitive-types.md"],
     testIds: [
       "integer division by zero causes runtime error, not Infinity",
       "i32 addition wraps on overflow (two's complement)",
@@ -239,6 +273,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     id: "PROP-STRING-SAFETY",
     description:
       "String type is not implicitly coerced in arithmetic or cross-type comparisons",
+    specRefs: ["0011-strings.md", "0010-primitive-types.md"],
     testIds: [
       "rejects string operand in arithmetic expression",
       "rejects string-to-string addition",
@@ -249,6 +284,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     id: "PROP-STRUCT-SAFETY",
     description:
       "Struct literal initialization and field access are validated against the struct declaration",
+    specRefs: ["0013-structs.md"],
     testIds: [
       "rejects struct literal with missing required field",
       "rejects struct literal with unknown field",

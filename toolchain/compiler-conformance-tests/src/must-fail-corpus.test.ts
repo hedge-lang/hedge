@@ -257,14 +257,14 @@ describe("must-fail corpus — rejection tests", (): void => {
       );
     });
 
-    it.fails(
+    it(
       "rejects equality comparison between mismatched types",
       (): void => {
         assertRejectsWithMessage(`fn main() { print(1 == "1"); }`, "type");
       },
     );
 
-    it.fails(
+    it(
       "rejects let binding type annotation mismatch: integer vs bool annotation",
       (): void => {
         assertRejectsWithMessage(
@@ -274,7 +274,7 @@ describe("must-fail corpus — rejection tests", (): void => {
       },
     );
 
-    it.fails("rejects float assigned to i32-annotated binding", (): void => {
+    it("rejects float assigned to i32-annotated binding", (): void => {
       assertRejectsWithMessage(
         `fn main() { let x: i32 = 3.14; print(x); }`,
         "type",
@@ -283,7 +283,7 @@ describe("must-fail corpus — rejection tests", (): void => {
   });
 
   describe("string type restrictions", (): void => {
-    it.fails("rejects string operand in arithmetic expression", (): void => {
+    it("rejects string operand in arithmetic expression", (): void => {
       assertRejectsWithMessage(
         `fn main() { let x = "hello" + 1; print(x); }`,
         "type",
@@ -297,7 +297,7 @@ describe("must-fail corpus — rejection tests", (): void => {
       );
     });
 
-    it.fails("rejects string in cross-type equality comparison", (): void => {
+    it("rejects string in cross-type equality comparison", (): void => {
       assertRejectsWithMessage(`fn main() { print("hello" == 1); }`, "type");
     });
   });

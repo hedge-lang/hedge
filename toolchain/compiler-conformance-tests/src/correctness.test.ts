@@ -586,10 +586,9 @@ describe("differential: generated programs", (): void => {
 // ---------------------------------------------------------------------------
 
 describe("differential: integer semantics", (): void => {
-  it.fails(
+  it(
     "diff-div-truncate: integer division truncates toward zero",
     (): void => {
-      // generator.ts emits plain `/` — `7 / 2` compiles to JS `3.5`, not Rust's `3`
       assertI32("7 / 2");
       assertI32("1 / 2");
 
