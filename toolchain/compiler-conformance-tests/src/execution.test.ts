@@ -257,10 +257,9 @@ describe("execution tests", (): void => {
     });
 
     it("multiple assignments to let write binding update sequentially", (): void => {
-      assertRunsTo(
-        `fn main() { let write x = 1; x = 2; x = 3; print(x); }`,
-        ["3"],
-      );
+      assertRunsTo(`fn main() { let write x = 1; x = 2; x = 3; print(x); }`, [
+        "3",
+      ]);
     });
 
     it.fails("inner scope shadow does not affect outer binding", (): void => {
@@ -319,13 +318,10 @@ describe("execution tests", (): void => {
   });
 
   describe("runtime behavior: integer safety", (): void => {
-    it(
-      "integer division by zero causes runtime error, not Infinity",
-      (): void => {
-        const result = executeHedgeCode(`fn main() { print(1 / 0); }`);
-        expect(result?.exitCode).not.toBe(0);
-      },
-    );
+    it("integer division by zero causes runtime error, not Infinity", (): void => {
+      const result = executeHedgeCode(`fn main() { print(1 / 0); }`);
+      expect(result?.exitCode).not.toBe(0);
+    });
 
     it("i32 addition wraps on overflow (two's complement)", (): void => {
       assertRunsTo(`fn main() { print(2147483647 + 1); }`, ["-2147483648"]);

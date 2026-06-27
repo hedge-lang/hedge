@@ -204,7 +204,10 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     id: "PROP-INT-SEMANTICS",
     description:
       "Integer arithmetic produces i32 truncating semantics, not JS float semantics",
-    specRefs: ["0010-primitive-types.md", "0008-expressions-and-control-flow.md"],
+    specRefs: [
+      "0010-primitive-types.md",
+      "0008-expressions-and-control-flow.md",
+    ],
     testIds: [
       "diff-div-truncate: integer division truncates toward zero",
       "diff-div-negative: negative dividend truncates toward zero not floor",
@@ -213,7 +216,10 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   {
     id: "PROP-ALGEBRAIC-LAWS",
     description: "Integer and boolean operations satisfy algebraic invariants",
-    specRefs: ["0008-expressions-and-control-flow.md", "0010-primitive-types.md"],
+    specRefs: [
+      "0008-expressions-and-control-flow.md",
+      "0010-primitive-types.md",
+    ],
     testIds: [
       "prop-add-commutative: a + b = b + a for integer constants",
       "prop-mul-commutative: a * b = b * a",
@@ -230,7 +236,10 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   {
     id: "PROP-TYPE-SAFETY",
     description: "Type system rejects ill-typed programs without coercion",
-    specRefs: ["0010-primitive-types.md", "0008-expressions-and-control-flow.md"],
+    specRefs: [
+      "0010-primitive-types.md",
+      "0008-expressions-and-control-flow.md",
+    ],
     testIds: [
       "rejects direct assignment to immutable let binding",
       "rejects compound assignment to immutable let binding",

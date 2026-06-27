@@ -586,16 +586,13 @@ describe("differential: generated programs", (): void => {
 // ---------------------------------------------------------------------------
 
 describe("differential: integer semantics", (): void => {
-  it(
-    "diff-div-truncate: integer division truncates toward zero",
-    (): void => {
-      assertI32("7 / 2");
-      assertI32("1 / 2");
+  it("diff-div-truncate: integer division truncates toward zero", (): void => {
+    assertI32("7 / 2");
+    assertI32("1 / 2");
 
-      assertBool("7 / 2 == 3");
-      assertBool("1 / 2 == 0");
-    },
-  );
+    assertBool("7 / 2 == 3");
+    assertBool("1 / 2 == 0");
+  });
 
   it.fails(
     "diff-div-negative: negative dividend truncates toward zero not floor",

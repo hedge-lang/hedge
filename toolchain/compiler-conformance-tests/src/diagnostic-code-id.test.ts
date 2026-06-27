@@ -7,7 +7,7 @@ function extractDiagnosticCode(diagnostic: unknown): string | null {
   if (typeof diagnostic !== "object" || diagnostic === null) {
     return null;
   }
-  if (!Object.prototype.hasOwnProperty.call(diagnostic, "code")) {
+  if (!Object.hasOwn(diagnostic, "code")) {
     return null;
   }
   const value = (diagnostic as Record<string, unknown>)["code"];

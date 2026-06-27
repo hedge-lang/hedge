@@ -34,9 +34,7 @@ export function executeHedgeCode(source: string): ExecutionResult | null {
   // Mock print() built-in for Slice 1
   const globalEnv = {
     print: (...args: unknown[]): void => {
-      stdout.push(
-        typeof args[0] === "string" ? args[0] : JSON.stringify(args[0]),
-      );
+      stdout.push(args.join(""));
     },
   };
 

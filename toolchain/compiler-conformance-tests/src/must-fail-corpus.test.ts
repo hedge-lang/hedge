@@ -257,22 +257,16 @@ describe("must-fail corpus — rejection tests", (): void => {
       );
     });
 
-    it(
-      "rejects equality comparison between mismatched types",
-      (): void => {
-        assertRejectsWithMessage(`fn main() { print(1 == "1"); }`, "type");
-      },
-    );
+    it("rejects equality comparison between mismatched types", (): void => {
+      assertRejectsWithMessage(`fn main() { print(1 == "1"); }`, "type");
+    });
 
-    it(
-      "rejects let binding type annotation mismatch: integer vs bool annotation",
-      (): void => {
-        assertRejectsWithMessage(
-          `fn main() { let x: bool = 5; print(x); }`,
-          "type",
-        );
-      },
-    );
+    it("rejects let binding type annotation mismatch: integer vs bool annotation", (): void => {
+      assertRejectsWithMessage(
+        `fn main() { let x: bool = 5; print(x); }`,
+        "type",
+      );
+    });
 
     it("rejects float assigned to i32-annotated binding", (): void => {
       assertRejectsWithMessage(
