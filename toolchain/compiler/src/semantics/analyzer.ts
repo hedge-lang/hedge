@@ -658,18 +658,20 @@ function analyzeStructExpression(
   return {
     ...structExprssion,
     fields: structExprssion.fields.map(
-      (field: Parser.FieldInit): Semantics.FieldInit => ({
-        ...field,
-        name: analyzeIdentifier(ctx, field.name, {
-          kind: "UnitType",
-          tokenId: structExprssion.tokenId,
-        }),
-        value: mapSome(field.value, (value) => analyzeExpression(ctx, value)),
-        type: unwrapSomeOr(
-          mapSome(field.value, (value) => analyzeExpression(ctx, value).type),
-          { kind: "UnitType", tokenId: structExprssion.tokenId },
-        ),
-      }),
+      (field: Parser.FieldInit): Semantics.FieldInit => {
+        const analyzedValue = mapSome(field.value, (v) =>
+          analyzeExpression(ctx, v),
+        );
+        return {
+          ...field,
+          name: analyzeIdentifier(ctx, field.name, {
+            kind: "UnitType",
+            tokenId: structExprssion.tokenId,
+          }),
+          value: analyzedValue,
+          type: unwrapSomeOr(mapSome(analyzedValue, (v) => v.type), { kind: "UnitType", tokenId: structExprssion.tokenId }),
+        };
+      },
     ),
     base: mapSome(structExprssion.base, (base) => analyzeExpression(ctx, base)),
     type: { kind: "UnitType", tokenId: structExprssion.tokenId },
