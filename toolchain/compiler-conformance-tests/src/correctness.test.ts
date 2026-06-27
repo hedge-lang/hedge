@@ -615,6 +615,10 @@ describe("differential: integer semantics", (): void => {
     assertBool("-7 / 2 == -3");
     assertBool("-1 / 2 == 0");
   });
+
+  it("diff-div-zero: division by zero throws", (): void => {
+    expect(() => { assertI32("1 / 0"); }).toThrow("divide by zero");
+  });
 });
 
 // ---------------------------------------------------------------------------
