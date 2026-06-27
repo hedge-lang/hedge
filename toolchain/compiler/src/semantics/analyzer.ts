@@ -153,11 +153,7 @@ function validateSlice1Type(
     }
   }
   if (type.kind === "UnitType") return type;
-  emitError(
-    ctx,
-    "type is not supported in Slice 1",
-    tokenId,
-  );
+  emitError(ctx, "type is not supported in Slice 1", tokenId);
   return { kind: "UnitType", tokenId };
 }
 
@@ -463,7 +459,8 @@ function analyzeLetStatement(
 
 function typesEqual(a: Semantics.Type, b: Semantics.Type): boolean {
   if (a.kind !== b.kind) return false;
-  if (a.kind === "StructType" && b.kind === "StructType") return a.name === b.name;
+  if (a.kind === "StructType" && b.kind === "StructType")
+    return a.name === b.name;
   return true;
 }
 
@@ -521,7 +518,7 @@ function inferBinaryType(
       return bool;
     }
 
-    case "And" :
+    case "And":
     case "Or": {
       if (leftOk && leftType.kind !== "PrimitiveBooleanType") {
         emitError(ctx, "logical operator operands must be `bool`", tokenId);
@@ -707,11 +704,16 @@ function analyzeStructExpression(
             tokenId: structExpression.tokenId,
           }),
           value: analyzedValue,
-          type: unwrapSomeOr(mapSome(analyzedValue, getType), { kind: "UnitType", tokenId: structExpression.tokenId }),
+          type: unwrapSomeOr(mapSome(analyzedValue, getType), {
+            kind: "UnitType",
+            tokenId: structExpression.tokenId,
+          }),
         };
       },
     ),
-    base: mapSome(structExpression.base, (base) => analyzeExpression(ctx, base)),
+    base: mapSome(structExpression.base, (base) =>
+      analyzeExpression(ctx, base),
+    ),
     type: { kind: "UnitType", tokenId: structExpression.tokenId },
   };
 }
@@ -729,7 +731,10 @@ function analyzeIfExpression(
   );
 
   const condType = getType(condition);
-  if (condType.kind !== "UnitType" && condType.kind !== "PrimitiveBooleanType") {
+  if (
+    condType.kind !== "UnitType" &&
+    condType.kind !== "PrimitiveBooleanType"
+  ) {
     emitError(ctx, "if condition must be `bool`", ifExpression.tokenId);
   }
 
@@ -741,7 +746,11 @@ function analyzeIfExpression(
       elseType.kind !== "UnitType" &&
       !typesEqual(thenType, elseType)
     ) {
-      emitError(ctx, "if expression branches have incompatible types", ifExpression.tokenId);
+      emitError(
+        ctx,
+        "if expression branches have incompatible types",
+        ifExpression.tokenId,
+      );
     }
   }
 
