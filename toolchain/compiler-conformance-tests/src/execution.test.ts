@@ -89,6 +89,12 @@ describe("execution tests", (): void => {
       assertRunsTo(`fn main() { print(16 >> 2); }`, ["4"]);
     });
 
+    it("arithmetic right shift is signed (sign-extending)", (): void => {
+      // Rust and JS both use arithmetic (sign-extending) >>
+      // -8 in binary: 1111…1000; >> 1 = 1111…1100 = -4
+      assertRunsTo(`fn main() { print(-8 >> 1); }`, ["-4"]);
+    });
+
     it("double negation of integers returns original value", (): void => {
       assertRunsTo(`fn main() { print(-(-5)); }`, ["5"]);
       assertRunsTo(`fn main() { print(-(-42)); }`, ["42"]);
@@ -204,6 +210,16 @@ describe("execution tests", (): void => {
       // Rust: (5 | 2) == 7 = 7 == 7 = true
       assertRunsTo(`fn main() { print(5 | 2 == 7); }`, ["true"]);
     });
+
+    it("bitwise-xor binds tighter than bitwise-or", (): void => {
+      // (5 ^ 2) | 3 = 7 | 3 = 7; if | were tighter: 5 ^ (2 | 3) = 5 ^ 3 = 6
+      assertRunsTo(`fn main() { print(5 ^ 2 | 3); }`, ["7"]);
+    });
+
+    it("bitwise-and binds tighter than bitwise-xor", (): void => {
+      // (3 & 6) ^ 5 = 2 ^ 5 = 7; if ^ were tighter: 3 & (6 ^ 5) = 3 & 3 = 3
+      assertRunsTo(`fn main() { print(3 & 6 ^ 5); }`, ["7"]);
+    });
   });
 
   describe("blocks and scopes", (): void => {
@@ -238,6 +254,13 @@ describe("execution tests", (): void => {
 
     it("compound assignment -= updates a let write binding", (): void => {
       assertRunsTo(`fn main() { let write x = 10; x -= 3; print(x); }`, ["7"]);
+    });
+
+    it("multiple assignments to let write binding update sequentially", (): void => {
+      assertRunsTo(
+        `fn main() { let write x = 1; x = 2; x = 3; print(x); }`,
+        ["3"],
+      );
     });
 
     it.fails("inner scope shadow does not affect outer binding", (): void => {

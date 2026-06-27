@@ -111,6 +111,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "bitwise XOR",
       "shift left",
       "shift right",
+      "arithmetic right shift is signed (sign-extending)",
       "double negation of integers returns original value",
     ],
   },
@@ -150,6 +151,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "type annotation on let binding compiles correctly",
       "compound assignment += updates a let write binding",
       "compound assignment -= updates a let write binding",
+      "multiple assignments to let write binding update sequentially",
     ],
   },
   {
@@ -204,6 +206,8 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "rejects string as boolean condition in if",
       "rejects arithmetic on boolean operands",
       "rejects equality comparison between mismatched types",
+      "rejects let binding type annotation mismatch: integer vs bool annotation",
+      "rejects float assigned to i32-annotated binding",
     ],
   },
   {
@@ -218,6 +222,8 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "unary not binds tighter than logical-and",
       "bitwise-and binds tighter than equality (Rust semantics)",
       "bitwise-or binds tighter than equality (Rust semantics)",
+      "bitwise-xor binds tighter than bitwise-or",
+      "bitwise-and binds tighter than bitwise-xor",
     ],
   },
   {
@@ -237,6 +243,17 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "rejects string operand in arithmetic expression",
       "rejects string-to-string addition",
       "rejects string in cross-type equality comparison",
+    ],
+  },
+  {
+    id: "PROP-STRUCT-SAFETY",
+    description:
+      "Struct literal initialization and field access are validated against the struct declaration",
+    testIds: [
+      "rejects struct literal with missing required field",
+      "rejects struct literal with unknown field",
+      "rejects access to undefined struct field",
+      "rejects field access on non-struct type",
     ],
   },
 ];
@@ -263,6 +280,7 @@ export const CORE_REQUIRED_RULE_IDS: readonly string[] = [
   "EXEC-PRECEDENCE",
   "EXEC-INT-SAFETY",
   "PROP-STRING-SAFETY",
+  "PROP-STRUCT-SAFETY",
 ];
 
 export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [

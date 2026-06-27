@@ -263,6 +263,23 @@ describe("must-fail corpus — rejection tests", (): void => {
         assertRejectsWithMessage(`fn main() { print(1 == "1"); }`, "type");
       },
     );
+
+    it.fails(
+      "rejects let binding type annotation mismatch: integer vs bool annotation",
+      (): void => {
+        assertRejectsWithMessage(
+          `fn main() { let x: bool = 5; print(x); }`,
+          "type",
+        );
+      },
+    );
+
+    it.fails("rejects float assigned to i32-annotated binding", (): void => {
+      assertRejectsWithMessage(
+        `fn main() { let x: i32 = 3.14; print(x); }`,
+        "type",
+      );
+    });
   });
 
   describe("string type restrictions", (): void => {
@@ -282,6 +299,36 @@ describe("must-fail corpus — rejection tests", (): void => {
 
     it.fails("rejects string in cross-type equality comparison", (): void => {
       assertRejectsWithMessage(`fn main() { print("hello" == 1); }`, "type");
+    });
+  });
+
+  describe("struct validation errors", (): void => {
+    it.fails("rejects struct literal with missing required field", (): void => {
+      assertRejectsWithMessage(
+        `struct Foo { x: i32, y: i32 } fn main() { let f = Foo { x: 1 }; print(f.x); }`,
+        "field",
+      );
+    });
+
+    it.fails("rejects struct literal with unknown field", (): void => {
+      assertRejectsWithMessage(
+        `struct Foo { x: i32 } fn main() { let f = Foo { x: 1, z: 2 }; print(f.x); }`,
+        "field",
+      );
+    });
+
+    it.fails("rejects access to undefined struct field", (): void => {
+      assertRejectsWithMessage(
+        `struct Foo { x: i32 } fn main() { let f = Foo { x: 1 }; print(f.z); }`,
+        "field",
+      );
+    });
+
+    it.fails("rejects field access on non-struct type", (): void => {
+      assertRejectsWithMessage(
+        `fn main() { let x = 5; print(x.value); }`,
+        "field",
+      );
     });
   });
 
