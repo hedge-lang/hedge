@@ -16,7 +16,7 @@ describe("type system soundness spec", (): void => {
     `);
   });
 
-  it.fails("mismatched branch result types are rejected", (): void => {
+  it("mismatched branch result types are rejected", (): void => {
     assertRejectsWithMessage(
       `
       fn main() {

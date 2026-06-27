@@ -466,6 +466,35 @@ const BITWISE_OPS = new Set(["Shl", "Shr", "BitAnd", "BitXor", "BitOr"]);
 const COMPARISON_OPS = new Set(["Eq", "Ne", "Lt", "Gt", "Le", "Ge"]);
 const LOGICAL_OPS = new Set(["And", "Or"]);
 
+function typesEqual(a: Semantics.Type, b: Semantics.Type): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "StructType" && b.kind === "StructType") return a.name === b.name;
+  return true;
+}
+
+function isNumericType(type: Semantics.Type): boolean {
+  return (
+    isIntegerType(type) ||
+    type.kind === "PrimitiveF32Type" ||
+    type.kind === "PrimitiveF64Type"
+  );
+}
+
+function isIntegerType(type: Semantics.Type): boolean {
+  return (
+    type.kind === "PrimitiveI8Type" ||
+    type.kind === "PrimitiveI16Type" ||
+    type.kind === "PrimitiveI32Type" ||
+    type.kind === "PrimitiveI64Type" ||
+    type.kind === "PrimitiveIsizeType" ||
+    type.kind === "PrimitiveU8Type" ||
+    type.kind === "PrimitiveU16Type" ||
+    type.kind === "PrimitiveU32Type" ||
+    type.kind === "PrimitiveU64Type" ||
+    type.kind === "PrimitiveUsizeType"
+  );
+}
+
 // eslint-disable-next-line complexity -- This is a routing function
 function inferBinaryType(
   ctx: AnalysisContext,
@@ -485,7 +514,7 @@ function inferBinaryType(
   const rightOk = rightType.kind !== "UnitType";
 
   if (COMPARISON_OPS.has(op)) {
-    if (leftOk && rightOk && leftType.kind !== rightType.kind) {
+    if (leftOk && rightOk && !typesEqual(leftType, rightType)) {
       emitError(ctx, "comparison operands must have the same type", tokenId);
     }
     return bool;
@@ -502,29 +531,27 @@ function inferBinaryType(
   }
 
   if (ARITHMETIC_OPS.has(op)) {
-    if (leftOk && rightOk && leftType.kind !== rightType.kind) {
+    if (leftOk && !isNumericType(leftType)) {
+      emitError(ctx, "arithmetic operands must be numeric", tokenId);
+    }
+    if (rightOk && !isNumericType(rightType)) {
+      emitError(ctx, "arithmetic operands must be numeric", tokenId);
+    }
+    if (leftOk && rightOk && !typesEqual(leftType, rightType)) {
       emitError(ctx, "arithmetic operands must have the same type", tokenId);
     }
     return leftOk ? leftType : rightType;
   }
 
   if (BITWISE_OPS.has(op)) {
-    if (leftOk && rightOk && leftType.kind !== rightType.kind) {
-      emitError(ctx, "bitwise operands must have the same type", tokenId);
+    if (leftOk && !isIntegerType(leftType)) {
+      emitError(ctx, "bitwise operations require integer operands", tokenId);
     }
-    if (
-      (leftOk &&
-        (leftType.kind === "PrimitiveF32Type" ||
-          leftType.kind === "PrimitiveF64Type")) ||
-      (rightOk &&
-        (rightType.kind === "PrimitiveF32Type" ||
-          rightType.kind === "PrimitiveF64Type"))
-    ) {
-      emitError(
-        ctx,
-        "bitwise operations are not supported for floating point values",
-        tokenId,
-      );
+    if (rightOk && !isIntegerType(rightType)) {
+      emitError(ctx, "bitwise operations require integer operands", tokenId);
+    }
+    if (leftOk && rightOk && !typesEqual(leftType, rightType)) {
+      emitError(ctx, "bitwise operands must have the same type", tokenId);
     }
     return leftOk ? leftType : rightType;
   }
@@ -682,18 +709,37 @@ function analyzeIfExpression(
   ctx: AnalysisContext,
   ifExpression: Parser.IfExpression,
 ): Semantics.IfExpression {
+  const condition = analyzeExpression(ctx, ifExpression.condition);
   const thenBranch = analyzeBlock(ctx, ifExpression.thenBranch);
   const elseBranch = mapSome(ifExpression.elseBranch, (elseBranch) =>
     elseBranch.kind === "IfExpression"
       ? analyzeIfExpression(ctx, elseBranch)
       : analyzeBlock(ctx, elseBranch),
   );
+
+  const condType = getType(condition);
+  if (condType.kind !== "UnitType" && condType.kind !== "PrimitiveBooleanType") {
+    emitError(ctx, "if condition must be `bool`", ifExpression.tokenId);
+  }
+
+  if (isSome(elseBranch)) {
+    const thenType = thenBranch.type;
+    const elseType = elseBranch.value.type;
+    if (
+      thenType.kind !== "UnitType" &&
+      elseType.kind !== "UnitType" &&
+      !typesEqual(thenType, elseType)
+    ) {
+      emitError(ctx, "if expression branches have incompatible types", ifExpression.tokenId);
+    }
+  }
+
   const type: Semantics.Type = isSome(elseBranch)
     ? thenBranch.type
     : { kind: "UnitType", tokenId: ifExpression.tokenId };
   return {
     ...ifExpression,
-    condition: analyzeExpression(ctx, ifExpression.condition),
+    condition,
     thenBranch,
     elseBranch,
     type,

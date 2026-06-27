@@ -239,21 +239,21 @@ describe("must-fail corpus — rejection tests", (): void => {
       },
     );
 
-    it.fails("rejects integer as boolean condition in if", (): void => {
+    it("rejects integer as boolean condition in if", (): void => {
       assertRejectsWithMessage(`fn main() { if 1 { print("yes"); } }`, "bool");
     });
 
-    it.fails("rejects string as boolean condition in if", (): void => {
+    it("rejects string as boolean condition in if", (): void => {
       assertRejectsWithMessage(
         `fn main() { if "yes" { print("yes"); } }`,
         "bool",
       );
     });
 
-    it.fails("rejects arithmetic on boolean operands", (): void => {
+    it("rejects arithmetic on boolean operands", (): void => {
       assertRejectsWithMessage(
         `fn main() { let x = true + 1; print(x); }`,
-        "bool",
+        "numeric",
       );
     });
 

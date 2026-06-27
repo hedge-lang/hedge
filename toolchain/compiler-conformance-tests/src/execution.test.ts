@@ -349,4 +349,41 @@ describe("execution tests", (): void => {
       );
     });
   });
+
+  describe("type-check rejections", (): void => {
+    it("rejects non-numeric arithmetic operands", (): void => {
+      assertRejectsWithMessage(
+        `fn main() { let _x = true + false; }`,
+        "arithmetic operands must be numeric",
+      );
+    });
+
+    it("rejects non-integer bitwise operands", (): void => {
+      assertRejectsWithMessage(
+        `fn main() { let _x = true & false; }`,
+        "bitwise operations require integer operands",
+      );
+    });
+
+    it("rejects float bitwise operands", (): void => {
+      assertRejectsWithMessage(
+        `fn main() { let _x = 1.0f32 & 2.0f32; }`,
+        "bitwise operations require integer operands",
+      );
+    });
+
+    it("rejects non-bool if condition", (): void => {
+      assertRejectsWithMessage(
+        `fn main() { if 1 { print("x"); } }`,
+        "if condition must be `bool`",
+      );
+    });
+
+    it("rejects mismatched if-else branch types", (): void => {
+      assertRejectsWithMessage(
+        `fn main() { let _x = if true { 1u32 } else { true }; }`,
+        "if expression branches have incompatible types",
+      );
+    });
+  });
 });

@@ -149,10 +149,11 @@ function emitNumericBinaryOp(
   const isDivision = op === "Div" || op === "Rem";
   const jsOp = BINARY_OPS[op];
   const zero = nk.kind === "bigint" ? "0n" : "0";
-  const divGuard = isDivision
-    ? `(${r}) === ${zero} ? (() => { throw new RangeError("attempt to divide by zero"); })() : `
-    : "";
-  const inner = `${divGuard}${l} ${jsOp} ${r}`;
+  // Bind both operands in an IIFE for division so the divisor is evaluated
+  // exactly once — avoiding double-evaluation in the zero-guard and the op.
+  const inner = isDivision
+    ? `((_l, _r) => _r === ${zero} ? (() => { throw new RangeError("attempt to divide by zero"); })() : _l ${jsOp} _r)(${l}, ${r})`
+    : `${l} ${jsOp} ${r}`;
 
   switch (nk.kind) {
     case "signed":

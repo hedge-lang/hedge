@@ -31,6 +31,9 @@ const CONFORMANCE_INDEX = join(
 // Parse proofRefs out of conformance-index.ts without importing it.
 // Looks for: proofRefs: [ "name1", "name2", ... ]
 // ---------------------------------------------------------------------------
+// TODO: replace regex extraction with the TypeScript compiler API — the
+// current [\s\S]*? can cross rule boundaries when a rule between two proofRefs
+// rules lacks its own proofRefs field. Tracked: https://github.com/hedge-lang/hedge/issues/129
 function extractProofRefs(source: string): Map<string, string[]> {
   const rulePattern = /id:\s*"([^"]+)"[\s\S]*?proofRefs:\s*\[([\s\S]*?)]/g;
   const stringPattern = /"([^"]+)"/g;
@@ -91,6 +94,8 @@ const vContents = await Promise.all(
 let failures = 0;
 for (const [id, refs] of proofRefsById) {
   for (const theorem of refs) {
+    // TODO: use word-boundary regex instead of includes to avoid substring
+    // false positives. Tracked: https://github.com/hedge-lang/hedge/issues/129
     const found = vContents.some(({ text }) => text.includes(theorem));
     if (!found) {
       console.error(
