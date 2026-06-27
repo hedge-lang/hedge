@@ -155,7 +155,7 @@ function validateSlice1Type(
   if (type.kind === "UnitType") return type;
   emitError(
     ctx,
-    "type is not supported in Slice 1 function signatures",
+    "type is not supported in Slice 1",
     tokenId,
   );
   return { kind: "UnitType", tokenId };
@@ -176,7 +176,7 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
       );
       const prevLen = ctx.diagnostics.length;
       const analyzed = analyzeStatement(ctx, item);
-      ctx.diagnostics.splice(prevLen); // suppress cascading errors — the restriction error is sufficient
+      ctx.diagnostics.splice(prevLen); // suppress cascading errors — the restriction error is good enough
       return analyzed;
     }
     default:
@@ -263,7 +263,7 @@ function analyzeAttribute(
     }),
     arguments: mapSome(attribute.arguments, (args) =>
       args.map((arg) => ({
-        path: mapSome(arg.path, (path) => path),
+        path: arg.path,
         literal: mapSome(arg.literal, (literal) => {
           switch (literal.kind) {
             case "StringLiteral":
@@ -461,11 +461,6 @@ function analyzeLetStatement(
   };
 }
 
-const ARITHMETIC_OPS = new Set(["Add", "Sub", "Mul", "Div", "Rem"]);
-const BITWISE_OPS = new Set(["Shl", "Shr", "BitAnd", "BitXor", "BitOr"]);
-const COMPARISON_OPS = new Set(["Eq", "Ne", "Lt", "Gt", "Le", "Ge"]);
-const LOGICAL_OPS = new Set(["And", "Or"]);
-
 function typesEqual(a: Semantics.Type, b: Semantics.Type): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === "StructType" && b.kind === "StructType") return a.name === b.name;
@@ -498,7 +493,7 @@ function isIntegerType(type: Semantics.Type): boolean {
 // eslint-disable-next-line complexity -- This is a routing function
 function inferBinaryType(
   ctx: AnalysisContext,
-  op: string,
+  op: Parser.BinaryOperator,
   left: Semantics.Expression,
   right: Semantics.Expression,
   tokenId: number,
@@ -513,50 +508,66 @@ function inferBinaryType(
   const leftOk = leftType.kind !== "UnitType";
   const rightOk = rightType.kind !== "UnitType";
 
-  if (COMPARISON_OPS.has(op)) {
-    if (leftOk && rightOk && !typesEqual(leftType, rightType)) {
-      emitError(ctx, "comparison operands must have the same type", tokenId);
+  switch (op) {
+    case "Eq":
+    case "Ne":
+    case "Lt":
+    case "Gt":
+    case "Le":
+    case "Ge": {
+      if (leftOk && rightOk && !typesEqual(leftType, rightType)) {
+        emitError(ctx, "comparison operands must have the same type", tokenId);
+      }
+      return bool;
     }
-    return bool;
-  }
 
-  if (LOGICAL_OPS.has(op)) {
-    if (leftOk && leftType.kind !== "PrimitiveBooleanType") {
-      emitError(ctx, "logical operator operands must be `bool`", tokenId);
+    case "And" :
+    case "Or": {
+      if (leftOk && leftType.kind !== "PrimitiveBooleanType") {
+        emitError(ctx, "logical operator operands must be `bool`", tokenId);
+      }
+      if (rightOk && rightType.kind !== "PrimitiveBooleanType") {
+        emitError(ctx, "logical operator operands must be `bool`", tokenId);
+      }
+      return bool;
     }
-    if (rightOk && rightType.kind !== "PrimitiveBooleanType") {
-      emitError(ctx, "logical operator operands must be `bool`", tokenId);
-    }
-    return bool;
-  }
 
-  if (ARITHMETIC_OPS.has(op)) {
-    if (leftOk && !isNumericType(leftType)) {
-      emitError(ctx, "arithmetic operands must be numeric", tokenId);
+    case "Add":
+    case "Sub":
+    case "Mul":
+    case "Div":
+    case "Rem": {
+      if (leftOk && !isNumericType(leftType)) {
+        emitError(ctx, "arithmetic operands must be numeric", tokenId);
+      }
+      if (rightOk && !isNumericType(rightType)) {
+        emitError(ctx, "arithmetic operands must be numeric", tokenId);
+      }
+      if (leftOk && rightOk && !typesEqual(leftType, rightType)) {
+        emitError(ctx, "arithmetic operands must have the same type", tokenId);
+      }
+      return leftOk ? leftType : rightType;
     }
-    if (rightOk && !isNumericType(rightType)) {
-      emitError(ctx, "arithmetic operands must be numeric", tokenId);
-    }
-    if (leftOk && rightOk && !typesEqual(leftType, rightType)) {
-      emitError(ctx, "arithmetic operands must have the same type", tokenId);
-    }
-    return leftOk ? leftType : rightType;
-  }
 
-  if (BITWISE_OPS.has(op)) {
-    if (leftOk && !isIntegerType(leftType)) {
-      emitError(ctx, "bitwise operations require integer operands", tokenId);
+    case "Shl":
+    case "Shr":
+    case "BitAnd":
+    case "BitXor":
+    case "BitOr": {
+      if (leftOk && !isIntegerType(leftType)) {
+        emitError(ctx, "bitwise operations require integer operands", tokenId);
+      }
+      if (rightOk && !isIntegerType(rightType)) {
+        emitError(ctx, "bitwise operations require integer operands", tokenId);
+      }
+      if (leftOk && rightOk && !typesEqual(leftType, rightType)) {
+        emitError(ctx, "bitwise operands must have the same type", tokenId);
+      }
+      return leftOk ? leftType : rightType;
     }
-    if (rightOk && !isIntegerType(rightType)) {
-      emitError(ctx, "bitwise operations require integer operands", tokenId);
-    }
-    if (leftOk && rightOk && !typesEqual(leftType, rightType)) {
-      emitError(ctx, "bitwise operands must have the same type", tokenId);
-    }
-    return leftOk ? leftType : rightType;
+    default:
+      assertNever(op, `Unexpected binary operator: ${JSON.stringify(op)}`);
   }
-
-  return leftType;
 }
 
 // eslint-disable-next-line complexity -- This is a routing function
@@ -680,11 +691,11 @@ function analyzeExpression(
 
 function analyzeStructExpression(
   ctx: AnalysisContext,
-  structExprssion: Parser.StructExpression,
+  structExpression: Parser.StructExpression,
 ): Semantics.StructExpression {
   return {
-    ...structExprssion,
-    fields: structExprssion.fields.map(
+    ...structExpression,
+    fields: structExpression.fields.map(
       (field: Parser.FieldInit): Semantics.FieldInit => {
         const analyzedValue = mapSome(field.value, (v) =>
           analyzeExpression(ctx, v),
@@ -693,15 +704,15 @@ function analyzeStructExpression(
           ...field,
           name: analyzeIdentifier(ctx, field.name, {
             kind: "UnitType",
-            tokenId: structExprssion.tokenId,
+            tokenId: structExpression.tokenId,
           }),
           value: analyzedValue,
-          type: unwrapSomeOr(mapSome(analyzedValue, (v) => v.type), { kind: "UnitType", tokenId: structExprssion.tokenId }),
+          type: unwrapSomeOr(mapSome(analyzedValue, getType), { kind: "UnitType", tokenId: structExpression.tokenId }),
         };
       },
     ),
-    base: mapSome(structExprssion.base, (base) => analyzeExpression(ctx, base)),
-    type: { kind: "UnitType", tokenId: structExprssion.tokenId },
+    base: mapSome(structExpression.base, (base) => analyzeExpression(ctx, base)),
+    type: { kind: "UnitType", tokenId: structExpression.tokenId },
   };
 }
 
