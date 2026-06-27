@@ -12,6 +12,7 @@ describe("toDocComment", () => {
           kind: "Identifier",
           text: "doc",
           tokenId: 0,
+          type: { kind: "PrimitiveStringType" },
         },
         arguments: none(),
       },
@@ -22,6 +23,7 @@ describe("toDocComment", () => {
           kind: "Identifier",
           text: "foo",
           tokenId: 1,
+          type: { kind: "PrimitiveStringType" },
         },
         arguments: some([
           {
@@ -41,6 +43,7 @@ describe("toDocComment", () => {
           kind: "Identifier",
           text: "doc",
           tokenId: 1,
+          type: { kind: "PrimitiveStringType" },
         },
         arguments: some([
           { path: none(), literal: none() },

@@ -252,8 +252,6 @@ function parseExpression(expression: Semantics.Expression): JSIM.Expression {
       return parseCompoundAssignExpression(expression);
     case "FieldAccessExpression":
       return parseFieldAccessExpression(expression);
-    case "Identifier":
-      return parseIdentifier(expression);
     case "MethodCallExpression":
       return jsimMethodCallExpression(expression);
     case "IndexExpression":
@@ -454,13 +452,5 @@ function parseFieldAccessExpression(
     kind: "FieldAccessExpression",
     object: parseExpression(fieldAccessExp.object),
     field: fieldAccessExp.field.text,
-  };
-}
-
-function parseIdentifier(identifier: Semantics.Identifier): JSIM.Expression {
-  return {
-    kind: "Identifier",
-    value: identifier.text,
-    type: none(),
   };
 }

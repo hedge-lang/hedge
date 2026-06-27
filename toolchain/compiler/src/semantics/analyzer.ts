@@ -1,7 +1,14 @@
 import { assertNever } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
 import type { IntSuffix, Token } from "../lexer/token.js";
-import { isSome, mapSome, none, some, type Option, isNone } from "../option.js";
+import {
+  isSome,
+  mapSome,
+  none,
+  some,
+  type Option,
+  unwrapSomeOr,
+} from "../option.js";
 import type * as Parser from "../parser/ast.js";
 import type * as Semantics from "./ast.js";
 
@@ -23,13 +30,8 @@ interface AnalysisContext {
 /** Synthetic unit type used for nodes that produce no value. */
 const UNIT: Semantics.UnitType = { kind: "UnitType", tokenId: 0 };
 
-/**
- * Return the type of a semantic expression.
- * `Identifier` does not extend `DecoratedAstNode` (it carries no type of its
- * own), so callers cannot simply write `expr.type` on the union.
- */
 function getType(expr: Semantics.Expression): Semantics.Type {
-  return expr.kind === "Identifier" ? UNIT : expr.type;
+  return expr.type;
 }
 
 /** Names and types available before any user code — Slice 1 prelude. */
@@ -194,6 +196,7 @@ function analyzeStruct(
   const scopedName = `scoped(${ctx.scopes.length})::${item.name.text}`;
   return {
     ...item,
+    name: { ...item.name, type: { kind: "StructType", name: scopedName } },
     attributes: item.attributes.map((attr) => analyzeAttribute(ctx, attr)),
     body: analyzeStructBody(ctx, item.body),
     type: {
@@ -214,13 +217,21 @@ function analyzeStructBody(
       return {
         ...body,
         fields: body.fields.map(
-          (field: Parser.StructField): Semantics.StructField => ({
-            ...field,
-            attributes: field.attributes.map((attr) =>
-              analyzeAttribute(ctx, attr),
-            ),
-            type: validateSlice1Type(ctx, field.type, field.type.tokenId),
-          }),
+          (field: Parser.StructField): Semantics.StructField => {
+            const fieldType = validateSlice1Type(
+              ctx,
+              field.type,
+              field.type.tokenId,
+            );
+            return {
+              ...field,
+              name: analyzeIdentifier(ctx, field.name, fieldType),
+              attributes: field.attributes.map((attr) =>
+                analyzeAttribute(ctx, attr),
+              ),
+              type: fieldType,
+            };
+          },
         ),
       };
     case "TupleFields":
@@ -247,7 +258,9 @@ function analyzeAttribute(
 ): Semantics.Attribute {
   return {
     ...attribute,
-    name: attribute.name,
+    name: analyzeIdentifier(ctx, attribute.name, {
+      kind: "PrimitiveStringType",
+    }),
     arguments: mapSome(attribute.arguments, (args) =>
       args.map((arg) => ({
         path: mapSome(arg.path, (path) => path),
@@ -320,11 +333,22 @@ function analyzeFunctionDecl(
     (param: Parser.Param): Semantics.Param => {
       const paramType = validateSlice1Type(ctx, param.type, param.type.tokenId);
       bind(ctx, param.pattern.name.text, paramType);
-      return { ...param, type: paramType };
+      return {
+        ...param,
+        type: paramType,
+        pattern: {
+          ...param.pattern,
+          name: { ...param.pattern.name, type: paramType },
+        },
+      };
     },
   );
   const result: Semantics.FunctionDecl = {
     ...decl,
+    name: {
+      ...decl.name,
+      type: { kind: "UnitType", tokenId: decl.name.tokenId },
+    },
     attributes: decl.attributes.map((attr) => analyzeAttribute(ctx, attr)),
     params: analyzedParams,
     returnType: mapSome(
@@ -427,6 +451,10 @@ function analyzeLetStatement(
 
   return {
     ...statement,
+    pattern: {
+      ...statement.pattern,
+      name: { ...statement.pattern.name, type: bindingType },
+    },
     attributes: statement.attributes.map((attr) => analyzeAttribute(ctx, attr)),
     initializer: analyzedInitializer,
     type: { kind: "UnitType", tokenId: statement.tokenId },
@@ -567,6 +595,10 @@ function analyzeExpression(
       return {
         ...expression,
         object: analyzeExpression(ctx, expression.object),
+        field: {
+          ...expression.field,
+          type: { kind: "UnitType", tokenId: expression.field.tokenId },
+        },
         type: { kind: "UnitType", tokenId: expression.tokenId },
       };
     case "MethodCallExpression": {
@@ -574,6 +606,10 @@ function analyzeExpression(
       return {
         ...expression,
         receiver,
+        method: {
+          ...expression.method,
+          type: { kind: "UnitType", tokenId: expression.method.tokenId },
+        },
         arguments: expression.arguments.map((arg) =>
           analyzeExpression(ctx, arg),
         ),
@@ -596,28 +632,48 @@ function analyzeExpression(
         type: { kind: "UnitType", tokenId: expression.tokenId },
       };
     case "StructExpression":
-      return {
-        ...expression,
-        fields: expression.fields.map((field) => ({
-          ...field,
-          value: mapSome(field.value, (value) => analyzeExpression(ctx, value)),
-          type: { kind: "UnitType", tokenId: expression.tokenId },
-        })),
-        base: mapSome(expression.base, (base) => analyzeExpression(ctx, base)),
-        type: { kind: "UnitType", tokenId: expression.tokenId },
-      };
+      return analyzeStructExpression(ctx, expression);
     case "IfExpression":
       return analyzeIfExpression(ctx, expression);
     case "Block":
       return analyzeBlock(ctx, expression);
     case "Identifier":
-      return analyzeIdentifier(ctx, expression);
+      return analyzePath(ctx, {
+        ...expression,
+        kind: "PathExpression",
+        path: { absolute: false, segments: [expression.text] },
+      });
     default:
       assertNever(
         expression,
         `Unexpected AST node: ${JSON.stringify(expression)}`,
       );
   }
+}
+
+function analyzeStructExpression(
+  ctx: AnalysisContext,
+  structExprssion: Parser.StructExpression,
+): Semantics.StructExpression {
+  return {
+    ...structExprssion,
+    fields: structExprssion.fields.map(
+      (field: Parser.FieldInit): Semantics.FieldInit => ({
+        ...field,
+        name: analyzeIdentifier(ctx, field.name, {
+          kind: "UnitType",
+          tokenId: structExprssion.tokenId,
+        }),
+        value: mapSome(field.value, (value) => analyzeExpression(ctx, value)),
+        type: unwrapSomeOr(
+          mapSome(field.value, (value) => analyzeExpression(ctx, value).type),
+          { kind: "UnitType", tokenId: structExprssion.tokenId },
+        ),
+      }),
+    ),
+    base: mapSome(structExprssion.base, (base) => analyzeExpression(ctx, base)),
+    type: { kind: "UnitType", tokenId: structExprssion.tokenId },
+  };
 }
 
 function analyzeIfExpression(
@@ -643,17 +699,11 @@ function analyzeIfExpression(
 }
 
 function analyzeIdentifier(
-  ctx: AnalysisContext,
+  _ctx: AnalysisContext,
   identifier: Parser.Identifier,
+  type: Semantics.Type,
 ): Semantics.Identifier {
-  if (isNone(resolve(ctx, identifier.text))) {
-    emitError(
-      ctx,
-      `Cannot find name "${identifier.text}" in this scope.`,
-      identifier.tokenId,
-    );
-  }
-  return identifier;
+  return { ...identifier, type };
 }
 
 function analyzeCall(

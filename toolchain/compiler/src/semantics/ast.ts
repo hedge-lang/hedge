@@ -1,3 +1,7 @@
+// Mirrors parser/ast.ts structurally but every expression node extends
+// DecoratedAstNode — the resolved Type field is the semantic layer's invariant.
+// Duplication is intentional; do not merge these two ASTs.
+
 import type { Option } from "../option.js";
 import type { FloatSuffix, IntSuffix } from "../lexer/token.js";
 
@@ -80,8 +84,7 @@ export type Expression =
   | TupleExpression
   | StructExpression
   | IfExpression
-  | Block
-  | Identifier;
+  | Block;
 
 interface Visibility {
   readonly kind: "Visibility";
@@ -172,7 +175,7 @@ interface ExpressionStatement extends DecoratedAstNode {
   readonly expression: Expression;
 }
 
-export interface Identifier extends AstNode {
+export interface Identifier extends DecoratedAstNode {
   readonly kind: "Identifier";
   readonly text: string;
 }

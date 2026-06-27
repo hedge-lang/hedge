@@ -25,3 +25,7 @@ export function mapSome<T, R>(
 ): Option<R> {
   return isSome(option) ? some(fn(option.value)) : none();
 }
+
+export function unwrapSomeOr<T>(option: Option<T>, fallback: T): T {
+  return isSome(option) ? option.value : fallback;
+}
