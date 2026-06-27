@@ -290,9 +290,12 @@ function evalExpr(expr: Expression, env: RefEnv): RefValue {
           throw new Error("SKIP: Not applied to non-boolean");
         return !val;
       }
-      if (typeof val !== "number")
-        throw new Error("SKIP: Neg applied to non-number");
-      return -val | 0;
+      if (expr.operator === "Neg") {
+        if (typeof val !== "number")
+          throw new Error("SKIP: Neg applied to non-number");
+        return -val | 0;
+      }
+      throw new Error("Unexpected UnaryExpression");
     }
     case "IfExpression":
       return evalIfExpr(expr, env);
