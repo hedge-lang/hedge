@@ -1,5 +1,5 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,8 +71,14 @@ describe("cli e2e", (): void => {
     expect(result.stdout).toContain("usage: hedge build <file.hedge>");
   });
 
-  it("build missing file exits non-zero and reports path failure", (): void => {
-    const result = runCli(["build", "C:\\definitely-missing-file.hed"]);
+  it("build missing file exits non-zero and reports path failure", async (): Promise<void> => {
+    const missingFile = fileURLToPath(
+        new URL("./missing-file.hed", import.meta.url),
+    );
+    if (await stat(missingFile).then(() => true, () => false)) {
+      throw new Error("Test file already exists");
+    }
+    const result = runCli(["build", missingFile]);
     expect(result.status).toBe(1);
     expect(result.stderr.length).toBeGreaterThan(0);
   });
