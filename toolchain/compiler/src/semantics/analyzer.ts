@@ -428,7 +428,7 @@ function analyzeLetStatement(
         statement.type.value,
         statement.tokenId,
       );
-      if (annotationType.kind !== bindingType.kind) {
+      if (!typesEqual(annotationType, bindingType)) {
         emitError(
           ctx,
           "type mismatch: explicit annotation does not match initializer type",
