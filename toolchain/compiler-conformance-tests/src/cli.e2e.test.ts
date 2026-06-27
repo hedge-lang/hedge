@@ -73,9 +73,14 @@ describe("cli e2e", (): void => {
 
   it("build missing file exits non-zero and reports path failure", async (): Promise<void> => {
     const missingFile = fileURLToPath(
-        new URL("./missing-file.hed", import.meta.url),
+      new URL("./missing-file.hed", import.meta.url),
     );
-    if (await stat(missingFile).then(() => true, () => false)) {
+    if (
+      await stat(missingFile).then(
+        () => true,
+        () => false,
+      )
+    ) {
       throw new Error("Test file already exists");
     }
     const result = runCli(["build", missingFile]);

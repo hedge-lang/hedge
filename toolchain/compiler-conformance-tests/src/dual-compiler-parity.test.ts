@@ -3,6 +3,8 @@ import { spawnSync } from "node:child_process";
 import { compile, isSome } from "@hedge-lang/compiler";
 import { describe, expect, it } from "vitest";
 
+import { shellSplit } from "./shell-split.js";
+
 const SELF_HOSTED_COMPILER_CMD = process.env["HEDGE_SELF_HOSTED_COMPILER_CMD"];
 
 interface NormalizedDiagnostic {
@@ -96,10 +98,10 @@ function compileWithSelfHosted(source: string): ParityCompileOutput {
   if (typeof SELF_HOSTED_COMPILER_CMD !== "string") {
     throw new Error("Missing HEDGE_SELF_HOSTED_COMPILER_CMD");
   }
-  const run = spawnSync(SELF_HOSTED_COMPILER_CMD, {
+  const [cmd, ...cmdArgs] = shellSplit(SELF_HOSTED_COMPILER_CMD);
+  const run = spawnSync(cmd ?? SELF_HOSTED_COMPILER_CMD, cmdArgs, {
     input: source,
     encoding: "utf8",
-    shell: true,
   });
   if (run.error !== undefined) {
     throw run.error;

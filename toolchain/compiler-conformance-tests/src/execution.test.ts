@@ -4,6 +4,8 @@ import {
   compileHedgeCode,
   hasCompileErrors,
   assertRunsTo,
+  assertCompilesClean,
+  assertRejectsWithMessage,
 } from "./test-harness.js";
 
 describe("execution tests", (): void => {
@@ -325,6 +327,26 @@ describe("execution tests", (): void => {
 
     it("i32 addition wraps on overflow (two's complement)", (): void => {
       assertRunsTo(`fn main() { print(2147483647 + 1); }`, ["-2147483648"]);
+    });
+  });
+
+  describe("type propagation through bindings", (): void => {
+    it("propagates type through a single binding alias", (): void => {
+      assertCompilesClean(`fn main() { let x = 1u32; let y: u32 = x; }`);
+    });
+
+    it("rejects a type mismatch through a binding alias", (): void => {
+      assertRejectsWithMessage(
+        `fn main() { let x = 1u32; let y = x; let z: str = y; }`,
+        "type mismatch",
+      );
+    });
+
+    it("propagates type through a three-step chain at runtime", (): void => {
+      assertRunsTo(
+        `fn main() { let x = 1u32; let y = x; let z = y; print(z); }`,
+        ["1"],
+      );
     });
   });
 });
