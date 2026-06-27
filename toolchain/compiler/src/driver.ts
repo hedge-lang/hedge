@@ -71,5 +71,8 @@ export function compile(source: string): CompileResult {
   if (hasError(diagnostics)) {
     return { diagnostics, code: none() };
   }
-  return { diagnostics, code: some(generate(toJsim(optimize(analysis.program)))) };
+  return {
+    diagnostics,
+    code: some(generate(toJsim(optimize(analysis.program)))),
+  };
 }

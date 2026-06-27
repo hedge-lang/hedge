@@ -19,6 +19,9 @@ export const isSome = <T>(
 export const isNone = <T>(option: Option<T>): option is { kind: "None" } =>
   option.kind === "None";
 
-export function mapSome<T, R>(option: Option<T>, fn: (value: T) => R): Option<R> {
+export function mapSome<T, R>(
+  option: Option<T>,
+  fn: (value: T) => R,
+): Option<R> {
   return isSome(option) ? some(fn(option.value)) : none();
 }

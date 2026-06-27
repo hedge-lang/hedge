@@ -1,9 +1,8 @@
 import type { Option } from "../option.js";
 import type { FloatSuffix, IntSuffix } from "../lexer/token.js";
-export type { IntSuffix, FloatSuffix } from "../lexer/token.js";
 
 /** Every AST node carries the index of the token that begins it. */
-export interface AstNode {
+interface AstNode {
   readonly tokenId: number;
 }
 
@@ -30,7 +29,7 @@ export type Item = FunctionDecl | StructDecl | Statement | Expression;
 
 export type Statement = LetStatement | ExpressionStatement;
 
-export type BinaryOperator =
+type BinaryOperator =
   | "Add"
   | "Sub"
   | "Mul"
@@ -50,7 +49,7 @@ export type BinaryOperator =
   | "And"
   | "Or";
 
-export type CompoundAssignOperator =
+type CompoundAssignOperator =
   | "AddAssign"
   | "SubAssign"
   | "MulAssign"
@@ -84,7 +83,7 @@ export type Expression =
   | Block
   | Identifier;
 
-export interface Visibility {
+interface Visibility {
   readonly kind: "Visibility";
   /** `none()` for bare `pub`; `some("package")` for `pub(package)`, etc. */
   readonly scope: Option<string>;
@@ -118,17 +117,17 @@ export interface StructDecl extends DecoratedAstNode {
 
 export type StructBody = NamedFieldsBody | TupleFieldsBody | UnitBody;
 
-export interface NamedFieldsBody {
+interface NamedFieldsBody {
   readonly kind: "NamedFields";
   readonly fields: readonly StructField[];
 }
 
-export interface TupleFieldsBody {
+interface TupleFieldsBody {
   readonly kind: "TupleFields";
   readonly fields: readonly TupleField[];
 }
 
-export interface UnitBody {
+interface UnitBody {
   readonly kind: "Unit";
 }
 
@@ -163,12 +162,12 @@ export interface LetStatement extends DecoratedAstNode {
   readonly initializer: Option<Expression>;
 }
 
-export interface BindingPattern {
+interface BindingPattern {
   readonly kind: "BindingPattern";
   readonly name: Identifier;
 }
 
-export interface ExpressionStatement extends DecoratedAstNode {
+interface ExpressionStatement extends DecoratedAstNode {
   readonly kind: "ExpressionStatement";
   readonly expression: Expression;
 }
@@ -209,91 +208,112 @@ export interface CharLiteral extends DecoratedAstNode {
   readonly value: string;
 }
 
-export interface Path {
+interface Path {
   readonly absolute: boolean;
   readonly segments: string[];
 }
 
-export type Type = NamedType | UnitType | PrimitiveType | StructType | FunctionType;
+export type Type =
+  | NamedType
+  | UnitType
+  | PrimitiveType
+  | StructType
+  | FunctionType;
 
-export interface FunctionType {
+interface FunctionType {
   readonly kind: "FunctionType";
   readonly params: readonly Type[];
   readonly returnType: Type;
 }
 
-export type PrimitiveType = PrimitiveIntType | PrimitiveUintType | PrimitiveFloatType | PrimitiveBooleanType | PrimitiveCharType | PrimitiveStringType;
+export type PrimitiveType =
+  | PrimitiveIntType
+  | PrimitiveUintType
+  | PrimitiveFloatType
+  | PrimitiveBooleanType
+  | PrimitiveCharType
+  | PrimitiveStringType;
 
-export type PrimitiveUintType = PrimitiveU8Type | PrimitiveU16Type | PrimitiveU32Type | PrimitiveU64Type | PrimitiveUsizeType;
-export type PrimitiveIntType = PrimitiveI8Type | PrimitiveI16Type | PrimitiveI32Type | PrimitiveI64Type | PrimitiveIsizeType;
-export type PrimitiveFloatType = PrimitiveF32Type | PrimitiveF64Type;
+type PrimitiveUintType =
+  | PrimitiveU8Type
+  | PrimitiveU16Type
+  | PrimitiveU32Type
+  | PrimitiveU64Type
+  | PrimitiveUsizeType;
+type PrimitiveIntType =
+  | PrimitiveI8Type
+  | PrimitiveI16Type
+  | PrimitiveI32Type
+  | PrimitiveI64Type
+  | PrimitiveIsizeType;
+type PrimitiveFloatType = PrimitiveF32Type | PrimitiveF64Type;
 
-export interface PrimitiveU8Type {
+interface PrimitiveU8Type {
   readonly kind: "PrimitiveU8Type";
 }
 
-export interface PrimitiveU16Type {
+interface PrimitiveU16Type {
   readonly kind: "PrimitiveU16Type";
 }
 
-export interface PrimitiveU32Type {
+interface PrimitiveU32Type {
   readonly kind: "PrimitiveU32Type";
 }
 
-export interface PrimitiveU64Type {
+interface PrimitiveU64Type {
   readonly kind: "PrimitiveU64Type";
 }
 
-export interface PrimitiveUsizeType {
+interface PrimitiveUsizeType {
   readonly kind: "PrimitiveUsizeType";
 }
 
-export interface PrimitiveI8Type  {
+interface PrimitiveI8Type {
   readonly kind: "PrimitiveI8Type";
 }
 
-export interface PrimitiveI16Type {
+interface PrimitiveI16Type {
   readonly kind: "PrimitiveI16Type";
 }
 
-export interface PrimitiveI32Type {
+interface PrimitiveI32Type {
   readonly kind: "PrimitiveI32Type";
 }
 
-export interface PrimitiveI64Type {
+interface PrimitiveI64Type {
   readonly kind: "PrimitiveI64Type";
 }
 
-export interface PrimitiveF32Type {
+interface PrimitiveF32Type {
   readonly kind: "PrimitiveF32Type";
 }
 
-export interface PrimitiveF64Type {
+interface PrimitiveF64Type {
   readonly kind: "PrimitiveF64Type";
 }
 
-export interface PrimitiveIsizeType {
+interface PrimitiveIsizeType {
   readonly kind: "PrimitiveIsizeType";
 }
 
-export interface PrimitiveBooleanType {
+interface PrimitiveBooleanType {
   readonly kind: "PrimitiveBooleanType";
 }
 
-export interface PrimitiveCharType {
+interface PrimitiveCharType {
   readonly kind: "PrimitiveCharType";
 }
 
-export interface PrimitiveStringType {
+interface PrimitiveStringType {
   readonly kind: "PrimitiveStringType";
 }
 
-export interface StructType {
+interface StructType {
   readonly kind: "StructType";
   readonly name: string;
 }
 
-export interface NamedType extends AstNode {
+interface NamedType extends AstNode {
   readonly kind: "NamedType";
   readonly path: Path;
 }
@@ -313,7 +333,7 @@ export interface CallExpression extends DecoratedAstNode {
   readonly arguments: Expression[];
 }
 
-export interface ReferenceExpression extends DecoratedAstNode {
+interface ReferenceExpression extends DecoratedAstNode {
   readonly kind: "ReferenceExpression";
   /** `true` for `&write` (exclusive), `false` for `&` (shared). */
   readonly mutable: boolean;

@@ -1,7 +1,7 @@
 import { assertNever } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
 import type { IntSuffix, Token } from "../lexer/token.js";
-import { isSome, mapSome, none, some, type Option } from "../option.js";
+import { isSome, mapSome, none, some, type Option, isNone } from "../option.js";
 import type * as Parser from "../parser/ast.js";
 import type * as Semantics from "./ast.js";
 
@@ -34,7 +34,14 @@ function getType(expr: Semantics.Expression): Semantics.Type {
 
 /** Names and types available before any user code — Slice 1 prelude. */
 const BUILTIN_SCOPE: [string, Semantics.Type][] = [
-  ["print", { kind: "FunctionType", params: [{ kind: "PrimitiveStringType" }], returnType: UNIT }],
+  [
+    "print",
+    {
+      kind: "FunctionType",
+      params: [{ kind: "PrimitiveStringType" }],
+      returnType: UNIT,
+    },
+  ],
 ];
 
 function bind(ctx: AnalysisContext, name: string, type: Semantics.Type): void {
@@ -44,18 +51,22 @@ function bind(ctx: AnalysisContext, name: string, type: Semantics.Type): void {
   }
 }
 
-function resolve(ctx: AnalysisContext, name: string): Semantics.Type | undefined {
+function resolve(ctx: AnalysisContext, name: string): Option<Semantics.Type> {
   for (let i = ctx.scopes.length - 1; i >= 0; i -= 1) {
     const scope = ctx.scopes[i];
     if (scope !== undefined) {
       const type = scope.get(name);
-      if (type !== undefined) return type;
+      if (type !== undefined) return some(type);
     }
   }
-  return undefined;
+  return none();
 }
 
-function emitError(ctx: AnalysisContext, message: string, tokenId: number): void {
+function emitError(
+  ctx: AnalysisContext,
+  message: string,
+  tokenId: number,
+): void {
   const token = ctx.tokens[tokenId];
   ctx.diagnostics.push({
     severity: "error",
@@ -65,39 +76,65 @@ function emitError(ctx: AnalysisContext, message: string, tokenId: number): void
 }
 
 // eslint-disable-next-line complexity -- Routing function
-function namedTypeToPrimitive(name: string): Semantics.PrimitiveType | undefined {
+function namedTypeToPrimitive(name: string): Option<Semantics.PrimitiveType> {
   switch (name) {
-    case "bool":  return { kind: "PrimitiveBooleanType" };
-    case "str":   return { kind: "PrimitiveStringType" };
-    case "char":  return { kind: "PrimitiveCharType" };
-    case "i8":    return { kind: "PrimitiveI8Type" };
-    case "i16":   return { kind: "PrimitiveI16Type" };
-    case "i32":   return { kind: "PrimitiveI32Type" };
-    case "i64":   return { kind: "PrimitiveI64Type" };
-    case "u8":    return { kind: "PrimitiveU8Type" };
-    case "u16":   return { kind: "PrimitiveU16Type" };
-    case "u32":   return { kind: "PrimitiveU32Type" };
-    case "u64":   return { kind: "PrimitiveU64Type" };
-    case "usize": return { kind: "PrimitiveUsizeType" };
-    case "isize": return { kind: "PrimitiveIsizeType" };
-    case "f32":   return { kind: "PrimitiveF32Type" };
-    case "f64":   return { kind: "PrimitiveF64Type" };
-    default:      return undefined;
+    case "bool":
+      return some({ kind: "PrimitiveBooleanType" });
+    case "str":
+      return some({ kind: "PrimitiveStringType" });
+    case "char":
+      return some({ kind: "PrimitiveCharType" });
+    case "i8":
+      return some({ kind: "PrimitiveI8Type" });
+    case "i16":
+      return some({ kind: "PrimitiveI16Type" });
+    case "i32":
+      return some({ kind: "PrimitiveI32Type" });
+    case "i64":
+      return some({ kind: "PrimitiveI64Type" });
+    case "u8":
+      return some({ kind: "PrimitiveU8Type" });
+    case "u16":
+      return some({ kind: "PrimitiveU16Type" });
+    case "u32":
+      return some({ kind: "PrimitiveU32Type" });
+    case "u64":
+      return some({ kind: "PrimitiveU64Type" });
+    case "usize":
+      return some({ kind: "PrimitiveUsizeType" });
+    case "isize":
+      return some({ kind: "PrimitiveIsizeType" });
+    case "f32":
+      return some({ kind: "PrimitiveF32Type" });
+    case "f64":
+      return some({ kind: "PrimitiveF64Type" });
+    default:
+      return none();
   }
 }
 
 function intSuffixToPrimitive(suffix: IntSuffix): Semantics.PrimitiveType {
   switch (suffix) {
-    case "i8":    return { kind: "PrimitiveI8Type" };
-    case "i16":   return { kind: "PrimitiveI16Type" };
-    case "i32":   return { kind: "PrimitiveI32Type" };
-    case "i64":   return { kind: "PrimitiveI64Type" };
-    case "isize": return { kind: "PrimitiveIsizeType" };
-    case "u8":    return { kind: "PrimitiveU8Type" };
-    case "u16":   return { kind: "PrimitiveU16Type" };
-    case "u32":   return { kind: "PrimitiveU32Type" };
-    case "u64":   return { kind: "PrimitiveU64Type" };
-    case "usize": return { kind: "PrimitiveUsizeType" };
+    case "i8":
+      return { kind: "PrimitiveI8Type" };
+    case "i16":
+      return { kind: "PrimitiveI16Type" };
+    case "i32":
+      return { kind: "PrimitiveI32Type" };
+    case "i64":
+      return { kind: "PrimitiveI64Type" };
+    case "isize":
+      return { kind: "PrimitiveIsizeType" };
+    case "u8":
+      return { kind: "PrimitiveU8Type" };
+    case "u16":
+      return { kind: "PrimitiveU16Type" };
+    case "u32":
+      return { kind: "PrimitiveU32Type" };
+    case "u64":
+      return { kind: "PrimitiveU64Type" };
+    case "usize":
+      return { kind: "PrimitiveUsizeType" };
   }
 }
 
@@ -106,13 +143,19 @@ function validateSlice1Type(
   type: Parser.Type,
   tokenId: number,
 ): Semantics.Type {
-  if (type.kind === "UnitType") return type;
   if (type.kind === "NamedType" && type.path.segments.length === 1) {
     const name = String(type.path.segments[0]);
     const prim = namedTypeToPrimitive(name);
-    if (prim !== undefined) return prim;
+    if (isSome(prim)) {
+      return prim.value;
+    }
   }
-  emitError(ctx, "type is not supported in Slice 1 function signatures", tokenId);
+  if (type.kind === "UnitType") return type;
+  emitError(
+    ctx,
+    "type is not supported in Slice 1 function signatures",
+    tokenId,
+  );
   return { kind: "UnitType", tokenId };
 }
 
@@ -124,19 +167,30 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
       return analyzeStruct(ctx, item);
     case "LetStatement":
     case "ExpressionStatement": {
-      emitError(ctx, "only function and struct declarations are allowed at the top level", item.tokenId);
+      emitError(
+        ctx,
+        "only function and struct declarations are allowed at the top level",
+        item.tokenId,
+      );
       const prevLen = ctx.diagnostics.length;
       const analyzed = analyzeStatement(ctx, item);
       ctx.diagnostics.splice(prevLen); // suppress cascading errors — the restriction error is sufficient
       return analyzed;
     }
     default:
-      emitError(ctx, "only function and struct declarations are allowed at the top level", item.tokenId);
+      emitError(
+        ctx,
+        "only function and struct declarations are allowed at the top level",
+        item.tokenId,
+      );
       return analyzeExpression(ctx, item);
   }
 }
 
-function analyzeStruct(ctx: AnalysisContext, item: Parser.StructDecl): Semantics.StructDecl {
+function analyzeStruct(
+  ctx: AnalysisContext,
+  item: Parser.StructDecl,
+): Semantics.StructDecl {
   const scopedName = `scoped(${ctx.scopes.length})::${item.name.text}`;
   return {
     ...item,
@@ -149,59 +203,93 @@ function analyzeStruct(ctx: AnalysisContext, item: Parser.StructDecl): Semantics
   };
 }
 
-function analyzeStructBody(ctx: AnalysisContext, body: Parser.StructBody): Semantics.StructBody {
+function analyzeStructBody(
+  ctx: AnalysisContext,
+  body: Parser.StructBody,
+): Semantics.StructBody {
   switch (body.kind) {
-    case "Unit": return body;
-    case "NamedFields": return {
-      ...body,
-      fields: body.fields.map((field: Parser.StructField): Semantics.StructField => ({
-        ...field,
-        attributes: field.attributes.map((attr) => analyzeAttribute(ctx, attr)),
-        type: validateSlice1Type(ctx, field.type, field.type.tokenId),
-      }))
-    };
-    case "TupleFields": return {
-      ...body,
-      fields: body.fields.map((field: Parser.TupleField): Semantics.TupleField => ({
-        ...field,
-        attributes: field.attributes.map((attr) => analyzeAttribute(ctx, attr)),
-        type: validateSlice1Type(ctx, field.type, field.type.tokenId),
-      }))
-    };
+    case "Unit":
+      return body;
+    case "NamedFields":
+      return {
+        ...body,
+        fields: body.fields.map(
+          (field: Parser.StructField): Semantics.StructField => ({
+            ...field,
+            attributes: field.attributes.map((attr) =>
+              analyzeAttribute(ctx, attr),
+            ),
+            type: validateSlice1Type(ctx, field.type, field.type.tokenId),
+          }),
+        ),
+      };
+    case "TupleFields":
+      return {
+        ...body,
+        fields: body.fields.map(
+          (field: Parser.TupleField): Semantics.TupleField => ({
+            ...field,
+            attributes: field.attributes.map((attr) =>
+              analyzeAttribute(ctx, attr),
+            ),
+            type: validateSlice1Type(ctx, field.type, field.type.tokenId),
+          }),
+        ),
+      };
     default:
       assertNever(body, `Unexpected AST node: ${JSON.stringify(body)}`);
   }
 }
 
-function analyzeAttribute(ctx: AnalysisContext, attribute: Parser.Attribute): Semantics.Attribute {
+function analyzeAttribute(
+  ctx: AnalysisContext,
+  attribute: Parser.Attribute,
+): Semantics.Attribute {
   return {
     ...attribute,
     name: attribute.name,
-    arguments: mapSome(attribute.arguments, (args) => args.map((arg) => ({
-      path: mapSome(arg.path, (path) => path),
-      literal: mapSome(arg.literal, (literal) => {
-        switch (literal.kind) {
-          case "StringLiteral": return analyzeStringLiteral(ctx, literal);
-          case "IntLiteral": return analyzeIntLiteral(ctx, literal);
-          default: return assertNever(literal, `Unexpected AST node: ${JSON.stringify(literal)}`);
-        }
-      })
-    }))),
-  }
+    arguments: mapSome(attribute.arguments, (args) =>
+      args.map((arg) => ({
+        path: mapSome(arg.path, (path) => path),
+        literal: mapSome(arg.literal, (literal) => {
+          switch (literal.kind) {
+            case "StringLiteral":
+              return analyzeStringLiteral(ctx, literal);
+            case "IntLiteral":
+              return analyzeIntLiteral(ctx, literal);
+            default:
+              return assertNever(
+                literal,
+                `Unexpected AST node: ${JSON.stringify(literal)}`,
+              );
+          }
+        }),
+      })),
+    ),
+  };
 }
 
-function analyzeStringLiteral(_ctx: AnalysisContext, stringLiteral: Parser.StringLiteral): Semantics.StringLiteral {
+function analyzeStringLiteral(
+  _ctx: AnalysisContext,
+  stringLiteral: Parser.StringLiteral,
+): Semantics.StringLiteral {
   return { ...stringLiteral, type: { kind: "PrimitiveStringType" } };
 }
 
-function analyzeIntLiteral(_ctx: AnalysisContext, intLiteral: Parser.IntLiteral): Semantics.IntLiteral {
+function analyzeIntLiteral(
+  _ctx: AnalysisContext,
+  intLiteral: Parser.IntLiteral,
+): Semantics.IntLiteral {
   const type: Semantics.PrimitiveType = isSome(intLiteral.suffix)
     ? intSuffixToPrimitive(intLiteral.suffix.value)
     : { kind: "PrimitiveI32Type" };
   return { ...intLiteral, type };
 }
 
-function analyzeFloatLiteral(_ctx: AnalysisContext, floatLiteral: Parser.FloatLiteral): Semantics.FloatLiteral {
+function analyzeFloatLiteral(
+  _ctx: AnalysisContext,
+  floatLiteral: Parser.FloatLiteral,
+): Semantics.FloatLiteral {
   const type: Semantics.PrimitiveType =
     isSome(floatLiteral.suffix) && floatLiteral.suffix.value === "f32"
       ? { kind: "PrimitiveF32Type" }
@@ -209,43 +297,66 @@ function analyzeFloatLiteral(_ctx: AnalysisContext, floatLiteral: Parser.FloatLi
   return { ...floatLiteral, type };
 }
 
-function analyzeBoolLiteral(_ctx: AnalysisContext, boolLiteral: Parser.BoolLiteral): Semantics.BoolLiteral {
+function analyzeBoolLiteral(
+  _ctx: AnalysisContext,
+  boolLiteral: Parser.BoolLiteral,
+): Semantics.BoolLiteral {
   return { ...boolLiteral, type: { kind: "PrimitiveBooleanType" } };
 }
 
-function analyzeCharLiteral(_ctx: AnalysisContext, charLiteral: Parser.CharLiteral): Semantics.CharLiteral {
+function analyzeCharLiteral(
+  _ctx: AnalysisContext,
+  charLiteral: Parser.CharLiteral,
+): Semantics.CharLiteral {
   return { ...charLiteral, type: { kind: "PrimitiveCharType" } };
 }
 
-function analyzeFunctionDecl(ctx: AnalysisContext, decl: Parser.FunctionDecl): Semantics.FunctionDecl {
+function analyzeFunctionDecl(
+  ctx: AnalysisContext,
+  decl: Parser.FunctionDecl,
+): Semantics.FunctionDecl {
   ctx.scopes.push(new Map());
-  const analyzedParams = decl.params.map((param: Parser.Param): Semantics.Param => {
-    const paramType = validateSlice1Type(ctx, param.type, param.type.tokenId);
-    bind(ctx, param.pattern.name.text, paramType);
-    return { ...param, type: paramType };
-  });
+  const analyzedParams = decl.params.map(
+    (param: Parser.Param): Semantics.Param => {
+      const paramType = validateSlice1Type(ctx, param.type, param.type.tokenId);
+      bind(ctx, param.pattern.name.text, paramType);
+      return { ...param, type: paramType };
+    },
+  );
   const result: Semantics.FunctionDecl = {
     ...decl,
     attributes: decl.attributes.map((attr) => analyzeAttribute(ctx, attr)),
     params: analyzedParams,
-    returnType: mapSome(decl.returnType, (returnType: Parser.Type): Semantics.Type =>
-      validateSlice1Type(ctx, returnType, returnType.tokenId)),
+    returnType: mapSome(
+      decl.returnType,
+      (returnType: Parser.Type): Semantics.Type =>
+        validateSlice1Type(ctx, returnType, returnType.tokenId),
+    ),
     body: analyzeBlock(ctx, decl.body),
   };
   ctx.scopes.pop();
   return result;
 }
 
-function analyzeBlock(ctx: AnalysisContext, block: Parser.Block): Semantics.Block {
+function analyzeBlock(
+  ctx: AnalysisContext,
+  block: Parser.Block,
+): Semantics.Block {
   ctx.scopes.push(new Map());
-  const analyzedStatements = block.statements.map((statement) => analyzeStatement(ctx, statement));
-  const analyzedTrailing = mapSome(block.trailingExpression, (expr) => analyzeExpression(ctx, expr));
+  const analyzedStatements = block.statements.map((statement) =>
+    analyzeStatement(ctx, statement),
+  );
+  const analyzedTrailing = mapSome(block.trailingExpression, (expr) =>
+    analyzeExpression(ctx, expr),
+  );
   const type: Semantics.Type = isSome(analyzedTrailing)
     ? getType(analyzedTrailing.value)
     : { kind: "UnitType", tokenId: block.tokenId };
   const result: Semantics.Block = {
     ...block,
-    innerAttributes: block.innerAttributes.map((attr) => analyzeAttribute(ctx, attr)),
+    innerAttributes: block.innerAttributes.map((attr) =>
+      analyzeAttribute(ctx, attr),
+    ),
     statements: analyzedStatements,
     trailingExpression: analyzedTrailing,
     type,
@@ -254,7 +365,10 @@ function analyzeBlock(ctx: AnalysisContext, block: Parser.Block): Semantics.Bloc
   return result;
 }
 
-function analyzeStatement(ctx: AnalysisContext, statement: Parser.Statement): Semantics.Statement {
+function analyzeStatement(
+  ctx: AnalysisContext,
+  statement: Parser.Statement,
+): Semantics.Statement {
   switch (statement.kind) {
     case "LetStatement":
       return analyzeLetStatement(ctx, statement);
@@ -265,7 +379,10 @@ function analyzeStatement(ctx: AnalysisContext, statement: Parser.Statement): Se
         type: { kind: "UnitType", tokenId: statement.tokenId },
       };
     default:
-      assertNever(statement, `Unexpected AST node: ${JSON.stringify(statement)}`);
+      assertNever(
+        statement,
+        `Unexpected AST node: ${JSON.stringify(statement)}`,
+      );
   }
 }
 
@@ -273,20 +390,35 @@ function analyzeLetStatement(
   ctx: AnalysisContext,
   statement: Parser.LetStatement,
 ): Semantics.LetStatement {
-  const analyzedInitializer: Option<Semantics.Expression> = mapSome(statement.initializer, (initializer) => analyzeExpression(ctx, initializer));
+  const analyzedInitializer: Option<Semantics.Expression> = mapSome(
+    statement.initializer,
+    (initializer) => analyzeExpression(ctx, initializer),
+  );
 
   let bindingType: Semantics.Type;
   if (isSome(analyzedInitializer)) {
     bindingType = getType(analyzedInitializer.value);
     if (isSome(statement.type)) {
-      const annotationType = validateSlice1Type(ctx, statement.type.value, statement.tokenId);
+      const annotationType = validateSlice1Type(
+        ctx,
+        statement.type.value,
+        statement.tokenId,
+      );
       if (annotationType.kind !== bindingType.kind) {
-        emitError(ctx, "type mismatch: explicit annotation does not match initializer type", statement.tokenId);
+        emitError(
+          ctx,
+          "type mismatch: explicit annotation does not match initializer type",
+          statement.tokenId,
+        );
       }
       bindingType = annotationType;
     }
   } else if (isSome(statement.type)) {
-    bindingType = validateSlice1Type(ctx, statement.type.value, statement.tokenId);
+    bindingType = validateSlice1Type(
+      ctx,
+      statement.type.value,
+      statement.tokenId,
+    );
   } else {
     bindingType = { kind: "UnitType", tokenId: statement.tokenId };
   }
@@ -301,15 +433,12 @@ function analyzeLetStatement(
   };
 }
 
-const ARITHMETIC_OPS = new Set([
-  "Add", "Sub", "Mul", "Div", "Rem",
-]);
-const BITWISE_OPS = new Set([
-  "Shl", "Shr", "BitAnd", "BitXor", "BitOr",
-]);
+const ARITHMETIC_OPS = new Set(["Add", "Sub", "Mul", "Div", "Rem"]);
+const BITWISE_OPS = new Set(["Shl", "Shr", "BitAnd", "BitXor", "BitOr"]);
 const COMPARISON_OPS = new Set(["Eq", "Ne", "Lt", "Gt", "Le", "Ge"]);
 const LOGICAL_OPS = new Set(["And", "Or"]);
 
+// eslint-disable-next-line complexity -- This is a routing function
 function inferBinaryType(
   ctx: AnalysisContext,
   op: string,
@@ -355,8 +484,19 @@ function inferBinaryType(
     if (leftOk && rightOk && leftType.kind !== rightType.kind) {
       emitError(ctx, "bitwise operands must have the same type", tokenId);
     }
-    if ((leftOk && (leftType.kind === "PrimitiveF32Type" || leftType.kind === "PrimitiveF64Type")) || (rightOk && (rightType.kind === "PrimitiveF32Type" || rightType.kind === "PrimitiveF64Type"))) {
-      emitError(ctx, "bitwise operations are not supported for floating point values", tokenId);
+    if (
+      (leftOk &&
+        (leftType.kind === "PrimitiveF32Type" ||
+          leftType.kind === "PrimitiveF64Type")) ||
+      (rightOk &&
+        (rightType.kind === "PrimitiveF32Type" ||
+          rightType.kind === "PrimitiveF64Type"))
+    ) {
+      emitError(
+        ctx,
+        "bitwise operations are not supported for floating point values",
+        tokenId,
+      );
     }
     return leftOk ? leftType : rightType;
   }
@@ -365,7 +505,10 @@ function inferBinaryType(
 }
 
 // eslint-disable-next-line complexity -- This is a routing function
-function analyzeExpression(ctx: AnalysisContext, expression: Parser.Expression): Semantics.Expression {
+function analyzeExpression(
+  ctx: AnalysisContext,
+  expression: Parser.Expression,
+): Semantics.Expression {
   switch (expression.kind) {
     case "StringLiteral":
       return analyzeStringLiteral(ctx, expression);
@@ -382,7 +525,11 @@ function analyzeExpression(ctx: AnalysisContext, expression: Parser.Expression):
     case "CallExpression":
       return analyzeCall(ctx, expression);
     case "ReferenceExpression":
-      emitError(ctx, "borrow expressions are not supported in Slice 1", expression.tokenId);
+      emitError(
+        ctx,
+        "borrow expressions are not supported in Slice 1",
+        expression.tokenId,
+      );
       return {
         ...expression,
         operand: analyzeExpression(ctx, expression.operand),
@@ -391,14 +538,21 @@ function analyzeExpression(ctx: AnalysisContext, expression: Parser.Expression):
     case "BinaryExpression": {
       const left = analyzeExpression(ctx, expression.left);
       const right = analyzeExpression(ctx, expression.right);
-      const type = inferBinaryType(ctx, expression.operator, left, right, expression.tokenId);
+      const type = inferBinaryType(
+        ctx,
+        expression.operator,
+        left,
+        right,
+        expression.tokenId,
+      );
       return { ...expression, left, right, type };
     }
     case "UnaryExpression": {
       const operand = analyzeExpression(ctx, expression.operand);
-      const type: Semantics.Type = expression.operator === "Not"
-        ? { kind: "PrimitiveBooleanType" }
-        : getType(operand);
+      const type: Semantics.Type =
+        expression.operator === "Not"
+          ? { kind: "PrimitiveBooleanType" }
+          : getType(operand);
       return { ...expression, operand, type };
     }
     case "AssignExpression":
@@ -420,7 +574,9 @@ function analyzeExpression(ctx: AnalysisContext, expression: Parser.Expression):
       return {
         ...expression,
         receiver,
-        arguments: expression.arguments.map((arg) => analyzeExpression(ctx, arg)),
+        arguments: expression.arguments.map((arg) =>
+          analyzeExpression(ctx, arg),
+        ),
         type: { kind: "UnitType", tokenId: expression.tokenId },
       };
     }
@@ -434,7 +590,9 @@ function analyzeExpression(ctx: AnalysisContext, expression: Parser.Expression):
     case "TupleExpression":
       return {
         ...expression,
-        elements: expression.elements.map((elem) => analyzeExpression(ctx, elem)),
+        elements: expression.elements.map((elem) =>
+          analyzeExpression(ctx, elem),
+        ),
         type: { kind: "UnitType", tokenId: expression.tokenId },
       };
     case "StructExpression":
@@ -455,15 +613,23 @@ function analyzeExpression(ctx: AnalysisContext, expression: Parser.Expression):
     case "Identifier":
       return analyzeIdentifier(ctx, expression);
     default:
-      assertNever(expression, `Unexpected AST node: ${JSON.stringify(expression)}`);
+      assertNever(
+        expression,
+        `Unexpected AST node: ${JSON.stringify(expression)}`,
+      );
   }
 }
 
-function analyzeIfExpression(ctx: AnalysisContext, ifExpression: Parser.IfExpression): Semantics.IfExpression {
+function analyzeIfExpression(
+  ctx: AnalysisContext,
+  ifExpression: Parser.IfExpression,
+): Semantics.IfExpression {
   const thenBranch = analyzeBlock(ctx, ifExpression.thenBranch);
-  const elseBranch = mapSome(ifExpression.elseBranch, (elseBranch) => elseBranch.kind === "IfExpression"
-        ? analyzeIfExpression(ctx, elseBranch)
-        : analyzeBlock(ctx, elseBranch));
+  const elseBranch = mapSome(ifExpression.elseBranch, (elseBranch) =>
+    elseBranch.kind === "IfExpression"
+      ? analyzeIfExpression(ctx, elseBranch)
+      : analyzeBlock(ctx, elseBranch),
+  );
   const type: Semantics.Type = isSome(elseBranch)
     ? thenBranch.type
     : { kind: "UnitType", tokenId: ifExpression.tokenId };
@@ -476,24 +642,38 @@ function analyzeIfExpression(ctx: AnalysisContext, ifExpression: Parser.IfExpres
   };
 }
 
-function analyzeIdentifier(ctx: AnalysisContext, identifier: Parser.Identifier): Semantics.Identifier {
-  if (resolve(ctx, identifier.text) === undefined) {
-    emitError(ctx, `Cannot find name "${identifier.text}" in this scope.`, identifier.tokenId);
+function analyzeIdentifier(
+  ctx: AnalysisContext,
+  identifier: Parser.Identifier,
+): Semantics.Identifier {
+  if (isNone(resolve(ctx, identifier.text))) {
+    emitError(
+      ctx,
+      `Cannot find name "${identifier.text}" in this scope.`,
+      identifier.tokenId,
+    );
   }
   return identifier;
 }
 
-function analyzeCall(ctx: AnalysisContext, call: Parser.CallExpression): Semantics.CallExpression {
+function analyzeCall(
+  ctx: AnalysisContext,
+  call: Parser.CallExpression,
+): Semantics.CallExpression {
   const callee = analyzeExpression(ctx, call.callee);
   const args = call.arguments.map((arg) => analyzeExpression(ctx, arg));
   const calleeType = getType(callee);
-  const returnType: Semantics.Type = calleeType.kind === "FunctionType"
-    ? calleeType.returnType
-    : { kind: "UnitType", tokenId: call.tokenId };
+  const returnType: Semantics.Type =
+    calleeType.kind === "FunctionType"
+      ? calleeType.returnType
+      : { kind: "UnitType", tokenId: call.tokenId };
   return { ...call, callee, arguments: args, type: returnType };
 }
 
-function analyzePath(ctx: AnalysisContext, path: Parser.PathExpression): Semantics.PathExpression {
+function analyzePath(
+  ctx: AnalysisContext,
+  path: Parser.PathExpression,
+): Semantics.PathExpression {
   const { segments } = path.path;
   // Multi-segment paths (modules, associated items) are a later slice.
   if (segments.length !== 1) {
@@ -504,11 +684,11 @@ function analyzePath(ctx: AnalysisContext, path: Parser.PathExpression): Semanti
     return { ...path, type: { kind: "UnitType", tokenId: path.tokenId } };
   }
   const resolvedType = resolve(ctx, name);
-  if (resolvedType === undefined) {
-    emitError(ctx, `Cannot find name "${name}" in this scope.`, path.tokenId);
-    return { ...path, type: { kind: "UnitType", tokenId: path.tokenId } };
+  if (isSome(resolvedType)) {
+    return { ...path, type: resolvedType.value };
   }
-  return { ...path, type: resolvedType };
+  emitError(ctx, `Cannot find name "${name}" in this scope.`, path.tokenId);
+  return { ...path, type: { kind: "UnitType", tokenId: path.tokenId } };
 }
 
 /**
@@ -526,7 +706,12 @@ export function analyze(
     diagnostics: [],
     tokens,
   };
-  const attributes = program.attributes.map((attr) => analyzeAttribute(ctx, attr));
+  const attributes = program.attributes.map((attr) =>
+    analyzeAttribute(ctx, attr),
+  );
   const items = program.items.map((item) => analyzeItem(ctx, item));
-  return { diagnostics: ctx.diagnostics, program: { ...program, attributes, items } };
+  return {
+    diagnostics: ctx.diagnostics,
+    program: { ...program, attributes, items },
+  };
 }

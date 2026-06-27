@@ -133,10 +133,10 @@ export type BinaryOperator =
 
 /** How the JS backend should wrap/truncate the result of a numeric binary operation. */
 export type NumericKind =
-  | { readonly kind: "signed";   readonly bits: 8 | 16 | 32 }
+  | { readonly kind: "signed"; readonly bits: 8 | 16 | 32 }
   | { readonly kind: "unsigned"; readonly bits: 8 | 16 | 32 }
-  | { readonly kind: "bigint";   readonly signed: boolean }
-  | { readonly kind: "float";    readonly bits: 32 | 64 };
+  | { readonly kind: "bigint"; readonly signed: boolean }
+  | { readonly kind: "float"; readonly bits: 32 | 64 };
 
 interface BinaryExpression {
   readonly kind: "BinaryExpression";

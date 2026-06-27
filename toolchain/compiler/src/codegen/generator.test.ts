@@ -197,8 +197,18 @@ describe("binary expression codegen", () => {
     ["Add", "i32", "x + y", "((x + y)|0)"],
     ["Sub", "i32", "x - y", "((x - y)|0)"],
     ["Mul", "i32", "x * y", "((x * y)|0)"],
-    ["Div", "i32", "x / y", "(((y) === 0 ? (() => { throw new RangeError(\"attempt to divide by zero\"); })() : x / y)|0)"],
-    ["Rem", "i32", "x % y", "(((y) === 0 ? (() => { throw new RangeError(\"attempt to divide by zero\"); })() : x % y)|0)"],
+    [
+      "Div",
+      "i32",
+      "x / y",
+      '(((y) === 0 ? (() => { throw new RangeError("attempt to divide by zero"); })() : x / y)|0)',
+    ],
+    [
+      "Rem",
+      "i32",
+      "x % y",
+      '(((y) === 0 ? (() => { throw new RangeError("attempt to divide by zero"); })() : x % y)|0)',
+    ],
     ["Shl", "i32", "x << y", "((x << y)|0)"],
     ["Shr", "i32", "x >> y", "((x >> y)|0)"],
     ["BitAnd", "i32", "x & y", "((x & y)|0)"],
@@ -213,8 +223,18 @@ describe("binary expression codegen", () => {
     ["Add", "f32", "x + y", "Math.fround(x + y)"],
     ["Sub", "f32", "x - y", "Math.fround(x - y)"],
     ["Mul", "f32", "x * y", "Math.fround(x * y)"],
-    ["Div", "f32", "x / y", "Math.fround((y) === 0 ? (() => { throw new RangeError(\"attempt to divide by zero\"); })() : x / y)"],
-    ["Rem", "f32", "x % y", "Math.fround((y) === 0 ? (() => { throw new RangeError(\"attempt to divide by zero\"); })() : x % y)"],
+    [
+      "Div",
+      "f32",
+      "x / y",
+      'Math.fround((y) === 0 ? (() => { throw new RangeError("attempt to divide by zero"); })() : x / y)',
+    ],
+    [
+      "Rem",
+      "f32",
+      "x % y",
+      'Math.fround((y) === 0 ? (() => { throw new RangeError("attempt to divide by zero"); })() : x % y)',
+    ],
     ["Eq", "f32", "x == y", "x === y"],
     ["Ne", "f32", "x != y", "x !== y"],
     ["Lt", "f32", "x < y", "x < y"],
@@ -230,13 +250,15 @@ describe("binary expression codegen", () => {
   });
 
   it.each([
-      ["Shr", "f32", "x >> y"],
-      ["Shl", "f32", "x << y"],
-      ["BitAnd", "f32", "x & y"],
-      ["BitOr", "f32", "x | y"],
-      ["BitXor", "f32", "x ^ y"],
+    ["Shr", "f32", "x >> y"],
+    ["Shl", "f32", "x << y"],
+    ["BitAnd", "f32", "x & y"],
+    ["BitOr", "f32", "x | y"],
+    ["BitXor", "f32", "x ^ y"],
   ])("%s on %s is a type-error", (_, ty, source): void => {
-    expect(() => stmts(gen(`fn _(x: ${ty}, y: ${ty}) { ${source}; }`))).toThrow();
+    expect(() =>
+      stmts(gen(`fn _(x: ${ty}, y: ${ty}) { ${source}; }`)),
+    ).toThrow();
   });
 
   it("(x + y) * z — parens preserved because + binds looser than *", () => {
