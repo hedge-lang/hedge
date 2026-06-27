@@ -188,17 +188,17 @@ function evalIfExpr(expr: IfExpression, env: RefEnv): RefValue {
 function applyArithOp(op: BinaryOperator, l: number, r: number): RefValue {
   switch (op) {
     case "Add":
-      return l + r;
+      return ((l|0) + (r|0))|0;
     case "Sub":
-      return l - r;
+      return ((l|0) - (r|0))|0;
     case "Mul":
-      return l * r;
+      return ((l|0) * (r|0))|0;
     case "Div":
       if (r === 0) throw new RangeError("attempt to divide by zero");
-      return Math.trunc(l / r) | 0;
+      return Math.trunc((l|0) / (r|0)) | 0;
     case "Rem":
       if (r === 0) throw new RangeError("attempt to divide by zero");
-      return (l % r) | 0;
+      return ((l|0) % (r|0)) | 0;
     default:
       throw new Error(`SKIP: not an arithmetic op "${op}"`);
   }
