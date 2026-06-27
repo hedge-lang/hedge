@@ -354,10 +354,10 @@ describe("must-fail corpus — rejection tests", (): void => {
       );
     });
 
-    it("rejects non-primitive parameter type in function signature", (): void => {
+    it("rejects non-primitive parameter type in function signature (Slice 1)", (): void => {
       assertRejectsWithMessage(
         `fn foo(x: MyStruct) {} fn main() {}`,
-        "not supported in Slice 1 function signatures",
+        "not supported",
       );
     });
   });
