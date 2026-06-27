@@ -223,18 +223,8 @@ describe("binary expression codegen", () => {
     ["Add", "f32", "x + y", "Math.fround(x + y)"],
     ["Sub", "f32", "x - y", "Math.fround(x - y)"],
     ["Mul", "f32", "x * y", "Math.fround(x * y)"],
-    [
-      "Div",
-      "f32",
-      "x / y",
-      'Math.fround(((_l, _r) => _r === 0 ? (() => { throw new RangeError("attempt to divide by zero"); })() : _l / _r)(x, y))',
-    ],
-    [
-      "Rem",
-      "f32",
-      "x % y",
-      'Math.fround(((_l, _r) => _r === 0 ? (() => { throw new RangeError("attempt to divide by zero"); })() : _l % _r)(x, y))',
-    ],
+    ["Div", "f32", "x / y", "Math.fround(x / y)"],
+    ["Rem", "f32", "x % y", "Math.fround(x % y)"],
     ["Eq", "f32", "x == y", "x === y"],
     ["Ne", "f32", "x != y", "x !== y"],
     ["Lt", "f32", "x < y", "x < y"],
@@ -292,6 +282,16 @@ describe("unary expression codegen", () => {
     ["Not", "!x", "(!x)"],
   ])("%s emits correct JS operator", (_, source, expected) => {
     expect(stmts(gen(`fn _(x: ()) { ${source}; }`))).toBe(`${expected};`);
+  });
+
+  it.each([
+    ["i32", "((-x)|0)"],
+    ["i8", "(((-x) << 24) >> 24)"],
+    ["u32", "((-x)>>>0)"],
+    ["f32", "Math.fround(-x)"],
+    ["f64", "(-x)"],
+  ])("Neg on %s wraps result", (ty, expected) => {
+    expect(stmts(gen(`fn _(x: ${ty}) { -x; }`))).toBe(`${expected};`);
   });
 });
 

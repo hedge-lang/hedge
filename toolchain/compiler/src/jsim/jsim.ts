@@ -416,10 +416,15 @@ function parseBinaryExpression(
 function parseUnaryExpression(
   unaryExp: Semantics.UnaryExpression,
 ): JSIM.Expression {
+  const numericKind: Option<JSIM.NumericKind> =
+    unaryExp.operator === "Neg"
+      ? hedgeTypeToNumericKind(unaryExp.type)
+      : none();
   return {
     kind: unaryExp.kind,
     operator: unaryExp.operator,
     operand: parseExpression(unaryExp.operand),
+    numericKind,
   };
 }
 

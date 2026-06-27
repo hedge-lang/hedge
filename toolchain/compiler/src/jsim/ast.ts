@@ -152,6 +152,8 @@ interface UnaryExpression {
   readonly kind: "UnaryExpression";
   readonly operator: UnaryOperator;
   readonly operand: Expression;
+  /** Present for `Neg` on numeric types; `none()` for `Not` and unit operands. */
+  readonly numericKind: Option<NumericKind>;
 }
 
 export type AssignOperator =
