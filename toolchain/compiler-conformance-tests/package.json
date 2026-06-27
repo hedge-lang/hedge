@@ -4,8 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "pretest": "npm run build --workspace=@hedge-lang/compiler",
-    "precheck": "npm run build --workspace=@hedge-lang/compiler",
+    "pretest": "npm run build",
+    "precheck": "npm run build",
+    "build": "npm-run-all build:compiler build:cli",
+    "build:compiler": "npm run build --workspace=@hedge-lang/compiler",
+    "build:cli": "npm run build --workspace=@hedge-lang/cli",
     "test": "vitest run",
     "check": "tsc --noEmit -p tsconfig.json"
   },

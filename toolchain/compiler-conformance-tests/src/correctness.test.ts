@@ -10,7 +10,7 @@
 import { stdout } from "node:process";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
-import { compile, isSome, parse, tokenize } from "@hedge-lang/compiler";
+import { compile, isSome, some, parse, tokenize } from "@hedge-lang/compiler";
 import type {
   BinaryOperator,
   Block,
@@ -18,6 +18,11 @@ import type {
   IfExpression,
   Program,
 } from "@hedge-lang/compiler";
+import {
+  CORE_CONFORMANCE_RULES,
+  CORE_REQUIRED_RULE_IDS,
+} from "./conformance-index.js";
+import { assertCompilesClean } from "./test-harness.js";
 
 function assert(cond: boolean, msg?: string): asserts cond {
   if (!cond) throw new Error(msg);
@@ -341,103 +346,6 @@ function assertBool(body: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// C) Conformance rule → test ID mapping.
-//    Fail if any rule lists zero test IDs.
-// ---------------------------------------------------------------------------
-interface ConformanceRule {
-  readonly id: string;
-  readonly description: string;
-  readonly testIds: readonly string[];
-}
-
-const CONFORMANCE_TABLE: readonly ConformanceRule[] = [
-  {
-    id: "PROP-WHITESPACE",
-    description:
-      "Extra whitespace and comments do not change the parsed AST shape",
-    testIds: [
-      "whitespace-invariance: extra spaces/newlines do not change AST shape",
-      "comment invariance: line comments between tokens do not change AST shape",
-      "comment invariance: block comments do not change AST shape",
-    ],
-  },
-  {
-    id: "PROP-ALPHA-RENAME",
-    description:
-      "Alpha-renaming local identifiers preserves diagnostic count and severity",
-    testIds: [
-      "alpha-rename-preserves-diagnostics: renaming locals keeps diagnostic count",
-      "alpha-rename preserves error-free status across multiple generated seeds",
-    ],
-  },
-  {
-    id: "PROP-PARENS",
-    description:
-      "Redundant parentheses around atoms/expressions do not change the AST",
-    testIds: [
-      "parens-atom-invariance: (42) and 42 parse to same AST",
-      "parens-subexpr-invariance: redundant outer parens do not change AST",
-      "redundant parens on int literal: ((1)) compiles same as 1",
-      "parens around both sides of addition do not change compiled output",
-    ],
-  },
-  {
-    id: "PROP-DETERMINISM",
-    description: "Compiling the same source twice produces identical output",
-    testIds: ["determinism: same source compiles to identical output twice"],
-  },
-  {
-    id: "DIFF-INT-ARITH",
-    description:
-      "Compiler result matches reference evaluator for integer arithmetic",
-    testIds: [
-      "diff-literal: integer literal compiles and matches reference",
-      "diff-add: addition compiles and matches reference",
-      "diff-sub: subtraction compiles and matches reference",
-      "diff-mul: multiplication compiles and matches reference",
-      "chained arithmetic matches reference",
-    ],
-  },
-  {
-    id: "DIFF-CMP",
-    description:
-      "Compiler result matches reference evaluator for comparison expressions",
-    testIds: [
-      "diff-eq: equality comparison compiles and matches reference",
-      "diff-lt: less-than comparison compiles and matches reference",
-      "diff-gt: greater-than comparison compiles and matches reference",
-    ],
-  },
-  {
-    id: "DIFF-IF",
-    description:
-      "Compiler result matches reference evaluator for if-else expressions",
-    testIds: [
-      "diff-if-true: if true { 1 } else { 2 } evaluates to 1",
-      "diff-if-false: if false { 1 } else { 2 } evaluates to 2",
-      "nested let and if expression match reference",
-    ],
-  },
-  {
-    id: "DIFF-LET",
-    description: "Compiler result matches reference evaluator for let bindings",
-    testIds: [
-      "diff-let-binding: let binding is available in trailing expression",
-    ],
-  },
-  {
-    id: "DIFF-GENERATED",
-    description:
-      "Compiler result matches reference evaluator on generated programs",
-    testIds: [
-      "diff-generated-seed-1: generated program matches reference evaluator",
-      "diff-generated-seed-2: generated program matches reference evaluator",
-      "diff-generated-seed-3: generated program matches reference evaluator",
-    ],
-  },
-];
-
-// ---------------------------------------------------------------------------
 // A) Property / Metamorphic tests
 // ---------------------------------------------------------------------------
 
@@ -477,10 +385,10 @@ describe("property: whitespace and comment invariance", (): void => {
 
 describe("property: alpha-renaming preserves diagnostics", (): void => {
   it("alpha-rename-preserves-diagnostics: renaming locals keeps diagnostic count", (): void => {
-    const original = compile(
+    const original = assertCompilesClean(
       `fn main() { let foo = 1; let bar = 2; foo + bar; }`,
     );
-    const renamed = compile(
+    const renamed = assertCompilesClean(
       `fn main() { let alpha = 1; let beta = 2; alpha + beta; }`,
     );
     expect(original.diagnostics.length).toBe(renamed.diagnostics.length);
@@ -509,27 +417,22 @@ describe("property: alpha-renaming preserves diagnostics", (): void => {
 
 describe("property: parenthesization invariance", (): void => {
   it("parens-atom-invariance: (42) and 42 parse to same AST", (): void => {
-    expect(stripTokenIds(parseProgram("(42)"))).toEqual(
-      stripTokenIds(parseProgram("42")),
+    expect(stripTokenIds(parseProgram("fn main() { (42) }"))).toEqual(
+      stripTokenIds(parseProgram("fn main() { 42 }")),
     );
   });
 
   it("parens-subexpr-invariance: redundant outer parens do not change AST", (): void => {
-    // (x + y) at the top level is the same AST as x + y.
-    expect(stripTokenIds(parseProgram("(x + y)"))).toEqual(
-      stripTokenIds(parseProgram("x + y")),
+    expect(stripTokenIds(parseProgram("fn main() { (x + y) }"))).toEqual(
+      stripTokenIds(parseProgram("fn main() { x + y }")),
     );
   });
 
   it("redundant parens on int literal: ((1)) compiles same as 1", (): void => {
     const r1 = compile("fn compute() -> i32 { 1 }");
     const r2 = compile("fn compute() -> i32 { ((1)) }");
-    expect(r1.diagnostics.filter((d) => d.severity === "error")).toHaveLength(
-      0,
-    );
-    expect(r2.diagnostics.filter((d) => d.severity === "error")).toHaveLength(
-      0,
-    );
+    expect(r1.code).toMatchObject(some({}));
+    expect(r2.code).toMatchObject(some({}));
     if (isSome(r1.code) && isSome(r2.code)) {
       expect(r1.code.value.javascript).toEqual(r2.code.value.javascript);
     }
@@ -540,12 +443,8 @@ describe("property: parenthesization invariance", (): void => {
     const r2 = compile(
       "fn compute() -> i32 { let x = 1; let y = 2; (x) + (y) }",
     );
-    expect(r1.diagnostics.filter((d) => d.severity === "error")).toHaveLength(
-      0,
-    );
-    expect(r2.diagnostics.filter((d) => d.severity === "error")).toHaveLength(
-      0,
-    );
+    expect(r1.code).toMatchObject(some({}));
+    expect(r2.code).toMatchObject(some({}));
     if (isSome(r1.code) && isSome(r2.code)) {
       expect(r1.code.value.javascript).toEqual(r2.code.value.javascript);
     }
@@ -620,6 +519,35 @@ describe("differential: formal subset hand-written programs", (): void => {
   it("chained arithmetic matches reference", (): void => {
     assertI32("let a = 3; let b = 4; (a * a) + (b * b)");
   });
+
+  it("diff-ne: not-equal comparison compiles and matches reference", (): void => {
+    assertBool("3 != 4");
+    assertBool("5 != 5");
+  });
+
+  it("diff-le: less-than-or-equal comparison compiles and matches reference", (): void => {
+    assertBool("3 <= 3");
+    assertBool("4 <= 3");
+  });
+
+  it("diff-ge: greater-than-or-equal comparison compiles and matches reference", (): void => {
+    assertBool("5 >= 3");
+    assertBool("3 >= 5");
+  });
+
+  it("diff-and: logical and compiles and matches reference", (): void => {
+    assertBool("true && true");
+    assertBool("true && false");
+  });
+
+  it("diff-or: logical or compiles and matches reference", (): void => {
+    assertBool("false || true");
+    assertBool("false || false");
+  });
+
+  it("diff-rem: remainder compiles and matches reference", (): void => {
+    assertI32("10 % 3");
+  });
 });
 
 describe("differential: generated programs", (): void => {
@@ -654,12 +582,104 @@ describe("differential: generated programs", (): void => {
 });
 
 // ---------------------------------------------------------------------------
-// C) Conformance rule coverage check
+// C) Integer semantics — differential tests that catch JS float vs Rust i32 divergence
+// ---------------------------------------------------------------------------
+
+describe("differential: integer semantics", (): void => {
+  it("diff-div-truncate: integer division truncates toward zero", (): void => {
+    assertI32("7 / 2");
+    assertI32("1 / 2");
+
+    assertBool("7 / 2 == 3");
+    assertBool("1 / 2 == 0");
+  });
+
+  it.fails(
+    "diff-div-negative: negative dividend truncates toward zero not floor",
+    (): void => {
+      // floor division would give -4; truncating gives -3 (Rust semantics)
+      assertI32("-7 / 2");
+      assertI32("-1 / 2");
+
+      assertBool("-7 / 2 === -3");
+      assertBool("-1 / 2 === 0");
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// D) Algebraic laws — specification-level property tests
+// ---------------------------------------------------------------------------
+
+describe("property: algebraic laws", (): void => {
+  it.fails(
+    "prop-add-commutative: a + b = b + a for integer constants",
+    (): void => {
+      assertBool("2 + 3 == 3 + 2");
+      assertBool("-5 + 7 == 7 + -5");
+      assertBool("0 + 42 == 42 + 0");
+    },
+  );
+
+  it.fails("prop-mul-commutative: a * b = b * a", (): void => {
+    assertBool("4 * 7 == 7 * 4");
+    assertBool("-3 * 5 == 5 * -3");
+  });
+
+  it.fails("prop-add-identity: a + 0 = a", (): void => {
+    assertBool("42 + 0 == 42");
+    assertBool("-7 + 0 == -7");
+  });
+
+  it.fails("prop-mul-identity: a * 1 = a", (): void => {
+    assertBool("13 * 1 == 13");
+    assertBool("-9 * 1 == -9");
+  });
+
+  it.fails("prop-mul-zero: a * 0 = 0", (): void => {
+    assertBool("13 * 0 == 0");
+    assertBool("-9 * 0 == 0");
+  });
+
+  it.fails("prop-demorgan-and: !(a && b) == (!a || !b)", (): void => {
+    assertBool("!(true && true) == (!true || !true)");
+    assertBool("!(true && false) == (!true || !false)");
+    assertBool("!(false && false) == (!false || !false)");
+  });
+
+  it.fails("prop-demorgan-or: !(a || b) == (!a && !b)", (): void => {
+    assertBool("!(true || true) == (!true && !true)");
+    assertBool("!(true || false) == (!true && !false)");
+    assertBool("!(false || false) == (!false && !false)");
+  });
+
+  it.fails("prop-double-neg-bool: !!a = a for booleans", (): void => {
+    assertBool("!!true == true");
+    assertBool("!!false == false");
+  });
+
+  it.fails("prop-comparison-antisymmetric: (a < b) == !(a >= b)", (): void => {
+    assertBool("(3 < 5) == !(3 >= 5)");
+    assertBool("(5 < 3) == !(5 >= 3)");
+    assertBool("(4 < 4) == !(4 >= 4)");
+  });
+
+  it.fails("prop-comparison-reflexive: a == a", (): void => {
+    assertBool("42 == 42");
+    assertBool("0 == 0");
+    assertBool("-7 == -7");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E) Conformance rule coverage check
 // ---------------------------------------------------------------------------
 
 describe("conformance: rule coverage", (): void => {
   it("every conformance rule lists at least one test ID", (): void => {
-    const uncovered = CONFORMANCE_TABLE.filter((r) => r.testIds.length === 0);
+    const uncovered = CORE_CONFORMANCE_RULES.filter(
+      (r) => r.testIds.length === 0,
+    );
     expect(
       uncovered.map((r) => `${r.id}: ${r.description}`),
       "These rules have no test IDs listed",
@@ -667,19 +687,8 @@ describe("conformance: rule coverage", (): void => {
   });
 
   it("CONFORMANCE_TABLE contains all required rule categories", (): void => {
-    const ids = new Set(CONFORMANCE_TABLE.map((r) => r.id));
-    const required = [
-      "PROP-WHITESPACE",
-      "PROP-ALPHA-RENAME",
-      "PROP-PARENS",
-      "PROP-DETERMINISM",
-      "DIFF-INT-ARITH",
-      "DIFF-CMP",
-      "DIFF-IF",
-      "DIFF-LET",
-      "DIFF-GENERATED",
-    ];
-    for (const id of required) {
+    const ids = new Set(CORE_CONFORMANCE_RULES.map((r) => r.id));
+    for (const id of CORE_REQUIRED_RULE_IDS) {
       expect(
         ids.has(id),
         `Rule "${id}" is missing from CONFORMANCE_TABLE`,

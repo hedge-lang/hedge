@@ -7,5 +7,5 @@
       "@hedge-lang/compiler": ["./toolchain/compiler/src/index.ts"]
     }
   },
-  "include": ["toolchain/*/src/**/*.ts", "vitest.config.ts"]
+  "include": ["toolchain/*/src/**/*.ts", "scripts/**/*.ts", "vitest.config.ts"]
 }

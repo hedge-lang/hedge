@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { none, some } from "../../option.js";
-import type { Attribute } from "../../parser/ast.js";
+import type { Attribute } from "../../semantics/ast.js";
 import { toDocComment } from "./doc-comment.js";
 
 describe("toDocComment", () => {
@@ -12,6 +12,7 @@ describe("toDocComment", () => {
           kind: "Identifier",
           text: "doc",
           tokenId: 0,
+          type: { kind: "PrimitiveStringType" },
         },
         arguments: none(),
       },
@@ -22,6 +23,7 @@ describe("toDocComment", () => {
           kind: "Identifier",
           text: "foo",
           tokenId: 1,
+          type: { kind: "PrimitiveStringType" },
         },
         arguments: some([
           {
@@ -30,6 +32,7 @@ describe("toDocComment", () => {
               kind: "StringLiteral",
               tokenId: 1,
               value: "Hello, world!",
+              type: { kind: "PrimitiveStringType" },
             }),
           },
         ]),
@@ -40,6 +43,7 @@ describe("toDocComment", () => {
           kind: "Identifier",
           text: "doc",
           tokenId: 1,
+          type: { kind: "PrimitiveStringType" },
         },
         arguments: some([
           { path: none(), literal: none() },
@@ -49,6 +53,7 @@ describe("toDocComment", () => {
               kind: "StringLiteral",
               tokenId: 1,
               value: "Hello, world!",
+              type: { kind: "PrimitiveStringType" },
             }),
           },
           {
@@ -74,6 +79,7 @@ describe("toDocComment", () => {
               kind: "StringLiteral",
               tokenId: 1,
               value: "Exclude",
+              type: { kind: "PrimitiveStringType" },
             }),
           },
           {
@@ -85,6 +91,7 @@ describe("toDocComment", () => {
               kind: "StringLiteral",
               tokenId: 1,
               value: "Exclude",
+              type: { kind: "PrimitiveStringType" },
             }),
           },
           {
@@ -96,6 +103,7 @@ describe("toDocComment", () => {
               kind: "StringLiteral",
               tokenId: 1,
               value: "Exclude",
+              type: { kind: "PrimitiveStringType" },
             }),
           },
         ]),

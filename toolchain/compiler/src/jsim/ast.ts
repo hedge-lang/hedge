@@ -130,11 +130,21 @@ export type BinaryOperator =
   | "Ge"
   | "And"
   | "Or";
+
+/** How the JS backend should wrap/truncate the result of a numeric binary operation. */
+export type NumericKind =
+  | { readonly kind: "signed"; readonly bits: 8 | 16 | 32 }
+  | { readonly kind: "unsigned"; readonly bits: 8 | 16 | 32 }
+  | { readonly kind: "bigint"; readonly signed: boolean }
+  | { readonly kind: "float"; readonly bits: 32 | 64 };
+
 interface BinaryExpression {
   readonly kind: "BinaryExpression";
   readonly operator: BinaryOperator;
   readonly left: Expression;
   readonly right: Expression;
+  /** Present for arithmetic operators on numeric types; `none()` for comparisons and logical ops. */
+  readonly numericKind: Option<NumericKind>;
 }
 
 export type UnaryOperator = "Neg" | "Not";
@@ -172,6 +182,7 @@ interface FieldAccessExpression {
 interface Identifier {
   readonly kind: "Identifier";
   readonly value: string;
+  readonly type: Option<Type>;
 }
 
 interface MethodCallExpression {

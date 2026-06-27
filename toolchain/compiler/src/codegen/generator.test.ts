@@ -13,12 +13,12 @@ function gen(source: string): Code {
   const { tokens } = tokenize(source);
   const { program, diagnostics: parseDiagnostics } = parse(tokens);
   assert(isSome(program), parseDiagnostics[0]?.message ?? "Parse failed");
-  const { diagnostics } = analyze(program.value, tokens);
+  const analysis = analyze(program.value, tokens);
   assert(
-    diagnostics.length === 0,
-    diagnostics[0]?.message ?? "Analysis failed",
+    analysis.diagnostics.length === 0,
+    analysis.diagnostics[0]?.message ?? "Analysis failed",
   );
-  return generate(toJsim(program.value));
+  return generate(toJsim(analysis.program));
 }
 
 function js(code: Code): string | null {
@@ -194,28 +194,71 @@ describe("generator", (): void => {
 
 describe("binary expression codegen", () => {
   it.each([
-    ["Add", "x + y", "x + y"],
-    ["Sub", "x - y", "x - y"],
-    ["Mul", "x * y", "x * y"],
-    ["Div", "x / y", "x / y"],
-    ["Rem", "x % y", "x % y"],
-    ["Shl", "x << y", "x << y"],
-    ["Shr", "x >> y", "x >> y"],
-    ["BitAnd", "x & y", "x & y"],
-    ["BitXor", "x ^ y", "x ^ y"],
-    ["BitOr", "x | y", "x | y"],
-    ["Eq", "x == y", "x === y"],
-    ["Ne", "x != y", "x !== y"],
-    ["Lt", "x < y", "x < y"],
-    ["Gt", "x > y", "x > y"],
-    ["Le", "x <= y", "x <= y"],
-    ["Ge", "x >= y", "x >= y"],
-    ["And", "x && y", "x && y"],
-    ["Or", "x || y", "x || y"],
-  ])("%s emits correct JS operator", (_, source, expected) => {
-    expect(stmts(gen(`fn _(x: (), y: ()) { ${source}; }`))).toBe(
+    ["Add", "i32", "x + y", "((x + y)|0)"],
+    ["Sub", "i32", "x - y", "((x - y)|0)"],
+    ["Mul", "i32", "x * y", "((x * y)|0)"],
+    [
+      "Div",
+      "i32",
+      "x / y",
+      '((((_l, _r) => _r === 0 ? (() => { throw new RangeError("attempt to divide by zero"); })() : _l / _r)(x, y))|0)',
+    ],
+    [
+      "Rem",
+      "i32",
+      "x % y",
+      '((((_l, _r) => _r === 0 ? (() => { throw new RangeError("attempt to divide by zero"); })() : _l % _r)(x, y))|0)',
+    ],
+    ["Shl", "i32", "x << y", "((x << y)|0)"],
+    ["Shr", "i32", "x >> y", "((x >> y)|0)"],
+    ["BitAnd", "i32", "x & y", "((x & y)|0)"],
+    ["BitXor", "i32", "x ^ y", "((x ^ y)|0)"],
+    ["BitOr", "i32", "x | y", "((x | y)|0)"],
+    ["Eq", "i32", "x == y", "x === y"],
+    ["Ne", "i32", "x != y", "x !== y"],
+    ["Lt", "i32", "x < y", "x < y"],
+    ["Gt", "i32", "x > y", "x > y"],
+    ["Le", "i32", "x <= y", "x <= y"],
+    ["Ge", "i32", "x >= y", "x >= y"],
+    ["Add", "f32", "x + y", "Math.fround(x + y)"],
+    ["Sub", "f32", "x - y", "Math.fround(x - y)"],
+    ["Mul", "f32", "x * y", "Math.fround(x * y)"],
+    [
+      "Div",
+      "f32",
+      "x / y",
+      'Math.fround(((_l, _r) => _r === 0 ? (() => { throw new RangeError("attempt to divide by zero"); })() : _l / _r)(x, y))',
+    ],
+    [
+      "Rem",
+      "f32",
+      "x % y",
+      'Math.fround(((_l, _r) => _r === 0 ? (() => { throw new RangeError("attempt to divide by zero"); })() : _l % _r)(x, y))',
+    ],
+    ["Eq", "f32", "x == y", "x === y"],
+    ["Ne", "f32", "x != y", "x !== y"],
+    ["Lt", "f32", "x < y", "x < y"],
+    ["Gt", "f32", "x > y", "x > y"],
+    ["Le", "f32", "x <= y", "x <= y"],
+    ["Ge", "f32", "x >= y", "x >= y"],
+    ["And", "bool", "x && y", "x && y"],
+    ["Or", "bool", "x || y", "x || y"],
+  ])("%s emits correct JS operator for %s", (_, ty, source, expected) => {
+    expect(stmts(gen(`fn _(x: ${ty}, y: ${ty}) { ${source}; }`))).toBe(
       `${expected};`,
     );
+  });
+
+  it.each([
+    ["Shr", "f32", "x >> y"],
+    ["Shl", "f32", "x << y"],
+    ["BitAnd", "f32", "x & y"],
+    ["BitOr", "f32", "x | y"],
+    ["BitXor", "f32", "x ^ y"],
+  ])("%s on %s is a type-error", (_, ty, source): void => {
+    expect(() =>
+      stmts(gen(`fn _(x: ${ty}, y: ${ty}) { ${source}; }`)),
+    ).toThrow();
   });
 
   it("(x + y) * z — parens preserved because + binds looser than *", () => {
@@ -237,7 +280,7 @@ describe("binary expression codegen", () => {
   });
 
   it("x || y && z — && binds tighter than ||, no parens needed", () => {
-    expect(stmts(gen("fn _(x: (), y: (), z: ()) { x || y && z; }"))).toBe(
+    expect(stmts(gen("fn _(x: bool, y: bool, z: bool) { x || y && z; }"))).toBe(
       "x || y && z;",
     );
   });
@@ -395,7 +438,7 @@ describe("block expression codegen", () => {
   });
   it("block as let initializer", () => {
     expect(stmts(gen("fn _() { let result = { 1 + 2 }; }"))).toBe(
-      ["const result = (() => {", "  return 1 + 2;", "})();"].join("\n"),
+      ["const result = (() => {", "  return ((1 + 2)|0);", "})();"].join("\n"),
     );
   });
 });
