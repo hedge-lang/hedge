@@ -4,11 +4,97 @@ import type * as JSIM from "./ast.js";
 import { toDocComment } from "./parts/doc-comment.js";
 import { assert, assertNever } from "../assert.js";
 
+/**
+ * The JSIM Creation context object
+ */
+interface JsimContext {
+  readonly rename: RenameCtx[];
+}
+
+function createJsimContext(): JsimContext {
+  return {
+    rename: [],
+  };
+}
+
+/**
+ * Tracks the alpha-renames from source-name to emitted-name per scope frame.
+ * Null outside function bodies (top-level items are not renamed).
+ */
+interface RenameCtx {
+  frames: Map<string, string>[];
+  counters: Map<string, number>;
+}
+
+function withFunctionCtx<T>(ctx: JsimContext, fn: () => T): T {
+  ctx.rename.push({
+    frames: [new Map<string, string>()],
+    counters: new Map<string, number>(),
+  });
+  try {
+    return fn();
+  } finally {
+    ctx.rename.pop();
+  }
+}
+
+function pushRenameFrame(ctx: JsimContext): void {
+  ctx.rename.at(-1)?.frames.push(new Map<string, string>());
+}
+
+function popRenameFrame(ctx: JsimContext): void {
+  ctx.rename.at(-1)?.frames.pop();
+}
+
+function getCurrentRenameContext(ctx: JsimContext): Option<RenameCtx> {
+  const renameCtx = ctx.rename.at(-1);
+  return renameCtx ? some(renameCtx) : none();
+}
+
+function bindLocalName(ctx: JsimContext, sourceName: string): string {
+  const renameCtx = getCurrentRenameContext(ctx);
+  if (!isSome(renameCtx)) {
+    return sourceName;
+  }
+  const visible = renameCtx.value.frames.some((f) => f.has(sourceName));
+  const frame = ((): Option<Map<string, string>> => {
+    const maybeFrame = renameCtx.value.frames.at(-1);
+    return maybeFrame === undefined ? none() : some(maybeFrame);
+  })();
+  if (visible) {
+    const k = (renameCtx.value.counters.get(sourceName) ?? 0) + 1;
+    renameCtx.value.counters.set(sourceName, k);
+    const emitted = `${sourceName}$${k}`;
+    mapSome(frame, (f) => f.set(sourceName, emitted));
+    return emitted;
+  }
+  mapSome(frame, (f) => f.set(sourceName, sourceName));
+  return sourceName;
+}
+
+function lookupLocalName(ctx: JsimContext, sourceName: string): string {
+  const renameCtx = getCurrentRenameContext(ctx);
+  if (!isSome(renameCtx)) {
+    return sourceName;
+  }
+  for (let i = renameCtx.value.frames.length - 1; i >= 0; i--) {
+    const frame = renameCtx.value.frames[i];
+    if (frame !== undefined) {
+      const hit = frame.get(sourceName);
+      if (hit !== undefined) {
+        return hit;
+      }
+    }
+  }
+  return sourceName;
+}
+
 export function toJsim(program: Semantics.Program): JSIM.Program {
+  const ctx = createJsimContext();
   return {
     kind: "Program",
     docComment: toDocComment(program.attributes),
-    items: program.items.flatMap(parseItem),
+    items: program.items.flatMap((i) => parseItem(ctx, i)),
   };
 }
 
@@ -95,12 +181,15 @@ function hedgeTypeToNumericKind(
   }
 }
 
-function parseItem(item: Semantics.Item): JSIM.Item | JSIM.Item[] {
-  if (item.kind === "Function") return parseFunction(item);
+function parseItem(
+  ctx: JsimContext,
+  item: Semantics.Item,
+): JSIM.Item | JSIM.Item[] {
+  if (item.kind === "Function") return parseFunction(ctx, item);
   if (item.kind === "LetStatement" || item.kind === "ExpressionStatement")
-    return parseStatement(item);
+    return parseStatement(ctx, item);
   if (item.kind === "Struct") return parseStruct(item);
-  return parseExpression(item);
+  return parseExpression(ctx, item);
 }
 
 function parseStruct(struct: Semantics.StructDecl): JSIM.Item[] {
@@ -109,14 +198,32 @@ function parseStruct(struct: Semantics.StructDecl): JSIM.Item[] {
   return [];
 }
 
-function parseFunction(fn: Semantics.FunctionDecl): JSIM.FunctionDecl {
+function parseFunction(
+  ctx: JsimContext,
+  fn: Semantics.FunctionDecl,
+): JSIM.FunctionDecl {
+  return withFunctionCtx(ctx, () => {
+    // Pre-bind params so inner `let` with the same name gets a unique suffix.
+    for (const param of fn.params) {
+      bindLocalName(ctx, param.pattern.name.text);
+    }
+    return parseFunctionBody(ctx, fn);
+  });
+}
+
+function parseFunctionBody(
+  ctx: JsimContext,
+  fn: Semantics.FunctionDecl,
+): JSIM.FunctionDecl {
   const innerDoc = toDocComment(fn.body.innerAttributes);
   const outerDoc = toDocComment(fn.attributes);
   const docComment = isSome(innerDoc) ? innerDoc : outerDoc;
 
-  const statements: JSIM.Statement[] = fn.body.statements.map(parseStatement);
+  const statements: JSIM.Statement[] = fn.body.statements.map((stmt) =>
+    parseStatement(ctx, stmt),
+  );
   if (isSome(fn.body.trailingExpression)) {
-    statements.push(parseExpression(fn.body.trailingExpression.value));
+    statements.push(parseExpression(ctx, fn.body.trailingExpression.value));
   }
 
   const scope: JSIM.FunctionDecl["scope"] = mapSome(
@@ -152,24 +259,34 @@ function parseFunction(fn: Semantics.FunctionDecl): JSIM.FunctionDecl {
   };
 }
 
-function parseStatement(statement: Semantics.Statement): JSIM.Statement {
+function parseStatement(
+  ctx: JsimContext,
+  statement: Semantics.Statement,
+): JSIM.Statement {
   switch (statement.kind) {
-    case "LetStatement":
+    case "LetStatement": {
+      // Evaluate the initializer BEFORE binding the name so that
+      // `let x = x + 1` resolves the RHS `x` to the *outer* binding.
+      const value = mapSome(statement.initializer, (expr) =>
+        parseExpression(ctx, expr),
+      );
+      const name = bindLocalName(ctx, statement.pattern.name.text);
       return {
         kind: "LetStatement",
-        name: statement.pattern.name.text,
+        name,
         mutable: statement.bind || statement.write,
-        value: mapSome(statement.initializer, parseExpression),
+        value,
         docComment: toDocComment(statement.attributes),
       };
+    }
     case "ExpressionStatement":
       if (statement.expression.kind === "Block") {
-        return jsimBlockStatement(statement.expression);
+        return jsimBlockStatement(ctx, statement.expression);
       }
       if (statement.expression.kind === "IfExpression") {
-        return jsimIfExpressionAsStatement(statement.expression);
+        return jsimIfExpressionAsStatement(ctx, statement.expression);
       }
-      return parseExpression(statement.expression);
+      return parseExpression(ctx, statement.expression);
   }
 }
 
@@ -186,26 +303,33 @@ function jsimBranchHasResult(
   return isSome(branch.trailingExpression);
 }
 
-function jsimBlockStatement(block: Semantics.Block): JSIM.Statement {
-  if (isSome(block.trailingExpression)) return jsimBlockExpression(block);
-  return {
-    kind: "BlockStatement",
-    body: block.statements.map(parseStatement),
-  };
+function jsimBlockStatement(
+  ctx: JsimContext,
+  block: Semantics.Block,
+): JSIM.Statement {
+  if (isSome(block.trailingExpression)) return jsimBlockExpression(ctx, block);
+  pushRenameFrame(ctx);
+  const body = block.statements.map((stmt) => parseStatement(ctx, stmt));
+  popRenameFrame(ctx);
+  return { kind: "BlockStatement", body };
 }
 
 function jsimIfExpressionAsStatement(
+  ctx: JsimContext,
   ifExpr: Semantics.IfExpression,
 ): JSIM.Statement {
   const hasResult =
     jsimBranchHasResult(ifExpr.thenBranch) ||
     (isSome(ifExpr.elseBranch) && jsimBranchHasResult(ifExpr.elseBranch.value));
-  if (hasResult) return jsimIfExpression(ifExpr);
-  return jsimIfStatement(ifExpr);
+  if (hasResult) return jsimIfExpression(ctx, ifExpr);
+  return jsimIfStatement(ctx, ifExpr);
 }
 
 // eslint-disable-next-line complexity -- This is a routing function
-function parseExpression(expression: Semantics.Expression): JSIM.Expression {
+function parseExpression(
+  ctx: JsimContext,
+  expression: Semantics.Expression,
+): JSIM.Expression {
   switch (expression.kind) {
     case "StringLiteral":
       return { kind: "StringLiteral", value: expression.value };
@@ -221,40 +345,44 @@ function parseExpression(expression: Semantics.Expression): JSIM.Expression {
       if (expression.path.segments.length === 1 && !expression.path.absolute) {
         const value = expression.path.segments[0];
         assert(value !== undefined, "Unexpected undefined segment");
-        return { kind: "Identifier", value, type: none() };
+        return {
+          kind: "Identifier",
+          value: lookupLocalName(ctx, value),
+          type: none(),
+        };
       }
       return { kind: "PathExpression", path: expression.path.segments };
     case "CallExpression":
       return {
         kind: "CallExpression",
-        callee: parseExpression(expression.callee),
-        arguments: expression.arguments.map(parseExpression),
+        callee: parseExpression(ctx, expression.callee),
+        arguments: expression.arguments.map((arg) => parseExpression(ctx, arg)),
       };
     case "ReferenceExpression":
       // References are transparent in JS — emit the operand directly.
-      return parseExpression(expression.operand);
+      return parseExpression(ctx, expression.operand);
     case "BinaryExpression":
-      return parseBinaryExpression(expression);
+      return parseBinaryExpression(ctx, expression);
     case "UnaryExpression":
-      return parseUnaryExpression(expression);
+      return parseUnaryExpression(ctx, expression);
     case "AssignExpression":
-      return parseAssignExpression(expression);
+      return parseAssignExpression(ctx, expression);
     case "CompoundAssignExpression":
-      return parseCompoundAssignExpression(expression);
+      return parseCompoundAssignExpression(ctx, expression);
     case "FieldAccessExpression":
-      return parseFieldAccessExpression(expression);
+      return parseFieldAccessExpression(ctx, expression);
     case "MethodCallExpression":
-      return jsimMethodCallExpression(expression);
+      return jsimMethodCallExpression(ctx, expression);
     case "IndexExpression":
-      return jsimIndexExpression(expression);
+      return jsimIndexExpression(ctx, expression);
     case "TupleExpression":
-      return jsimTupleExpression(expression);
+      return jsimTupleExpression(ctx, expression);
     case "StructExpression":
-      return jsimStructExpression(expression);
+      return jsimStructExpression(ctx, expression);
     case "IfExpression":
-      return jsimIfExpression(expression);
+      return jsimIfExpression(ctx, expression);
     case "Block":
-      return jsimBlockExpression(expression);
+      return jsimBlockExpression(ctx, expression);
 
     default:
       assertNever(
@@ -265,95 +393,119 @@ function parseExpression(expression: Semantics.Expression): JSIM.Expression {
 }
 
 function jsimMethodCallExpression(
+  ctx: JsimContext,
   methodCallExpression: Semantics.MethodCallExpression,
 ): JSIM.Expression {
   return {
     kind: "MethodCallExpression",
-    receiver: parseExpression(methodCallExpression.receiver),
+    receiver: parseExpression(ctx, methodCallExpression.receiver),
     method: methodCallExpression.method.text,
-    arguments: methodCallExpression.arguments.map(parseExpression),
+    arguments: methodCallExpression.arguments.map((arg) =>
+      parseExpression(ctx, arg),
+    ),
   };
 }
 
-function jsimBlockExpression(block: Semantics.Block): JSIM.Expression {
+function jsimBlockExpression(
+  ctx: JsimContext,
+  block: Semantics.Block,
+): JSIM.Expression {
   return {
     kind: "CallExpression",
     callee: {
       kind: "ArrowFunctionExpression",
       params: [],
-      body: jsimBranchBody(block),
+      body: jsimBranchBody(ctx, block),
     },
     arguments: [],
   };
 }
 
-function jsimBranchBody(block: Semantics.Block): JSIM.Statement[] {
-  const stmts: JSIM.Statement[] = block.statements.map(parseStatement);
+function jsimBranchBody(
+  ctx: JsimContext,
+  block: Semantics.Block,
+): JSIM.Statement[] {
+  pushRenameFrame(ctx);
+  const stmts: JSIM.Statement[] = block.statements.map((stmt) =>
+    parseStatement(ctx, stmt),
+  );
   if (isSome(block.trailingExpression)) {
     stmts.push({
       kind: "ReturnStatement",
-      value: some(parseExpression(block.trailingExpression.value)),
+      value: some(parseExpression(ctx, block.trailingExpression.value)),
     });
   }
+  popRenameFrame(ctx);
   return stmts;
 }
 
 function jsimBranchElse(
+  ctx: JsimContext,
   branch: Semantics.IfExpression | Semantics.Block,
 ): JSIM.Statement[] {
-  if (branch.kind === "IfExpression") return [jsimIfStatement(branch)];
-  return jsimBranchBody(branch);
+  if (branch.kind === "IfExpression") return [jsimIfStatement(ctx, branch)];
+  return jsimBranchBody(ctx, branch);
 }
 
-function jsimIfStatement(ifExpr: Semantics.IfExpression): JSIM.IfStatement {
+function jsimIfStatement(
+  ctx: JsimContext,
+  ifExpr: Semantics.IfExpression,
+): JSIM.IfStatement {
   return {
     kind: "IfStatement",
-    condition: parseExpression(ifExpr.condition),
-    then: jsimBranchBody(ifExpr.thenBranch),
-    else: mapSome(ifExpr.elseBranch, jsimBranchElse),
+    condition: parseExpression(ctx, ifExpr.condition),
+    then: jsimBranchBody(ctx, ifExpr.thenBranch),
+    else: mapSome(ifExpr.elseBranch, (eb) => jsimBranchElse(ctx, eb)),
   };
 }
 
 function jsimIndexExpression(
+  ctx: JsimContext,
   indexExpression: Semantics.IndexExpression,
 ): JSIM.Expression {
   return {
     kind: "IndexExpression",
-    object: parseExpression(indexExpression.object),
-    index: parseExpression(indexExpression.index),
+    object: parseExpression(ctx, indexExpression.object),
+    index: parseExpression(ctx, indexExpression.index),
   };
 }
 
 function jsimTupleExpression(
+  ctx: JsimContext,
   tupleExpression: Semantics.TupleExpression,
 ): JSIM.Expression {
   return {
     kind: "TupleExpression",
-    elements: tupleExpression.elements.map(parseExpression),
+    elements: tupleExpression.elements.map((elem) =>
+      parseExpression(ctx, elem),
+    ),
   };
 }
 
-function jsimStructExpression({
-  base,
-  fields,
-}: Semantics.StructExpression): JSIM.Expression {
+function jsimStructExpression(
+  ctx: JsimContext,
+  { base, fields }: Semantics.StructExpression,
+): JSIM.Expression {
   return {
     kind: "StructExpression",
     fields: [
       ...[base]
         .filter(isSome)
-        .map((b) => parseExpression(b.value))
+        .map((b) => parseExpression(ctx, b.value))
         .map(makeSpread),
-      ...fields.map(makeStructField),
+      ...fields.map((f) => makeStructField(ctx, f)),
     ],
   };
 }
 
-function makeStructField(field: Semantics.FieldInit): JSIM.StructField {
+function makeStructField(
+  ctx: JsimContext,
+  field: Semantics.FieldInit,
+): JSIM.StructField {
   return {
     kind: "StructField",
     name: field.name.text,
-    value: mapSome(field.value, parseExpression),
+    value: mapSome(field.value, (v) => parseExpression(ctx, v)),
   };
 }
 
@@ -362,6 +514,7 @@ function makeSpread(expression: JSIM.Expression): JSIM.SpreadExpression {
 }
 
 function jsimIfExpression(
+  ctx: JsimContext,
   ifExpression: Semantics.IfExpression,
 ): JSIM.Expression {
   return {
@@ -369,7 +522,7 @@ function jsimIfExpression(
     callee: {
       kind: "ArrowFunctionExpression",
       params: [],
-      body: [jsimIfStatement(ifExpression)],
+      body: [jsimIfStatement(ctx, ifExpression)],
     },
     arguments: [],
   };
@@ -389,6 +542,7 @@ function jsimIntLiteral({
 }
 
 function parseBinaryExpression(
+  ctx: JsimContext,
   binExp: Semantics.BinaryExpression,
 ): JSIM.Expression {
   const numericKind: Option<JSIM.NumericKind> = ARITHMETIC_OPS.has(
@@ -399,13 +553,14 @@ function parseBinaryExpression(
   return {
     kind: binExp.kind,
     operator: binExp.operator,
-    left: parseExpression(binExp.left),
-    right: parseExpression(binExp.right),
+    left: parseExpression(ctx, binExp.left),
+    right: parseExpression(ctx, binExp.right),
     numericKind,
   };
 }
 
 function parseUnaryExpression(
+  ctx: JsimContext,
   unaryExp: Semantics.UnaryExpression,
 ): JSIM.Expression {
   const numericKind: Option<JSIM.NumericKind> =
@@ -415,39 +570,42 @@ function parseUnaryExpression(
   return {
     kind: unaryExp.kind,
     operator: unaryExp.operator,
-    operand: parseExpression(unaryExp.operand),
+    operand: parseExpression(ctx, unaryExp.operand),
     numericKind,
   };
 }
 
 function parseAssignExpression(
+  ctx: JsimContext,
   assignExp: Semantics.AssignExpression,
 ): JSIM.Expression {
   return {
     kind: "AssignExpression",
     operator: "Assign",
-    lhs: parseExpression(assignExp.lhs),
-    rhs: parseExpression(assignExp.rhs),
+    lhs: parseExpression(ctx, assignExp.lhs),
+    rhs: parseExpression(ctx, assignExp.rhs),
   };
 }
 
 function parseCompoundAssignExpression(
+  ctx: JsimContext,
   compoundAssignExp: Semantics.CompoundAssignExpression,
 ): JSIM.Expression {
   return {
     kind: "AssignExpression",
     operator: compoundAssignExp.operator,
-    lhs: parseExpression(compoundAssignExp.lhs),
-    rhs: parseExpression(compoundAssignExp.rhs),
+    lhs: parseExpression(ctx, compoundAssignExp.lhs),
+    rhs: parseExpression(ctx, compoundAssignExp.rhs),
   };
 }
 
 function parseFieldAccessExpression(
+  ctx: JsimContext,
   fieldAccessExp: Semantics.FieldAccessExpression,
 ): JSIM.Expression {
   return {
     kind: "FieldAccessExpression",
-    object: parseExpression(fieldAccessExp.object),
+    object: parseExpression(ctx, fieldAccessExp.object),
     field: fieldAccessExp.field.text,
   };
 }
