@@ -60,9 +60,13 @@ function bindLocalName(ctx: JsimContext, sourceName: string): string {
   const frame = renameCtx.value.frames.at(-1);
   assert(frame !== undefined, "Expected a rename frame to be present");
   if (visible) {
-    const k = (renameCtx.value.counters.get(sourceName) ?? 0) + 1;
+    let k = (renameCtx.value.counters.get(sourceName) ?? 0) + 1;
+    let emitted = `${sourceName}$${k}`;
+    while (renameCtx.value.frames.some((f) => f.has(emitted))) {
+      k += 1;
+      emitted = `${sourceName}$${k}`;
+    }
     renameCtx.value.counters.set(sourceName, k);
-    const emitted = `${sourceName}$${k}`;
     frame.set(sourceName, emitted);
     return emitted;
   }
@@ -202,16 +206,24 @@ function parseFunction(
 ): JSIM.FunctionDecl {
   return withFunctionCtx(ctx, () => {
     // Pre-bind params so inner `let` with the same name gets a unique suffix.
-    for (const param of fn.params) {
-      bindLocalName(ctx, param.pattern.name.text);
-    }
-    return parseFunctionBody(ctx, fn);
+    // Capture the emitted name so the function declaration stays in sync with
+    // whatever the rename context assigns (defensive: currently always identity
+    // since params are the first things bound in a fresh function scope).
+    const emittedParams = fn.params.map((p) => ({
+      param: p,
+      emittedName: bindLocalName(ctx, p.pattern.name.text),
+    }));
+    return parseFunctionBody(ctx, fn, emittedParams);
   });
 }
 
 function parseFunctionBody(
   ctx: JsimContext,
   fn: Semantics.FunctionDecl,
+  emittedParams: ReadonlyArray<{
+    param: Semantics.FunctionDecl["params"][number];
+    emittedName: string;
+  }>,
 ): JSIM.FunctionDecl {
   const innerDoc = toDocComment(fn.body.innerAttributes);
   const outerDoc = toDocComment(fn.attributes);
@@ -236,18 +248,14 @@ function parseFunctionBody(
     kind: "FunctionDecl",
     scope,
     name: fn.name.text,
-    params: fn.params.flatMap((p): JSIM.FunctionParam[] => {
-      const type: Option<JsPrimitiveType> = semanticTypeToJsPrimitive(p.type);
-      return isSome(type)
-        ? [
-            {
-              kind: "FunctionParam",
-              name: p.pattern.name.text,
-              type: type.value,
-            },
-          ]
-        : [];
-    }),
+    params: emittedParams.flatMap(
+      ({ param: p, emittedName }): JSIM.FunctionParam[] => {
+        const type: Option<JsPrimitiveType> = semanticTypeToJsPrimitive(p.type);
+        return isSome(type)
+          ? [{ kind: "FunctionParam", name: emittedName, type: type.value }]
+          : [];
+      },
+    ),
     returnType:
       isSome(fn.returnType) && fn.returnType.value.kind !== "UnitType"
         ? semanticTypeToJsPrimitive(fn.returnType.value)
@@ -307,9 +315,12 @@ function jsimBlockStatement(
 ): JSIM.Statement {
   if (isSome(block.trailingExpression)) return jsimBlockExpression(ctx, block);
   pushRenameFrame(ctx);
-  const body = block.statements.map((stmt) => parseStatement(ctx, stmt));
-  popRenameFrame(ctx);
-  return { kind: "BlockStatement", body };
+  try {
+    const body = block.statements.map((stmt) => parseStatement(ctx, stmt));
+    return { kind: "BlockStatement", body };
+  } finally {
+    popRenameFrame(ctx);
+  }
 }
 
 function jsimIfExpressionAsStatement(
@@ -424,17 +435,20 @@ function jsimBranchBody(
   block: Semantics.Block,
 ): JSIM.Statement[] {
   pushRenameFrame(ctx);
-  const stmts: JSIM.Statement[] = block.statements.map((stmt) =>
-    parseStatement(ctx, stmt),
-  );
-  if (isSome(block.trailingExpression)) {
-    stmts.push({
-      kind: "ReturnStatement",
-      value: some(parseExpression(ctx, block.trailingExpression.value)),
-    });
+  try {
+    const stmts: JSIM.Statement[] = block.statements.map((stmt) =>
+      parseStatement(ctx, stmt),
+    );
+    if (isSome(block.trailingExpression)) {
+      stmts.push({
+        kind: "ReturnStatement",
+        value: some(parseExpression(ctx, block.trailingExpression.value)),
+      });
+    }
+    return stmts;
+  } finally {
+    popRenameFrame(ctx);
   }
-  popRenameFrame(ctx);
-  return stmts;
 }
 
 function jsimBranchElse(
@@ -500,11 +514,14 @@ function makeStructField(
   ctx: JsimContext,
   field: Semantics.FieldInit,
 ): JSIM.StructField {
-  return {
-    kind: "StructField",
-    name: field.name.text,
-    value: mapSome(field.value, (v) => parseExpression(ctx, v)),
-  };
+  const value = isSome(field.value)
+    ? some(parseExpression(ctx, field.value.value))
+    : some<JSIM.Expression>({
+        kind: "Identifier",
+        value: lookupLocalName(ctx, field.name.text),
+        type: none(),
+      });
+  return { kind: "StructField", name: field.name.text, value };
 }
 
 function makeSpread(expression: JSIM.Expression): JSIM.SpreadExpression {

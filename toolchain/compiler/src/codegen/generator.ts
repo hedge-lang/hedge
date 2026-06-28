@@ -256,9 +256,16 @@ function emitExpression(expression: Expression): string {
       const fields = expression.fields.map((f) =>
         f.kind === "SpreadExpression"
           ? `...${emitExpression(f.expression)}`
-          : isSome(f.value)
-            ? `${f.name}: ${emitExpression(f.value.value)}`
-            : f.name,
+          : unwrapSomeOr(
+              mapSome(f.value, (fValue) => {
+                const fName = f.name;
+                const emittedExpression = emitExpression(fValue);
+                return emittedExpression === fName
+                  ? fName
+                  : `${fName}: ${emittedExpression}`;
+              }),
+              f.name,
+            ),
       );
       return `({${fields.join(", ")}})`;
     }
