@@ -293,6 +293,23 @@ describe("unary expression codegen", () => {
   ])("Neg on %s wraps result", (ty, expected) => {
     expect(stmts(gen(`fn _(x: ${ty}) { -x; }`))).toBe(`${expected};`);
   });
+
+  it.each([
+    ["i64", "-0x8000_0000_0000_0000"],
+    ["i32", "-0x8000_0000"],
+    ["i16", "-0x8000"],
+    ["i8", "-0x80"],
+    ["u64", "-1"],
+    ["u32", "-1"],
+    ["u16", "-1"],
+    ["u8", "-1"],
+    ["f32", "-3.4028234663852886e+38"],
+    ["f64", "-1.7976931348623157e+308"],
+  ])("Neg on %s = %s literal panics", (ty, expected) => {
+    expect(() => {
+      stmts(gen(`fn _() { let x: ${ty} = ${expected}; let y: ${ty} = -x; }`));
+    }).toThrow(`out of range for ${ty}`);
+  });
 });
 
 describe("assign expression codegen", () => {

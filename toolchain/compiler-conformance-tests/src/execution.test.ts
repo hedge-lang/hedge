@@ -6,6 +6,7 @@ import {
   assertRunsTo,
   assertCompilesClean,
   assertRejectsWithMessage,
+  assertRejects,
 } from "./test-harness.js";
 
 describe("execution tests", (): void => {
@@ -332,8 +333,212 @@ describe("execution tests", (): void => {
       );
     });
 
+    it("i64 addition wraps on overflow (two's complement)", (): void => {
+      assertRunsTo(`fn main() { print(0x7FFF_FFFF_FFFF_FFFF_i64 + 1); }`, [
+        String(-0x8000_0000_0000_0000n),
+      ]);
+    });
+
     it("i32 addition wraps on overflow (two's complement)", (): void => {
-      assertRunsTo(`fn main() { print(2147483647 + 1); }`, ["-2147483648"]);
+      assertRunsTo(`fn main() { print(0x7FFF_FFFF_i32 + 1); }`, [
+        String(-0x8000_0000),
+      ]);
+    });
+
+    it("i16 addition wraps on overflow (two's complement)", (): void => {
+      assertRunsTo(`fn main() { print(0x7FFF_i16 + 1); }`, [String(-0x8000)]);
+    });
+
+    it("i8 addition wraps on overflow (two's complement)", (): void => {
+      assertRunsTo(`fn main() { print(0x7F_i8 + 1); }`, [String(-0x80)]);
+    });
+
+    it("u64 addition wraps on overflow", (): void => {
+      assertRunsTo(`fn main() { print(0xFFFF_FFFF_FFFF_FFFF_u64 + 1); }`, [
+        "0",
+      ]);
+    });
+
+    it("u32 addition wraps on overflow", (): void => {
+      assertRunsTo(`fn main() { print(0xFFFF_FFFF_u32 + 1); }`, ["0"]);
+    });
+
+    it("u16 addition wraps on overflow", (): void => {
+      assertRunsTo(`fn main() { print(0xFFFF_u16 + 1); }`, ["0"]);
+    });
+
+    it("u8 addition wraps on overflow (two's complement)", (): void => {
+      assertRunsTo(`fn main() { print(0xFF_u8 + 1); }`, ["0"]);
+    });
+
+    it("i64 negation of zeroes", () => {
+      assertRunsTo(`fn main() { let x: i64 = 0; print(-x == 0); }`, ["true"]);
+      assertRunsTo(`fn main() { let x: i64 = -0; print(-x == 0); }`, ["true"]);
+    });
+
+    it("i64 negation of ones", () => {
+      assertRunsTo(`fn main() { let x: i64 = 1; print(-x == -1); }`, ["true"]);
+      assertRunsTo(`fn main() { let x: i64 = -1; print(-x == 1); }`, ["true"]);
+    });
+
+    it("i64 negation of max value", () => {
+      assertRunsTo(
+        `fn main() { let x: i64 = 0x7FFF_FFFF_FFFF_FFFF; print(-x == -0x7FFF_FFFF_FFFF_FFFF); }`,
+        ["true"],
+      );
+    });
+
+    it("i64 assignment beyond max value", () => {
+      assertRejects(
+        `fn main() { let x: i64 = 0x8000_0000_0000_0000; print(x); }`,
+      );
+    });
+
+    it("i64 assignment beyond min value", () => {
+      assertRejects(
+        `fn main() { let x: i64 = -0x8000_0000_0000_0000; print(-x == 0x8000_0000_0000_0000); }`,
+      );
+    });
+
+    it("i64 negation of min value", () => {
+      assertRunsTo(
+        `fn main() { let x: i64 = -0x8000_0000_0000_0000; print(x); }`,
+        ["-9223372036854775808"],
+      );
+    });
+
+    it("i64 negated literal below min in comparison is rejected", () => {
+      assertRejects(
+        `fn main() { let x: i64 = 0; print(-0x8000_0000_0000_0001 == x); }`,
+      );
+    });
+
+    it("i64 negated literal at min in comparison is accepted", () => {
+      assertRunsTo(
+        `fn main() { let x: i64 = -0x8000_0000_0000_0000; print(-0x8000_0000_0000_0000 == x); }`,
+        ["true"],
+      );
+    });
+
+    it("i32 negation of zeroes", () => {
+      assertRunsTo(`fn main() { let x: i32 = 0; print(-x == 0); }`, ["true"]);
+      assertRunsTo(`fn main() { let x: i32 = -0; print(-x == 0); }`, ["true"]);
+    });
+
+    it("i32 negation of ones", () => {
+      assertRunsTo(`fn main() { let x: i32 = 1; print(-x == -1); }`, ["true"]);
+      assertRunsTo(`fn main() { let x: i32 = -1; print(-x == 1); }`, ["true"]);
+    });
+
+    it("i32 negation of max value", () => {
+      assertRunsTo(
+        `fn main() { let x: i32 = 0x7FFF_FFFF; print(-x == -0x7FFF_FFFF); }`,
+        ["true"],
+      );
+    });
+
+    it("i32 assignment beyond max value", () => {
+      assertRejects(`fn main() { let x: i32 = 0x8000_0000; print(x); }`);
+    });
+
+    it("i32 assignment beyond min value", () => {
+      assertRejects(
+        `fn main() { let x: i32 = -0x8000_0000; print(-x == 0x8000_0000); }`,
+      );
+    });
+
+    it("i32 negation of min value", () => {
+      assertRunsTo(`fn main() { let x: i32 = -0x8000_0000; print(x); }`, [
+        "-2147483648",
+      ]);
+    });
+
+    it("i32 negated literal below min in comparison is rejected", () => {
+      assertRejects(`fn main() { let x: i32 = 0; print(-0x8000_0001 == x); }`);
+    });
+
+    it("i32 negated literal at min in comparison is accepted", () => {
+      assertRunsTo(
+        `fn main() { let x: i32 = -0x8000_0000; print(-0x8000_0000 == x); }`,
+        ["true"],
+      );
+    });
+
+    it("i16 negation of zeroes", () => {
+      assertRunsTo(`fn main() { let x: i16 = 0; print(-x == 0); }`, ["true"]);
+      assertRunsTo(`fn main() { let x: i16 = -0; print(-x == 0); }`, ["true"]);
+    });
+
+    it("i16 negation of ones", () => {
+      assertRunsTo(`fn main() { let x: i16 = 1; print(-x == -1); }`, ["true"]);
+      assertRunsTo(`fn main() { let x: i16 = -1; print(-x == 1); }`, ["true"]);
+    });
+
+    it("i16 negation of max value", () => {
+      assertRunsTo(`fn main() { let x: i16 = 0x7FFF; print(-x == -0x7FFF); }`, [
+        "true",
+      ]);
+    });
+
+    it("i16 assignment beyond max value", () => {
+      assertRejects(`fn main() { let x: i16 = 0x8000; print(x); }`);
+    });
+
+    it("i16 assignment beyond min value", () => {
+      assertRejects(`fn main() { let x: i16 = -0x8000; print(-x == 0x8000); }`);
+    });
+
+    it("i16 negation of min value", () => {
+      assertRunsTo(`fn main() { let x: i16 = -0x8000; print(x); }`, ["-32768"]);
+    });
+
+    it("i16 negated literal below min in comparison is rejected", () => {
+      assertRejects(`fn main() { let x: i16 = 0; print(-0x8001 == x); }`);
+    });
+
+    it("i16 negated literal at min in comparison is accepted", () => {
+      assertRunsTo(`fn main() { let x: i16 = -0x8000; print(-0x8000 == x); }`, [
+        "true",
+      ]);
+    });
+
+    it("i8 negation of zeroes", () => {
+      assertRunsTo(`fn main() { let x: i8 = 0; print(-x == 0); }`, ["true"]);
+      assertRunsTo(`fn main() { let x: i8 = -0; print(-x == 0); }`, ["true"]);
+    });
+
+    it("i8 negation of ones", () => {
+      assertRunsTo(`fn main() { let x: i8 = 1; print(-x == -1); }`, ["true"]);
+      assertRunsTo(`fn main() { let x: i8 = -1; print(-x == 1); }`, ["true"]);
+    });
+
+    it("i8 negation of max value", () => {
+      assertRunsTo(`fn main() { let x: i8 = 0x7F; print(-x == -0x7F); }`, [
+        "true",
+      ]);
+    });
+
+    it("i8 assignment beyond max value", () => {
+      assertRejects(`fn main() { let x: i8 = 0x80; print(x); }`);
+    });
+
+    it("i8 assignment beyond min value", () => {
+      assertRejects(`fn main() { let x: i8 = -0x80; print(-x == 0x80); }`);
+    });
+
+    it("i8 negation of min value", () => {
+      debugger;
+      assertRunsTo(`fn main() { let x: i8 = -0x80; print(x); }`, ["-128"]);
+    });
+
+    it("i8 negated literal below min in comparison is rejected", () => {
+      assertRejects(`fn main() { let x: i8 = 0; print(-0x81 == x); }`);
+    });
+
+    it("i8 negated literal at min in comparison is accepted", () => {
+      assertRunsTo(`fn main() { let x: i8 = -0x80; print(-0x80 == x); }`, [
+        "true",
+      ]);
     });
   });
 

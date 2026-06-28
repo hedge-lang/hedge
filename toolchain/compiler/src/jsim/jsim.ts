@@ -387,13 +387,14 @@ function jsimIfExpression(
 function jsimIntLiteral({
   base,
   value,
+  type,
 }: Semantics.IntLiteral): JSIM.Expression {
   const basePrefix =
     base === 2 ? "0b" : base === 8 ? "0o" : base === 16 ? "0x" : "";
-  return {
-    kind: "NumberLiteral",
-    value: String(BigInt(basePrefix + value)),
-  };
+  const isBigInt =
+    type.kind === "PrimitiveI64Type" || type.kind === "PrimitiveU64Type";
+  const numStr = String(BigInt(basePrefix + value));
+  return { kind: "NumberLiteral", value: isBigInt ? numStr + "n" : numStr };
 }
 
 function parseBinaryExpression(

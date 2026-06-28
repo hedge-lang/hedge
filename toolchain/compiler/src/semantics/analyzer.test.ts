@@ -138,4 +138,19 @@ describe("semantic analysis", (): void => {
     assert(isSome(span), "Expected span");
     expect(span.value.start).toBe(source.indexOf("UnknownType"));
   });
+
+  describe("integer literal range validation", () => {
+    describe("negated literal in binary expression", () => {
+      it("rejects a negated literal below i8 min in a comparison", () => {
+        const result = diagnose("fn f(x: i8) { print(-0x81 == x); }");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain("out of range for i8");
+      });
+
+      it("accepts a negated literal at exactly i8 min in a comparison", () => {
+        const result = diagnose("fn f(x: i8) { print(-0x80 == x); }");
+        expect(result.diagnostics).toEqual([]);
+      });
+    });
+  });
 });
