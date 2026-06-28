@@ -57,18 +57,16 @@ function bindLocalName(ctx: JsimContext, sourceName: string): string {
     return sourceName;
   }
   const visible = renameCtx.value.frames.some((f) => f.has(sourceName));
-  const frame = ((): Option<Map<string, string>> => {
-    const maybeFrame = renameCtx.value.frames.at(-1);
-    return maybeFrame === undefined ? none() : some(maybeFrame);
-  })();
+  const frame = renameCtx.value.frames.at(-1);
+  assert(frame !== undefined, "Expected a rename frame to be present");
   if (visible) {
     const k = (renameCtx.value.counters.get(sourceName) ?? 0) + 1;
     renameCtx.value.counters.set(sourceName, k);
     const emitted = `${sourceName}$${k}`;
-    mapSome(frame, (f) => f.set(sourceName, emitted));
+    frame.set(sourceName, emitted);
     return emitted;
   }
-  mapSome(frame, (f) => f.set(sourceName, sourceName));
+  frame.set(sourceName, sourceName);
   return sourceName;
 }
 
