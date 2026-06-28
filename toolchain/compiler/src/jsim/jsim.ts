@@ -24,12 +24,14 @@ function createJsimContext(): JsimContext {
 interface RenameCtx {
   frames: Map<string, string>[];
   counters: Map<string, number>;
+  emittedNames: Set<string>;
 }
 
 function withFunctionCtx<T>(ctx: JsimContext, fn: () => T): T {
   ctx.rename.push({
     frames: [new Map<string, string>()],
     counters: new Map<string, number>(),
+    emittedNames: new Set<string>(),
   });
   try {
     return fn();
@@ -59,25 +61,26 @@ function bindLocalName(ctx: JsimContext, sourceName: string): string {
   const visible = renameCtx.value.frames.some((f) => f.has(sourceName));
   const frame = renameCtx.value.frames.at(-1);
   assert(frame !== undefined, "Expected a rename frame to be present");
-  // Collect all emitted values to catch value collisions: if a shadow of x
-  // already emitted x$1, a subsequent user-defined x$1 must also be renamed.
-  const allEmitted = new Set(
-    renameCtx.value.frames.flatMap((f) => [...f.values()]),
-  );
-  if (visible || allEmitted.has(sourceName)) {
+  // emittedNames is maintained incrementally to avoid O(N²) flatMap on each
+  // bind call. It catches value collisions: if a shadow of x already emitted
+  // x$1, a subsequent user-defined x$1 must also be renamed.
+  const { emittedNames } = renameCtx.value;
+  if (visible || emittedNames.has(sourceName)) {
     let k = (renameCtx.value.counters.get(sourceName) ?? 0) + 1;
     let emitted = `${sourceName}$${k}`;
     while (
       renameCtx.value.frames.some((f) => f.has(emitted)) ||
-      allEmitted.has(emitted)
+      emittedNames.has(emitted)
     ) {
       k += 1;
       emitted = `${sourceName}$${k}`;
     }
     renameCtx.value.counters.set(sourceName, k);
     frame.set(sourceName, emitted);
+    emittedNames.add(emitted);
     return emitted;
   }
+  emittedNames.add(sourceName);
   frame.set(sourceName, sourceName);
   return sourceName;
 }
