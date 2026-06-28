@@ -305,7 +305,7 @@ describe("unary expression codegen", () => {
     ["u8", "-1"],
   ])("Neg on %s = %s literal panics", (ty, expected) => {
     expect(() => {
-      stmts(gen(`fn _() { let x: ${ty} = ${expected}; let y: ${ty} = -x; }`));
+      stmts(gen(`fn _() { let x: ${ty} = ${expected}; }`));
     }).toThrow(`out of range for ${ty}`);
   });
 });
