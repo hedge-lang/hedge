@@ -87,7 +87,7 @@ describe("move semantics spec", (): void => {
     );
   });
 
-  it.fails("loop-carried move requires explicit reinitialization", (): void => {
+  it("loop-carried move requires explicit reinitialization", (): void => {
     assertCompilesClean(`
       struct Boxed { value: i32 }
       fn main() {

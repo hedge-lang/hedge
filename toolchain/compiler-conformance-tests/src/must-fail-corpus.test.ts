@@ -42,15 +42,12 @@ describe("must-fail corpus — rejection tests", (): void => {
       assertRejects(`fn main() { let x = 1; print(y); }`);
     });
 
-    it.fails(
-      "rejects access to block-scoped variable after block exits",
-      (): void => {
-        assertRejectsWithMessage(
-          `fn main() { { let inner = 1; } print(inner); }`,
-          "inner",
-        );
-      },
-    );
+    it("rejects access to block-scoped variable after block exits", (): void => {
+      assertRejectsWithMessage(
+        `fn main() { { let inner = 1; } print(inner); }`,
+        "inner",
+      );
+    });
   });
 
   describe("borrow checker errors", (): void => {

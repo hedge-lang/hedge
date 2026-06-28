@@ -265,7 +265,7 @@ describe("execution tests", (): void => {
       ]);
     });
 
-    it.fails("inner scope shadow does not affect outer binding", (): void => {
+    it("inner scope shadow does not affect outer binding", (): void => {
       assertRunsTo(
         `fn main() {
           let x = 1;
@@ -279,8 +279,7 @@ describe("execution tests", (): void => {
       );
     });
 
-    it.fails("variable shadowing emits correct output", (): void => {
-      // compiler bug: JSIM lowers both bindings to `const`, which is illegal in JS block scope
+    it("variable shadowing emits correct output", (): void => {
       assertRunsTo(`fn main() { let x = 1; let x = 2; print(x); }`, ["2"]);
     });
   });
