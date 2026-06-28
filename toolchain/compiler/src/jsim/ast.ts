@@ -47,8 +47,8 @@ export interface LetStatement {
 export interface IfStatement {
   readonly kind: "IfStatement";
   readonly condition: Expression;
-  readonly then: readonly Statement[];
-  readonly else: Option<readonly Statement[]>;
+  readonly thenBranch: readonly Statement[];
+  readonly elseBranch: Option<readonly Statement[]>;
 }
 
 export interface ReturnStatement {

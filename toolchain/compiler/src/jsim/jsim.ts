@@ -454,8 +454,8 @@ function jsimIfStatement(
   return {
     kind: "IfStatement",
     condition: parseExpression(ctx, ifExpr.condition),
-    then: jsimBranchBody(ctx, ifExpr.thenBranch),
-    else: mapSome(ifExpr.elseBranch, (eb) => jsimBranchElse(ctx, eb)),
+    thenBranch: jsimBranchBody(ctx, ifExpr.thenBranch),
+    elseBranch: mapSome(ifExpr.elseBranch, (eb) => jsimBranchElse(ctx, eb)),
   };
 }
 

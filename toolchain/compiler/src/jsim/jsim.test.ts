@@ -379,7 +379,7 @@ describe("toJsim", () => {
             body: [
               {
                 kind: "IfStatement",
-                else: { value: [{ kind: "IfStatement" }] },
+                elseBranch: { value: [{ kind: "IfStatement" }] },
               },
             ],
           },
