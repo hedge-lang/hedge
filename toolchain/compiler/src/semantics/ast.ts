@@ -237,13 +237,13 @@ export type PrimitiveType =
   | PrimitiveCharType
   | PrimitiveStringType;
 
-export type PrimitiveUintType =
+type PrimitiveUintType =
   | PrimitiveU8Type
   | PrimitiveU16Type
   | PrimitiveU32Type
   | PrimitiveU64Type
   | PrimitiveUsizeType;
-export type PrimitiveIntType =
+type PrimitiveIntType =
   | PrimitiveI8Type
   | PrimitiveI16Type
   | PrimitiveI32Type
