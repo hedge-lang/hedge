@@ -420,6 +420,48 @@ describe("toJsim", () => {
       });
     });
 
+    it("shadow of x skips user-defined x$1 and lands on x$2", () => {
+      const program = toJsim(
+        parseOrThrow("fn main() { let x = 1; let x$1 = 50; let x = 2; }"),
+      );
+      const functionDecl = program.items.find(
+        (item) => item.kind === "FunctionDecl",
+      );
+      assert(
+        functionDecl !== undefined,
+        "Expected to find a function declaration block",
+      );
+      const letStatements = functionDecl.body.filter(
+        (statement) => statement.kind === "LetStatement",
+      );
+      expect(letStatements).toMatchObject([
+        { kind: "LetStatement", name: "x" },
+        { kind: "LetStatement", name: "x$1" },
+        { kind: "LetStatement", name: "x$2" },
+      ]);
+    });
+
+    it("user-defined x$1 declared after shadow is renamed to x$1$1", () => {
+      const program = toJsim(
+        parseOrThrow("fn main() { let x = 1; let x = 2; let x$1 = 99; }"),
+      );
+      const functionDecl = program.items.find(
+        (item) => item.kind === "FunctionDecl",
+      );
+      assert(
+        functionDecl !== undefined,
+        "Expected to find a function declaration block",
+      );
+      const letStatements = functionDecl.body.filter(
+        (statement) => statement.kind === "LetStatement",
+      );
+      expect(letStatements).toMatchObject([
+        { kind: "LetStatement", name: "x" },
+        { kind: "LetStatement", name: "x$1" },
+        { kind: "LetStatement", name: "x$1$1" },
+      ]);
+    });
+
     it("struct shorthand field resolves to the renamed binding in scope", () => {
       const program = toJsim(
         parseOrThrow(
