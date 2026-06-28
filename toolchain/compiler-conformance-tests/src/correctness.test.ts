@@ -60,6 +60,19 @@ function rngPick<T>(rng: RNG, arr: readonly T[]): T {
 // ---------------------------------------------------------------------------
 const ARITH_OPS: readonly string[] = ["+", "-", "*"];
 const CMP_OPS: readonly string[] = ["==", "!=", "<", ">", "<=", ">="];
+const NUMERIC_ARITH_OPS: readonly BinaryOperator[] = [
+  "Add",
+  "Sub",
+  "Mul",
+  "Div",
+  "Rem",
+];
+
+const GEN_MAX_INT_LITERAL = 50;
+const GEN_LITERAL_PROBABILITY = 0.4;
+const GEN_VAR_REF_PROBABILITY = 0.35;
+const GEN_MIN_VARS = 1;
+const GEN_MAX_VARS = 4;
 
 interface GenCtx {
   rng: RNG;
@@ -68,13 +81,13 @@ interface GenCtx {
 }
 
 function genIntLit(rng: RNG): string {
-  return String(rngInt(rng, 0, 50));
+  return String(rngInt(rng, 0, GEN_MAX_INT_LITERAL));
 }
 
 function genIntExpr(ctx: GenCtx): string {
   const { rng, depth, vars } = ctx;
-  if (depth <= 0 || rng() < 0.4) return genIntLit(rng);
-  if (vars.length > 0 && rng() < 0.35) {
+  if (depth <= 0 || rng() < GEN_LITERAL_PROBABILITY) return genIntLit(rng);
+  if (vars.length > 0 && rng() < GEN_VAR_REF_PROBABILITY) {
     return rngPick(rng, vars);
   }
   const op = rngPick(rng, ARITH_OPS);
@@ -96,7 +109,7 @@ function genBoolExpr(ctx: GenCtx): string {
  */
 function genComputeProgram(seed: number): string {
   const rng = mulberry32(seed);
-  const numVars = rngInt(rng, 1, 4);
+  const numVars = rngInt(rng, GEN_MIN_VARS, GEN_MAX_VARS);
   const vars: string[] = [];
   const stmts: string[] = [];
 
@@ -240,14 +253,7 @@ function applyBoolBinOp(op: BinaryOperator, l: boolean, r: boolean): RefValue {
 
 function applyBinOp(op: BinaryOperator, l: RefValue, r: RefValue): RefValue {
   if (typeof l === "number" && typeof r === "number") {
-    const arithmeticOps: readonly BinaryOperator[] = [
-      "Add",
-      "Sub",
-      "Mul",
-      "Div",
-      "Rem",
-    ];
-    return arithmeticOps.includes(op)
+    return NUMERIC_ARITH_OPS.includes(op)
       ? applyArithOp(op, l, r)
       : applyNumericCmpOp(op, l, r);
   }

@@ -527,7 +527,6 @@ describe("execution tests", (): void => {
     });
 
     it("i8 negation of min value", () => {
-      debugger;
       assertRunsTo(`fn main() { let x: i8 = -0x80; print(x); }`, ["-128"]);
     });
 

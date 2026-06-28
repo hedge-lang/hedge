@@ -1,4 +1,4 @@
-import { assertNever } from "../assert.js";
+import { assert, assertNever } from "../assert.js";
 import { isSome, none, some } from "../option.js";
 import type {
   AssignOperator,
@@ -75,32 +75,28 @@ type PrecKey =
   | "StructExpression"
   | BinaryOperator;
 
-function precGroup(...keys: PrecKey[]): readonly PrecKey[] {
-  return keys;
-}
-
 // Ascending precedence: earlier entries bind looser → more likely to need parens.
 // Atoms (literals, identifiers, etc.) are absent; levelOf returns PREC_LEVELS.length,
 // placing them above everything (they never need parens in any position).
 const PREC_LEVELS: ReadonlyArray<readonly PrecKey[]> = [
-  precGroup("ArrowFunctionExpression", "AssignExpression"),
-  precGroup("Or"),
-  precGroup("And"),
-  precGroup("BitOr"),
-  precGroup("BitXor"),
-  precGroup("BitAnd"),
-  precGroup("Eq", "Ne"),
-  precGroup("Lt", "Gt", "Le", "Ge"),
-  precGroup("Shl", "Shr"),
-  precGroup("Add", "Sub"),
-  precGroup("Mul", "Div", "Rem"),
-  precGroup("UnaryExpression"),
-  precGroup(
+  ["ArrowFunctionExpression", "AssignExpression"],
+  ["Or"],
+  ["And"],
+  ["BitOr"],
+  ["BitXor"],
+  ["BitAnd"],
+  ["Eq", "Ne"],
+  ["Lt", "Gt", "Le", "Ge"],
+  ["Shl", "Shr"],
+  ["Add", "Sub"],
+  ["Mul", "Div", "Rem"],
+  ["UnaryExpression"],
+  [
     "CallExpression",
     "MethodCallExpression",
     "FieldAccessExpression",
     "IndexExpression",
-  ),
+  ],
 ];
 
 function levelOf(key: PrecKey): number {
@@ -290,22 +286,26 @@ function emitBranchBlock(
 
 function emitIfStatement(stmt: IfStatement): string {
   const cond = emitExpression(stmt.condition);
-  const multiline =
+  const isMultiline =
     branchHasReturn(stmt.then) ||
     (isSome(stmt.else) && branchHasReturn(stmt.else.value));
-  const thenStr = emitBranchBlock(stmt.then, multiline);
+  const thenStr = emitBranchBlock(stmt.then, isMultiline);
   if (!isSome(stmt.else)) return `if (${cond}) ${thenStr}`;
   const elseStmts = stmt.else.value;
   if (elseStmts.length === 1 && elseStmts[0]?.kind === "IfStatement") {
     return `if (${cond}) ${thenStr} else ${emitIfStatement(elseStmts[0])}`;
   }
-  return `if (${cond}) ${thenStr} else ${emitBranchBlock(elseStmts, multiline)}`;
+  return `if (${cond}) ${thenStr} else ${emitBranchBlock(elseStmts, isMultiline)}`;
 }
 
 function emitBlockStatement(stmt: BlockStatement): string {
   const lines = stmt.body.map(emitStatement).filter((s) => s.length > 0);
   if (lines.length === 0) return "";
-  if (lines.length === 1) return `{ ${lines[0]} }`;
+  if (lines.length === 1) {
+    const line = lines[0];
+    assert(line !== undefined, "Expected a single line in block statement");
+    return `{ ${line} }`;
+  }
   return `{\n${lines.map(indent).join("\n")}\n}`;
 }
 

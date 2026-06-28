@@ -8,9 +8,7 @@ export function toJsim(program: Semantics.Program): JSIM.Program {
   return {
     kind: "Program",
     docComment: toDocComment(program.attributes),
-    items: program.items.flatMap((item): JSIM.Item | JSIM.Item[] => {
-      return parseItem(item);
-    }),
+    items: program.items.flatMap(parseItem),
   };
 }
 
@@ -206,13 +204,6 @@ function jsimIfExpressionAsStatement(
   return jsimIfStatement(ifExpr);
 }
 
-/**
- * Parse an expression into a JSIM AST.
- *
- * @param expression The expression to parse.
- *
- * @returns The parsed expression.
- */
 // eslint-disable-next-line complexity -- This is a routing function
 function parseExpression(expression: Semantics.Expression): JSIM.Expression {
   switch (expression.kind) {
