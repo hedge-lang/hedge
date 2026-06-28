@@ -60,6 +60,19 @@ function rngPick<T>(rng: RNG, arr: readonly T[]): T {
 // ---------------------------------------------------------------------------
 const ARITH_OPS: readonly string[] = ["+", "-", "*"];
 const CMP_OPS: readonly string[] = ["==", "!=", "<", ">", "<=", ">="];
+const NUMERIC_ARITH_OPS: readonly BinaryOperator[] = [
+  "Add",
+  "Sub",
+  "Mul",
+  "Div",
+  "Rem",
+];
+
+const GEN_MAX_INT_LITERAL = 50;
+const GEN_LITERAL_PROBABILITY = 0.4;
+const GEN_VAR_REF_PROBABILITY = 0.35;
+const GEN_MIN_VARS = 1;
+const GEN_MAX_VARS = 4;
 
 interface GenCtx {
   rng: RNG;
@@ -68,13 +81,13 @@ interface GenCtx {
 }
 
 function genIntLit(rng: RNG): string {
-  return String(rngInt(rng, 0, 50));
+  return String(rngInt(rng, 0, GEN_MAX_INT_LITERAL));
 }
 
 function genIntExpr(ctx: GenCtx): string {
   const { rng, depth, vars } = ctx;
-  if (depth <= 0 || rng() < 0.4) return genIntLit(rng);
-  if (vars.length > 0 && rng() < 0.35) {
+  if (depth <= 0 || rng() < GEN_LITERAL_PROBABILITY) return genIntLit(rng);
+  if (vars.length > 0 && rng() < GEN_VAR_REF_PROBABILITY) {
     return rngPick(rng, vars);
   }
   const op = rngPick(rng, ARITH_OPS);
@@ -96,7 +109,7 @@ function genBoolExpr(ctx: GenCtx): string {
  */
 function genComputeProgram(seed: number): string {
   const rng = mulberry32(seed);
-  const numVars = rngInt(rng, 1, 4);
+  const numVars = rngInt(rng, GEN_MIN_VARS, GEN_MAX_VARS);
   const vars: string[] = [];
   const stmts: string[] = [];
 
@@ -188,15 +201,17 @@ function evalIfExpr(expr: IfExpression, env: RefEnv): RefValue {
 function applyArithOp(op: BinaryOperator, l: number, r: number): RefValue {
   switch (op) {
     case "Add":
-      return l + r;
+      return ((l | 0) + (r | 0)) | 0;
     case "Sub":
-      return l - r;
+      return ((l | 0) - (r | 0)) | 0;
     case "Mul":
-      return l * r;
+      return ((l | 0) * (r | 0)) | 0;
     case "Div":
-      return r === 0 ? 0 : Math.trunc(l / r);
+      if (r === 0) throw new RangeError("attempt to divide by zero");
+      return Math.trunc((l | 0) / (r | 0)) | 0;
     case "Rem":
-      return r === 0 ? 0 : l % r;
+      if (r === 0) throw new RangeError("attempt to divide by zero");
+      return ((l | 0) % (r | 0)) | 0;
     default:
       throw new Error(`SKIP: not an arithmetic op "${op}"`);
   }
@@ -238,14 +253,7 @@ function applyBoolBinOp(op: BinaryOperator, l: boolean, r: boolean): RefValue {
 
 function applyBinOp(op: BinaryOperator, l: RefValue, r: RefValue): RefValue {
   if (typeof l === "number" && typeof r === "number") {
-    const arithmeticOps: readonly BinaryOperator[] = [
-      "Add",
-      "Sub",
-      "Mul",
-      "Div",
-      "Rem",
-    ];
-    return arithmeticOps.includes(op)
+    return NUMERIC_ARITH_OPS.includes(op)
       ? applyArithOp(op, l, r)
       : applyNumericCmpOp(op, l, r);
   }
@@ -281,6 +289,23 @@ function evalExpr(expr: Expression, env: RefEnv): RefValue {
         evalExpr(expr.left, env),
         evalExpr(expr.right, env),
       );
+    case "UnaryExpression": {
+      const val = evalExpr(expr.operand, env);
+      switch (expr.operator) {
+        case "Not": {
+          if (typeof val !== "boolean")
+            throw new Error("SKIP: Not applied to non-boolean");
+          return !val;
+        }
+        case "Neg": {
+          if (typeof val !== "number")
+            throw new Error("SKIP: Neg applied to non-number");
+          return -val | 0;
+        }
+        default:
+          throw new Error("Unexpected UnaryExpression");
+      }
+    }
     case "IfExpression":
       return evalIfExpr(expr, env);
     case "Block":
@@ -594,17 +619,23 @@ describe("differential: integer semantics", (): void => {
     assertBool("1 / 2 == 0");
   });
 
-  it.fails(
-    "diff-div-negative: negative dividend truncates toward zero not floor",
-    (): void => {
-      // floor division would give -4; truncating gives -3 (Rust semantics)
-      assertI32("-7 / 2");
-      assertI32("-1 / 2");
+  it("diff-div-negative: negative dividend truncates toward zero not floor", (): void => {
+    // floor division would give -4; truncating gives -3 (Rust semantics)
+    assertI32("-7 / 2");
+    assertI32("-1 / 2");
 
-      assertBool("-7 / 2 === -3");
-      assertBool("-1 / 2 === 0");
-    },
-  );
+    assertBool("-7 / 2 == -3");
+    assertBool("-1 / 2 == 0");
+  });
+
+  it("diff-div-zero: division by zero throws", (): void => {
+    expect(() => {
+      assertI32("1 / 0");
+    }).toThrow("divide by zero");
+    expect(() => {
+      assertI32("1 % 0");
+    }).toThrow("divide by zero");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -612,59 +643,56 @@ describe("differential: integer semantics", (): void => {
 // ---------------------------------------------------------------------------
 
 describe("property: algebraic laws", (): void => {
-  it.fails(
-    "prop-add-commutative: a + b = b + a for integer constants",
-    (): void => {
-      assertBool("2 + 3 == 3 + 2");
-      assertBool("-5 + 7 == 7 + -5");
-      assertBool("0 + 42 == 42 + 0");
-    },
-  );
+  it("prop-add-commutative: a + b = b + a for integer constants", (): void => {
+    assertBool("2 + 3 == 3 + 2");
+    assertBool("-5 + 7 == 7 + -5");
+    assertBool("0 + 42 == 42 + 0");
+  });
 
-  it.fails("prop-mul-commutative: a * b = b * a", (): void => {
+  it("prop-mul-commutative: a * b = b * a", (): void => {
     assertBool("4 * 7 == 7 * 4");
     assertBool("-3 * 5 == 5 * -3");
   });
 
-  it.fails("prop-add-identity: a + 0 = a", (): void => {
+  it("prop-add-identity: a + 0 = a", (): void => {
     assertBool("42 + 0 == 42");
     assertBool("-7 + 0 == -7");
   });
 
-  it.fails("prop-mul-identity: a * 1 = a", (): void => {
+  it("prop-mul-identity: a * 1 = a", (): void => {
     assertBool("13 * 1 == 13");
     assertBool("-9 * 1 == -9");
   });
 
-  it.fails("prop-mul-zero: a * 0 = 0", (): void => {
+  it("prop-mul-zero: a * 0 = 0", (): void => {
     assertBool("13 * 0 == 0");
     assertBool("-9 * 0 == 0");
   });
 
-  it.fails("prop-demorgan-and: !(a && b) == (!a || !b)", (): void => {
+  it("prop-demorgan-and: !(a && b) == (!a || !b)", (): void => {
     assertBool("!(true && true) == (!true || !true)");
     assertBool("!(true && false) == (!true || !false)");
     assertBool("!(false && false) == (!false || !false)");
   });
 
-  it.fails("prop-demorgan-or: !(a || b) == (!a && !b)", (): void => {
+  it("prop-demorgan-or: !(a || b) == (!a && !b)", (): void => {
     assertBool("!(true || true) == (!true && !true)");
     assertBool("!(true || false) == (!true && !false)");
     assertBool("!(false || false) == (!false && !false)");
   });
 
-  it.fails("prop-double-neg-bool: !!a = a for booleans", (): void => {
+  it("prop-double-neg-bool: !!a = a for booleans", (): void => {
     assertBool("!!true == true");
     assertBool("!!false == false");
   });
 
-  it.fails("prop-comparison-antisymmetric: (a < b) == !(a >= b)", (): void => {
+  it("prop-comparison-antisymmetric: (a < b) == !(a >= b)", (): void => {
     assertBool("(3 < 5) == !(3 >= 5)");
     assertBool("(5 < 3) == !(5 >= 3)");
     assertBool("(4 < 4) == !(4 >= 4)");
   });
 
-  it.fails("prop-comparison-reflexive: a == a", (): void => {
+  it("prop-comparison-reflexive: a == a", (): void => {
     assertBool("42 == 42");
     assertBool("0 == 0");
     assertBool("-7 == -7");

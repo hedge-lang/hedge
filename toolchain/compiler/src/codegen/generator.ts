@@ -1,4 +1,4 @@
-import { assertNever } from "../assert.js";
+import { assert, assertNever } from "../assert.js";
 import { isSome, none, some } from "../option.js";
 import type {
   AssignOperator,
@@ -75,32 +75,28 @@ type PrecKey =
   | "StructExpression"
   | BinaryOperator;
 
-function precGroup(...keys: PrecKey[]): readonly PrecKey[] {
-  return keys;
-}
-
 // Ascending precedence: earlier entries bind looser → more likely to need parens.
 // Atoms (literals, identifiers, etc.) are absent; levelOf returns PREC_LEVELS.length,
 // placing them above everything (they never need parens in any position).
 const PREC_LEVELS: ReadonlyArray<readonly PrecKey[]> = [
-  precGroup("ArrowFunctionExpression", "AssignExpression"),
-  precGroup("Or"),
-  precGroup("And"),
-  precGroup("BitOr"),
-  precGroup("BitXor"),
-  precGroup("BitAnd"),
-  precGroup("Eq", "Ne"),
-  precGroup("Lt", "Gt", "Le", "Ge"),
-  precGroup("Shl", "Shr"),
-  precGroup("Add", "Sub"),
-  precGroup("Mul", "Div", "Rem"),
-  precGroup("UnaryExpression"),
-  precGroup(
+  ["ArrowFunctionExpression", "AssignExpression"],
+  ["Or"],
+  ["And"],
+  ["BitOr"],
+  ["BitXor"],
+  ["BitAnd"],
+  ["Eq", "Ne"],
+  ["Lt", "Gt", "Le", "Ge"],
+  ["Shl", "Shr"],
+  ["Add", "Sub"],
+  ["Mul", "Div", "Rem"],
+  ["UnaryExpression"],
+  [
     "CallExpression",
     "MethodCallExpression",
     "FieldAccessExpression",
     "IndexExpression",
-  ),
+  ],
 ];
 
 function levelOf(key: PrecKey): number {
@@ -140,6 +136,7 @@ function emitDocComment(doc: DocComment, isModule: boolean = false): string {
   return ["/**", ...body, " */"].join("\n");
 }
 
+// eslint-disable-next-line complexity -- Routing function: one branch per numeric kind × op
 function emitNumericBinaryOp(
   nk: NumericKind,
   op: BinaryOperator,
@@ -149,9 +146,10 @@ function emitNumericBinaryOp(
   const isDivision = op === "Div" || op === "Rem";
   const jsOp = BINARY_OPS[op];
   const zero = nk.kind === "bigint" ? "0n" : "0";
-  // Bind both operands in an IIFE for division so the divisor is evaluated
-  // exactly once — avoiding double-evaluation in the zero-guard and the op.
-  const inner = isDivision
+  // Floats follow IEEE 754 (division by zero yields Infinity/NaN); the
+  // zero-guard is only needed for integer and bigint types.
+  const needsZeroGuard = isDivision && nk.kind !== "float";
+  const inner = needsZeroGuard
     ? `((_l, _r) => _r === ${zero} ? (() => { throw new RangeError("attempt to divide by zero"); })() : _l ${jsOp} _r)(${l}, ${r})`
     : `${l} ${jsOp} ${r}`;
 
@@ -160,6 +158,25 @@ function emitNumericBinaryOp(
       if (nk.bits === 32) {
         return `((${inner})|0)`;
       }
+      return `(((${inner}) << ${32 - nk.bits}) >> ${32 - nk.bits})`;
+    case "unsigned":
+      if (nk.bits === 32) return `((${inner})>>>0)`;
+      return `((${inner})&${(1 << nk.bits) - 1})`;
+    case "bigint":
+      return nk.signed
+        ? `BigInt.asIntN(64,${inner})`
+        : `BigInt.asUintN(64,${inner})`;
+    case "float":
+      return nk.bits === 32 ? `Math.fround(${inner})` : `(${inner})`;
+    default:
+      assertNever(nk, `Unexpected numeric kind: ${JSON.stringify(nk)}`);
+  }
+}
+
+function emitNumericUnaryOp(nk: NumericKind, inner: string): string {
+  switch (nk.kind) {
+    case "signed":
+      if (nk.bits === 32) return `((${inner})|0)`;
       return `(((${inner}) << ${32 - nk.bits}) >> ${32 - nk.bits})`;
     case "unsigned":
       if (nk.bits === 32) return `((${inner})>>>0)`;
@@ -208,8 +225,14 @@ function emitExpression(expression: Expression): string {
       }
       return `${l} ${BINARY_OPS[op]} ${r}`;
     }
-    case "UnaryExpression":
-      return `(${UNARY_OPS[expression.operator]}${emitExpression(expression.operand)})`;
+    case "UnaryExpression": {
+      const operand = needsAtLeast(expression.operand, "UnaryExpression");
+      const inner = `${UNARY_OPS[expression.operator]}${operand}`;
+      if (isSome(expression.numericKind)) {
+        return emitNumericUnaryOp(expression.numericKind.value, inner);
+      }
+      return `(${inner})`;
+    }
     case "AssignExpression":
       return `${emitExpression(expression.lhs)} ${ASSIGN_OPS[expression.operator]} ${emitExpression(expression.rhs)}`;
     case "FieldAccessExpression":
@@ -263,22 +286,26 @@ function emitBranchBlock(
 
 function emitIfStatement(stmt: IfStatement): string {
   const cond = emitExpression(stmt.condition);
-  const multiline =
+  const isMultiline =
     branchHasReturn(stmt.then) ||
     (isSome(stmt.else) && branchHasReturn(stmt.else.value));
-  const thenStr = emitBranchBlock(stmt.then, multiline);
+  const thenStr = emitBranchBlock(stmt.then, isMultiline);
   if (!isSome(stmt.else)) return `if (${cond}) ${thenStr}`;
   const elseStmts = stmt.else.value;
   if (elseStmts.length === 1 && elseStmts[0]?.kind === "IfStatement") {
     return `if (${cond}) ${thenStr} else ${emitIfStatement(elseStmts[0])}`;
   }
-  return `if (${cond}) ${thenStr} else ${emitBranchBlock(elseStmts, multiline)}`;
+  return `if (${cond}) ${thenStr} else ${emitBranchBlock(elseStmts, isMultiline)}`;
 }
 
 function emitBlockStatement(stmt: BlockStatement): string {
   const lines = stmt.body.map(emitStatement).filter((s) => s.length > 0);
   if (lines.length === 0) return "";
-  if (lines.length === 1) return `{ ${lines[0]} }`;
+  if (lines.length === 1) {
+    const line = lines[0];
+    assert(line !== undefined, "Expected a single line in block statement");
+    return `{ ${line} }`;
+  }
   return `{\n${lines.map(indent).join("\n")}\n}`;
 }
 

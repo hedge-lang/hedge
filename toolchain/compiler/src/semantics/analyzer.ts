@@ -1,4 +1,4 @@
-import { assertNever } from "../assert.js";
+import { assert, assertNever } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
 import type { IntSuffix, Token } from "../lexer/token.js";
 import {
@@ -46,6 +46,13 @@ const BUILTIN_SCOPE: [string, Semantics.Type][] = [
   ],
 ];
 
+/**
+ * Binds a given {@link name} to a specific {@link type} within the current scope of the analysis context.
+ *
+ * @param ctx - The analysis context containing the scope stack.
+ * @param name - The identifier to bind within the current scope.
+ * @param type - The type associated with the identifier.
+ */
 function bind(ctx: AnalysisContext, name: string, type: Semantics.Type): void {
   const scope = ctx.scopes[ctx.scopes.length - 1];
   if (scope !== undefined) {
@@ -53,6 +60,13 @@ function bind(ctx: AnalysisContext, name: string, type: Semantics.Type): void {
   }
 }
 
+/**
+ * Resolves the semantic type associated with a given {@link name} within the context's scopes.
+ *
+ * @param ctx - The analysis context containing scoped information.
+ * @param name - The name of the entity to resolve within the context's scopes.
+ * @return An optional semantic type if the name is found, or none if it is not.
+ */
 function resolve(ctx: AnalysisContext, name: string): Option<Semantics.Type> {
   for (let i = ctx.scopes.length - 1; i >= 0; i -= 1) {
     const scope = ctx.scopes[i];
@@ -64,6 +78,13 @@ function resolve(ctx: AnalysisContext, name: string): Option<Semantics.Type> {
   return none();
 }
 
+/**
+ * Emits an error diagnostic message for a given token in the analysis context.
+ *
+ * @param ctx - The analysis context where the error will be recorded.
+ * @param message - The error message to emit.
+ * @param tokenId - The identifier of the token associated with the error.
+ */
 function emitError(
   ctx: AnalysisContext,
   message: string,
@@ -146,7 +167,8 @@ function validateSlice1Type(
   tokenId: number,
 ): Semantics.Type {
   if (type.kind === "NamedType" && type.path.segments.length === 1) {
-    const name = String(type.path.segments[0]);
+    const name = type.path.segments[0];
+    assert(name !== undefined, "Name segment missing");
     const prim = namedTypeToPrimitive(name);
     if (isSome(prim)) {
       return prim.value;
@@ -286,13 +308,18 @@ function analyzeStringLiteral(
 }
 
 function analyzeIntLiteral(
-  _ctx: AnalysisContext,
+  ctx: AnalysisContext,
   intLiteral: Parser.IntLiteral,
+  skipRangeCheck: boolean = false,
 ): Semantics.IntLiteral {
   const type: Semantics.PrimitiveType = isSome(intLiteral.suffix)
     ? intSuffixToPrimitive(intLiteral.suffix.value)
     : { kind: "PrimitiveI32Type" };
-  return { ...intLiteral, type };
+  const result = { ...intLiteral, type };
+  if (!skipRangeCheck && isSome(intLiteral.suffix)) {
+    checkPosLiteralRange(ctx, result, type);
+  }
+  return result;
 }
 
 function analyzeFloatLiteral(
@@ -406,6 +433,7 @@ function analyzeStatement(
   }
 }
 
+// eslint-disable-next-line complexity -- This is difficult to split up
 function analyzeLetStatement(
   ctx: AnalysisContext,
   statement: Parser.LetStatement,
@@ -415,6 +443,7 @@ function analyzeLetStatement(
     (initializer) => analyzeExpression(ctx, initializer),
   );
 
+  let coercedInitializer: Option<Semantics.Expression> = analyzedInitializer;
   let bindingType: Semantics.Type;
   if (isSome(analyzedInitializer)) {
     bindingType = getType(analyzedInitializer.value);
@@ -424,7 +453,36 @@ function analyzeLetStatement(
         statement.type.value,
         statement.tokenId,
       );
-      if (!typesEqual(annotationType, bindingType)) {
+      let typeMismatchSuppressed = false;
+      if (
+        isUnsuffixedLiteralExpr(analyzedInitializer.value) &&
+        isIntegerType(annotationType)
+      ) {
+        coercedInitializer = some(
+          coerceToIntegerType(analyzedInitializer.value, annotationType),
+        );
+        bindingType = annotationType;
+        typeMismatchSuppressed = true;
+      }
+      const initExpr = isSome(coercedInitializer)
+        ? coercedInitializer.value
+        : analyzedInitializer.value;
+      if (
+        initExpr.kind === "UnaryExpression" &&
+        initExpr.operator === "Neg" &&
+        initExpr.operand.kind === "IntLiteral" &&
+        !isSome(initExpr.operand.suffix)
+      ) {
+        const rangeError = checkNegLiteralRange(
+          initExpr.operand,
+          annotationType,
+        );
+        if (isSome(rangeError)) {
+          emitError(ctx, rangeError.value, statement.tokenId);
+          typeMismatchSuppressed = true;
+        }
+      }
+      if (!typeMismatchSuppressed && !typesEqual(annotationType, bindingType)) {
         emitError(
           ctx,
           "type mismatch: explicit annotation does not match initializer type",
@@ -443,6 +501,13 @@ function analyzeLetStatement(
     bindingType = { kind: "UnitType", tokenId: statement.tokenId };
   }
 
+  if (
+    isSome(coercedInitializer) &&
+    coercedInitializer.value.kind === "IntLiteral"
+  ) {
+    checkPosLiteralRange(ctx, coercedInitializer.value, bindingType);
+  }
+
   bind(ctx, statement.pattern.name.text, bindingType);
 
   return {
@@ -452,9 +517,154 @@ function analyzeLetStatement(
       name: { ...statement.pattern.name, type: bindingType },
     },
     attributes: statement.attributes.map((attr) => analyzeAttribute(ctx, attr)),
-    initializer: analyzedInitializer,
+    initializer: coercedInitializer,
     type: { kind: "UnitType", tokenId: statement.tokenId },
   };
+}
+
+const INT_BOUNDS: Partial<Record<Semantics.Type["kind"], [bigint, bigint]>> = {
+  PrimitiveI8Type: [-0x80n, 0x7fn],
+  PrimitiveI16Type: [-0x8000n, 0x7fffn],
+  PrimitiveI32Type: [-0x8000_0000n, 0x7fff_ffffn],
+  PrimitiveI64Type: [-0x8000_0000_0000_0000n, 0x7fff_ffff_ffff_ffffn],
+  PrimitiveU8Type: [0n, 0xffn],
+  PrimitiveU16Type: [0n, 0xffffn],
+  PrimitiveU32Type: [0n, 0xffff_ffffn],
+  PrimitiveU64Type: [0n, 0xffff_ffff_ffff_ffffn],
+  PrimitiveUsizeType: [0n, 0xffff_ffffn],
+  PrimitiveIsizeType: [-0x8000_0000n, 0x7fff_ffffn],
+};
+
+const NEG_FLOAT_MAX: Partial<Record<Semantics.Type["kind"], number>> = {
+  PrimitiveF32Type: 3.4028234663852886e38,
+  PrimitiveF64Type: 1.7976931348623157e308,
+};
+
+const NUMERIC_TYPE_NAME: Partial<Record<Semantics.Type["kind"], string>> = {
+  PrimitiveI8Type: "i8",
+  PrimitiveI16Type: "i16",
+  PrimitiveI32Type: "i32",
+  PrimitiveI64Type: "i64",
+  PrimitiveIsizeType: "isize",
+  PrimitiveU8Type: "u8",
+  PrimitiveU16Type: "u16",
+  PrimitiveU32Type: "u32",
+  PrimitiveU64Type: "u64",
+  PrimitiveUsizeType: "usize",
+  PrimitiveF32Type: "f32",
+  PrimitiveF64Type: "f64",
+};
+
+// eslint-disable-next-line complexity -- This is difficult to split up
+function checkNegLiteralRange(
+  operand: Semantics.Expression,
+  annotationType: Semantics.Type,
+): Option<string> {
+  const typeName = NUMERIC_TYPE_NAME[annotationType.kind];
+  if (typeName === undefined) return none();
+
+  if (operand.kind === "IntLiteral") {
+    const prefix =
+      operand.base === 16
+        ? "0x"
+        : operand.base === 8
+          ? "0o"
+          : operand.base === 2
+            ? "0b"
+            : "";
+    const val = -BigInt(prefix + operand.value);
+    const [min, max] = INT_BOUNDS[annotationType.kind] ?? [];
+    if (min === undefined || max === undefined) {
+      return some(`unexpected int-literal range check for type ${typeName}`);
+    }
+    if (val > max || val < min) {
+      return some(`out of range for ${typeName}`);
+    }
+  } else if (operand.kind === "FloatLiteral") {
+    const val = parseFloat(operand.value);
+    const max = NEG_FLOAT_MAX[annotationType.kind];
+    if (max === undefined) {
+      return some(`unexpected float-literal range check for type ${typeName}`);
+    }
+    if (val > max) {
+      return some(`out of range for ${typeName}`);
+    }
+  }
+  return none();
+}
+
+function checkPosLiteralRange(
+  ctx: AnalysisContext,
+  literal: Semantics.IntLiteral,
+  type: Semantics.Type,
+): void {
+  const bounds = INT_BOUNDS[type.kind];
+  if (bounds === undefined) return;
+  const prefix =
+    literal.base === 16
+      ? "0x"
+      : literal.base === 8
+        ? "0o"
+        : literal.base === 2
+          ? "0b"
+          : "";
+  const val = BigInt(prefix + literal.value);
+  const [, max] = bounds;
+  if (val > max) {
+    const name = NUMERIC_TYPE_NAME[type.kind] ?? type.kind;
+    emitError(ctx, `out of range for ${name}`, literal.tokenId);
+  }
+}
+
+function isUnsuffixedLiteralExpr(expr: Semantics.Expression): boolean {
+  if (expr.kind === "IntLiteral" && !isSome(expr.suffix)) return true;
+  return (
+    expr.kind === "UnaryExpression" &&
+    expr.operator === "Neg" &&
+    expr.operand.kind === "IntLiteral" &&
+    !isSome(expr.operand.suffix)
+  );
+}
+
+function coerceToIntegerType(
+  expr: Semantics.Expression,
+  targetType: Semantics.Type,
+): Semantics.Expression {
+  if (!isIntegerType(targetType)) return expr;
+  if (expr.kind === "IntLiteral" && !isSome(expr.suffix)) {
+    return { ...expr, type: targetType };
+  }
+  if (
+    expr.kind === "UnaryExpression" &&
+    expr.operator === "Neg" &&
+    expr.operand.kind === "IntLiteral" &&
+    !isSome(expr.operand.suffix)
+  ) {
+    return {
+      ...expr,
+      type: targetType,
+      operand: { ...expr.operand, type: targetType },
+    };
+  }
+  return expr;
+}
+
+function checkCoercedLiteralRange(
+  ctx: AnalysisContext,
+  expr: Semantics.Expression,
+): void {
+  if (expr.kind === "IntLiteral") {
+    checkPosLiteralRange(ctx, expr, expr.type);
+  } else if (
+    expr.kind === "UnaryExpression" &&
+    expr.operator === "Neg" &&
+    expr.operand.kind === "IntLiteral"
+  ) {
+    const rangeError = checkNegLiteralRange(expr.operand, expr.type);
+    if (isSome(rangeError)) {
+      emitError(ctx, rangeError.value, expr.operand.tokenId);
+    }
+  }
 }
 
 function typesEqual(a: Semantics.Type, b: Semantics.Type): boolean {
@@ -502,8 +712,8 @@ function inferBinaryType(
 
   // UnitType is the error-recovery type from failed name resolution.
   // Suppress cascading type errors when either operand already failed.
-  const leftOk = leftType.kind !== "UnitType";
-  const rightOk = rightType.kind !== "UnitType";
+  const isLeftTypeValid = leftType.kind !== "UnitType";
+  const isRightTypeValid = rightType.kind !== "UnitType";
 
   switch (op) {
     case "Eq":
@@ -512,7 +722,11 @@ function inferBinaryType(
     case "Gt":
     case "Le":
     case "Ge": {
-      if (leftOk && rightOk && !typesEqual(leftType, rightType)) {
+      if (
+        isLeftTypeValid &&
+        isRightTypeValid &&
+        !typesEqual(leftType, rightType)
+      ) {
         emitError(ctx, "comparison operands must have the same type", tokenId);
       }
       return bool;
@@ -520,10 +734,10 @@ function inferBinaryType(
 
     case "And":
     case "Or": {
-      if (leftOk && leftType.kind !== "PrimitiveBooleanType") {
+      if (isLeftTypeValid && leftType.kind !== "PrimitiveBooleanType") {
         emitError(ctx, "logical operator operands must be `bool`", tokenId);
       }
-      if (rightOk && rightType.kind !== "PrimitiveBooleanType") {
+      if (isRightTypeValid && rightType.kind !== "PrimitiveBooleanType") {
         emitError(ctx, "logical operator operands must be `bool`", tokenId);
       }
       return bool;
@@ -534,16 +748,20 @@ function inferBinaryType(
     case "Mul":
     case "Div":
     case "Rem": {
-      if (leftOk && !isNumericType(leftType)) {
+      if (isLeftTypeValid && !isNumericType(leftType)) {
         emitError(ctx, "arithmetic operands must be numeric", tokenId);
       }
-      if (rightOk && !isNumericType(rightType)) {
+      if (isRightTypeValid && !isNumericType(rightType)) {
         emitError(ctx, "arithmetic operands must be numeric", tokenId);
       }
-      if (leftOk && rightOk && !typesEqual(leftType, rightType)) {
+      if (
+        isLeftTypeValid &&
+        isRightTypeValid &&
+        !typesEqual(leftType, rightType)
+      ) {
         emitError(ctx, "arithmetic operands must have the same type", tokenId);
       }
-      return leftOk ? leftType : rightType;
+      return isLeftTypeValid ? leftType : rightType;
     }
 
     case "Shl":
@@ -551,16 +769,20 @@ function inferBinaryType(
     case "BitAnd":
     case "BitXor":
     case "BitOr": {
-      if (leftOk && !isIntegerType(leftType)) {
+      if (isLeftTypeValid && !isIntegerType(leftType)) {
         emitError(ctx, "bitwise operations require integer operands", tokenId);
       }
-      if (rightOk && !isIntegerType(rightType)) {
+      if (isRightTypeValid && !isIntegerType(rightType)) {
         emitError(ctx, "bitwise operations require integer operands", tokenId);
       }
-      if (leftOk && rightOk && !typesEqual(leftType, rightType)) {
+      if (
+        isLeftTypeValid &&
+        isRightTypeValid &&
+        !typesEqual(leftType, rightType)
+      ) {
         emitError(ctx, "bitwise operands must have the same type", tokenId);
       }
-      return leftOk ? leftType : rightType;
+      return isLeftTypeValid ? leftType : rightType;
     }
     default:
       assertNever(op, `Unexpected binary operator: ${JSON.stringify(op)}`);
@@ -599,8 +821,17 @@ function analyzeExpression(
         type: { kind: "UnitType", tokenId: expression.tokenId },
       };
     case "BinaryExpression": {
-      const left = analyzeExpression(ctx, expression.left);
-      const right = analyzeExpression(ctx, expression.right);
+      let left = analyzeExpression(ctx, expression.left);
+      let right = analyzeExpression(ctx, expression.right);
+      const isLeftUnsuffixed = isUnsuffixedLiteralExpr(left);
+      const isRightUnsuffixed = isUnsuffixedLiteralExpr(right);
+      if (isLeftUnsuffixed && !isRightUnsuffixed) {
+        left = coerceToIntegerType(left, getType(right));
+        checkCoercedLiteralRange(ctx, left);
+      } else if (!isLeftUnsuffixed && isRightUnsuffixed) {
+        right = coerceToIntegerType(right, getType(left));
+        checkCoercedLiteralRange(ctx, right);
+      }
       const type = inferBinaryType(
         ctx,
         expression.operator,
@@ -611,11 +842,24 @@ function analyzeExpression(
       return { ...expression, left, right, type };
     }
     case "UnaryExpression": {
-      const operand = analyzeExpression(ctx, expression.operand);
+      const operand =
+        expression.operator === "Neg" &&
+        expression.operand.kind === "IntLiteral"
+          ? analyzeIntLiteral(ctx, expression.operand, true)
+          : analyzeExpression(ctx, expression.operand);
       const type: Semantics.Type =
         expression.operator === "Not"
           ? { kind: "PrimitiveBooleanType" }
           : getType(operand);
+      if (
+        expression.operator === "Neg" &&
+        operand.kind === "IntLiteral" &&
+        isSome(operand.suffix)
+      ) {
+        const rangeError = checkNegLiteralRange(operand, type);
+        if (isSome(rangeError))
+          emitError(ctx, rangeError.value, operand.tokenId);
+      }
       return { ...expression, operand, type };
     }
     case "AssignExpression":

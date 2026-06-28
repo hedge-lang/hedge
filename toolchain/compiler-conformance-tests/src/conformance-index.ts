@@ -211,6 +211,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     testIds: [
       "diff-div-truncate: integer division truncates toward zero",
       "diff-div-negative: negative dividend truncates toward zero not floor",
+      "diff-div-zero: division by zero throws runtime error",
     ],
   },
   {
