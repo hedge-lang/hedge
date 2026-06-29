@@ -212,11 +212,11 @@ describe("must-fail corpus — rejection tests", (): void => {
 
   describe("type errors", (): void => {
     it("rejects comparisons with right-side boolean", (): void => {
-      assertRejectsWithMessage(`fn main() { let x = 1 < (2 < 3); }`, "types");
+      assertRejectsWithMessage(`fn main() { let x = 1 < (2 < 3); }`, "type");
     });
 
     it("rejects comparisons with left-side boolean", (): void => {
-      assertRejectsWithMessage(`fn main() { let x = (1 < 2) < 3; }`, "types");
+      assertRejectsWithMessage(`fn main() { let x = (1 < 2) < 3; }`, "type");
     });
 
     it("rejects direct assignment to immutable let binding", (): void => {
