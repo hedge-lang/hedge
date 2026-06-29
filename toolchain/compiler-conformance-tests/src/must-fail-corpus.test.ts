@@ -211,30 +211,27 @@ describe("must-fail corpus — rejection tests", (): void => {
   });
 
   describe("type errors", (): void => {
-    it.fails("rejects comparisons with right-side boolean", (): void => {
+    it("rejects comparisons with right-side boolean", (): void => {
       assertRejectsWithMessage(`fn main() { let x = 1 < (2 < 3); }`, "types");
     });
 
-    it.fails("rejects comparisons with left-side boolean", (): void => {
+    it("rejects comparisons with left-side boolean", (): void => {
       assertRejectsWithMessage(`fn main() { let x = (1 < 2) < 3; }`, "types");
     });
 
-    it.fails("rejects direct assignment to immutable let binding", (): void => {
+    it("rejects direct assignment to immutable let binding", (): void => {
       assertRejectsWithMessage(
         `fn main() { let x = 1; x = 2; print(x); }`,
         "immutable",
       );
     });
 
-    it.fails(
-      "rejects compound assignment to immutable let binding",
-      (): void => {
-        assertRejectsWithMessage(
-          `fn main() { let x = 1; x += 1; print(x); }`,
-          "immutable",
-        );
-      },
-    );
+    it("rejects compound assignment to immutable let binding", (): void => {
+      assertRejectsWithMessage(
+        `fn main() { let x = 1; x += 1; print(x); }`,
+        "immutable",
+      );
+    });
 
     it("rejects integer as boolean condition in if", (): void => {
       assertRejectsWithMessage(`fn main() { if 1 { print("yes"); } }`, "bool");
