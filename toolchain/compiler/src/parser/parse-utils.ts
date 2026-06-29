@@ -25,15 +25,6 @@ export function tokenAt(tokens: readonly Token[], pos: number): PR<Token> {
 }
 
 /**
- * Contextual keywords are lexed as identifiers and interpreted by the parser.
- *
- * @returns `true` if the token is an identifier whose text matches a contextual keyword.
- */
-export function isContextual(token: Token, text: string): boolean {
-  return token.kind === "ident" && token.text === text;
-}
-
-/**
  * Consumes a required token of the given kind.
  *
  * @returns Index of the next token, or `Err` if the token at `pos` is not of the expected kind.
