@@ -45,11 +45,11 @@ describe("generator", (): void => {
     expect(gen("")).toEqual({ javascript: none(), typedef: none() });
   });
 
-  it("lowers a read-only let to const and `let write` to let", (): void => {
+  it("lowers a read-only let to const and `let mut` to let", (): void => {
     expect(stmts(gen('fn _() { let greeting = "hi"; }'))).toBe(
       'const greeting = "hi";',
     );
-    expect(stmts(gen("fn _() { let write n = 1; }"))).toBe("let n = 1;");
+    expect(stmts(gen("fn _() { let mut n = 1; }"))).toBe("let n = 1;");
     expect(stmts(gen("fn _() { let b_true = true; }"))).toBe(
       "const b_true = true;",
     );
@@ -370,7 +370,7 @@ describe("no-init let codegen", () => {
   });
 
   it("mutable let with no initializer emits let x;", () => {
-    expect(stmts(gen("fn _() { let write x; }"))).toBe("let x;");
+    expect(stmts(gen("fn _() { let mut x; }"))).toBe("let x;");
   });
 });
 
