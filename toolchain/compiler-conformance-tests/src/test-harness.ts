@@ -115,7 +115,11 @@ export function assertRejectsWithMessage(
   );
   expect(
     getErrorMessages(result).some((m) => m.includes(messageFragment)),
-    `no error contained "${messageFragment}"; received: \n${getErrorMessages(result).map((e) => ` - "${e}"\n`).join("")}`,
+    `no error contained "${messageFragment}"; received: \n${getErrorMessages(
+      result,
+    )
+      .map((e) => ` - "${e}"\n`)
+      .join("")}`,
   ).toBe(true);
 }
 
