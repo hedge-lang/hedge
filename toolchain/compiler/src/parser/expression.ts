@@ -24,8 +24,6 @@ import type {
 import type { Parsed } from "./parse.js";
 import {
   expect,
-  isContextual,
-  MUT_MESSAGE,
   parseIdentifier,
   stripPrefix,
   stripUnderscores,
@@ -389,14 +387,14 @@ function infixOp(token: Token): InfixEntry | null {
  * Grammar:
  *
  * ```text
- * ReferenceExpression ::= "&" "write"? PrimaryExpression
+ * ReferenceExpression ::= "&" "mut"? PrimaryExpression
  * ```
  *
  * Examples:
  *
  * ```hedge
  * &value
- * &write counter
+ * &mut counter
  * ```
  */
 function parseReference(
@@ -413,14 +411,6 @@ function parseReference(
   }
   const a = aResult.value;
   if (a.kind === "keyword" && a.text === "mut") {
-    return err({
-      severity: "error",
-      span: some({ start: a.span.start, end: a.span.end }),
-      message: MUT_MESSAGE,
-    });
-  }
-
-  if (isContextual(a, "write")) {
     mutable = true;
     cursor += 1;
   }

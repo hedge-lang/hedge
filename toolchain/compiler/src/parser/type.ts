@@ -10,7 +10,7 @@ import { parsePathSegments } from "./path.js";
  * Parses a type.
  *
  * Slice-1 supports named types (path types) and the unit type `()`.
- * The forms `&T`, `&write T`, `[T]`, and `!` are recognized and produce
+ * The forms `&T`, `&mut T`, `[T]`, and `!` are recognized and produce
  * specific guardrail errors; all other unsupported type syntax produces a
  * generic guardrail error.
  *

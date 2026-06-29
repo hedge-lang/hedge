@@ -34,8 +34,7 @@ describe("parser", (): void => {
       items: [
         {
           kind: "LetStatement",
-          bind: false,
-          write: false,
+          mutable: false,
           pattern: {
             kind: "BindingPattern",
             name: {
@@ -123,8 +122,7 @@ describe("parser", (): void => {
             statements: [
               {
                 kind: "LetStatement",
-                bind: false,
-                write: false,
+                mutable: false,
                 pattern: {
                   kind: "BindingPattern",
                   name: {
@@ -373,7 +371,7 @@ describe("type annotation error diagnostics", (): void => {
   });
 
   it("produces an error diagnostic for an exclusive reference type", (): void => {
-    const { tokens } = tokenize("let x: &write i32;");
+    const { tokens } = tokenize("let x: &mut i32;");
     const amp = tokens.find((t) => t.kind === "amp");
     expect(amp).toBeDefined();
     if (!amp) return;
@@ -912,9 +910,10 @@ describe("identifiers", (): void => {
       },
     );
 
-    it.each(ALL_HARD_KEYWORDS)(
+    it.each(["mut"])(
       "rejects hard keyword %s as a let binding name with a diagnostic naming the keyword",
       (kw) => {
+        debugger;
         const result = parse(tokenize(`let ${kw} = 1;`).tokens);
         assert(
           isNone(result.program),
@@ -926,16 +925,15 @@ describe("identifiers", (): void => {
   });
 
   describe("reserved keyword diagnostics", (): void => {
-    it("rejects mut in let binding position with a hint about write", (): void => {
+    it("rejects mut used as a binding name (without pattern)", (): void => {
       const result = parse(tokenize("let mut = 1;").tokens);
       expect(result.program).toEqual(none());
-      expect(result.diagnostics[0]?.message).toContain("write");
     });
 
-    it("rejects mut as a function name with a hint about write", (): void => {
+    it("rejects mut as a function name with a diagnostic", (): void => {
       const result = parse(tokenize("fn mut() {}").tokens);
       expect(result.program).toEqual(none());
-      expect(result.diagnostics[0]?.message).toContain("write");
+      expect(result.diagnostics[0]?.message).toContain("mut");
     });
 
     it.each(["mod", "box", "macro", "yield"])(
@@ -1067,8 +1065,8 @@ describe("reference expressions", (): void => {
     });
   });
 
-  it("parses an exclusive reference &write counter", (): void => {
-    const ast = parseProgram("&write counter;");
+  it("parses an exclusive reference &mut counter", (): void => {
+    const ast = parseProgram("&mut counter;");
     expect(ast).toMatchObject({
       items: [
         {
@@ -1086,32 +1084,38 @@ describe("reference expressions", (): void => {
     });
   });
 
-  it("rejects &mut x with the mut→write hint", (): void => {
-    const result = parse(tokenize("&mut x;").tokens);
-    expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("write");
+  it("parses &mut x as a mutable reference", (): void => {
+    const ast = parseProgram("&mut x;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "ReferenceExpression",
+            mutable: true,
+            operand: {
+              kind: "PathExpression",
+              path: { segments: ["x"] },
+            },
+          },
+        },
+      ],
+    });
   });
 });
 
 describe("let binding modifiers", (): void => {
-  it("parses let bind x = 1", (): void => {
-    const ast = parseProgram("let bind x = 1;");
+  it("parses let mut x = 1", (): void => {
+    const ast = parseProgram("let mut x = 1;");
     expect(ast).toMatchObject({
-      items: [{ kind: "LetStatement", bind: true, write: false }],
+      items: [{ kind: "LetStatement", mutable: true }],
     });
   });
 
-  it("parses let write x = 1", (): void => {
-    const ast = parseProgram("let write x = 1;");
+  it("parses let x = 1 as immutable", (): void => {
+    const ast = parseProgram("let x = 1;");
     expect(ast).toMatchObject({
-      items: [{ kind: "LetStatement", bind: false, write: true }],
-    });
-  });
-
-  it("parses let bind write x = 1", (): void => {
-    const ast = parseProgram("let bind write x = 1;");
-    expect(ast).toMatchObject({
-      items: [{ kind: "LetStatement", bind: true, write: true }],
+      items: [{ kind: "LetStatement", mutable: false }],
     });
   });
 
@@ -1273,13 +1277,6 @@ describe("parse errors — missing tokens", (): void => {
   it("errors on fn at EOF", (): void => {
     const result = parse(tokenize("fn").tokens);
     expect(result.program).toEqual(none());
-  });
-
-  it("foo::mut gives the mut hint about write/bind, not a generic keyword error", (): void => {
-    const result = parse(tokenize("foo::mut;").tokens);
-    expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("write");
-    expect(result.diagnostics[0]?.message).toContain("mut");
   });
 
   it.todo(
@@ -1721,14 +1718,8 @@ describe("no-op let warnings", (): void => {
     );
   });
 
-  it("let write x; with no initializer does not warn", (): void => {
-    const { diagnostics } = parse(tokenize("let write x;").tokens);
-    const warnings = diagnostics.filter((d) => d.severity === "warning");
-    expect(warnings).toHaveLength(0);
-  });
-
-  it("let bind x; with no initializer does not warn", (): void => {
-    const { diagnostics } = parse(tokenize("let bind x;").tokens);
+  it("let mut x; with no initializer does not warn", (): void => {
+    const { diagnostics } = parse(tokenize("let mut x;").tokens);
     const warnings = diagnostics.filter((d) => d.severity === "warning");
     expect(warnings).toHaveLength(0);
   });

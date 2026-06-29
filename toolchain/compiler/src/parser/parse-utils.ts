@@ -94,7 +94,7 @@ export function stripUnderscores(text: string): string {
 }
 
 export const MUT_MESSAGE: string =
-  "The keyword `mut` is reserved and cannot be used as an identifier. If you meant mutability, try `bind` for reassignment and/or `write` for mutation.";
+  "The keyword `mut` is reserved and cannot be used as an identifier. For a mutable binding, use `let mut`; for a mutable borrow, use `&mut`.";
 
 /**
  * Parses an identifier expression.
