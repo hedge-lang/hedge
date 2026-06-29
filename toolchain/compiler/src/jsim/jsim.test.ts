@@ -379,11 +379,125 @@ describe("toJsim", () => {
             body: [
               {
                 kind: "IfStatement",
-                else: { value: [{ kind: "IfStatement" }] },
+                elseBranch: { value: [{ kind: "IfStatement" }] },
               },
             ],
           },
         ],
+      });
+    });
+  });
+
+  describe("alpha-rename", () => {
+    it("three sequential shadows of the same name produce distinct emitted identifiers", () => {
+      const program = toJsim(
+        parseOrThrow("fn main() { let x = 1; let x = 2; let x = 3; }"),
+      );
+      expect(program).toMatchObject({
+        items: [
+          {
+            kind: "FunctionDecl",
+            body: [
+              { kind: "LetStatement", name: "x" },
+              { kind: "LetStatement", name: "x$1" },
+              { kind: "LetStatement", name: "x$2" },
+            ],
+          },
+        ],
+      });
+    });
+
+    it("function parameter shadowed by inner let uses original name in declaration and suffixed name in body", () => {
+      const program = toJsim(parseOrThrow("fn foo(n: i32) { let n = 42; }"));
+      expect(program).toMatchObject({
+        items: [
+          {
+            kind: "FunctionDecl",
+            params: [{ kind: "FunctionParam", name: "n" }],
+            body: [{ kind: "LetStatement", name: "n$1" }],
+          },
+        ],
+      });
+    });
+
+    it("shadow of x skips user-defined x$1 and lands on x$2", () => {
+      const program = toJsim(
+        parseOrThrow("fn main() { let x = 1; let x$1 = 50; let x = 2; }"),
+      );
+      const functionDecl = program.items.find(
+        (item) => item.kind === "FunctionDecl",
+      );
+      assert(
+        functionDecl !== undefined,
+        "Expected to find a function declaration block",
+      );
+      const letStatements = functionDecl.body.filter(
+        (statement) => statement.kind === "LetStatement",
+      );
+      expect(letStatements).toMatchObject([
+        { kind: "LetStatement", name: "x" },
+        { kind: "LetStatement", name: "x$1" },
+        { kind: "LetStatement", name: "x$2" },
+      ]);
+    });
+
+    it("user-defined x$1 declared after shadow is renamed to x$1$1", () => {
+      const program = toJsim(
+        parseOrThrow("fn main() { let x = 1; let x = 2; let x$1 = 99; }"),
+      );
+      const functionDecl = program.items.find(
+        (item) => item.kind === "FunctionDecl",
+      );
+      assert(
+        functionDecl !== undefined,
+        "Expected to find a function declaration block",
+      );
+      const letStatements = functionDecl.body.filter(
+        (statement) => statement.kind === "LetStatement",
+      );
+      expect(letStatements).toMatchObject([
+        { kind: "LetStatement", name: "x" },
+        { kind: "LetStatement", name: "x$1" },
+        { kind: "LetStatement", name: "x$1$1" },
+      ]);
+    });
+
+    it("struct shorthand field resolves to the renamed binding in scope", () => {
+      const program = toJsim(
+        parseOrThrow(
+          "struct Pt { x: i32 } fn main() { let x = 1; let x = 2; let p = Pt { x }; }",
+        ),
+      );
+      const functionDecl = program.items.find(
+        (item) => item.kind === "FunctionDecl",
+      );
+      assert(
+        functionDecl !== undefined,
+        "Expected to find a function declaration block",
+      );
+      const letP = functionDecl.body.find(
+        (b) => b.kind === "LetStatement" && b.name === "p",
+      );
+      assert(letP !== undefined, "Expected to find `let p` statement");
+      expect(letP).toMatchObject({
+        kind: "LetStatement",
+        name: "p",
+        value: {
+          kind: "Some",
+          value: {
+            kind: "StructExpression",
+            fields: [
+              {
+                kind: "StructField",
+                name: "x",
+                value: {
+                  kind: "Some",
+                  value: { kind: "Identifier", value: "x$1" },
+                },
+              },
+            ],
+          },
+        },
       });
     });
   });

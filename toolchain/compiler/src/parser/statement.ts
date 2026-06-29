@@ -253,6 +253,17 @@ export function parseBlock(
       cursor += 1;
       continue;
     }
+    // ExpressionWithBlock does not require a semicolon in statement position.
+    // Block-like expressions (Block, IfExpression) used before the final position
+    // are statements without a trailing `;`
+    if (
+      (exprResult.value.node.kind === "Block" ||
+        exprResult.value.node.kind === "IfExpression") &&
+      tokens[cursor]?.kind !== "rbrace"
+    ) {
+      statements.push(expressionStatement(exprResult.value.node));
+      continue;
+    }
     trailing = exprResult.value.node;
     break;
   }

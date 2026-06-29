@@ -1,5 +1,5 @@
 import { assert, assertNever } from "../assert.js";
-import { isSome, none, some } from "../option.js";
+import { isSome, mapSome, none, some, unwrapSomeOr } from "../option.js";
 import type {
   AssignOperator,
   BinaryOperator,
@@ -256,9 +256,16 @@ function emitExpression(expression: Expression): string {
       const fields = expression.fields.map((f) =>
         f.kind === "SpreadExpression"
           ? `...${emitExpression(f.expression)}`
-          : isSome(f.value)
-            ? `${f.name}: ${emitExpression(f.value.value)}`
-            : f.name,
+          : unwrapSomeOr(
+              mapSome(f.value, (fValue) => {
+                const fName = f.name;
+                const emittedExpression = emitExpression(fValue);
+                return emittedExpression === fName
+                  ? fName
+                  : `${fName}: ${emittedExpression}`;
+              }),
+              f.name,
+            ),
       );
       return `({${fields.join(", ")}})`;
     }
@@ -287,11 +294,11 @@ function emitBranchBlock(
 function emitIfStatement(stmt: IfStatement): string {
   const cond = emitExpression(stmt.condition);
   const isMultiline =
-    branchHasReturn(stmt.then) ||
-    (isSome(stmt.else) && branchHasReturn(stmt.else.value));
-  const thenStr = emitBranchBlock(stmt.then, isMultiline);
-  if (!isSome(stmt.else)) return `if (${cond}) ${thenStr}`;
-  const elseStmts = stmt.else.value;
+    branchHasReturn(stmt.thenBranch) ||
+    unwrapSomeOr(mapSome(stmt.elseBranch, branchHasReturn), false);
+  const thenStr = emitBranchBlock(stmt.thenBranch, isMultiline);
+  if (!isSome(stmt.elseBranch)) return `if (${cond}) ${thenStr}`;
+  const elseStmts = stmt.elseBranch.value;
   if (elseStmts.length === 1 && elseStmts[0]?.kind === "IfStatement") {
     return `if (${cond}) ${thenStr} else ${emitIfStatement(elseStmts[0])}`;
   }
