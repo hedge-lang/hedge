@@ -153,4 +153,34 @@ describe("semantic analysis", (): void => {
       });
     });
   });
+
+  it("rejects comparisons with right-side boolean", (): void => {
+    const result = diagnose("fn main() { let x = 1 < (2 < 3); }");
+    expect(result.diagnostics).toMatchObject([
+      {
+        severity: "error",
+        message: "comparison operands must have the same type",
+      },
+    ]);
+  });
+
+  it("rejects comparisons with left-side boolean", (): void => {
+    const result = diagnose("fn main() { let x = (1 < 2) < 3; }");
+    expect(result.diagnostics).toMatchObject([
+      {
+        severity: "error",
+        message: "comparison operands must have the same type",
+      },
+    ]);
+  });
+
+  it.each(["=", "+=", "-=", "*=", "/=", "%=", "<<=", ">>="])(
+    "rejects `%s` assignment to immutable let binding",
+    (op): void => {
+      const result = diagnose(`fn main() { let x = 1; x ${op} 1; print(x); }`);
+      expect(result.diagnostics).toMatchObject([
+        { severity: "error", message: "cannot assign to immutable binding" },
+      ]);
+    },
+  );
 });
