@@ -12,7 +12,7 @@ the boundary.
 - **Primitives only, inward:** only primitive values may cross from JavaScript
   into Hedge. Complex objects cannot, since they would let JavaScript alias or
   mutate data behind Hedge's back.
-- **No references across:** neither `&T` nor `&write T` crosses in either
+- **No references across:** neither `&T` nor `&mut T` crosses in either
   direction; JavaScript has no notion of a borrow, and letting one cross would
   surrender Hedge's ownership guarantees. A borrowing struct cannot cross either.
 - **Owned values may go out:** Hedge may hand an owned value to JavaScript, at

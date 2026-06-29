@@ -2,7 +2,7 @@
 
 There are three sequence types: a fixed-size array `[T; N]`, where `N` is a const;
 a growable owned vector `Vec<T>`; and a slice `[T]`, a borrowed view into a
-contiguous range used as `&[T]` or `&write [T]`.
+contiguous range used as `&[T]` or `&mut [T]`.
 
 A `Vec<T>` or `[T; N]` is backed by a JavaScript `Array` for an object element
 type, or by a typed array for a numeric one, so `Vec<u8>` is a `Uint8Array`,

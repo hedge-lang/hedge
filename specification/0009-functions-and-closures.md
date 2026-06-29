@@ -29,7 +29,7 @@ separator.
 A closure captures each variable it references by the least capability its body
 requires, inferred per variable. A variable that is only read is captured by `&`
 and shared-borrowed for the closure's life; a variable that is mutated is captured
-by `&write` and exclusively borrowed; a variable that is consumed is captured by
+by `&mut` and exclusively borrowed; a variable that is consumed is captured by
 move. Writing `move |…| …` forces every capture to be taken by value. Capture is
 disjoint, so using `s.x` captures the place `s.x` rather than all of `s`.
 
@@ -41,7 +41,7 @@ receivers:
 | Captures                       | Trait     | Call receiver |
 | ------------------------------ | --------- | ------------- |
 | only `&` (or `Copy`)           | `Fn`      | `&self`       |
-| any `&write`                   | `FnWrite` | `&write self` |
+| any `&mut`                     | `FnWrite` | `&mut self`   |
 | anything by move (consumes it) | `FnOnce`  | `self`        |
 
 A non-capturing closure coerces to a plain `fn(T) -> R`.
@@ -68,7 +68,7 @@ iterator where the depth is unbounded.
 ## Generated code and Drop
 
 Closures compile to native JavaScript closures that close over their captures; the
-runtime reclaims a closure's memory once it is unreachable. A `&write` capture of a
+runtime reclaims a closure's memory once it is unreachable. A `&mut` capture of a
 primitive is the `{ v }` cell used for mutable primitive borrows (see
 [Borrows](0005-borrows.md)). A closure owns its by-move captures, so a closure
 holding a `Drop` value is itself a `Drop` value, dropped at the end of its scope

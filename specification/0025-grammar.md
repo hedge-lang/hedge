@@ -67,15 +67,15 @@ Hard keywords are always reserved and may appear as identifiers only through the
 ```txt
 as     async  await  break  const  continue  dyn    else   enum
 export extern false  fn     for    if        impl   in     let
-loop   match  move   pub    return self  Self  static struct super
+loop   match  move   mut    pub    return self  Self  static struct super
 trait  true   type   unsafe use    where     while
 ```
 
 Contextual keywords are keywords only in their syntactic slot and are ordinary
-identifiers elsewhere (so `socket.write(buf)` and `fn test()` are valid):
+identifiers elsewhere (so `fn test()` is valid):
 
 ```txt
-write  bind  package  unchecked
+package  unchecked
 ```
 
 Attribute names (`derive`, `test`, `non_exhaustive`, and any future ones) are
@@ -86,14 +86,14 @@ The following are reserved but unused, held back for diagnostics and future use.
 They are not valid identifiers except through `r#`:
 
 ```txt
-mut  mod  box  macro  yield
+write bind mod  box  macro  yield
 ```
 
-`mut`, `mod`, and `box` mark capabilities Hedge deliberately omits (`write`
-instead of `mut`, files-as-modules instead of `mod`, no `Box`); reserving them
-lets the compiler report the intended alternative rather than a generic parse
-error. New keywords are introduced only at major language versions, and the `r#`
-form keeps any such addition from breaking existing code.
+`write`, `bind`, `mod` and `box` mark capabilities Hedge deliberately omits (files-as-modules
+instead of `mod`, no `Box`); reserving them lets the compiler report the intended
+alternative rather than a generic parse error. New keywords are introduced only at
+major language versions, and the `r#` form keeps any such addition from breaking
+existing code.
 
 ### Literals
 
@@ -170,7 +170,7 @@ type arguments to a value use the turbofish `::<...>`.
 | Prec | Operators                                                | Associativity |
 | ---- | -------------------------------------------------------- | ------------- |
 | 1    | `.` `()` `[]` `?` (postfix)                              | left          |
-| 2    | `-` `!` `*` `&` `&write` (prefix)                        | right         |
+| 2    | `-` `!` `*` `&` `&mut` (prefix)                          | right         |
 | 3    | `*` `/` `%`                                              | left          |
 | 4    | `+` `-`                                                  | left          |
 | 5    | `<<` `>>`                                                | left          |
@@ -210,7 +210,7 @@ Function    ::= Linkage? "unsafe"? "async"? "const"? "fn" Identifier
                 ( Block | ";" )
 Params      ::= Receiver ( "," Param )* ","?
              | Param ( "," Param )* ","?
-Receiver    ::= "self" | "write" "self" | "&" "self" | "&" "write" "self"
+Receiver    ::= "self" | "mut" "self" | "&" "self" | "&" "mut" "self"
 Param       ::= Pattern ":" Type
 
 Struct      ::= "struct" Identifier Generics? WhereClause?
@@ -262,7 +262,7 @@ WherePredicate ::= Type ":" TraitBounds
 ### Types
 
 ```txt
-Type ::= "&" Lifetime? "write"? Type
+Type ::= "&" Lifetime? "mut"? Type
        | "[" Type ";" Expression "]"
        | "[" Type "]"
        | "(" ( Type ( "," Type )* ","? )? ")"
@@ -291,14 +291,14 @@ PatternNoAlt ::= "_"
              | TuplePat
              | SlicePat
              | Path
-BindingPat ::= ( "&" "write"? | "write" )? Identifier ( "@" PatternNoAlt )?
+BindingPat ::= ( "&" "mut"? | "mut" )? Identifier ( "@" PatternNoAlt )?
 RangePat   ::= Literal "..=" Literal
 StructPat  ::= Path "{" ( FieldPat ( "," FieldPat )* )? ( ","? ".." )? "}"
 FieldPat   ::= Identifier ( ":" Pattern )?
 TupleStructPat ::= Path "(" ( Pattern ( "," Pattern )* )? ")"
 TuplePat   ::= "(" ( Pattern ( "," Pattern )* ","? )? ")"
 SlicePat   ::= "[" ( Pattern | RestPat ) ( "," ( Pattern | RestPat ) )* ","? "]"
-RestPat    ::= ( "&" "write"? Identifier | Identifier )? ".."
+RestPat    ::= ( "&" "mut"? Identifier | Identifier )? ".."
 ```
 
 Binding modes, refutability, and exhaustiveness are specified in
@@ -312,13 +312,13 @@ Statement    ::= ";"
               | Item
               | LetStatement
               | Expression ";"
-LetStatement ::= "let" "bind"? "write"? Pattern ( ":" Type )?
+LetStatement ::= "let" "mut"? Pattern ( ":" Type )?
                  ( "=" Expression )? ";"
 ```
 
 A block evaluates to its trailing expression, or to `()` when it ends in a
-statement. Binding capabilities are declared `bind` before `write`
-(`let bind write x`); see [Mutability](0004-mutability.md).
+statement. Mutability is declared with `let mut`; see
+[Mutability](0004-mutability.md).
 
 ### Expressions
 
@@ -347,7 +347,7 @@ ArrayElems  ::= Expression ( "," Expression )* ","?
 StructExpr  ::= Path "{" ( FieldInit ( "," FieldInit )* )? ( ","? ".." Expression )? "}"
 FieldInit   ::= Identifier ( ":" Expression )?
 
-UnaryExpr   ::= ( "-" | "!" | "*" | "&" "write"? | "write" ) Expression
+UnaryExpr   ::= ( "-" | "!" | "*" | "&" "mut"? ) Expression
 BinaryExpr  ::= Expression BinaryOp Expression
 AssignExpr  ::= Expression AssignOp Expression
 CallExpr    ::= Expression "(" ( Expression ( "," Expression )* ","? )? ")"

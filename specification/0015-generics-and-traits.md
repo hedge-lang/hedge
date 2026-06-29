@@ -52,7 +52,7 @@ associated types:
 ```hedge
 trait Iterator {
   type Item;
-  fn next(&write self) -> Option<Self::Item>;
+  fn next(&mut self) -> Option<Self::Item>;
   fn count(self) -> usize { … }   // default method
 }
 ```

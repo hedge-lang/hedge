@@ -5,7 +5,7 @@ primitive that is held, passed, returned, and copied by value freely. Because a
 JavaScript string is a sized, immutable reference, the unsized-`str` problem that
 forces a `String`/`&str`/`str` split in other languages does not arise, and there
 is one string type. A read borrow `&str` is the bare string and is rarely needed,
-since `str` is `Copy`. A write borrow `&write str` uses the mutable-primitive
+since `str` is `Copy`. A write borrow `&mut str` uses the mutable-primitive
 boxing, `{ v: string }`, so writing through it replaces the whole string, which is
 what mutating an immutable string means; there is no in-place editing. A string is
 not integer-indexed as characters, because byte and code-unit indexing is a

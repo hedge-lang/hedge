@@ -11,7 +11,7 @@ At any point a region is in exactly one of four states:
   capability in [Mutability](0004-mutability.md).
 - **SHARED**: one or more immutable references (`&`) refer to the region, and no
   binding may mutate it while they live.
-- **EXCLUSIVE-BORROW**: a single mutable reference (`&write`) holds the region,
+- **EXCLUSIVE-BORROW**: a single mutable reference (`&mut`) holds the region,
   the owning binding is frozen, and the reference is the only path to the value
   until the borrow ends.
 - **UNBOUND**: the region has been moved or invalidated and can no longer be
@@ -30,8 +30,8 @@ stateDiagram-v2
   [*] --> OWNED: let binding
   OWNED --> SHARED: take &
   SHARED --> OWNED: last & released
-  OWNED --> EXCLUSIVE: take &write
-  EXCLUSIVE --> OWNED: &write released
+  OWNED --> EXCLUSIVE: take &mut
+  EXCLUSIVE --> OWNED: &mut released
   OWNED --> UNBOUND: move or drop
   UNBOUND --> [*]
 ```
@@ -42,25 +42,24 @@ A region is either held exclusively or shared, never both. OWNED and
 EXCLUSIVE-BORROW are the exclusive states; SHARED is the shared state; UNBOUND is
 neither. SHARED forbids mutation and every operation that presumes exclusive
 ownership, because other references may be reading the value. EXCLUSIVE-BORROW
-permits mutation through its `&write` reference and freezes the owning binding so
+permits mutation through its `&mut` reference and freezes the owning binding so
 the reference stays the only path to the value. OWNED forbids mutation and
 sharing except where the binding's capability grants them. An UNBOUND region
 permits nothing.
 
 ## Bindings
 
-The binding forms `let`, `let bind`, `let write`, and `let bind write` do not
-declare mutability directly. Each sets or transforms the ownership state of the
-region it binds and grants the capabilities that later operations are checked
-against; the capabilities are described in [Mutability](0004-mutability.md).
+The binding forms `let` and `let mut` set the ownership state of the region
+they bind. `let` yields OWNED-IMMUTABLE; `let mut` yields OWNED-MUTABLE. The
+full state machine is described in [Mutability](0004-mutability.md).
 
 ## References
 
 A shared reference, `&value`, moves the region into SHARED state. Every binding
 that names the region then has read-only access for as long as any shared
-reference lives. A mutable reference, `&write value`, moves the region into
+reference lives. A mutable reference, `&mut value`, moves the region into
 EXCLUSIVE-BORROW: at most one may exist at a time, the owner must already hold the
-`write` capability, and the owning binding may not be read, written, moved, or
+`mut` capability, and the owning binding may not be read, written, moved, or
 re-borrowed until the borrow ends.
 
 A borrow's extent is inferred from its last use, not its lexical scope. It ends

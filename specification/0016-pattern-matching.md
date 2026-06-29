@@ -12,12 +12,12 @@ The form of the scrutinee sets the default mode for the bindings in its patterns
   partial move of `x`; Copy types copy).
 - `match &x { … }` matches a read-borrow, so bindings are **read-borrows**; `x`
   is untouched.
-- `match &write x { … }` matches a write-borrow, so bindings are
-  **write-borrows**; `x` must hold `write`.
+- `match &mut x { … }` matches a mutable-borrow, so bindings are
+  **mutable-borrows**; `x` must hold `mut`.
 
 Pattern bindings use the same vocabulary as `let`: `name` is read-only,
-`write name` is writable, `&name` is a read-borrow, `&write name` is a
-write-borrow. These sigils are the whole vocabulary; there is no separate
+`write name` is writable, `&name` is a read-borrow, `&mut name` is a
+mutable-borrow. These sigils are the whole vocabulary; there is no separate
 binding keyword.
 
 A binding may override the default with those sigils, for example borrowing one
@@ -82,7 +82,7 @@ patterns over it are refutable.
 - **Guards:** `pattern if cond`.
 
 There is no separate reference pattern. The scrutinee form already drives binding
-modes, and `&`/`&write` in a pattern mean "bind by borrow"; a second meaning for
+modes, and `&`/`&mut` in a pattern mean "bind by borrow"; a second meaning for
 `&` would only confuse.
 
 ## Generated code
