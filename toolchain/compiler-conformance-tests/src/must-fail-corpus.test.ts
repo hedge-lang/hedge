@@ -51,19 +51,19 @@ describe("must-fail corpus — rejection tests", (): void => {
   });
 
   describe("borrow checker errors", (): void => {
-    it("rejects &write of immutable binding", (): void => {
+    it("rejects &mut of immutable binding", (): void => {
       assertRejectsWithMessage(
-        `fn main() { let x = "a"; let r = &write x; print(r); }`,
-        "not declared write",
+        `fn main() { let x = "a"; let r = &mut x; print(r); }`,
+        "not declared mut",
       );
     });
 
     it("rejects overlapping mutable borrows", (): void => {
       assertRejectsWithMessage(
         `fn main() {
-          let write x = "a";
-          let r1 = &write x;
-          let r2 = &write x;
+          let mut x = "a";
+          let r1 = &mut x;
+          let r2 = &mut x;
           print(r1);
           print(r2);
         }`,
@@ -74,10 +74,10 @@ describe("must-fail corpus — rejection tests", (): void => {
     it.fails("accepts sequential mutable borrows (NLL)", (): void => {
       assertCompilesClean(`
         fn main() {
-          let write x = "a";
-          let r1 = &write x;
+          let mut x = "a";
+          let r1 = &mut x;
           print(r1);
-          let r2 = &write x;
+          let r2 = &mut x;
           print(r2);
         }
       `);
@@ -102,8 +102,8 @@ describe("must-fail corpus — rejection tests", (): void => {
     it("rejects shared borrow while mutable borrow is still live", (): void => {
       assertRejectsWithMessage(
         `fn main() {
-          let write x = "a";
-          let rw = &write x;
+          let mut x = "a";
+          let rw = &mut x;
           let r = &x;
           print(rw);
           print(r);
@@ -148,9 +148,9 @@ describe("must-fail corpus — rejection tests", (): void => {
     it("rejects mutable borrow while shared borrow is still live", (): void => {
       assertRejectsWithMessage(
         `fn main() {
-          let write x = "a";
+          let mut x = "a";
           let r = &x;
-          let rw = &write x;
+          let rw = &mut x;
           print(r);
           print(rw);
         }`,
@@ -163,9 +163,9 @@ describe("must-fail corpus — rejection tests", (): void => {
       (): void => {
         assertCompilesClean(`
         fn main() {
-          let write x = "a";
-          let r1 = &write x;
-          let r2 = &write x;
+          let mut x = "a";
+          let r1 = &mut x;
+          let r2 = &mut x;
           print(r2);
         }
       `);

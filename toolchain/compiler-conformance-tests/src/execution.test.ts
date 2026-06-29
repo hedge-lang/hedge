@@ -239,28 +239,28 @@ describe("execution tests", (): void => {
       );
     });
 
-    it("let write rebinding updates the value", (): void => {
-      assertRunsTo(`fn main() { let write x = 1; x = 2; print(x); }`, ["2"]);
+    it("let mut rebinding updates the value", (): void => {
+      assertRunsTo(`fn main() { let mut x = 1; x = 2; print(x); }`, ["2"]);
     });
 
-    it("let bind modifier compiles and executes", (): void => {
-      assertRunsTo(`fn main() { let bind x = 5; print(x); }`, ["5"]);
+    it("let mut modifier compiles and executes", (): void => {
+      assertRunsTo(`fn main() { let mut x = 5; print(x); }`, ["5"]);
     });
 
     it("type annotation on let binding compiles correctly", (): void => {
       assertRunsTo(`fn main() { let x: i32 = 5; print(x); }`, ["5"]);
     });
 
-    it("compound assignment += updates a let write binding", (): void => {
-      assertRunsTo(`fn main() { let write x = 1; x += 5; print(x); }`, ["6"]);
+    it("compound assignment += updates a let mut binding", (): void => {
+      assertRunsTo(`fn main() { let mut x = 1; x += 5; print(x); }`, ["6"]);
     });
 
-    it("compound assignment -= updates a let write binding", (): void => {
-      assertRunsTo(`fn main() { let write x = 10; x -= 3; print(x); }`, ["7"]);
+    it("compound assignment -= updates a let mut binding", (): void => {
+      assertRunsTo(`fn main() { let mut x = 10; x -= 3; print(x); }`, ["7"]);
     });
 
-    it("multiple assignments to let write binding update sequentially", (): void => {
-      assertRunsTo(`fn main() { let write x = 1; x = 2; x = 3; print(x); }`, [
+    it("multiple assignments to let mut binding update sequentially", (): void => {
+      assertRunsTo(`fn main() { let mut x = 1; x = 2; x = 3; print(x); }`, [
         "3",
       ]);
     });
