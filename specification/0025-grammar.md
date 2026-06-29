@@ -211,7 +211,7 @@ Function    ::= Linkage? "unsafe"? "async"? "const"? "fn" Identifier
 Params      ::= Receiver ( "," Param )* ","?
              | Param ( "," Param )* ","?
 Receiver    ::= "self" | "mut" "self" | "&" "self" | "&" "mut" "self"
-Param       ::= Pattern ":" Type
+Param       ::= "mut"? Pattern ":" Type
 
 Struct      ::= "struct" Identifier Generics? WhereClause?
                 ( StructBody | TupleBody ";" | ";" )
