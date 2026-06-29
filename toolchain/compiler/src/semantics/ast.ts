@@ -159,8 +159,7 @@ export interface Block extends DecoratedAstNode {
 export interface LetStatement extends DecoratedAstNode {
   readonly kind: "LetStatement";
   readonly attributes: readonly Attribute[];
-  readonly bind: boolean;
-  readonly write: boolean;
+  readonly mutable: boolean;
   readonly pattern: BindingPattern;
   readonly initializer: Option<Expression>;
 }
@@ -338,7 +337,7 @@ export interface CallExpression extends DecoratedAstNode {
 
 interface ReferenceExpression extends DecoratedAstNode {
   readonly kind: "ReferenceExpression";
-  /** `true` for `&write` (exclusive), `false` for `&` (shared). */
+  /** `true` for `&mut` (exclusive), `false` for `&` (shared). */
   readonly mutable: boolean;
   readonly operand: Expression;
 }
