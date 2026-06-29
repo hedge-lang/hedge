@@ -88,6 +88,7 @@ export interface Visibility {
 
 export interface Param extends AstNode {
   readonly kind: "Param";
+  readonly mutable: boolean;
   readonly pattern: BindingPattern;
   readonly type: Type;
 }

@@ -79,7 +79,7 @@ function parseVisibility(
  *
  * ```text
  * Params ::= "(" (Param ("," Param)* ","?)? ")"
- * Param  ::= BindingPattern ":" Type
+ * Param  ::= "mut"? BindingPattern ":" Type
  * ```
  */
 // eslint-disable-next-line complexity -- This is too difficult to split up
@@ -99,6 +99,12 @@ function parseParams(
       break;
     }
     const paramStart = cursor;
+    let mutable = false;
+    const maybeMut = tokens[cursor];
+    if (maybeMut?.kind === "keyword" && maybeMut.text === "mut") {
+      mutable = true;
+      cursor += 1;
+    }
     const identResult = parseIdentifier(tokens, cursor);
     if (isErr(identResult)) {
       return identResult;
@@ -128,6 +134,7 @@ function parseParams(
     params.push({
       kind: "Param",
       tokenId: paramStart,
+      mutable,
       pattern,
       type: typeResult.value.node,
     });

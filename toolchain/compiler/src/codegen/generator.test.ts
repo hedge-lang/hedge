@@ -324,7 +324,7 @@ describe("assign expression codegen", () => {
     ["ShlAssign", "x <<= 1;", "x <<= 1"],
     ["ShrAssign", "x >>= 1;", "x >>= 1"],
   ])("%s emits correct JS operator", (_, source, expected) => {
-    expect(stmts(gen(`fn _(x: ()) { ${source} }`))).toBe(`${expected};`);
+    expect(stmts(gen(`fn _(mut x: ()) { ${source} }`))).toBe(`${expected};`);
   });
 });
 

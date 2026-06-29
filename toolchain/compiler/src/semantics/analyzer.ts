@@ -22,9 +22,14 @@ export interface AnalysisResult {
  * Maps onto `struct AnalysisContext { scopes: ..., diagnostics: ... }` in Hedge.
  */
 interface AnalysisContext {
-  readonly scopes: Map<string, Semantics.Type>[];
+  readonly scopes: Map<string, ScopedVariable>[];
   readonly diagnostics: Diagnostic[];
   readonly tokens: readonly Token[];
+}
+
+interface ScopedVariable {
+  readonly type: Semantics.Type;
+  readonly mutable: boolean;
 }
 
 /** Synthetic unit type used for nodes that produce no value. */
@@ -35,13 +40,16 @@ function getType(expr: Semantics.Expression): Semantics.Type {
 }
 
 /** Names and types available before any user code — Slice 1 prelude. */
-const BUILTIN_SCOPE: [string, Semantics.Type][] = [
+const BUILTIN_SCOPE: [string, ScopedVariable][] = [
   [
     "print",
     {
-      kind: "FunctionType",
-      params: [{ kind: "PrimitiveStringType" }],
-      returnType: UNIT,
+      type: {
+        kind: "FunctionType",
+        params: [{ kind: "PrimitiveStringType" }],
+        returnType: UNIT,
+      },
+      mutable: false,
     },
   ],
 ];
@@ -51,12 +59,16 @@ const BUILTIN_SCOPE: [string, Semantics.Type][] = [
  *
  * @param ctx - The analysis context containing the scope stack.
  * @param name - The identifier to bind within the current scope.
- * @param type - The type associated with the identifier.
+ * @param scopedVariable - The type associated with the identifier.
  */
-function bind(ctx: AnalysisContext, name: string, type: Semantics.Type): void {
+function bind(
+  ctx: AnalysisContext,
+  name: string,
+  scopedVariable: ScopedVariable,
+): void {
   const scope = ctx.scopes[ctx.scopes.length - 1];
   if (scope !== undefined) {
-    scope.set(name, type);
+    scope.set(name, scopedVariable);
   }
 }
 
@@ -67,7 +79,7 @@ function bind(ctx: AnalysisContext, name: string, type: Semantics.Type): void {
  * @param name - The name of the entity to resolve within the context's scopes.
  * @return An optional semantic type if the name is found, or none if it is not.
  */
-function resolve(ctx: AnalysisContext, name: string): Option<Semantics.Type> {
+function resolve(ctx: AnalysisContext, name: string): Option<ScopedVariable> {
   for (let i = ctx.scopes.length - 1; i >= 0; i -= 1) {
     const scope = ctx.scopes[i];
     if (scope !== undefined) {
@@ -355,7 +367,10 @@ function analyzeFunctionDecl(
   const analyzedParams = decl.params.map(
     (param: Parser.Param): Semantics.Param => {
       const paramType = validateSlice1Type(ctx, param.type, param.type.tokenId);
-      bind(ctx, param.pattern.name.text, paramType);
+      bind(ctx, param.pattern.name.text, {
+        type: paramType,
+        mutable: param.mutable,
+      });
       return {
         ...param,
         type: paramType,
@@ -508,7 +523,10 @@ function analyzeLetStatement(
     checkPosLiteralRange(ctx, coercedInitializer.value, bindingType);
   }
 
-  bind(ctx, statement.pattern.name.text, bindingType);
+  bind(ctx, statement.pattern.name.text, {
+    type: bindingType,
+    mutable: statement.mutable,
+  });
 
   return {
     ...statement,
@@ -863,13 +881,9 @@ function analyzeExpression(
       return { ...expression, operand, type };
     }
     case "AssignExpression":
+      return analyzeAssignmentExpression(ctx, expression);
     case "CompoundAssignExpression":
-      return {
-        ...expression,
-        lhs: analyzeExpression(ctx, expression.lhs),
-        rhs: analyzeExpression(ctx, expression.rhs),
-        type: { kind: "UnitType", tokenId: expression.tokenId },
-      };
+      return analyzeCompoundAssignmentExpression(ctx, expression);
     case "FieldAccessExpression":
       return {
         ...expression,
@@ -928,6 +942,58 @@ function analyzeExpression(
         `Unexpected AST node: ${JSON.stringify(expression)}`,
       );
   }
+}
+
+function checkLhsMutability(
+  ctx: AnalysisContext,
+  lhs: Parser.Expression,
+  tokenId: number,
+): void {
+  const name = ((): Option<string> => {
+    if (lhs.kind === "PathExpression" && lhs.path.segments.length === 1) {
+      assert(lhs.path.segments[0] !== undefined, "Name segment missing");
+      return some(lhs.path.segments[0]);
+    } else if (lhs.kind === "Identifier") {
+      return some(lhs.text);
+    }
+    return none();
+  })();
+  if (isSome(name)) {
+    const resolved = resolve(ctx, name.value);
+    if (isSome(resolved) && !resolved.value.mutable) {
+      emitError(ctx, "cannot assign to immutable binding", tokenId);
+    }
+  }
+}
+
+function analyzeAssignmentExpression(
+  ctx: AnalysisContext,
+  assignExpression: Parser.AssignExpression,
+): Semantics.AssignExpression {
+  checkLhsMutability(ctx, assignExpression.lhs, assignExpression.tokenId);
+  return {
+    ...assignExpression,
+    lhs: analyzeExpression(ctx, assignExpression.lhs),
+    rhs: analyzeExpression(ctx, assignExpression.rhs),
+    type: { kind: "UnitType", tokenId: assignExpression.tokenId },
+  };
+}
+
+function analyzeCompoundAssignmentExpression(
+  ctx: AnalysisContext,
+  compoundAssignExpression: Parser.CompoundAssignExpression,
+): Semantics.CompoundAssignExpression {
+  checkLhsMutability(
+    ctx,
+    compoundAssignExpression.lhs,
+    compoundAssignExpression.tokenId,
+  );
+  return {
+    ...compoundAssignExpression,
+    lhs: analyzeExpression(ctx, compoundAssignExpression.lhs),
+    rhs: analyzeExpression(ctx, compoundAssignExpression.rhs),
+    type: { kind: "UnitType", tokenId: compoundAssignExpression.tokenId },
+  };
 }
 
 function analyzeStructExpression(
@@ -1047,7 +1113,7 @@ function analyzePath(
   }
   const resolvedType = resolve(ctx, name);
   if (isSome(resolvedType)) {
-    return { ...path, type: resolvedType.value };
+    return { ...path, type: resolvedType.value.type };
   }
   emitError(ctx, `Cannot find name "${name}" in this scope.`, path.tokenId);
   return { ...path, type: { kind: "UnitType", tokenId: path.tokenId } };
