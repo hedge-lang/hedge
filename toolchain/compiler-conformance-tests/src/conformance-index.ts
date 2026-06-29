@@ -242,6 +242,8 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "0008-expressions-and-control-flow.md",
     ],
     testIds: [
+      "rejects comparisons with right-side boolean",
+      "rejects comparisons with left-side boolean",
       "rejects direct assignment to immutable let binding",
       "rejects compound assignment to immutable let binding",
       "rejects integer as boolean condition in if",
