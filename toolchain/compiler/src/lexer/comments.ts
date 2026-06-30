@@ -491,7 +491,7 @@ function tokenizeOuterDocComment(
 
   const lines: string[] = [];
   let end = source.length;
-  for (let i = start; i < source.length; ) {
+  for (let i = start; i < source.length;) {
     while (i < source.length) {
       const maybeWhitespace = isWhitespace(source, i);
       if (isErr(maybeWhitespace)) {
@@ -630,7 +630,7 @@ function tokenizeInnerDocComment(
 
   const lines: string[] = [];
   let end = source.length;
-  for (let i = start; i < source.length; ) {
+  for (let i = start; i < source.length;) {
     while (i < source.length) {
       const maybeWhitespace = isWhitespace(source, i);
       if (isErr(maybeWhitespace)) {
