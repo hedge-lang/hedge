@@ -19,7 +19,7 @@ rules:
 1. Each unannotated reference parameter is given its own lifetime.
 2. If there is exactly one reference parameter, its lifetime is given to every
    reference in the return type.
-3. In a method, a `&self` or `&write self` receiver's lifetime is given to every
+3. In a method, a `&self` or `&mut self` receiver's lifetime is given to every
    reference in the return type.
 
 ```hedge
@@ -63,7 +63,7 @@ longer lifetime may be supplied where a shorter one is expected, contravariant
 when only a shorter one may, and invariant when neither substitution is sound.
 
 - `&'a T` is covariant in both `'a` and `T`.
-- `&'a write T` is covariant in `'a` but invariant in `T`. This is the
+- `&'a mut T` is covariant in `'a` but invariant in `T`. This is the
   load-bearing case: were a mutable borrow covariant in `T`, a shorter-lived
   reference could be stored through it into a longer-lived slot.
 - Owned containers and structs are covariant in their parameters where those
@@ -74,6 +74,6 @@ when only a shorter one may, and invariant when neither substitution is sound.
 
 Variance is a purely compile-time property, unaffected by the JavaScript target
 because lifetimes are erased. It still matters under garbage collection: unsound
-variance would not corrupt memory, but it would allow a `&write` to be aliased or
+variance would not corrupt memory, but it would allow a `&mut` to be aliased or
 a value to be observed after its `Drop` had run, breaking the exclusivity and
 deterministic-cleanup guarantees the language depends on.

@@ -16,16 +16,16 @@ async fn load(url: &str) -> str {
 
 A borrow may be held across an `await`. While a task is suspended other tasks
 run, but the borrow rules already guarantee no other reference to a
-write-borrowed region exists, and Hedge runs on a single thread, so suspension
+mutable-borrowed region exists, and Hedge runs on a single thread, so suspension
 cannot introduce a conflicting access.
 
 This makes the borrow itself a compile-time lock for a uniquely-owned value:
-holding `&write` across an `await` excludes every other task from that region for
+holding `&mut` across an `await` excludes every other task from that region for
 the whole span (a mutex), and the read/write borrow split gives many-readers or
 one-writer (an RW-lock), all checked statically, with no runtime primitive. A
 _runtime_ async lock is only needed for shared ownership, which is deferred along
 with interior mutability; when added it must be a non-blocking awaitable lock
-(its guard releases on `Drop` and yields `&write`), never a thread-style blocking
+(its guard releases on `Drop` and yields `&mut`), never a thread-style blocking
 one.
 
 ## Detached tasks

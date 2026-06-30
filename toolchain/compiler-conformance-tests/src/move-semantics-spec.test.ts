@@ -57,7 +57,7 @@ describe("move semantics spec", (): void => {
       `
       struct Boxed { value: i32 }
       fn main() {
-        let bind write cond = true;
+        let mut cond = true;
         let x = Boxed { value: 1 };
         if cond {
           let y = x;
@@ -91,7 +91,7 @@ describe("move semantics spec", (): void => {
     assertCompilesClean(`
       struct Boxed { value: i32 }
       fn main() {
-        let bind write x = Boxed { value: 1 };
+        let mut x = Boxed { value: 1 };
         if true {
           let y = x;
           print(y.value);

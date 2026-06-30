@@ -700,7 +700,7 @@ describe("lexer", (): void => {
     });
 
     describe("reserved keywords", () => {
-      it.each(["mut", "mod", "box", "macro", "yield"])(
+      it.each(["mod", "box", "macro", "yield"])(
         "classifies %s as a keyword token",
         (kw) => {
           expect(tokenize(kw).tokens[0]).toMatchObject({

@@ -291,7 +291,7 @@ function parseStatement(
       return {
         kind: "LetStatement",
         name,
-        mutable: statement.bind || statement.write,
+        mutable: statement.mutable,
         value,
         docComment: toDocComment(statement.attributes),
       };

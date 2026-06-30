@@ -7,23 +7,23 @@ two kinds. A read-borrow, `&`, grants read-only access:
 let name = &user.name;
 ```
 
-A write-borrow, `&write`, grants exclusive mutable access:
+A mutable-borrow, `&mut`, grants exclusive mutable access:
 
 ```hedge
-let name = &write user.name;
+let name = &mut user.name;
 ```
 
 ## Rules
 
-Borrowing is governed by four rules:
+Four rules govern borrowing:
 
 1. Any number of read-borrows may be active at once.
-2. At most one write-borrow may be active at a time.
-3. A write-borrow excludes everything else for its duration. No read-borrow may
+2. At most one mutable-borrow may be active at a time.
+3. A mutable-borrow excludes everything else for its duration. No read-borrow may
    overlap it, and the owning binding is frozen: it cannot be read, written,
-   moved, or re-borrowed until the write-borrow ends.
-4. A write-borrow requires the owner to hold the `write` capability, since a
-   borrow cannot lend mutation the owner does not have.
+   moved, or re-borrowed until the mutable-borrow ends.
+4. A mutable-borrow requires the owner to hold the `mut` capability, since a
+   borrow cannot lend mutation if the owner does not have it.
 
 These are the exclusivity rules that govern region state in the
 [execution model](0002-execution-model.md): a region is shared or exclusive,
@@ -35,8 +35,8 @@ A borrow lasts until its last use rather than until the end of the enclosing
 block, so a borrow that is never used again ends immediately:
 
 ```hedge
-let write n = 0;
-let r = &write n;
+let mut n = 0;
+let r = &mut n;
 *r = 1;          // last use of r; the borrow ends here
 read(n);         // n is no longer borrowed
 ```
@@ -57,7 +57,7 @@ print(u.name);          // no explicit dereference
 Reading or replacing the referent itself uses `*`:
 
 ```hedge
-let r = &write count;
+let r = &mut count;
 *r = *r + 1;            // read and write the referent
 ```
 

@@ -63,8 +63,7 @@ export function parse(tokens: readonly Token[]): ParseResult {
     items.push(node);
     if (
       node.kind === "LetStatement" &&
-      !node.bind &&
-      !node.write &&
+      !node.mutable &&
       !isSome(node.initializer)
     ) {
       const token = tokens[node.tokenId];

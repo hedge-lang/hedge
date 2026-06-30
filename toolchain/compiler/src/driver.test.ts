@@ -52,12 +52,12 @@ describe("driver", (): void => {
 
   it("reports a borrow error and produces no code", (): void => {
     const result = compile(
-      'fn main() { let x = "a"; let r = &write x; print(r); }',
+      'fn main() { let x = "a"; let r = &mut x; print(r); }',
     );
     expect(isNone(result.code)).toBe(true);
     expect(result.diagnostics).toHaveLength(2);
     expect(result.diagnostics[0]?.message).toContain("Slice 1");
-    expect(result.diagnostics[1]?.message).toContain("not declared write");
+    expect(result.diagnostics[1]?.message).toContain("not declared mut");
   });
 
   it("reports a syntax error and produces no code", (): void => {

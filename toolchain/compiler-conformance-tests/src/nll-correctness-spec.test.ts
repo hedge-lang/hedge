@@ -11,10 +11,10 @@ describe("NLL and lifetime correctness spec", (): void => {
     (): void => {
       assertCompilesClean(`
       fn main() {
-        let write x = "a";
-        let r1 = &write x;
+        let mut x = "a";
+        let r1 = &mut x;
         print(r1);
-        let r2 = &write x;
+        let r2 = &mut x;
         print(r2);
       }
     `);
@@ -26,10 +26,10 @@ describe("NLL and lifetime correctness spec", (): void => {
     (): void => {
       assertCompilesClean(`
       fn main() {
-        let write x = "a";
+        let mut x = "a";
         let r = &x;
         print(r);
-        let rw = &write x;
+        let rw = &mut x;
         print(rw);
       }
     `);
@@ -39,9 +39,9 @@ describe("NLL and lifetime correctness spec", (): void => {
   it.fails("branch-local borrow release allows use after join", (): void => {
     assertCompilesClean(`
       fn main() {
-        let write x = "a";
+        let mut x = "a";
         if true {
-          let r = &write x;
+          let r = &mut x;
           print(r);
         } else {
           print("none");
@@ -56,13 +56,13 @@ describe("NLL and lifetime correctness spec", (): void => {
     (): void => {
       assertCompilesClean(`
       fn main() {
-        let write x = "a";
+        let mut x = "a";
         if true {
-          let r1 = &write x;
+          let r1 = &mut x;
           print(r1);
         }
         if true {
-          let r2 = &write x;
+          let r2 = &mut x;
           print(r2);
         }
       }
@@ -74,8 +74,8 @@ describe("NLL and lifetime correctness spec", (): void => {
     assertRejectsWithMessage(
       `
       fn main() {
-        let write x = "a";
-        let rw = &write x;
+        let mut x = "a";
+        let rw = &mut x;
         let r = &x;
         print(rw);
         print(r);

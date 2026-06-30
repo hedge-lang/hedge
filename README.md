@@ -24,11 +24,11 @@ struct Counter { value: i32 }
 
 impl Counter {
   fn new() -> Self { Counter { value: 0 } }
-  fn increment(&write self) { self.value = self.value + 1 }
+  fn increment(&mut self) { self.value = self.value + 1 }
 }
 
 fn main() {
-  let write c = Counter::new();
+  let mut c = Counter::new();
   c.increment();
 }
 ```

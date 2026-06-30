@@ -88,6 +88,7 @@ export interface Visibility {
 
 export interface Param extends AstNode {
   readonly kind: "Param";
+  readonly mutable: boolean;
   readonly pattern: BindingPattern;
   readonly type: Type;
 }
@@ -153,8 +154,7 @@ export interface Block extends AstNode {
 export interface LetStatement extends AstNode {
   readonly kind: "LetStatement";
   readonly attributes: readonly Attribute[];
-  readonly bind: boolean;
-  readonly write: boolean;
+  readonly mutable: boolean;
   readonly pattern: BindingPattern;
   readonly type: Option<Type>;
   readonly initializer: Option<Expression>;
@@ -235,7 +235,7 @@ export interface CallExpression extends AstNode {
 
 export interface ReferenceExpression extends AstNode {
   readonly kind: "ReferenceExpression";
-  /** `true` for `&write` (exclusive), `false` for `&` (shared). */
+  /** `true` for `&mut` (exclusive), `false` for `&` (shared). */
   readonly mutable: boolean;
   readonly operand: Expression;
 }

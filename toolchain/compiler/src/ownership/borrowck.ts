@@ -152,18 +152,17 @@ function statementUses(statement: Statement, out: Set<string>): void {
 }
 
 /**
- * Map each binding to whether it was declared with the `write` capability.
- *
- * @param statements The statements to analyze.
- * @returns A map from binding names to whether they were declared with the `write` capability.
+ * Map each binding to whether it was declared with the `mut` capability.
+ * Seeds from function parameters first, then let statements.
  */
-function writeCapabilities(
-  statements: readonly Statement[],
-): Map<string, boolean> {
+function writeCapabilities(decl: FunctionDecl): Map<string, boolean> {
   const capabilities = new Map<string, boolean>();
-  for (const statement of statements) {
+  for (const param of decl.params) {
+    capabilities.set(param.pattern.name.text, param.mutable);
+  }
+  for (const statement of decl.body.statements) {
     if (statement.kind === "LetStatement") {
-      capabilities.set(statement.pattern.name.text, statement.write);
+      capabilities.set(statement.pattern.name.text, statement.mutable);
     }
   }
   return capabilities;
@@ -269,7 +268,7 @@ function liveRangesOverlap(
  * @returns A string representation of the borrow.
  */
 function describeBorrow(borrow: Borrow): string {
-  return borrow.mutable ? "&write" : "&";
+  return borrow.mutable ? "&mut" : "&";
 }
 
 /**
@@ -294,7 +293,7 @@ function checkCapabilities(
     if (borrow.mutable && capabilities.get(borrow.base) === false) {
       diagnostics.push({
         severity: "error",
-        message: `Cannot borrow "${borrow.base}" as &write because it is not declared write.`,
+        message: `Cannot borrow "${borrow.base}" as &mut because it is not declared mut.`,
         span: spanOf(tokens, borrow.tokenId),
       });
     }
@@ -340,7 +339,7 @@ function checkFunction(
   const statements = decl.body.statements;
   checkCapabilities(
     collectBorrows(statements),
-    writeCapabilities(statements),
+    writeCapabilities(decl),
     diagnostics,
     tokens,
   );
@@ -363,8 +362,8 @@ function checkItem(
 }
 
 /**
- * Ownership analysis for slice 1: enforces `&write` capability and borrow
- * exclusivity (at most one `&write` xor any number of `&`) using last-use
+ * Ownership analysis for slice 1: enforces `&mut` capability and borrow
+ * exclusivity (at most one `&mut` xor any number of `&`) using last-use
  * liveness. Each function body is a single straight-line basic block; the
  * explicit multi-block CFG arrives with control flow (ADR 0002).
  *

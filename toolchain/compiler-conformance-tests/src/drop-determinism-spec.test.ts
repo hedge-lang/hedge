@@ -48,7 +48,7 @@ describe("drop determinism and RAII spec", (): void => {
       const js = requireJavascript(`
       struct R { id: i32 }
       fn main() {
-        let bind write cond = true;
+        let mut cond = true;
         if cond {
           let x = R { id: 1 };
           print(x.id);
@@ -64,8 +64,8 @@ describe("drop determinism and RAII spec", (): void => {
   it.fails("drop cannot occur while mutable borrow is live", (): void => {
     const result = compile(`
       fn main() {
-        let write x = "a";
-        let r = &write x;
+        let mut x = "a";
+        let r = &mut x;
         print(r);
       }
     `);

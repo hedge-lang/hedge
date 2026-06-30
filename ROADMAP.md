@@ -39,9 +39,9 @@ Spec: `0008`, `0009`, `0010`, `0011-structs`-equivalent (structs only).
 
 ### Slice 2 — Borrows, references, lifetimes
 
-`&` / `&write`, the **NLL borrow checker** on the CFG, lifetime elision and
+`&` / `&mut`, the **NLL borrow checker** on the CFG, lifetime elision and
 explicit lifetimes, drop flags for conditional moves, `*` deref, `{v}` cells for
-`&write` primitives. The riskiest stage, now against a working pipeline.
+`&mut` primitives. The riskiest stage, now against a working pipeline.
 Spec: `0002`, `0004`, `0005`, `0006`, `0007`.
 
 ### Slice 3 — Enums & pattern matching

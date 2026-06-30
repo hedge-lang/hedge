@@ -96,10 +96,10 @@ describe("JS interop boundary negative suite", (): void => {
 
   it("rejects crossing mutable references over JS boundary", (): void => {
     const source = `
-      extern "js" fn mutate_ref(value: &write i32) -> ();
+      extern "js" fn mutate_ref(value: &mut i32) -> ();
       fn main() {
-        let write x = 1;
-        mutate_ref(&write x);
+        let mut x = 1;
+        mutate_ref(&mut x);
       }
     `;
     const result = compile(source);

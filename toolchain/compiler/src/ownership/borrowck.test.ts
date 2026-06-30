@@ -17,7 +17,7 @@ function check(source: string): readonly Diagnostic[] {
 describe("borrow checker", (): void => {
   it("accepts a single live mutable borrow", (): void => {
     const diagnostics = check(
-      'fn main() { let write x = "a"; let r = &write x; print(r); }',
+      'fn main() { let mut x = "a"; let r = &mut x; print(r); }',
     );
     expect(diagnostics).toEqual([]);
   });
@@ -31,7 +31,7 @@ describe("borrow checker", (): void => {
 
   it("rejects two overlapping mutable borrows", (): void => {
     const diagnostics = check(
-      'fn main() { let write x = "a"; let r1 = &write x; let r2 = &write x; print(r1); print(r2); }',
+      'fn main() { let mut x = "a"; let r1 = &mut x; let r2 = &mut x; print(r1); print(r2); }',
     );
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.message).toContain("Conflicting borrows");
@@ -39,16 +39,29 @@ describe("borrow checker", (): void => {
 
   it("accepts sequential mutable borrows (non-lexical, last-use)", (): void => {
     const diagnostics = check(
-      'fn main() { let write x = "a"; let r1 = &write x; print(r1); let r2 = &write x; print(r2); }',
+      'fn main() { let mut x = "a"; let r1 = &mut x; print(r1); let r2 = &mut x; print(r2); }',
     );
     expect(diagnostics).toEqual([]);
   });
 
-  it("rejects &write of a binding not declared write", (): void => {
+  it("rejects &mut of a binding not declared mut", (): void => {
     const diagnostics = check(
-      'fn main() { let x = "a"; let r = &write x; print(r); }',
+      'fn main() { let x = "a"; let r = &mut x; print(r); }',
     );
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("not declared write");
+    expect(diagnostics[0]?.message).toContain("not declared mut");
+  });
+
+  it("rejects &mut borrow of an immutable function parameter", (): void => {
+    const diagnostics = check("fn f(x: string) { let r = &mut x; print(r); }");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("not declared mut");
+  });
+
+  it("accepts &mut borrow of a mutable function parameter", (): void => {
+    const diagnostics = check(
+      "fn f(mut x: string) { let r = &mut x; print(r); }",
+    );
+    expect(diagnostics).toEqual([]);
   });
 });

@@ -153,4 +153,56 @@ describe("semantic analysis", (): void => {
       });
     });
   });
+
+  it("rejects comparisons with right-side boolean", (): void => {
+    const result = diagnose("fn main() { let x = 1 < (2 < 3); }");
+    expect(result.diagnostics).toMatchObject([
+      {
+        severity: "error",
+        message: "type does not support ordering comparison",
+      },
+    ]);
+  });
+
+  it("rejects comparisons with left-side boolean", (): void => {
+    const result = diagnose("fn main() { let x = (1 < 2) < 3; }");
+    expect(result.diagnostics).toMatchObject([
+      {
+        severity: "error",
+        message: "type does not support ordering comparison",
+      },
+    ]);
+  });
+
+  it("rejects ordering comparison between two booleans", (): void => {
+    const result = diagnose("fn main() { let x = true < false; }");
+    expect(result.diagnostics).toMatchObject([
+      {
+        severity: "error",
+        message: "type does not support ordering comparison",
+      },
+    ]);
+  });
+
+  it.each(["=", "+=", "-=", "*=", "/=", "%=", "<<=", ">>="])(
+    "rejects `%s` assignment to immutable let binding",
+    (op): void => {
+      const result = diagnose(`fn main() { let x = 1; x ${op} 1; print(x); }`);
+      expect(result.diagnostics).toMatchObject([
+        { severity: "error", message: "cannot assign to immutable binding" },
+      ]);
+    },
+  );
+
+  it("rejects field assignment to immutable binding (inherited mutability)", (): void => {
+    const result = diagnose("fn f(s: Point) { s.x = 1; }");
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          severity: "error",
+          message: "cannot assign to immutable binding",
+        }),
+      ]),
+    );
+  });
 });

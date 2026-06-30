@@ -8,7 +8,7 @@ exhausted, then `None`.
 ```hedge
 trait Iterator {
   type Item;
-  fn next(&write self) -> Option<Self::Item>;
+  fn next(&mut self) -> Option<Self::Item>;
 }
 ```
 
@@ -16,7 +16,7 @@ A `for` loop consumes anything that implements `IntoIterator`, in three flavors:
 
 - `for x in v` consumes `v` (`x: T`),
 - `for x in &v` borrows it shared (`x: &T`),
-- `for x in &write v` borrows it exclusively (`x: &write T`).
+- `for x in &mut v` borrows it exclusively (`x: &mut T`).
 
 `for x in iter { body }` desugars to repeated `next()` calls until `None`.
 
@@ -24,7 +24,7 @@ A `for` loop consumes anything that implements `IntoIterator`, in three flavors:
 
 `for x in &v` borrows `v` for the whole loop, so mutating `v` mid-iteration is a
 compile error; the concurrent-modification bug that JavaScript's `for…of` permits
-is rejected here. To change elements while iterating, iterate `&write v` and
+is rejected here. To change elements while iterating, iterate `&mut v` and
 mutate through `x`.
 
 ## Adapters and consumers

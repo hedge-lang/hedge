@@ -174,11 +174,11 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     testIds: [
       "executes block statements",
       "block with trailing expression",
-      "let write rebinding updates the value",
+      "let mut rebinding updates the value",
       "type annotation on let binding compiles correctly",
-      "compound assignment += updates a let write binding",
-      "compound assignment -= updates a let write binding",
-      "multiple assignments to let write binding update sequentially",
+      "compound assignment += updates a let mut binding",
+      "compound assignment -= updates a let mut binding",
+      "multiple assignments to let mut binding update sequentially",
     ],
   },
   {
@@ -242,6 +242,8 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "0008-expressions-and-control-flow.md",
     ],
     testIds: [
+      "rejects comparisons with right-side boolean",
+      "rejects comparisons with left-side boolean",
       "rejects direct assignment to immutable let binding",
       "rejects compound assignment to immutable let binding",
       "rejects integer as boolean condition in if",

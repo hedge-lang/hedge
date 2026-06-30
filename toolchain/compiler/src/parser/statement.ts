@@ -1,3 +1,4 @@
+import { assert } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
 import { none, some, type Option } from "../option.js";
@@ -16,7 +17,6 @@ import type { Parsed } from "./parse.js";
 import {
   expect,
   expectKeyword,
-  isContextual,
   parseIdentifier,
   type PR,
 } from "./parse-utils.js";
@@ -74,8 +74,7 @@ function parseBindingPattern(
  * ```text
  * LetStatement ::=
  *   "let"
- *   "bind"?
- *   "write"?
+ *   "mut"?
  *   BindingPattern
  *   ("=" Expression)?
  *   ";"
@@ -86,11 +85,10 @@ function parseBindingPattern(
  * ```hedge
  * let value;
  * let value = 42;
- * let write counter = 0;
- * let bind resource = open();
+ * let mut counter = 0;
  * ```
  */
-// eslint-disable-next-line complexity -- Multiple optional clauses (bind, write, type, initializer) each contribute a branch; the grammar drives the complexity, not poor structure.
+// eslint-disable-next-line complexity -- Optional clauses (mut, type, initializer) each contribute a branch; the grammar drives the complexity, not poor structure.
 export function parseLetStatement(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -104,22 +102,28 @@ export function parseLetStatement(
   }
   let cursor = afterLet.value;
 
-  let bind = false;
-  let write = false;
-  const maybeBind = tokens[cursor];
-  if (maybeBind !== undefined && isContextual(maybeBind, "bind")) {
-    bind = true;
-    cursor += 1;
-  }
-  const maybeWrite = tokens[cursor];
-  if (maybeWrite !== undefined && isContextual(maybeWrite, "write")) {
-    write = true;
+  let mutable = false;
+  const maybeMut = tokens[cursor];
+  if (
+    maybeMut !== undefined &&
+    maybeMut.kind === "keyword" &&
+    maybeMut.text === "mut"
+  ) {
+    mutable = true;
     cursor += 1;
   }
 
   const patternResult = parseBindingPattern(tokens, cursor);
   if (isErr(patternResult)) {
-    return patternResult;
+    if (!mutable) {
+      return patternResult;
+    }
+    const bindingPattern = parseBindingPattern(tokens, cursor - 1);
+    assert(
+      isErr(bindingPattern),
+      "parseBindingPattern failed on a token that was already parsed successfully",
+    );
+    return bindingPattern;
   }
   const pattern = patternResult.value;
   cursor = pattern.next;
@@ -156,8 +160,7 @@ export function parseLetStatement(
     kind: "LetStatement",
     tokenId: start,
     attributes,
-    bind,
-    write,
+    mutable,
     pattern: pattern.node,
     type: typeAnnotation,
     initializer,

@@ -36,7 +36,7 @@ composite key they use a structural hash map (see
 
 ## What cannot be declared
 
-References do not cross the boundary, so a signature using `&T` or `&write T`
+References do not cross the boundary, so a signature using `&T` or `&mut T`
 across `export "js"`, or a struct that borrows, is a compile error rather than a
 declaration. See [Safe/Unsafe Boundaries](0023-safe-unsafe-boundaries.md).
 
