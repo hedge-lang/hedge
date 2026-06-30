@@ -11,6 +11,7 @@ import {
 } from "../option.js";
 import type * as Parser from "../parser/ast.js";
 import type * as Semantics from "./ast.js";
+import { hasCapability } from "./type-capabilities.js";
 
 export interface AnalysisResult {
   readonly diagnostics: readonly Diagnostic[];
@@ -692,14 +693,6 @@ function typesEqual(a: Semantics.Type, b: Semantics.Type): boolean {
   return true;
 }
 
-function isNumericType(type: Semantics.Type): boolean {
-  return (
-    isIntegerType(type) ||
-    type.kind === "PrimitiveF32Type" ||
-    type.kind === "PrimitiveF64Type"
-  );
-}
-
 function isIntegerType(type: Semantics.Type): boolean {
   return (
     type.kind === "PrimitiveI8Type" ||
@@ -735,12 +728,31 @@ function inferBinaryType(
 
   switch (op) {
     case "Eq":
-    case "Ne":
+    case "Ne": {
+      const leftEq = !isLeftTypeValid || hasCapability(leftType, "equality");
+      const rightEq = !isRightTypeValid || hasCapability(rightType, "equality");
+      if (!leftEq || !rightEq) {
+        emitError(ctx, "type does not support equality comparison", tokenId);
+      } else if (
+        isLeftTypeValid &&
+        isRightTypeValid &&
+        !typesEqual(leftType, rightType)
+      ) {
+        emitError(ctx, "comparison operands must have the same type", tokenId);
+      }
+      return bool;
+    }
+
     case "Lt":
     case "Gt":
     case "Le":
     case "Ge": {
-      if (
+      const leftOrd = !isLeftTypeValid || hasCapability(leftType, "ordering");
+      const rightOrd =
+        !isRightTypeValid || hasCapability(rightType, "ordering");
+      if (!leftOrd || !rightOrd) {
+        emitError(ctx, "type does not support ordering comparison", tokenId);
+      } else if (
         isLeftTypeValid &&
         isRightTypeValid &&
         !typesEqual(leftType, rightType)
@@ -752,10 +764,10 @@ function inferBinaryType(
 
     case "And":
     case "Or": {
-      if (isLeftTypeValid && leftType.kind !== "PrimitiveBooleanType") {
+      if (isLeftTypeValid && !hasCapability(leftType, "logical")) {
         emitError(ctx, "logical operator operands must be `bool`", tokenId);
       }
-      if (isRightTypeValid && rightType.kind !== "PrimitiveBooleanType") {
+      if (isRightTypeValid && !hasCapability(rightType, "logical")) {
         emitError(ctx, "logical operator operands must be `bool`", tokenId);
       }
       return bool;
@@ -766,10 +778,10 @@ function inferBinaryType(
     case "Mul":
     case "Div":
     case "Rem": {
-      if (isLeftTypeValid && !isNumericType(leftType)) {
+      if (isLeftTypeValid && !hasCapability(leftType, "arithmetic")) {
         emitError(ctx, "arithmetic operands must be numeric", tokenId);
       }
-      if (isRightTypeValid && !isNumericType(rightType)) {
+      if (isRightTypeValid && !hasCapability(rightType, "arithmetic")) {
         emitError(ctx, "arithmetic operands must be numeric", tokenId);
       }
       if (
@@ -787,10 +799,10 @@ function inferBinaryType(
     case "BitAnd":
     case "BitXor":
     case "BitOr": {
-      if (isLeftTypeValid && !isIntegerType(leftType)) {
+      if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
         emitError(ctx, "bitwise operations require integer operands", tokenId);
       }
-      if (isRightTypeValid && !isIntegerType(rightType)) {
+      if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
         emitError(ctx, "bitwise operations require integer operands", tokenId);
       }
       if (
@@ -944,20 +956,29 @@ function analyzeExpression(
   }
 }
 
+function rootBinding(expr: Parser.Expression): Option<string> {
+  if (expr.kind === "PathExpression" && expr.path.segments.length === 1) {
+    assert(expr.path.segments[0] !== undefined, "Name segment missing");
+    return some(expr.path.segments[0]);
+  }
+  if (expr.kind === "Identifier") {
+    return some(expr.text);
+  }
+  if (expr.kind === "FieldAccessExpression") {
+    return rootBinding(expr.object);
+  }
+  if (expr.kind === "IndexExpression") {
+    return rootBinding(expr.object);
+  }
+  return none();
+}
+
 function checkLhsMutability(
   ctx: AnalysisContext,
   lhs: Parser.Expression,
   tokenId: number,
 ): void {
-  const name = ((): Option<string> => {
-    if (lhs.kind === "PathExpression" && lhs.path.segments.length === 1) {
-      assert(lhs.path.segments[0] !== undefined, "Name segment missing");
-      return some(lhs.path.segments[0]);
-    } else if (lhs.kind === "Identifier") {
-      return some(lhs.text);
-    }
-    return none();
-  })();
+  const name = rootBinding(lhs);
   if (isSome(name)) {
     const resolved = resolve(ctx, name.value);
     if (isSome(resolved) && !resolved.value.mutable) {

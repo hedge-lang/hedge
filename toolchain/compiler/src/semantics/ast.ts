@@ -94,6 +94,7 @@ interface Visibility {
 
 export interface Param extends DecoratedAstNode {
   readonly kind: "Param";
+  readonly mutable: boolean;
   readonly pattern: BindingPattern;
   readonly type: Type;
 }
@@ -236,6 +237,7 @@ export type PrimitiveType =
   | PrimitiveCharType
   | PrimitiveStringType;
 
+export type PrimitiveIntegerType = PrimitiveUintType | PrimitiveIntType;
 type PrimitiveUintType =
   | PrimitiveU8Type
   | PrimitiveU16Type
