@@ -25,11 +25,7 @@ export interface FunctionDecl {
 }
 
 export type Statement =
-  | LetStatement
-  | BlockStatement
-  | IfStatement
-  | ReturnStatement
-  | Expression;
+  LetStatement | BlockStatement | IfStatement | ReturnStatement | Expression;
 
 export interface BlockStatement {
   readonly kind: "BlockStatement";

@@ -55,6 +55,5 @@ An enum becomes a discriminated union:
 
 ```ts
 type Shape =
-  | { tag: "Circle"; _0: number }
-  | { tag: "Rect"; w: number; h: number };
+  { tag: "Circle"; _0: number } | { tag: "Rect"; w: number; h: number };
 ```
