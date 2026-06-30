@@ -278,7 +278,7 @@ describe("must-fail corpus — rejection tests", (): void => {
       );
     });
 
-    it.fails("rejects string-to-string addition", (): void => {
+    it("rejects string-to-string addition", (): void => {
       assertRejectsWithMessage(
         `fn main() { let x = "hello" + " world"; print(x); }`,
         "type",
