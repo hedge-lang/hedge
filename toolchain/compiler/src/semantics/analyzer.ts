@@ -779,10 +779,18 @@ function inferBinaryType(
     case "Div":
     case "Rem": {
       if (isLeftTypeValid && !hasCapability(leftType, "arithmetic")) {
-        emitError(ctx, `arithmetic operands must be numeric; left-operand is type "${leftType.kind}"`, tokenId);
+        emitError(
+          ctx,
+          `arithmetic operands must be numeric; left-operand is type "${leftType.kind}"`,
+          tokenId,
+        );
       }
       if (isRightTypeValid && !hasCapability(rightType, "arithmetic")) {
-        emitError(ctx, `arithmetic operands must be numeric; right-operand is type "${rightType.kind}"`, tokenId);
+        emitError(
+          ctx,
+          `arithmetic operands must be numeric; right-operand is type "${rightType.kind}"`,
+          tokenId,
+        );
       }
       if (
         isLeftTypeValid &&
