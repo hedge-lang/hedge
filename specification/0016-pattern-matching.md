@@ -16,7 +16,7 @@ The form of the scrutinee sets the default mode for the bindings in its patterns
   **mutable-borrows**; `x` must hold `mut`.
 
 Pattern bindings use the same vocabulary as `let`: `name` is read-only,
-`write name` is writable, `&name` is a read-borrow, `&mut name` is a
+`mut name` is writable, `&name` is a read-borrow, `&mut name` is a
 mutable-borrow. These sigils are the whole vocabulary; there is no separate
 binding keyword.
 
