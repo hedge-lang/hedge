@@ -217,11 +217,7 @@ interface Path {
 }
 
 export type Type =
-  | NamedType
-  | UnitType
-  | PrimitiveType
-  | StructType
-  | FunctionType;
+  NamedType | UnitType | PrimitiveType | StructType | FunctionType;
 
 interface FunctionType {
   readonly kind: "FunctionType";

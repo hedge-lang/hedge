@@ -1,11 +1,7 @@
 import type * as Semantics from "./ast.js";
 
 export type TypeCapability =
-  | "equality"
-  | "ordering"
-  | "arithmetic"
-  | "bitwise"
-  | "logical";
+  "equality" | "ordering" | "arithmetic" | "bitwise" | "logical";
 
 const INTEGER_CAPS: ReadonlySet<TypeCapability> = new Set([
   "equality",
