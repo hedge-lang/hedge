@@ -51,4 +51,17 @@ describe("borrow checker", (): void => {
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.message).toContain("not declared mut");
   });
+
+  it("rejects &mut borrow of an immutable function parameter", (): void => {
+    const diagnostics = check("fn f(x: string) { let r = &mut x; print(r); }");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("not declared mut");
+  });
+
+  it("accepts &mut borrow of a mutable function parameter", (): void => {
+    const diagnostics = check(
+      "fn f(mut x: string) { let r = &mut x; print(r); }",
+    );
+    expect(diagnostics).toEqual([]);
+  });
 });

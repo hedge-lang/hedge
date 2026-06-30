@@ -152,16 +152,15 @@ function statementUses(statement: Statement, out: Set<string>): void {
 }
 
 /**
- * Map each binding to whether it was declared with the `write` capability.
- *
- * @param statements The statements to analyze.
- * @returns A map from binding names to whether they were declared with the `write` capability.
+ * Map each binding to whether it was declared with the `mut` capability.
+ * Seeds from function parameters first, then let statements.
  */
-function writeCapabilities(
-  statements: readonly Statement[],
-): Map<string, boolean> {
+function writeCapabilities(decl: FunctionDecl): Map<string, boolean> {
   const capabilities = new Map<string, boolean>();
-  for (const statement of statements) {
+  for (const param of decl.params) {
+    capabilities.set(param.pattern.name.text, param.mutable);
+  }
+  for (const statement of decl.body.statements) {
     if (statement.kind === "LetStatement") {
       capabilities.set(statement.pattern.name.text, statement.mutable);
     }
@@ -340,7 +339,7 @@ function checkFunction(
   const statements = decl.body.statements;
   checkCapabilities(
     collectBorrows(statements),
-    writeCapabilities(statements),
+    writeCapabilities(decl),
     diagnostics,
     tokens,
   );
