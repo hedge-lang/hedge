@@ -291,28 +291,28 @@ describe("must-fail corpus — rejection tests", (): void => {
   });
 
   describe("struct validation errors", (): void => {
-    it.fails("rejects struct literal with missing required field", (): void => {
+    it("rejects struct literal with missing required field", (): void => {
       assertRejectsWithMessage(
         `struct Foo { x: i32, y: i32 } fn main() { let f = Foo { x: 1 }; print(f.x); }`,
         "field",
       );
     });
 
-    it.fails("rejects struct literal with unknown field", (): void => {
+    it("rejects struct literal with unknown field", (): void => {
       assertRejectsWithMessage(
         `struct Foo { x: i32 } fn main() { let f = Foo { x: 1, z: 2 }; print(f.x); }`,
         "field",
       );
     });
 
-    it.fails("rejects access to undefined struct field", (): void => {
+    it("rejects access to undefined struct field", (): void => {
       assertRejectsWithMessage(
         `struct Foo { x: i32 } fn main() { let f = Foo { x: 1 }; print(f.z); }`,
         "field",
       );
     });
 
-    it.fails("rejects field access on non-struct type", (): void => {
+    it("rejects field access on non-struct type", (): void => {
       assertRejectsWithMessage(
         `fn main() { let x = 5; print(x.value); }`,
         "field",
