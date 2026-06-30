@@ -32,7 +32,7 @@ const INTEGER_KINDS: readonly Semantics.PrimitiveIntegerType["kind"][] = [
  * Slot for trait-based operator dispatch when traits land — each entry will
  * become the set of traits the type implements.
  */
-export const TYPE_CAPABILITIES: ReadonlyMap<
+const TYPE_CAPABILITIES: ReadonlyMap<
   string,
   ReadonlySet<TypeCapability>
 > = new Map<string, ReadonlySet<TypeCapability>>([
