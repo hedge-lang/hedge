@@ -159,7 +159,7 @@ describe("semantic analysis", (): void => {
     expect(result.diagnostics).toMatchObject([
       {
         severity: "error",
-        message: "comparison operands must have the same type",
+        message: "type does not support ordering comparison",
       },
     ]);
   });
@@ -169,7 +169,17 @@ describe("semantic analysis", (): void => {
     expect(result.diagnostics).toMatchObject([
       {
         severity: "error",
-        message: "comparison operands must have the same type",
+        message: "type does not support ordering comparison",
+      },
+    ]);
+  });
+
+  it("rejects ordering comparison between two booleans", (): void => {
+    const result = diagnose("fn main() { let x = true < false; }");
+    expect(result.diagnostics).toMatchObject([
+      {
+        severity: "error",
+        message: "type does not support ordering comparison",
       },
     ]);
   });
@@ -183,4 +193,16 @@ describe("semantic analysis", (): void => {
       ]);
     },
   );
+
+  it("rejects field assignment to immutable binding (inherited mutability)", (): void => {
+    const result = diagnose("fn f(s: Point) { s.x = 1; }");
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          severity: "error",
+          message: "cannot assign to immutable binding",
+        }),
+      ]),
+    );
+  });
 });
