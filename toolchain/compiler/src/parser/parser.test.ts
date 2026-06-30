@@ -910,10 +910,9 @@ describe("identifiers", (): void => {
       },
     );
 
-    it.each(["mut"])(
+    it.each(ALL_HARD_KEYWORDS)(
       "rejects hard keyword %s as a let binding name with a diagnostic naming the keyword",
       (kw) => {
-        debugger;
         const result = parse(tokenize(`let ${kw} = 1;`).tokens);
         assert(
           isNone(result.program),

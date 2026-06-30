@@ -1,3 +1,4 @@
+import { assert } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
 import { none, some, type Option } from "../option.js";
@@ -112,12 +113,17 @@ export function parseLetStatement(
     cursor += 1;
   }
 
-  const maybePatternResult = parseBindingPattern(tokens, cursor);
-  const patternResult = isErr(maybePatternResult)
-    ? parseBindingPattern(tokens, cursor - 1)
-    : maybePatternResult;
+  const patternResult = parseBindingPattern(tokens, cursor);
   if (isErr(patternResult)) {
-    return patternResult;
+    if (!mutable) {
+      return patternResult;
+    }
+    const bindingPattern = parseBindingPattern(tokens, cursor - 1);
+    assert(
+      isErr(bindingPattern),
+      "parseBindingPattern failed on a token that was already parsed successfully",
+    );
+    return bindingPattern;
   }
   const pattern = patternResult.value;
   cursor = pattern.next;
