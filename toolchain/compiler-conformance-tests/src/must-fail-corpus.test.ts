@@ -359,6 +359,13 @@ describe("must-fail corpus — rejection tests", (): void => {
         "field",
       );
     });
+
+    it("rejects duplicate struct declaration", (): void => {
+      assertRejectsWithMessage(
+        `struct Foo { x: i32 } struct Foo { y: i32 } fn main() { }`,
+        "defined more than once",
+      );
+    });
   });
 
   describe("diagnostic non-cascade", (): void => {
