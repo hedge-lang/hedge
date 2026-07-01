@@ -977,7 +977,7 @@ function analyzeFieldAccessExpression(
   if (objectType.kind === "UnitType") return unresolved();
 
   if (objectType.kind !== "StructType") {
-    emitError(ctx, "field access on non-struct type", expression.tokenId);
+    emitError(ctx, "field access on non-struct type", expression.field.tokenId);
     return unresolved();
   }
 
