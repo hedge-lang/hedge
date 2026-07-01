@@ -189,6 +189,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     testIds: [
       "struct declaration compiles alongside fn main",
       "struct literal field access evaluates correctly",
+      "struct declared after use resolves correctly",
     ],
   },
   {

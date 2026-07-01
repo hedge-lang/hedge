@@ -318,6 +318,47 @@ describe("must-fail corpus — rejection tests", (): void => {
         "field",
       );
     });
+
+    it("does not cascade errors from unresolved struct name", (): void => {
+      assertNoCascade(
+        `struct Foo { x: i32 } fn main() { let f = Bogus { x: 1 }; print(f.x); }`,
+      );
+    });
+
+    it("rejects field access on resolved primitive field type", (): void => {
+      assertRejectsWithMessage(
+        `struct Foo { x: i32 } fn main() { let f = Foo { x: 1 }; print(f.x.y); }`,
+        "field",
+      );
+    });
+
+    it("rejects struct literal with simultaneous unknown and missing fields", (): void => {
+      assertRejectsWithMessage(
+        `struct Foo { x: i32, y: i32 } fn main() { let f = Foo { x: 1, z: 2 }; }`,
+        "field",
+      );
+    });
+
+    it("rejects fields in unit struct literal", (): void => {
+      assertRejectsWithMessage(
+        `struct Foo; fn main() { let f = Foo { x: 1 }; }`,
+        "field",
+      );
+    });
+
+    it("rejects field access using another struct's field name", (): void => {
+      assertRejectsWithMessage(
+        `struct Foo { x: i32 } struct Bar { y: i32 } fn main() { let f = Foo { x: 1 }; print(f.y); }`,
+        "field",
+      );
+    });
+
+    it("rejects duplicate field in struct literal", (): void => {
+      assertRejectsWithMessage(
+        `struct Foo { x: i32 } fn main() { let f = Foo { x: 1, x: 2 }; }`,
+        "field",
+      );
+    });
   });
 
   describe("diagnostic non-cascade", (): void => {
