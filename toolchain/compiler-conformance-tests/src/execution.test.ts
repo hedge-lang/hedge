@@ -305,6 +305,13 @@ describe("execution tests", (): void => {
         ["42"],
       );
     });
+
+    it("struct declared after use resolves correctly", (): void => {
+      assertRunsTo(
+        `fn main() { let f = Foo { x: 42 }; print(f.x); } struct Foo { x: i32 }`,
+        ["42"],
+      );
+    });
   });
 
   describe("error handling", (): void => {

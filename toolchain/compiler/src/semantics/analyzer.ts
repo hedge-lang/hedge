@@ -24,6 +24,7 @@ export interface AnalysisResult {
  */
 interface AnalysisContext {
   readonly scopes: Map<string, ScopedVariable>[];
+  readonly typeScope: Map<string, Semantics.StructDecl>;
   readonly diagnostics: Diagnostic[];
   readonly tokens: readonly Token[];
 }
@@ -196,8 +197,12 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
   switch (item.kind) {
     case "Function":
       return analyzeFunctionDecl(ctx, item);
-    case "Struct":
-      return analyzeStruct(ctx, item);
+    case "Struct": {
+      const cached = ctx.typeScope.get(item.name.text);
+      return cached !== undefined && cached.tokenId === item.tokenId
+        ? cached
+        : analyzeStruct(ctx, item);
+    }
     case "LetStatement":
     case "ExpressionStatement": {
       emitError(
@@ -905,15 +910,7 @@ function analyzeExpression(
     case "CompoundAssignExpression":
       return analyzeCompoundAssignmentExpression(ctx, expression);
     case "FieldAccessExpression":
-      return {
-        ...expression,
-        object: analyzeExpression(ctx, expression.object),
-        field: {
-          ...expression.field,
-          type: { kind: "UnitType", tokenId: expression.field.tokenId },
-        },
-        type: { kind: "UnitType", tokenId: expression.tokenId },
-      };
+      return analyzeFieldAccessExpression(ctx, expression);
     case "MethodCallExpression": {
       const receiver = analyzeExpression(ctx, expression.receiver);
       return {
@@ -962,6 +959,62 @@ function analyzeExpression(
         `Unexpected AST node: ${JSON.stringify(expression)}`,
       );
   }
+}
+
+function analyzeFieldAccessExpression(
+  ctx: AnalysisContext,
+  expression: Parser.FieldAccessExpression,
+): Semantics.FieldAccessExpression {
+  const object = analyzeExpression(ctx, expression.object);
+  const objectType = getType(object);
+  const unresolved = (): Semantics.FieldAccessExpression => ({
+    ...expression,
+    object,
+    field: { ...expression.field, type: UNIT },
+    type: UNIT,
+  });
+
+  if (objectType.kind === "UnitType") return unresolved();
+
+  if (objectType.kind !== "StructType") {
+    emitError(ctx, "field access on non-struct type", expression.field.tokenId);
+    return unresolved();
+  }
+
+  const structName = objectType.name.split("::").pop() ?? objectType.name;
+  const structDecl = ctx.typeScope.get(structName);
+  const fieldName = expression.field.text;
+
+  if (structDecl === undefined) {
+    return unresolved();
+  }
+  if (structDecl.body.kind !== "NamedFields") {
+    emitError(
+      ctx,
+      `no field \`${fieldName}\` on struct \`${structName}\``,
+      expression.field.tokenId,
+    );
+    return unresolved();
+  }
+
+  const matchedField = structDecl.body.fields.find(
+    (f) => f.name.text === fieldName,
+  );
+  if (matchedField === undefined) {
+    emitError(
+      ctx,
+      `no field \`${fieldName}\` on struct \`${structName}\``,
+      expression.field.tokenId,
+    );
+    return unresolved();
+  }
+
+  return {
+    ...expression,
+    object,
+    field: { ...expression.field, type: matchedField.type },
+    type: matchedField.type,
+  };
 }
 
 function rootBinding(expr: Parser.Expression): Option<string> {
@@ -1029,32 +1082,125 @@ function analyzeStructExpression(
   ctx: AnalysisContext,
   structExpression: Parser.StructExpression,
 ): Semantics.StructExpression {
+  const analyzedFields = structExpression.fields.map(
+    (field: Parser.FieldInit): Semantics.FieldInit => {
+      const analyzedValue = mapSome(field.value, (v) =>
+        analyzeExpression(ctx, v),
+      );
+      return {
+        ...field,
+        name: analyzeIdentifier(ctx, field.name, UNIT),
+        value: analyzedValue,
+        type: unwrapSomeOr(mapSome(analyzedValue, getType), UNIT),
+      };
+    },
+  );
+
+  const analyzedBase = mapSome(structExpression.base, (base) =>
+    analyzeExpression(ctx, base),
+  );
+
+  if (structExpression.path.segments.length !== 1) {
+    return {
+      ...structExpression,
+      fields: analyzedFields,
+      base: analyzedBase,
+      type: UNIT,
+    };
+  }
+  const structName = structExpression.path.segments[0];
+  if (structName === undefined) {
+    return {
+      ...structExpression,
+      fields: analyzedFields,
+      base: analyzedBase,
+      type: UNIT,
+    };
+  }
+
+  const structDecl = ctx.typeScope.get(structName);
+  if (structDecl === undefined) {
+    emitError(
+      ctx,
+      `cannot find struct \`${structName}\` in this scope`,
+      structExpression.tokenId,
+    );
+    return {
+      ...structExpression,
+      fields: analyzedFields,
+      base: analyzedBase,
+      type: UNIT,
+    };
+  }
+
+  if (structDecl.body.kind === "NamedFields") {
+    analyzeStructNamedFields(
+      ctx,
+      structName,
+      structExpression,
+      structDecl.body,
+    );
+  } else if (
+    structDecl.body.kind === "Unit" &&
+    structExpression.fields.length > 0
+  ) {
+    for (const field of structExpression.fields) {
+      emitError(
+        ctx,
+        `field \`${field.name.text}\` provided for unit struct \`${structName}\``,
+        field.name.tokenId,
+      );
+    }
+  }
+
   return {
     ...structExpression,
-    fields: structExpression.fields.map(
-      (field: Parser.FieldInit): Semantics.FieldInit => {
-        const analyzedValue = mapSome(field.value, (v) =>
-          analyzeExpression(ctx, v),
-        );
-        return {
-          ...field,
-          name: analyzeIdentifier(ctx, field.name, {
-            kind: "UnitType",
-            tokenId: structExpression.tokenId,
-          }),
-          value: analyzedValue,
-          type: unwrapSomeOr(mapSome(analyzedValue, getType), {
-            kind: "UnitType",
-            tokenId: structExpression.tokenId,
-          }),
-        };
-      },
-    ),
-    base: mapSome(structExpression.base, (base) =>
-      analyzeExpression(ctx, base),
-    ),
-    type: { kind: "UnitType", tokenId: structExpression.tokenId },
+    fields: analyzedFields,
+    base: analyzedBase,
+    type: structDecl.type,
   };
+}
+
+function analyzeStructNamedFields(
+  ctx: AnalysisContext,
+  structName: string,
+  structExpression: Parser.StructExpression,
+  namedFieldsBody: Semantics.NamedFieldsBody,
+): void {
+  const declaredFieldNames = new Set(
+    namedFieldsBody.fields.map((f) => f.name.text),
+  );
+
+  const seenFields = new Set<string>();
+  for (const field of structExpression.fields) {
+    if (seenFields.has(field.name.text)) {
+      emitError(
+        ctx,
+        `field \`${field.name.text}\` specified more than once in struct literal`,
+        field.name.tokenId,
+      );
+    }
+    seenFields.add(field.name.text);
+    if (!declaredFieldNames.has(field.name.text)) {
+      emitError(
+        ctx,
+        `unknown field \`${field.name.text}\` for struct \`${structName}\``,
+        field.name.tokenId,
+      );
+    }
+  }
+
+  if (!isSome(structExpression.base)) {
+    for (const fieldName of declaredFieldNames) {
+      if (!seenFields.has(fieldName)) {
+        emitError(
+          ctx,
+          `missing required field \`${fieldName}\` in struct literal of type \`${structName}\``,
+          structExpression.tokenId,
+        );
+      }
+    }
+  }
 }
 
 function analyzeIfExpression(
@@ -1160,9 +1306,23 @@ export function analyze(
 ): AnalysisResult {
   const ctx: AnalysisContext = {
     scopes: [new Map(BUILTIN_SCOPE)],
+    typeScope: new Map(),
     diagnostics: [],
     tokens,
   };
+  for (const item of program.items) {
+    if (item.kind === "Struct") {
+      if (ctx.typeScope.has(item.name.text)) {
+        emitError(
+          ctx,
+          `struct \`${item.name.text}\` is defined more than once`,
+          item.name.tokenId,
+        );
+      } else {
+        ctx.typeScope.set(item.name.text, analyzeStruct(ctx, item));
+      }
+    }
+  }
   const attributes = program.attributes.map((attr) =>
     analyzeAttribute(ctx, attr),
   );

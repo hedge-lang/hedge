@@ -121,7 +121,7 @@ export interface StructDecl extends DecoratedAstNode {
 
 export type StructBody = NamedFieldsBody | TupleFieldsBody | UnitBody;
 
-interface NamedFieldsBody {
+export interface NamedFieldsBody {
   readonly kind: "NamedFields";
   readonly fields: readonly StructField[];
 }

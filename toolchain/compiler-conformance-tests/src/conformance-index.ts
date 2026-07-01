@@ -189,6 +189,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     testIds: [
       "struct declaration compiles alongside fn main",
       "struct literal field access evaluates correctly",
+      "struct declared after use resolves correctly",
     ],
   },
   {
@@ -302,6 +303,13 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "rejects struct literal with unknown field",
       "rejects access to undefined struct field",
       "rejects field access on non-struct type",
+      "does not cascade errors from unresolved struct name",
+      "rejects field access on resolved primitive field type",
+      "rejects struct literal with simultaneous unknown and missing fields",
+      "rejects fields in unit struct literal",
+      "rejects field access using another struct's field name",
+      "rejects duplicate field in struct literal",
+      "rejects duplicate struct declaration",
     ],
   },
 ];
