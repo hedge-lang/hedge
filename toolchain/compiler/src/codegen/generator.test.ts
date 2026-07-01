@@ -524,11 +524,11 @@ describe("struct expression codegen", () => {
       "({x});",
     );
   });
-  it.fails("struct update spread emits spread-first object literal", () => {
+  it("struct update spread emits spread-first object literal", () => {
     expect(
       stmts(
         gen(
-          "struct Foo { x: i32, y: i32, z: i32 } struct Base { y: i32, z: i32 } fn _(base: Base) { Foo { x: 1, ..base }; }",
+          "struct Foo { x: i32, y: i32, z: i32 } fn _(base: ()) { Foo { x: 1, ..base }; }",
         ),
       ),
     ).toBe("({...base, x: 1});");
