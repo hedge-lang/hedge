@@ -197,8 +197,12 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
   switch (item.kind) {
     case "Function":
       return analyzeFunctionDecl(ctx, item);
-    case "Struct":
-      return ctx.typeScope.get(item.name.text) ?? analyzeStruct(ctx, item);
+    case "Struct": {
+      const cached = ctx.typeScope.get(item.name.text);
+      return cached !== undefined && cached.tokenId === item.tokenId
+        ? cached
+        : analyzeStruct(ctx, item);
+    }
     case "LetStatement":
     case "ExpressionStatement": {
       emitError(
@@ -981,7 +985,15 @@ function analyzeFieldAccessExpression(
   const structDecl = ctx.typeScope.get(structName);
   const fieldName = expression.field.text;
 
-  if (structDecl === undefined || structDecl.body.kind !== "NamedFields") {
+  if (structDecl === undefined) {
+    return unresolved();
+  }
+  if (structDecl.body.kind !== "NamedFields") {
+    emitError(
+      ctx,
+      `no field \`${fieldName}\` on struct \`${structName}\``,
+      expression.field.tokenId,
+    );
     return unresolved();
   }
 
@@ -1088,6 +1100,14 @@ function analyzeStructExpression(
     analyzeExpression(ctx, base),
   );
 
+  if (structExpression.path.segments.length !== 1) {
+    return {
+      ...structExpression,
+      fields: analyzedFields,
+      base: analyzedBase,
+      type: UNIT,
+    };
+  }
   const structName = structExpression.path.segments[0];
   if (structName === undefined) {
     return {
@@ -1292,7 +1312,15 @@ export function analyze(
   };
   for (const item of program.items) {
     if (item.kind === "Struct") {
-      ctx.typeScope.set(item.name.text, analyzeStruct(ctx, item));
+      if (ctx.typeScope.has(item.name.text)) {
+        emitError(
+          ctx,
+          `struct \`${item.name.text}\` is defined more than once`,
+          item.name.tokenId,
+        );
+      } else {
+        ctx.typeScope.set(item.name.text, analyzeStruct(ctx, item));
+      }
     }
   }
   const attributes = program.attributes.map((attr) =>
