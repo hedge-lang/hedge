@@ -963,24 +963,18 @@ function analyzeFieldAccessExpression(
 ): Semantics.FieldAccessExpression {
   const object = analyzeExpression(ctx, expression.object);
   const objectType = getType(object);
+  const unresolved = (): Semantics.FieldAccessExpression => ({
+    ...expression,
+    object,
+    field: { ...expression.field, type: UNIT },
+    type: UNIT,
+  });
 
-  if (objectType.kind === "UnitType") {
-    return {
-      ...expression,
-      object,
-      field: { ...expression.field, type: UNIT },
-      type: UNIT,
-    };
-  }
+  if (objectType.kind === "UnitType") return unresolved();
 
   if (objectType.kind !== "StructType") {
     emitError(ctx, "field access on non-struct type", expression.tokenId);
-    return {
-      ...expression,
-      object,
-      field: { ...expression.field, type: UNIT },
-      type: UNIT,
-    };
+    return unresolved();
   }
 
   const structName = objectType.name.split("::").pop() ?? objectType.name;
@@ -988,12 +982,7 @@ function analyzeFieldAccessExpression(
   const fieldName = expression.field.text;
 
   if (structDecl === undefined || structDecl.body.kind !== "NamedFields") {
-    return {
-      ...expression,
-      object,
-      field: { ...expression.field, type: UNIT },
-      type: UNIT,
-    };
+    return unresolved();
   }
 
   const matchedField = structDecl.body.fields.find(
@@ -1005,12 +994,7 @@ function analyzeFieldAccessExpression(
       `no field \`${fieldName}\` on struct \`${structName}\``,
       expression.field.tokenId,
     );
-    return {
-      ...expression,
-      object,
-      field: { ...expression.field, type: UNIT },
-      type: UNIT,
-    };
+    return unresolved();
   }
 
   return {
@@ -1130,33 +1114,22 @@ function analyzeStructExpression(
   }
 
   if (structDecl.body.kind === "NamedFields") {
-    const declaredFields = new Map(
-      structDecl.body.fields.map((f) => [f.name.text, f.type]),
+    analyzeStructNamedFields(
+      ctx,
+      structName,
+      structExpression,
+      structDecl.body,
     );
-
+  } else if (
+    structDecl.body.kind === "Unit" &&
+    structExpression.fields.length > 0
+  ) {
     for (const field of structExpression.fields) {
-      if (!declaredFields.has(field.name.text)) {
-        emitError(
-          ctx,
-          `unknown field \`${field.name.text}\` for struct \`${structName}\``,
-          field.name.tokenId,
-        );
-      }
-    }
-
-    if (!isSome(structExpression.base)) {
-      const providedFields = new Set(
-        structExpression.fields.map((f) => f.name.text),
+      emitError(
+        ctx,
+        `field \`${field.name.text}\` provided for unit struct \`${structName}\``,
+        field.name.tokenId,
       );
-      for (const [fieldName] of declaredFields) {
-        if (!providedFields.has(fieldName)) {
-          emitError(
-            ctx,
-            `missing required field \`${fieldName}\` in struct literal of type \`${structName}\``,
-            structExpression.tokenId,
-          );
-        }
-      }
     }
   }
 
@@ -1166,6 +1139,48 @@ function analyzeStructExpression(
     base: analyzedBase,
     type: structDecl.type,
   };
+}
+
+function analyzeStructNamedFields(
+  ctx: AnalysisContext,
+  structName: string,
+  structExpression: Parser.StructExpression,
+  namedFieldsBody: Semantics.NamedFieldsBody,
+): void {
+  const declaredFieldNames = new Set(
+    namedFieldsBody.fields.map((f) => f.name.text),
+  );
+
+  const seenFields = new Set<string>();
+  for (const field of structExpression.fields) {
+    if (seenFields.has(field.name.text)) {
+      emitError(
+        ctx,
+        `field \`${field.name.text}\` specified more than once in struct literal`,
+        field.name.tokenId,
+      );
+    }
+    seenFields.add(field.name.text);
+    if (!declaredFieldNames.has(field.name.text)) {
+      emitError(
+        ctx,
+        `unknown field \`${field.name.text}\` for struct \`${structName}\``,
+        field.name.tokenId,
+      );
+    }
+  }
+
+  if (!isSome(structExpression.base)) {
+    for (const fieldName of declaredFieldNames) {
+      if (!seenFields.has(fieldName)) {
+        emitError(
+          ctx,
+          `missing required field \`${fieldName}\` in struct literal of type \`${structName}\``,
+          structExpression.tokenId,
+        );
+      }
+    }
+  }
 }
 
 function analyzeIfExpression(
