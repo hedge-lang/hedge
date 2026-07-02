@@ -175,6 +175,10 @@ function evalBlock(block: Block, env: RefEnv): RefValue {
       }
     } else if (stmt.kind === "ExpressionStatement") {
       evalExpr(stmt.expression, local);
+    } else {
+      throw new Error(
+        "SKIP: local item declarations not supported in reference evaluator",
+      );
     }
   }
   if (isSome(block.trailingExpression)) {
