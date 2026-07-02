@@ -174,7 +174,6 @@ function evalBlock(block: Block, env: RefEnv): RefValue {
         local.set(stmt.pattern.name.text, val);
       }
     } else if (stmt.kind === "ExpressionStatement") {
-      // stmt.kind === "ExpressionStatement" (Statement has only two variants)
       evalExpr(stmt.expression, local);
     }
   }
