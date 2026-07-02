@@ -31,7 +31,8 @@ export interface Attribute {
 /** A top-level entry. Slice 1 is lenient and also accepts bare statements. */
 export type Item = FunctionDecl | StructDecl | Statement | Expression;
 
-export type Statement = LetStatement | ExpressionStatement;
+export type Statement =
+  LetStatement | ExpressionStatement | FunctionDecl | StructDecl;
 
 type BinaryOperator =
   | "Add"
@@ -219,7 +220,7 @@ interface Path {
 export type Type =
   NamedType | UnitType | PrimitiveType | StructType | FunctionType;
 
-interface FunctionType {
+export interface FunctionType {
   readonly kind: "FunctionType";
   readonly params: readonly Type[];
   readonly returnType: Type;

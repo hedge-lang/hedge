@@ -365,6 +365,25 @@ function analyzeCharLiteral(
   return { ...charLiteral, type: { kind: "PrimitiveCharType" } };
 }
 
+function fnSignatureType(
+  ctx: AnalysisContext,
+  fn: Parser.FunctionDecl,
+): Semantics.FunctionType {
+  return {
+    kind: "FunctionType",
+    params: fn.params.map((p) =>
+      validateSlice1Type(ctx, p.type, p.type.tokenId),
+    ),
+    returnType: isSome(fn.returnType)
+      ? validateSlice1Type(
+          ctx,
+          fn.returnType.value,
+          fn.returnType.value.tokenId,
+        )
+      : { kind: "UnitType", tokenId: fn.tokenId },
+  };
+}
+
 function analyzeFunctionDecl(
   ctx: AnalysisContext,
   decl: Parser.FunctionDecl,
@@ -446,6 +465,27 @@ function analyzeStatement(
         expression: analyzeExpression(ctx, statement.expression),
         type: { kind: "UnitType", tokenId: statement.tokenId },
       };
+    case "Function": {
+      // Bind the function name into the current scope before analyzing the body
+      // so the function is callable from subsequent statements in the same block.
+      bind(ctx, statement.name.text, {
+        type: fnSignatureType(ctx, statement),
+        mutable: false,
+      });
+      return analyzeFunctionDecl(ctx, statement);
+    }
+    case "Struct": {
+      if (ctx.typeScope.has(statement.name.text)) {
+        emitError(
+          ctx,
+          `struct \`${statement.name.text}\` is defined more than once`,
+          statement.name.tokenId,
+        );
+      }
+      const analyzed = analyzeStruct(ctx, statement);
+      ctx.typeScope.set(statement.name.text, analyzed);
+      return analyzed;
+    }
     default:
       assertNever(
         statement,

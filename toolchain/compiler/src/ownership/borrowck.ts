@@ -143,6 +143,10 @@ function statementUses(statement: Statement, out: Set<string>): void {
     case "ExpressionStatement":
       collectUses(statement.expression, out);
       return;
+    case "Function":
+    case "Struct":
+      // TODO: Local item declarations do not directly use outer bindings in Slice 1.
+      return;
     default:
       assertNever(
         statement,
