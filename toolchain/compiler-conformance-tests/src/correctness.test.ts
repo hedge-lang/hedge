@@ -173,7 +173,7 @@ function evalBlock(block: Block, env: RefEnv): RefValue {
         const val = evalExpr(stmt.initializer.value, local);
         local.set(stmt.pattern.name.text, val);
       }
-    } else {
+    } else if (stmt.kind === "ExpressionStatement") {
       // stmt.kind === "ExpressionStatement" (Statement has only two variants)
       evalExpr(stmt.expression, local);
     }

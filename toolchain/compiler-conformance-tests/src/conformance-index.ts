@@ -182,6 +182,20 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     ],
   },
   {
+    id: "EXEC-BLOCKS",
+    description:
+      "Block grammar — empty statements, local item declarations, nested blocks, and block-as-expression execute correctly end-to-end",
+    specRefs: ["0008-expressions-and-control-flow.md", "0025-grammar.md"],
+    testIds: [
+      "empty block returns unit",
+      "block with only empty statements returns unit",
+      "nested blocks evaluate innermost trailing expression",
+      "local fn declaration inside block is callable",
+      "local struct declaration inside block is usable",
+      "let without initializer parses cleanly",
+    ],
+  },
+  {
     id: "EXEC-STRUCTS",
     description:
       "Struct declarations and field access execute correctly end-to-end",

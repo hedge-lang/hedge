@@ -284,6 +284,38 @@ describe("execution tests", (): void => {
     });
   });
 
+  describe("block grammar (EXEC-BLOCKS)", (): void => {
+    it("empty block returns unit", (): void => {
+      assertCompilesClean(`fn main() { }`);
+    });
+
+    it("block with only empty statements returns unit", (): void => {
+      assertCompilesClean(`fn main() { ; ; ; }`);
+    });
+
+    it("nested blocks evaluate innermost trailing expression", (): void => {
+      assertRunsTo(`fn main() { let x = { { 42 } }; print(x); }`, ["42"]);
+    });
+
+    it("local fn declaration inside block is callable", (): void => {
+      assertRunsTo(
+        `fn main() { fn greet() { print("hello"); } greet(); greet(); }`,
+        ["hello", "hello"],
+      );
+    });
+
+    it("local struct declaration inside block is usable", (): void => {
+      assertRunsTo(
+        `fn main() { struct Point { x: i32 } let p = Point { x: 7 }; print(p.x); }`,
+        ["7"],
+      );
+    });
+
+    it("let without initializer parses cleanly", (): void => {
+      assertCompilesClean(`fn main() { let x; }`);
+    });
+  });
+
   describe("literal types", (): void => {
     it("float literal prints correctly", (): void => {
       assertRunsTo(`fn main() { let x = 3.14; print(x); }`, ["3.14"]);

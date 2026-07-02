@@ -206,7 +206,7 @@ describe("must-fail corpus — rejection tests", (): void => {
     });
 
     it("rejects unclosed block", (): void => {
-      assertRejectsWithMessage(`fn main() { let x = 1;`, "eof");
+      assertRejectsWithMessage(`fn main() { let x = 1;`, "end of input");
     });
   });
 
