@@ -145,7 +145,7 @@ function statementUses(statement: Statement, out: Set<string>): void {
       return;
     case "Function":
     case "Struct":
-      // Local item bodies are not analyzed for outer-binding uses in Slice 1.
+      // TODO: Local item declarations do not directly use outer bindings in Slice 1.
       return;
     default:
       assertNever(
