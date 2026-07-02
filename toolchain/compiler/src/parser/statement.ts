@@ -254,11 +254,16 @@ export function parseBlock(
         return itemResult;
       }
       const item = itemResult.value.node;
-      if (item.kind === "Function" || item.kind === "Struct") {
-        statements.push(item);
-        cursor = itemResult.value.next;
-        continue;
+      if (item.kind !== "Function" && item.kind !== "Struct") {
+        return err({
+          severity: "error",
+          message: `unexpected item kind '${item.kind}' in block position`,
+          span: none(),
+        });
       }
+      statements.push(item);
+      cursor = itemResult.value.next;
+      continue;
     }
     if (token?.kind === "keyword" && token.text === "let") {
       const letResult = parseLetStatement(
