@@ -1221,6 +1221,18 @@ describe("empty statements in blocks", (): void => {
       ],
     });
   });
+
+  it("skips an outer attribute followed by a semicolon", (): void => {
+    const ast = parseProgram("fn f() { #[attr] ; }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: { statements: [], trailingExpression: none() },
+        },
+      ],
+    });
+  });
 });
 
 describe("item declarations inside blocks", (): void => {

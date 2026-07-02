@@ -233,6 +233,11 @@ export function parseBlock(
       return outerResult;
     }
     cursor = outerResult.value.next;
+    // Attributes followed by `;` — still an empty statement; discard the attributes.
+    if (tokens[cursor]?.kind === "semi") {
+      cursor += 1;
+      continue;
+    }
     if (tokens[cursor]?.kind === "eof") {
       return err({
         severity: "error",
