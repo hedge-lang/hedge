@@ -365,21 +365,26 @@ function analyzeCharLiteral(
   return { ...charLiteral, type: { kind: "PrimitiveCharType" } };
 }
 
-function fnSignatureType(
-  ctx: AnalysisContext,
-  fn: Parser.FunctionDecl,
-): Semantics.FunctionType {
+function resolveSlice1Type(
+  type: Parser.Type,
+  fallbackTokenId: number,
+): Semantics.Type {
+  if (type.kind === "NamedType" && type.path.segments.length === 1) {
+    const name = type.path.segments[0];
+    assert(name !== undefined, "Name segment missing");
+    const prim = namedTypeToPrimitive(name);
+    if (isSome(prim)) return prim.value;
+  }
+  if (type.kind === "UnitType") return type;
+  return { kind: "UnitType", tokenId: fallbackTokenId };
+}
+
+function fnSignatureType(fn: Parser.FunctionDecl): Semantics.FunctionType {
   return {
     kind: "FunctionType",
-    params: fn.params.map((p) =>
-      validateSlice1Type(ctx, p.type, p.type.tokenId),
-    ),
+    params: fn.params.map((p) => resolveSlice1Type(p.type, p.type.tokenId)),
     returnType: isSome(fn.returnType)
-      ? validateSlice1Type(
-          ctx,
-          fn.returnType.value,
-          fn.returnType.value.tokenId,
-        )
+      ? resolveSlice1Type(fn.returnType.value, fn.returnType.value.tokenId)
       : { kind: "UnitType", tokenId: fn.tokenId },
   };
 }
@@ -430,6 +435,7 @@ function analyzeBlock(
   block: Parser.Block,
 ): Semantics.Block {
   ctx.scopes.push(new Map());
+  const typeScopeBefore = new Set(ctx.typeScope.keys());
   const analyzedStatements = block.statements.map((statement) =>
     analyzeStatement(ctx, statement),
   );
@@ -449,6 +455,9 @@ function analyzeBlock(
     type,
   };
   ctx.scopes.pop();
+  for (const key of ctx.typeScope.keys()) {
+    if (!typeScopeBefore.has(key)) ctx.typeScope.delete(key);
+  }
   return result;
 }
 
@@ -469,7 +478,7 @@ function analyzeStatement(
       // Bind the function name into the current scope before analyzing the body
       // so the function is callable from subsequent statements in the same block.
       bind(ctx, statement.name.text, {
-        type: fnSignatureType(ctx, statement),
+        type: fnSignatureType(statement),
         mutable: false,
       });
       return analyzeFunctionDecl(ctx, statement);
