@@ -1299,6 +1299,12 @@ describe("missing brace diagnostics", (): void => {
     expect(result.program).toEqual(none());
     expect(result.diagnostics[0]?.message).toContain("}");
   });
+
+  it("produces a diagnostic when the opening brace is missing", (): void => {
+    const result = parse(tokenize("fn f() let x = 1; }").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("lbrace");
+  });
 });
 
 describe("visibility on function declarations", (): void => {
