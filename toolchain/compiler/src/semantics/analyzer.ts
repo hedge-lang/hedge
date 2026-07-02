@@ -365,6 +365,30 @@ function analyzeCharLiteral(
   return { ...charLiteral, type: { kind: "PrimitiveCharType" } };
 }
 
+function resolveSlice1Type(
+  type: Parser.Type,
+  fallbackTokenId: number,
+): Semantics.Type {
+  if (type.kind === "NamedType" && type.path.segments.length === 1) {
+    const name = type.path.segments[0];
+    assert(name !== undefined, "Name segment missing");
+    const prim = namedTypeToPrimitive(name);
+    if (isSome(prim)) return prim.value;
+  }
+  if (type.kind === "UnitType") return type;
+  return { kind: "UnitType", tokenId: fallbackTokenId };
+}
+
+function fnSignatureType(fn: Parser.FunctionDecl): Semantics.FunctionType {
+  return {
+    kind: "FunctionType",
+    params: fn.params.map((p) => resolveSlice1Type(p.type, p.type.tokenId)),
+    returnType: isSome(fn.returnType)
+      ? resolveSlice1Type(fn.returnType.value, fn.returnType.value.tokenId)
+      : { kind: "UnitType", tokenId: fn.tokenId },
+  };
+}
+
 function analyzeFunctionDecl(
   ctx: AnalysisContext,
   decl: Parser.FunctionDecl,
@@ -411,6 +435,7 @@ function analyzeBlock(
   block: Parser.Block,
 ): Semantics.Block {
   ctx.scopes.push(new Map());
+  const typeScopeBefore = new Set(ctx.typeScope.keys());
   const analyzedStatements = block.statements.map((statement) =>
     analyzeStatement(ctx, statement),
   );
@@ -430,6 +455,9 @@ function analyzeBlock(
     type,
   };
   ctx.scopes.pop();
+  for (const key of ctx.typeScope.keys()) {
+    if (!typeScopeBefore.has(key)) ctx.typeScope.delete(key);
+  }
   return result;
 }
 
@@ -446,6 +474,27 @@ function analyzeStatement(
         expression: analyzeExpression(ctx, statement.expression),
         type: { kind: "UnitType", tokenId: statement.tokenId },
       };
+    case "Function": {
+      // Bind the function name into the current scope before analyzing the body
+      // so the function is callable from subsequent statements in the same block.
+      bind(ctx, statement.name.text, {
+        type: fnSignatureType(statement),
+        mutable: false,
+      });
+      return analyzeFunctionDecl(ctx, statement);
+    }
+    case "Struct": {
+      if (ctx.typeScope.has(statement.name.text)) {
+        emitError(
+          ctx,
+          `struct \`${statement.name.text}\` is defined more than once`,
+          statement.name.tokenId,
+        );
+      }
+      const analyzed = analyzeStruct(ctx, statement);
+      ctx.typeScope.set(statement.name.text, analyzed);
+      return analyzed;
+    }
     default:
       assertNever(
         statement,

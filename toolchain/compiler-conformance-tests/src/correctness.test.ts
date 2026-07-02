@@ -173,9 +173,12 @@ function evalBlock(block: Block, env: RefEnv): RefValue {
         const val = evalExpr(stmt.initializer.value, local);
         local.set(stmt.pattern.name.text, val);
       }
-    } else {
-      // stmt.kind === "ExpressionStatement" (Statement has only two variants)
+    } else if (stmt.kind === "ExpressionStatement") {
       evalExpr(stmt.expression, local);
+    } else {
+      throw new Error(
+        "SKIP: local item declarations not supported in reference evaluator",
+      );
     }
   }
   if (isSome(block.trailingExpression)) {

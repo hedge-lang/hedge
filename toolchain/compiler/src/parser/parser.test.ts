@@ -1163,6 +1163,162 @@ describe("trailing expression in block", (): void => {
   });
 });
 
+describe("empty statements in blocks", (): void => {
+  it("skips a lone semicolon inside a block silently", (): void => {
+    const ast = parseProgram("fn f() { ; }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: {
+            kind: "Block",
+            statements: [],
+            trailingExpression: none(),
+          },
+        },
+      ],
+    });
+  });
+
+  it("skips multiple consecutive semicolons", (): void => {
+    const ast = parseProgram("fn f() { ; ; ; }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: { statements: [], trailingExpression: none() },
+        },
+      ],
+    });
+  });
+
+  it("skips empty statements interspersed with real statements", (): void => {
+    const ast = parseProgram("fn f() -> i32 { ; let x = 1; ; x }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: {
+            statements: [{ kind: "LetStatement" }],
+            trailingExpression: some({ kind: "PathExpression" }),
+          },
+        },
+      ],
+    });
+  });
+
+  it("skips a lone semicolon before a trailing expression", (): void => {
+    const ast = parseProgram("fn f() -> i32 { ; 42 }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: {
+            statements: [],
+            trailingExpression: some({ kind: "IntLiteral" }),
+          },
+        },
+      ],
+    });
+  });
+
+  it("skips an outer attribute followed by a semicolon", (): void => {
+    const ast = parseProgram("fn f() { #[attr] ; }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: { statements: [], trailingExpression: none() },
+        },
+      ],
+    });
+  });
+});
+
+describe("item declarations inside blocks", (): void => {
+  it("parses a local fn declaration as a block statement", (): void => {
+    const ast = parseProgram("fn f() { fn g() -> i32 { 42 } g() }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          name: { text: "f" },
+          body: {
+            statements: [{ kind: "Function", name: { text: "g" } }],
+            trailingExpression: some({ kind: "CallExpression" }),
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses a local struct declaration as a block statement", (): void => {
+    const ast = parseProgram("fn f() { struct P { x: i32 } }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: {
+            statements: [{ kind: "Struct", name: { text: "P" } }],
+            trailingExpression: none(),
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses a pub fn inside a block", (): void => {
+    const ast = parseProgram("fn f() { pub fn g() {} }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: {
+            statements: [
+              {
+                kind: "Function",
+                name: { text: "g" },
+                visibility: some({ scope: none() }),
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses a nested block as a trailing expression after a local fn", (): void => {
+    const ast = parseProgram(
+      "fn f() -> i32 { fn double(x: i32) -> i32 { x + x } double(21) }",
+    );
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: {
+            statements: [{ kind: "Function", name: { text: "double" } }],
+            trailingExpression: some({ kind: "CallExpression" }),
+          },
+        },
+      ],
+    });
+  });
+});
+
+describe("missing brace diagnostics", (): void => {
+  it("produces a diagnostic when the closing brace is missing", (): void => {
+    const result = parse(tokenize("fn f() { let x = 1;").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("}");
+  });
+
+  it("produces a diagnostic when the opening brace is missing", (): void => {
+    const result = parse(tokenize("fn f() let x = 1; }").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("lbrace");
+  });
+});
+
 describe("visibility on function declarations", (): void => {
   it("parses pub fn f() {}", (): void => {
     const ast = parseProgram("pub fn f() {}");

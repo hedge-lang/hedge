@@ -341,6 +341,8 @@ function emitStatement(statement: Statement): string {
       return emitIfStatement(statement);
     case "ReturnStatement":
       return emitReturn(statement);
+    case "FunctionDecl":
+      return emitFunction(statement);
     default:
       return `${emitExpression(statement)};`;
   }

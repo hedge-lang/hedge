@@ -304,6 +304,16 @@ function parseStatement(
         return jsimIfExpressionAsStatement(ctx, statement.expression);
       }
       return parseExpression(ctx, statement.expression);
+    case "Function":
+      return parseFunction(ctx, statement);
+    case "Struct":
+      // Struct declarations are type-only — no JS runtime representation.
+      return { kind: "BlockStatement", body: [] };
+    default:
+      assertNever(
+        statement,
+        `JSIM lowering for "${JSON.stringify(statement)}" is not yet implemented`,
+      );
   }
 }
 

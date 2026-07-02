@@ -205,4 +205,18 @@ describe("semantic analysis", (): void => {
       ]),
     );
   });
+
+  it("emits exactly one diagnostic for an unsupported param type on a block-local fn", (): void => {
+    const result = diagnose("fn main() { fn f(x: unknownType) {} }");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+  });
+
+  it("struct defined in one function body does not leak into a sibling function", (): void => {
+    const result = diagnose(`
+      fn first() { struct Foo { x: i32 } }
+      fn second() { struct Foo { x: i32 } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
 });

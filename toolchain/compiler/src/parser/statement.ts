@@ -22,6 +22,7 @@ import {
 } from "./parse-utils.js";
 import { collectInnerAttributes, collectOuterAttributes } from "./attribute.js";
 import { parseExpression } from "./expression.js";
+import { parseItem } from "./item.js";
 import { parseType } from "./type.js";
 
 /**
@@ -220,18 +221,55 @@ export function parseBlock(
     if (tokens[cursor]?.kind === "rbrace") {
       break;
     }
-    // Outer attributes (e.g. `/// doc`) before a statement attach to a following
-    // `let` — the only named target inside a block. Before anything else they
-    // have nothing to document and are discarded.
+    // Empty statement — lone `;` carries no semantic content; skip silently.
+    if (tokens[cursor]?.kind === "semi") {
+      cursor += 1;
+      continue;
+    }
+    // Save position before attributes so `parseItem` can re-collect them.
+    const preAttrCursor = cursor;
     const outerResult = collectOuterAttributes(tokens, cursor);
     if (isErr(outerResult)) {
       return outerResult;
     }
     cursor = outerResult.value.next;
+    // Attributes followed by `;` — still an empty statement; discard the attributes.
+    if (tokens[cursor]?.kind === "semi") {
+      cursor += 1;
+      continue;
+    }
+    if (tokens[cursor]?.kind === "eof") {
+      return err({
+        severity: "error",
+        message: "expected `}` to close block, found end of input",
+        span: none(),
+      });
+    }
     if (tokens[cursor]?.kind === "rbrace") {
       break;
     }
     const token = tokens[cursor];
+    // Item declarations (fn, struct, or pub-prefixed variants) in block position.
+    if (
+      token?.kind === "keyword" &&
+      (token.text === "fn" || token.text === "struct" || token.text === "pub")
+    ) {
+      const itemResult = parseItem(tokens, diagnostics, preAttrCursor);
+      if (isErr(itemResult)) {
+        return itemResult;
+      }
+      const item = itemResult.value.node;
+      if (item.kind !== "Function" && item.kind !== "Struct") {
+        return err({
+          severity: "error",
+          message: `unexpected item kind '${item.kind}' in block position`,
+          span: none(),
+        });
+      }
+      statements.push(item);
+      cursor = itemResult.value.next;
+      continue;
+    }
     if (token?.kind === "keyword" && token.text === "let") {
       const letResult = parseLetStatement(
         tokens,
