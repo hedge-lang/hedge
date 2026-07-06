@@ -1936,9 +1936,10 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
       if (isSome(program)) {
         expect(program.value.items).toMatchObject([
           { kind: "Function", name: { text: "f" } },
+        expect(program.value.items).toMatchObject([
+          { kind: "Function", name: { text: "f" }, body: { statements: [] } },
           { kind: "Function", name: { text: "g" } },
         ]);
-      }
     },
   );
 

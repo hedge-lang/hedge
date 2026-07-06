@@ -64,9 +64,15 @@ function findLoopBodyOpenBrace(
         span: none(),
       });
     }
-    if (condDepth === 0 && tok.kind === "lbrace") return ok(cursor);
-    if (tok.kind === "lparen" || tok.kind === "lbracket") condDepth += 1;
-    if (tok.kind === "rparen" || tok.kind === "rbracket") condDepth -= 1;
+    if (condDepth === 0 && tok.kind === "lbrace") {
+      return ok(cursor);
+    }
+    if (tok.kind === "lparen" || tok.kind === "lbracket") {
+      condDepth += 1;
+    }
+    if (tok.kind === "rparen" || tok.kind === "rbracket") {
+      condDepth = Math.max(0, condDepth - 1);
+    }
     cursor += 1;
   }
 }
