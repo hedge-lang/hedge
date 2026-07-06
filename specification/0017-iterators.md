@@ -24,8 +24,8 @@ A `for` loop consumes anything that implements `IntoIterator`, in three flavors:
 
 `for x in &v` borrows `v` for the whole loop, so mutating `v` mid-iteration is a
 compile error; the concurrent-modification bug that JavaScript's `for…of` permits
-is rejected here. To change elements while iterating, iterate `&mut v` and
-mutate through `x`.
+is rejected here.[^iter-invalidation] To change elements while iterating, iterate
+`&mut v` and mutate through `x`.
 
 ## Adapters and consumers
 
@@ -53,3 +53,5 @@ For hot cases the compiler specializes instead of allocating iterator objects:
 `for x in 0..n` or `for x in &vec` lowers to a plain indexed loop. Inbound
 JavaScript iterables remain subject to the primitive-only boundary rule, so
 iteration interop is primarily outbound.
+
+[^iter-invalidation]: [Mutating An Array During .forEach() Iteration In JavaScript](https://www.bennadel.com/blog/2992-mutating-an-array-during-foreach-iteration-in-javascript.htm), [Array forEach doesn't iterate through all elements of mutating array](https://es.discourse.group/t/array-foreach-doesnt-iterate-through-all-elements-of-mutating-array/1176)
