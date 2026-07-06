@@ -6,7 +6,7 @@ Recoverable failure is a value. A function that can fail returns `Result<T, E>`,
 either `Ok(T)` or `Err(E)`, so the failure is part of the return type, visible in
 the signature and never a hidden exception. An absent value is instead an
 `Option<T>`, either `Some(T)` or `None`, for the case where there might be nothing
-here, which is not the same as an error.
+here, which is not the same as an error.[^undefined-error]
 
 Both are ordinary enums (see [Enums](0014-enums.md)); nothing about them is
 special-cased except the conveniences below.
@@ -96,3 +96,5 @@ shape JavaScript expects:
 
 A consumer that wants errors as values instead of exceptions can opt into the
 raw discriminated-union form (`{ tag: "Ok", … } | { tag: "Err", … }`).
+
+[^undefined-error]: [TypeError: Cannot read properties of undefined](https://sentry.io/answers/typeerror-cannot-read-properties-of-undefined/), [How to Fix "Cannot read properties of undefined"](https://rollbar.com/blog/javascript-typeerror-cannot-read-property-of-undefined/)

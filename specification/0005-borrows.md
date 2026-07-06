@@ -71,3 +71,32 @@ what it borrows and cannot outlive it; see [Lifetimes](0006-lifetimes.md).
 A borrow may be held across an `await`. The borrow rules and a single-threaded
 event loop together ensure that suspension cannot introduce a conflicting alias;
 see [Async](0019-async.md).
+
+This rules out a common class of JavaScript bugs: many concurrent tasks read a
+shared value, await, then write back what they read, and an update made in
+between is silently lost.[^async-race]
+
+```js
+let count = 0;
+async function increment() {
+  await sleep(random());
+  const seen = count;
+  await sleep(random());
+  count = seen + 1;
+}
+await Promise.all(Array.from({ length: 1000 }, increment));
+// count ends far below 1000: two tasks can read the same value
+// before either writes it back.
+```
+
+`increment` needs `&mut count` to read and later write it, held across both
+`await` points. A second async function cannot take `&mut count` while the
+first function's borrow is still live, so Hedge rejects the concurrent version
+outright and accepts only the sequential one, where each borrow ends before the
+next begins. The lost update becomes a compilation error instead of a race that
+only surfaces under load.
+
+NOTE: This is not the forever-syntax for Hedge, there are plans to provide
+ergonomic syntax for sharing mutable state across async tasks.
+
+[^async-race]: [Node.js race conditions](https://nodejsdesignpatterns.com/blog/node-js-race-conditions/), [async-mutex](https://github.com/DirtyHairy/async-mutex), [Race condition in upscale webhook, actions-runner-controller#1321](https://github.com/actions-runner-controller/actions-runner-controller/issues/1321)

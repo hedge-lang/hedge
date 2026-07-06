@@ -71,7 +71,7 @@ The conventional split between binding mutability and value mutability leaves
 several questions ambiguous at once: whether a name may be reassigned, whether a
 value may be changed in place, whether references are exclusive, and whether
 interior mutability is in play. Hedge folds all of these into a single ownership
-state so that aliasing is the one invariant governing mutation. References are a
+state so that aliasing is the one invariant governing mutation.[^shared-mutation] References are a
 tracked state rather than an annotation, mutation is always subject to
 exclusivity, and a binding cannot escalate its own capabilities by reassignment.
 
@@ -87,3 +87,5 @@ Two alternatives were considered and rejected:
 - A TypeScript-style `readonly` annotates the type rather than the value, so it
   imposes no aliasing constraint, cannot express exclusive ownership, and need
   not match the value's runtime mutability.
+
+[^shared-mutation]: [A "Gotcha" of JavaScript's Pass-by-Reference](https://dev.to/bytebodger/a-gotcha-of-javascript-s-pass-by-reference-1afm), [Pass by reference issue I encountered in JavaScript](https://medium.com/@linuk/pass-by-reference-issue-i-encountered-in-javascript-c22f59f1196)

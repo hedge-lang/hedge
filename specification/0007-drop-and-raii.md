@@ -1,9 +1,9 @@
 # Drop & RAII
 
 A type may implement `Drop` to run cleanup when a value's lifetime ends: closing
-a file, releasing a handle, flushing a buffer. Because Hedge runs on JavaScript
-and does not manage memory by hand, `Drop` exists only for these observable side
-effects, not for reclaiming memory.
+a file, releasing a handle, flushing a buffer.[^resource-leak] Because Hedge runs
+on JavaScript and does not manage memory by hand, `Drop` exists only for these
+observable side effects, not for reclaiming memory.
 
 ## When Drop runs
 
@@ -80,3 +80,5 @@ Cleanup that must await, such as an asynchronous flush or close, is an async
 `Drop`, lowered to `[Symbol.asyncDispose]` and `await using`. A value with async
 cleanup is async-tainted: it can be held only in an async context, where its
 disposal can be awaited. See [Async](0019-async.md).
+
+[^resource-leak]: [MaxListenersExceededWarning: node-fetch#1295](https://github.com/node-fetch/node-fetch/issues/1295), [MaxListenersExceededWarning: npm/cli#6763](https://github.com/npm/cli/issues/6763), [MaxListenersExceededWarning: nodejs/help#1051](https://github.com/nodejs/help/issues/1051)
