@@ -1896,3 +1896,237 @@ describe("no-op let warnings", (): void => {
     });
   });
 });
+
+describe("statement-level loop/while/for/label rejection with recovery", (): void => {
+  it.each([
+    ["loop", "loop {}"],
+    ["while", "while true {}"],
+    ["for", "for x in v {}"],
+  ])(
+    "rejects bare `%s` statement and recovers so later items still parse",
+    (keyword, construct): void => {
+      const { tokens } = tokenize(`fn f() { ${construct} } fn g() {}`);
+      const { program, diagnostics } = parse(tokens);
+      expect(isSome(program)).toBe(true);
+      expect(diagnostics[0]?.severity).toBe("error");
+      expect(diagnostics[0]?.message).toContain("Slice 1");
+      expect(diagnostics[0]?.message).toContain(keyword);
+      if (isSome(program)) {
+        expect(program.value.items).toMatchObject([
+          { kind: "Function", name: { text: "f" }, body: { statements: [] } },
+          { kind: "Function", name: { text: "g" } },
+        ]);
+      }
+    },
+  );
+
+  it.each([
+    ["loop", "'outer: loop {}"],
+    ["while", "'outer: while true {}"],
+    ["for", "'outer: for x in v {}"],
+  ])(
+    "rejects label-prefixed `%s` and recovers so later items still parse",
+    (keyword, construct): void => {
+      const { tokens } = tokenize(`fn f() { ${construct} } fn g() {}`);
+      const { program, diagnostics } = parse(tokens);
+      expect(isSome(program)).toBe(true);
+      expect(diagnostics[0]?.severity).toBe("error");
+      expect(diagnostics[0]?.message).toContain("Slice 1");
+      expect(diagnostics[0]?.message).toContain(keyword);
+      if (isSome(program)) {
+        expect(program.value.items).toMatchObject([
+          { kind: "Function", name: { text: "f" } },
+          { kind: "Function", name: { text: "g" } },
+        ]);
+      }
+    },
+  );
+
+  it("emits one diagnostic per rejected construct when several appear in one function", (): void => {
+    const { tokens } = tokenize(
+      "fn f() { loop {} while true {} for x in v {} }",
+    );
+    const { program, diagnostics } = parse(tokens);
+    expect(isSome(program)).toBe(true);
+    expect(diagnostics).toHaveLength(3);
+    expect(diagnostics[0]?.message).toContain("loop");
+    expect(diagnostics[1]?.message).toContain("while");
+    expect(diagnostics[2]?.message).toContain("for");
+  });
+
+  it("recovers across back-to-back rejected loops with no separator", (): void => {
+    const { tokens } = tokenize("fn f() { loop {} loop {} }");
+    const { program, diagnostics } = parse(tokens);
+    expect(isSome(program)).toBe(true);
+    expect(diagnostics).toHaveLength(2);
+  });
+
+  it("emits exactly one diagnostic for a loop nested inside a rejected loop", (): void => {
+    const { tokens } = tokenize("fn f() { loop { while true {} } }");
+    const { program, diagnostics } = parse(tokens);
+    expect(isSome(program)).toBe(true);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("loop");
+  });
+
+  it("skips braces inside a string literal in the rejected loop's body", (): void => {
+    const { tokens } = tokenize(
+      'fn f() { loop { let s = "{ not a brace }"; } } fn g() {}',
+    );
+    const { program, diagnostics } = parse(tokens);
+    expect(isSome(program)).toBe(true);
+    expect(diagnostics).toHaveLength(1);
+    if (isSome(program)) {
+      expect(program.value.items).toMatchObject([
+        { kind: "Function", name: { text: "f" } },
+        { kind: "Function", name: { text: "g" } },
+      ]);
+    }
+  });
+
+  it("balances real nested braces inside the rejected loop's body", (): void => {
+    const { tokens } = tokenize("fn f() { loop { if true { } } } fn g() {}");
+    const { program, diagnostics } = parse(tokens);
+    expect(isSome(program)).toBe(true);
+    expect(diagnostics).toHaveLength(1);
+    if (isSome(program)) {
+      expect(program.value.items).toMatchObject([
+        { kind: "Function", name: { text: "f" } },
+        { kind: "Function", name: { text: "g" } },
+      ]);
+    }
+  });
+
+  it("fails gracefully instead of hanging on an unterminated loop body", (): void => {
+    const { tokens } = tokenize("fn f() { loop {");
+    const { program, diagnostics } = parse(tokens);
+    expect(isNone(program)).toBe(true);
+    expect(diagnostics[0]?.message).toContain("end of input");
+  });
+
+  it("consumes a redundant trailing semicolon after a rejected loop", (): void => {
+    const { tokens } = tokenize("fn f() { loop {}; } fn g() {}");
+    const { program, diagnostics } = parse(tokens);
+    expect(isSome(program)).toBe(true);
+    expect(diagnostics).toHaveLength(1);
+    if (isSome(program)) {
+      expect(program.value.items).toMatchObject([
+        { kind: "Function", name: { text: "f" } },
+        { kind: "Function", name: { text: "g" } },
+      ]);
+    }
+  });
+
+  it("rejects `while let` the same as a plain `while` condition", (): void => {
+    const { tokens } = tokenize(
+      "fn f() { while let Some(x) = opt {} } fn g() {}",
+    );
+    const { program, diagnostics } = parse(tokens);
+    expect(isSome(program)).toBe(true);
+    expect(diagnostics[0]?.message).toContain("while");
+    if (isSome(program)) {
+      expect(program.value.items).toMatchObject([
+        { kind: "Function", name: { text: "f" } },
+        { kind: "Function", name: { text: "g" } },
+      ]);
+    }
+  });
+
+  it("rejects a loop in trailing (no-semicolon) block position the same as mid-block", (): void => {
+    const { tokens } = tokenize("fn f() { loop {} }");
+    const { program, diagnostics } = parse(tokens);
+    expect(isSome(program)).toBe(true);
+    expect(diagnostics).toHaveLength(1);
+    if (isSome(program)) {
+      expect(program.value.items).toMatchObject([
+        {
+          kind: "Function",
+          body: { statements: [], trailingExpression: none() },
+        },
+      ]);
+    }
+  });
+
+  it("diagnostic span covers exactly the loop keyword token", (): void => {
+    const { tokens } = tokenize("fn f() { loop {} }");
+    const { diagnostics } = parse(tokens);
+    const loopToken = tokens.find(
+      (t) => t.kind === "keyword" && t.text === "loop",
+    );
+    assert(loopToken !== undefined, "expected to find the loop token");
+    expect(diagnostics[0]?.span).toEqual(some(loopToken.span));
+  });
+
+  it("a bare top-level `loop {}` (outside any function) also gets the Slice 1 diagnostic, fail-fast", (): void => {
+    const { tokens } = tokenize("loop {}");
+    const { program, diagnostics } = parse(tokens);
+    expect(isNone(program)).toBe(true);
+    expect(diagnostics[0]?.message).toContain("Slice 1");
+    expect(diagnostics[0]?.message).toContain("loop");
+  });
+
+  it("documents imprecise recovery when a while condition contains a bare brace (already-invalid syntax)", (): void => {
+    // `Foo { x: 1 }` bare in condition position isn't valid Hedge grammar
+    // (same `allowStruct: false` restriction `if`/`while` already enforce
+    // elsewhere), so the recovery skip has no real condition grammar to
+    // respect here. It lands on the condition's own `{`, not the loop's
+    // intended body — but the construct is still rejected and the parser
+    // still recovers rather than hanging or crashing.
+    const { tokens } = tokenize("fn f() { while Foo { x: 1 } { } }");
+    const { program, diagnostics } = parse(tokens);
+    expect(isSome(program)).toBe(true);
+    expect(diagnostics[0]?.message).toContain("while");
+  });
+});
+
+describe("loop/while/for guardrail in nested expression position", (): void => {
+  it.each(["loop {}", "while true {}", "for x in v {}"])(
+    "`let y = %s;` produces the Slice-1 diagnostic, not a generic 'expected expression' error",
+    (construct): void => {
+      const { tokens } = tokenize(`let y = ${construct};`);
+      const { program, diagnostics } = parse(tokens);
+      expect(isNone(program)).toBe(true);
+      expect(diagnostics[0]?.message).toContain("Slice 1");
+    },
+  );
+
+  it.each(["loop {}", "while true {}", "for x in v {}"])(
+    "`foo(%s);` in call-argument position produces the Slice-1 diagnostic",
+    (construct): void => {
+      const { tokens } = tokenize(`foo(${construct});`);
+      const { program, diagnostics } = parse(tokens);
+      expect(isNone(program)).toBe(true);
+      expect(diagnostics[0]?.message).toContain("Slice 1");
+    },
+  );
+
+  it.each(["loop {}", "while true {}", "for x in v {}"])(
+    "`if %s { }` in if-condition position produces the Slice-1 diagnostic",
+    (construct): void => {
+      const { tokens } = tokenize(`if ${construct} { }`);
+      const { program, diagnostics } = parse(tokens);
+      expect(isNone(program)).toBe(true);
+      expect(diagnostics[0]?.message).toContain("Slice 1");
+    },
+  );
+
+  it.each(["loop {}", "while true {}", "for x in v {}"])(
+    "`1 + %s;` in binary-operand position produces the Slice-1 diagnostic",
+    (construct): void => {
+      const { tokens } = tokenize(`1 + ${construct};`);
+      const { program, diagnostics } = parse(tokens);
+      expect(isNone(program)).toBe(true);
+      expect(diagnostics[0]?.message).toContain("Slice 1");
+    },
+  );
+
+  it("nested-position diagnostic span covers exactly the loop keyword token", (): void => {
+    const { tokens } = tokenize("let y = loop {};");
+    const { diagnostics } = parse(tokens);
+    const loopToken = tokens.find(
+      (t) => t.kind === "keyword" && t.text === "loop",
+    );
+    assert(loopToken !== undefined, "expected to find the loop token");
+    expect(diagnostics[0]?.span).toEqual(some(loopToken.span));
+  });
+});
