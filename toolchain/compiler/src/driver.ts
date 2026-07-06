@@ -9,7 +9,6 @@ import { none, some, type Option, isSome } from "./option.js";
 import { checkBorrows } from "./ownership/borrowck.js";
 import type { Program } from "./parser/ast.js";
 import { parse } from "./parser/parser.js";
-import { err, isErr, ok, type Result } from "./result.js";
 import { analyze } from "./semantics/analyzer.js";
 
 export interface CompileResult {
@@ -18,27 +17,17 @@ export interface CompileResult {
   readonly code: Option<Code>;
 }
 
-function parseSource(source: string): {
-  outcome: Result<Program, Diagnostic>;
-  lexDiagnostics: readonly Diagnostic[];
-  tokens: readonly Token[];
-} {
+interface ParseSourceResult {
+  readonly program: Option<Program>;
+  readonly lexDiagnostics: readonly Diagnostic[];
+  readonly parseDiagnostics: readonly Diagnostic[];
+  readonly tokens: readonly Token[];
+}
+
+function parseSource(source: string): ParseSourceResult {
   const { tokens, diagnostics: lexDiagnostics } = tokenize(source);
   const { program, diagnostics: parseDiagnostics } = parse(tokens);
-  if (isSome(program)) {
-    return { outcome: ok(program.value), lexDiagnostics, tokens };
-  }
-  return {
-    outcome: err(
-      parseDiagnostics[0] ?? {
-        severity: "error",
-        message: "Parse failed",
-        span: none(),
-      },
-    ),
-    lexDiagnostics,
-    tokens,
-  };
+  return { program, lexDiagnostics, parseDiagnostics, tokens };
 }
 
 function hasError(diagnostics: readonly Diagnostic[]): boolean {
@@ -53,14 +42,19 @@ function hasError(diagnostics: readonly Diagnostic[]): boolean {
  * is `none()` when any error diagnostic is reported.
  */
 export function compile(source: string): CompileResult {
-  const { outcome: parseOutcome, lexDiagnostics, tokens } = parseSource(source);
-  if (isErr(parseOutcome)) {
+  const {
+    program: programOpt,
+    lexDiagnostics,
+    parseDiagnostics,
+    tokens,
+  } = parseSource(source);
+  if (!isSome(programOpt)) {
     return {
-      diagnostics: [...lexDiagnostics, parseOutcome.error],
+      diagnostics: [...lexDiagnostics, ...parseDiagnostics],
       code: none(),
     };
   }
-  const program = parseOutcome.value;
+  const program = programOpt.value;
   const analysis = analyze(program, tokens);
   // TODO: pass analysis.program (Semantics.Program) once the borrow checker
   // is updated to consume the semantic AST instead of the parser AST.
@@ -68,6 +62,7 @@ export function compile(source: string): CompileResult {
   const borrowChecked = checkBorrows(program, tokens);
   const diagnostics = [
     ...lexDiagnostics,
+    ...parseDiagnostics,
     ...analysis.diagnostics,
     ...borrowChecked,
   ];

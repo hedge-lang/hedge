@@ -65,4 +65,51 @@ describe("driver", (): void => {
     expect(isNone(result.code)).toBe(true);
     expect(result.diagnostics).toHaveLength(1);
   });
+
+  it("surfaces every parse diagnostic on failure, not just the first", (): void => {
+    const result = compile("let x; fn main() {}");
+    expect(isNone(result.code)).toBe(true);
+    expect(result.diagnostics.some((d) => d.severity === "warning")).toBe(true);
+  });
+
+  describe("Slice 1 loop/label rejection", (): void => {
+    it.each([
+      ["loop", "fn main() { loop {} }"],
+      ["while", "fn main() { while true {} }"],
+      ["for", "fn main() { for x in v {} }"],
+      ["labeled loop", "fn main() { 'outer: loop {} }"],
+    ])(
+      "surfaces a recovered parse-time error for %s and produces no code",
+      (_label, source): void => {
+        const result = compile(source);
+        expect(isNone(result.code)).toBe(true);
+        expect(
+          result.diagnostics.some(
+            (d) => d.severity === "error" && d.message.includes("Slice 1"),
+          ),
+        ).toBe(true);
+      },
+    );
+
+    it("rejection is deterministic across repeated compiles", (): void => {
+      const source = "fn main() { loop {} }";
+      const first = compile(source);
+      const second = compile(source);
+      expect(first.diagnostics).toEqual(second.diagnostics);
+      expect(isNone(first.code)).toBe(true);
+      expect(isNone(second.code)).toBe(true);
+    });
+
+    it("recovery lets a later, independently-broken declaration still surface its own error", (): void => {
+      const result = compile(`
+        fn main() { loop {} }
+        fn other() { print(undefined_name); }
+      `);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors.some((e) => e.message.includes("loop"))).toBe(true);
+      expect(errors.some((e) => e.message.includes("undefined_name"))).toBe(
+        true,
+      );
+    });
+  });
 });

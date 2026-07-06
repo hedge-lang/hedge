@@ -1,7 +1,7 @@
 import { assert } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
-import { none, some, type Option } from "../option.js";
+import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import type {
   Attribute,
@@ -17,7 +17,10 @@ import type { Parsed } from "./parse.js";
 import {
   expect,
   expectKeyword,
+  loopKeywordAt,
   parseIdentifier,
+  unsupportedLoopMessage,
+  type LoopKeywordMatch,
   type PR,
 } from "./parse-utils.js";
 import { collectInnerAttributes, collectOuterAttributes } from "./attribute.js";
@@ -39,6 +42,98 @@ export function expressionStatement(
     tokenId: expression.tokenId,
     expression,
   };
+}
+
+/**
+ * Skips past a loop's condition/pattern (if any) to find the body's opening
+ * `{`. Struct literals aren't allowed bare in condition position, so the
+ * first `{` at paren/bracket depth 0 is unambiguously the body.
+ */
+function findLoopBodyOpenBrace(
+  tokens: readonly Token[],
+  afterKeyword: number,
+): PR<number> {
+  let cursor = afterKeyword;
+  let condDepth = 0;
+  for (;;) {
+    const tok = tokens[cursor];
+    if (tok === undefined || tok.kind === "eof") {
+      return err({
+        severity: "error",
+        message: "expected `{` to open loop body, found end of input",
+        span: none(),
+      });
+    }
+    if (condDepth === 0 && tok.kind === "lbrace") {
+      return ok(cursor);
+    }
+    if (tok.kind === "lparen" || tok.kind === "lbracket") {
+      condDepth += 1;
+    }
+    if (tok.kind === "rparen" || tok.kind === "rbracket") {
+      condDepth = Math.max(0, condDepth - 1);
+    }
+    cursor += 1;
+  }
+}
+
+/**
+ * Skips a `{ ... }` span starting at `openBrace`, purely by counting
+ * `lbrace`/`rbrace` tokens — never string/char literal contents, so braces
+ * inside a string can't desync the count. Returns the index just past the
+ * matching `}`.
+ */
+function skipBalancedBraceBlock(
+  tokens: readonly Token[],
+  openBrace: number,
+): PR<number> {
+  let cursor = openBrace;
+  let braceDepth = 0;
+  for (;;) {
+    const tok = tokens[cursor];
+    if (tok === undefined || tok.kind === "eof") {
+      return err({
+        severity: "error",
+        message: "expected `}` to close block, found end of input",
+        span: none(),
+      });
+    }
+    if (tok.kind === "lbrace") braceDepth += 1;
+    if (tok.kind === "rbrace") braceDepth -= 1;
+    cursor += 1;
+    if (braceDepth === 0) return ok(cursor);
+  }
+}
+
+/**
+ * Recovers from a rejected `loop`/`while`/`for` statement: builds the
+ * "not supported until Slice 6" diagnostic for the matched keyword, then
+ * skips the whole construct as an opaque, brace-balanced token span so the
+ * block's statement loop can resume at the next statement boundary.
+ *
+ * Anything unsupported nested inside the skipped body (e.g. a `loop` inside
+ * a rejected `loop`) is swallowed silently — recovery only reports the
+ * outermost construct.
+ */
+function skipUnsupportedLoopConstruct(
+  tokens: readonly Token[],
+  match: LoopKeywordMatch,
+): PR<{ diagnostic: Diagnostic; next: number }> {
+  const diagnostic: Diagnostic = {
+    severity: "error",
+    message: unsupportedLoopMessage(match.token.text),
+    span: some(match.token.span),
+  };
+
+  const openBraceResult = findLoopBodyOpenBrace(tokens, match.pos + 1);
+  if (isErr(openBraceResult)) {
+    return openBraceResult;
+  }
+  const nextResult = skipBalancedBraceBlock(tokens, openBraceResult.value);
+  if (isErr(nextResult)) {
+    return nextResult;
+  }
+  return ok({ diagnostic, next: nextResult.value });
 }
 
 /**
@@ -282,6 +377,22 @@ export function parseBlock(
       }
       statements.push(letResult.value.node);
       cursor = letResult.value.next;
+      continue;
+    }
+    // `loop`/`while`/`for` statements, optionally label-prefixed, are not
+    // supported until Slice 6 — reject with a diagnostic and recover by
+    // skipping the whole construct so later statements still parse.
+    const loopKeyword = loopKeywordAt(tokens, cursor);
+    if (isSome(loopKeyword)) {
+      const skipResult = skipUnsupportedLoopConstruct(
+        tokens,
+        loopKeyword.value,
+      );
+      if (isErr(skipResult)) {
+        return skipResult;
+      }
+      diagnostics.push(skipResult.value.diagnostic);
+      cursor = skipResult.value.next;
       continue;
     }
     const exprResult = parseExpression(tokens, diagnostics, cursor);

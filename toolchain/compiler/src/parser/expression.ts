@@ -24,10 +24,12 @@ import type {
 import type { Parsed } from "./parse.js";
 import {
   expect,
+  loopKeywordAt,
   parseIdentifier,
   stripPrefix,
   stripUnderscores,
   tokenAt,
+  unsupportedLoopMessage,
   type PR,
 } from "./parse-utils.js";
 import { parsePath } from "./path.js";
@@ -741,6 +743,15 @@ function parsePrimary(
   // `if` expression
   if (token.kind === "keyword" && token.text === "if") {
     return parseIfExpression(tokens, diagnostics, pos);
+  }
+
+  const loopKeyword = loopKeywordAt(tokens, pos);
+  if (isSome(loopKeyword)) {
+    return err({
+      severity: "error",
+      message: unsupportedLoopMessage(loopKeyword.value.token.text),
+      span: some(loopKeyword.value.token.span),
+    });
   }
 
   // Block expression
