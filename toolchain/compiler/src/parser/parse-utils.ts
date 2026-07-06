@@ -1,6 +1,6 @@
 import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
-import { none, some } from "../option.js";
+import { none, some, type Option } from "../option.js";
 import { err, isErr, ok, type Result } from "../result.js";
 import type { Identifier } from "./ast.js";
 import type { Parsed } from "./parse.js";
@@ -86,6 +86,44 @@ export function stripUnderscores(text: string): string {
 
 export const MUT_MESSAGE: string =
   "The keyword `mut` is reserved and cannot be used as an identifier. For a mutable binding, use `let mut`; for a mutable borrow, use `&mut`.";
+
+export function unsupportedLoopMessage(keyword: string): string {
+  return `\`${keyword}\` is not supported in Slice 1; loops are introduced in Slice 6`;
+}
+
+const LOOP_KEYWORDS: ReadonlySet<string> = new Set(["loop", "while", "for"]);
+
+export interface LoopKeywordMatch {
+  readonly pos: number;
+  readonly token: Extract<Token, { kind: "keyword" }>;
+}
+
+/**
+ * If a `loop`/`while`/`for` construct — optionally label-prefixed
+ * (`'name: loop {}`) — starts at `pos`, returns the position and token of
+ * the `loop`/`while`/`for` keyword. Otherwise `none()`.
+ */
+export function loopKeywordAt(
+  tokens: readonly Token[],
+  pos: number,
+): Option<LoopKeywordMatch> {
+  const token = tokens[pos];
+  if (token?.kind === "keyword" && LOOP_KEYWORDS.has(token.text)) {
+    return some({ pos, token });
+  }
+  if (token?.kind === "lifetime") {
+    const colonTok = tokens[pos + 1];
+    const keywordTok = tokens[pos + 2];
+    if (
+      colonTok?.kind === "colon" &&
+      keywordTok?.kind === "keyword" &&
+      LOOP_KEYWORDS.has(keywordTok.text)
+    ) {
+      return some({ pos: pos + 2, token: keywordTok });
+    }
+  }
+  return none();
+}
 
 /**
  * Parses an identifier expression.

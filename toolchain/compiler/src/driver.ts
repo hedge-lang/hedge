@@ -18,15 +18,23 @@ export interface CompileResult {
   readonly code: Option<Code>;
 }
 
-function parseSource(source: string): {
-  outcome: Result<Program, Diagnostic>;
-  lexDiagnostics: readonly Diagnostic[];
-  tokens: readonly Token[];
-} {
+interface ParseSourceResult {
+  readonly outcome: Result<Program, Diagnostic>;
+  readonly lexDiagnostics: readonly Diagnostic[];
+  readonly parseDiagnostics: readonly Diagnostic[];
+  readonly tokens: readonly Token[];
+}
+
+function parseSource(source: string): ParseSourceResult {
   const { tokens, diagnostics: lexDiagnostics } = tokenize(source);
   const { program, diagnostics: parseDiagnostics } = parse(tokens);
   if (isSome(program)) {
-    return { outcome: ok(program.value), lexDiagnostics, tokens };
+    return {
+      outcome: ok(program.value),
+      lexDiagnostics,
+      parseDiagnostics,
+      tokens,
+    };
   }
   return {
     outcome: err(
@@ -37,6 +45,7 @@ function parseSource(source: string): {
       },
     ),
     lexDiagnostics,
+    parseDiagnostics,
     tokens,
   };
 }
@@ -53,7 +62,12 @@ function hasError(diagnostics: readonly Diagnostic[]): boolean {
  * is `none()` when any error diagnostic is reported.
  */
 export function compile(source: string): CompileResult {
-  const { outcome: parseOutcome, lexDiagnostics, tokens } = parseSource(source);
+  const {
+    outcome: parseOutcome,
+    lexDiagnostics,
+    parseDiagnostics,
+    tokens,
+  } = parseSource(source);
   if (isErr(parseOutcome)) {
     return {
       diagnostics: [...lexDiagnostics, parseOutcome.error],
@@ -68,6 +82,7 @@ export function compile(source: string): CompileResult {
   const borrowChecked = checkBorrows(program, tokens);
   const diagnostics = [
     ...lexDiagnostics,
+    ...parseDiagnostics,
     ...analysis.diagnostics,
     ...borrowChecked,
   ];
