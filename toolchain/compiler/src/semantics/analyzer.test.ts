@@ -219,4 +219,15 @@ describe("semantic analysis", (): void => {
     `);
     expect(result.diagnostics).toEqual([]);
   });
+
+  it.fails.each(["loop", "while", "for x in [1, 2, 3]"])(
+    "%s statement at top level is an error",
+    (stmt) => {
+      const result = diagnose(`${stmt}; fn main() {}`);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "only function and struct declarations are allowed at the top level",
+      );
+    },
+  );
 });
