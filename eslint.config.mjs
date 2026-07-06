@@ -168,7 +168,7 @@ export default defineConfig([
     ========================================================= */
   markdown.configs.recommended,
   {
-    files: [".github/**/*.md"],
+    files: ["**/*.md"],
     language: "markdown/gfm",
   },
 
