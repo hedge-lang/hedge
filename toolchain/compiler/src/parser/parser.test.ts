@@ -361,8 +361,7 @@ describe("type annotation error diagnostics", (): void => {
   it("produces an error diagnostic for a reference type", (): void => {
     const { tokens } = tokenize("let x: &i32;");
     const amp = tokens.find((t) => t.kind === "amp");
-    expect(amp).toBeDefined();
-    if (!amp) return;
+    assert(amp !== undefined, "Expected to find an amp token");
     const result = parse(tokens);
     expect(result.program).toEqual(none());
     expect(result.diagnostics[0]?.severity).toBe("error");
@@ -373,8 +372,7 @@ describe("type annotation error diagnostics", (): void => {
   it("produces an error diagnostic for an exclusive reference type", (): void => {
     const { tokens } = tokenize("let x: &mut i32;");
     const amp = tokens.find((t) => t.kind === "amp");
-    expect(amp).toBeDefined();
-    if (!amp) return;
+    assert(amp !== undefined, "Expected to find an amp token");
     const result = parse(tokens);
     expect(result.program).toEqual(none());
     expect(result.diagnostics[0]?.severity).toBe("error");
@@ -385,8 +383,7 @@ describe("type annotation error diagnostics", (): void => {
   it("produces an error diagnostic for a slice type", (): void => {
     const { tokens } = tokenize("let xs: [i32];");
     const lbracket = tokens.find((t) => t.kind === "lbracket");
-    expect(lbracket).toBeDefined();
-    if (!lbracket) return;
+    assert(lbracket !== undefined, "Expected to find a lbracket token");
     const result = parse(tokens);
     expect(result.program).toEqual(none());
     expect(result.diagnostics[0]?.severity).toBe("error");
@@ -397,8 +394,7 @@ describe("type annotation error diagnostics", (): void => {
   it("produces an error diagnostic for the never type", (): void => {
     const { tokens } = tokenize("fn f() -> ! {}");
     const bang = tokens.find((t) => t.kind === "bang");
-    expect(bang).toBeDefined();
-    if (!bang) return;
+    assert(bang !== undefined, "Expected to find a bang token");
     const result = parse(tokens);
     expect(result.program).toEqual(none());
     expect(result.diagnostics[0]?.severity).toBe("error");
@@ -1907,16 +1903,14 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     (keyword, construct): void => {
       const { tokens } = tokenize(`fn f() { ${construct} } fn g() {}`);
       const { program, diagnostics } = parse(tokens);
-      expect(isSome(program)).toBe(true);
+      assert(isSome(program), "Expected a program to come back");
       expect(diagnostics[0]?.severity).toBe("error");
       expect(diagnostics[0]?.message).toContain("Slice 1");
       expect(diagnostics[0]?.message).toContain(keyword);
-      if (isSome(program)) {
-        expect(program.value.items).toMatchObject([
-          { kind: "Function", name: { text: "f" }, body: { statements: [] } },
-          { kind: "Function", name: { text: "g" } },
-        ]);
-      }
+      expect(program.value.items).toMatchObject([
+        { kind: "Function", name: { text: "f" }, body: { statements: [] } },
+        { kind: "Function", name: { text: "g" } },
+      ]);
     },
   );
 
@@ -1930,16 +1924,16 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
       const { tokens } = tokenize(`fn f() { ${construct} } fn g() {}`);
       const { program, diagnostics } = parse(tokens);
       expect(isSome(program)).toBe(true);
-      expect(diagnostics[0]?.severity).toBe("error");
-      expect(diagnostics[0]?.message).toContain("Slice 1");
-      expect(diagnostics[0]?.message).toContain(keyword);
-      if (isSome(program)) {
-        expect(program.value.items).toMatchObject([
-          { kind: "Function", name: { text: "f" } },
-        expect(program.value.items).toMatchObject([
-          { kind: "Function", name: { text: "f" }, body: { statements: [] } },
-          { kind: "Function", name: { text: "g" } },
-        ]);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
+      expect(diagnostics[0].severity).toBe("error");
+      expect(diagnostics[0].message).toContain("Slice 1");
+      expect(diagnostics[0].message).toContain(keyword);
+      assert(isSome(program), "Expected a program to come back");
+      expect(program.value.items).toMatchObject([
+        { kind: "Function", name: { text: "f" }, body: { statements: [] } },
+        { kind: "Function", name: { text: "g" } },
+      ]);
     },
   );
 
@@ -1950,9 +1944,12 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     const { program, diagnostics } = parse(tokens);
     expect(isSome(program)).toBe(true);
     expect(diagnostics).toHaveLength(3);
-    expect(diagnostics[0]?.message).toContain("loop");
-    expect(diagnostics[1]?.message).toContain("while");
-    expect(diagnostics[2]?.message).toContain("for");
+    assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
+    expect(diagnostics[0].message).toContain("loop");
+    assert(diagnostics[1] !== undefined, "Expected to get diagnostic");
+    expect(diagnostics[1].message).toContain("while");
+    assert(diagnostics[2] !== undefined, "Expected to get diagnostic");
+    expect(diagnostics[2].message).toContain("for");
   });
 
   it("recovers across back-to-back rejected loops with no separator", (): void => {
@@ -1967,7 +1964,8 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     const { program, diagnostics } = parse(tokens);
     expect(isSome(program)).toBe(true);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("loop");
+    assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
+    expect(diagnostics[0].message).toContain("loop");
   });
 
   it("skips braces inside a string literal in the rejected loop's body", (): void => {
@@ -1977,12 +1975,13 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     const { program, diagnostics } = parse(tokens);
     expect(isSome(program)).toBe(true);
     expect(diagnostics).toHaveLength(1);
-    if (isSome(program)) {
-      expect(program.value.items).toMatchObject([
-        { kind: "Function", name: { text: "f" } },
-        { kind: "Function", name: { text: "g" } },
-      ]);
-    }
+    assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
+    expect(diagnostics[0].message).toContain("loop");
+    assert(isSome(program), "Expected a program to come back");
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "f" } },
+      { kind: "Function", name: { text: "g" } },
+    ]);
   });
 
   it("balances real nested braces inside the rejected loop's body", (): void => {
@@ -1990,32 +1989,30 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     const { program, diagnostics } = parse(tokens);
     expect(isSome(program)).toBe(true);
     expect(diagnostics).toHaveLength(1);
-    if (isSome(program)) {
-      expect(program.value.items).toMatchObject([
-        { kind: "Function", name: { text: "f" } },
-        { kind: "Function", name: { text: "g" } },
-      ]);
-    }
+    assert(isSome(program), "Expected a program to come back");
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "f" } },
+      { kind: "Function", name: { text: "g" } },
+    ]);
   });
 
   it("fails gracefully instead of hanging on an unterminated loop body", (): void => {
     const { tokens } = tokenize("fn f() { loop {");
     const { program, diagnostics } = parse(tokens);
-    expect(isNone(program)).toBe(true);
-    expect(diagnostics[0]?.message).toContain("end of input");
+    assert(isNone(program), "Expected no program to come back");
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic to come back");
+    expect(diagnostics[0].message).toContain("end of input");
   });
 
   it("consumes a redundant trailing semicolon after a rejected loop", (): void => {
     const { tokens } = tokenize("fn f() { loop {}; } fn g() {}");
     const { program, diagnostics } = parse(tokens);
-    expect(isSome(program)).toBe(true);
+    assert(isSome(program), "Expected program to come back");
     expect(diagnostics).toHaveLength(1);
-    if (isSome(program)) {
-      expect(program.value.items).toMatchObject([
-        { kind: "Function", name: { text: "f" } },
-        { kind: "Function", name: { text: "g" } },
-      ]);
-    }
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "f" } },
+      { kind: "Function", name: { text: "g" } },
+    ]);
   });
 
   it("rejects `while let` the same as a plain `while` condition", (): void => {
@@ -2023,29 +2020,26 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
       "fn f() { while let Some(x) = opt {} } fn g() {}",
     );
     const { program, diagnostics } = parse(tokens);
-    expect(isSome(program)).toBe(true);
-    expect(diagnostics[0]?.message).toContain("while");
-    if (isSome(program)) {
-      expect(program.value.items).toMatchObject([
-        { kind: "Function", name: { text: "f" } },
-        { kind: "Function", name: { text: "g" } },
-      ]);
-    }
+    assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
+    expect(diagnostics[0].message).toContain("while");
+    assert(isSome(program), "Expected a program to come back");
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "f" } },
+      { kind: "Function", name: { text: "g" } },
+    ]);
   });
 
   it("rejects a loop in trailing (no-semicolon) block position the same as mid-block", (): void => {
     const { tokens } = tokenize("fn f() { loop {} }");
     const { program, diagnostics } = parse(tokens);
-    expect(isSome(program)).toBe(true);
+    assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
-    if (isSome(program)) {
-      expect(program.value.items).toMatchObject([
-        {
-          kind: "Function",
-          body: { statements: [], trailingExpression: none() },
-        },
-      ]);
-    }
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        body: { statements: [], trailingExpression: none() },
+      },
+    ]);
   });
 
   it("diagnostic span covers exactly the loop keyword token", (): void => {
@@ -2061,9 +2055,10 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
   it("a bare top-level `loop {}` (outside any function) also gets the Slice 1 diagnostic, fail-fast", (): void => {
     const { tokens } = tokenize("loop {}");
     const { program, diagnostics } = parse(tokens);
-    expect(isNone(program)).toBe(true);
-    expect(diagnostics[0]?.message).toContain("Slice 1");
-    expect(diagnostics[0]?.message).toContain("loop");
+    assert(isNone(program), "Expected no program to come back");
+    assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
+    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics[0].message).toContain("loop");
   });
 
   it("documents imprecise recovery when a while condition contains a bare brace (already-invalid syntax)", (): void => {
@@ -2075,8 +2070,25 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     // still recovers rather than hanging or crashing.
     const { tokens } = tokenize("fn f() { while Foo { x: 1 } { } }");
     const { program, diagnostics } = parse(tokens);
-    expect(isSome(program)).toBe(true);
-    expect(diagnostics[0]?.message).toContain("while");
+    assert(isSome(program), "Expected program to come back");
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("while");
+  });
+
+  it("recovers even when a malformed condition has a stray closing bracket", (): void => {
+    // A stray `]` with no matching `[` must not drive condDepth negative —
+    // otherwise the scan can never recognize the real loop body's `{` as
+    // being at top-level depth, and misreports "end of input" instead of
+    // recovering.
+    const { tokens } = tokenize("fn f() { while x] {} } fn g() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected program to come back");
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("while");
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "f" } },
+      { kind: "Function", name: { text: "g" } },
+    ]);
   });
 });
 
@@ -2086,8 +2098,9 @@ describe("loop/while/for guardrail in nested expression position", (): void => {
     (construct): void => {
       const { tokens } = tokenize(`let y = ${construct};`);
       const { program, diagnostics } = parse(tokens);
-      expect(isNone(program)).toBe(true);
-      expect(diagnostics[0]?.message).toContain("Slice 1");
+      assert(isNone(program), "Expected program to be nonexistent");
+      assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
+      expect(diagnostics[0].message).toContain("Slice 1");
     },
   );
 
@@ -2096,8 +2109,9 @@ describe("loop/while/for guardrail in nested expression position", (): void => {
     (construct): void => {
       const { tokens } = tokenize(`foo(${construct});`);
       const { program, diagnostics } = parse(tokens);
-      expect(isNone(program)).toBe(true);
-      expect(diagnostics[0]?.message).toContain("Slice 1");
+      assert(isNone(program), "Expected no program to come back");
+      assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
+      expect(diagnostics[0].message).toContain("Slice 1");
     },
   );
 
@@ -2106,8 +2120,9 @@ describe("loop/while/for guardrail in nested expression position", (): void => {
     (construct): void => {
       const { tokens } = tokenize(`if ${construct} { }`);
       const { program, diagnostics } = parse(tokens);
-      expect(isNone(program)).toBe(true);
-      expect(diagnostics[0]?.message).toContain("Slice 1");
+      assert(isNone(program), "Expected program to be nonexistent");
+      assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
+      expect(diagnostics[0].message).toContain("Slice 1");
     },
   );
 
@@ -2116,8 +2131,9 @@ describe("loop/while/for guardrail in nested expression position", (): void => {
     (construct): void => {
       const { tokens } = tokenize(`1 + ${construct};`);
       const { program, diagnostics } = parse(tokens);
-      expect(isNone(program)).toBe(true);
-      expect(diagnostics[0]?.message).toContain("Slice 1");
+      assert(isNone(program), "Expected program to be nonexistent");
+      assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
+      expect(diagnostics[0].message).toContain("Slice 1");
     },
   );
 
@@ -2128,6 +2144,7 @@ describe("loop/while/for guardrail in nested expression position", (): void => {
       (t) => t.kind === "keyword" && t.text === "loop",
     );
     assert(loopToken !== undefined, "expected to find the loop token");
-    expect(diagnostics[0]?.span).toEqual(some(loopToken.span));
+    assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
+    expect(diagnostics[0].span).toEqual(some(loopToken.span));
   });
 });

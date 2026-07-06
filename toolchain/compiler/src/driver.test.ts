@@ -66,6 +66,12 @@ describe("driver", (): void => {
     expect(result.diagnostics).toHaveLength(1);
   });
 
+  it("surfaces every parse diagnostic on failure, not just the first", (): void => {
+    const result = compile("let x; fn main() {}");
+    expect(isNone(result.code)).toBe(true);
+    expect(result.diagnostics.some((d) => d.severity === "warning")).toBe(true);
+  });
+
   describe("Slice 1 loop/label rejection", (): void => {
     it.each([
       ["loop", "fn main() { loop {} }"],
