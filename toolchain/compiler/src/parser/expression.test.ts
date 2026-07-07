@@ -1676,6 +1676,106 @@ describe("method call expressions", (): void => {
   });
 });
 
+describe("turbofish guardrail", (): void => {
+  it("first::<i32>(xs) produces a Slice-1 diagnostic, not an ambiguous parse", (): void => {
+    const { program, diagnostics } = parse(
+      tokenize("first::<i32>(xs);").tokens,
+    );
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics[0].message).toContain("turbofish");
+  });
+
+  it("x.foo::<T>() produces a Slice-1 diagnostic on a method call", (): void => {
+    const { program, diagnostics } = parse(tokenize("x.foo::<T>();").tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics[0].message).toContain("turbofish");
+  });
+
+  it("first::<>() — empty turbofish is still rejected", (): void => {
+    const { program, diagnostics } = parse(tokenize("first::<>();").tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics[0].message).toContain("turbofish");
+  });
+
+  it("a::b::<T>() — turbofish after a multi-segment path is rejected", (): void => {
+    const { program, diagnostics } = parse(tokenize("a::b::<T>();").tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics[0].message).toContain("turbofish");
+  });
+
+  it("turbofish diagnostic span covers the :: token", (): void => {
+    const { tokens } = tokenize("first::<i32>(xs);");
+    const pathSep = tokens.find((t) => t.kind === "path_sep");
+    assert(pathSep !== undefined, "Expected to find a path_sep token");
+    const { diagnostics } = parse(tokens);
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].span).toEqual(some(pathSep.span));
+  });
+});
+
+describe("comparison expressions unaffected by turbofish guardrail", (): void => {
+  it("a < b — plain comparison is unaffected", (): void => {
+    const ast = parseProgram("a < b");
+    expect(ast).toMatchObject({
+      items: [{ kind: "BinaryExpression", operator: "Lt" }],
+    });
+  });
+
+  it("a < b > c — still the existing non-assoc chain error, not the turbofish diagnostic", (): void => {
+    const { program, diagnostics } = parse(tokenize("a < b > c").tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("cannot chain");
+    expect(diagnostics[0].message).not.toContain("Slice 1");
+    expect(diagnostics[0].message).not.toContain("turbofish");
+    expect(diagnostics[0].message).not.toContain("generic");
+  });
+
+  it("if x < y { } — comparison in condition position is unaffected", (): void => {
+    const ast = parseProgram("if x < y { }");
+    expect(ast).toMatchObject({
+      items: [{ kind: "IfExpression" }],
+    });
+  });
+
+  it("a << b — shift is unaffected", (): void => {
+    const ast = parseProgram("a << b");
+    expect(ast).toMatchObject({
+      items: [{ kind: "BinaryExpression", operator: "Shl" }],
+    });
+  });
+
+  it("a >> b — shift is unaffected", (): void => {
+    const ast = parseProgram("a >> b");
+    expect(ast).toMatchObject({
+      items: [{ kind: "BinaryExpression", operator: "Shr" }],
+    });
+  });
+
+  it("foo < bar — a bare path (no ::) followed by < is comparison, not a misdetected turbofish", (): void => {
+    const ast = parseProgram("foo < bar");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "BinaryExpression",
+          operator: "Lt",
+          left: { kind: "PathExpression", path: { segments: ["foo"] } },
+          right: { kind: "PathExpression", path: { segments: ["bar"] } },
+        },
+      ],
+    });
+  });
+});
+
 describe("struct expressions", (): void => {
   it("Foo {} — empty struct expression", (): void => {
     const ast = parseProgram("Foo {}");
