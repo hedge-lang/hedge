@@ -696,7 +696,7 @@ function checkTurbofish(tokens: readonly Token[], pos: number): PR<boolean> {
   const pathSepMatch = pathSepBeforeLt(tokens, pos);
   if (isSome(pathSepMatch)) {
     const message = isLifetimeGenericsStart(tokens, pos + 1)
-      ? unsupportedLifetimeMessage("turbofish generic arguments (`::<...>`)")
+      ? unsupportedLifetimeMessage("lifetime arguments (`::<...>`)")
       : unsupportedGenericsMessage("turbofish generic arguments (`::<...>`)");
     return err({
       severity: "error",
