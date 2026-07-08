@@ -49,6 +49,11 @@ export function parsePathSegments(
     if (tokens[cursor]?.kind !== "path_sep") {
       break;
     }
+    if (tokens[cursor + 1]?.kind === "lt") {
+      // Turbofish (`::<...>`) — leave the `::` unconsumed for the caller,
+      // which is responsible for the actual guardrail diagnostic.
+      break;
+    }
     cursor += 1; // skip `::`
     const nextToken = tokens[cursor];
     if (nextToken === undefined || nextToken.kind !== "ident") {

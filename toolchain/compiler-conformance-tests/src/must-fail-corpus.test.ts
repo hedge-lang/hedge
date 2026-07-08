@@ -378,7 +378,7 @@ describe("must-fail corpus — rejection tests", (): void => {
     it("rejects generic types (not in Slice 1)", (): void => {
       assertRejectsWithMessage(
         `fn main() { let x: Vec<i32> = Vec::new(); }`,
-        "Expected semi",
+        "not supported in Slice 1",
       );
     });
 

@@ -1,9 +1,14 @@
 import type { Token } from "../lexer/token.js";
-import { some } from "../option.js";
+import { isSome, some } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import type { NamedType, Type, UnitType } from "./ast.js";
 import type { Parsed } from "./parse.js";
-import { tokenAt, type PR } from "./parse-utils.js";
+import {
+  pathSepBeforeLt,
+  tokenAt,
+  unsupportedGenericsMessage,
+  type PR,
+} from "./parse-utils.js";
 import { parsePathSegments } from "./path.js";
 
 /**
@@ -23,6 +28,7 @@ import { parsePathSegments } from "./path.js";
  * `(Type)` (tuple syntax) is recognized and produces a guardrail diagnostic;
  * tuple types are not supported in Slice 1.
  */
+// eslint-disable-next-line complexity -- Guardrail cluster; each unsupported-syntax branch is a necessary, independent case.
 export function parseType(
   tokens: readonly Token[],
   pos: number,
@@ -62,12 +68,36 @@ export function parseType(
     if (isErr(pathResult)) {
       return pathResult;
     }
+    const genericToken = tokens[pathResult.value.next];
+    if (genericToken?.kind === "lt") {
+      return err({
+        severity: "error",
+        message: unsupportedGenericsMessage("generic type arguments"),
+        span: some(genericToken.span),
+      });
+    }
+    const pathSepMatch = pathSepBeforeLt(tokens, pathResult.value.next);
+    if (isSome(pathSepMatch)) {
+      return err({
+        severity: "error",
+        message: unsupportedGenericsMessage("generic type arguments"),
+        span: some(pathSepMatch.value.span),
+      });
+    }
     const named: NamedType = {
       kind: "NamedType",
       tokenId: pos,
       path: pathResult.value.node,
     };
     return ok({ node: named, next: pathResult.value.next });
+  }
+
+  if (token.kind === "lt") {
+    return err({
+      severity: "error",
+      message: unsupportedGenericsMessage("generic type arguments"),
+      span: some(token.span),
+    });
   }
 
   if (token.kind === "amp") {
