@@ -4,9 +4,11 @@ import { err, isErr, ok } from "../result.js";
 import type { NamedType, Type, UnitType } from "./ast.js";
 import type { Parsed } from "./parse.js";
 import {
+  isLifetimeGenericsStart,
   pathSepBeforeLt,
   tokenAt,
   unsupportedGenericsMessage,
+  unsupportedLifetimeMessage,
   type PR,
 } from "./parse-utils.js";
 import { parsePathSegments } from "./path.js";
@@ -70,17 +72,23 @@ export function parseType(
     }
     const genericToken = tokens[pathResult.value.next];
     if (genericToken?.kind === "lt") {
+      const message = isLifetimeGenericsStart(tokens, pathResult.value.next)
+        ? unsupportedLifetimeMessage("generic type arguments")
+        : unsupportedGenericsMessage("generic type arguments");
       return err({
         severity: "error",
-        message: unsupportedGenericsMessage("generic type arguments"),
+        message,
         span: some(genericToken.span),
       });
     }
     const pathSepMatch = pathSepBeforeLt(tokens, pathResult.value.next);
     if (isSome(pathSepMatch)) {
+      const message = isLifetimeGenericsStart(tokens, pathResult.value.next + 1)
+        ? unsupportedLifetimeMessage("generic type arguments")
+        : unsupportedGenericsMessage("generic type arguments");
       return err({
         severity: "error",
-        message: unsupportedGenericsMessage("generic type arguments"),
+        message,
         span: some(pathSepMatch.value.span),
       });
     }
@@ -121,6 +129,14 @@ export function parseType(
     return err({
       severity: "error",
       message: "the never type (!) is not supported in Slice 1",
+      span: some(token.span),
+    });
+  }
+
+  if (token.kind === "lifetime") {
+    return err({
+      severity: "error",
+      message: unsupportedLifetimeMessage("lifetime annotations"),
       span: some(token.span),
     });
   }

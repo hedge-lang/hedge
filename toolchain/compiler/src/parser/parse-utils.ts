@@ -129,6 +129,21 @@ export function unsupportedGenericsMessage(construct: string): string {
   return `${construct} are not supported in Slice 1; generics are introduced in Slice 4`;
 }
 
+export function unsupportedLifetimeMessage(construct: string): string {
+  return `${construct} are not supported in Slice 1; lifetimes are introduced in Slice 2`;
+}
+
+/**
+ * @returns true if the token immediately after a `<` at `ltPos` is a
+ * lifetime token.
+ */
+export function isLifetimeGenericsStart(
+  tokens: readonly Token[],
+  ltPos: number,
+): boolean {
+  return tokens[ltPos + 1]?.kind === "lifetime";
+}
+
 /**
  * @returns the `::` token if `tokens[pos]` is a turbofish (`::<...>`).
  */
