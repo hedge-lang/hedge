@@ -24,6 +24,7 @@ import type {
 import type { Parsed } from "./parse.js";
 import {
   expect,
+  isLifetimeGenericsStart,
   loopKeywordAt,
   parseIdentifier,
   pathSepBeforeLt,
@@ -31,6 +32,7 @@ import {
   stripUnderscores,
   tokenAt,
   unsupportedGenericsMessage,
+  unsupportedLifetimeMessage,
   unsupportedLoopMessage,
   type PR,
 } from "./parse-utils.js";
@@ -693,11 +695,12 @@ function parseStructExpression(
 function checkTurbofish(tokens: readonly Token[], pos: number): PR<boolean> {
   const pathSepMatch = pathSepBeforeLt(tokens, pos);
   if (isSome(pathSepMatch)) {
+    const message = isLifetimeGenericsStart(tokens, pos + 1)
+      ? unsupportedLifetimeMessage("lifetime arguments (`::<...>`)")
+      : unsupportedGenericsMessage("turbofish generic arguments (`::<...>`)");
     return err({
       severity: "error",
-      message: unsupportedGenericsMessage(
-        "turbofish generic arguments (`::<...>`)",
-      ),
+      message,
       span: some(pathSepMatch.value.span),
     });
   }

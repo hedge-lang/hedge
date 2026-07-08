@@ -401,6 +401,43 @@ describe("type annotation error diagnostics", (): void => {
     expect(result.diagnostics[0]?.message).toContain("!");
     expect(result.diagnostics[0]?.span).toEqual(some(bang.span));
   });
+
+  it("produces the existing reference-type diagnostic for a lifetime-annotated reference param", (): void => {
+    const { tokens } = tokenize("fn f(x: &'a i32) {}");
+    const amp = tokens.find((t) => t.kind === "amp");
+    assert(amp !== undefined, "Expected to find an amp token");
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toContain("reference");
+    expect(diagnostics[0].message).toContain("Slice 2");
+    expect(diagnostics[0].span).toEqual(some(amp.span));
+  });
+
+  it("produces the existing reference-type diagnostic for a lifetime-annotated reference return type", (): void => {
+    const { tokens } = tokenize("fn f() -> &'a i32 {}");
+    const amp = tokens.find((t) => t.kind === "amp");
+    assert(amp !== undefined, "Expected to find an amp token");
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("reference");
+    expect(diagnostics[0].message).toContain("Slice 2");
+    expect(diagnostics[0].span).toEqual(some(amp.span));
+  });
+
+  it("produces the existing reference-type diagnostic for a lifetime-annotated exclusive reference param", (): void => {
+    const { tokens } = tokenize("fn f(x: &'a mut i32) {}");
+    const amp = tokens.find((t) => t.kind === "amp");
+    assert(amp !== undefined, "Expected to find an amp token");
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("reference");
+    expect(diagnostics[0].message).toContain("Slice 2");
+    expect(diagnostics[0].span).toEqual(some(amp.span));
+  });
 });
 
 describe("generics guardrail — type position", (): void => {
@@ -471,6 +508,54 @@ describe("generics guardrail — type position", (): void => {
     expect(diagnostics[0].message).toContain("Slice 1");
     expect(diagnostics[0].message).toContain("generic");
     expect(diagnostics[0].span).toEqual(some(lt.span));
+  });
+});
+
+describe("lifetime guardrail — generic type argument position", (): void => {
+  it("produces a lifetime-specific diagnostic for Vec<'a>", (): void => {
+    const { tokens } = tokenize("let x: Vec<'a>;");
+    const lt = tokens.find((t) => t.kind === "lt");
+    assert(lt !== undefined, "Expected to find a lt token");
+    const { diagnostics, program } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toContain("Slice 2");
+    expect(diagnostics[0].message).toContain("lifetime");
+    expect(diagnostics[0].span).toEqual(some(lt.span));
+  });
+
+  it("produces a lifetime-specific diagnostic for Vec<'a, T>", (): void => {
+    const { tokens } = tokenize("let x: Vec<'a, T>;");
+    const lt = tokens.find((t) => t.kind === "lt");
+    assert(lt !== undefined, "Expected to find a lt token");
+    const { diagnostics, program } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("Slice 2");
+    expect(diagnostics[0].message).toContain("lifetime");
+    expect(diagnostics[0].span).toEqual(some(lt.span));
+  });
+
+  it("produces a lifetime-specific diagnostic for a turbofish-shaped Vec::<'a>", (): void => {
+    const { tokens } = tokenize("let x: Vec::<'a>;");
+    const pathSep = tokens.find((t) => t.kind === "path_sep");
+    assert(pathSep !== undefined, "Expected to find a path_sep token");
+    const { diagnostics, program } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("Slice 2");
+    expect(diagnostics[0].message).toContain("lifetime");
+    expect(diagnostics[0].span).toEqual(some(pathSep.span));
+  });
+
+  it("still produces the generic-Slice-4 diagnostic for Vec<T> (regression)", (): void => {
+    const { tokens } = tokenize("let x: Vec<T>;");
+    const { diagnostics, program } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("Slice 4");
+    expect(diagnostics[0].message).not.toContain("lifetime");
   });
 });
 
@@ -1544,8 +1629,34 @@ describe("unsupported type syntax in additional positions", (): void => {
   });
 
   it("rejects a lifetime 'a in type position", (): void => {
-    const result = parse(tokenize("let x: 'a;").tokens);
+    const { tokens } = tokenize("let x: 'a;");
+    const lifetime = tokens.find((t) => t.kind === "lifetime");
+    assert(lifetime !== undefined, "Expected to find a lifetime token");
+    const result = parse(tokens);
     expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("lifetime");
+    expect(result.diagnostics[0]?.message).toContain("Slice 2");
+    expect(result.diagnostics[0]?.span).toEqual(some(lifetime.span));
+  });
+
+  it("rejects a named lifetime 'static in type position", (): void => {
+    const result = parse(tokenize("let x: 'static;").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("lifetime");
+    expect(result.diagnostics[0]?.message).toContain("Slice 2");
+  });
+
+  it("rejects an anonymous lifetime '_ in type position", (): void => {
+    const result = parse(tokenize("let x: '_;").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("lifetime");
+    expect(result.diagnostics[0]?.message).toContain("Slice 2");
+  });
+
+  it("does not misparse a char literal as a lifetime in type position (regression)", (): void => {
+    const result = parse(tokenize("let x: 'a';").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).not.toContain("lifetime");
   });
 
   it("rejects a reference return type fn f() -> &i32 {}", (): void => {
@@ -1882,6 +1993,16 @@ describe("unsupported item keywords", (): void => {
       expect(diagnostics[0]?.message).toContain(keyword);
     },
   );
+
+  it("rejects impl<'a> Foo<'a> { ... } the same as a plain impl (lifetime generics don't change anything)", (): void => {
+    const { tokens } = tokenize("impl<'a> Foo<'a> { fn m(&'a self) {} }");
+    const { diagnostics } = parse(tokens);
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics[0].message).toContain("impl");
+  });
 });
 
 describe("item error recovery", (): void => {
@@ -1986,14 +2107,85 @@ describe("generics guardrail — declaration-name position", (): void => {
     ]);
   });
 
-  it("fn foo<'a>() {} recovers past a lifetime-looking generic", (): void => {
+  it("fn foo<'a>() {} recovers past a lifetime-looking generic with a lifetime-specific diagnostic", (): void => {
     const { tokens } = tokenize("fn foo<'a>() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics[0].message).toContain("Slice 2");
+    expect(diagnostics[0].message).toContain("lifetime");
     expect(program.value.items).toMatchObject([
       { kind: "Function", generics: [] },
+    ]);
+  });
+
+  it("fn foo<'a, T>(x: T) {} recovers and still parses the parameter list", (): void => {
+    const { tokens } = tokenize("fn foo<'a, T>(x: T) {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("Slice 2");
+    expect(diagnostics[0].message).toContain("lifetime");
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        generics: [],
+        params: [
+          {
+            kind: "Param",
+            pattern: { name: { text: "x" } },
+            type: { kind: "NamedType", path: { segments: ["T"] } },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("fn foo<T, 'a>() {} falls back to the generic Slice-4 diagnostic (lifetime not listed first)", (): void => {
+    const { tokens } = tokenize("fn foo<T, 'a>() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("Slice 4");
+    expect(diagnostics[0].message).not.toContain("lifetime");
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", generics: [] },
+    ]);
+  });
+
+  it("struct Cursor<'a> { source: T } recovers with a lifetime-specific diagnostic", (): void => {
+    const { tokens } = tokenize("struct Cursor<'a> { source: T }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("Slice 2");
+    expect(diagnostics[0].message).toContain("lifetime");
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Struct",
+        name: { text: "Cursor" },
+        body: {
+          kind: "NamedFields",
+          fields: [
+            {
+              kind: "StructField",
+              name: { text: "source" },
+              type: { kind: "NamedType", path: { segments: ["T"] } },
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("recovers so a sibling function after a rejected lifetime generic still parses", (): void => {
+    const { tokens } = tokenize("fn foo<'a>() {} fn bar() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "foo" } },
+      { kind: "Function", name: { text: "bar" } },
     ]);
   });
 
@@ -2130,6 +2322,61 @@ describe("generics guardrail — declaration-name position", (): void => {
   });
 });
 
+describe("lifetime + reference type interactions", (): void => {
+  // Contrast with "fn foo<'a>() {} recovers..." above (unused lifetime
+  // param): the declaration-generics step still recovers and pushes its
+  // own diagnostic here, but parsing `&'a i32` as the parameter type then
+  // hits the pre-existing, unchanged `&` guardrail in type.ts, which is
+  // fail-fast — so the whole file's `program` still ends up `none()`. This
+  // is expected, not accidental: the identical composition already happens
+  // for `fn foo<T>(x: &T) {}` with no lifetime involved at all, and
+  // recovery is documented as the exception, not the template.
+  it("fn foo<'a>(x: &'a i32) {} — recovered generics diagnostic followed by fail-fast reference-type diagnostic", (): void => {
+    const { tokens } = tokenize("fn foo<'a>(x: &'a i32) {}");
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    expect(diagnostics).toHaveLength(2);
+    assert(diagnostics[0] !== undefined, "Expected a first diagnostic");
+    expect(diagnostics[0].message).toContain("lifetime");
+    expect(diagnostics[0].message).toContain("Slice 2");
+    assert(diagnostics[1] !== undefined, "Expected a second diagnostic");
+    expect(diagnostics[1].message).toContain("reference");
+    expect(diagnostics[1].message).toContain("Slice 2");
+  });
+
+  it("struct Ref<'a>(&'a i32); — same interaction via a tuple-struct field", (): void => {
+    const { tokens } = tokenize("struct Ref<'a>(&'a i32);");
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    expect(diagnostics).toHaveLength(2);
+    assert(diagnostics[0] !== undefined, "Expected a first diagnostic");
+    expect(diagnostics[0].message).toContain("lifetime");
+    assert(diagnostics[1] !== undefined, "Expected a second diagnostic");
+    expect(diagnostics[1].message).toContain("reference");
+  });
+});
+
+describe("lifetime guardrail — nested and reversed-order generics", (): void => {
+  it("let x: Vec<Vec<'a>>; diagnoses only the outer generic (inner lifetime never reached)", (): void => {
+    const { tokens } = tokenize("let x: Vec<Vec<'a>>;");
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("Slice 4");
+    expect(diagnostics[0].message).not.toContain("lifetime");
+  });
+
+  it("let x: Vec<T, 'a>; falls back to the generic Slice-4 diagnostic (lifetime not listed first)", (): void => {
+    const { tokens } = tokenize("let x: Vec<T, 'a>;");
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("Slice 4");
+    expect(diagnostics[0].message).not.toContain("lifetime");
+  });
+});
+
 describe("generics guardrail — where clause", (): void => {
   it("fn f() where T: Draw {} recovers with a Slice-1 diagnostic", (): void => {
     const { tokens } = tokenize("fn f() where T: Draw {}");
@@ -2170,6 +2417,15 @@ describe("generics guardrail — where clause", (): void => {
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.message).toContain("where");
+  });
+
+  it("fn f() where 'a: 'b {} recovers past a lifetime bound (skipToFunctionBody isn't confused by lifetime tokens)", (): void => {
+    const { tokens } = tokenize("fn f() where 'a: 'b {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("where");
   });
 
   it("fn f() where T: Draw (missing body) fails fast without hanging", (): void => {
@@ -2497,6 +2753,19 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
       { kind: "Function", name: { text: "f" } },
       { kind: "Function", name: { text: "g" } },
     ]);
+  });
+});
+
+describe("lifetime vs label disambiguation regression", (): void => {
+  it("'a: loop {} produces only the loop diagnostic, not a lifetime diagnostic", (): void => {
+    const { tokens } = tokenize("fn f() { 'a: loop { break; } }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("loop");
+    expect(diagnostics[0].message).toContain("Slice 6");
+    expect(diagnostics[0].message).not.toContain("lifetime");
   });
 });
 

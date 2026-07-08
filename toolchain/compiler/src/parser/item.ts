@@ -21,11 +21,13 @@ import type { Parsed } from "./parse.js";
 import {
   expect,
   expectKeyword,
+  isLifetimeGenericsStart,
   parseIdentifier,
   skipBalancedAngleList,
   skipToFunctionBody,
   skipToStructBody,
   unsupportedGenericsMessage,
+  unsupportedLifetimeMessage,
   type PR,
 } from "./parse-utils.js";
 import { collectOuterAttributes } from "./attribute.js";
@@ -170,9 +172,12 @@ function skipDeclarationGenerics(
   if (token?.kind !== "lt") {
     return pos;
   }
+  const message = isLifetimeGenericsStart(tokens, pos)
+    ? unsupportedLifetimeMessage("lifetime parameters")
+    : unsupportedGenericsMessage("generic parameter lists");
   diagnostics.push({
     severity: "error",
-    message: unsupportedGenericsMessage("generic parameter lists"),
+    message,
     span: some(token.span),
   });
   return skipBalancedAngleList(tokens, pos).next;
