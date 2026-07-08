@@ -2137,6 +2137,12 @@ describe("generics guardrail — where clause", (): void => {
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toMatch("Slice 1");
+    expect(diagnostics[0].message).toMatch("where");
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "f" }, body: { statements: [] } },
+    ]);
   });
 
   it("fn f() where T: Foo<Bar> {} recovers even when a bound itself contains <>", (): void => {
