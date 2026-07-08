@@ -449,11 +449,12 @@ describe("generics guardrail — type position", (): void => {
     const { tokens } = tokenize("let x: <T>;");
     const lt = tokens.find((t) => t.kind === "lt");
     assert(lt !== undefined, "Expected to find a lt token");
-    const result = parse(tokens);
-    expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("Slice 1");
-    expect(result.diagnostics[0]?.message).toContain("generic");
-    expect(result.diagnostics[0]?.span).toEqual(some(lt.span));
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics[0].message).toContain("generic");
+    expect(diagnostics[0].span).toEqual(some(lt.span));
   });
 });
 
