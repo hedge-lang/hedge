@@ -445,6 +445,22 @@ describe("generics guardrail — type position", (): void => {
     expect(diagnostics).toHaveLength(1);
   });
 
+  it("produces an error diagnostic for a turbofish-shaped generic type (Vec::<T>)", (): void => {
+    // parsePathSegments stops before consuming `::<` (leaving `::` unconsumed
+    // for the caller), so this guardrail must check for `path_sep` followed
+    // by `lt`, not just a bare `lt`, or this form falls through to a
+    // confusing unrelated "expected ';'" error instead.
+    const { tokens } = tokenize("let x: Vec::<T>;");
+    const pathSep = tokens.find((t) => t.kind === "path_sep");
+    assert(pathSep !== undefined, "Expected to find a path_sep token");
+    const { diagnostics, program } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics[0].message).toContain("generic");
+    expect(diagnostics[0].span).toEqual(some(pathSep.span));
+  });
+
   it("produces an error diagnostic for a bare < with no preceding type name", (): void => {
     const { tokens } = tokenize("let x: <T>;");
     const lt = tokens.find((t) => t.kind === "lt");
@@ -2071,7 +2087,9 @@ describe("generics guardrail — declaration-name position", (): void => {
     assert(diagnostics[0] !== undefined, "Expected a diagnostic to come back");
   });
 
+  // biome-ignore lint/security/noSecrets: false positive — generic syntax test string, not a secret
   it("fn foo<T: Foo<Bar<Baz>>>() {} recovers past triple-nested generics", (): void => {
+    // biome-ignore lint/security/noSecrets: false positive — generic syntax test string, not a secret
     const { tokens } = tokenize("fn foo<T: Foo<Bar<Baz>>>() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
@@ -2170,6 +2188,83 @@ describe("generics guardrail — where clause", (): void => {
       { kind: "Function", name: { text: "f" } },
       { kind: "Function", name: { text: "g" } },
     ]);
+  });
+
+  it("does not steal a sibling function's body when the where clause has no body", (): void => {
+    // Regression: without a stop condition on the item's own boundary, the
+    // where-clause skip used to scan straight past `fn g()` looking for the
+    // first `{` and land on g's body, silently discarding `g` and giving `f`
+    // an empty body that was never really there. Missing a body is malformed
+    // input either way, so failing fast (not hanging, not corrupting the
+    // AST into a single bogus item) is the correct outcome.
+    const { tokens } = tokenize("fn f() where T: Draw fn g() {}");
+    const { program } = parse(tokens);
+    assert(isNone(program), "Expected no program to come back");
+  });
+});
+
+describe("generics guardrail — where clause on struct", (): void => {
+  it("struct Pair<T> where T: Bound { x: T } recovers with a Slice-1 diagnostic", (): void => {
+    const { tokens } = tokenize("struct Pair<T> where T: Bound { x: T }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(2);
+    expect(diagnostics[0]?.message).toContain("Slice 1");
+    expect(diagnostics[1]?.message).toContain("where");
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Struct",
+        name: { text: "Pair" },
+        body: {
+          kind: "NamedFields",
+          fields: [{ kind: "StructField", name: { text: "x" } }],
+        },
+      },
+    ]);
+  });
+
+  it("struct Pair<T> where T: Bound; recovers as a unit struct", (): void => {
+    // The `;` here is the CORRECT unit-struct terminator, not a malformed-
+    // input signal — the struct-specific skip helper must treat `;` as
+    // "found the body," unlike the fn-specific one (fn bodies are never `;`).
+    const { tokens } = tokenize("struct Pair<T> where T: Bound;");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics[1]?.message).toContain("where");
+    expect(program.value.items).toMatchObject([
+      { kind: "Struct", name: { text: "Pair" }, body: { kind: "Unit" } },
+    ]);
+  });
+
+  it("struct Pair<T> where T: Bound(T); recovers as a tuple struct", (): void => {
+    const { tokens } = tokenize("struct Pair<T> where T: Bound(T);");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics[1]?.message).toContain("where");
+    expect(program.value.items).toMatchObject([
+      { kind: "Struct", name: { text: "Pair" }, body: { kind: "TupleFields" } },
+    ]);
+  });
+
+  it("recovers so a sibling struct after a rejected where clause still parses", (): void => {
+    const { tokens } = tokenize(
+      "struct Pair<T> where T: Bound { x: T } struct Ok { y: i32 }",
+    );
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(2);
+    expect(program.value.items).toMatchObject([
+      { kind: "Struct", name: { text: "Pair" } },
+      { kind: "Struct", name: { text: "Ok" } },
+    ]);
+  });
+
+  it("does not steal a sibling struct's body when the where clause has no body", (): void => {
+    const { tokens } = tokenize(
+      "struct Pair<T> where T: Bound struct Ok { y: i32 }",
+    );
+    const { program } = parse(tokens);
+    assert(isNone(program), "Expected no program to come back");
   });
 });
 
