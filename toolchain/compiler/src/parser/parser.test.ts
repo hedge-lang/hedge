@@ -527,11 +527,14 @@ describe("lifetime guardrail — generic type argument position", (): void => {
 
   it("produces a lifetime-specific diagnostic for Vec<'a, T>", (): void => {
     const { tokens } = tokenize("let x: Vec<'a, T>;");
+    const lt = tokens.find((t) => t.kind === "lt");
+    assert(lt !== undefined, "Expected to find a lt token");
     const { diagnostics, program } = parse(tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
     expect(diagnostics[0].message).toContain("Slice 2");
     expect(diagnostics[0].message).toContain("lifetime");
+    expect(diagnostics[0].span).toEqual(some(lt.span));
   });
 
   it("produces a lifetime-specific diagnostic for a turbofish-shaped Vec::<'a>", (): void => {
@@ -2163,7 +2166,13 @@ describe("generics guardrail — declaration-name position", (): void => {
         name: { text: "Cursor" },
         body: {
           kind: "NamedFields",
-          fields: [{ kind: "StructField", name: { text: "source" } }],
+          fields: [
+            {
+              kind: "StructField",
+              name: { text: "source" },
+              type: { kind: "NamedType", path: { segments: ["T"] } },
+            },
+          ],
         },
       },
     ]);
