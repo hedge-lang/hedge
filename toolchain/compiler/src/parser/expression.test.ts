@@ -1722,11 +1722,15 @@ describe("turbofish guardrail", (): void => {
   });
 
   it("first::<'a>() produces a lifetime-specific diagnostic", (): void => {
-    const { program, diagnostics } = parse(tokenize("first::<'a>();").tokens);
+    const { tokens } = tokenize("first::<'a>();");
+    const pathSep = tokens.find((t) => t.kind === "path_sep");
+    assert(pathSep !== undefined, "Expected to find a path_sep token");
+    const { program, diagnostics } = parse(tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
     expect(diagnostics[0].message).toContain("Slice 2");
     expect(diagnostics[0].message).toContain("lifetime");
+    expect(diagnostics[0].span).toEqual(some(pathSep.span));
   });
 
   it("first::<T>() still produces the generic-Slice-4 diagnostic (regression)", (): void => {
