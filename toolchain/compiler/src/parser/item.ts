@@ -22,6 +22,9 @@ import {
   expect,
   expectKeyword,
   parseIdentifier,
+  skipBalancedAngleList,
+  skipToNextOpenBrace,
+  unsupportedGenericsMessage,
   type PR,
 } from "./parse-utils.js";
 import { collectOuterAttributes } from "./attribute.js";
@@ -154,6 +157,27 @@ function parseParams(
 }
 
 /**
+ * @returns A Slice-1 diagnostic if the generic parameter list (`<...>`) starts
+ * at `pos`; Otherwise returns `pos` unchanged.
+ */
+function skipDeclarationGenerics(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): number {
+  const token = tokens[pos];
+  if (token?.kind !== "lt") {
+    return pos;
+  }
+  diagnostics.push({
+    severity: "error",
+    message: unsupportedGenericsMessage("generic parameter lists"),
+    span: some(token.span),
+  });
+  return skipBalancedAngleList(tokens, pos).next;
+}
+
+/**
  * Parses a function declaration.
  *
  * Grammar:
@@ -162,6 +186,7 @@ function parseParams(
  * FunctionDecl ::= Visibility? "fn" Identifier "(" Params? ")" ("->" Type)? Block
  * ```
  */
+// eslint-disable-next-line complexity -- Optional clauses (generics, return type, where clause) each contribute a branch; the grammar drives the complexity, not poor structure.
 function parseFunction(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -178,7 +203,14 @@ function parseFunction(
   if (isErr(nameResult)) {
     return nameResult;
   }
-  const paramsResult = parseParams(tokens, nameResult.value.next);
+
+  // TODO: Actually parse generics, later.
+  const afterGenerics = skipDeclarationGenerics(
+    tokens,
+    diagnostics,
+    nameResult.value.next,
+  );
+  const paramsResult = parseParams(tokens, afterGenerics);
   if (isErr(paramsResult)) {
     return paramsResult;
   }
@@ -192,6 +224,15 @@ function parseFunction(
     }
     returnType = some(typeResult.value.node);
     cursor = typeResult.value.next;
+  }
+  const whereToken = tokens[cursor];
+  if (whereToken?.kind === "keyword" && whereToken.text === "where") {
+    diagnostics.push({
+      severity: "error",
+      message: unsupportedGenericsMessage("`where` clauses"),
+      span: some(whereToken.span),
+    });
+    cursor = skipToNextOpenBrace(tokens, cursor);
   }
   const bodyResult = parseBlock(tokens, diagnostics, cursor);
   if (isErr(bodyResult)) {
@@ -382,6 +423,7 @@ function parseTupleFieldsBody(
 // eslint-disable-next-line complexity -- This is too difficult to split up
 function parseStruct(
   tokens: readonly Token[],
+  diagnostics: Diagnostic[],
   pos: number,
   attributes: readonly Attribute[] = [],
   visibility: Option<Visibility> = none(),
@@ -395,7 +437,11 @@ function parseStruct(
   if (isErr(nameResult)) {
     return nameResult;
   }
-  let cursor = nameResult.value.next;
+  let cursor = skipDeclarationGenerics(
+    tokens,
+    diagnostics,
+    nameResult.value.next,
+  );
 
   let body: StructBody;
   const bodyToken = tokens[cursor];
@@ -496,7 +542,13 @@ export function parseItem(
     return ok(fnResult.value);
   }
   if (token?.kind === "keyword" && token.text === "struct") {
-    const structResult = parseStruct(tokens, afterVis, attributes, vis.node);
+    const structResult = parseStruct(
+      tokens,
+      diagnostics,
+      afterVis,
+      attributes,
+      vis.node,
+    );
     if (isErr(structResult)) {
       return structResult;
     }

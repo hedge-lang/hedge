@@ -29,6 +29,7 @@ import {
   stripPrefix,
   stripUnderscores,
   tokenAt,
+  unsupportedGenericsMessage,
   unsupportedLoopMessage,
   type PR,
 } from "./parse-utils.js";
@@ -683,6 +684,26 @@ function parseStructExpression(
 }
 
 /**
+ * If `tokens[pos]` is `::` immediately followed by `<`, it's a turbofish
+ * (`::<...>`). Rejects it with the generics guardrail diagnostic. Otherwise
+ * a no-op success, so callers thread it through the same `isErr` check they
+ * use for every other parse step.
+ */
+function checkTurbofish(tokens: readonly Token[], pos: number): PR<undefined> {
+  if (tokens[pos]?.kind === "path_sep" && tokens[pos + 1]?.kind === "lt") {
+    const pathSepToken = tokens[pos];
+    return err({
+      severity: "error",
+      message: unsupportedGenericsMessage(
+        "turbofish generic arguments (`::<...>`)",
+      ),
+      span: some(pathSepToken.span),
+    });
+  }
+  return ok(undefined);
+}
+
+/**
  * Parses a primary expression.
  *
  * Supported slice-1 forms:
@@ -763,6 +784,11 @@ function parsePrimary(
   if (token.kind === "ident" || token.kind === "path_sep") {
     const pathResult = parsePath(tokens, pos);
     if (isErr(pathResult)) return pathResult;
+    const afterPath = pathResult.value.next;
+    const turbofishResult = checkTurbofish(tokens, afterPath);
+    if (isErr(turbofishResult)) {
+      return turbofishResult;
+    }
     if (allowStruct && tokens[pathResult.value.next]?.kind === "lbrace") {
       return parseStructExpression(
         tokens,
@@ -915,6 +941,11 @@ function parseInfixField(
   const fieldResult = parseIdentifier(tokens, opPos + 1);
   if (isErr(fieldResult)) return fieldResult;
   const afterIdent = fieldResult.value.next;
+
+  const turbofishResult = checkTurbofish(tokens, afterIdent);
+  if (isErr(turbofishResult)) {
+    return turbofishResult;
+  }
 
   if (tokens[afterIdent]?.kind === "lparen") {
     const argsResult = parseArguments(tokens, diagnostics, afterIdent);

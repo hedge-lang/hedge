@@ -125,6 +125,83 @@ export function loopKeywordAt(
   return none();
 }
 
+export function unsupportedGenericsMessage(construct: string): string {
+  return `${construct} are not supported in Slice 1; generics are introduced in Slice 4`;
+}
+
+export interface SkipAngleListResult {
+  readonly next: number;
+  readonly closed: boolean;
+}
+
+/**
+ * Skips a balanced `<...>` list starting at `ltPos` (the caller has already
+ * confirmed `tokens[ltPos]` is a `lt` token). Counts `lt`/`gt` as depth ±1
+ * and `lt_lt`/`gt_gt` as depth ±2, since `>>` lexes as a single `gt_gt`
+ * token under maximal munch (see lexer/symbol.ts) — a naive one-token-at-a-
+ * time count would never see the second `>` of a doubly-nested close.
+ */
+// eslint-disable-next-line complexity -- Token-kind dispatch loop; each branch is a necessary depth-counting case.
+export function skipBalancedAngleList(
+  tokens: readonly Token[],
+  ltPos: number,
+): SkipAngleListResult {
+  let cursor = ltPos;
+  let depth = 0;
+  for (;;) {
+    const tok = tokens[cursor];
+    if (tok === undefined || tok.kind === "eof") {
+      return { next: cursor, closed: false };
+    }
+    if (tok.kind === "lt") {
+      depth += 1;
+      cursor += 1;
+      continue;
+    }
+    if (tok.kind === "lt_lt") {
+      depth += 2;
+      cursor += 1;
+      continue;
+    }
+    if (tok.kind === "gt") {
+      depth -= 1;
+      cursor += 1;
+      if (depth <= 0) return { next: cursor, closed: true };
+      continue;
+    }
+    if (tok.kind === "gt_gt") {
+      depth -= 2;
+      cursor += 1;
+      if (depth <= 0) return { next: cursor, closed: true };
+      continue;
+    }
+    if (tok.kind === "semi" || tok.kind === "lbrace" || tok.kind === "lparen") {
+      return { next: cursor, closed: false };
+    }
+    cursor += 1;
+  }
+}
+
+/**
+ * Scans forward to the next `{`, for skipping a rejected `where` clause.
+ * No depth tracking is needed: nothing legal in a Slice-1-adjacent bound
+ * list (paths, `:`, `,`, `<...>`) can itself contain a bare `{`, so the
+ * first `{` seen is always the function body.
+ */
+export function skipToNextOpenBrace(
+  tokens: readonly Token[],
+  pos: number,
+): number {
+  let cursor = pos;
+  for (;;) {
+    const tok = tokens[cursor];
+    if (tok === undefined || tok.kind === "eof" || tok.kind === "lbrace") {
+      return cursor;
+    }
+    cursor += 1;
+  }
+}
+
 /**
  * Parses an identifier expression.
  *
