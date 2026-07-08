@@ -73,7 +73,7 @@ export function parseType(
     const genericToken = tokens[pathResult.value.next];
     if (genericToken?.kind === "lt") {
       const message = isLifetimeGenericsStart(tokens, pathResult.value.next)
-        ? unsupportedLifetimeMessage("generic type arguments")
+        ? unsupportedLifetimeMessage("lifetime arguments")
         : unsupportedGenericsMessage("generic type arguments");
       return err({
         severity: "error",
@@ -84,7 +84,7 @@ export function parseType(
     const pathSepMatch = pathSepBeforeLt(tokens, pathResult.value.next);
     if (isSome(pathSepMatch)) {
       const message = isLifetimeGenericsStart(tokens, pathResult.value.next + 1)
-        ? unsupportedLifetimeMessage("generic type arguments")
+        ? unsupportedLifetimeMessage("lifetime arguments")
         : unsupportedGenericsMessage("generic type arguments");
       return err({
         severity: "error",
