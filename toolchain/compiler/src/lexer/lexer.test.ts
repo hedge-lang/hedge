@@ -941,6 +941,22 @@ describe("string literals", () => {
       expect(tokens).toMatchObject([{ kind: "string" }, { kind: "eof" }]);
     });
 
+    it("carriage return escape \\r", () => {
+      const { tokens } = tokenize('"\\r"');
+      expect(tokens).toMatchObject([
+        { kind: "string", text: "\\r" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("null escape \\0", () => {
+      const { tokens } = tokenize('"\\0"');
+      expect(tokens).toMatchObject([
+        { kind: "string", text: "\\0" },
+        { kind: "eof" },
+      ]);
+    });
+
     it("invalid escape \\q produces an error token and diagnostic", () => {
       const { tokens, diagnostics } = tokenize('"\\q"');
       expect(tokens[0]).toMatchObject({ kind: "error" });
@@ -1574,6 +1590,12 @@ describe("char literals", () => {
       expect(diagnostics[0]?.message).toContain("escape");
     });
 
+    it("\\x escape in a char literal needs exactly 2 hex digits", () => {
+      const { tokens, diagnostics } = tokenize("'\\x4'");
+      expect(tokens[0]).toMatchObject({ kind: "error" });
+      expect(diagnostics[0]?.message).toContain("hex");
+    });
+
     it("'\\u{110000}' (above max code point) is a lex error", () => {
       const { tokens, diagnostics } = tokenize("'\\u{110000}'");
       expect(tokens[0]).toMatchObject({ kind: "error" });
@@ -1630,6 +1652,12 @@ describe("symbol tokens", () => {
   it("unrecognized character ~ produces an error token and diagnostic", () => {
     const { tokens, diagnostics } = tokenize("~");
     expect(tokens[0]).toMatchObject({ kind: "error", text: "~" });
+    expect(diagnostics[0]?.message).toContain("Unexpected");
+  });
+
+  it("unrecognized character ` produces an error token and diagnostic", () => {
+    const { tokens, diagnostics } = tokenize("`");
+    expect(tokens[0]).toMatchObject({ kind: "error", text: "`" });
     expect(diagnostics[0]?.message).toContain("Unexpected");
   });
 
