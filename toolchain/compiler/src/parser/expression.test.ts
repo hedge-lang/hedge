@@ -1720,6 +1720,32 @@ describe("turbofish guardrail", (): void => {
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
     expect(diagnostics[0].span).toEqual(some(pathSep.span));
   });
+
+  it("first::<'a>() produces a lifetime-specific diagnostic", (): void => {
+    const { program, diagnostics } = parse(tokenize("first::<'a>();").tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("Slice 2");
+    expect(diagnostics[0].message).toContain("lifetime");
+  });
+
+  it("first::<T>() still produces the generic-Slice-4 diagnostic (regression)", (): void => {
+    const { program, diagnostics } = parse(tokenize("first::<T>();").tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("Slice 4");
+    expect(diagnostics[0].message).not.toContain("lifetime");
+  });
+
+  it("first::<T, 'a>() falls back to the generic-Slice-4 diagnostic (lifetime not listed first)", (): void => {
+    const { program, diagnostics } = parse(
+      tokenize("first::<T, 'a>();").tokens,
+    );
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("Slice 4");
+    expect(diagnostics[0].message).not.toContain("lifetime");
+  });
 });
 
 describe("comparison expressions unaffected by turbofish guardrail", (): void => {
