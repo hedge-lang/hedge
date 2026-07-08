@@ -1,9 +1,14 @@
 import type { Token } from "../lexer/token.js";
-import { some } from "../option.js";
+import { isSome, some } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import type { NamedType, Type, UnitType } from "./ast.js";
 import type { Parsed } from "./parse.js";
-import { tokenAt, unsupportedGenericsMessage, type PR } from "./parse-utils.js";
+import {
+  pathSepBeforeLt,
+  tokenAt,
+  unsupportedGenericsMessage,
+  type PR,
+} from "./parse-utils.js";
 import { parsePathSegments } from "./path.js";
 
 /**
@@ -69,6 +74,14 @@ export function parseType(
         severity: "error",
         message: unsupportedGenericsMessage("generic type arguments"),
         span: some(genericToken.span),
+      });
+    }
+    const pathSepMatch = pathSepBeforeLt(tokens, pathResult.value.next);
+    if (isSome(pathSepMatch)) {
+      return err({
+        severity: "error",
+        message: unsupportedGenericsMessage("generic type arguments"),
+        span: some(pathSepMatch.value.span),
       });
     }
     const named: NamedType = {

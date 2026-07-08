@@ -23,7 +23,8 @@ import {
   expectKeyword,
   parseIdentifier,
   skipBalancedAngleList,
-  skipToNextOpenBrace,
+  skipToFunctionBody,
+  skipToStructBody,
   unsupportedGenericsMessage,
   type PR,
 } from "./parse-utils.js";
@@ -178,6 +179,30 @@ function skipDeclarationGenerics(
 }
 
 /**
+ * If a `where` clause starts at `pos`, pushes a Slice-1 diagnostic and skips
+ * it via `skip` (which knows the declaration kind's own body-start shape —
+ * a function's body is always `{`, a struct's can be `{`/`(`/`;`). Otherwise
+ * returns `pos` unchanged.
+ */
+function checkWhereClause(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  skip: (tokens: readonly Token[], pos: number) => number,
+): number {
+  const whereToken = tokens[pos];
+  if (whereToken?.kind !== "keyword" || whereToken.text !== "where") {
+    return pos;
+  }
+  diagnostics.push({
+    severity: "error",
+    message: unsupportedGenericsMessage("`where` clauses"),
+    span: some(whereToken.span),
+  });
+  return skip(tokens, pos);
+}
+
+/**
  * Parses a function declaration.
  *
  * Grammar:
@@ -186,7 +211,6 @@ function skipDeclarationGenerics(
  * FunctionDecl ::= Visibility? "fn" Identifier "(" Params? ")" ("->" Type)? Block
  * ```
  */
-// eslint-disable-next-line complexity -- Optional clauses (generics, return type, where clause) each contribute a branch; the grammar drives the complexity, not poor structure.
 function parseFunction(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -225,15 +249,7 @@ function parseFunction(
     returnType = some(typeResult.value.node);
     cursor = typeResult.value.next;
   }
-  const whereToken = tokens[cursor];
-  if (whereToken?.kind === "keyword" && whereToken.text === "where") {
-    diagnostics.push({
-      severity: "error",
-      message: unsupportedGenericsMessage("`where` clauses"),
-      span: some(whereToken.span),
-    });
-    cursor = skipToNextOpenBrace(tokens, cursor);
-  }
+  cursor = checkWhereClause(tokens, diagnostics, cursor, skipToFunctionBody);
   const bodyResult = parseBlock(tokens, diagnostics, cursor);
   if (isErr(bodyResult)) {
     return bodyResult;
@@ -442,6 +458,7 @@ function parseStruct(
     diagnostics,
     nameResult.value.next,
   );
+  cursor = checkWhereClause(tokens, diagnostics, cursor, skipToStructBody);
 
   let body: StructBody;
   const bodyToken = tokens[cursor];

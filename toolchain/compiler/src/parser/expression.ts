@@ -26,6 +26,7 @@ import {
   expect,
   loopKeywordAt,
   parseIdentifier,
+  pathSepBeforeLt,
   stripPrefix,
   stripUnderscores,
   tokenAt,
@@ -689,18 +690,18 @@ function parseStructExpression(
  * a no-op success, so callers thread it through the same `isErr` check they
  * use for every other parse step.
  */
-function checkTurbofish(tokens: readonly Token[], pos: number): PR<undefined> {
-  if (tokens[pos]?.kind === "path_sep" && tokens[pos + 1]?.kind === "lt") {
-    const pathSepToken = tokens[pos];
+function checkTurbofish(tokens: readonly Token[], pos: number): PR<boolean> {
+  const pathSepMatch = pathSepBeforeLt(tokens, pos);
+  if (isSome(pathSepMatch)) {
     return err({
       severity: "error",
       message: unsupportedGenericsMessage(
         "turbofish generic arguments (`::<...>`)",
       ),
-      span: some(pathSepToken.span),
+      span: some(pathSepMatch.value.span),
     });
   }
-  return ok(undefined);
+  return ok(true);
 }
 
 /**

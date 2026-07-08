@@ -129,6 +129,20 @@ export function unsupportedGenericsMessage(construct: string): string {
   return `${construct} are not supported in Slice 1; generics are introduced in Slice 4`;
 }
 
+/**
+ * @returns the `::` token if `tokens[pos]` is a turbofish (`::<...>`).
+ */
+export function pathSepBeforeLt(
+  tokens: readonly Token[],
+  pos: number,
+): Option<Extract<Token, { kind: "path_sep" }>> {
+  const token = tokens[pos];
+  if (token?.kind === "path_sep" && tokens[pos + 1]?.kind === "lt") {
+    return some(token);
+  }
+  return none();
+}
+
 export interface SkipAngleListResult {
   readonly next: number;
   readonly closed: boolean;
@@ -182,13 +196,37 @@ export function skipBalancedAngleList(
   }
 }
 
+const ITEM_START_KEYWORDS: ReadonlySet<string> = new Set([
+  "fn",
+  "struct",
+  "let",
+  "pub",
+  "enum",
+  "export",
+  "extern",
+  "impl",
+  "trait",
+]);
+
 /**
- * Scans forward to the next `{`, for skipping a rejected `where` clause.
- * No depth tracking is needed: nothing legal in a Slice-1-adjacent bound
- * list (paths, `:`, `,`, `<...>`) can itself contain a bare `{`, so the
- * first `{` seen is always the function body.
+ * True for tokens that can never legally appear inside a `where`-clause
+ * bound list (paths, `:`, `,`, `<...>`).
  */
-export function skipToNextOpenBrace(
+function isWhereClauseBoundary(tok: Token): boolean {
+  return (
+    tok.kind === "rbrace" ||
+    (tok.kind === "keyword" && ITEM_START_KEYWORDS.has(tok.text))
+  );
+}
+
+/**
+ * Scans forward to the next `{`, for skipping a rejected `where` clause on a
+ * function (a function's body always starts with one). Bails at `;` or an
+ * {@link isWhereClauseBoundary} token: if the clause has no body, the caller's
+ * own body-parsing step will fail cleanly there instead of this scan silently
+ * absorbing a sibling item's body.
+ */
+export function skipToFunctionBody(
   tokens: readonly Token[],
   pos: number,
 ): number {
@@ -196,6 +234,38 @@ export function skipToNextOpenBrace(
   for (;;) {
     const tok = tokens[cursor];
     if (tok === undefined || tok.kind === "eof" || tok.kind === "lbrace") {
+      return cursor;
+    }
+    if (tok.kind === "semi" || isWhereClauseBoundary(tok)) {
+      return cursor;
+    }
+    cursor += 1;
+  }
+}
+
+/**
+ * Scans forward to a struct's body start, for skipping a rejected `where`
+ * clause on a struct. Unlike a function, a struct's body can start with
+ * `{`, `(`, or `;` (a unit struct). Bails at an
+ * {@link isWhereClauseBoundary} token.
+ */
+export function skipToStructBody(
+  tokens: readonly Token[],
+  pos: number,
+): number {
+  let cursor = pos;
+  for (;;) {
+    const tok = tokens[cursor];
+    if (
+      tok === undefined ||
+      tok.kind === "eof" ||
+      tok.kind === "lbrace" ||
+      tok.kind === "lparen" ||
+      tok.kind === "semi"
+    ) {
+      return cursor;
+    }
+    if (isWhereClauseBoundary(tok)) {
       return cursor;
     }
     cursor += 1;
