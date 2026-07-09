@@ -1,6 +1,6 @@
 import { assert } from "../assert.js";
 import type { Token } from "../lexer/token.js";
-import { err, isErr, ok, unwrapOk } from "../result.js";
+import { err, isErr, ok } from "../result.js";
 import type { Pattern } from "./ast.js";
 import type { Parsed } from "./parse.js";
 import {
@@ -51,7 +51,7 @@ export function parsePattern(
     }
     return identResult;
   }
-  const { node: ident, next } = unwrapOk(identResult);
+  const { node: ident, next } = identResult.value;
 
   if (ident.text === "_") {
     if (isMut) {
