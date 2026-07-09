@@ -263,6 +263,14 @@ export function skipBalancedBraceBlock(
   tokens: readonly Token[],
   openBrace: number,
 ): PR<number> {
+  const openBraceToken = tokens[openBrace];
+  if (openBraceToken?.kind !== "lbrace") {
+    return err({
+      severity: "error",
+      message: `expected \`{\` to start block, found \`${openBraceToken?.kind ?? "MISSING"}\``,
+      span: openBraceToken ? some(openBraceToken.span) : none(),
+    });
+  }
   let cursor = openBrace;
   let braceDepth = 0;
   for (;;) {
@@ -271,7 +279,7 @@ export function skipBalancedBraceBlock(
       return err({
         severity: "error",
         message: "expected `}` to close block, found end of input",
-        span: some(tokens[openBrace].span),
+        span: some(openBraceToken.span),
       });
     }
     if (tok.kind === "lbrace") braceDepth += 1;
