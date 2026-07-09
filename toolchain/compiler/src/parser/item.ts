@@ -88,7 +88,7 @@ function parseVisibility(
  *
  * ```text
  * Params ::= "(" (Param ("," Param)* ","?)? ")"
- * Param  ::= "mut"? Pattern ":" Type
+ * Param  ::= Pattern ":" Type
  * ```
  */
 function parseParams(
