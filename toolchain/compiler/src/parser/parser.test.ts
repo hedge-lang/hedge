@@ -2167,6 +2167,71 @@ describe("unsupported item keywords", (): void => {
     expect(diagnostics[0].message).toContain("Slice 1");
     expect(diagnostics[0].message).toContain("impl");
   });
+
+  it.each(["enum", "export", "extern", "impl", "trait"])(
+    "recovers so a sibling function after a rejected `%s` declaration still parses",
+    (keyword): void => {
+      const { tokens } = tokenize(`${keyword} Foo {} fn bar() {}`);
+      const { program, diagnostics } = parse(tokens);
+      assert(isSome(program), "Expected a program to come back");
+      expect(diagnostics[0]?.severity).toBe("error");
+      expect(diagnostics[0]?.message).toContain("Slice 1");
+      expect(diagnostics[0]?.message).toContain(keyword);
+      expect(program.value.items).toMatchObject([
+        { kind: "Function", name: { text: "bar" } },
+      ]);
+    },
+  );
+
+  it("rejects `async fn` with a clear Slice 1/Slice 8 diagnostic and recovers", (): void => {
+    const { tokens } = tokenize("async fn foo() {} fn bar() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics[0]?.severity).toBe("error");
+    expect(diagnostics[0]?.message).toContain("Slice 1");
+    expect(diagnostics[0]?.message).toContain("Slice 8");
+    expect(diagnostics[0]?.message).toContain("async");
+    expect(diagnostics[0]?.message).not.toContain("Expected an expression");
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "bar" } },
+    ]);
+  });
+
+  it.each(["use", "mod"])(
+    "rejects top-level `%s` with a clear Slice 1/Slice 7 diagnostic and recovers",
+    (keyword): void => {
+      const { tokens } = tokenize(`${keyword} foo; fn bar() {}`);
+      const { program, diagnostics } = parse(tokens);
+      assert(isSome(program), "Expected a program to come back");
+      expect(diagnostics[0]?.severity).toBe("error");
+      expect(diagnostics[0]?.message).toContain("Slice 1");
+      expect(diagnostics[0]?.message).toContain("Slice 7");
+      expect(diagnostics[0]?.message).toContain(keyword);
+      expect(diagnostics[0]?.message).not.toContain("Expected an expression");
+      expect(program.value.items).toMatchObject([
+        { kind: "Function", name: { text: "bar" } },
+      ]);
+    },
+  );
+
+  it("rejects a bare top-level `match` expression with a clear Slice 1/Slice 3 diagnostic", (): void => {
+    const { tokens } = tokenize("match x { }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isNone(program), "Expected no program to come back");
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics[0].message).toContain("Slice 3");
+    expect(diagnostics[0].message).not.toContain("Expected an expression");
+  });
+
+  it("`let y = match x {};` produces the Slice-1 diagnostic, not a generic 'expected expression' error", (): void => {
+    const { tokens } = tokenize("let y = match x {};");
+    const { program, diagnostics } = parse(tokens);
+    assert(isNone(program), "Expected no program to come back");
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics[0].message).not.toContain("Expected an expression");
+  });
 });
 
 describe("item error recovery", (): void => {
