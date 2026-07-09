@@ -429,7 +429,13 @@ export function skipUnsupportedTopLevelItem(
     return ok({ diagnostic, next: bodyStart.pos + 1 });
   }
   const nextResult = skipBalancedBraceBlock(tokens, bodyStart.pos);
-  if (isErr(nextResult)) return nextResult;
+  if (isErr(nextResult)) {
+    return err({
+      ...nextResult.error,
+      message: `${message}; ${nextResult.error.message}`,
+      span: some(keyword.span),
+    });
+  }
   return ok({ diagnostic, next: nextResult.value });
 }
 
