@@ -1179,7 +1179,9 @@ describe("identifiers", (): void => {
     it("accepts r#true as a let binding name", (): void => {
       const result = parse(tokenize("let r#true = 1;").tokens);
       assert(isSome(result.program), "expected program to compile");
-      const stmt = result.program.value.items.find((s) => s.kind === "LetStatement");
+      const stmt = result.program.value.items.find(
+        (s) => s.kind === "LetStatement",
+      );
       assert(stmt !== undefined, "expected LetStatement");
       assert(stmt.pattern.kind === "BindingPattern", "expected BindingPattern");
       expect(stmt.pattern.name.text).toBe("true");
