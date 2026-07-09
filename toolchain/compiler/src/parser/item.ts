@@ -1,37 +1,40 @@
 import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
-import { none, some, type Option } from "../option.js";
+import { none, some, unwrapSomeOr, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
-import type {
-  Attribute,
-  BindingPattern,
-  FunctionDecl,
-  Item,
-  NamedFieldsBody,
-  Param,
-  StructBody,
-  StructDecl,
-  StructField,
-  TupleField,
-  TupleFieldsBody,
-  Type,
-  Visibility,
+import {
+  patternBindingName,
+  type Attribute,
+  type FunctionDecl,
+  type Item,
+  type NamedFieldsBody,
+  type Param,
+  type StructBody,
+  type StructDecl,
+  type StructField,
+  type TupleField,
+  type TupleFieldsBody,
+  type Type,
+  type Visibility,
 } from "./ast.js";
 import type { Parsed } from "./parse.js";
 import {
   expect,
   expectKeyword,
   isLifetimeGenericsStart,
+  kindAt,
   parseIdentifier,
   skipBalancedAngleList,
   skipToFunctionBody,
   skipToStructBody,
+  spanAt,
   unsupportedGenericsMessage,
   unsupportedLifetimeMessage,
   type PR,
 } from "./parse-utils.js";
 import { collectOuterAttributes } from "./attribute.js";
 import { parseExpression } from "./expression.js";
+import { parsePattern } from "./pattern.js";
 import {
   expressionStatement,
   parseBlock,
@@ -85,10 +88,9 @@ function parseVisibility(
  *
  * ```text
  * Params ::= "(" (Param ("," Param)* ","?)? ")"
- * Param  ::= "mut"? BindingPattern ":" Type
+ * Param  ::= "mut"? Pattern ":" Type
  * ```
  */
-// eslint-disable-next-line complexity -- This is too difficult to split up
 function parseParams(
   tokens: readonly Token[],
   pos: number,
@@ -101,32 +103,23 @@ function parseParams(
   const params: Param[] = [];
 
   for (;;) {
-    if (tokens[cursor]?.kind === "rparen") {
+    if (kindAt(tokens, cursor) === "rparen") {
       break;
     }
     const paramStart = cursor;
-    let mutable = false;
-    const maybeMut = tokens[cursor];
-    if (maybeMut?.kind === "keyword" && maybeMut.text === "mut") {
-      mutable = true;
-      cursor += 1;
+    const patternResult = parsePattern(tokens, cursor);
+    if (isErr(patternResult)) {
+      return patternResult;
     }
-    const identResult = parseIdentifier(tokens, cursor);
-    if (isErr(identResult)) {
-      return identResult;
-    }
-    const pattern: BindingPattern = {
-      kind: "BindingPattern",
-      name: identResult.value.node,
-    };
-    cursor = identResult.value.next;
+    const pattern = patternResult.value.node;
+    cursor = patternResult.value.next;
 
-    if (tokens[cursor]?.kind !== "colon") {
-      const token = tokens[cursor];
+    if (kindAt(tokens, cursor) !== "colon") {
+      const name = unwrapSomeOr(patternBindingName(pattern), "_");
       return err({
         severity: "error",
-        message: `expected ':' after parameter name '${pattern.name.text}'`,
-        span: token !== undefined ? some(token.span) : none(),
+        message: `expected ':' after parameter name '${name}'`,
+        span: spanAt(tokens, cursor),
       });
     }
     cursor += 1;
@@ -140,12 +133,11 @@ function parseParams(
     params.push({
       kind: "Param",
       tokenId: paramStart,
-      mutable,
       pattern,
       type: typeResult.value.node,
     });
 
-    if (tokens[cursor]?.kind === "comma") {
+    if (kindAt(tokens, cursor) === "comma") {
       cursor += 1;
     } else {
       break;

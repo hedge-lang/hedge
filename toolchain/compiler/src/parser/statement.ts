@@ -1,11 +1,9 @@
-import { assert } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import type {
   Attribute,
-  BindingPattern,
   Block,
   Expression,
   ExpressionStatement,
@@ -18,7 +16,6 @@ import {
   expect,
   expectKeyword,
   loopKeywordAt,
-  parseIdentifier,
   unsupportedLoopMessage,
   type LoopKeywordMatch,
   type PR,
@@ -26,6 +23,7 @@ import {
 import { collectInnerAttributes, collectOuterAttributes } from "./attribute.js";
 import { parseExpression } from "./expression.js";
 import { parseItem } from "./item.js";
+import { parsePattern } from "./pattern.js";
 import { parseType } from "./type.js";
 
 /**
@@ -137,32 +135,6 @@ function skipUnsupportedLoopConstruct(
 }
 
 /**
- * Parses a binding pattern.
- *
- * Slice-1 only supports simple identifier bindings.
- *
- * Grammar:
- *
- * ```text
- * BindingPattern ::= Identifier
- * ```
- */
-function parseBindingPattern(
-  tokens: readonly Token[],
-  pos: number,
-): PR<Parsed<BindingPattern>> {
-  const identResult = parseIdentifier(tokens, pos);
-  if (isErr(identResult)) {
-    return identResult;
-  }
-  const ident = identResult.value;
-  return ok({
-    node: { kind: "BindingPattern", name: ident.node },
-    next: ident.next,
-  });
-}
-
-/**
  * Parses a `let` statement.
  *
  * Grammar:
@@ -170,8 +142,8 @@ function parseBindingPattern(
  * ```text
  * LetStatement ::=
  *   "let"
- *   "mut"?
- *   BindingPattern
+ *   Pattern
+ *   (":" Type)?
  *   ("=" Expression)?
  *   ";"
  * ```
@@ -182,9 +154,9 @@ function parseBindingPattern(
  * let value;
  * let value = 42;
  * let mut counter = 0;
+ * let _ = 42;
  * ```
  */
-// eslint-disable-next-line complexity -- Optional clauses (mut, type, initializer) each contribute a branch; the grammar drives the complexity, not poor structure.
 export function parseLetStatement(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -198,28 +170,9 @@ export function parseLetStatement(
   }
   let cursor = afterLet.value;
 
-  let mutable = false;
-  const maybeMut = tokens[cursor];
-  if (
-    maybeMut !== undefined &&
-    maybeMut.kind === "keyword" &&
-    maybeMut.text === "mut"
-  ) {
-    mutable = true;
-    cursor += 1;
-  }
-
-  const patternResult = parseBindingPattern(tokens, cursor);
+  const patternResult = parsePattern(tokens, cursor);
   if (isErr(patternResult)) {
-    if (!mutable) {
-      return patternResult;
-    }
-    const bindingPattern = parseBindingPattern(tokens, cursor - 1);
-    assert(
-      isErr(bindingPattern),
-      "parseBindingPattern failed on a token that was already parsed successfully",
-    );
-    return bindingPattern;
+    return patternResult;
   }
   const pattern = patternResult.value;
   cursor = pattern.next;
@@ -256,7 +209,6 @@ export function parseLetStatement(
     kind: "LetStatement",
     tokenId: start,
     attributes,
-    mutable,
     pattern: pattern.node,
     type: typeAnnotation,
     initializer,
