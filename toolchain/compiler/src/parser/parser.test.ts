@@ -239,6 +239,130 @@ describe("path expressions", (): void => {
       'Expected identifier after "::"',
     );
   });
+
+  it("returns an error for an empty path (bare leading `::`)", (): void => {
+    const { program, diagnostics } = parse(tokenize("::;").tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("Expected an identifier");
+  });
+});
+
+describe("self/super/Self path segment diagnostics", (): void => {
+  it("produces a Slice 7 diagnostic for `super` as a segment after `::`", (): void => {
+    const { tokens } = tokenize("::super;");
+    const keyword = tokens.find(
+      (t) => t.kind === "keyword" && t.text === "super",
+    );
+    assert(keyword !== undefined, "Expected to find a super keyword token");
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toContain("Slice 7");
+    expect(diagnostics[0].span).toEqual(some(keyword.span));
+  });
+
+  it("produces a Slice 7 diagnostic for `self` as a non-first segment", (): void => {
+    const { tokens } = tokenize("foo::self;");
+    const keyword = tokens.find(
+      (t) => t.kind === "keyword" && t.text === "self",
+    );
+    assert(keyword !== undefined, "Expected to find a self keyword token");
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toContain("Slice 7");
+    expect(diagnostics[0].span).toEqual(some(keyword.span));
+  });
+
+  it("produces a Slice 7 diagnostic for `self` as a non-first segment in type position", (): void => {
+    const { tokens } = tokenize("let x: std::self::Foo;");
+    const keyword = tokens.find(
+      (t) => t.kind === "keyword" && t.text === "self",
+    );
+    assert(keyword !== undefined, "Expected to find a self keyword token");
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toContain("Slice 7");
+    expect(diagnostics[0].span).toEqual(some(keyword.span));
+  });
+
+  it("produces a Slice 7 diagnostic for `self` before a turbofish, ahead of any generics guardrail", (): void => {
+    const { tokens } = tokenize("self::<T>;");
+    const keyword = tokens.find(
+      (t) => t.kind === "keyword" && t.text === "self",
+    );
+    assert(keyword !== undefined, "Expected to find a self keyword token");
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toContain("Slice 7");
+    expect(diagnostics[0].span).toEqual(some(keyword.span));
+  });
+
+  it.each(["self", "super", "Self"])(
+    "produces a Slice 7 diagnostic for bare `%s` in expression position",
+    (text): void => {
+      const { tokens } = tokenize(`${text};`);
+      const keyword = tokens.find(
+        (t) => t.kind === "keyword" && t.text === text,
+      );
+      assert(keyword !== undefined, `Expected to find a ${text} keyword token`);
+      const { program, diagnostics } = parse(tokens);
+      expect(program).toEqual(none());
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].severity).toBe("error");
+      expect(diagnostics[0].message).toContain("Slice 7");
+      expect(diagnostics[0].span).toEqual(some(keyword.span));
+    },
+  );
+
+  it("produces a Slice 7 diagnostic for bare `self` in type position", (): void => {
+    const { tokens } = tokenize("let x: self::Foo;");
+    const keyword = tokens.find(
+      (t) => t.kind === "keyword" && t.text === "self",
+    );
+    assert(keyword !== undefined, "Expected to find a self keyword token");
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toContain("Slice 7");
+    expect(diagnostics[0].span).toEqual(some(keyword.span));
+  });
+
+  it("produces a Slice 7 diagnostic for bare `Self` in type position", (): void => {
+    const { tokens } = tokenize("let x: Self;");
+    const keyword = tokens.find(
+      (t) => t.kind === "keyword" && t.text === "Self",
+    );
+    assert(keyword !== undefined, "Expected to find a Self keyword token");
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toContain("Slice 7");
+    expect(diagnostics[0].span).toEqual(some(keyword.span));
+  });
+
+  it("produces a Slice 7 diagnostic for bare `self` in struct-construction position", (): void => {
+    const { tokens } = tokenize("self::Foo {}");
+    const keyword = tokens.find(
+      (t) => t.kind === "keyword" && t.text === "self",
+    );
+    assert(keyword !== undefined, "Expected to find a self keyword token");
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toContain("Slice 7");
+    expect(diagnostics[0].span).toEqual(some(keyword.span));
+  });
 });
 
 describe("type annotations", (): void => {
