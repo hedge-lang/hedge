@@ -271,7 +271,7 @@ export function skipBalancedBraceBlock(
       return err({
         severity: "error",
         message: "expected `}` to close block, found end of input",
-        span: none(),
+        span: some(tokens[openBrace].span),
       });
     }
     if (tok.kind === "lbrace") braceDepth += 1;
@@ -422,7 +422,7 @@ export function skipUnsupportedTopLevelItem(
     return err({
       severity: "error",
       message: `expected a body for \`${keyword.text}\`, found end of input`,
-      span: none(),
+      span: some(keyword.span),
     });
   }
   if (bodyStart.kind === "semi") {

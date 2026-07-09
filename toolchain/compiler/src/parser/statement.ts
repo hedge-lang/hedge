@@ -287,7 +287,7 @@ export function parseBlock(
         return err({
           severity: "error",
           message: `unexpected item kind '${item.value.kind}' in block position`,
-          span: none(),
+          span: some(tokens[item.value.tokenId].span),
         });
       }
       statements.push(item.value);
