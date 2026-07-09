@@ -179,6 +179,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "compound assignment += updates a let mut binding",
       "compound assignment -= updates a let mut binding",
       "multiple assignments to let mut binding update sequentially",
+      "wildcard let evaluates its initializer for its side effect",
     ],
   },
   {

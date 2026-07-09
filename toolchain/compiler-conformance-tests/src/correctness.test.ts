@@ -171,7 +171,9 @@ function evalBlock(block: Block, env: RefEnv): RefValue {
     if (stmt.kind === "LetStatement") {
       if (isSome(stmt.initializer)) {
         const val = evalExpr(stmt.initializer.value, local);
-        local.set(stmt.pattern.name.text, val);
+        if (stmt.pattern.kind === "BindingPattern") {
+          local.set(stmt.pattern.name.text, val);
+        }
       }
     } else if (stmt.kind === "ExpressionStatement") {
       evalExpr(stmt.expression, local);
