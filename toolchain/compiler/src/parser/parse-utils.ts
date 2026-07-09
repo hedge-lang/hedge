@@ -421,7 +421,7 @@ export function skipUnsupportedTopLevelItem(
   if (bodyStart === undefined) {
     return err({
       severity: "error",
-      message: `expected a body for \`${keyword.text}\`, found end of input`,
+      message: `${message}; expected a body for \`${keyword.text}\`, found end of input`,
       span: some(keyword.span),
     });
   }
