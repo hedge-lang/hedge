@@ -282,10 +282,16 @@ export function skipBalancedBraceBlock(
         span: some(openBraceToken.span),
       });
     }
-    if (tok.kind === "lbrace") braceDepth += 1;
-    if (tok.kind === "rbrace") braceDepth -= 1;
+    if (tok.kind === "lbrace") {
+      braceDepth += 1;
+    }
+    if (tok.kind === "rbrace") {
+      braceDepth -= 1;
+    }
     cursor += 1;
-    if (braceDepth === 0) return ok(cursor);
+    if (braceDepth === 0) {
+      return ok(cursor);
+    }
   }
 }
 
