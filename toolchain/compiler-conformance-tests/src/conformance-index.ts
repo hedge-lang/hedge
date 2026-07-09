@@ -205,6 +205,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "struct declaration compiles alongside fn main",
       "struct literal field access evaluates correctly",
       "struct declared after use resolves correctly",
+      "fn, struct, i32/bool, let/let mut, arithmetic, calls, if/else, and blocks execute together",
     ],
   },
   {
