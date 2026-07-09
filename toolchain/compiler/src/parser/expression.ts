@@ -27,6 +27,7 @@ import {
   isLifetimeGenericsStart,
   loopKeywordAt,
   parseIdentifier,
+  pathKeywordAt,
   pathSepBeforeLt,
   stripPrefix,
   stripUnderscores,
@@ -785,7 +786,11 @@ function parsePrimary(
   }
 
   // Path, or path followed by `{` (struct expression when allowed)
-  if (token.kind === "ident" || token.kind === "path_sep") {
+  if (
+    token.kind === "ident" ||
+    token.kind === "path_sep" ||
+    isSome(pathKeywordAt(tokens, pos))
+  ) {
     const pathResult = parsePath(tokens, pos);
     if (isErr(pathResult)) return pathResult;
     const afterPath = pathResult.value.next;

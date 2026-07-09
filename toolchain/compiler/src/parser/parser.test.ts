@@ -239,6 +239,62 @@ describe("path expressions", (): void => {
       'Expected identifier after "::"',
     );
   });
+
+  it("returns an error for an empty path (bare leading `::`)", (): void => {
+    const { program, diagnostics } = parse(tokenize("::;").tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("Expected an identifier");
+  });
+});
+
+describe("self/super/Self path segment diagnostics", (): void => {
+  function assertSlice7Error(input: string, kw: string): void {
+    const { tokens } = tokenize(input);
+    const keyword = tokens.find((t) => t.kind === "keyword" && t.text === kw);
+    assert(keyword !== undefined, `Expected to find a ${kw} keyword token`);
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toContain("Slice 7");
+    expect(diagnostics[0].span).toEqual(some(keyword.span));
+  }
+
+  it("produces a Slice 7 diagnostic for `super` as a segment after `::`", (): void => {
+    assertSlice7Error("::super;", "super");
+  });
+
+  it("produces a Slice 7 diagnostic for `self` as a non-first segment", (): void => {
+    assertSlice7Error("foo::self;", "self");
+  });
+
+  it("produces a Slice 7 diagnostic for `self` as a non-first segment in type position", (): void => {
+    assertSlice7Error("let x: std::self::Foo;", "self");
+  });
+
+  it("produces a Slice 7 diagnostic for `self` before a turbofish, ahead of any generics guardrail", (): void => {
+    assertSlice7Error("self::<T>;", "self");
+  });
+
+  it.each(["self", "super", "Self"])(
+    "produces a Slice 7 diagnostic for bare `%s` in expression position",
+    (text): void => {
+      assertSlice7Error(`${text};`, text);
+    },
+  );
+
+  it("produces a Slice 7 diagnostic for bare `self` in type position", (): void => {
+    assertSlice7Error("let x: self::Foo;", "self");
+  });
+
+  it("produces a Slice 7 diagnostic for bare `Self` in type position", (): void => {
+    assertSlice7Error("let x: Self;", "Self");
+  });
+
+  it("produces a Slice 7 diagnostic for bare `self` in struct-construction position", (): void => {
+    assertSlice7Error("self::Foo {}", "self");
+  });
 });
 
 describe("type annotations", (): void => {

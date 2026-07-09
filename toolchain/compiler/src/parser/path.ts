@@ -1,12 +1,14 @@
 import type { Span, Token } from "../lexer/token.js";
-import { none, some } from "../option.js";
+import { isSome, none, some } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import type { Path, PathExpression } from "./ast.js";
 import type { Parsed } from "./parse.js";
 import {
   MUT_MESSAGE,
   parseIdentifier,
+  pathKeywordAt,
   tokenAt,
+  unsupportedPathKeywordMessage,
   type PR,
 } from "./parse-utils.js";
 
@@ -16,7 +18,7 @@ import {
  * Grammar:
  *
  * ```text
- * Path ::= "::"? Identifier ("::" Identifier)*
+ * Path ::= "::"? PathSegment ("::" PathSegment)*
  * ```
  */
 // eslint-disable-next-line complexity -- Result-threading adds an isErr branch per step; extracting helpers would obscure the grammar structure.
@@ -35,6 +37,15 @@ export function parsePathSegments(
   if (token.kind === "path_sep") {
     absolute = true;
     cursor += 1;
+  }
+
+  const firstKeyword = pathKeywordAt(tokens, cursor);
+  if (isSome(firstKeyword)) {
+    return err({
+      severity: "error",
+      message: unsupportedPathKeywordMessage(firstKeyword.value.text),
+      span: some(firstKeyword.value.span),
+    });
   }
 
   const nextResult = parseIdentifier(tokens, cursor);
@@ -62,6 +73,14 @@ export function parsePathSegments(
           severity: "error",
           message: MUT_MESSAGE,
           span: some(nextToken.span),
+        });
+      }
+      const keyword = pathKeywordAt(tokens, cursor);
+      if (isSome(keyword)) {
+        return err({
+          severity: "error",
+          message: unsupportedPathKeywordMessage(keyword.value.text),
+          span: some(keyword.value.span),
         });
       }
       const foundDesc =
