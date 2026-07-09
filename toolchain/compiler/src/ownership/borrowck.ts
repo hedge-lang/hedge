@@ -6,9 +6,27 @@ import type {
   Expression,
   FunctionDecl,
   Item,
+  Pattern,
   Program,
   Statement,
 } from "../parser/ast.js";
+
+/** A binding's name and write-capability, or `none()` for a pattern that binds nothing (`_`). */
+function patternCapability(
+  pattern: Pattern,
+): Option<{ readonly name: string; readonly mutable: boolean }> {
+  switch (pattern.kind) {
+    case "BindingPattern":
+      return some({ name: pattern.name.text, mutable: pattern.mutable });
+    case "WildcardPattern":
+      return none();
+    default:
+      return assertNever(
+        pattern,
+        `Unexpected pattern: ${JSON.stringify(pattern)}`,
+      );
+  }
+}
 
 /** A borrow introduced by `let r = &[write] base`. */
 interface Borrow {
@@ -162,11 +180,18 @@ function statementUses(statement: Statement, out: Set<string>): void {
 function writeCapabilities(decl: FunctionDecl): Map<string, boolean> {
   const capabilities = new Map<string, boolean>();
   for (const param of decl.params) {
-    capabilities.set(param.pattern.name.text, param.mutable);
+    const capability = patternCapability(param.pattern);
+    if (isSome(capability)) {
+      capabilities.set(capability.value.name, capability.value.mutable);
+    }
   }
   for (const statement of decl.body.statements) {
-    if (statement.kind === "LetStatement") {
-      capabilities.set(statement.pattern.name.text, statement.mutable);
+    if (statement.kind !== "LetStatement") {
+      continue;
+    }
+    const capability = patternCapability(statement.pattern);
+    if (isSome(capability)) {
+      capabilities.set(capability.value.name, capability.value.mutable);
     }
   }
   return capabilities;
@@ -183,6 +208,10 @@ function collectBorrows(statements: readonly Statement[]): Borrow[] {
   for (let index = 0; index < statements.length; index += 1) {
     const statement = statements[index];
     if (statement === undefined || statement.kind !== "LetStatement") {
+      continue;
+    }
+    const capability = patternCapability(statement.pattern);
+    if (!isSome(capability)) {
       continue;
     }
     const { initializer } = statement;
@@ -203,7 +232,7 @@ function collectBorrows(statements: readonly Statement[]): Borrow[] {
       continue;
     }
     borrows.push({
-      name: statement.pattern.name.text,
+      name: capability.value.name,
       base,
       mutable: init.mutable,
       declIndex: index,

@@ -9,6 +9,7 @@ import {
   type Option,
   unwrapSomeOr,
 } from "../option.js";
+import { patternMutable } from "../parser/ast.js";
 import type * as Parser from "../parser/ast.js";
 import type * as Semantics from "./ast.js";
 import { hasCapability } from "./type-capabilities.js";
@@ -71,6 +72,35 @@ function bind(
   const scope = ctx.scopes[ctx.scopes.length - 1];
   if (scope !== undefined) {
     scope.set(name, scopedVariable);
+  }
+}
+
+/**
+ * Binds a `let`/parameter pattern's name into scope and returns the
+ * decorated {@link Semantics.Identifier} for the resulting AST node.
+ *
+ * A `BindingPattern` is bound under its own name. A `WildcardPattern` binds
+ * nothing — a later reference to bare `_` must fail to resolve — but still
+ * yields a synthetic `"_"` identifier so codegen has a JS binding slot to
+ * emit.
+ */
+function bindPatternName(
+  ctx: AnalysisContext,
+  pattern: Parser.Pattern,
+  type: Semantics.Type,
+  mutable: boolean,
+): Semantics.Identifier {
+  switch (pattern.kind) {
+    case "BindingPattern":
+      bind(ctx, pattern.name.text, { type, mutable });
+      return { ...pattern.name, type };
+    case "WildcardPattern":
+      return { kind: "Identifier", tokenId: pattern.tokenId, text: "_", type };
+    default:
+      return assertNever(
+        pattern,
+        `Unexpected pattern: ${JSON.stringify(pattern)}`,
+      );
   }
 }
 
@@ -397,17 +427,13 @@ function analyzeFunctionDecl(
   const analyzedParams = decl.params.map(
     (param: Parser.Param): Semantics.Param => {
       const paramType = validateSlice1Type(ctx, param.type, param.type.tokenId);
-      bind(ctx, param.pattern.name.text, {
-        type: paramType,
-        mutable: param.mutable,
-      });
+      const mutable = patternMutable(param.pattern);
+      const name = bindPatternName(ctx, param.pattern, paramType, mutable);
       return {
         ...param,
+        mutable,
         type: paramType,
-        pattern: {
-          ...param.pattern,
-          name: { ...param.pattern.name, type: paramType },
-        },
+        pattern: { kind: "BindingPattern", name },
       };
     },
   );
@@ -578,17 +604,13 @@ function analyzeLetStatement(
     checkPosLiteralRange(ctx, coercedInitializer.value, bindingType);
   }
 
-  bind(ctx, statement.pattern.name.text, {
-    type: bindingType,
-    mutable: statement.mutable,
-  });
+  const mutable = patternMutable(statement.pattern);
+  const name = bindPatternName(ctx, statement.pattern, bindingType, mutable);
 
   return {
     ...statement,
-    pattern: {
-      ...statement.pattern,
-      name: { ...statement.pattern.name, type: bindingType },
-    },
+    mutable,
+    pattern: { kind: "BindingPattern", name },
     attributes: statement.attributes.map((attr) => analyzeAttribute(ctx, attr)),
     initializer: coercedInitializer,
     type: { kind: "UnitType", tokenId: statement.tokenId },

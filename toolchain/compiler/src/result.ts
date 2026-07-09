@@ -19,3 +19,15 @@ export function isErr<T, E>(
 ): result is { kind: "Err"; error: E } {
   return result.kind === "Err";
 }
+
+export function unwrapOk<T, E>(result: Result<T, E>): T {
+  if (isOk(result)) {
+    return result.value;
+  }
+
+  if (result.error instanceof Error) {
+    throw result.error;
+  }
+
+  throw new Error("Unwrap failed", { cause: result.error });
+}
