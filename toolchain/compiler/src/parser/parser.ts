@@ -31,6 +31,7 @@ export interface ParseResult {
   readonly diagnostics: readonly Diagnostic[];
 }
 
+// eslint-disable-next-line complexity -- splitting would obscure the grammar rule.
 export function parse(tokens: readonly Token[]): ParseResult {
   const diagnostics: Diagnostic[] = [];
   let cursor = 0;
@@ -53,6 +54,14 @@ export function parse(tokens: readonly Token[]): ParseResult {
     }
     if (peekResult.value.kind === "eof") {
       break;
+    }
+    // A lone `;` carries no semantic content. Skip it silently rather
+    // than falling through to expression parsing, which would produce
+    // a confusing secondary "Expected an expression" error and abort
+    // the whole parse.
+    if (peekResult.value.kind === "semi") {
+      cursor += 1;
+      continue;
     }
     const itemResult = parseItem(tokens, diagnostics, cursor);
     if (isErr(itemResult)) {
