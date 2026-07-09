@@ -79,7 +79,7 @@ export default defineConfig([
         "error",
         {
           default: "disallow",
-          rules: [
+          policies: [
             {
               from: { type: "compiler" },
               allow: [
