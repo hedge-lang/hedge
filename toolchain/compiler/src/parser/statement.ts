@@ -284,10 +284,11 @@ export function parseBlock(
         continue;
       }
       if (item.value.kind !== "Function" && item.value.kind !== "Struct") {
+        const token = tokens[item.value.tokenId];
         return err({
           severity: "error",
           message: `unexpected item kind '${item.value.kind}' in block position`,
-          span: some(tokens[item.value.tokenId].span),
+          span: token === undefined ? none() : some(token.span),
         });
       }
       statements.push(item.value);
