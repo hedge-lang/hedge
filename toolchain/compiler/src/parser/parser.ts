@@ -31,6 +31,7 @@ export interface ParseResult {
   readonly diagnostics: readonly Diagnostic[];
 }
 
+// eslint-disable-next-line complexity -- splitting would obscure the grammar rule.
 export function parse(tokens: readonly Token[]): ParseResult {
   const diagnostics: Diagnostic[] = [];
   let cursor = 0;
@@ -54,27 +55,38 @@ export function parse(tokens: readonly Token[]): ParseResult {
     if (peekResult.value.kind === "eof") {
       break;
     }
+    // A lone `;` carries no semantic content. Skip it silently rather
+    // than falling through to expression parsing, which would produce
+    // a confusing secondary "Expected an expression" error and abort
+    // the whole parse.
+    if (peekResult.value.kind === "semi") {
+      cursor += 1;
+      continue;
+    }
     const itemResult = parseItem(tokens, diagnostics, cursor);
     if (isErr(itemResult)) {
       diagnostics.push(itemResult.error);
       return { program: none(), diagnostics };
     }
+    cursor = itemResult.value.next;
     const node = itemResult.value.node;
-    items.push(node);
+    if (!isSome(node)) {
+      continue;
+    }
+    items.push(node.value);
     if (
-      node.kind === "LetStatement" &&
-      node.pattern.kind === "BindingPattern" &&
-      !node.pattern.mutable &&
-      !isSome(node.initializer)
+      node.value.kind === "LetStatement" &&
+      node.value.pattern.kind === "BindingPattern" &&
+      !node.value.pattern.mutable &&
+      !isSome(node.value.initializer)
     ) {
-      const token = tokens[node.tokenId];
+      const token = tokens[node.value.tokenId];
       diagnostics.push({
         severity: "warning",
         message: "immutable binding declared without a value can never be used",
         span: token !== undefined ? some(token.span) : none(),
       });
     }
-    cursor = itemResult.value.next;
   }
   return { program: some({ kind: "Program", items, attributes }), diagnostics };
 }

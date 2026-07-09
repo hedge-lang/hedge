@@ -348,6 +348,36 @@ describe("execution tests", (): void => {
         ["42"],
       );
     });
+
+    it("fn, struct, i32/bool, let/let mut, arithmetic, calls, if/else, and blocks execute together", (): void => {
+      assertRunsTo(
+        `
+        struct Point { x: i32, y: i32 }
+
+        fn main() {
+          fn describe(x: i32, y: i32) {
+            if x > y {
+              print("x wins");
+            } else {
+              print("y wins");
+            }
+          }
+
+          let mut total: i32 = 0;
+          let a = 3;
+          let b = 4;
+          total = a * b + 2;
+          let is_big = total > 10;
+          print(total);
+          print(is_big);
+
+          let p = Point { x: 5, y: 9 };
+          describe(p.x, p.y);
+        }
+        `,
+        ["14", "true", "y wins"],
+      );
+    });
   });
 
   describe("error handling", (): void => {

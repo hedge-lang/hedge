@@ -1,6 +1,6 @@
 import type { Diagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
-import { none, some, unwrapSomeOr, type Option } from "../option.js";
+import { isSome, none, some, unwrapSomeOr, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import {
   patternBindingName,
@@ -27,9 +27,12 @@ import {
   skipBalancedAngleList,
   skipToFunctionBody,
   skipToStructBody,
+  skipUnsupportedTopLevelItem,
   spanAt,
+  unsupportedAsyncMessage,
   unsupportedGenericsMessage,
   unsupportedLifetimeMessage,
+  unsupportedPathKeywordMessage,
   type PR,
 } from "./parse-utils.js";
 import { collectOuterAttributes } from "./attribute.js";
@@ -501,13 +504,26 @@ function parseStruct(
   return ok({ node: decl, next: cursor });
 }
 
-const UNSUPPORTED_SLICE1_KEYWORDS = new Set([
-  "enum",
-  "export",
-  "extern",
-  "impl",
-  "trait",
-]);
+const UNSUPPORTED_TOP_LEVEL_KEYWORD_MESSAGES: ReadonlyMap<string, string> =
+  new Map([
+    ["enum", "`enum` declarations are not supported in Slice 1"],
+    ["export", "`export` declarations are not supported in Slice 1"],
+    ["extern", "`extern` declarations are not supported in Slice 1"],
+    ["impl", "`impl` declarations are not supported in Slice 1"],
+    ["trait", "`trait` declarations are not supported in Slice 1"],
+    ["use", unsupportedPathKeywordMessage("use")],
+    ["mod", unsupportedPathKeywordMessage("mod")],
+    ["async", unsupportedAsyncMessage()],
+  ]);
+
+/**
+ * @returns the guardrail diagnostic message for a rejected top-level
+ * declaration keyword, or `none()` if `keyword` isn't one of them.
+ */
+function unsupportedTopLevelKeywordMessage(keyword: string): Option<string> {
+  const messageFor = UNSUPPORTED_TOP_LEVEL_KEYWORD_MESSAGES.get(keyword);
+  return messageFor === undefined ? none() : some(messageFor);
+}
 
 /**
  * Parses a top-level item.
@@ -525,7 +541,7 @@ export function parseItem(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
   pos: number,
-): PR<Parsed<Item>> {
+): PR<Parsed<Option<Item>>> {
   // Collect outer attributes (#[...]) before the item and attach them to the
   // named declaration that follows (a function, struct, or `let`).
   const outerResult = collectOuterAttributes(tokens, pos);
@@ -553,7 +569,7 @@ export function parseItem(
     if (isErr(fnResult)) {
       return fnResult;
     }
-    return ok(fnResult.value);
+    return ok({ node: some(fnResult.value.node), next: fnResult.value.next });
   }
   if (token?.kind === "keyword" && token.text === "struct") {
     const structResult = parseStruct(
@@ -566,7 +582,10 @@ export function parseItem(
     if (isErr(structResult)) {
       return structResult;
     }
-    return ok(structResult.value);
+    return ok({
+      node: some(structResult.value.node),
+      next: structResult.value.next,
+    });
   }
   if (token?.kind === "keyword" && token.text === "let") {
     if (afterVis > cursor) {
@@ -586,17 +605,26 @@ export function parseItem(
     if (isErr(letResult)) {
       return letResult;
     }
-    return ok(letResult.value);
-  }
-  if (
-    token?.kind === "keyword" &&
-    UNSUPPORTED_SLICE1_KEYWORDS.has(token.text)
-  ) {
-    return err({
-      severity: "error",
-      message: `\`${token.text}\` declarations are not supported in Slice 1`,
-      span: some(token.span),
+    return ok({
+      node: some(letResult.value.node),
+      next: letResult.value.next,
     });
+  }
+  if (token?.kind === "keyword") {
+    const message = unsupportedTopLevelKeywordMessage(token.text);
+    if (isSome(message)) {
+      const skipResult = skipUnsupportedTopLevelItem(
+        tokens,
+        token,
+        afterVis,
+        message.value,
+      );
+      if (isErr(skipResult)) {
+        return skipResult;
+      }
+      diagnostics.push(skipResult.value.diagnostic);
+      return ok({ node: none(), next: skipResult.value.next });
+    }
   }
   if (afterVis > cursor) {
     const visToken = tokens[cursor];
@@ -613,9 +641,9 @@ export function parseItem(
   const parsed = exprResult.value;
   if (tokens[parsed.next]?.kind === "semi") {
     return ok({
-      node: expressionStatement(parsed.node),
+      node: some(expressionStatement(parsed.node)),
       next: parsed.next + 1,
     });
   }
-  return ok(parsed);
+  return ok({ node: some(parsed.node), next: parsed.next });
 }
