@@ -5,6 +5,7 @@ import type { NamedType, Type, UnitType } from "./ast.js";
 import type { Parsed } from "./parse.js";
 import {
   isLifetimeGenericsStart,
+  pathKeywordAt,
   pathSepBeforeLt,
   tokenAt,
   unsupportedGenericsMessage,
@@ -65,7 +66,11 @@ export function parseType(
     });
   }
 
-  if (token.kind === "ident" || token.kind === "path_sep") {
+  if (
+    token.kind === "ident" ||
+    token.kind === "path_sep" ||
+    isSome(pathKeywordAt(tokens, pos))
+  ) {
     const pathResult = parsePathSegments(tokens, pos);
     if (isErr(pathResult)) {
       return pathResult;

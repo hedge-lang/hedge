@@ -125,6 +125,26 @@ export function loopKeywordAt(
   return none();
 }
 
+export function unsupportedPathKeywordMessage(keyword: string): string {
+  return `\`${keyword}\` is not supported in Slice 1; module resolution is introduced in Slice 7`;
+}
+
+const PATH_KEYWORDS: ReadonlySet<string> = new Set(["self", "super", "Self"]);
+
+/**
+ * @returns The token at `pos` if it is `self`/`super`/`Self`.
+ */
+export function pathKeywordAt(
+  tokens: readonly Token[],
+  pos: number,
+): Option<Extract<Token, { kind: "keyword" }>> {
+  const token = tokens[pos];
+  if (token?.kind === "keyword" && PATH_KEYWORDS.has(token.text)) {
+    return some(token);
+  }
+  return none();
+}
+
 export function unsupportedGenericsMessage(construct: string): string {
   return `${construct} are not supported in Slice 1; generics are introduced in Slice 4`;
 }
