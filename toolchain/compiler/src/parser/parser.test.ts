@@ -251,9 +251,7 @@ describe("path expressions", (): void => {
 describe("self/super/Self path segment diagnostics", (): void => {
   function assertSlice7Error(input: string, kw: string): void {
     const { tokens } = tokenize(input);
-    const keyword = tokens.find(
-        (t) => t.kind === "keyword" && t.text === kw,
-    );
+    const keyword = tokens.find((t) => t.kind === "keyword" && t.text === kw);
     assert(keyword !== undefined, `Expected to find a ${kw} keyword token`);
     const { program, diagnostics } = parse(tokens);
     expect(program).toEqual(none());
