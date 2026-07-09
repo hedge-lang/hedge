@@ -2232,6 +2232,17 @@ describe("unsupported item keywords", (): void => {
     expect(diagnostics[0].message).toContain("Slice 1");
     expect(diagnostics[0].message).not.toContain("Expected an expression");
   });
+
+  it.each(["enum", "export", "extern", "impl", "trait", "async", "use", "mod"])(
+    "`%s` with no body at EOF fails fast without hanging",
+    (keyword): void => {
+      const { tokens } = tokenize(keyword);
+      const { program, diagnostics } = parse(tokens);
+      assert(isNone(program), "Expected no program to come back");
+      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(diagnostics[0].message).toContain("end of input");
+    },
+  );
 });
 
 describe("item error recovery", (): void => {
