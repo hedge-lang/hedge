@@ -64,4 +64,11 @@ describe("borrow checker", (): void => {
     );
     expect(diagnostics).toEqual([]);
   });
+
+  it("does not crash on a wildcard let binding or parameter", (): void => {
+    const diagnostics = check(
+      'fn f(_: i32, mut x: string) { let _ = "a"; let r = &mut x; print(r); }',
+    );
+    expect(diagnostics).toEqual([]);
+  });
 });

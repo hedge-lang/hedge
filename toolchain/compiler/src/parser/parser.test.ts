@@ -34,9 +34,9 @@ describe("parser", (): void => {
       items: [
         {
           kind: "LetStatement",
-          mutable: false,
           pattern: {
             kind: "BindingPattern",
+            mutable: false,
             name: {
               kind: "Identifier",
               text: "x",
@@ -122,9 +122,9 @@ describe("parser", (): void => {
             statements: [
               {
                 kind: "LetStatement",
-                mutable: false,
                 pattern: {
                   kind: "BindingPattern",
+                  mutable: false,
                   name: {
                     kind: "Identifier",
                     text: "greeting",
@@ -1179,8 +1179,11 @@ describe("identifiers", (): void => {
     it("accepts r#true as a let binding name", (): void => {
       const result = parse(tokenize("let r#true = 1;").tokens);
       assert(isSome(result.program), "expected program to compile");
-      const stmt = result.program.value.items[0];
-      assert(stmt?.kind === "LetStatement", "expected LetStatement");
+      const stmt = result.program.value.items.find(
+        (s) => s.kind === "LetStatement",
+      );
+      assert(stmt !== undefined, "expected LetStatement");
+      assert(stmt.pattern.kind === "BindingPattern", "expected BindingPattern");
       expect(stmt.pattern.name.text).toBe("true");
     });
 
@@ -1208,8 +1211,9 @@ describe("identifiers", (): void => {
         isSome(program),
         diagnostics[0]?.message ?? "expected program to compile",
       );
-      const stmt = program.value.items[0];
-      assert(stmt?.kind === "LetStatement", "expected LetStatement");
+      const stmt = program.value.items.find((s) => s.kind === "LetStatement");
+      assert(stmt !== undefined, "expected LetStatement");
+      assert(stmt.pattern.kind === "BindingPattern", "expected BindingPattern");
       const { tokenId } = stmt.pattern.name;
       expect(tokens[tokenId]).toMatchObject({
         kind: "ident",
@@ -1315,14 +1319,24 @@ describe("let binding modifiers", (): void => {
   it("parses let mut x = 1", (): void => {
     const ast = parseProgram("let mut x = 1;");
     expect(ast).toMatchObject({
-      items: [{ kind: "LetStatement", mutable: true }],
+      items: [
+        {
+          kind: "LetStatement",
+          pattern: { mutable: true, name: { text: "x" } },
+        },
+      ],
     });
   });
 
   it("parses let x = 1 as immutable", (): void => {
     const ast = parseProgram("let x = 1;");
     expect(ast).toMatchObject({
-      items: [{ kind: "LetStatement", mutable: false }],
+      items: [
+        {
+          kind: "LetStatement",
+          pattern: { mutable: false, name: { text: "x" } },
+        },
+      ],
     });
   });
 
@@ -1331,6 +1345,82 @@ describe("let binding modifiers", (): void => {
     expect(ast).toMatchObject({
       items: [{ kind: "LetStatement", type: none(), initializer: none() }],
     });
+  });
+});
+
+describe("core patterns", (): void => {
+  it("parses let _ = 5; as a wildcard pattern", (): void => {
+    const ast = parseProgram("let _ = 5;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "LetStatement",
+          pattern: { kind: "WildcardPattern" },
+          initializer: some({ kind: "IntLiteral", value: "5" }),
+        },
+      ],
+    });
+  });
+
+  it("parses fn f(_: i32) {} with a wildcard parameter", (): void => {
+    const ast = parseProgram("fn f(_: i32) {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          params: [{ kind: "Param", pattern: { kind: "WildcardPattern" } }],
+        },
+      ],
+    });
+  });
+
+  it("rejects mut applied to the wildcard pattern", (): void => {
+    const { tokens } = tokenize("let mut _ = 5;");
+    const mutToken = tokens.find(
+      (t) => t.kind === "keyword" && t.text === "mut",
+    );
+    assert(mutToken !== undefined, "Expected to find a mut token");
+    const result = parse(tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain("wildcard");
+    expect(result.diagnostics[0]?.span).toEqual(some(mutToken.span));
+  });
+
+  it("produces a Slice 1 diagnostic for a struct pattern in let position", (): void => {
+    const result = parse(tokenize("let Point { x, y } = p;").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain("Slice 3");
+  });
+
+  it("produces a Slice 1 diagnostic for a struct pattern in param position", (): void => {
+    const result = parse(tokenize("fn f(Point { x, y }: Point) {}").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(result.diagnostics[0]?.message).toContain("Slice 3");
+  });
+
+  it("gives the MUT_MESSAGE for fn f(mut: i32) {} (mut used as a param name)", (): void => {
+    const result = parse(tokenize("fn f(mut: i32) {}").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain(
+      "The keyword `mut` is reserved",
+    );
+  });
+
+  it("still gives the MUT_MESSAGE for let mut = 1; after the pattern refactor", (): void => {
+    const { tokens } = tokenize("let mut = 1;");
+    const mutToken = tokens.find(
+      (t) => t.kind === "keyword" && t.text === "mut",
+    );
+    assert(mutToken !== undefined, "Expected to find a mut token");
+    const result = parse(tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain(
+      "The keyword `mut` is reserved",
+    );
+    expect(result.diagnostics[0]?.span).toEqual(some(mutToken.span));
   });
 });
 

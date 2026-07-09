@@ -1,4 +1,5 @@
-import type { Option } from "../option.js";
+import { assertNever } from "../assert.js";
+import { none, some, type Option } from "../option.js";
 import type { FloatSuffix, IntSuffix } from "../lexer/token.js";
 export type { IntSuffix, FloatSuffix } from "../lexer/token.js";
 
@@ -89,8 +90,7 @@ export interface Visibility {
 
 export interface Param extends AstNode {
   readonly kind: "Param";
-  readonly mutable: boolean;
-  readonly pattern: BindingPattern;
+  readonly pattern: Pattern;
   readonly type: Type;
 }
 
@@ -155,15 +155,49 @@ export interface Block extends AstNode {
 export interface LetStatement extends AstNode {
   readonly kind: "LetStatement";
   readonly attributes: readonly Attribute[];
-  readonly mutable: boolean;
-  readonly pattern: BindingPattern;
+  readonly pattern: Pattern;
   readonly type: Option<Type>;
   readonly initializer: Option<Expression>;
 }
 
-export interface BindingPattern {
+export type Pattern = BindingPattern | WildcardPattern;
+
+export interface BindingPattern extends AstNode {
   readonly kind: "BindingPattern";
+  readonly mutable: boolean;
   readonly name: Identifier;
+}
+
+export interface WildcardPattern extends AstNode {
+  readonly kind: "WildcardPattern";
+}
+
+export function patternMutable(pattern: Pattern): boolean {
+  switch (pattern.kind) {
+    case "BindingPattern":
+      return pattern.mutable;
+    case "WildcardPattern":
+      return false;
+    default:
+      return assertNever(
+        pattern,
+        `Unexpected pattern: ${JSON.stringify(pattern)}`,
+      );
+  }
+}
+
+export function patternBindingName(pattern: Pattern): Option<string> {
+  switch (pattern.kind) {
+    case "BindingPattern":
+      return some(pattern.name.text);
+    case "WildcardPattern":
+      return none();
+    default:
+      return assertNever(
+        pattern,
+        `Unexpected pattern: ${JSON.stringify(pattern)}`,
+      );
+  }
 }
 
 export interface ExpressionStatement extends AstNode {

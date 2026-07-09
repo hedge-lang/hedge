@@ -43,6 +43,44 @@ describe("driver", (): void => {
     }
   });
 
+  it("compiles a wildcard let with no initializer as a true no-op", (): void => {
+    const result = compile(`
+      fn main() {
+        let _;
+        print("after");
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(isSome(result.code)).toBe(true);
+    if (isSome(result.code)) {
+      const { javascript } = result.code.value;
+      expect(isSome(javascript)).toBe(true);
+      if (isSome(javascript)) {
+        expect(javascript.value).not.toMatch(/\b_\b/);
+        expect(javascript.value).toContain('print("after")');
+      }
+    }
+  });
+
+  it("compiles a wildcard parameter without colliding with a real binding", (): void => {
+    const result = compile(`
+      fn main() {
+        fn f(_: i32, x: i32) {
+          print(x);
+        }
+        f(1, 2);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(isSome(result.code)).toBe(true);
+  });
+
+  it("rejects a bare wildcard reference after a wildcard let", (): void => {
+    const result = compile("fn main() { let _ = 5; print(_); }");
+    expect(isNone(result.code)).toBe(true);
+    expect(result.diagnostics.some((d) => d.severity === "error")).toBe(true);
+  });
+
   it("reports a semantic error and produces no code", (): void => {
     const result = compile("fn main() { print(missing); }");
     expect(isNone(result.code)).toBe(true);

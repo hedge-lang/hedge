@@ -1,5 +1,5 @@
 import type { Diagnostic } from "../diagnostics.js";
-import type { Token } from "../lexer/token.js";
+import type { Span, Token } from "../lexer/token.js";
 import { none, some, type Option } from "../option.js";
 import { err, isErr, ok, type Result } from "../result.js";
 import type { Identifier } from "./ast.js";
@@ -22,6 +22,24 @@ export function tokenAt(tokens: readonly Token[], pos: number): PR<Token> {
     });
   }
   return ok(token);
+}
+
+/**
+ * @returns The kind of the token at `pos`, or `undefined` past the end of input.
+ */
+export function kindAt(
+  tokens: readonly Token[],
+  pos: number,
+): Token["kind"] | undefined {
+  return tokens[pos]?.kind;
+}
+
+/**
+ * @returns The span of the token at `pos`, if one exists.
+ */
+export function spanAt(tokens: readonly Token[], pos: number): Option<Span> {
+  const token = tokens[pos];
+  return token !== undefined ? some(token.span) : none();
 }
 
 /**
@@ -147,6 +165,10 @@ export function pathKeywordAt(
 
 export function unsupportedGenericsMessage(construct: string): string {
   return `${construct} are not supported in Slice 1; generics are introduced in Slice 4`;
+}
+
+export function unsupportedPatternMessage(construct: string): string {
+  return `${construct} are not supported in Slice 1; pattern matching is introduced in Slice 3`;
 }
 
 export function unsupportedLifetimeMessage(construct: string): string {

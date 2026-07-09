@@ -265,6 +265,10 @@ describe("execution tests", (): void => {
       ]);
     });
 
+    it("wildcard let evaluates its initializer for its side effect", (): void => {
+      assertRunsTo(`fn main() { let _ = print(5); }`, ["5"]);
+    });
+
     it("inner scope shadow does not affect outer binding", (): void => {
       assertRunsTo(
         `fn main() {
