@@ -255,7 +255,8 @@ export function skipBalancedAngleList(
 
 /**
  * Skips a `{ ... }` span starting at `openBrace`, purely by counting
- * `lbrace`/`rbrace` tokens. Returns the index just past the
+ * `lbrace`/`rbrace` tokens; never string/char literal contents, so braces
+ * inside a string can't desync the count. Returns the index just past the
  * matching `}`.
  */
 export function skipBalancedBraceBlock(

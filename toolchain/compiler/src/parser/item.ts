@@ -504,31 +504,25 @@ function parseStruct(
   return ok({ node: decl, next: cursor });
 }
 
-const UNSUPPORTED_SLICE1_KEYWORDS = new Set([
-  "enum",
-  "export",
-  "extern",
-  "impl",
-  "trait",
-]);
-
-const UNSUPPORTED_MODULE_KEYWORDS = new Set(["use", "mod"]);
+const UNSUPPORTED_TOP_LEVEL_KEYWORD_MESSAGES: ReadonlyMap<string, string> =
+  new Map([
+    ["enum", "`enum` declarations are not supported in Slice 1"],
+    ["export", "`export` declarations are not supported in Slice 1"],
+    ["extern", "`extern` declarations are not supported in Slice 1"],
+    ["impl", "`impl` declarations are not supported in Slice 1"],
+    ["trait", "`trait` declarations are not supported in Slice 1"],
+    ["use", unsupportedPathKeywordMessage("use")],
+    ["mod", unsupportedPathKeywordMessage("mod")],
+    ["async", unsupportedAsyncMessage()],
+  ]);
 
 /**
  * @returns the guardrail diagnostic message for a rejected top-level
  * declaration keyword, or `none()` if `keyword` isn't one of them.
  */
 function unsupportedTopLevelKeywordMessage(keyword: string): Option<string> {
-  if (UNSUPPORTED_SLICE1_KEYWORDS.has(keyword)) {
-    return some(`\`${keyword}\` declarations are not supported in Slice 1`);
-  }
-  if (UNSUPPORTED_MODULE_KEYWORDS.has(keyword)) {
-    return some(unsupportedPathKeywordMessage(keyword));
-  }
-  if (keyword === "async") {
-    return some(unsupportedAsyncMessage());
-  }
-  return none();
+  const messageFor = UNSUPPORTED_TOP_LEVEL_KEYWORD_MESSAGES.get(keyword);
+  return messageFor === undefined ? none() : some(messageFor);
 }
 
 /**
