@@ -59,22 +59,25 @@ export function parse(tokens: readonly Token[]): ParseResult {
       diagnostics.push(itemResult.error);
       return { program: none(), diagnostics };
     }
+    cursor = itemResult.value.next;
     const node = itemResult.value.node;
-    items.push(node);
+    if (!isSome(node)) {
+      continue;
+    }
+    items.push(node.value);
     if (
-      node.kind === "LetStatement" &&
-      node.pattern.kind === "BindingPattern" &&
-      !node.pattern.mutable &&
-      !isSome(node.initializer)
+      node.value.kind === "LetStatement" &&
+      node.value.pattern.kind === "BindingPattern" &&
+      !node.value.pattern.mutable &&
+      !isSome(node.value.initializer)
     ) {
-      const token = tokens[node.tokenId];
+      const token = tokens[node.value.tokenId];
       diagnostics.push({
         severity: "warning",
         message: "immutable binding declared without a value can never be used",
         span: token !== undefined ? some(token.span) : none(),
       });
     }
-    cursor = itemResult.value.next;
   }
   return { program: some({ kind: "Program", items, attributes }), diagnostics };
 }

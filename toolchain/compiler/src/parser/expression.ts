@@ -35,6 +35,7 @@ import {
   unsupportedGenericsMessage,
   unsupportedLifetimeMessage,
   unsupportedLoopMessage,
+  unsupportedPatternMessage,
   type PR,
 } from "./parse-utils.js";
 import { parsePath } from "./path.js";
@@ -777,6 +778,15 @@ function parsePrimary(
       severity: "error",
       message: unsupportedLoopMessage(loopKeyword.value.token.text),
       span: some(loopKeyword.value.token.span),
+    });
+  }
+
+  // Guardrail: `match` expressions are not yet supported.
+  if (token.kind === "keyword" && token.text === "match") {
+    return err({
+      severity: "error",
+      message: unsupportedPatternMessage("`match` expressions"),
+      span: some(token.span),
     });
   }
 

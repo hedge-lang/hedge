@@ -253,6 +253,33 @@ export function skipBalancedAngleList(
   }
 }
 
+/**
+ * Skips a `{ ... }` span starting at `openBrace`, purely by counting
+ * `lbrace`/`rbrace` tokens. Returns the index just past the
+ * matching `}`.
+ */
+export function skipBalancedBraceBlock(
+  tokens: readonly Token[],
+  openBrace: number,
+): PR<number> {
+  let cursor = openBrace;
+  let braceDepth = 0;
+  for (;;) {
+    const tok = tokens[cursor];
+    if (tok === undefined || tok.kind === "eof") {
+      return err({
+        severity: "error",
+        message: "expected `}` to close block, found end of input",
+        span: none(),
+      });
+    }
+    if (tok.kind === "lbrace") braceDepth += 1;
+    if (tok.kind === "rbrace") braceDepth -= 1;
+    cursor += 1;
+    if (braceDepth === 0) return ok(cursor);
+  }
+}
+
 const ITEM_START_KEYWORDS: ReadonlySet<string> = new Set([
   "fn",
   "struct",
@@ -327,6 +354,82 @@ export function skipToStructBody(
     }
     cursor += 1;
   }
+}
+
+export function unsupportedAsyncMessage(): string {
+  return "`async` is not supported in Slice 1; async is introduced in Slice 8";
+}
+
+interface TopLevelBodyStart {
+  readonly kind: "brace" | "semi";
+  readonly pos: number;
+}
+
+/**
+ * Scans forward from a rejected top-level declaration keyword for its body
+ * start, tracking `(`/`[` depth so a `fn`'s parameter list (reachable for
+ * `export`/`extern` linkage and `async fn`, which all prefix a function)
+ * isn't mistaken for the body. Returns `undefined` at end of input.
+ */
+function findTopLevelItemBodyStart(
+  tokens: readonly Token[],
+  pos: number,
+): TopLevelBodyStart | undefined {
+  let cursor = pos;
+  let depth = 0;
+  for (;;) {
+    const tok = tokens[cursor];
+    if (tok === undefined || tok.kind === "eof") {
+      return undefined;
+    }
+    if (depth === 0 && tok.kind === "lbrace") {
+      return { kind: "brace", pos: cursor };
+    }
+    if (depth === 0 && tok.kind === "semi") {
+      return { kind: "semi", pos: cursor };
+    }
+    if (tok.kind === "lparen" || tok.kind === "lbracket") depth += 1;
+    if (tok.kind === "rparen" || tok.kind === "rbracket") {
+      depth = Math.max(0, depth - 1);
+    }
+    cursor += 1;
+  }
+}
+
+/**
+ * Recovers from a rejected top-level declaration keyword (`enum`, `export`,
+ * `extern`, `impl`, `trait`, `async`, `use`, `mod`) so a sibling item after
+ * it still parses: either a brace-delimited body (`enum`/`trait`/`impl`/
+ * `extern` block, or a `fn` body), which is skipped as a balanced span, or a
+ * bare `;` (a linkage/`use`/`mod` declaration with no body), which is
+ * skipped past directly.
+ */
+export function skipUnsupportedTopLevelItem(
+  tokens: readonly Token[],
+  keyword: Extract<Token, { kind: "keyword" }>,
+  pos: number,
+  message: string,
+): PR<{ diagnostic: Diagnostic; next: number }> {
+  const diagnostic: Diagnostic = {
+    severity: "error",
+    message,
+    span: some(keyword.span),
+  };
+
+  const bodyStart = findTopLevelItemBodyStart(tokens, pos);
+  if (bodyStart === undefined) {
+    return err({
+      severity: "error",
+      message: `expected a body for \`${keyword.text}\`, found end of input`,
+      span: none(),
+    });
+  }
+  if (bodyStart.kind === "semi") {
+    return ok({ diagnostic, next: bodyStart.pos + 1 });
+  }
+  const nextResult = skipBalancedBraceBlock(tokens, bodyStart.pos);
+  if (isErr(nextResult)) return nextResult;
+  return ok({ diagnostic, next: nextResult.value });
 }
 
 /**

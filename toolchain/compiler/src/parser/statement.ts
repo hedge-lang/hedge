@@ -16,6 +16,7 @@ import {
   expect,
   expectKeyword,
   loopKeywordAt,
+  skipBalancedBraceBlock,
   unsupportedLoopMessage,
   type LoopKeywordMatch,
   type PR,
@@ -72,34 +73,6 @@ function findLoopBodyOpenBrace(
       condDepth = Math.max(0, condDepth - 1);
     }
     cursor += 1;
-  }
-}
-
-/**
- * Skips a `{ ... }` span starting at `openBrace`, purely by counting
- * `lbrace`/`rbrace` tokens — never string/char literal contents, so braces
- * inside a string can't desync the count. Returns the index just past the
- * matching `}`.
- */
-function skipBalancedBraceBlock(
-  tokens: readonly Token[],
-  openBrace: number,
-): PR<number> {
-  let cursor = openBrace;
-  let braceDepth = 0;
-  for (;;) {
-    const tok = tokens[cursor];
-    if (tok === undefined || tok.kind === "eof") {
-      return err({
-        severity: "error",
-        message: "expected `}` to close block, found end of input",
-        span: none(),
-      });
-    }
-    if (tok.kind === "lbrace") braceDepth += 1;
-    if (tok.kind === "rbrace") braceDepth -= 1;
-    cursor += 1;
-    if (braceDepth === 0) return ok(cursor);
   }
 }
 
@@ -305,16 +278,19 @@ export function parseBlock(
       if (isErr(itemResult)) {
         return itemResult;
       }
+      cursor = itemResult.value.next;
       const item = itemResult.value.node;
-      if (item.kind !== "Function" && item.kind !== "Struct") {
+      if (!isSome(item)) {
+        continue;
+      }
+      if (item.value.kind !== "Function" && item.value.kind !== "Struct") {
         return err({
           severity: "error",
-          message: `unexpected item kind '${item.kind}' in block position`,
+          message: `unexpected item kind '${item.value.kind}' in block position`,
           span: none(),
         });
       }
-      statements.push(item);
-      cursor = itemResult.value.next;
+      statements.push(item.value);
       continue;
     }
     if (token?.kind === "keyword" && token.text === "let") {
