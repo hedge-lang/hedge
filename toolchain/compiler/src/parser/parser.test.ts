@@ -313,6 +313,24 @@ describe("type annotations", (): void => {
     });
   });
 
+  it.each(["i32", "bool", "str", "f64"])(
+    "parses `%s` as a primitive named type annotation on a let binding",
+    (primitive): void => {
+      const ast = parseProgram(`let x: ${primitive};`);
+      expect(ast).toMatchObject({
+        items: [
+          {
+            kind: "LetStatement",
+            type: some({
+              kind: "NamedType",
+              path: { absolute: false, segments: [primitive] },
+            }),
+          },
+        ],
+      });
+    },
+  );
+
   it("parses a named type with no initializer", (): void => {
     const ast = parseProgram("let p: Point;");
     expect(ast).toMatchObject({
