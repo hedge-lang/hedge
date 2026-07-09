@@ -2243,6 +2243,31 @@ describe("unsupported item keywords", (): void => {
       expect(diagnostics[0].message).toContain("end of input");
     },
   );
+
+  it.each(["enum Foo {}", "trait Foo {}", "impl Foo {}"])(
+    "recovers past a redundant trailing semicolon after a rejected `%s`, without a secondary parsing error",
+    (construct): void => {
+      const { tokens } = tokenize(`${construct}; fn bar() {}`);
+      const { program, diagnostics } = parse(tokens);
+      assert(isSome(program), "Expected a program to come back");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.message).toContain("Slice 1");
+      expect(program.value.items).toMatchObject([
+        { kind: "Function", name: { text: "bar" } },
+      ]);
+    },
+  );
+
+  it("recovers past a redundant trailing semicolon after a rejected `use`, without a secondary parsing error", (): void => {
+    const { tokens } = tokenize("use foo;; fn bar() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("Slice 1");
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "bar" } },
+    ]);
+  });
 });
 
 describe("item error recovery", (): void => {
