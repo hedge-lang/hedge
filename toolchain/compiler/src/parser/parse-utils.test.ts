@@ -12,4 +12,13 @@ describe("skipBalancedBraceBlock", (): void => {
     expect(result.error.message).toContain("expected `{` to start block");
     expect(result.error.message).toContain("found `ident`");
   });
+
+  it("errors instead of hanging when EOF is reached without a matching `}`", (): void => {
+    const { tokens } = tokenize("{ foo(); { bar();");
+    const result = skipBalancedBraceBlock(tokens, 0);
+    assert(isErr(result), "Expected an error result");
+    expect(result.error.message).toContain(
+      "expected `}` to close block, found end of input",
+    );
+  });
 });
