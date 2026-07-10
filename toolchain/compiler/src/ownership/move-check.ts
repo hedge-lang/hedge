@@ -213,7 +213,7 @@ function useOrMove(
     case "Unbound":
       emitDiagnostic(
         ctx,
-        `use of moved value \`${name}\`: moved at offset [${current.moveSite.start}, ${current.moveSite.end})`,
+        `use of moved value \`${name}\``,
         pathExpr.tokenId,
       );
       state.set(id, { kind: "Owned" });
@@ -221,7 +221,7 @@ function useOrMove(
     case "ConditionallyMoved":
       emitDiagnostic(
         ctx,
-        `use of possibly-moved value \`${name}\`: moved on some paths but not others (last known move at offset [${current.moveSite.start}, ${current.moveSite.end}))`,
+        `use of possibly-moved value \`${name}\`: moved on some paths but not others`,
         pathExpr.tokenId,
       );
       state.set(id, { kind: "Owned" });
