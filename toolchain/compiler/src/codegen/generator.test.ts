@@ -144,7 +144,7 @@ describe("generator", (): void => {
   });
 
   it("emits param types in .d.ts for pub fn", (): void => {
-    expect(dts(gen("pub fn add(x: i32, y: i32) -> i32 {}"))).toBe(
+    expect(dts(gen("pub fn add(x: i32, y: i32) -> i32 { x + y }"))).toBe(
       "export declare function add(x: number, y: number): number;\n",
     );
   });
