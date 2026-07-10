@@ -436,7 +436,16 @@ function checkFunctionReturnType(
   body: Semantics.Block,
   expectedReturnType: Semantics.Type,
 ): Semantics.Block {
-  if (!isSome(body.trailingExpression)) return body;
+  if (!isSome(body.trailingExpression)) {
+    if (expectedReturnType.kind !== "UnitType") {
+      emitError(
+        ctx,
+        `missing return value: expected \`${describeType(expectedReturnType)}\``,
+        body.tokenId,
+      );
+    }
+    return body;
+  }
   const trailing = body.trailingExpression.value;
 
   const { expr, mismatch } = reconcileExpressionType(
@@ -836,6 +845,36 @@ function isIntegerType(type: Semantics.Type): boolean {
 }
 
 /**
+ * Kinds whose `UnitType` result can only be the error-recovery placeholder
+ * for a failed sub-analysis (unresolved name/field/struct, or a Slice-1
+ * not-yet-implemented construct), or a type inherited/propagated from such
+ * a placeholder (`BinaryExpression`/`UnaryExpression`, which never compute
+ * `UnitType` themselves — only ever pass one through from an operand) —
+ * never a genuine unit value. A `UnitType` from one of these suppresses a
+ * redundant diagnostic, since the failure already reported its own error
+ * (or, for not-yet-implemented constructs, isn't a reliable type signal
+ * yet). A `UnitType` from anything else (`CallExpression`, `Block`,
+ * `AssignExpression`, `CompoundAssignExpression`, `IfExpression`, ...) is
+ * genuine and must be compared normally.
+ */
+function isAmbiguousUnitExpr(expr: Semantics.Expression): boolean {
+  switch (expr.kind) {
+    case "PathExpression":
+    case "FieldAccessExpression":
+    case "StructExpression":
+    case "MethodCallExpression":
+    case "IndexExpression":
+    case "BinaryExpression":
+    case "UnaryExpression":
+    case "TupleExpression":
+    case "ReferenceExpression":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
  * Reconciles an analyzed expression against an `expectedType` context — a
  * `let` binding's explicit annotation, a function's declared return type, or
  * a struct field's declared type — applying Slice 1's unsuffixed-integer-
@@ -849,8 +888,10 @@ function isIntegerType(type: Semantics.Type): boolean {
  * call site performs the positive-range check exactly once.
  *
  * Cascade guard: `mismatch` is always `false` when the resolved expression's
- * type is the `UnitType` error-recovery placeholder — that failure already
- * reported its own diagnostic.
+ * type is the `UnitType` error-recovery placeholder (see
+ * {@link isAmbiguousUnitExpr}) — that failure already reported its own
+ * diagnostic. A genuinely unit-typed result (e.g. a `print(...)` call) is
+ * compared normally, not suppressed.
  */
 function reconcileExpressionType(
   ctx: AnalysisContext,
@@ -882,7 +923,7 @@ function reconcileExpressionType(
   const resultType = getType(result);
   const mismatch =
     !suppressed &&
-    resultType.kind !== "UnitType" &&
+    (resultType.kind !== "UnitType" || !isAmbiguousUnitExpr(result)) &&
     !typesEqual(expectedType, resultType);
 
   return { expr: result, mismatch };
@@ -901,10 +942,14 @@ function inferBinaryType(
   const leftType = getType(left);
   const rightType = getType(right);
 
-  // UnitType is the error-recovery type from failed name resolution.
-  // Suppress cascading type errors when either operand already failed.
-  const isLeftTypeValid = leftType.kind !== "UnitType";
-  const isRightTypeValid = rightType.kind !== "UnitType";
+  // UnitType is ambiguous: it's either the error-recovery placeholder from a
+  // failed sub-analysis, or a genuine unit value (e.g. a `print(...)` call).
+  // Only suppress cascading type errors for the former — see
+  // isAmbiguousUnitExpr.
+  const isLeftTypeValid =
+    leftType.kind !== "UnitType" || !isAmbiguousUnitExpr(left);
+  const isRightTypeValid =
+    rightType.kind !== "UnitType" || !isAmbiguousUnitExpr(right);
 
   switch (op) {
     case "Eq":
@@ -961,14 +1006,14 @@ function inferBinaryType(
       if (isLeftTypeValid && !hasCapability(leftType, "arithmetic")) {
         emitError(
           ctx,
-          `arithmetic operands must be numeric; left-operand is type "${leftType.kind}"`,
+          `arithmetic operands must be numeric; left-operand is type \`${describeType(leftType)}\``,
           tokenId,
         );
       }
       if (isRightTypeValid && !hasCapability(rightType, "arithmetic")) {
         emitError(
           ctx,
-          `arithmetic operands must be numeric; right-operand is type "${rightType.kind}"`,
+          `arithmetic operands must be numeric; right-operand is type \`${describeType(rightType)}\``,
           tokenId,
         );
       }

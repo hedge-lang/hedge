@@ -221,6 +221,16 @@ describe("semantic analysis", (): void => {
     ]);
   });
 
+  it("rejects arithmetic on unit-typed operands", (): void => {
+    const result = diagnose('fn main() { let x = print("hi") + 1; }');
+    const numericError = result.diagnostics.find((d) =>
+      d.message.includes("arithmetic operands must be numeric"),
+    );
+    assert(numericError !== undefined, "Expected a numeric-operand error");
+    expect(numericError.severity).toBe("error");
+    expect(numericError.message).toContain("()");
+  });
+
   it.each(["=", "+=", "-=", "*=", "/=", "%=", "<<=", ">>="])(
     "rejects `%s` assignment to immutable let binding",
     (op): void => {
@@ -262,6 +272,14 @@ describe("semantic analysis", (): void => {
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
     expect(diagnostics[0].message).toContain("missing_var");
+  });
+
+  it("rejects a genuinely unit-typed let initializer against a non-unit annotation", (): void => {
+    const { diagnostics } = diagnose("fn main() { let x: i32 = {}; }");
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toContain("type mismatch");
   });
 
   describe("function return type", () => {
@@ -321,9 +339,28 @@ describe("semantic analysis", (): void => {
       expect(diagnostics[0].message).toContain("unknown_name");
     });
 
-    it("accepts a body with no trailing expression regardless of return type annotation", (): void => {
+    it("rejects a genuinely unit-typed trailing expression against a non-unit return type", (): void => {
+      const { diagnostics } = diagnose('fn f() -> i32 { print("hi") }');
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].severity).toBe("error");
+      expect(diagnostics[0].message).toContain("return type mismatch");
+      expect(diagnostics[0].message).toContain("i32");
+      expect(diagnostics[0].message).toContain("()");
+    });
+
+    it("accepts a body with no trailing expression when the return type is implicit unit", (): void => {
       const { diagnostics } = diagnose("fn f() {}");
       expect(diagnostics).toEqual([]);
+    });
+
+    it("rejects a declared non-unit return type with no trailing expression", (): void => {
+      const { diagnostics } = diagnose("fn f() -> i32 {}");
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].severity).toBe("error");
+      expect(diagnostics[0].message).toContain("missing return value");
+      expect(diagnostics[0].message).toContain("i32");
     });
 
     it("accepts a matching if/else trailing expression as the return value", (): void => {
@@ -417,6 +454,17 @@ describe("semantic analysis", (): void => {
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
       expect(diagnostics[0].message).toContain("unknown_name");
+    });
+
+    it("rejects a genuinely unit-typed field value against a non-unit field type", (): void => {
+      const { diagnostics } = diagnose(`
+        struct P { x: i32 }
+        fn main() { let p = P { x: print("hi") }; }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].severity).toBe("error");
+      expect(diagnostics[0].message).toContain("type mismatch");
     });
 
     it("leaves a shorthand field untouched", (): void => {
