@@ -146,6 +146,39 @@ describe("move-check", (): void => {
     expect(allDrops.map((d) => d.name)).toEqual(["b", "a"]);
   });
 
+  it("every drops key corresponds to a real scope-exit block in the paired graph", (): void => {
+    const result = check(
+      `${BOXED}
+      fn main() {
+        let a = Boxed { value: 1 };
+        if true {
+          let b = Boxed { value: 2 };
+          print(b.value);
+        } else {
+          print(0);
+        }
+        let c = Boxed { value: 3 };
+        print(a.value);
+        print(c.value);
+      }`,
+    );
+    const main = result.functions.get("main");
+    assert(main !== undefined);
+    expect(main.drops.size).toBeGreaterThan(0);
+    const scopeExitTokenIds = main.graph.blocks.flatMap((b) =>
+      isSome(b.scopeExit) ? [b.scopeExit.value.scopeTokenId] : [],
+    );
+    for (const scopeTokenId of main.drops.keys()) {
+      expect(scopeExitTokenIds).toContain(scopeTokenId);
+    }
+    // The outer scope's drops (a and c, split across the pre-if and join
+    // blocks by the fork) land together on the join block's scopeExit key.
+    const outerDrops = [...main.drops.entries()]
+      .filter(([, decls]) => decls.some((d) => d.name === "a"))
+      .flatMap(([, decls]) => decls);
+    expect(outerDrops.map((d) => d.name)).toEqual(["c", "a"]);
+  });
+
   it("a moved value is not annotated for drop", (): void => {
     const result = check(
       `${BOXED}

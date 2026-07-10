@@ -98,9 +98,7 @@ function pushBlock(blocks: MutableBlock[]): number {
  * `none()` for a wildcard `_` pattern because it binds no name, so
  * it is never move-tracked or drop-annotated.
  */
-function declarationOf(pattern: {
-  readonly name: Semantics.Identifier;
-}): Option<Declaration> {
+function declarationOf(pattern: Semantics.BindingPattern): Option<Declaration> {
   if (pattern.name.text === "_") {
     return none();
   }
@@ -156,7 +154,7 @@ function lowerNestedBlock(
  * or a plain append, by its expression's kind.
  */
 function lowerExpressionStatement(
-  statement: Extract<Semantics.Statement, { kind: "ExpressionStatement" }>,
+  statement: Semantics.ExpressionStatement,
   blocks: MutableBlock[],
   currentId: number,
 ): number {

@@ -166,12 +166,12 @@ export interface LetStatement extends DecoratedAstNode {
   readonly initializer: Option<Expression>;
 }
 
-interface BindingPattern {
+export interface BindingPattern {
   readonly kind: "BindingPattern";
   readonly name: Identifier;
 }
 
-interface ExpressionStatement extends DecoratedAstNode {
+export interface ExpressionStatement extends DecoratedAstNode {
   readonly kind: "ExpressionStatement";
   readonly expression: Expression;
 }
@@ -212,7 +212,7 @@ export interface CharLiteral extends DecoratedAstNode {
   readonly value: string;
 }
 
-interface Path {
+export interface Path {
   readonly absolute: boolean;
   readonly segments: string[];
 }

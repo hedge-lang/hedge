@@ -73,6 +73,32 @@ describe("buildControlFlowGraph", (): void => {
     expect(graph.blocks.some((b) => b.id === joinId)).toBe(true);
   });
 
+  it("accumulates a scope's declarations across the blocks an if forks it into", (): void => {
+    const graph = mainGraph(`
+      fn main() {
+        let mut cond = true;
+        if cond {
+          let a = 1;
+        } else {
+          let b = 2;
+        }
+        let done = true;
+      }
+    `);
+    const pre = graph.blocks.find((b) => b.id === graph.entry);
+    assert(pre !== undefined, "Expected entry block");
+    const [thenId] = pre.successors;
+    const thenBlock = graph.blocks.find((b) => b.id === thenId);
+    assert(thenBlock !== undefined);
+    const [joinId] = thenBlock.successors;
+    const joinBlock = graph.blocks.find((b) => b.id === joinId);
+    assert(joinBlock !== undefined, "Expected a join block");
+    // `cond` is declared before the fork and `done` after it, but both
+    // belong to the function body's single Semantics.Block scope, so the
+    // join block's own scopeExit must list both, in declaration order.
+    expect(scopeExitNames(joinBlock)).toEqual(["cond", "done"]);
+  });
+
   it("builds 3 blocks for if with no else", (): void => {
     const graph = mainGraph(`
       fn main() {

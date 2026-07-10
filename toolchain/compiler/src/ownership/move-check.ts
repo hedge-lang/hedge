@@ -134,9 +134,7 @@ function registerBinding(
  * There's no module system yet, so a multi-segment path never resolves
  * to a local binding anyway.
  */
-function singleSegmentName(path: {
-  readonly segments: readonly string[];
-}): string | undefined {
+function singleSegmentName(path: Semantics.Path): string | undefined {
   return path.segments.length === 1 ? path.segments[0] : undefined;
 }
 
