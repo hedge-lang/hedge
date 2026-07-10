@@ -269,6 +269,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "rejects equality comparison between mismatched types",
       "rejects let binding type annotation mismatch: integer vs bool annotation",
       "rejects float assigned to i32-annotated binding",
+      "rejects function return type mismatch",
     ],
   },
   {
@@ -326,6 +327,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "rejects field access using another struct's field name",
       "rejects duplicate field in struct literal",
       "rejects duplicate struct declaration",
+      "rejects struct field value type mismatch (bool vs i32)",
     ],
   },
 ];

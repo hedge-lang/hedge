@@ -268,6 +268,20 @@ describe("must-fail corpus — rejection tests", (): void => {
         "type",
       );
     });
+
+    it("rejects function return type mismatch", (): void => {
+      assertRejectsWithMessage(
+        `fn bad() -> i32 { "x" } fn main() { print(bad()); }`,
+        "i32",
+      );
+    });
+
+    it("rejects struct field value type mismatch (bool vs i32)", (): void => {
+      assertRejectsWithMessage(
+        `struct P { x: i32 } fn main() { let p = P { x: true }; print(p.x); }`,
+        "type",
+      );
+    });
   });
 
   describe("string type restrictions", (): void => {
@@ -371,6 +385,16 @@ describe("must-fail corpus — rejection tests", (): void => {
   describe("diagnostic non-cascade", (): void => {
     it("does not emit spurious diagnostics for single missing name", (): void => {
       assertNoCascade(`fn main() { let x = missing_var + 1; }`);
+    });
+
+    it("does not cascade a return-type-mismatch diagnostic for an unresolved trailing name", (): void => {
+      assertNoCascade(`fn bad() -> i32 { unknown_name }`);
+    });
+
+    it("does not cascade a field-type-mismatch diagnostic for an unresolved field value", (): void => {
+      assertNoCascade(
+        `struct P { x: i32 } fn main() { let p = P { x: unknown_name }; }`,
+      );
     });
   });
 

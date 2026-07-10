@@ -28,21 +28,18 @@ describe("type system soundness spec", (): void => {
     );
   });
 
-  it.fails(
-    "struct field initialization enforces declared field types",
-    (): void => {
-      assertRejectsWithMessage(
-        `
+  it("struct field initialization enforces declared field types", (): void => {
+    assertRejectsWithMessage(
+      `
       struct Point { x: i32 }
       fn main() {
         let p = Point { x: "bad" };
         print(p.x);
       }
     `,
-        "type",
-      );
-    },
-  );
+      "type",
+    );
+  });
 
   it("arithmetic does not silently coerce bool to integer", (): void => {
     assertRejectsWithMessage(
@@ -56,7 +53,7 @@ describe("type system soundness spec", (): void => {
     );
   });
 
-  it.fails("function return type mismatch is rejected", (): void => {
+  it("function return type mismatch is rejected", (): void => {
     assertRejectsWithMessage(
       `
       fn bad() -> i32 { "x" }
