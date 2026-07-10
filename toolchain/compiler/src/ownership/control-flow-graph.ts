@@ -98,7 +98,9 @@ function pushBlock(blocks: MutableBlock[]): number {
  * `none()` for a wildcard `_` pattern because it binds no name, so
  * it is never move-tracked or drop-annotated.
  */
-function declarationOf(pattern: Semantics.BindingPattern): Option<Declaration> {
+export function declarationOf(
+  pattern: Semantics.BindingPattern,
+): Option<Declaration> {
   if (pattern.name.text === "_") {
     return none();
   }
@@ -108,6 +110,22 @@ function declarationOf(pattern: Semantics.BindingPattern): Option<Declaration> {
     type: pattern.name.type,
     tokenId: pattern.name.tokenId,
   });
+}
+
+/**
+ * Function parameters are treated as declared before the body, so they seed
+ * the root scope's declarations list (see `buildControlFlowGraph`) — the
+ * body's own locals then drop before them, matching real drop order.
+ */
+function paramDeclarations(params: readonly Semantics.Param[]): Declaration[] {
+  const declarations: Declaration[] = [];
+  for (const param of params) {
+    const declaration = declarationOf(param.pattern);
+    if (declaration.kind === "Some") {
+      declarations.push(declaration.value);
+    }
+  }
+  return declarations;
 }
 
 /**
@@ -226,8 +244,9 @@ function lowerScope(
   scope: Semantics.Block,
   blocks: MutableBlock[],
   currentId: number,
+  initialDeclarations: readonly Declaration[] = [],
 ): number {
-  const declarations: Declaration[] = [];
+  const declarations: Declaration[] = [...initialDeclarations];
   const exitId = lowerStatements(
     scope.statements,
     blocks,
@@ -296,6 +315,6 @@ export function buildControlFlowGraph(
 ): ControlFlowGraph {
   const blocks: MutableBlock[] = [];
   const entry = pushBlock(blocks);
-  lowerScope(fn.body, blocks, entry);
+  lowerScope(fn.body, blocks, entry, paramDeclarations(fn.params));
   return { entry, blocks };
 }

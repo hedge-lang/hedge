@@ -32,13 +32,13 @@ describe("move-check", (): void => {
         let a = Boxed { value: 1 };
         let mut cond = true;
         if cond {
-          let b = a;
-          print(b.value);
+          print(a.value);
         } else {
           print(0);
         }
         print(x);
         print(y);
+        print(a.value);
       }`,
     );
     expect(diagnostics).toEqual([]);
@@ -114,6 +114,50 @@ describe("move-check", (): void => {
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].message).toContain("moved");
     expect(diagnostics[0].message).toContain("x");
+  });
+
+  it("a struct ambiguously moved across a branch merge and never used again is rejected at scope close", (): void => {
+    const { diagnostics } = check(
+      `${BOXED}
+      fn main() {
+        let mut cond = true;
+        let x = Boxed { value: 1 };
+        if cond {
+          let y = x; // moved on this path only
+          print(y.value);
+        } else {
+          print(0);
+        }
+        // x is never read again: on the else path it is still Owned, but
+        // Slice 1 has no drop-flag mechanism to conditionally drop it.
+      }`,
+    );
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("moved");
+    expect(diagnostics[0].message).toContain("x");
+  });
+
+  it("a value fully moved on every branch merges to an unconditional Unbound, not an ambiguous state", (): void => {
+    const { diagnostics } = check(
+      `${BOXED}
+      fn main() {
+        let mut cond = true;
+        let x = Boxed { value: 1 };
+        if cond {
+          let y = x;
+          print(y.value);
+        } else {
+          let z = x;
+          print(z.value);
+        }
+        print(x.value);
+      }`,
+    );
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("moved");
+    expect(diagnostics[0].message).not.toContain("possibly");
   });
 
   it("drop annotation: an owned struct with no move is present at its scope's exit", (): void => {
@@ -211,6 +255,81 @@ describe("move-check", (): void => {
     assert(f !== undefined);
     const allDrops = [...f.drops.values()].flat();
     expect(allDrops.map((d) => d.name)).not.toContain("x");
+  });
+
+  it("an owned struct parameter that is never moved is dropped at function exit", (): void => {
+    const result = check(
+      `${BOXED}
+      fn f(p: Boxed) {
+        print(p.value);
+      }`,
+    );
+    expect(result.diagnostics).toEqual([]);
+    const f = result.functions.get("f");
+    assert(f !== undefined);
+    const allDrops = [...f.drops.values()].flat();
+    expect(allDrops.map((d) => d.name)).toContain("p");
+  });
+
+  it("a struct parameter is dropped after the function body's own locals, in reverse order", (): void => {
+    const result = check(
+      `${BOXED}
+      fn f(p: Boxed) {
+        let a = Boxed { value: 2 };
+        print(p.value);
+        print(a.value);
+      }`,
+    );
+    expect(result.diagnostics).toEqual([]);
+    const f = result.functions.get("f");
+    assert(f !== undefined);
+    const allDrops = [...f.drops.values()].flat();
+    expect(allDrops.map((d) => d.name)).toEqual(["a", "p"]);
+  });
+
+  it("a parameter returned via the trailing expression is moved out, not dropped", (): void => {
+    const result = check(
+      `${BOXED}
+      fn identity(x: Boxed) -> Boxed {
+        x
+      }
+      fn main() {
+        let y = identity(Boxed { value: 1 });
+        print(y.value);
+      }`,
+    );
+    expect(result.diagnostics).toEqual([]);
+    const identity = result.functions.get("identity");
+    assert(identity !== undefined);
+    const allDrops = [...identity.drops.values()].flat();
+    expect(allDrops.map((d) => d.name)).not.toContain("x");
+  });
+
+  it("a moved-away struct parameter is excluded from the drop list", (): void => {
+    const result = check(
+      `${BOXED}
+      fn take(v: Boxed) { print(v.value); }
+      fn f(p: Boxed) {
+        take(p);
+      }`,
+    );
+    expect(result.diagnostics).toEqual([]);
+    const f = result.functions.get("f");
+    assert(f !== undefined);
+    const allDrops = [...f.drops.values()].flat();
+    expect(allDrops.map((d) => d.name)).not.toContain("p");
+  });
+
+  it("does not track a wildcard parameter for drops", (): void => {
+    const result = check(
+      `${BOXED}
+      fn f(_: Boxed) {}`,
+    );
+    expect(result.diagnostics).toEqual([]);
+    const f = result.functions.get("f");
+    assert(f !== undefined);
+    const allDrops = [...f.drops.values()].flat();
+    expect(allDrops).toEqual([]);
   });
 
   it("does not cascade: one move followed by three reads reports exactly one diagnostic", (): void => {

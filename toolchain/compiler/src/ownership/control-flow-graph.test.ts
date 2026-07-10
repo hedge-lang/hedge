@@ -47,6 +47,30 @@ describe("buildControlFlowGraph", (): void => {
     expect(scopeExitNames(block)).toEqual(["a", "b"]);
   });
 
+  it("seeds the root scope's declarations with the function's own parameters, before any body-level let", (): void => {
+    const graph = mainGraph(`
+      struct Boxed { value: i32 }
+      fn main(p: Boxed) {
+        let a = 1;
+      }
+    `);
+    expect(graph.blocks).toHaveLength(1);
+    const block = graph.blocks[0];
+    assert(block !== undefined);
+    expect(scopeExitNames(block)).toEqual(["p", "a"]);
+  });
+
+  it("does not include a wildcard parameter in the root scope's declarations", (): void => {
+    const graph = mainGraph(`
+      fn main(_: i32) {
+        let a = 1;
+      }
+    `);
+    const block = graph.blocks[0];
+    assert(block !== undefined);
+    expect(scopeExitNames(block)).toEqual(["a"]);
+  });
+
   it("builds 4 blocks for if/else as a statement", (): void => {
     const graph = mainGraph(`
       fn main() {

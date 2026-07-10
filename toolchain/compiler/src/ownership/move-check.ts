@@ -23,7 +23,7 @@
  * See {@link useOrMove} for the core move/use state transition.
  */
 
-import { assertNever } from "../assert.js";
+import { assert, assertNever } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
@@ -43,11 +43,24 @@ import { buildControlFlowGraph } from "./control-flow-graph.js";
  * OWNED/SHARED/EXCLUSIVE-BORROW/UNBOUND with `let` eagerly OWNED. Slice 1
  * adds UNINITIALIZED because it alone has deferred-init bindings
  * (`let mut x: i32;` with no initializer).
+ *
+ * `Unbound` and `ConditionallyMoved` are deliberately distinct states, not
+ * one state with a comment explaining the difference: `Unbound` means moved
+ * on every reachable path (nothing to drop, unambiguously);
+ * `ConditionallyMoved` means moved on some reachable path but not others —
+ * the binding may still be Owned depending on which branch actually ran.
+ * Slice 1 has no drop-flag mechanism (that's Slice 2, per ROADMAP.md), so it
+ * cannot correctly decide whether to drop a `ConditionallyMoved` binding;
+ * collapsing it into `Unbound` would silently under-drop on the branch that
+ * never moved it. Keeping it a separate `kind` forces every consumer of
+ * `MoveState` (see `useOrMove`, `dropDecision`) to make an explicit decision
+ * via exhaustive matching instead of one being able to quietly forget it.
  */
 type MoveState =
   | { readonly kind: "Uninitialized" }
   | { readonly kind: "Owned" }
-  | { readonly kind: "Unbound"; readonly moveSite: Span };
+  | { readonly kind: "Unbound"; readonly moveSite: Span }
+  | { readonly kind: "ConditionallyMoved"; readonly moveSite: Span };
 
 type StateMap = Map<BindingId, MoveState>;
 type ScopeStack = Map<string, BindingId>[];
@@ -166,30 +179,41 @@ function useOrMove(
   if (current === undefined) {
     return;
   }
-  if (current.kind === "Uninitialized") {
-    emitDiagnostic(
-      ctx,
-      `use of uninitialized binding \`${name}\``,
-      pathExpr.tokenId,
-    );
-    state.set(id, { kind: "Owned" });
-    return;
-  }
-  if (current.kind === "Unbound") {
-    const { moveSite } = current;
-    emitDiagnostic(
-      ctx,
-      `use of moved value \`${name}\`: moved at offset [${moveSite.start}, ${moveSite.end})`,
-      pathExpr.tokenId,
-    );
-    state.set(id, { kind: "Owned" });
-    return;
-  }
-  if (asMove && !hasCapability(pathExpr.type, "copy")) {
-    state.set(id, {
-      kind: "Unbound",
-      moveSite: tokenSpan(ctx.tokens, pathExpr.tokenId),
-    });
+  switch (current.kind) {
+    case "Uninitialized":
+      emitDiagnostic(
+        ctx,
+        `use of uninitialized binding \`${name}\``,
+        pathExpr.tokenId,
+      );
+      state.set(id, { kind: "Owned" });
+      return;
+    case "Unbound":
+      emitDiagnostic(
+        ctx,
+        `use of moved value \`${name}\`: moved at offset [${current.moveSite.start}, ${current.moveSite.end})`,
+        pathExpr.tokenId,
+      );
+      state.set(id, { kind: "Owned" });
+      return;
+    case "ConditionallyMoved":
+      emitDiagnostic(
+        ctx,
+        `use of possibly-moved value \`${name}\`: moved on some paths but not others (last known move at offset [${current.moveSite.start}, ${current.moveSite.end}))`,
+        pathExpr.tokenId,
+      );
+      state.set(id, { kind: "Owned" });
+      return;
+    case "Owned":
+      if (asMove && !hasCapability(pathExpr.type, "copy")) {
+        state.set(id, {
+          kind: "Unbound",
+          moveSite: tokenSpan(ctx.tokens, pathExpr.tokenId),
+        });
+      }
+      return;
+    default:
+      assertNever(current);
   }
 }
 
@@ -215,10 +239,64 @@ function cloneState(state: StateMap): StateMap {
 }
 
 /**
- * Branch-merge (meet) rule: `Owned` only if every predecessor is `Owned`;
- * else `Unbound` (carrying the first `Unbound` predecessor's move site) if
- * any predecessor is `Unbound`; else `Uninitialized`.
+ * Combine two predecessor states for the same binding at a branch merge.
+ * Exhaustive over both sides' `kind` (nested switch, each with an
+ * `assertNever` default) so a future 5th `MoveState` can't be silently
+ * half-handled here — see the `MoveState` doc comment for why `Unbound` and
+ * `ConditionallyMoved` must stay distinct rather than collapsing one into
+ * the other.
  */
+// eslint-disable-next-line complexity -- exhaustive over a 4x4 state pairing, not incidental branching
+function combineStates(av: MoveState, bv: MoveState): MoveState {
+  switch (av.kind) {
+    case "Owned":
+      switch (bv.kind) {
+        case "Owned":
+          return { kind: "Owned" };
+        case "Uninitialized":
+          return { kind: "Uninitialized" };
+        case "Unbound":
+        case "ConditionallyMoved":
+          return { kind: "ConditionallyMoved", moveSite: bv.moveSite };
+        default:
+          return assertNever(bv);
+      }
+    case "Uninitialized":
+      // Never constructed on this path, so there is nothing to drop
+      // regardless of the other path — this pairing has no drop-safety
+      // ambiguity and doesn't need ConditionallyMoved.
+      return { kind: "Uninitialized" };
+    case "Unbound":
+      switch (bv.kind) {
+        case "Owned":
+          return { kind: "ConditionallyMoved", moveSite: av.moveSite };
+        case "Uninitialized":
+          return { kind: "Uninitialized" };
+        case "Unbound":
+          return { kind: "Unbound", moveSite: av.moveSite };
+        case "ConditionallyMoved":
+          return { kind: "ConditionallyMoved", moveSite: av.moveSite };
+        default:
+          return assertNever(bv);
+      }
+    case "ConditionallyMoved":
+      switch (bv.kind) {
+        case "Owned":
+          return { kind: "ConditionallyMoved", moveSite: av.moveSite };
+        case "Uninitialized":
+          return { kind: "Uninitialized" };
+        case "Unbound":
+        case "ConditionallyMoved":
+          return { kind: "ConditionallyMoved", moveSite: av.moveSite };
+        default:
+          return assertNever(bv);
+      }
+    default:
+      return assertNever(av);
+  }
+}
+
+/** Branch-merge (meet) rule, applied per binding via `combineStates`. */
 function mergeStates(a: StateMap, b: StateMap): StateMap {
   const merged: StateMap = new Map();
   const ids = new Set<BindingId>([...a.keys(), ...b.keys()]);
@@ -229,18 +307,12 @@ function mergeStates(a: StateMap, b: StateMap): StateMap {
       // Declared only within one branch's own (now-closed) scope; its name
       // is no longer resolvable outside that branch, so the merged value
       // here is never looked up again.
-      merged.set(id, av ?? bv ?? { kind: "Uninitialized" });
+      const only = av ?? bv;
+      assert(only !== undefined, "id came from a's or b's keys");
+      merged.set(id, only);
       continue;
     }
-    if (av.kind === "Owned" && bv.kind === "Owned") {
-      merged.set(id, { kind: "Owned" });
-    } else if (av.kind === "Unbound") {
-      merged.set(id, av);
-    } else if (bv.kind === "Unbound") {
-      merged.set(id, bv);
-    } else {
-      merged.set(id, { kind: "Uninitialized" });
-    }
+    merged.set(id, combineStates(av, bv));
   }
   return merged;
 }
@@ -441,15 +513,47 @@ function walkStatement(
   }
 }
 
+type DropDecision = "Drop" | "NoDrop" | "Ambiguous";
+
+/**
+ * Exhaustive over `MoveState["kind"]` so a still-`ConditionallyMoved`
+ * binding can't be silently treated as safe to skip (that was the actual
+ * bug Codacy found: collapsing an ambiguous branch-merge state into
+ * `Unbound` meant a binding still `Owned` on the untaken branch silently
+ * never appeared in the drop list either). `Ambiguous` is handled by the
+ * caller, not folded into `NoDrop` here — Slice 1 has no drop-flag
+ * mechanism to correctly resolve it, so the caller rejects it instead.
+ */
+function dropDecision(state: MoveState | undefined): DropDecision {
+  if (state === undefined) {
+    return "NoDrop"; // Unreachable given seeding at declaration time; safe default.
+  }
+  switch (state.kind) {
+    case "Owned":
+      return "Drop";
+    case "Uninitialized":
+    case "Unbound":
+      return "NoDrop";
+    case "ConditionallyMoved":
+      return "Ambiguous";
+    default:
+      return assertNever(state);
+  }
+}
+
 /**
  * Reverse-order walk over `declarations` gives reverse-declaration-order
  * dropping for free (AC5). Skipping `Copy` types and keeping only bindings
- * still `Owned` needs no special-casing for moved-away values (AC6) or
- * values moved out via a trailing/return expression: both leave the binding
- * `Unbound` by the time this runs — walkScope calls this only after walking
- * the scope's trailing expression, so a `fn f() -> Boxed { let x = ...; x }`
- * body has already marked `x` `Unbound` (moved out to the caller) before its
- * drop list is computed, and it's correctly excluded.
+ * `dropDecision` reports as `"Drop"` needs no special-casing for moved-away
+ * values (AC6) or values moved out via a trailing/return expression: both
+ * leave the binding `Unbound` by the time this runs — walkScope calls this
+ * only after walking the scope's trailing expression, so a
+ * `fn f() -> Boxed { let x = ...; x }` body has already marked `x` `Unbound`
+ * (moved out to the caller) before its drop list is computed, and it's
+ * correctly excluded. A binding still `"Ambiguous"` at scope close (moved on
+ * some branch but not others, and never resolved by a later use or
+ * reassignment) is rejected here rather than silently dropped or silently
+ * skipped — see `dropDecision`'s doc comment.
  */
 function recordDrops(
   ctx: Ctx,
@@ -463,8 +567,22 @@ function recordDrops(
     if (declaration === undefined || hasCapability(declaration.type, "copy")) {
       continue;
     }
-    if (state.get(declaration.id)?.kind === "Owned") {
-      drops.push(declaration);
+    const decision = dropDecision(state.get(declaration.id));
+    switch (decision) {
+      case "Drop":
+        drops.push(declaration);
+        break;
+      case "NoDrop":
+        break;
+      case "Ambiguous":
+        emitDiagnostic(
+          ctx,
+          `\`${declaration.name}\` may or may not have been moved depending on the branch taken; Slice 1 cannot conditionally drop it (no drop-flag support yet)`,
+          declaration.tokenId,
+        );
+        break;
+      default:
+        assertNever(decision);
     }
   }
   ctx.drops.set(scopeTokenId, drops);
