@@ -24,20 +24,6 @@ describe("must-fail corpus — rejection tests", (): void => {
       assertRejects(`fn main() { undefined_fn(1, 2); }`);
     });
 
-    it("rejects call to function name not in scope", (): void => {
-      assertRejects(`
-        fn add(a: i32, b: i32) { print(a + b); }
-        fn main() { add(2, 3); }
-      `);
-    });
-
-    it("rejects multiple calls to function name not in scope", (): void => {
-      assertRejects(`
-        fn double(x: i32) { print(x * 2); }
-        fn main() { double(3); double(6); }
-      `);
-    });
-
     it("rejects use of name after binding", (): void => {
       assertRejects(`fn main() { let x = 1; print(y); }`);
     });
@@ -251,6 +237,17 @@ describe("must-fail corpus — rejection tests", (): void => {
       );
     });
 
+    it("rejects arithmetic on a genuinely unit-typed operand", (): void => {
+      assertRejectsWithMessage(
+        `fn main() { let x = print("hi") + 1; }`,
+        "numeric",
+      );
+    });
+
+    it("rejects a non-unit return type with no trailing expression", (): void => {
+      assertRejectsWithMessage(`fn f() -> i32 {} fn main() {}`, "return");
+    });
+
     it("rejects equality comparison between mismatched types", (): void => {
       assertRejectsWithMessage(`fn main() { print(1 == "1"); }`, "type");
     });
@@ -265,6 +262,20 @@ describe("must-fail corpus — rejection tests", (): void => {
     it("rejects float assigned to i32-annotated binding", (): void => {
       assertRejectsWithMessage(
         `fn main() { let x: i32 = 3.14; print(x); }`,
+        "type",
+      );
+    });
+
+    it("rejects function return type mismatch", (): void => {
+      assertRejectsWithMessage(
+        `fn bad() -> i32 { "x" } fn main() { print(bad()); }`,
+        "i32",
+      );
+    });
+
+    it("rejects struct field value type mismatch (bool vs i32)", (): void => {
+      assertRejectsWithMessage(
+        `struct P { x: i32 } fn main() { let p = P { x: true }; print(p.x); }`,
         "type",
       );
     });
@@ -371,6 +382,16 @@ describe("must-fail corpus — rejection tests", (): void => {
   describe("diagnostic non-cascade", (): void => {
     it("does not emit spurious diagnostics for single missing name", (): void => {
       assertNoCascade(`fn main() { let x = missing_var + 1; }`);
+    });
+
+    it("does not cascade a return-type-mismatch diagnostic for an unresolved trailing name", (): void => {
+      assertNoCascade(`fn bad() -> i32 { unknown_name }`);
+    });
+
+    it("does not cascade a field-type-mismatch diagnostic for an unresolved field value", (): void => {
+      assertNoCascade(
+        `struct P { x: i32 } fn main() { let p = P { x: unknown_name }; }`,
+      );
     });
   });
 

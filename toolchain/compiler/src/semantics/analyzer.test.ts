@@ -66,6 +66,43 @@ describe("semantic analysis", (): void => {
     expect(result.diagnostics[0]?.message).toContain("y");
   });
 
+  describe("top-level function resolution", () => {
+    it("resolves a call to a top-level function from another top-level function", (): void => {
+      const result = diagnose(
+        "fn add(a: i32, b: i32) -> i32 { a + b } fn main() { print(add(1, 2)); }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a call to a top-level function declared later in the file", (): void => {
+      const result = diagnose(
+        "fn main() { print(later(3)); } fn later(x: i32) -> i32 { x + 1 }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a genuinely undefined top-level function call", (): void => {
+      const result = diagnose("fn main() { print(missing_fn(1)); }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("missing_fn");
+    });
+
+    it("rejects a duplicate top-level function declaration", (): void => {
+      const result = diagnose(
+        "fn add(a: i32) -> i32 { a } fn add(b: i32) -> i32 { b } fn main() {}",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "defined more than once",
+      );
+    });
+
+    it("does not flag a top-level function named the same as a builtin as a duplicate", (): void => {
+      const result = diagnose("fn print() {} fn main() {}");
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
   it("struct declaration does not crash the analyzer", (): void => {
     const result = diagnose("struct Foo;");
     expect(result.diagnostics).toEqual([]);
@@ -184,6 +221,16 @@ describe("semantic analysis", (): void => {
     ]);
   });
 
+  it("rejects arithmetic on unit-typed operands", (): void => {
+    const result = diagnose('fn main() { let x = print("hi") + 1; }');
+    const numericError = result.diagnostics.find((d) =>
+      d.message.includes("arithmetic operands must be numeric"),
+    );
+    assert(numericError !== undefined, "Expected a numeric-operand error");
+    expect(numericError.severity).toBe("error");
+    expect(numericError.message).toContain("()");
+  });
+
   it.each(["=", "+=", "-=", "*=", "/=", "%=", "<<=", ">>="])(
     "rejects `%s` assignment to immutable let binding",
     (op): void => {
@@ -218,6 +265,228 @@ describe("semantic analysis", (): void => {
       fn second() { struct Foo { x: i32 } }
     `);
     expect(result.diagnostics).toEqual([]);
+  });
+
+  it("does not cascade a type-mismatch diagnostic for an unresolved let initializer", (): void => {
+    const { diagnostics } = diagnose("fn main() { let x: i32 = missing_var; }");
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("missing_var");
+  });
+
+  it("rejects a genuinely unit-typed let initializer against a non-unit annotation", (): void => {
+    const { diagnostics } = diagnose("fn main() { let x: i32 = {}; }");
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toContain("type mismatch");
+  });
+
+  describe("function return type", () => {
+    it("rejects a body whose trailing expression does not match the declared return type", (): void => {
+      const { diagnostics } = diagnose('fn bad() -> i32 { "x" }');
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].severity).toBe("error");
+      expect(diagnostics[0].message).toContain("return type mismatch");
+      expect(diagnostics[0].message).toContain("i32");
+      expect(diagnostics[0].message).toContain("str");
+    });
+
+    it("return type mismatch diagnostic span points at the trailing expression", (): void => {
+      const source = 'fn bad() -> i32 { "x" }';
+      const { result } = analyzeWithTokens(source);
+      expect(result.diagnostics).toHaveLength(1);
+      assert(result.diagnostics[0] !== undefined, "Expected diagnostics");
+      const span = result.diagnostics[0].span;
+      assert(isSome(span), "Expected span");
+      expect(span.value.start).toBe(source.indexOf('"x"'));
+    });
+
+    it("accepts a matching i32 return type", (): void => {
+      const result = diagnose("fn f() -> i32 { 5 }");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("coerces an unsuffixed literal trailing expression to the declared return type", (): void => {
+      const result = diagnose("fn f() -> u8 { 5 }");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a coerced literal trailing expression that is out of range for the return type", (): void => {
+      const { diagnostics } = diagnose("fn f() -> u8 { 300 }");
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].message).toContain("out of range for u8");
+    });
+
+    it("accepts a negated literal at exactly i8 min as the return value", (): void => {
+      const { diagnostics } = diagnose("fn f() -> i8 { -0x80 }");
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("rejects a negated literal below i8 min as the return value", (): void => {
+      const { diagnostics } = diagnose("fn f() -> i8 { -0x81 }");
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].message).toContain("out of range for i8");
+    });
+
+    it("does not cascade a return-type-mismatch diagnostic for an unresolved trailing name", (): void => {
+      const { diagnostics } = diagnose("fn bad() -> i32 { unknown_name }");
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].message).toContain("unknown_name");
+    });
+
+    it("rejects a genuinely unit-typed trailing expression against a non-unit return type", (): void => {
+      const { diagnostics } = diagnose('fn f() -> i32 { print("hi") }');
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].severity).toBe("error");
+      expect(diagnostics[0].message).toContain("return type mismatch");
+      expect(diagnostics[0].message).toContain("i32");
+      expect(diagnostics[0].message).toContain("()");
+    });
+
+    it("accepts a body with no trailing expression when the return type is implicit unit", (): void => {
+      const { diagnostics } = diagnose("fn f() {}");
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("rejects a declared non-unit return type with no trailing expression", (): void => {
+      const { diagnostics } = diagnose("fn f() -> i32 {}");
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].severity).toBe("error");
+      expect(diagnostics[0].message).toContain("missing return value");
+      expect(diagnostics[0].message).toContain("i32");
+    });
+
+    it("accepts a matching if/else trailing expression as the return value", (): void => {
+      const { diagnostics } = diagnose(
+        "fn f() -> i32 { if true { 1 } else { 2 } }",
+      );
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("rejects a mismatching if/else trailing expression as the return value", (): void => {
+      const { diagnostics } = diagnose(
+        "fn f() -> bool { if true { 1 } else { 2 } }",
+      );
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].message).toContain("return type mismatch");
+    });
+
+    it("checks the return type of a block-local function", (): void => {
+      const { diagnostics } = diagnose('fn main() { fn bad() -> i32 { "x" } }');
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].message).toContain("return type mismatch");
+    });
+  });
+
+  describe("struct field type", () => {
+    it("rejects a field value whose type does not match the declared field type", (): void => {
+      const { diagnostics } = diagnose(`
+        struct Point { x: i32 }
+        fn main() { let p = Point { x: "bad" }; print(p.x); }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].severity).toBe("error");
+      expect(diagnostics[0].message).toContain("x");
+      expect(diagnostics[0].message).toContain("i32");
+      expect(diagnostics[0].message).toContain("str");
+    });
+
+    it("field type mismatch diagnostic span points at the field value", (): void => {
+      const source =
+        'struct Point { x: i32 } fn main() { let p = Point { x: "bad" }; }';
+      const { result } = analyzeWithTokens(source);
+      expect(result.diagnostics).toHaveLength(1);
+      assert(result.diagnostics[0] !== undefined, "Expected diagnostics");
+      const span = result.diagnostics[0].span;
+      assert(isSome(span), "Expected span");
+      expect(span.value.start).toBe(source.indexOf('"bad"'));
+    });
+
+    it("accepts a matching field value", (): void => {
+      const { diagnostics } = diagnose(`
+        struct Point { x: i32 }
+        fn main() { let p = Point { x: 1 }; print(p.x); }
+      `);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("coerces an unsuffixed literal field value to the declared field type", (): void => {
+      const { diagnostics } = diagnose(`
+        struct Point { x: u8 }
+        fn main() { let p = Point { x: 5 }; print(p.x); }
+      `);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("rejects a coerced literal field value that is out of range for the field type", (): void => {
+      const { diagnostics } = diagnose(`
+        struct Point { x: u8 }
+        fn main() { let p = Point { x: 300 }; print(p.x); }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].message).toContain("out of range for u8");
+    });
+
+    it("reports each mismatched field independently", (): void => {
+      const { diagnostics } = diagnose(`
+        struct P { x: i32, y: bool }
+        fn main() { let p = P { x: "a", y: 1 }; }
+      `);
+      expect(diagnostics).toHaveLength(2);
+    });
+
+    it("does not cascade a field-type-mismatch diagnostic for an unresolved field value", (): void => {
+      const { diagnostics } = diagnose(`
+        struct P { x: i32 }
+        fn main() { let p = P { x: unknown_name }; }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].message).toContain("unknown_name");
+    });
+
+    it("rejects a genuinely unit-typed field value against a non-unit field type", (): void => {
+      const { diagnostics } = diagnose(`
+        struct P { x: i32 }
+        fn main() { let p = P { x: print("hi") }; }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].severity).toBe("error");
+      expect(diagnostics[0].message).toContain("type mismatch");
+    });
+
+    it("leaves a shorthand field untouched", (): void => {
+      const { diagnostics } = diagnose(`
+        struct P { x: i32 }
+        fn main() { let x: i32 = 1; let p = P { x }; print(p.x); }
+      `);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("still checks field types when a struct-update base is present", (): void => {
+      const { diagnostics } = diagnose(`
+        struct P { x: i32, y: i32 }
+        fn main() {
+          let base = P { x: 1, y: 2 };
+          let p = P { x: "bad", ..base };
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].message).toContain("x");
+    });
   });
 
   it.fails.each(["loop", "while", "for x in [1, 2, 3]"])(

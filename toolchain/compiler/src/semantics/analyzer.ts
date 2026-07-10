@@ -419,6 +419,57 @@ function fnSignatureType(fn: Parser.FunctionDecl): Semantics.FunctionType {
   };
 }
 
+/**
+ * Checks a function body's trailing-expression type against its declared
+ * (or implicit-unit) return type, coercing an unsuffixed-integer-literal
+ * trailing expression first. Only checks when there IS a trailing
+ * expression — AC1 is specifically about "the body's trailing expression";
+ * a body with no trailing expression (e.g. `fn f() -> i32 { let x = 1; }`)
+ * is intentionally left unchecked.
+ *
+ * Cascade guard: if the trailing expression's own analysis already failed
+ * (its type is the `UnitType` error-recovery placeholder), no diagnostic is
+ * emitted here — see {@link reconcileExpressionType}.
+ */
+function checkFunctionReturnType(
+  ctx: AnalysisContext,
+  body: Semantics.Block,
+  expectedReturnType: Semantics.Type,
+): Semantics.Block {
+  if (!isSome(body.trailingExpression)) {
+    if (expectedReturnType.kind !== "UnitType") {
+      emitError(
+        ctx,
+        `missing return value: expected \`${describeType(expectedReturnType)}\``,
+        body.tokenId,
+      );
+    }
+    return body;
+  }
+  const trailing = body.trailingExpression.value;
+
+  const { expr, mismatch } = reconcileExpressionType(
+    ctx,
+    trailing,
+    expectedReturnType,
+    trailing.tokenId,
+  );
+  if (expr.kind === "IntLiteral") {
+    checkPosLiteralRange(ctx, expr, expectedReturnType);
+  }
+  if (mismatch) {
+    emitError(
+      ctx,
+      `return type mismatch: expected \`${describeType(expectedReturnType)}\`, found \`${describeType(getType(expr))}\``,
+      trailing.tokenId,
+    );
+  }
+
+  return expr === trailing
+    ? body
+    : { ...body, trailingExpression: some(expr), type: getType(expr) };
+}
+
 function analyzeFunctionDecl(
   ctx: AnalysisContext,
   decl: Parser.FunctionDecl,
@@ -437,6 +488,20 @@ function analyzeFunctionDecl(
       };
     },
   );
+  const returnType: Option<Semantics.Type> = mapSome(
+    decl.returnType,
+    (rt: Parser.Type): Semantics.Type =>
+      validateSlice1Type(ctx, rt, rt.tokenId),
+  );
+  const expectedReturnType: Semantics.Type = unwrapSomeOr(returnType, {
+    kind: "UnitType",
+    tokenId: decl.tokenId,
+  });
+  const body = checkFunctionReturnType(
+    ctx,
+    analyzeBlock(ctx, decl.body),
+    expectedReturnType,
+  );
   const result: Semantics.FunctionDecl = {
     ...decl,
     name: {
@@ -445,12 +510,8 @@ function analyzeFunctionDecl(
     },
     attributes: decl.attributes.map((attr) => analyzeAttribute(ctx, attr)),
     params: analyzedParams,
-    returnType: mapSome(
-      decl.returnType,
-      (returnType: Parser.Type): Semantics.Type =>
-        validateSlice1Type(ctx, returnType, returnType.tokenId),
-    ),
-    body: analyzeBlock(ctx, decl.body),
+    returnType,
+    body,
   };
   ctx.scopes.pop();
   return result;
@@ -529,7 +590,6 @@ function analyzeStatement(
   }
 }
 
-// eslint-disable-next-line complexity -- This is difficult to split up
 function analyzeLetStatement(
   ctx: AnalysisContext,
   statement: Parser.LetStatement,
@@ -549,36 +609,14 @@ function analyzeLetStatement(
         statement.type.value,
         statement.tokenId,
       );
-      let typeMismatchSuppressed = false;
-      if (
-        isUnsuffixedLiteralExpr(analyzedInitializer.value) &&
-        isIntegerType(annotationType)
-      ) {
-        coercedInitializer = some(
-          coerceToIntegerType(analyzedInitializer.value, annotationType),
-        );
-        bindingType = annotationType;
-        typeMismatchSuppressed = true;
-      }
-      const initExpr = isSome(coercedInitializer)
-        ? coercedInitializer.value
-        : analyzedInitializer.value;
-      if (
-        initExpr.kind === "UnaryExpression" &&
-        initExpr.operator === "Neg" &&
-        initExpr.operand.kind === "IntLiteral" &&
-        !isSome(initExpr.operand.suffix)
-      ) {
-        const rangeError = checkNegLiteralRange(
-          initExpr.operand,
-          annotationType,
-        );
-        if (isSome(rangeError)) {
-          emitError(ctx, rangeError.value, statement.tokenId);
-          typeMismatchSuppressed = true;
-        }
-      }
-      if (!typeMismatchSuppressed && !typesEqual(annotationType, bindingType)) {
+      const { expr, mismatch } = reconcileExpressionType(
+        ctx,
+        analyzedInitializer.value,
+        annotationType,
+        statement.tokenId,
+      );
+      coercedInitializer = some(expr);
+      if (mismatch) {
         emitError(
           ctx,
           "type mismatch: explicit annotation does not match initializer type",
@@ -649,6 +687,28 @@ const NUMERIC_TYPE_NAME: Partial<Record<Semantics.Type["kind"], string>> = {
   PrimitiveF32Type: "f32",
   PrimitiveF64Type: "f64",
 };
+
+/**
+ * Renders a {@link Semantics.Type} as the name a diagnostic should show the
+ * user (`i32`, `bool`, `str`, a struct's simple name, `()`). Complements
+ * {@link NUMERIC_TYPE_NAME}, which only covers the numeric kinds.
+ */
+function describeType(type: Semantics.Type): string {
+  switch (type.kind) {
+    case "PrimitiveBooleanType":
+      return "bool";
+    case "PrimitiveStringType":
+      return "str";
+    case "PrimitiveCharType":
+      return "char";
+    case "StructType":
+      return type.name.split("::").pop() ?? type.name;
+    case "UnitType":
+      return "()";
+    default:
+      return NUMERIC_TYPE_NAME[type.kind] ?? type.kind;
+  }
+}
 
 // eslint-disable-next-line complexity -- This is difficult to split up
 function checkNegLiteralRange(
@@ -784,6 +844,91 @@ function isIntegerType(type: Semantics.Type): boolean {
   );
 }
 
+/**
+ * Kinds whose `UnitType` result can only be the error-recovery placeholder
+ * for a failed sub-analysis (unresolved name/field/struct, or a Slice-1
+ * not-yet-implemented construct), or a type inherited/propagated from such
+ * a placeholder (`BinaryExpression`/`UnaryExpression`, which never compute
+ * `UnitType` themselves — only ever pass one through from an operand) —
+ * never a genuine unit value. A `UnitType` from one of these suppresses a
+ * redundant diagnostic, since the failure already reported its own error
+ * (or, for not-yet-implemented constructs, isn't a reliable type signal
+ * yet). A `UnitType` from anything else (`CallExpression`, `Block`,
+ * `AssignExpression`, `CompoundAssignExpression`, `IfExpression`, ...) is
+ * genuine and must be compared normally.
+ */
+function isAmbiguousUnitExpr(expr: Semantics.Expression): boolean {
+  switch (expr.kind) {
+    case "PathExpression":
+    case "FieldAccessExpression":
+    case "StructExpression":
+    case "MethodCallExpression":
+    case "IndexExpression":
+    case "BinaryExpression":
+    case "UnaryExpression":
+    case "TupleExpression":
+    case "ReferenceExpression":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Reconciles an analyzed expression against an `expectedType` context — a
+ * `let` binding's explicit annotation, a function's declared return type, or
+ * a struct field's declared type — applying Slice 1's unsuffixed-integer-
+ * literal coercion (0010-primitive-types.md: an unconstrained literal adopts
+ * the type its context expects) and negative-literal range checks before
+ * falling back to a plain type-equality comparison.
+ *
+ * Callers are responsible for (a) emitting their own call-site-specific
+ * message when `mismatch` is true, and (b) running {@link checkPosLiteralRange}
+ * on the result if it is an `IntLiteral` — kept out of this helper so each
+ * call site performs the positive-range check exactly once.
+ *
+ * Cascade guard: `mismatch` is always `false` when the resolved expression's
+ * type is the `UnitType` error-recovery placeholder (see
+ * {@link isAmbiguousUnitExpr}) — that failure already reported its own
+ * diagnostic. A genuinely unit-typed result (e.g. a `print(...)` call) is
+ * compared normally, not suppressed.
+ */
+function reconcileExpressionType(
+  ctx: AnalysisContext,
+  expr: Semantics.Expression,
+  expectedType: Semantics.Type,
+  tokenId: number,
+): { expr: Semantics.Expression; mismatch: boolean } {
+  let result = expr;
+  let suppressed = false;
+
+  if (isUnsuffixedLiteralExpr(expr) && isIntegerType(expectedType)) {
+    result = coerceToIntegerType(expr, expectedType);
+    suppressed = true;
+  }
+
+  if (
+    result.kind === "UnaryExpression" &&
+    result.operator === "Neg" &&
+    result.operand.kind === "IntLiteral" &&
+    !isSome(result.operand.suffix)
+  ) {
+    const rangeError = checkNegLiteralRange(result.operand, expectedType);
+    if (isSome(rangeError)) {
+      emitError(ctx, rangeError.value, tokenId);
+      suppressed = true;
+    }
+  }
+
+  const resultType = getType(result);
+  const mismatch =
+    !suppressed &&
+    (resultType.kind !== "UnitType" || !isAmbiguousUnitExpr(result)) &&
+    !typesEqual(expectedType, resultType);
+
+  return { expr: result, mismatch };
+}
+
 // eslint-disable-next-line complexity -- This is a routing function
 function inferBinaryType(
   ctx: AnalysisContext,
@@ -797,10 +942,14 @@ function inferBinaryType(
   const leftType = getType(left);
   const rightType = getType(right);
 
-  // UnitType is the error-recovery type from failed name resolution.
-  // Suppress cascading type errors when either operand already failed.
-  const isLeftTypeValid = leftType.kind !== "UnitType";
-  const isRightTypeValid = rightType.kind !== "UnitType";
+  // UnitType is ambiguous: it's either the error-recovery placeholder from a
+  // failed sub-analysis, or a genuine unit value (e.g. a `print(...)` call).
+  // Only suppress cascading type errors for the former — see
+  // isAmbiguousUnitExpr.
+  const isLeftTypeValid =
+    leftType.kind !== "UnitType" || !isAmbiguousUnitExpr(left);
+  const isRightTypeValid =
+    rightType.kind !== "UnitType" || !isAmbiguousUnitExpr(right);
 
   switch (op) {
     case "Eq":
@@ -857,14 +1006,14 @@ function inferBinaryType(
       if (isLeftTypeValid && !hasCapability(leftType, "arithmetic")) {
         emitError(
           ctx,
-          `arithmetic operands must be numeric; left-operand is type "${leftType.kind}"`,
+          `arithmetic operands must be numeric; left-operand is type \`${describeType(leftType)}\``,
           tokenId,
         );
       }
       if (isRightTypeValid && !hasCapability(rightType, "arithmetic")) {
         emitError(
           ctx,
-          `arithmetic operands must be numeric; right-operand is type "${rightType.kind}"`,
+          `arithmetic operands must be numeric; right-operand is type \`${describeType(rightType)}\``,
           tokenId,
         );
       }
@@ -1204,11 +1353,14 @@ function analyzeStructExpression(
     };
   }
 
+  let checkedFields = analyzedFields;
   if (structDecl.body.kind === "NamedFields") {
-    analyzeStructNamedFields(
+    checkedFields = analyzeStructNamedFields(
       ctx,
       structName,
-      structExpression,
+      analyzedFields,
+      isSome(analyzedBase),
+      structExpression.tokenId,
       structDecl.body,
     );
   } else if (
@@ -1226,24 +1378,37 @@ function analyzeStructExpression(
 
   return {
     ...structExpression,
-    fields: analyzedFields,
+    fields: checkedFields,
     base: analyzedBase,
     type: structDecl.type,
   };
 }
 
+/**
+ * Checks each provided field against the struct's declaration: duplicate
+ * names, unknown names, value-type mismatches (coercing an unsuffixed-
+ * integer-literal value first), and — unless a `..base` spread is present —
+ * missing required fields. Returns the fields with any coerced values
+ * threaded back in, since downstream JSIM lowering reads each field value's
+ * `.type` to pick numeric wrapping.
+ */
 function analyzeStructNamedFields(
   ctx: AnalysisContext,
   structName: string,
-  structExpression: Parser.StructExpression,
+  fields: readonly Semantics.FieldInit[],
+  hasBase: boolean,
+  structTokenId: number,
   namedFieldsBody: Semantics.NamedFieldsBody,
-): void {
-  const declaredFieldNames = new Set(
-    namedFieldsBody.fields.map((f) => f.name.text),
+): Semantics.FieldInit[] {
+  const declaredFields = new Map(
+    namedFieldsBody.fields.map((f): [string, Semantics.StructField] => [
+      f.name.text,
+      f,
+    ]),
   );
 
   const seenFields = new Set<string>();
-  for (const field of structExpression.fields) {
+  const checkedFields = fields.map((field): Semantics.FieldInit => {
     if (seenFields.has(field.name.text)) {
       emitError(
         ctx,
@@ -1252,26 +1417,56 @@ function analyzeStructNamedFields(
       );
     }
     seenFields.add(field.name.text);
-    if (!declaredFieldNames.has(field.name.text)) {
+
+    const declaredField = declaredFields.get(field.name.text);
+    if (declaredField === undefined) {
       emitError(
         ctx,
         `unknown field \`${field.name.text}\` for struct \`${structName}\``,
         field.name.tokenId,
       );
+      return field;
     }
-  }
 
-  if (!isSome(structExpression.base)) {
-    for (const fieldName of declaredFieldNames) {
+    // Shorthand `Foo { x }` (field.value is none()) — value-type inference
+    // for shorthand is a separate, pre-existing gap; out of scope here.
+    if (!isSome(field.value)) return field;
+
+    const value = field.value.value;
+    const { expr, mismatch } = reconcileExpressionType(
+      ctx,
+      value,
+      declaredField.type,
+      value.tokenId,
+    );
+    if (expr.kind === "IntLiteral") {
+      checkPosLiteralRange(ctx, expr, declaredField.type);
+    }
+    if (mismatch) {
+      emitError(
+        ctx,
+        `field \`${field.name.text}\` type mismatch: expected \`${describeType(declaredField.type)}\`, found \`${describeType(getType(expr))}\``,
+        value.tokenId,
+      );
+    }
+    return expr === value
+      ? field
+      : { ...field, value: some(expr), type: getType(expr) };
+  });
+
+  if (!hasBase) {
+    for (const fieldName of declaredFields.keys()) {
       if (!seenFields.has(fieldName)) {
         emitError(
           ctx,
           `missing required field \`${fieldName}\` in struct literal of type \`${structName}\``,
-          structExpression.tokenId,
+          structTokenId,
         );
       }
     }
   }
+
+  return checkedFields;
 }
 
 function analyzeIfExpression(
@@ -1381,6 +1576,7 @@ export function analyze(
     diagnostics: [],
     tokens,
   };
+  const topLevelFunctionNames = new Set<string>();
   for (const item of program.items) {
     if (item.kind === "Struct") {
       if (ctx.typeScope.has(item.name.text)) {
@@ -1391,6 +1587,20 @@ export function analyze(
         );
       } else {
         ctx.typeScope.set(item.name.text, analyzeStruct(ctx, item));
+      }
+    } else if (item.kind === "Function") {
+      if (topLevelFunctionNames.has(item.name.text)) {
+        emitError(
+          ctx,
+          `function \`${item.name.text}\` is defined more than once`,
+          item.name.tokenId,
+        );
+      } else {
+        topLevelFunctionNames.add(item.name.text);
+        bind(ctx, item.name.text, {
+          type: fnSignatureType(item),
+          mutable: false,
+        });
       }
     }
   }

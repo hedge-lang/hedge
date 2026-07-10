@@ -84,7 +84,7 @@ describe("generator", (): void => {
 
   it("generates libraries without the shebang", () => {
     const code = gen(`
-      fn lib() { 0 }
+      fn lib() { 0; }
     `);
     expect(js(code)).toBe(["function lib() {", "  0;", "}", ""].join("\n"));
   });
@@ -144,7 +144,7 @@ describe("generator", (): void => {
   });
 
   it("emits param types in .d.ts for pub fn", (): void => {
-    expect(dts(gen("pub fn add(x: i32, y: i32) -> i32 {}"))).toBe(
+    expect(dts(gen("pub fn add(x: i32, y: i32) -> i32 { x + y }"))).toBe(
       "export declare function add(x: number, y: number): number;\n",
     );
   });
@@ -483,19 +483,35 @@ describe("if expression codegen", () => {
   });
   it("else-if chain emits inline else if", () => {
     expect(
-      stmts(gen("fn _(a: (), b: ()) { if a { 1 } else if b { 2 } }")),
+      stmts(
+        gen(
+          "fn _(a: (), b: ()) -> i32 { if a { 1 } else if b { 2 } else { 3 } }",
+        ),
+      ),
     ).toBe(
       [
-        "(() => {",
-        "  if (a) {",
-        "    return 1;",
-        "  } else if (b) {",
-        "    return 2;",
-        "  }",
-        "})();",
+        "if (a) {",
+        "  return 1;",
+        "} else if (b) {",
+        "  return 2;",
+        "} else {",
+        "  return 3;",
+        "}",
       ].join("\n"),
     );
   });
+  it("a plain trailing expression returns a value with the correct i32 wrap", () => {
+    const code = gen("fn double(x: i32) -> i32 { x * 2 }");
+    expect(js(code)).toBe("function double(x) {\n  return ((x * 2)|0);\n}\n");
+  });
+
+  it("an if/else trailing expression returns a value from each branch, no IIFE", () => {
+    const code = gen("fn sign(x: i32) -> i32 { if x > 0 { 1 } else { -1 } }");
+    expect(js(code)).toBe(
+      "function sign(x) {\n  if (x > 0) {\n    return 1;\n  } else {\n    return ((-1)|0);\n  }\n}\n",
+    );
+  });
+
   it("empty branches emit empty blocks", () => {
     expect(stmts(gen("fn _(cond: ()) { if cond { } else { }; }"))).toBe(
       "if (cond) {} else {}",

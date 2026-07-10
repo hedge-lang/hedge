@@ -332,11 +332,9 @@ function evalFunctionBody(program: Program): RefValue {
 }
 
 // ---------------------------------------------------------------------------
-// Compiled runner — compile source and eval the generated function body.
-// Returns null when compilation produced no code or the body is empty.
-//
-// The current compiler emits the trailing expression as an ExpressionStatement
-// rather than a ReturnStatement, so calling compute() would return undefined.
+// Compiled runner — compile source, define the generated function, and call
+// it for its real return value.
+// Returns null when compilation produced no code or the shape is unexpected.
 // ---------------------------------------------------------------------------
 function runCompiledSource(source: string): RefValue | null {
   const compileResult = compile(source);
@@ -344,15 +342,15 @@ function runCompiledSource(source: string): RefValue | null {
   const { javascript } = compileResult.code.value;
   if (!isSome(javascript)) return null;
   const jsSource = javascript.value;
-  // Match: function <name>() {\n  <body>\n}\n
-  const match = /^function \w+\(\) \{\n([\s\S]+)\n}\n$/.exec(jsSource);
-  if (match === null) return null;
-  const indented = match[1];
-  if (indented === undefined) return null;
-  // Strip the two-space indent the generator adds to each line.
-  const body = indented.replace(/^ {2}/gm, "");
+  // Every caller (assertI32, assertBool, genComputeProgram) compiles a
+  // single `fn compute() -> ...`; call it by name directly rather than
+  // structurally matching the source, which is sensitive to whitespace,
+  // parameter lists, and function ordering.
+  if (!/\bfunction\s+compute\s*\(/.test(jsSource)) return null;
   // Narrow the result at runtime — eval returns any, so we validate the type.
-  const evalResult: unknown = runInNewContext(body, { Math });
+  const evalResult: unknown = runInNewContext(`${jsSource}\ncompute();`, {
+    Math,
+  });
   if (typeof evalResult === "number" || typeof evalResult === "boolean")
     return evalResult;
   return null;

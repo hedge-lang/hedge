@@ -209,6 +209,25 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     ],
   },
   {
+    id: "EXEC-FUNCTIONS",
+    description:
+      "User-defined functions with non-unit return types return their trailing expression's value, including tail-position if/else chains, end-to-end",
+    specRefs: [
+      "0009-functions-and-closures.md",
+      "0008-expressions-and-control-flow.md",
+    ],
+    testIds: [
+      "function trailing expression returns a value",
+      "if/else trailing expression returns a value",
+      "else-if chain trailing expression returns from every branch",
+      "nested user-defined function calls use real return values",
+      "calling a top-level function declared later in the file (forward reference)",
+      "a unit-returning function's trailing expression is still discarded",
+      "returns the correct value at the i32 boundary",
+      "a function's return value composes directly into another call's argument",
+    ],
+  },
+  {
     id: "EXEC-LITERALS",
     description: "Literal types beyond integers execute correctly end-to-end",
     specRefs: ["0010-primitive-types.md"],
@@ -269,6 +288,9 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "rejects equality comparison between mismatched types",
       "rejects let binding type annotation mismatch: integer vs bool annotation",
       "rejects float assigned to i32-annotated binding",
+      "rejects function return type mismatch",
+      "rejects arithmetic on a genuinely unit-typed operand",
+      "rejects a non-unit return type with no trailing expression",
     ],
   },
   {
@@ -326,6 +348,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "rejects field access using another struct's field name",
       "rejects duplicate field in struct literal",
       "rejects duplicate struct declaration",
+      "rejects struct field value type mismatch (bool vs i32)",
     ],
   },
 ];
@@ -346,6 +369,7 @@ export const CORE_REQUIRED_RULE_IDS: readonly string[] = [
   "EXEC-BINDINGS",
   "EXEC-BLOCKS",
   "EXEC-STRUCTS",
+  "EXEC-FUNCTIONS",
   "EXEC-LITERALS",
   "PROP-INT-SEMANTICS",
   "PROP-ALGEBRAIC-LAWS",
@@ -556,14 +580,6 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "dual-compiler parity keeps skip guards only at the harness boundary",
     ],
   },
-  {
-    id: "FUTURE-SEMANTICS-STUBS",
-    description: "Future semantics activation stubs are tracked explicitly",
-    testIds: [
-      "executes user-defined return-value function calls once supported",
-      "supports nested user-defined call chains once supported",
-    ],
-  },
 ];
 
 export const CROSS_DOMAIN_REQUIRED_RULE_IDS: readonly string[] = [
@@ -587,5 +603,4 @@ export const CROSS_DOMAIN_REQUIRED_RULE_IDS: readonly string[] = [
   "FUZZ-STABILITY",
   "PERF-GUARDRAIL",
   "SPEC-FIRST-GOVERNANCE",
-  "FUTURE-SEMANTICS-STUBS",
 ];

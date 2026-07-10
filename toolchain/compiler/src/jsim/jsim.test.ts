@@ -388,6 +388,128 @@ describe("toJsim", () => {
     });
   });
 
+  describe("function trailing-expression lowering (tail-position return)", () => {
+    it("plain-expression trailing return lowers to a single ReturnStatement, no IIFE", () => {
+      const program = toJsim(parseOrThrow("fn f(x: i32) -> i32 { x * 2 }"));
+      expect(program).toMatchObject({
+        items: [
+          {
+            kind: "FunctionDecl",
+            body: [
+              {
+                kind: "ReturnStatement",
+                value: { value: { kind: "BinaryExpression" } },
+              },
+            ],
+          },
+        ],
+      });
+    });
+
+    it("if/else trailing return lowers to a bare IfStatement with ReturnStatement in each branch, no IIFE", () => {
+      const program = toJsim(
+        parseOrThrow("fn sign(x: i32) -> i32 { if x > 0 { 1 } else { -1 } }"),
+      );
+      expect(program).toMatchObject({
+        items: [
+          {
+            kind: "FunctionDecl",
+            body: [
+              {
+                kind: "IfStatement",
+                thenBranch: [{ kind: "ReturnStatement" }],
+                elseBranch: { value: [{ kind: "ReturnStatement" }] },
+              },
+            ],
+          },
+        ],
+      });
+    });
+
+    it("else-if chain trailing return recursively pushes ReturnStatement into every leaf", () => {
+      const program = toJsim(
+        parseOrThrow(
+          "fn f(a: bool, b: bool) -> i32 { if a { 1 } else if b { 2 } else { 3 } }",
+        ),
+      );
+      expect(program).toMatchObject({
+        items: [
+          {
+            kind: "FunctionDecl",
+            body: [
+              {
+                kind: "IfStatement",
+                thenBranch: [{ kind: "ReturnStatement" }],
+                elseBranch: {
+                  value: [
+                    {
+                      kind: "IfStatement",
+                      thenBranch: [{ kind: "ReturnStatement" }],
+                      elseBranch: { value: [{ kind: "ReturnStatement" }] },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      });
+    });
+
+    it("a unit-returning function's trailing expression stays a bare statement, not a ReturnStatement", () => {
+      const program = toJsim(parseOrThrow('fn f() { print("hi") }'));
+      expect(program).toMatchObject({
+        items: [
+          {
+            kind: "FunctionDecl",
+            body: [{ kind: "CallExpression" }],
+          },
+        ],
+      });
+    });
+
+    it("block trailing-expression splices its return directly, no IIFE", () => {
+      const program = toJsim(parseOrThrow("fn f() -> i32 { { 5 } }"));
+      expect(program).toMatchObject({
+        items: [
+          {
+            kind: "FunctionDecl",
+            body: [
+              {
+                kind: "ReturnStatement",
+                value: { value: { kind: "NumberLiteral" } },
+              },
+            ],
+          },
+        ],
+      });
+    });
+
+    it("known limitation: an if nested inside a function's trailing block is still IIFE-wrapped (one level deep only)", () => {
+      const program = toJsim(
+        parseOrThrow("fn f() -> i32 { { if true { 1 } else { 2 } } }"),
+      );
+      expect(program).toMatchObject({
+        items: [
+          {
+            kind: "FunctionDecl",
+            body: [
+              {
+                kind: "ReturnStatement",
+                value: {
+                  value: {
+                    kind: "CallExpression",
+                    callee: { kind: "ArrowFunctionExpression" },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      });
+    });
+  });
+
   describe("alpha-rename", () => {
     it("three sequential shadows of the same name produce distinct emitted identifiers", () => {
       const program = toJsim(
