@@ -342,13 +342,13 @@ function runCompiledSource(source: string): RefValue | null {
   const { javascript } = compileResult.code.value;
   if (!isSome(javascript)) return null;
   const jsSource = javascript.value;
-  // Match: function <name>() {\n  ...\n}\n
-  const match = /^function (\w+)\(\) \{\n[\s\S]+\n}\n$/.exec(jsSource);
-  if (match === null) return null;
-  const fnName = match[1];
-  if (fnName === undefined) return null;
+  // Every caller (assertI32, assertBool, genComputeProgram) compiles a
+  // single `fn compute() -> ...`; call it by name directly rather than
+  // structurally matching the source, which is sensitive to whitespace,
+  // parameter lists, and function ordering.
+  if (!/\bfunction\s+compute\s*\(/.test(jsSource)) return null;
   // Narrow the result at runtime — eval returns any, so we validate the type.
-  const evalResult: unknown = runInNewContext(`${jsSource}\n${fnName}();`, {
+  const evalResult: unknown = runInNewContext(`${jsSource}\ncompute();`, {
     Math,
   });
   if (typeof evalResult === "number" || typeof evalResult === "boolean")

@@ -289,6 +289,8 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "rejects let binding type annotation mismatch: integer vs bool annotation",
       "rejects float assigned to i32-annotated binding",
       "rejects function return type mismatch",
+      "rejects arithmetic on a genuinely unit-typed operand",
+      "rejects a non-unit return type with no trailing expression",
     ],
   },
   {

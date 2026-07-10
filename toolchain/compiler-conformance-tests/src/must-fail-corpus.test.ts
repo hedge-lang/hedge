@@ -237,6 +237,17 @@ describe("must-fail corpus — rejection tests", (): void => {
       );
     });
 
+    it("rejects arithmetic on a genuinely unit-typed operand", (): void => {
+      assertRejectsWithMessage(
+        `fn main() { let x = print("hi") + 1; }`,
+        "numeric",
+      );
+    });
+
+    it("rejects a non-unit return type with no trailing expression", (): void => {
+      assertRejectsWithMessage(`fn f() -> i32 {} fn main() {}`, "return");
+    });
+
     it("rejects equality comparison between mismatched types", (): void => {
       assertRejectsWithMessage(`fn main() { print(1 == "1"); }`, "type");
     });
