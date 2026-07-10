@@ -176,6 +176,22 @@ describe("semantic analysis", (): void => {
     expect(span.value.start).toBe(source.indexOf("UnknownType"));
   });
 
+  it("accepts a struct type as a function parameter type", (): void => {
+    const result = diagnose(`
+      struct Boxed { value: i32 }
+      fn take(v: Boxed) { print(v.value); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts a struct type as a function return type", (): void => {
+    const result = diagnose(`
+      struct Boxed { value: i32 }
+      fn make() -> Boxed { Boxed { value: 1 } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
   describe("integer literal range validation", () => {
     describe("negated literal in binary expression", () => {
       it("rejects a negated literal below i8 min in a comparison", () => {

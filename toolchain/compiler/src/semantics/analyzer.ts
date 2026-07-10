@@ -217,6 +217,10 @@ function validateSlice1Type(
     if (isSome(prim)) {
       return prim.value;
     }
+    const structDecl = ctx.typeScope.get(name);
+    if (structDecl !== undefined) {
+      return structDecl.type;
+    }
   }
   if (type.kind === "UnitType") return type;
   emitError(ctx, "type is not supported in Slice 1", tokenId);
