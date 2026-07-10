@@ -2,7 +2,11 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": ".",
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "@hedge-lang/compiler": ["../compiler/src/index.ts"]
+    },
+    "composite": true
   },
   "include": ["src/**/*.ts", "vitest.config.ts"]
 }
