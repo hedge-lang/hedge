@@ -99,7 +99,7 @@ describe("must-fail corpus — rejection tests", (): void => {
     });
 
     describe("ownership move errors", (): void => {
-      it.fails("rejects reading moved struct value", (): void => {
+      it("rejects reading moved struct value", (): void => {
         assertRejectsWithMessage(
           `
           struct Boxed { value: i32 }
@@ -114,7 +114,7 @@ describe("must-fail corpus — rejection tests", (): void => {
         );
       });
 
-      it.fails("rejects double move of the same owned binding", (): void => {
+      it("rejects double move of the same owned binding", (): void => {
         assertRejectsWithMessage(
           `
           struct Boxed { value: i32 }

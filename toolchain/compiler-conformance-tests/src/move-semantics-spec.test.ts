@@ -21,7 +21,7 @@ describe("move semantics spec", (): void => {
     );
   });
 
-  it.fails("moved struct binding is unusable after move", (): void => {
+  it("moved struct binding is unusable after move", (): void => {
     assertRejectsWithMessage(
       `
       struct Boxed { value: i32 }
@@ -36,7 +36,7 @@ describe("move semantics spec", (): void => {
     );
   });
 
-  it.fails("moving the same owned value twice is rejected", (): void => {
+  it("moving the same owned value twice is rejected", (): void => {
     assertRejectsWithMessage(
       `
       struct Boxed { value: i32 }
@@ -52,7 +52,7 @@ describe("move semantics spec", (): void => {
     );
   });
 
-  it.fails("move in one branch invalidates use after merge", (): void => {
+  it("move in one branch invalidates use after merge", (): void => {
     assertRejectsWithMessage(
       `
       struct Boxed { value: i32 }
@@ -72,7 +72,7 @@ describe("move semantics spec", (): void => {
     );
   });
 
-  it.fails("passing owned value by value consumes it", (): void => {
+  it("passing owned value by value consumes it", (): void => {
     assertRejectsWithMessage(
       `
       struct Boxed { value: i32 }
@@ -84,6 +84,18 @@ describe("move semantics spec", (): void => {
       }
     `,
       "moved",
+    );
+  });
+
+  it("using an uninitialized binding is rejected", (): void => {
+    assertRejectsWithMessage(
+      `
+      fn main() {
+        let mut x: i32;
+        print(x);
+      }
+    `,
+      "uninitialized",
     );
   });
 
