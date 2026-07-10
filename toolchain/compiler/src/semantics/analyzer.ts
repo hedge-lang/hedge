@@ -1531,6 +1531,7 @@ export function analyze(
     diagnostics: [],
     tokens,
   };
+  const topLevelFunctionNames = new Set<string>();
   for (const item of program.items) {
     if (item.kind === "Struct") {
       if (ctx.typeScope.has(item.name.text)) {
@@ -1541,6 +1542,20 @@ export function analyze(
         );
       } else {
         ctx.typeScope.set(item.name.text, analyzeStruct(ctx, item));
+      }
+    } else if (item.kind === "Function") {
+      if (topLevelFunctionNames.has(item.name.text)) {
+        emitError(
+          ctx,
+          `function \`${item.name.text}\` is defined more than once`,
+          item.name.tokenId,
+        );
+      } else {
+        topLevelFunctionNames.add(item.name.text);
+        bind(ctx, item.name.text, {
+          type: fnSignatureType(item),
+          mutable: false,
+        });
       }
     }
   }

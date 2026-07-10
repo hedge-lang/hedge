@@ -380,6 +380,86 @@ describe("execution tests", (): void => {
     });
   });
 
+  describe("functions", (): void => {
+    it("function trailing expression returns a value", (): void => {
+      assertRunsTo(
+        `fn double(x: i32) -> i32 { x * 2 } fn main() { print(double(5)); }`,
+        ["10"],
+      );
+    });
+
+    it("if/else trailing expression returns a value", (): void => {
+      assertRunsTo(
+        `
+        fn sign(x: i32) -> i32 { if x > 0 { 1 } else { -1 } }
+        fn main() {
+          print(sign(5));
+          print(sign(-5));
+        }
+        `,
+        ["1", "-1"],
+      );
+    });
+
+    it("else-if chain trailing expression returns from every branch", (): void => {
+      assertRunsTo(
+        `
+        fn sign(x: i32) -> i32 {
+          if x > 0 { 1 } else if x < 0 { -1 } else { 0 }
+        }
+        fn main() {
+          print(sign(5));
+          print(sign(-5));
+          print(sign(0));
+        }
+        `,
+        ["1", "-1", "0"],
+      );
+    });
+
+    it("nested user-defined function calls use real return values", (): void => {
+      assertRunsTo(
+        `fn inc(x: i32) -> i32 { x + 1 } fn main() { let y = inc(inc(1)); print(y); }`,
+        ["3"],
+      );
+    });
+
+    it("calling a top-level function declared later in the file (forward reference)", (): void => {
+      assertRunsTo(
+        `fn main() { print(later(3)); } fn later(x: i32) -> i32 { x + 1 }`,
+        ["4"],
+      );
+    });
+
+    it("a unit-returning function's trailing expression is still discarded", (): void => {
+      assertRunsTo(
+        `fn log(x: i32) { print(x); } fn main() { log(9); }`,
+        ["9"],
+      );
+    });
+
+    it("returns the correct value at the i32 boundary", (): void => {
+      assertRunsTo(
+        `
+        fn clampish(x: i32) -> i32 { if x > 100 { 100 } else { x } }
+        fn main() { print(clampish(2147483647)); }
+        `,
+        ["100"],
+      );
+    });
+
+    it("a function's return value composes directly into another call's argument", (): void => {
+      assertRunsTo(
+        `
+        fn double(x: i32) -> i32 { x * 2 }
+        fn sign(x: i32) -> i32 { if x > 0 { 1 } else { -1 } }
+        fn main() { print(double(sign(5))); }
+        `,
+        ["2"],
+      );
+    });
+  });
+
   describe("error handling", (): void => {
     it("fails to compile unknown variable", (): void => {
       const result = compileHedgeCode(`fn main() { print(unknown_var); }`);

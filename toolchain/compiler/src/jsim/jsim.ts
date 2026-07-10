@@ -240,11 +240,26 @@ function parseFunctionBody(
   const outerDoc = toDocComment(fn.attributes);
   const docComment = isSome(innerDoc) ? innerDoc : outerDoc;
 
+  // A declared, non-unit return type. When Some, Gap-A's return-type-mismatch
+  // check (checkFunctionReturnType in analyzer.ts) already guarantees
+  // fn.body.trailingExpression is Some and its type matches — no defensive
+  // handling needed here for "declared return type but missing/wrong trailing
+  // expression."
+  const declaredReturnType: Option<Semantics.Type> =
+    isSome(fn.returnType) && fn.returnType.value.kind !== "UnitType"
+      ? fn.returnType
+      : none();
+
   const statements: JSIM.Statement[] = fn.body.statements.map((stmt) =>
     parseStatement(ctx, stmt),
   );
   if (isSome(fn.body.trailingExpression)) {
-    statements.push(parseExpression(ctx, fn.body.trailingExpression.value));
+    const trailing = fn.body.trailingExpression.value;
+    statements.push(
+      ...(isSome(declaredReturnType)
+        ? jsimTailStatements(ctx, trailing)
+        : [parseExpression(ctx, trailing)]),
+    );
   }
 
   const scope: JSIM.FunctionDecl["scope"] = mapSome(
@@ -267,10 +282,9 @@ function parseFunctionBody(
           : [];
       },
     ),
-    returnType:
-      isSome(fn.returnType) && fn.returnType.value.kind !== "UnitType"
-        ? semanticTypeToJsPrimitive(fn.returnType.value)
-        : none(),
+    returnType: isSome(declaredReturnType)
+      ? semanticTypeToJsPrimitive(declaredReturnType.value)
+      : none(),
     body: statements,
     docComment,
   };
@@ -490,6 +504,28 @@ function jsimIfStatement(
     thenBranch: jsimBranchBody(ctx, ifExpr.thenBranch),
     elseBranch: mapSome(ifExpr.elseBranch, (eb) => jsimBranchElse(ctx, eb)),
   };
+}
+
+/**
+ * Lowers a function's own trailing expression into tail-position statements
+ * ending in `return`, used only when the function has a declared non-unit
+ * return type. `IfExpression` and `Block` reuse the existing leaf-return
+ * lowering (`jsimIfStatement` / `jsimBranchBody`) spliced directly into the
+ * function body — no IIFE. Anything else becomes a single `ReturnStatement`.
+ *
+ * Scoped to exactly one level: a branch/block nested *inside* the function's
+ * own trailing `Block`/`IfExpression` still goes through the general
+ * IIFE-wrapping `parseExpression` path (e.g. a bare block whose own trailing
+ * expression is itself an `if`). Deliberately not chased further — this is
+ * an obscure, non-idiomatic construct.
+ */
+function jsimTailStatements(
+  ctx: JsimContext,
+  expr: Semantics.Expression,
+): JSIM.Statement[] {
+  if (expr.kind === "IfExpression") return [jsimIfStatement(ctx, expr)];
+  if (expr.kind === "Block") return jsimBranchBody(ctx, expr);
+  return [{ kind: "ReturnStatement", value: some(parseExpression(ctx, expr)) }];
 }
 
 function jsimIndexExpression(

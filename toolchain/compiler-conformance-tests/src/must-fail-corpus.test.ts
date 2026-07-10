@@ -24,20 +24,6 @@ describe("must-fail corpus — rejection tests", (): void => {
       assertRejects(`fn main() { undefined_fn(1, 2); }`);
     });
 
-    it("rejects call to function name not in scope", (): void => {
-      assertRejects(`
-        fn add(a: i32, b: i32) { print(a + b); }
-        fn main() { add(2, 3); }
-      `);
-    });
-
-    it("rejects multiple calls to function name not in scope", (): void => {
-      assertRejects(`
-        fn double(x: i32) { print(x * 2); }
-        fn main() { double(3); double(6); }
-      `);
-    });
-
     it("rejects use of name after binding", (): void => {
       assertRejects(`fn main() { let x = 1; print(y); }`);
     });

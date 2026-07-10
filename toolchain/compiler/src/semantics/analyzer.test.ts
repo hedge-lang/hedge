@@ -66,6 +66,43 @@ describe("semantic analysis", (): void => {
     expect(result.diagnostics[0]?.message).toContain("y");
   });
 
+  describe("top-level function resolution", () => {
+    it("resolves a call to a top-level function from another top-level function", (): void => {
+      const result = diagnose(
+        "fn add(a: i32, b: i32) -> i32 { a + b } fn main() { print(add(1, 2)); }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a call to a top-level function declared later in the file", (): void => {
+      const result = diagnose(
+        "fn main() { print(later(3)); } fn later(x: i32) -> i32 { x + 1 }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a genuinely undefined top-level function call", (): void => {
+      const result = diagnose("fn main() { print(missing_fn(1)); }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("missing_fn");
+    });
+
+    it("rejects a duplicate top-level function declaration", (): void => {
+      const result = diagnose(
+        "fn add(a: i32) -> i32 { a } fn add(b: i32) -> i32 { b } fn main() {}",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "defined more than once",
+      );
+    });
+
+    it("does not flag a top-level function named the same as a builtin as a duplicate", (): void => {
+      const result = diagnose("fn print() {} fn main() {}");
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
   it("struct declaration does not crash the analyzer", (): void => {
     const result = diagnose("struct Foo;");
     expect(result.diagnostics).toEqual([]);
