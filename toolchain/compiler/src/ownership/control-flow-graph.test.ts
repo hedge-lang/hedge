@@ -1,24 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import { assert } from "../assert.js";
-import { tokenize } from "../lexer/lexer.js";
 import { isSome } from "../option.js";
-import { parse } from "../parser/parser.js";
-import { analyze } from "../semantics/analyzer.js";
 import type * as Semantics from "../semantics/ast.js";
+import { analyzeSource } from "../testing/analyze-source.js";
 import type { BasicBlock, ControlFlowGraph } from "./control-flow-graph.js";
 import { buildControlFlowGraph } from "./control-flow-graph.js";
 
 function mainGraph(source: string): ControlFlowGraph {
-  const { tokens } = tokenize(source);
-  const { program, diagnostics } = parse(tokens);
-  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
-  const analysis = analyze(program.value, tokens);
-  assert(
-    analysis.diagnostics.every((d) => d.severity !== "error"),
-    analysis.diagnostics.map((d) => d.message).join("; "),
-  );
-  const main = analysis.program.items.find(
+  const { program } = analyzeSource(source);
+  const main = program.items.find(
     (item): item is Semantics.FunctionDecl =>
       item.kind === "Function" && item.name.text === "main",
   );

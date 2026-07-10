@@ -34,7 +34,7 @@ import type {
   ControlFlowGraph,
   Declaration,
 } from "./control-flow-graph.js";
-import { buildControlFlowGraph } from "./control-flow-graph.js";
+import { buildControlFlowGraph, declarationOf } from "./control-flow-graph.js";
 
 /**
  * A binding's move state within one function body. This vocabulary is
@@ -151,6 +151,31 @@ function singleSegmentName(path: Semantics.Path): string | undefined {
   return path.segments.length === 1 ? path.segments[0] : undefined;
 }
 
+interface ResolvedBinding {
+  readonly id: BindingId;
+  readonly name: string;
+}
+
+/**
+ * Combines `singleSegmentName` and `resolve`: `undefined` for a
+ * multi-segment path or a name that doesn't resolve to a tracked local
+ * binding (function names, builtins, already-diagnosed unresolved names).
+ */
+function resolveBinding(
+  pathExpr: Semantics.PathExpression,
+  scopeStack: ScopeStack,
+): ResolvedBinding | undefined {
+  const name = singleSegmentName(pathExpr.path);
+  if (name === undefined) {
+    return undefined;
+  }
+  const id = resolve(scopeStack, name);
+  if (id === undefined) {
+    return undefined;
+  }
+  return { id, name };
+}
+
 /**
  * Process a use of `pathExpr`. Requires the binding be `Owned` (else emits
  * use-after-move/use-before-init and poisons to `Owned` to avoid cascading).
@@ -167,14 +192,11 @@ function useOrMove(
   scopeStack: ScopeStack,
   asMove: boolean,
 ): void {
-  const name = singleSegmentName(pathExpr.path);
-  if (name === undefined) {
+  const resolved = resolveBinding(pathExpr, scopeStack);
+  if (resolved === undefined) {
     return;
   }
-  const id = resolve(scopeStack, name);
-  if (id === undefined) {
-    return;
-  }
+  const { id, name } = resolved;
   const current = state.get(id);
   if (current === undefined) {
     return;
@@ -223,15 +245,11 @@ function reassign(
   state: StateMap,
   scopeStack: ScopeStack,
 ): void {
-  const name = singleSegmentName(pathExpr.path);
-  if (name === undefined) {
+  const resolved = resolveBinding(pathExpr, scopeStack);
+  if (resolved === undefined) {
     return;
   }
-  const id = resolve(scopeStack, name);
-  if (id === undefined) {
-    return;
-  }
-  state.set(id, { kind: "Owned" });
+  state.set(resolved.id, { kind: "Owned" });
 }
 
 function cloneState(state: StateMap): StateMap {
@@ -317,6 +335,36 @@ function mergeStates(a: StateMap, b: StateMap): StateMap {
   return merged;
 }
 
+function walkStructExpression(
+  ctx: Ctx,
+  expression: Semantics.StructExpression,
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  for (const field of expression.fields) {
+    if (isSome(field.value)) {
+      walkExpression(ctx, field.value.value, state, scopeStack);
+    }
+  }
+  if (isSome(expression.base)) {
+    walkExpression(ctx, expression.base.value, state, scopeStack);
+  }
+}
+
+function walkAssignExpression(
+  ctx: Ctx,
+  expression: Semantics.AssignExpression,
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  walkExpression(ctx, expression.rhs, state, scopeStack);
+  if (expression.lhs.kind === "PathExpression") {
+    reassign(expression.lhs, state, scopeStack);
+  } else {
+    walkExpression(ctx, expression.lhs, state, scopeStack);
+  }
+}
+
 /**
  * Recurse through `expression`, walking every sub-expression through the
  * same `asMove: true` path a bare `PathExpression` gets (see `useOrMove`).
@@ -357,12 +405,7 @@ function walkExpression(
       }
       return;
     case "AssignExpression":
-      walkExpression(ctx, expression.rhs, state, scopeStack);
-      if (expression.lhs.kind === "PathExpression") {
-        reassign(expression.lhs, state, scopeStack);
-      } else {
-        walkExpression(ctx, expression.lhs, state, scopeStack);
-      }
+      walkAssignExpression(ctx, expression, state, scopeStack);
       return;
     case "CompoundAssignExpression":
       walkExpression(ctx, expression.rhs, state, scopeStack);
@@ -394,14 +437,7 @@ function walkExpression(
       }
       return;
     case "StructExpression":
-      for (const field of expression.fields) {
-        if (isSome(field.value)) {
-          walkExpression(ctx, field.value.value, state, scopeStack);
-        }
-      }
-      if (isSome(expression.base)) {
-        walkExpression(ctx, expression.base.value, state, scopeStack);
-      }
+      walkStructExpression(ctx, expression, state, scopeStack);
       return;
     case "IfExpression":
       walkIf(ctx, expression, state, scopeStack);
@@ -479,13 +515,9 @@ function walkStatement(
       }
       const { name } = statement.pattern;
       registerBinding(state, scopeStack, name, isSome(statement.initializer));
-      if (name.text !== "_") {
-        declarations.push({
-          id: name.tokenId,
-          name: name.text,
-          type: name.type,
-          tokenId: name.tokenId,
-        });
+      const declaration = declarationOf(statement.pattern);
+      if (declaration.kind === "Some") {
+        declarations.push(declaration.value);
       }
       return;
     }
@@ -600,11 +632,12 @@ function walkScope(
   state: StateMap,
   scopeStack: ScopeStack,
   pushFrame: boolean,
+  initialDeclarations: readonly Declaration[] = [],
 ): void {
   if (pushFrame) {
     scopeStack.push(new Map());
   }
-  const declarations: Declaration[] = [];
+  const declarations: Declaration[] = [...initialDeclarations];
   for (const statement of scope.statements) {
     walkStatement(ctx, statement, state, scopeStack, declarations);
   }
@@ -626,10 +659,15 @@ function walkScope(
 function walkFunction(ctx: Ctx, fn: Semantics.FunctionDecl): void {
   const state: StateMap = new Map();
   const scopeStack: ScopeStack = [new Map<string, BindingId>()];
+  const paramDeclarations: Declaration[] = [];
   for (const param of fn.params) {
     registerBinding(state, scopeStack, param.pattern.name, true);
+    const declaration = declarationOf(param.pattern);
+    if (declaration.kind === "Some") {
+      paramDeclarations.push(declaration.value);
+    }
   }
-  walkScope(ctx, fn.body, state, scopeStack, false);
+  walkScope(ctx, fn.body, state, scopeStack, false, paramDeclarations);
 }
 
 /**
