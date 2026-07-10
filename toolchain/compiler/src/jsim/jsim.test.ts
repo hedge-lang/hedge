@@ -396,7 +396,10 @@ describe("toJsim", () => {
           {
             kind: "FunctionDecl",
             body: [
-              { kind: "ReturnStatement", value: { value: { kind: "BinaryExpression" } } },
+              {
+                kind: "ReturnStatement",
+                value: { value: { kind: "BinaryExpression" } },
+              },
             ],
           },
         ],
@@ -472,7 +475,10 @@ describe("toJsim", () => {
           {
             kind: "FunctionDecl",
             body: [
-              { kind: "ReturnStatement", value: { value: { kind: "NumberLiteral" } } },
+              {
+                kind: "ReturnStatement",
+                value: { value: { kind: "NumberLiteral" } },
+              },
             ],
           },
         ],

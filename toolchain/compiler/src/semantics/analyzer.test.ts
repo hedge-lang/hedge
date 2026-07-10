@@ -275,6 +275,16 @@ describe("semantic analysis", (): void => {
       expect(diagnostics[0].message).toContain("str");
     });
 
+    it("return type mismatch diagnostic span points at the trailing expression", (): void => {
+      const source = 'fn bad() -> i32 { "x" }';
+      const { result } = analyzeWithTokens(source);
+      expect(result.diagnostics).toHaveLength(1);
+      assert(result.diagnostics[0] !== undefined, "Expected diagnostics");
+      const span = result.diagnostics[0].span;
+      assert(isSome(span), "Expected span");
+      expect(span.value.start).toBe(source.indexOf('"x"'));
+    });
+
     it("accepts a matching i32 return type", (): void => {
       const result = diagnose("fn f() -> i32 { 5 }");
       expect(result.diagnostics).toEqual([]);
@@ -317,12 +327,16 @@ describe("semantic analysis", (): void => {
     });
 
     it("accepts a matching if/else trailing expression as the return value", (): void => {
-      const { diagnostics } = diagnose("fn f() -> i32 { if true { 1 } else { 2 } }");
+      const { diagnostics } = diagnose(
+        "fn f() -> i32 { if true { 1 } else { 2 } }",
+      );
       expect(diagnostics).toEqual([]);
     });
 
     it("rejects a mismatching if/else trailing expression as the return value", (): void => {
-      const { diagnostics } = diagnose("fn f() -> bool { if true { 1 } else { 2 } }");
+      const { diagnostics } = diagnose(
+        "fn f() -> bool { if true { 1 } else { 2 } }",
+      );
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
       expect(diagnostics[0].message).toContain("return type mismatch");
@@ -348,6 +362,17 @@ describe("semantic analysis", (): void => {
       expect(diagnostics[0].message).toContain("x");
       expect(diagnostics[0].message).toContain("i32");
       expect(diagnostics[0].message).toContain("str");
+    });
+
+    it("field type mismatch diagnostic span points at the field value", (): void => {
+      const source =
+        'struct Point { x: i32 } fn main() { let p = Point { x: "bad" }; }';
+      const { result } = analyzeWithTokens(source);
+      expect(result.diagnostics).toHaveLength(1);
+      assert(result.diagnostics[0] !== undefined, "Expected diagnostics");
+      const span = result.diagnostics[0].span;
+      assert(isSome(span), "Expected span");
+      expect(span.value.start).toBe(source.indexOf('"bad"'));
     });
 
     it("accepts a matching field value", (): void => {

@@ -432,10 +432,7 @@ describe("execution tests", (): void => {
     });
 
     it("a unit-returning function's trailing expression is still discarded", (): void => {
-      assertRunsTo(
-        `fn log(x: i32) { print(x); } fn main() { log(9); }`,
-        ["9"],
-      );
+      assertRunsTo(`fn log(x: i32) { print(x); } fn main() { log(9); }`, ["9"]);
     });
 
     it("returns the correct value at the i32 boundary", (): void => {

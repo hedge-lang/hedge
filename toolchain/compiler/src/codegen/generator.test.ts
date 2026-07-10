@@ -483,7 +483,11 @@ describe("if expression codegen", () => {
   });
   it("else-if chain emits inline else if", () => {
     expect(
-      stmts(gen("fn _(a: (), b: ()) -> i32 { if a { 1 } else if b { 2 } else { 3 } }")),
+      stmts(
+        gen(
+          "fn _(a: (), b: ()) -> i32 { if a { 1 } else if b { 2 } else { 3 } }",
+        ),
+      ),
     ).toBe(
       [
         "if (a) {",
