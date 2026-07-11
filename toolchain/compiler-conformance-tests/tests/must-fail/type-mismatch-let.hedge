@@ -1,0 +1,3 @@
+fn main() {
+  let _x = if true { 1u32 } else { true };
+}

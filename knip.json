@@ -1,1 +1,3 @@
-{}
+{
+  "ignore": ["toolchain/compiler-conformance-tests/tests/**"]
+}

@@ -10,6 +10,7 @@
     "build:compiler": "npm run build --workspace=@hedge-lang/compiler",
     "build:cli": "npm run build --workspace=@hedge-lang/cli",
     "test": "vitest run",
+    "test:update": "vitest run -u",
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
