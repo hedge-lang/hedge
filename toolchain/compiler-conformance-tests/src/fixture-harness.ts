@@ -118,5 +118,5 @@ export function discoverMustFailFixtures(): MustFailFixture[] {
  * locally to avoid a cross-package dependency on @hedge-lang/cli.
  */
 export function renderDiagnostics(diagnostics: readonly Diagnostic[]): string {
-  return diagnostics.map((d) => `${d.severity}: ${d.message}`).join("\n");
+  return `${diagnostics.map((d) => `${d.severity}: ${d.message}`).join("\n")}\n`;
 }
