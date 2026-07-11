@@ -17,8 +17,6 @@ export default defineConfig({
     exclude: [
       "node_modules",
       "dist",
-      // Conformance tests run against compiled dist/ and require a build step.
-      // Run them separately: npm run conformance
       "toolchain/compiler-conformance-tests/**",
     ],
 

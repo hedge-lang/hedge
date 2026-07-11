@@ -30,8 +30,5 @@ jobs:
       - name: Run checks
         run: npm run check
 
-      - name: Run tests
+      - name: Run all tests
         run: npm run test
-
-      - name: Run conformance checks
-        run: npm run conformance
