@@ -151,6 +151,44 @@ describe("move-check", (): void => {
     expect(diagnostics[0].message).not.toContain("possibly");
   });
 
+  it("a struct possibly-uninitialized at scope close (no else branch initializes it) is rejected", (): void => {
+    const { diagnostics } = check(
+      `${BOXED}
+      fn main() {
+        let mut cond = true;
+        let mut x: Boxed;
+        if cond {
+          x = Boxed { value: 1 };
+        }
+        // There is a branch (cond == false) where x is never initialized
+        // at all, so the compiler can't be sure it exists by the time the
+        // scope closes. That's the actual reason this is rejected — not a
+        // drop-flag question, since there's nothing to drop until x is
+        // known to have been constructed in the first place.
+      }`,
+    );
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("x");
+  });
+
+  it("a struct initialized on only one branch is rejected on next use", (): void => {
+    const { diagnostics } = check(
+      `${BOXED}
+      fn main() {
+        let mut cond = true;
+        let mut x: Boxed;
+        if cond {
+          x = Boxed { value: 1 };
+        }
+        print(x.value);
+      }`,
+    );
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("x");
+  });
+
   it("drop annotation: an owned struct with no move is present at its scope's exit", (): void => {
     const result = check(
       `${BOXED}

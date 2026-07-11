@@ -88,6 +88,38 @@ describe("buildControlFlowGraph", (): void => {
     expect(graph.blocks.some((b) => b.id === joinId)).toBe(true);
   });
 
+  it("records the if condition on the forking block", (): void => {
+    const graph = mainGraph(`
+      fn main() {
+        let mut cond = true;
+        if cond {
+          let a = 1;
+        } else {
+          let b = 2;
+        }
+        let done = true;
+      }
+    `);
+    const pre = graph.blocks.find((b) => b.id === graph.entry);
+    assert(pre !== undefined, "Expected entry block");
+    assert(
+      isSome(pre.forkCondition),
+      "Expected the fork condition to be recorded",
+    );
+    expect(pre.forkCondition.value.kind).toBe("PathExpression");
+  });
+
+  it("does not set a fork condition on a non-forking block", (): void => {
+    const graph = mainGraph(`
+      fn main() {
+        let a = 1;
+      }
+    `);
+    const block = graph.blocks[0];
+    assert(block !== undefined);
+    expect(isSome(block.forkCondition)).toBe(false);
+  });
+
   it("accumulates a scope's declarations across the blocks an if forks it into", (): void => {
     const graph = mainGraph(`
       fn main() {

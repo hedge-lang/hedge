@@ -57,6 +57,16 @@ export interface BasicBlock {
    * two `[then, else-or-join]` at a fork.
    */
   readonly successors: readonly number[];
+  /**
+   * Set only on a forking block (`successors.length === 2`), to the `if`
+   * expression's own condition. Without this, a consumer walking only
+   * `statements`/`trailingExpression` to find uses or moves would silently
+   * miss anything evaluated in the condition itself (e.g. `if consume(x)`)
+   * — the condition is evaluated as part of this block's own control flow,
+   * but isn't a statement or a trailing expression, so it has nowhere else
+   * to live on the block.
+   */
+  readonly forkCondition: Option<Semantics.Expression>;
 }
 
 export interface ControlFlowGraph {
@@ -71,6 +81,7 @@ interface MutableBlock {
   declarations: Declaration[];
   scopeExit: Option<ScopeExit>;
   successors: number[];
+  forkCondition: Option<Semantics.Expression>;
 }
 
 function blockAt(blocks: MutableBlock[], id: number): MutableBlock {
@@ -90,6 +101,7 @@ function pushBlock(blocks: MutableBlock[]): number {
     declarations: [],
     scopeExit: none(),
     successors: [],
+    forkCondition: none(),
   });
   return id;
 }
@@ -192,9 +204,9 @@ function lowerExpressionStatement(
  * at statement-position `if` expressions and splitting at nested bare-block
  * statements (so each block carries at most one `scopeExit`). Value-position
  * `if`/`Block` expressions (inside a `let` initializer, call argument, etc.)
- * are not lowered into the CFG structure — Slice 1's CFG only needs to fork
- * on statement-position control flow; moves inside a value-position branch
- * are out of scope for this ticket.
+ * are not lowered into the CFG structure — only statement-position control
+ * flow forks the graph; a value-position `if`/`Block` stays an ordinary
+ * nested expression on whichever statement contains it.
  */
 function lowerStatements(
   statements: readonly Semantics.Statement[],
@@ -279,6 +291,7 @@ function lowerIf(
   preId: number,
 ): number {
   const pre = blockAt(blocks, preId);
+  pre.forkCondition = some(expression.condition);
 
   const thenId = pushBlock(blocks);
   pre.successors.push(thenId);
