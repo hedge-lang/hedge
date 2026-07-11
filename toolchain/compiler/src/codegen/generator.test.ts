@@ -624,10 +624,16 @@ describe("using / scope-end drop codegen", (): void => {
     const body = stmts(code);
     assert(body !== null, "JS output should not be null");
     const printed: unknown[] = [];
-    eval(`
+    const script = `
       const print = (v) => { printed.push(v); };
       { ${body} }
-    `);
+    `;
+    // `script` is compiler-generated JS from the hardcoded fixture above,
+    // not external or user-supplied input, so this is the same
+    // test-only pattern already used by the field/index-detach tests
+    // in this file, not a real code-injection surface.
+    // biome-ignore lint/security/noGlobalEval: test-only eval of compiler-generated fixture output, see comment above
+    eval(script); // nosemgrep: javascript.browser.security.eval-detected.eval-detected,javascript_eval_rule-eval-with-expression
     expect(printed).toEqual([1]);
   });
 });
