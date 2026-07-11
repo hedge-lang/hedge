@@ -487,6 +487,7 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "moving the same owned value twice is rejected",
       "move in one branch invalidates use after merge",
       "passing owned value by value consumes it",
+      "using an uninitialized binding is rejected",
       "loop-carried move requires explicit reinitialization",
       "rejects reading moved struct value",
       "rejects double move of the same owned binding",

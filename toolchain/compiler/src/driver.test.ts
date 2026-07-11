@@ -98,6 +98,28 @@ describe("driver", (): void => {
     expect(result.diagnostics[1]?.message).toContain("not declared mut");
   });
 
+  it("reports a use-after-move error and produces no code", (): void => {
+    const result = compile(`
+      struct Boxed { value: i32 }
+      fn main() {
+        let x = Boxed { value: 1 };
+        let y = x;
+        print(x.value);
+        print(y.value);
+      }
+    `);
+    expect(isNone(result.code)).toBe(true);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toContain("moved");
+  });
+
+  it("does not run ownership checking when semantic analysis already reported an error", (): void => {
+    const result = compile("fn main() { print(missing); }");
+    expect(isNone(result.code)).toBe(true);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toContain("missing");
+  });
+
   it("reports a syntax error and produces no code", (): void => {
     const result = compile("fn main(");
     expect(isNone(result.code)).toBe(true);

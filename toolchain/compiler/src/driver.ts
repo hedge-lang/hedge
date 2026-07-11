@@ -7,6 +7,7 @@ import type { Token } from "./lexer/token.js";
 import { optimize } from "./optimization/optimizer.js";
 import { none, some, type Option, isSome } from "./option.js";
 import { checkBorrows } from "./ownership/borrowck.js";
+import { checkOwnership } from "./ownership/move-check.js";
 import type { Program } from "./parser/ast.js";
 import { parse } from "./parser/parser.js";
 import { analyze } from "./semantics/analyzer.js";
@@ -58,13 +59,16 @@ export function compile(source: string): CompileResult {
   const analysis = analyze(program, tokens);
   // TODO: pass analysis.program (Semantics.Program) once the borrow checker
   // is updated to consume the semantic AST instead of the parser AST.
-  // Tracked: https://github.com/hedge-lang/hedge/issues/128
   const borrowChecked = checkBorrows(program, tokens);
+  const ownershipDiagnostics = hasError(analysis.diagnostics)
+    ? []
+    : checkOwnership(analysis.program, tokens);
   const diagnostics = [
     ...lexDiagnostics,
     ...parseDiagnostics,
     ...analysis.diagnostics,
     ...borrowChecked,
+    ...ownershipDiagnostics,
   ];
   if (hasError(diagnostics)) {
     return { diagnostics, code: none() };

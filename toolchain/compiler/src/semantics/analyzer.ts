@@ -217,6 +217,10 @@ function validateSlice1Type(
     if (isSome(prim)) {
       return prim.value;
     }
+    const structDecl = ctx.typeScope.get(name);
+    if (structDecl !== undefined) {
+      return structDecl.type;
+    }
   }
   if (type.kind === "UnitType") return type;
   emitError(ctx, "type is not supported in Slice 1", tokenId);
@@ -422,10 +426,10 @@ function fnSignatureType(fn: Parser.FunctionDecl): Semantics.FunctionType {
 /**
  * Checks a function body's trailing-expression type against its declared
  * (or implicit-unit) return type, coercing an unsuffixed-integer-literal
- * trailing expression first. Only checks when there IS a trailing
- * expression — AC1 is specifically about "the body's trailing expression";
- * a body with no trailing expression (e.g. `fn f() -> i32 { let x = 1; }`)
- * is intentionally left unchecked.
+ * trailing expression first. A body with no trailing expression at all
+ * (e.g. `fn f() -> i32 { let x = 1; }`) takes the early-return branch below
+ * instead — it's checked for a missing return value there, not for a type
+ * mismatch, since there's no trailing-expression type to reconcile against.
  *
  * Cascade guard: if the trailing expression's own analysis already failed
  * (its type is the `UnitType` error-recovery placeholder), no diagnostic is

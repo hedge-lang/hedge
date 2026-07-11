@@ -1,13 +1,14 @@
 import type * as Semantics from "./ast.js";
 
 export type TypeCapability =
-  "equality" | "ordering" | "arithmetic" | "bitwise" | "logical";
+  "equality" | "ordering" | "arithmetic" | "bitwise" | "logical" | "copy";
 
 const INTEGER_CAPS: ReadonlySet<TypeCapability> = new Set([
   "equality",
   "ordering",
   "arithmetic",
   "bitwise",
+  "copy",
 ]);
 
 const INTEGER_KINDS: readonly Semantics.PrimitiveIntegerType["kind"][] = [
@@ -25,18 +26,21 @@ const INTEGER_KINDS: readonly Semantics.PrimitiveIntegerType["kind"][] = [
 
 /**
  * Static capability table for Slice-1 primitive types.
- * Slot for trait-based operator dispatch when traits land — each entry will
- * become the set of traits the type implements.
+ * Slot for trait-based operator dispatch when traits land. Each entry will
+ * become the set of traits the type implements. `StructType` has no entry,
+ * so it is never `copy`. Every struct is move-only in Slice 1 (no `Copy`
+ * derivation via all-fields-Copy-and-no-Drop yet; that needs the trait
+ * machinery landing in Slice 4).
  */
 const TYPE_CAPABILITIES: ReadonlyMap<
   string,
   ReadonlySet<TypeCapability>
 > = new Map<string, ReadonlySet<TypeCapability>>([
-  ["PrimitiveBooleanType", new Set(["equality", "logical"])],
-  ["PrimitiveCharType", new Set(["equality", "ordering"])],
-  ["PrimitiveStringType", new Set(["equality"])],
-  ["PrimitiveF32Type", new Set(["equality", "ordering", "arithmetic"])],
-  ["PrimitiveF64Type", new Set(["equality", "ordering", "arithmetic"])],
+  ["PrimitiveBooleanType", new Set(["equality", "logical", "copy"])],
+  ["PrimitiveCharType", new Set(["equality", "ordering", "copy"])],
+  ["PrimitiveStringType", new Set(["equality", "copy"])],
+  ["PrimitiveF32Type", new Set(["equality", "ordering", "arithmetic", "copy"])],
+  ["PrimitiveF64Type", new Set(["equality", "ordering", "arithmetic", "copy"])],
   ...INTEGER_KINDS.map((k): [string, ReadonlySet<TypeCapability>] => [
     k,
     INTEGER_CAPS,
