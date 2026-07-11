@@ -16,7 +16,7 @@ import type {
   ReturnStatement,
   Statement,
 } from "../jsim/ast.js";
-import type { Code } from "./output.js";
+import type { Code, SourceMapMapping } from "./output.js";
 
 const BINARY_OPS: Record<BinaryOperator, string> = {
   Add: "+",
@@ -267,7 +267,12 @@ function emitExpression(expression: Expression): string {
               f.name,
             ),
       );
-      return `({${fields.join(", ")}})`;
+      // Every struct value carries a (currently no-op) disposer, so any
+      // binding for it can uniformly lower to `using` — Slice 1 has no
+      // trait/`impl` support yet, so there is no way to write a custom
+      // `Drop` for a struct; this establishes the codegen shape a later
+      // slice's real Drop impls will fill in.
+      return `({${[...fields, "[Symbol.dispose]() {}"].join(", ")}})`;
     }
     default:
       assertNever(
@@ -322,12 +327,24 @@ function emitReturn(stmt: ReturnStatement): string {
     : `return;`;
 }
 
+/**
+ * Determines the appropriate keyword to use for a given `LetStatement` object.
+ *
+ * @param statement - The statement object containing properties that influence
+ *   the choice of keyword.
+ *
+ * @return "using" if `statement.dispose` is truthy, "let" if
+ *   {@link LetStatement.mutable} is truthy, or "const" otherwise.
+ */
+function letKeyword(statement: LetStatement): string {
+  return statement.dispose ? "using" : statement.mutable ? "let" : "const";
+}
+
 function emitLet(statement: LetStatement): string {
   if (!statement.mutable && !isSome(statement.value)) return "";
-  const keyword = statement.mutable ? "let" : "const";
   const value = statement.value;
   return isSome(value)
-    ? `${keyword} ${statement.name} = ${emitExpression(value.value)};`
+    ? `${letKeyword(statement)} ${statement.name} = ${emitExpression(value.value)};`
     : `let ${statement.name};`;
 }
 
@@ -348,13 +365,73 @@ function emitStatement(statement: Statement): string {
   }
 }
 
-function emitFunction(decl: FunctionDecl): string {
-  const bodyLines = decl.body.map(emitStatement).filter((s) => s.length > 0);
+interface EmittedPart {
+  readonly text: string;
+  /** Offsets relative to this part's own start (0-based), shifted to absolute by `generate`. */
+  readonly mappings: readonly SourceMapMapping[];
+}
+
+/**
+ * Emits a function declaration along with source-map mappings for itself
+ * and its direct top-level `let` bindings / their binary-expression
+ * initializers. Finer mappings (let bindings, binary expressions) are
+ * pushed before the coarse whole-function mapping so a first-match lookup
+ * prefers the tightest covering entry.
+ */
+function emitFunctionPart(decl: FunctionDecl): EmittedPart {
+  const bodyEntries = decl.body
+    .map((stmt) => ({ stmt, text: emitStatement(stmt) }))
+    .filter((entry) => entry.text.length > 0);
   const bodyStr =
-    bodyLines.length === 0 ? "{}" : `{\n${bodyLines.map(indent).join("\n")}\n}`;
+    bodyEntries.length === 0
+      ? "{}"
+      : `{\n${bodyEntries.map((e) => indent(e.text)).join("\n")}\n}`;
   const keyword = isSome(decl.scope) ? "export function" : "function";
   const params = decl.params.map((p) => p.name).join(", ");
-  return `${keyword} ${decl.name}(${params}) ${bodyStr}`;
+  const header = `${keyword} ${decl.name}(${params}) `;
+  const text = `${header}${bodyStr}`;
+
+  const mappings: SourceMapMapping[] = [];
+  let cursor = header.length + 2; // past the header and the body's opening "{\n"
+  for (const entry of bodyEntries) {
+    const line = indent(entry.text);
+    if (entry.stmt.kind === "LetStatement") {
+      mappings.push({
+        generatedStart: cursor,
+        generatedEnd: cursor + line.length,
+        sourceStart: entry.stmt.span.start,
+        sourceEnd: entry.stmt.span.end,
+      });
+      const value = entry.stmt.value;
+      if (isSome(value) && value.value.kind === "BinaryExpression") {
+        const binExpr = value.value;
+        // `entry.text` is always exactly `${prefix}${exprText};` (see
+        // emitLet), so the expression's offset is the prefix's own length —
+        // no need to search for it.
+        const prefix = `${letKeyword(entry.stmt)} ${entry.stmt.name} = `;
+        const exprStart = cursor + 2 + prefix.length;
+        mappings.push({
+          generatedStart: exprStart,
+          generatedEnd: exprStart + emitExpression(binExpr).length,
+          sourceStart: binExpr.span.start,
+          sourceEnd: binExpr.span.end,
+        });
+      }
+    }
+    cursor += line.length + 1; // + the "\n" following this line
+  }
+  mappings.push({
+    generatedStart: 0,
+    generatedEnd: text.length,
+    sourceStart: decl.span.start,
+    sourceEnd: decl.span.end,
+  });
+
+  return { text, mappings };
+}
+
+function emitFunction(decl: FunctionDecl): string {
+  return emitFunctionPart(decl).text;
 }
 
 function emitItem(item: Item): string {
@@ -379,7 +456,7 @@ function emitDtsFunction(
   scope: "public" | "package",
 ): string {
   const params = decl.params
-    .map((p) => `${p.name}: ${p.type.value}`)
+    .map((p) => `${p.name}: ${isSome(p.type) ? p.type.value.value : "unknown"}`)
     .join(", ");
   const returnType = isSome(decl.returnType)
     ? decl.returnType.value.value
@@ -412,23 +489,101 @@ function hasMain(program: Program): boolean {
   );
 }
 
+function emitItemParts(program: Program): EmittedPart[] {
+  const parts: EmittedPart[] = [];
+  for (const item of program.items) {
+    if (item.kind === "FunctionDecl") {
+      const part = emitFunctionPart(item);
+      if (part.text.length > 0) parts.push(part);
+      continue;
+    }
+    const emitted = emitItem(item);
+    if (emitted.length > 0) parts.push({ text: emitted, mappings: [] });
+  }
+  return parts;
+}
+
 /**
- * Generate JavaScript and a TypeScript declaration from a JSIM program.
- * Slice-1 subset: a `fn main` is invoked as the entry point, and the `.d.ts`
- * is empty until `export "js"` items exist (slice 9).
+ * Constructs the main entry point parts of a program, consisting of a shebang
+ * line and a main function call, along with source mappings where applicable.
+ *
+ * @param program The compiled program containing items, including function
+ *   declarations and metadata.
+ *
+ * @return A tuple of emitted parts: the shebang line and the main function
+ *   call, with optional source mappings.
+ */
+function mainEntryPointParts(
+  program: Program,
+): readonly [shebang: EmittedPart, mainCall: EmittedPart] {
+  const mainDecl = program.items.find(
+    (item): item is FunctionDecl =>
+      item.kind === "FunctionDecl" && item.name === "main",
+  );
+  const mainCallText = "main();";
+  return [
+    { text: "#!/usr/bin/env node", mappings: [] },
+    {
+      text: mainCallText,
+      mappings: mainDecl
+        ? [
+            {
+              generatedStart: 0,
+              generatedEnd: mainCallText.length,
+              sourceStart: mainDecl.span.start,
+              sourceEnd: mainDecl.span.end,
+            },
+          ]
+        : [],
+    },
+  ];
+}
+
+/**
+ * Combines and adjusts the mappings from multiple emitted parts into a single
+ * array of mappings with corrected offsets.
+ *
+ * @param parts - An array of emitted parts, where each part includes a text
+ *   property and an array of source map mappings.
+ *
+ * @return An array of source map mappings with adjusted offsets, combining all
+ *   mappings from the provided parts.
+ */
+function absoluteMappings(parts: readonly EmittedPart[]): SourceMapMapping[] {
+  const mappings: SourceMapMapping[] = [];
+  let offset = 0;
+  for (const part of parts) {
+    for (const mapping of part.mappings) {
+      mappings.push({
+        generatedStart: offset + mapping.generatedStart,
+        generatedEnd: offset + mapping.generatedEnd,
+        sourceStart: mapping.sourceStart,
+        sourceEnd: mapping.sourceEnd,
+      });
+    }
+    offset += part.text.length + 2; // "\n\n" separator between parts
+  }
+  return mappings;
+}
+
+/**
+ * Generates JavaScript code, type definitions, and source map based on the
+ * provided program.
+ *
+ * @param program - The input program containing items and associated metadata.
+ *
+ * @return The generated JavaScript code, type definitions, and source map.
  */
 export function generate(program: Program): Code {
-  const parts: string[] = [];
-
-  for (const item of program.items) {
-    const emitted = emitItem(item);
-    if (emitted.length > 0) parts.push(emitted);
-  }
+  const parts = emitItemParts(program);
 
   if (hasMain(program)) {
-    parts.unshift("#!/usr/bin/env node");
-    parts.push("main();");
+    const [shebang, mainCall] = mainEntryPointParts(program);
+    parts.unshift(shebang);
+    parts.push(mainCall);
   }
+
+  const mappings = absoluteMappings(parts);
 
   const dtsParts: string[] = [];
   if (isSome(program.docComment)) {
@@ -442,7 +597,10 @@ export function generate(program: Program): Code {
   }
 
   return {
-    javascript: parts.length ? some(`${parts.join("\n\n")}\n`) : none(),
+    javascript: parts.length
+      ? some(`${parts.map((p) => p.text).join("\n\n")}\n`)
+      : none(),
     typedef: dtsParts.length ? some(`${dtsParts.join("\n\n")}\n`) : none(),
+    sourceMap: { version: 3, mappings },
   };
 }
