@@ -491,6 +491,7 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "loop-carried move requires explicit reinitialization",
       "rejects reading moved struct value",
       "rejects double move of the same owned binding",
+      "a let mut struct binding reassigned after a move still runs (deferred: not scope-end dropped until Slice 2)",
     ],
   },
   {
@@ -512,7 +513,7 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "Deterministic cleanup contracts and Symbol.dispose wiring are specified",
     testIds: [
       "generated JS emits Symbol.dispose wiring for owned cleanup paths",
-      "drop order for nested owned values is reverse declaration order",
+      "drop order for distinct owned bindings is reverse declaration order",
       "conditional initialization uses drop flags to avoid double-drop",
       "drop cannot occur while mutable borrow is live",
       "early drop occurs at last use instead of lexical scope end",
