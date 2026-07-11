@@ -578,7 +578,7 @@ function walkStatement(
       }
       const { name } = statement.pattern;
       registerBinding(state, scopeStack, name, isSome(statement.initializer));
-      const declaration = declarationOf(statement.pattern);
+      const declaration = declarationOf(statement.pattern, statement.mutable);
       if (declaration.kind === "Some") {
         declarations.push(declaration.value);
       }
@@ -750,7 +750,7 @@ function walkFunction(ctx: Ctx, fn: Semantics.FunctionDecl): void {
   const paramDeclarations: Declaration[] = [];
   for (const param of fn.params) {
     registerBinding(state, scopeStack, param.pattern.name, true);
-    const declaration = declarationOf(param.pattern);
+    const declaration = declarationOf(param.pattern, param.mutable);
     if (declaration.kind === "Some") {
       paramDeclarations.push(declaration.value);
     }
@@ -781,17 +781,4 @@ export function analyzeOwnership(
     functions.set(item.name.text, { graph, drops });
   }
   return { diagnostics, functions };
-}
-
-/**
- * Driver-facing subset of `analyzeOwnership`'s result: just the diagnostics.
- * The driver doesn't yet consume the per-function drop annotations — future
- * codegen work (ADR 0003, `using`/`Symbol.dispose` emission) will call
- * `analyzeOwnership` directly instead.
- */
-export function checkOwnership(
-  program: Semantics.Program,
-  tokens: readonly Token[],
-): readonly Diagnostic[] {
-  return analyzeOwnership(program, tokens).diagnostics;
 }
