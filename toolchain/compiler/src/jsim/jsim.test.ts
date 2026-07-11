@@ -1,27 +1,73 @@
 import { describe, it, expect } from "vitest";
 import { assert } from "../assert.js";
-import { isSome, none } from "../option.js";
-import type { Program } from "../semantics/ast.js";
+import { isSome, none, some } from "../option.js";
+import { tokenize } from "../lexer/lexer.js";
+import { analyzeOwnership } from "../ownership/move-check.js";
+import { parse } from "../parser/parser.js";
 import { analyze } from "../semantics/analyzer.js";
 import { toJsim } from "./jsim.js";
-import { tokenize } from "../lexer/lexer.js";
-import { parse } from "../parser/parser.js";
-function parseOrThrow(source: string): Program {
+import type * as JSIM from "./ast.js";
+
+/**
+ * Lowers `source` to JSIM without requiring error-free semantic analysis.
+ * Several fixtures below are deliberately semantically invalid (bare
+ * top-level expressions, undefined identifiers, a declared-but-unfilled
+ * return type) to isolate JSIM's own lowering shape from full type-checking.
+ * Only a successful parse is required.
+ */
+function jsimSource(source: string): JSIM.Program {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
   assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
-  return analyze(program.value, tokens).program;
+  const analysis = analyze(program.value, tokens);
+  return toJsim(analysis.program, tokens);
+}
+
+/**
+ * Like `jsimSource`, but also runs ownership analysis and threads its
+ * per-function drop info through.
+ */
+function jsimSourceWithOwnership(source: string): JSIM.Program {
+  const { tokens } = tokenize(source);
+  const { program, diagnostics } = parse(tokens);
+  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  const analysis = analyze(program.value, tokens);
+  assert(
+    analysis.diagnostics.every((d) => d.severity !== "error"),
+    analysis.diagnostics.map((d) => d.message).join("; "),
+  );
+  const ownership = analyzeOwnership(analysis.program, tokens);
+  assert(
+    ownership.diagnostics.every((d) => d.severity !== "error"),
+    ownership.diagnostics.map((d) => d.message).join("; "),
+  );
+  return toJsim(analysis.program, tokens, ownership.functions);
+}
+
+/**
+ * Retrieves the main function declaration from the given program.
+ *
+ * @param program The program object containing various items, including
+ *   function declarations.
+ *
+ * @return The main function declaration object if found.
+ */
+function mainFunction(program: JSIM.Program): JSIM.FunctionDecl {
+  const main = program.items.find(
+    (item): item is JSIM.FunctionDecl =>
+      item.kind === "FunctionDecl" && item.name === "main",
+  );
+  assert(main !== undefined, "Expected a main function");
+  return main;
 }
 
 describe("toJsim", () => {
   it("parses functions to the JSIM Function representation", () => {
-    const program = toJsim(
-      parseOrThrow(`
+    const program = jsimSource(`
                 fn test_fn() {
                     // Empty on purpose
                 }
-            `),
-    );
+            `);
     expect(program).toMatchObject({
       kind: "Program",
       items: [
@@ -37,7 +83,7 @@ describe("toJsim", () => {
   });
 
   it("maps function params with known primitive types to FunctionParam nodes", () => {
-    const program = toJsim(parseOrThrow("fn f(x: i32, b: bool) {}"));
+    const program = jsimSource("fn f(x: i32, b: bool) {}");
     expect(program).toMatchObject({
       items: [
         {
@@ -46,12 +92,12 @@ describe("toJsim", () => {
             {
               kind: "FunctionParam",
               name: "x",
-              type: { kind: "PrimitiveType", value: "number" },
+              type: some({ kind: "PrimitiveType", value: "number" }),
             },
             {
               kind: "FunctionParam",
               name: "b",
-              type: { kind: "PrimitiveType", value: "boolean" },
+              type: some({ kind: "PrimitiveType", value: "boolean" }),
             },
           ],
         },
@@ -60,7 +106,7 @@ describe("toJsim", () => {
   });
 
   it("maps a function return type to a JSIM PrimitiveType", () => {
-    const program = toJsim(parseOrThrow("fn f() -> bool {}"));
+    const program = jsimSource("fn f() -> bool {}");
     expect(program).toMatchObject({
       items: [
         {
@@ -72,7 +118,7 @@ describe("toJsim", () => {
   });
 
   it("maps an i64 param to bigint", () => {
-    const program = toJsim(parseOrThrow("fn f(x: i64) {}"));
+    const program = jsimSource("fn f(x: i64) {}");
     expect(program).toMatchObject({
       items: [
         {
@@ -80,7 +126,7 @@ describe("toJsim", () => {
             {
               kind: "FunctionParam",
               name: "x",
-              type: { kind: "PrimitiveType", value: "bigint" },
+              type: some({ kind: "PrimitiveType", value: "bigint" }),
             },
           ],
         },
@@ -89,19 +135,19 @@ describe("toJsim", () => {
   });
 
   it("maps a unit return type to none()", () => {
-    const program = toJsim(parseOrThrow("fn f() -> () {}"));
+    const program = jsimSource("fn f() -> () {}");
     expect(program).toMatchObject({
       items: [{ kind: "FunctionDecl", returnType: none() }],
     });
   });
 
   it("struct declaration produces no JSIM items", () => {
-    const program = toJsim(parseOrThrow("struct Foo;"));
+    const program = jsimSource("struct Foo;");
     expect(program.items).toEqual([]);
   });
 
   it("unit-typed param is kept in JSIM output with null type", () => {
-    const program = toJsim(parseOrThrow("fn f(x: ()) {}"));
+    const program = jsimSource("fn f(x: ()) {}");
     expect(program).toMatchObject({
       items: [
         {
@@ -110,7 +156,7 @@ describe("toJsim", () => {
             {
               kind: "FunctionParam",
               name: "x",
-              type: { kind: "PrimitiveType", value: "null" },
+              type: some({ kind: "PrimitiveType", value: "null" }),
             },
           ],
         },
@@ -139,7 +185,7 @@ describe("toJsim", () => {
       ["And", "x && y"],
       ["Or", "x || y"],
     ])("binary operator %s is preserved in JSIM", (operator, source) => {
-      const program = toJsim(parseOrThrow(source));
+      const program = jsimSource(source);
       expect(program.items[0]).toMatchObject({
         kind: "BinaryExpression",
         operator,
@@ -152,7 +198,7 @@ describe("toJsim", () => {
       ["Neg", "-x"],
       ["Not", "!x"],
     ])("unary operator %s is preserved in JSIM", (operator, source) => {
-      const program = toJsim(parseOrThrow(source));
+      const program = jsimSource(source);
       expect(program.items[0]).toMatchObject({
         kind: "UnaryExpression",
         operator,
@@ -174,7 +220,7 @@ describe("toJsim", () => {
       ["ShlAssign", "x <<= 1;"],
       ["ShrAssign", "x >>= 1;"],
     ])("assign operator %s is preserved in JSIM", (operator, source) => {
-      const program = toJsim(parseOrThrow(source));
+      const program = jsimSource(source);
       expect(program.items[0]).toMatchObject({
         kind: "AssignExpression",
         operator,
@@ -184,7 +230,7 @@ describe("toJsim", () => {
 
   describe("path and identifier lowering", () => {
     it("single-segment path lowers to Identifier", () => {
-      const program = toJsim(parseOrThrow("x"));
+      const program = jsimSource("x");
       expect(program.items[0]).toMatchObject({
         kind: "Identifier",
         value: "x",
@@ -192,7 +238,7 @@ describe("toJsim", () => {
     });
 
     it("multi-segment path stays as PathExpression", () => {
-      const program = toJsim(parseOrThrow("foo::bar;"));
+      const program = jsimSource("foo::bar;");
       expect(program.items[0]).toMatchObject({
         kind: "PathExpression",
         path: ["foo", "bar"],
@@ -200,7 +246,7 @@ describe("toJsim", () => {
     });
 
     it("absolute path stays as PathExpression", () => {
-      const program = toJsim(parseOrThrow("::foo;"));
+      const program = jsimSource("::foo;");
       expect(program.items[0]).toMatchObject({
         kind: "PathExpression",
         path: ["foo"],
@@ -210,7 +256,7 @@ describe("toJsim", () => {
 
   describe("reference expressions", () => {
     it("ReferenceExpression is transparent — emits the operand directly", () => {
-      const program = toJsim(parseOrThrow("&x;"));
+      const program = jsimSource("&x;");
       expect(program.items[0]).toMatchObject({
         kind: "Identifier",
         value: "x",
@@ -220,7 +266,7 @@ describe("toJsim", () => {
 
   describe("int literal bases", () => {
     it("hex IntLiteral is converted to decimal", () => {
-      const program = toJsim(parseOrThrow("0xFF"));
+      const program = jsimSource("0xFF");
       expect(program.items[0]).toMatchObject({
         kind: "NumberLiteral",
         value: "255",
@@ -228,7 +274,7 @@ describe("toJsim", () => {
     });
 
     it("octal IntLiteral is converted to decimal", () => {
-      const program = toJsim(parseOrThrow("0o17"));
+      const program = jsimSource("0o17");
       expect(program.items[0]).toMatchObject({
         kind: "NumberLiteral",
         value: "15",
@@ -236,7 +282,7 @@ describe("toJsim", () => {
     });
 
     it("binary IntLiteral is converted to decimal", () => {
-      const program = toJsim(parseOrThrow("0b1010"));
+      const program = jsimSource("0b1010");
       expect(program.items[0]).toMatchObject({
         kind: "NumberLiteral",
         value: "10",
@@ -246,7 +292,7 @@ describe("toJsim", () => {
 
   describe("other literal kinds", () => {
     it("CharLiteral lowers to StringLiteral", () => {
-      const program = toJsim(parseOrThrow("'a'"));
+      const program = jsimSource("'a'");
       expect(program.items[0]).toMatchObject({
         kind: "StringLiteral",
         value: "a",
@@ -254,7 +300,7 @@ describe("toJsim", () => {
     });
 
     it("FloatLiteral lowers to NumberLiteral", () => {
-      const program = toJsim(parseOrThrow("3.14"));
+      const program = jsimSource("3.14");
       expect(program.items[0]).toMatchObject({
         kind: "NumberLiteral",
         value: "3.14",
@@ -264,7 +310,7 @@ describe("toJsim", () => {
 
   describe("field access expressions", () => {
     it("FieldAccessExpression lowers to FieldAccessExpression with Identifier object", () => {
-      const program = toJsim(parseOrThrow("foo.bar;"));
+      const program = jsimSource("foo.bar;");
       expect(program.items[0]).toMatchObject({
         kind: "FieldAccessExpression",
         object: { kind: "Identifier", value: "foo" },
@@ -282,7 +328,7 @@ describe("toJsim", () => {
 
   describe("block lowering", () => {
     it("empty block in statement position lowers to BlockStatement with empty body", () => {
-      const program = toJsim(parseOrThrow("fn _() { { }; }"));
+      const program = jsimSource("fn _() { { }; }");
       expect(program).toMatchObject({
         items: [
           {
@@ -294,7 +340,7 @@ describe("toJsim", () => {
     });
 
     it("block without trailing expression lowers to BlockStatement containing its statements", () => {
-      const program = toJsim(parseOrThrow("fn _() { { 1; }; }"));
+      const program = jsimSource("fn _() { { 1; }; }");
       expect(program).toMatchObject({
         items: [
           {
@@ -311,7 +357,7 @@ describe("toJsim", () => {
     });
 
     it("block with trailing expression lowers to IIFE (CallExpression of ArrowFunctionExpression)", () => {
-      const program = toJsim(parseOrThrow("fn _() { let x = { 1 }; }"));
+      const program = jsimSource("fn _() { let x = { 1 }; }");
       expect(program).toMatchObject({
         items: [
           {
@@ -338,15 +384,15 @@ describe("toJsim", () => {
 
   describe("if-expression lowering", () => {
     it("if with no result in any branch lowers to bare IfStatement (no IIFE)", () => {
-      const program = toJsim(parseOrThrow("fn _() { if cond { }; }"));
+      const program = jsimSource("fn _() { if cond { }; }");
       expect(program).toMatchObject({
         items: [{ kind: "FunctionDecl", body: [{ kind: "IfStatement" }] }],
       });
     });
 
     it("if with a result in a branch lowers to IIFE wrapping IfStatement", () => {
-      const program = toJsim(
-        parseOrThrow("fn _() { let x = if cond { 1 } else { 2 }; }"),
+      const program = jsimSource(
+        "fn _() { let x = if cond { 1 } else { 2 }; }",
       );
       expect(program).toMatchObject({
         items: [
@@ -369,9 +415,7 @@ describe("toJsim", () => {
     });
 
     it("else-if chain with no results lowers to nested bare IfStatements", () => {
-      const program = toJsim(
-        parseOrThrow("fn _() { if a { } else if b { }; }"),
-      );
+      const program = jsimSource("fn _() { if a { } else if b { }; }");
       expect(program).toMatchObject({
         items: [
           {
@@ -390,7 +434,7 @@ describe("toJsim", () => {
 
   describe("function trailing-expression lowering (tail-position return)", () => {
     it("plain-expression trailing return lowers to a single ReturnStatement, no IIFE", () => {
-      const program = toJsim(parseOrThrow("fn f(x: i32) -> i32 { x * 2 }"));
+      const program = jsimSource("fn f(x: i32) -> i32 { x * 2 }");
       expect(program).toMatchObject({
         items: [
           {
@@ -407,8 +451,8 @@ describe("toJsim", () => {
     });
 
     it("if/else trailing return lowers to a bare IfStatement with ReturnStatement in each branch, no IIFE", () => {
-      const program = toJsim(
-        parseOrThrow("fn sign(x: i32) -> i32 { if x > 0 { 1 } else { -1 } }"),
+      const program = jsimSource(
+        "fn sign(x: i32) -> i32 { if x > 0 { 1 } else { -1 } }",
       );
       expect(program).toMatchObject({
         items: [
@@ -427,10 +471,8 @@ describe("toJsim", () => {
     });
 
     it("else-if chain trailing return recursively pushes ReturnStatement into every leaf", () => {
-      const program = toJsim(
-        parseOrThrow(
-          "fn f(a: bool, b: bool) -> i32 { if a { 1 } else if b { 2 } else { 3 } }",
-        ),
+      const program = jsimSource(
+        "fn f(a: bool, b: bool) -> i32 { if a { 1 } else if b { 2 } else { 3 } }",
       );
       expect(program).toMatchObject({
         items: [
@@ -457,7 +499,7 @@ describe("toJsim", () => {
     });
 
     it("a unit-returning function's trailing expression stays a bare statement, not a ReturnStatement", () => {
-      const program = toJsim(parseOrThrow('fn f() { print("hi") }'));
+      const program = jsimSource('fn f() { print("hi") }');
       expect(program).toMatchObject({
         items: [
           {
@@ -469,7 +511,7 @@ describe("toJsim", () => {
     });
 
     it("block trailing-expression splices its return directly, no IIFE", () => {
-      const program = toJsim(parseOrThrow("fn f() -> i32 { { 5 } }"));
+      const program = jsimSource("fn f() -> i32 { { 5 } }");
       expect(program).toMatchObject({
         items: [
           {
@@ -486,8 +528,8 @@ describe("toJsim", () => {
     });
 
     it("known limitation: an if nested inside a function's trailing block is still IIFE-wrapped (one level deep only)", () => {
-      const program = toJsim(
-        parseOrThrow("fn f() -> i32 { { if true { 1 } else { 2 } } }"),
+      const program = jsimSource(
+        "fn f() -> i32 { { if true { 1 } else { 2 } } }",
       );
       expect(program).toMatchObject({
         items: [
@@ -512,8 +554,8 @@ describe("toJsim", () => {
 
   describe("alpha-rename", () => {
     it("three sequential shadows of the same name produce distinct emitted identifiers", () => {
-      const program = toJsim(
-        parseOrThrow("fn main() { let x = 1; let x = 2; let x = 3; }"),
+      const program = jsimSource(
+        "fn main() { let x = 1; let x = 2; let x = 3; }",
       );
       expect(program).toMatchObject({
         items: [
@@ -530,7 +572,7 @@ describe("toJsim", () => {
     });
 
     it("function parameter shadowed by inner let uses original name in declaration and suffixed name in body", () => {
-      const program = toJsim(parseOrThrow("fn foo(n: i32) { let n = 42; }"));
+      const program = jsimSource("fn foo(n: i32) { let n = 42; }");
       expect(program).toMatchObject({
         items: [
           {
@@ -543,8 +585,8 @@ describe("toJsim", () => {
     });
 
     it("shadow of x skips user-defined x$1 and lands on x$2", () => {
-      const program = toJsim(
-        parseOrThrow("fn main() { let x = 1; let x$1 = 50; let x = 2; }"),
+      const program = jsimSource(
+        "fn main() { let x = 1; let x$1 = 50; let x = 2; }",
       );
       const functionDecl = program.items.find(
         (item) => item.kind === "FunctionDecl",
@@ -564,8 +606,8 @@ describe("toJsim", () => {
     });
 
     it("user-defined x$1 declared after shadow is renamed to x$1$1", () => {
-      const program = toJsim(
-        parseOrThrow("fn main() { let x = 1; let x = 2; let x$1 = 99; }"),
+      const program = jsimSource(
+        "fn main() { let x = 1; let x = 2; let x$1 = 99; }",
       );
       const functionDecl = program.items.find(
         (item) => item.kind === "FunctionDecl",
@@ -585,10 +627,8 @@ describe("toJsim", () => {
     });
 
     it("struct shorthand field resolves to the renamed binding in scope", () => {
-      const program = toJsim(
-        parseOrThrow(
-          "struct Pt { x: i32 } fn main() { let x = 1; let x = 2; let p = Pt { x }; }",
-        ),
+      const program = jsimSource(
+        "struct Pt { x: i32 } fn main() { let x = 1; let x = 2; let p = Pt { x }; }",
       );
       const functionDecl = program.items.find(
         (item) => item.kind === "FunctionDecl",
@@ -622,5 +662,89 @@ describe("toJsim", () => {
         },
       });
     });
+  });
+});
+
+describe("scope-end drop", () => {
+  it("a non-mut struct binding never moved is marked for dispose", () => {
+    const program = jsimSourceWithOwnership(
+      "struct R { id: i32 } fn main() { let x = R { id: 1 }; print(x.id); }",
+    );
+    const letX = mainFunction(program).body.find(
+      (s) => s.kind === "LetStatement" && s.name === "x",
+    );
+    expect(letX).toMatchObject({ kind: "LetStatement", dispose: true });
+  });
+
+  it("a let mut struct binding is not marked for dispose (deferred to Slice 2)", () => {
+    const program = jsimSourceWithOwnership(
+      "struct R { id: i32 } fn main() { let mut x = R { id: 1 }; print(x.id); }",
+    );
+    const letX = mainFunction(program).body.find(
+      (s) => s.kind === "LetStatement" && s.name === "x",
+    );
+    expect(letX).toMatchObject({ kind: "LetStatement", dispose: false });
+  });
+
+  it("a moved-from binding is not disposed; the binding it moved into is", () => {
+    const program = jsimSourceWithOwnership(
+      "struct R { id: i32 } fn main() { let x = R { id: 1 }; let y = x; print(y.id); }",
+    );
+    const body = mainFunction(program).body;
+    const letX = body.find((s) => s.kind === "LetStatement" && s.name === "x");
+    const letY = body.find((s) => s.kind === "LetStatement" && s.name === "y");
+    expect(letX).toMatchObject({ kind: "LetStatement", dispose: false });
+    expect(letY).toMatchObject({ kind: "LetStatement", dispose: true });
+  });
+
+  it("a Copy-typed (i32) binding is never marked for dispose", () => {
+    const program = jsimSourceWithOwnership(
+      "fn main() { let x = 1; print(x); }",
+    );
+    const letX = mainFunction(program).body.find(
+      (s) => s.kind === "LetStatement" && s.name === "x",
+    );
+    expect(letX).toMatchObject({ kind: "LetStatement", dispose: false });
+  });
+
+  it("a struct parameter still owned at function exit gets a shadow rebind marked for dispose", () => {
+    const program = jsimSourceWithOwnership(
+      "struct R { id: i32 } fn f(p: R) { print(p.id); }",
+    );
+    const f = program.items.find(
+      (item): item is JSIM.FunctionDecl =>
+        item.kind === "FunctionDecl" && item.name === "f",
+    );
+    assert(f !== undefined, "Expected function f");
+    // The signature keeps the original param name...
+    expect(f.params).toMatchObject([{ kind: "FunctionParam", name: "p" }]);
+    // ...while the body shadow-rebinds it to a fresh alpha-rename name.
+    const shadow = f.body[0];
+    expect(shadow).toMatchObject({
+      kind: "LetStatement",
+      dispose: true,
+      value: { kind: "Some", value: { kind: "Identifier", value: "p" } },
+    });
+    assert(shadow?.kind === "LetStatement");
+    expect(shadow.name).not.toBe("p");
+    const printCall = f.body.find((s) => s.kind === "CallExpression");
+    expect(printCall).toMatchObject({
+      kind: "CallExpression",
+      arguments: [
+        { kind: "FieldAccessExpression", object: { value: shadow.name } },
+      ],
+    });
+  });
+
+  it("a mut struct parameter is not shadow-rebound (deferred to Slice 2)", () => {
+    const program = jsimSourceWithOwnership(
+      "struct R { id: i32 } fn f(mut p: R) { print(p.id); }",
+    );
+    const f = program.items.find(
+      (item): item is JSIM.FunctionDecl =>
+        item.kind === "FunctionDecl" && item.name === "f",
+    );
+    assert(f !== undefined, "Expected function f");
+    expect(f.body.some((s) => s.kind === "LetStatement")).toBe(false);
   });
 });

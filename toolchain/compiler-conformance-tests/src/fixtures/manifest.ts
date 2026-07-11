@@ -26,7 +26,7 @@ interface ConformanceFixtureManifest {
 }
 
 export const CONFORMANCE_FIXTURE_MANIFEST: ConformanceFixtureManifest = {
-  version: "2026.06.26.1",
+  version: "2026.07.10.1",
   fuzz: {
     seeds: Array.from({ length: 80 }, (_, i): number => i + 1),
     smokeLength: 120,
@@ -59,7 +59,14 @@ export const CONFORMANCE_FIXTURE_MANIFEST: ConformanceFixtureManifest = {
     {
       id: "map-let-expression",
       source: `fn main() { let x = 1 + 2; print(x); }`,
-      expectedGeneratedSnippet: `const x = 1 + 2;`,
+      // i32 arithmetic wraps via `|0` (settled semantics), so the
+      // initializer is not emitted verbatim as `1 + 2`.
+      expectedGeneratedSnippet: `const x = ((1 + 2)|0);`,
+    },
+    {
+      id: "map-function-decl",
+      source: `pub fn add(x: i32, y: i32) -> i32 { x + y }`,
+      expectedGeneratedSnippet: `function add(x, y)`,
     },
   ],
 };

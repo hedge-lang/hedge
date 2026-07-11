@@ -1,3 +1,4 @@
+import type { Span } from "../lexer/token.js";
 import type { Option } from "../option.js";
 
 export interface Program {
@@ -15,13 +16,17 @@ export interface DocComment {
 
 export interface FunctionDecl {
   readonly kind: "FunctionDecl";
-  /** `none()` = module-private; `some("public")` = `pub`; `some("package")` = `pub(package)`. */
+  /**
+   * `none()` = module-private; `some("public")` = `pub`;
+   * `some("package")` = `pub(package)`.
+   */
   readonly scope: Option<"public" | "package">;
   readonly name: string;
   readonly params: readonly FunctionParam[];
   readonly returnType: Option<Type>;
   readonly body: readonly Statement[];
   readonly docComment: Option<DocComment>;
+  readonly span: Span;
 }
 
 export type Statement =
@@ -43,6 +48,12 @@ export interface LetStatement {
   readonly mutable: boolean;
   readonly value: Option<Expression>;
   readonly docComment: Option<DocComment>;
+  readonly span: Span;
+  /**
+   * `true` when this binding needs scope-end drop and lowers to `using`
+   * instead of `const`/`let`.
+   */
+  readonly dispose: boolean;
 }
 
 export interface IfStatement {
@@ -103,7 +114,12 @@ interface CallExpression {
 export interface FunctionParam {
   readonly kind: "FunctionParam";
   readonly name: string;
-  readonly type: Type;
+  /**
+   * `none()` for a type with no JS-primitive representation (e.g. a
+   * struct); the parameter still exists in JS, it just has no `.d.ts`
+   * type annotation yet.
+   */
+  readonly type: Option<Type>;
 }
 
 type Type = PrimitiveType;
@@ -132,7 +148,10 @@ export type BinaryOperator =
   | "And"
   | "Or";
 
-/** How the JS backend should wrap/truncate the result of a numeric binary operation. */
+/**
+ * How the JS backend should wrap/truncate the result of a numeric
+ * binary operation.
+ */
 export type NumericKind =
   | { readonly kind: "signed"; readonly bits: 8 | 16 | 32 }
   | { readonly kind: "unsigned"; readonly bits: 8 | 16 | 32 }
@@ -144,8 +163,12 @@ interface BinaryExpression {
   readonly operator: BinaryOperator;
   readonly left: Expression;
   readonly right: Expression;
-  /** Present for arithmetic operators on numeric types; `none()` for comparisons and logical ops. */
+  /**
+   * Present for arithmetic operators on numeric types; `none()` for
+   * comparisons and logical ops.
+   */
   readonly numericKind: Option<NumericKind>;
+  readonly span: Span;
 }
 
 export type UnaryOperator = "Neg" | "Not";
@@ -153,7 +176,10 @@ interface UnaryExpression {
   readonly kind: "UnaryExpression";
   readonly operator: UnaryOperator;
   readonly operand: Expression;
-  /** Present for `Neg` on numeric types; `none()` for `Not` and unit operands. */
+  /**
+   * Present for `Neg` on numeric types; `none()` for `Not` and unit
+   * operands.
+   */
   readonly numericKind: Option<NumericKind>;
 }
 

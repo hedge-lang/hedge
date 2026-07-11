@@ -2,23 +2,30 @@ import { describe, expect, it } from "vitest";
 import { assert } from "../assert.js";
 
 import { toJsim } from "../jsim/jsim.js";
-import { tokenize } from "../lexer/lexer.js";
+import { analyzeOwnership } from "../ownership/move-check.js";
 import { isSome, none } from "../option.js";
-import { parse } from "../parser/parser.js";
-import { analyze } from "../semantics/analyzer.js";
+import { analyzeSource } from "../testing/analyze-source.js";
+import { jsimSource } from "../testing/jsim-source.js";
 import { generate } from "./generator.js";
 import type { Code } from "./output.js";
 
 function gen(source: string): Code {
-  const { tokens } = tokenize(source);
-  const { program, diagnostics: parseDiagnostics } = parse(tokens);
-  assert(isSome(program), parseDiagnostics[0]?.message ?? "Parse failed");
-  const analysis = analyze(program.value, tokens);
+  return generate(jsimSource(source));
+}
+
+/**
+ * Like `gen`, but also runs ownership analysis and threads its
+ * per-function drop info through, for fixtures that need real
+ * `using`/dispose codegen.
+ */
+function genWithOwnership(source: string): Code {
+  const { program, tokens } = analyzeSource(source);
+  const ownership = analyzeOwnership(program, tokens);
   assert(
-    analysis.diagnostics.length === 0,
-    analysis.diagnostics[0]?.message ?? "Analysis failed",
+    ownership.diagnostics.every((d) => d.severity !== "error"),
+    ownership.diagnostics.map((d) => d.message).join("; "),
   );
-  return generate(toJsim(analysis.program));
+  return generate(toJsim(program, tokens, ownership.functions));
 }
 
 function js(code: Code): string | null {
@@ -29,7 +36,10 @@ function dts(code: Code): string | null {
   return isSome(code.typedef) ? code.typedef.value : null;
 }
 
-/** Extracts body statements from a single `function _()` wrapper, stripping one indent level. */
+/**
+ * Extracts body statements from a single `function _()` wrapper,
+ * stripping one indent level.
+ */
 function stmts(code: Code): string | null {
   const output = js(code);
   if (output === null) return null;
@@ -42,7 +52,11 @@ function stmts(code: Code): string | null {
 
 describe("generator", (): void => {
   it("generates nothing for an empty program", (): void => {
-    expect(gen("")).toEqual({ javascript: none(), typedef: none() });
+    expect(gen("")).toEqual({
+      javascript: none(),
+      typedef: none(),
+      sourceMap: { version: 3, mappings: [] },
+    });
   });
 
   it("lowers a read-only let to const and `let mut` to let", (): void => {
@@ -141,6 +155,12 @@ describe("generator", (): void => {
 
   it("emits function parameters in JS output", (): void => {
     expect(js(gen("fn f(x: i32, y: bool) {}"))).toBe("function f(x, y) {}\n");
+  });
+
+  it("keeps a struct-typed parameter in the JS signature (no JS-primitive type, but still a real param)", (): void => {
+    expect(js(gen("struct R { id: i32 } fn f(p: R) { print(p.id); }"))).toBe(
+      "function f(p) {\n  print(p.id);\n}\n",
+    );
   });
 
   it("emits param types in .d.ts for pub fn", (): void => {
@@ -525,28 +545,139 @@ describe("if expression codegen", () => {
 });
 
 describe("struct expression codegen", () => {
-  it("empty struct emits ({})", () => {
-    expect(stmts(gen("struct Foo{} fn _() { Foo {}; }"))).toBe("({});");
+  it("empty struct emits ({}) plus a no-op Symbol.dispose", () => {
+    expect(stmts(gen("struct Foo{} fn _() { Foo {}; }"))).toBe(
+      "({[Symbol.dispose]() {}});",
+    );
   });
-  it("named fields emit object literal", () => {
+  it("named fields emit object literal plus a no-op Symbol.dispose", () => {
     expect(
       stmts(
         gen("struct Foo { x: i32, y: i32 } fn _() { Foo { x: 1, y: 2 }; }"),
       ),
-    ).toBe("({x: 1, y: 2});");
+    ).toBe("({x: 1, y: 2, [Symbol.dispose]() {}});");
   });
-  it("shorthand fields emit ES6 shorthand", () => {
+  it("shorthand fields emit ES6 shorthand plus a no-op Symbol.dispose", () => {
     expect(stmts(gen("struct Foo { x: () } fn _(x: ()) { Foo { x }; }"))).toBe(
-      "({x});",
+      "({x, [Symbol.dispose]() {}});",
     );
   });
-  it("struct update spread emits spread-first object literal", () => {
+  it("struct update spread emits spread-first object literal plus a no-op Symbol.dispose", () => {
     expect(
       stmts(
         gen(
           "struct Foo { x: i32, y: i32, z: i32 } fn _(base: ()) { Foo { x: 1, ..base }; }",
         ),
       ),
-    ).toBe("({...base, x: 1});");
+    ).toBe("({...base, x: 1, [Symbol.dispose]() {}});");
+  });
+});
+
+describe("using / scope-end drop codegen", (): void => {
+  it("a non-mut struct binding never moved lowers to using", (): void => {
+    const code = genWithOwnership(
+      "struct R { id: i32 } fn _() { let x = R { id: 1 }; print(x.id); }",
+    );
+    expect(stmts(code)).toBe(
+      "using x = ({id: 1, [Symbol.dispose]() {}});\nprint(x.id);",
+    );
+  });
+
+  it("a let mut struct binding stays plain let (deferred to Slice 2)", (): void => {
+    const code = genWithOwnership(
+      "struct R { id: i32 } fn _() { let mut x = R { id: 1 }; print(x.id); }",
+    );
+    expect(stmts(code)).toBe(
+      "let x = ({id: 1, [Symbol.dispose]() {}});\nprint(x.id);",
+    );
+  });
+
+  it("a moved-from binding stays const; the binding it moved into becomes using", (): void => {
+    const code = genWithOwnership(
+      "struct R { id: i32 } fn _() { let x = R { id: 1 }; let y = x; print(y.id); }",
+    );
+    expect(stmts(code)).toBe(
+      "const x = ({id: 1, [Symbol.dispose]() {}});\nusing y = x;\nprint(y.id);",
+    );
+  });
+
+  it("a struct parameter still owned at function exit gets a shadow using rebind", (): void => {
+    const code = genWithOwnership(
+      "struct R { id: i32 } fn f(p: R) { print(p.id); }",
+    );
+    expect(js(code)).toBe(
+      "function f(p) {\n  using p$1 = p;\n  print(p$1.id);\n}\n",
+    );
+  });
+
+  it("a mut struct parameter is not shadow-rebound (deferred to Slice 2)", (): void => {
+    const code = genWithOwnership(
+      "struct R { id: i32 } fn f(mut p: R) { print(p.id); }",
+    );
+    expect(js(code)).toBe("function f(p) {\n  print(p.id);\n}\n");
+  });
+
+  it("a using-declared struct runs cleanly under Node's explicit resource management", (): void => {
+    const code = genWithOwnership(
+      "struct R { id: i32 } fn _() { let x = R { id: 1 }; print(x.id); }",
+    );
+    const body = stmts(code);
+    assert(body !== null, "JS output should not be null");
+    const printed: unknown[] = [];
+    const script = `
+      const print = (v) => { printed.push(v); };
+      { ${body} }
+    `;
+    // `script` is compiler-generated JS from the hardcoded fixture above,
+    // not external or user-supplied input, so this is the same
+    // test-only pattern already used by the field/index-detach tests
+    // in this file, not a real code-injection surface.
+    // biome-ignore lint/security/noGlobalEval: test-only eval of compiler-generated fixture output, see comment above
+    eval(script); // nosemgrep: javascript.browser.security.eval-detected.eval-detected,javascript_eval_rule-eval-with-expression
+    expect(printed).toEqual([1]);
+  });
+});
+
+describe("source maps", (): void => {
+  it("maps the whole function declaration back to its own source span", (): void => {
+    const source = "fn _() { print(1); }";
+    const code = gen(source);
+    const output = js(code);
+    assert(output !== null);
+    const functionStart = output.indexOf("function _()");
+    const functionEnd = output.indexOf("\n}") + "\n}".length;
+    const covering = code.sourceMap.mappings.find(
+      (m) => m.generatedStart <= functionStart && m.generatedEnd >= functionEnd,
+    );
+    assert(covering !== undefined, "Expected a covering mapping");
+    expect(source.slice(covering.sourceStart, covering.sourceEnd)).toBe(source);
+  });
+
+  it("maps a let binding's generated text through its trailing semicolon", (): void => {
+    const source = "fn _() { let x = 1 + 2; print(x); }";
+    const code = gen(source);
+    const output = js(code);
+    assert(output !== null);
+    const letTextStart = output.indexOf("const x = ");
+    const letTextEnd = output.indexOf(";", letTextStart) + 1;
+    const mapping = code.sourceMap.mappings.find(
+      (m) => m.generatedStart <= letTextStart && m.generatedEnd >= letTextEnd,
+    );
+    assert(mapping !== undefined, "Expected a covering let-statement mapping");
+    expect(source.slice(mapping.sourceStart, mapping.sourceEnd)).toBe(
+      "let x = 1 + 2;",
+    );
+  });
+
+  it("does not map an uninitialized wildcard let that emits no code", (): void => {
+    const source = "fn _() { let _; print(2); }";
+    const code = gen(source);
+    // `let _;` (immutable, no initializer) emits an empty string (see
+    // emitLet), so it must produce no mapping entry pointing back at it,
+    // not a zero-width one.
+    const wildcardMappings = code.sourceMap.mappings.filter(
+      (m) => source.slice(m.sourceStart, m.sourceEnd) === "let _;",
+    );
+    expect(wildcardMappings).toEqual([]);
   });
 });

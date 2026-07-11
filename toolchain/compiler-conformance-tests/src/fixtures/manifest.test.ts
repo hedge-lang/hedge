@@ -4,7 +4,7 @@ import { CONFORMANCE_FIXTURE_MANIFEST } from "./manifest.js";
 
 describe("conformance fixture manifest", (): void => {
   it("pins fixture manifest version", (): void => {
-    expect(CONFORMANCE_FIXTURE_MANIFEST.version).toBe("2026.06.26.1");
+    expect(CONFORMANCE_FIXTURE_MANIFEST.version).toBe("2026.07.10.1");
   });
 
   it("has stable fuzz seed/count and key lengths", (): void => {
@@ -26,6 +26,7 @@ describe("conformance fixture manifest", (): void => {
       "map-main-callsite",
       "map-branch-expression",
       "map-let-expression",
+      "map-function-decl",
     ]);
   });
 });

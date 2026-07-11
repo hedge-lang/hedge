@@ -51,6 +51,24 @@ describe("buildControlFlowGraph", (): void => {
     expect(scopeExitNames(block)).toEqual(["p", "a"]);
   });
 
+  it("records whether each declaration is mutable", (): void => {
+    const graph = mainGraph(`
+      fn main(p: i32) {
+        let a = 1;
+        let mut b = 2;
+      }
+    `);
+    const block = graph.blocks[0];
+    assert(block !== undefined);
+    assert(isSome(block.scopeExit), "Expected a scope exit on this block");
+    const byName = new Map(
+      block.scopeExit.value.declarations.map((d) => [d.name, d.mutable]),
+    );
+    expect(byName.get("p")).toBe(false);
+    expect(byName.get("a")).toBe(false);
+    expect(byName.get("b")).toBe(true);
+  });
+
   it("does not include a wildcard parameter in the root scope's declarations", (): void => {
     const graph = mainGraph(`
       fn main(_: i32) {

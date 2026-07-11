@@ -26,6 +26,7 @@ export interface Declaration {
   readonly name: string;
   readonly type: Semantics.Type;
   readonly tokenId: number;
+  readonly mutable: boolean;
 }
 
 interface ScopeExit {
@@ -112,6 +113,7 @@ function pushBlock(blocks: MutableBlock[]): number {
  */
 export function declarationOf(
   pattern: Semantics.BindingPattern,
+  mutable: boolean,
 ): Option<Declaration> {
   if (pattern.name.text === "_") {
     return none();
@@ -121,6 +123,7 @@ export function declarationOf(
     name: pattern.name.text,
     type: pattern.name.type,
     tokenId: pattern.name.tokenId,
+    mutable,
   });
 }
 
@@ -132,7 +135,7 @@ export function declarationOf(
 function paramDeclarations(params: readonly Semantics.Param[]): Declaration[] {
   const declarations: Declaration[] = [];
   for (const param of params) {
-    const declaration = declarationOf(param.pattern);
+    const declaration = declarationOf(param.pattern, param.mutable);
     if (declaration.kind === "Some") {
       declarations.push(declaration.value);
     }
@@ -153,7 +156,7 @@ function lowerLet(
 ): void {
   const current = blockAt(blocks, currentId);
   current.statements.push(statement);
-  const declaration = declarationOf(statement.pattern);
+  const declaration = declarationOf(statement.pattern, statement.mutable);
   if (declaration.kind === "Some") {
     current.declarations.push(declaration.value);
     declarations.push(declaration.value);
