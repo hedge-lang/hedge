@@ -23,13 +23,14 @@ describe("drop determinism and RAII spec", (): void => {
   });
 
   it("drop order for distinct owned bindings is reverse declaration order", (): void => {
-    // A struct field typed `i32` is Copy, so a struct with only Copy fields
-    // has exactly one real drop point — the struct itself, not its fields.
-    // Two separate droppable bindings (not two fields of one struct) is what
-    // actually exercises "reverse declaration order": both bindings lower to
-    // `using` in source declaration order, and native `using` semantics
-    // guarantee disposal at scope end runs in the *reverse* of that order
-    // (b before a) — no codegen effort beyond emitting `using` is needed.
+    // A struct field typed `i32` is Copy, so a struct with only Copy
+    // fields has exactly one real drop point: the struct itself, not
+    // its fields. Two separate droppable bindings (not two fields of
+    // one struct) is what actually exercises "reverse declaration
+    // order": both bindings lower to `using` in source declaration
+    // order, and native `using` semantics guarantee disposal at scope
+    // end runs in the *reverse* of that order (b before a), no codegen
+    // effort beyond emitting `using` is needed.
     const js = requireJavascript(`
       struct A { id: i32 }
       struct B { id: i32 }

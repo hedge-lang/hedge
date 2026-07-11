@@ -21,21 +21,13 @@ interface JsimContext {
   readonly tokens: readonly Token[];
   readonly ownership: ReadonlyMap<string, FunctionOwnership>;
   readonly rename: RenameCtx[];
-  /** Per-function stack of that function's own scope-end drop map, keyed by block tokenId. */
+  /**
+   * Per-function stack of that function's own scope-end drop map,
+   * keyed by block tokenId.
+   */
   readonly drops: ReadonlyMap<number, readonly Declaration[]>[];
 }
 
-/**
- * Creates a JsimContext object using the provided tokens and ownership mapping.
- *
- * @param tokens - A readonly array of Token objects to be included in
- *   the context.
- * @param ownership - A readonly map associating identifiers with their
- *   respective FunctionOwnership.
- *
- * @return The newly created JsimContext containing the provided tokens and
- *   ownership mapping, with empty rename and drops arrays.
- */
 function createJsimContext(
   tokens: readonly Token[],
   ownership: ReadonlyMap<string, FunctionOwnership>,
@@ -49,16 +41,8 @@ function createJsimContext(
 }
 
 /**
- * Retrieves the declarations that need scope-end drop in the block owning
- * {@link blockTokenId}, for the function currently being lowered.
- *
- * @param ctx - The JsimContext object containing the current state of the
- *   JSIM creation process.
- * @param blockTokenId - The token ID of the block for which scope-end drops
- *   are being retrieved.
- *
- * @return A readonly array of Declaration objects that need scope-end drop in
- *   the specified block.
+ * Declarations that need scope-end drop in the block owning
+ * `blockTokenId`, for the function currently being lowered.
  */
 function scopeDrops(
   ctx: JsimContext,
@@ -72,42 +56,11 @@ function scopeDrops(
  * Null outside function bodies (top-level items are not renamed).
  */
 interface RenameCtx {
-  /**
-   * A collection of maps where each map contains string key-value pairs.
-   * Each map represents a "frame" in the collection.
-   *
-   * This variable is typically used to store structured data,
-   * with keys and values representing specific attributes or properties.
-   */
   frames: Map<string, string>[];
-
-  /**
-   * A map to store counters, where each key is a string identifier and
-   * the corresponding value is a numeric count.
-   *
-   * This variable is typically used for tracking occurrences or managing
-   * counts of specific entities, identified by their string keys.
-   */
   counters: Map<string, number>;
-
-  /**
-   * A Set that contains the names of events or signals that have been emitted.
-   * This collection is used to track unique event names to prevent duplication
-   * or for reference in event handling logic.
-   */
   emittedNames: Set<string>;
 }
 
-/**
- * Executes a function within a specific context, managing the necessary setup
- * and teardown of the context stack.
- *
- * @param ctx - The context object that manages state for the function.
- * @param functionName - The name of the function being executed in the context.
- * @param fn - The function to be executed within the specified context.
- *
- * @return The result of the executed function.
- */
 function withFunctionCtx<T>(
   ctx: JsimContext,
   functionName: string,
@@ -189,16 +142,6 @@ function lookupLocalName(ctx: JsimContext, sourceName: string): string {
   return sourceName;
 }
 
-/**
- * Converts a given semantic program representation into its equivalent
- * JSIM structure.
- *
- * @param program - The semantic program to be converted.
- * @param tokens - A readonly array of tokens associated with the program.
- * @param ownership - A readonly map defining function ownership details.
- *
- * @return The converted JSIM program representation.
- */
 export function toJsim(
   program: Semantics.Program,
   tokens: readonly Token[],
@@ -330,15 +273,16 @@ function parseFunction(
 }
 
 /**
- * A struct-typed parameter still owned (unconditionally, per `analyzeOwnership`)
- * at the function's own top-level scope end needs scope-end drop, but a JS
- * `using` binding can't reuse its own parameter's name (`using p = p;` is a
- * `SyntaxError`) and can't be reassigned (so a `mut` parameter is excluded,
- * matching the same restriction on local `let` bindings — see `emitLet`).
- * Re-binds the parameter's source name to a fresh alpha-rename shadow via the
- * existing collision-avoidance machinery, then returns a synthetic
- * `using <shadow> = <original>;` statement to prepend to the body — every
- * later `lookupLocalName` reference resolves to the shadow for free.
+ * A struct-typed parameter still owned (unconditionally, per
+ * `analyzeOwnership`) at the function's own top-level scope end needs
+ * scope-end drop, but a JS `using` binding can't reuse its own parameter's
+ * name (`using p = p;` is a `SyntaxError`) and can't be reassigned (so a
+ * `mut` parameter is excluded, matching the same restriction on local
+ * `let` bindings, see `emitLet`). Re-binds the parameter's source name to
+ * a fresh alpha-rename shadow via the existing collision-avoidance
+ * machinery, then returns a synthetic `using <shadow> = <original>;`
+ * statement to prepend to the body: every later `lookupLocalName`
+ * reference resolves to the shadow for free.
  */
 function dropParamShadows(
   ctx: JsimContext,
@@ -446,11 +390,11 @@ function parseFunctionBody(
 }
 
 /**
- * `scopeDrops` is the enclosing block's own scope-end drop list — passed in
- * by the caller (rather than looked up here) because `parseStatement` itself
- * doesn't know which `Semantics.Block` it's being lowered for; only the
- * block-lowering call sites (`parseFunctionBody`, `jsimBlockStatement`,
- * `jsimBranchBody`) do.
+ * `scopeDrops` is the enclosing block's own scope-end drop list, passed
+ * in by the caller (rather than looked up here) because `parseStatement`
+ * itself doesn't know which `Semantics.Block` it's being lowered for;
+ * only the block-lowering call sites (`parseFunctionBody`,
+ * `jsimBlockStatement`, `jsimBranchBody`) do.
  */
 function parseStatement(
   ctx: JsimContext,

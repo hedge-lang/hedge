@@ -115,10 +115,11 @@ describe("move semantics spec", (): void => {
   });
 
   it("a let mut struct binding reassigned after a move still runs (deferred: not scope-end dropped until Slice 2)", (): void => {
-    // `x` is `mut`, so codegen can't lower it to `using` (a `using` binding
-    // can't be reassigned) — it stays a plain `let` and simply isn't
-    // scope-end dropped yet. This pins that the program still runs
-    // correctly end-to-end under that fallback, not just that it compiles.
+    // `x` is `mut`, so codegen can't lower it to `using` (a `using`
+    // binding can't be reassigned): it stays a plain `let` and simply
+    // isn't scope-end dropped yet. This pins that the program still
+    // runs correctly end-to-end under that fallback, not just that it
+    // compiles.
     assertRunsTo(
       `
       struct Boxed { value: i32 }

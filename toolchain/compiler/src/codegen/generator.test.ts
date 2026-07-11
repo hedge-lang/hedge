@@ -14,8 +14,9 @@ function gen(source: string): Code {
 }
 
 /**
- * Like `gen`, but also runs ownership analysis and threads its per-function
- * drop info through.
+ * Like `gen`, but also runs ownership analysis and threads its
+ * per-function drop info through, for fixtures that need real
+ * `using`/dispose codegen.
  */
 function genWithOwnership(source: string): Code {
   const { program, tokens } = analyzeSource(source);
@@ -36,8 +37,8 @@ function dts(code: Code): string | null {
 }
 
 /**
- * Extracts body statements from a single `function _()` wrapper, stripping one
- * indent level.
+ * Extracts body statements from a single `function _()` wrapper,
+ * stripping one indent level.
  */
 function stmts(code: Code): string | null {
   const output = js(code);
@@ -666,7 +667,7 @@ describe("source maps", (): void => {
     const source = "fn _() { let _; print(2); }";
     const code = gen(source);
     // `let _;` (immutable, no initializer) emits an empty string (see
-    // emitLet), so it must produce no mapping entry pointing back at it —
+    // emitLet), so it must produce no mapping entry pointing back at it,
     // not a zero-width one.
     const wildcardMappings = code.sourceMap.mappings.filter(
       (m) => source.slice(m.sourceStart, m.sourceEnd) === "let _;",

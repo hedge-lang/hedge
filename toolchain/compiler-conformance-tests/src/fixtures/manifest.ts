@@ -59,8 +59,8 @@ export const CONFORMANCE_FIXTURE_MANIFEST: ConformanceFixtureManifest = {
     {
       id: "map-let-expression",
       source: `fn main() { let x = 1 + 2; print(x); }`,
-      // i32 arithmetic wraps via `|0` (settled semantics) — the initializer
-      // is not emitted verbatim as `1 + 2`.
+      // i32 arithmetic wraps via `|0` (settled semantics), so the
+      // initializer is not emitted verbatim as `1 + 2`.
       expectedGeneratedSnippet: `const x = ((1 + 2)|0);`,
     },
     {

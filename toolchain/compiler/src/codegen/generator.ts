@@ -268,7 +268,7 @@ function emitExpression(expression: Expression): string {
             ),
       );
       // Every struct value carries a (currently no-op) disposer, so any
-      // binding for it can uniformly lower to `using` — Slice 1 has no
+      // binding for it can uniformly lower to `using`. Slice 1 has no
       // trait/`impl` support yet, so there is no way to write a custom
       // `Drop` for a struct; this establishes the codegen shape a later
       // slice's real Drop impls will fill in.
@@ -327,15 +327,6 @@ function emitReturn(stmt: ReturnStatement): string {
     : `return;`;
 }
 
-/**
- * Determines the appropriate keyword to use for a given `LetStatement` object.
- *
- * @param statement - The statement object containing properties that influence
- *   the choice of keyword.
- *
- * @return "using" if `statement.dispose` is truthy, "let" if
- *   {@link LetStatement.mutable} is truthy, or "const" otherwise.
- */
 function letKeyword(statement: LetStatement): string {
   return statement.dispose ? "using" : statement.mutable ? "let" : "const";
 }
@@ -367,7 +358,10 @@ function emitStatement(statement: Statement): string {
 
 interface EmittedPart {
   readonly text: string;
-  /** Offsets relative to this part's own start (0-based), shifted to absolute by `generate`. */
+  /**
+   * Offsets relative to this part's own start (0-based), shifted to
+   * absolute by `generate`.
+   */
   readonly mappings: readonly SourceMapMapping[];
 }
 
@@ -392,7 +386,8 @@ function emitFunctionPart(decl: FunctionDecl): EmittedPart {
   const text = `${header}${bodyStr}`;
 
   const mappings: SourceMapMapping[] = [];
-  let cursor = header.length + 2; // past the header and the body's opening "{\n"
+  // past the header and the body's opening "{\n"
+  let cursor = header.length + 2;
   for (const entry of bodyEntries) {
     const line = indent(entry.text);
     if (entry.stmt.kind === "LetStatement") {
@@ -406,8 +401,8 @@ function emitFunctionPart(decl: FunctionDecl): EmittedPart {
       if (isSome(value) && value.value.kind === "BinaryExpression") {
         const binExpr = value.value;
         // `entry.text` is always exactly `${prefix}${exprText};` (see
-        // emitLet), so the expression's offset is the prefix's own length —
-        // no need to search for it.
+        // emitLet), so the expression's offset is just the prefix's own
+        // length; no need to search for it.
         const prefix = `${letKeyword(entry.stmt)} ${entry.stmt.name} = `;
         const exprStart = cursor + 2 + prefix.length;
         mappings.push({
@@ -503,16 +498,6 @@ function emitItemParts(program: Program): EmittedPart[] {
   return parts;
 }
 
-/**
- * Constructs the main entry point parts of a program, consisting of a shebang
- * line and a main function call, along with source mappings where applicable.
- *
- * @param program The compiled program containing items, including function
- *   declarations and metadata.
- *
- * @return A tuple of emitted parts: the shebang line and the main function
- *   call, with optional source mappings.
- */
 function mainEntryPointParts(
   program: Program,
 ): readonly [shebang: EmittedPart, mainCall: EmittedPart] {
@@ -540,14 +525,8 @@ function mainEntryPointParts(
 }
 
 /**
- * Combines and adjusts the mappings from multiple emitted parts into a single
- * array of mappings with corrected offsets.
- *
- * @param parts - An array of emitted parts, where each part includes a text
- *   property and an array of source map mappings.
- *
- * @return An array of source map mappings with adjusted offsets, combining all
- *   mappings from the provided parts.
+ * Shifts each part's mappings (relative to its own start) to absolute
+ * offsets in the final `"\n\n"`-joined text.
  */
 function absoluteMappings(parts: readonly EmittedPart[]): SourceMapMapping[] {
   const mappings: SourceMapMapping[] = [];
@@ -567,12 +546,9 @@ function absoluteMappings(parts: readonly EmittedPart[]): SourceMapMapping[] {
 }
 
 /**
- * Generates JavaScript code, type definitions, and source map based on the
- * provided program.
- *
- * @param program - The input program containing items and associated metadata.
- *
- * @return The generated JavaScript code, type definitions, and source map.
+ * Generate JavaScript and a TypeScript declaration from a JSIM program.
+ * Slice-1 subset: a `fn main` is invoked as the entry point, and the `.d.ts`
+ * is empty until `export "js"` items exist (slice 9).
  */
 export function generate(program: Program): Code {
   const parts = emitItemParts(program);

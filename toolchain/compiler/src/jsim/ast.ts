@@ -17,9 +17,8 @@ export interface DocComment {
 export interface FunctionDecl {
   readonly kind: "FunctionDecl";
   /**
-   * `none()` = module-private
-   * `some("public")` = `pub`
-   * `some("package")` = `pub(package)`
+   * `none()` = module-private; `some("public")` = `pub`;
+   * `some("package")` = `pub(package)`.
    */
   readonly scope: Option<"public" | "package">;
   readonly name: string;
@@ -116,9 +115,9 @@ export interface FunctionParam {
   readonly kind: "FunctionParam";
   readonly name: string;
   /**
-   * `none()` for a type with no JS-primitive representation (e.g., a struct);
-   * the parameter still exists in JS, it just has no `.d.ts` type
-   * annotation yet.
+   * `none()` for a type with no JS-primitive representation (e.g. a
+   * struct); the parameter still exists in JS, it just has no `.d.ts`
+   * type annotation yet.
    */
   readonly type: Option<Type>;
 }
@@ -178,7 +177,8 @@ interface UnaryExpression {
   readonly operator: UnaryOperator;
   readonly operand: Expression;
   /**
-   * Present for `Neg` on numeric types; `none()` for `Not` and unit operands.
+   * Present for `Neg` on numeric types; `none()` for `Not` and unit
+   * operands.
    */
   readonly numericKind: Option<NumericKind>;
 }

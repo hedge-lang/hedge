@@ -44,9 +44,9 @@ export function findMatchingCloseBraceTokenId(
 }
 
 /**
- * Finds the tokenId of the first depth-0 `;` at or after `letKeywordTokenId`
- * — the terminator of a `let` statement, inclusive (the span of a `let`
- * statement covers its own trailing `;`).
+ * Finds the tokenId of the first depth-0 `;` at or after
+ * `letKeywordTokenId`, the terminator of a `let` statement, inclusive
+ * (the span of a `let` statement covers its own trailing `;`).
  */
 export function findLetStatementEndTokenId(
   tokens: readonly Token[],
@@ -98,7 +98,7 @@ export function findExpressionEndTokenId(
 
 /**
  * `BinaryExpression.tokenId` is the operator's own token, not the left
- * operand's start — descend through `left` for a chain of binary
+ * operand's start. Descend through `left` for a chain of binary
  * expressions to find where the whole expression actually starts.
  */
 export function leftmostExpressionTokenId(expr: Semantics.Expression): number {

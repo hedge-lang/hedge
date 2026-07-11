@@ -12,15 +12,6 @@ import {
   resolveSpan,
 } from "./span.js";
 
-/**
- * Extracts the trailing binary expression of the `main` function from the given
- * source code.
- *
- * @param source The source code to be analyzed as a string.
- *
- * @return The binary expression that is the trailing expression for the `main`
- *   function in the analyzed source.
- */
 function trailingBinaryExpression(source: string): Semantics.BinaryExpression {
   const { program } = analyzeSource(source);
   const main = program.items.find(
@@ -37,25 +28,10 @@ function trailingBinaryExpression(source: string): Semantics.BinaryExpression {
   return trailing.value;
 }
 
-/**
- * Tokenizes the given source code and returns the list of tokens.
- *
- * @param source The source code to be tokenized.
- *
- * @return The list of tokens extracted from the source code.
- */
 function tokensOf(source: string): readonly Token[] {
   return tokenize(source).tokens;
 }
 
-/**
- * Finds the first token that matches the given predicate and returns its id.
- *
- * @param tokens The list of tokens to search through.
- * @param predicate A function that returns true for the token to find.
- *
- * @return The id of the first token that matches the predicate.
- */
 function findFirstTokenId(
   tokens: readonly Token[],
   predicate: (t: Token) => boolean,
@@ -143,8 +119,8 @@ describe("leftmostExpressionTokenId", (): void => {
   });
 
   it("descends through the left operand of a binary chain", (): void => {
-    // 1 + 2 + 3 parses as (1 + 2) + 3 — the outer BinaryExpression's own
-    // tokenId is the second `+` operator, not `1`.
+    // 1 + 2 + 3 parses as (1 + 2) + 3, so the outer BinaryExpression's
+    // own tokenId is the second `+` operator, not `1`.
     const source = "fn main() -> i32 { 1 + 2 + 3 }";
     const tokens = tokensOf(source);
     const outer = trailingBinaryExpression(source);
