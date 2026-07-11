@@ -1,20 +1,70 @@
 import { isSome, mapSome, none, type Option, some } from "../option.js";
+import type { Token } from "../lexer/token.js";
+import type { Declaration } from "../ownership/control-flow-graph.js";
+import type { FunctionOwnership } from "../ownership/move-check.js";
 import type * as Semantics from "../semantics/ast.js";
 import type * as JSIM from "./ast.js";
 import { toDocComment } from "./parts/doc-comment.js";
+import {
+  findExpressionEndTokenId,
+  findLetStatementEndTokenId,
+  findMatchingCloseBraceTokenId,
+  leftmostExpressionTokenId,
+  resolveSpan,
+} from "./parts/span.js";
 import { assert, assertNever } from "../assert.js";
 
 /**
  * The JSIM Creation context object
  */
 interface JsimContext {
+  readonly tokens: readonly Token[];
+  readonly ownership: ReadonlyMap<string, FunctionOwnership>;
   readonly rename: RenameCtx[];
+  /** Per-function stack of that function's own scope-end drop map, keyed by block tokenId. */
+  readonly drops: ReadonlyMap<number, readonly Declaration[]>[];
 }
 
-function createJsimContext(): JsimContext {
+/**
+ * Creates a JsimContext object using the provided tokens and ownership mapping.
+ *
+ * @param tokens - A readonly array of Token objects to be included in
+ *   the context.
+ * @param ownership - A readonly map associating identifiers with their
+ *   respective FunctionOwnership.
+ *
+ * @return The newly created JsimContext containing the provided tokens and
+ *   ownership mapping, with empty rename and drops arrays.
+ */
+function createJsimContext(
+  tokens: readonly Token[],
+  ownership: ReadonlyMap<string, FunctionOwnership>,
+): JsimContext {
   return {
+    tokens,
+    ownership,
     rename: [],
+    drops: [],
   };
+}
+
+/**
+ * Retrieves the declarations that need scope-end drop in the block owning
+ * {@link blockTokenId}, for the function currently being lowered.
+ *
+ * @param ctx - The JsimContext object containing the current state of the
+ *   JSIM creation process.
+ * @param blockTokenId - The token ID of the block for which scope-end drops
+ *   are being retrieved.
+ *
+ * @return A readonly array of Declaration objects that need scope-end drop in
+ *   the specified block.
+ */
+function scopeDrops(
+  ctx: JsimContext,
+  blockTokenId: number,
+): readonly Declaration[] {
+  return ctx.drops.at(-1)?.get(blockTokenId) ?? [];
 }
 
 /**
@@ -22,21 +72,58 @@ function createJsimContext(): JsimContext {
  * Null outside function bodies (top-level items are not renamed).
  */
 interface RenameCtx {
+  /**
+   * A collection of maps where each map contains string key-value pairs.
+   * Each map represents a "frame" in the collection.
+   *
+   * This variable is typically used to store structured data,
+   * with keys and values representing specific attributes or properties.
+   */
   frames: Map<string, string>[];
+
+  /**
+   * A map to store counters, where each key is a string identifier and
+   * the corresponding value is a numeric count.
+   *
+   * This variable is typically used for tracking occurrences or managing
+   * counts of specific entities, identified by their string keys.
+   */
   counters: Map<string, number>;
+
+  /**
+   * A Set that contains the names of events or signals that have been emitted.
+   * This collection is used to track unique event names to prevent duplication
+   * or for reference in event handling logic.
+   */
   emittedNames: Set<string>;
 }
 
-function withFunctionCtx<T>(ctx: JsimContext, fn: () => T): T {
+/**
+ * Executes a function within a specific context, managing the necessary setup
+ * and teardown of the context stack.
+ *
+ * @param ctx - The context object that manages state for the function.
+ * @param functionName - The name of the function being executed in the context.
+ * @param fn - The function to be executed within the specified context.
+ *
+ * @return The result of the executed function.
+ */
+function withFunctionCtx<T>(
+  ctx: JsimContext,
+  functionName: string,
+  fn: () => T,
+): T {
   ctx.rename.push({
     frames: [new Map<string, string>()],
     counters: new Map<string, number>(),
     emittedNames: new Set<string>(),
   });
+  ctx.drops.push(ctx.ownership.get(functionName)?.drops ?? new Map());
   try {
     return fn();
   } finally {
     ctx.rename.pop();
+    ctx.drops.pop();
   }
 }
 
@@ -102,8 +189,22 @@ function lookupLocalName(ctx: JsimContext, sourceName: string): string {
   return sourceName;
 }
 
-export function toJsim(program: Semantics.Program): JSIM.Program {
-  const ctx = createJsimContext();
+/**
+ * Converts a given semantic program representation into its equivalent
+ * JSIM structure.
+ *
+ * @param program - The semantic program to be converted.
+ * @param tokens - A readonly array of tokens associated with the program.
+ * @param ownership - A readonly map defining function ownership details.
+ *
+ * @return The converted JSIM program representation.
+ */
+export function toJsim(
+  program: Semantics.Program,
+  tokens: readonly Token[],
+  ownership: ReadonlyMap<string, FunctionOwnership> = new Map(),
+): JSIM.Program {
+  const ctx = createJsimContext(tokens, ownership);
   return {
     kind: "Program",
     docComment: toDocComment(program.attributes),
@@ -215,7 +316,7 @@ function parseFunction(
   ctx: JsimContext,
   fn: Semantics.FunctionDecl,
 ): JSIM.FunctionDecl {
-  return withFunctionCtx(ctx, () => {
+  return withFunctionCtx(ctx, fn.name.text, () => {
     // Pre-bind params so inner `let` with the same name gets a unique suffix.
     // Capture the emitted name so the function declaration stays in sync with
     // whatever the rename context assigns (defensive: currently always identity
@@ -226,6 +327,50 @@ function parseFunction(
     }));
     return parseFunctionBody(ctx, fn, emittedParams);
   });
+}
+
+/**
+ * A struct-typed parameter still owned (unconditionally, per `analyzeOwnership`)
+ * at the function's own top-level scope end needs scope-end drop, but a JS
+ * `using` binding can't reuse its own parameter's name (`using p = p;` is a
+ * `SyntaxError`) and can't be reassigned (so a `mut` parameter is excluded,
+ * matching the same restriction on local `let` bindings — see `emitLet`).
+ * Re-binds the parameter's source name to a fresh alpha-rename shadow via the
+ * existing collision-avoidance machinery, then returns a synthetic
+ * `using <shadow> = <original>;` statement to prepend to the body — every
+ * later `lookupLocalName` reference resolves to the shadow for free.
+ */
+function dropParamShadows(
+  ctx: JsimContext,
+  emittedParams: ReadonlyArray<{
+    param: Semantics.FunctionDecl["params"][number];
+    emittedName: string;
+  }>,
+  rootDrops: readonly Declaration[],
+): JSIM.LetStatement[] {
+  const shadows: JSIM.LetStatement[] = [];
+  for (const { param, emittedName } of emittedParams) {
+    if (param.mutable) continue;
+    const needsDrop = rootDrops.some(
+      (d) => d.id === param.pattern.name.tokenId,
+    );
+    if (!needsDrop) continue;
+    const shadowName = bindLocalName(ctx, param.pattern.name.text);
+    shadows.push({
+      kind: "LetStatement",
+      name: shadowName,
+      mutable: false,
+      value: some({ kind: "Identifier", value: emittedName, type: none() }),
+      docComment: none(),
+      span: resolveSpan(
+        ctx.tokens,
+        param.pattern.name.tokenId,
+        param.pattern.name.tokenId,
+      ),
+      dispose: true,
+    });
+  }
+  return shadows;
 }
 
 function parseFunctionBody(
@@ -250,9 +395,15 @@ function parseFunctionBody(
       ? fn.returnType
       : none();
 
-  const statements: JSIM.Statement[] = fn.body.statements.map((stmt) =>
-    parseStatement(ctx, stmt),
-  );
+  // Param shadows must be computed (and their `bindLocalName` side effects
+  // applied) before the body is lowered, so `lookupLocalName` inside the
+  // body resolves references to the shadow, not the original parameter.
+  const rootDrops = scopeDrops(ctx, fn.body.tokenId);
+  const paramShadows = dropParamShadows(ctx, emittedParams, rootDrops);
+  const statements: JSIM.Statement[] = [
+    ...paramShadows,
+    ...fn.body.statements.map((stmt) => parseStatement(ctx, stmt, rootDrops)),
+  ];
   if (isSome(fn.body.trailingExpression)) {
     const trailing = fn.body.trailingExpression.value;
     statements.push(
@@ -274,25 +425,37 @@ function parseFunctionBody(
     kind: "FunctionDecl",
     scope,
     name: fn.name.text,
-    params: emittedParams.flatMap(
-      ({ param: p, emittedName }): JSIM.FunctionParam[] => {
-        const type: Option<JsPrimitiveType> = semanticTypeToJsPrimitive(p.type);
-        return isSome(type)
-          ? [{ kind: "FunctionParam", name: emittedName, type: type.value }]
-          : [];
-      },
+    params: emittedParams.map(
+      ({ param: p, emittedName }): JSIM.FunctionParam => ({
+        kind: "FunctionParam",
+        name: emittedName,
+        type: semanticTypeToJsPrimitive(p.type),
+      }),
     ),
     returnType: isSome(declaredReturnType)
       ? semanticTypeToJsPrimitive(declaredReturnType.value)
       : none(),
+    span: resolveSpan(
+      ctx.tokens,
+      fn.tokenId,
+      findMatchingCloseBraceTokenId(ctx.tokens, fn.body.tokenId),
+    ),
     body: statements,
     docComment,
   };
 }
 
+/**
+ * `scopeDrops` is the enclosing block's own scope-end drop list — passed in
+ * by the caller (rather than looked up here) because `parseStatement` itself
+ * doesn't know which `Semantics.Block` it's being lowered for; only the
+ * block-lowering call sites (`parseFunctionBody`, `jsimBlockStatement`,
+ * `jsimBranchBody`) do.
+ */
 function parseStatement(
   ctx: JsimContext,
   statement: Semantics.Statement,
+  scopeDrops: readonly Declaration[] = [],
 ): JSIM.Statement {
   switch (statement.kind) {
     case "LetStatement": {
@@ -302,12 +465,21 @@ function parseStatement(
         parseExpression(ctx, expr),
       );
       const name = bindLocalName(ctx, statement.pattern.name.text);
+      const dispose =
+        !statement.mutable &&
+        scopeDrops.some((d) => d.id === statement.pattern.name.tokenId);
       return {
         kind: "LetStatement",
         name,
         mutable: statement.mutable,
         value,
         docComment: toDocComment(statement.attributes),
+        span: resolveSpan(
+          ctx.tokens,
+          statement.tokenId,
+          findLetStatementEndTokenId(ctx.tokens, statement.tokenId),
+        ),
+        dispose,
       };
     }
     case "ExpressionStatement":
@@ -351,7 +523,10 @@ function jsimBlockStatement(
   if (isSome(block.trailingExpression)) return jsimBlockExpression(ctx, block);
   pushRenameFrame(ctx);
   try {
-    const body = block.statements.map((stmt) => parseStatement(ctx, stmt));
+    const drops = scopeDrops(ctx, block.tokenId);
+    const body = block.statements.map((stmt) =>
+      parseStatement(ctx, stmt, drops),
+    );
     return { kind: "BlockStatement", body };
   } finally {
     popRenameFrame(ctx);
@@ -471,8 +646,9 @@ function jsimBranchBody(
 ): JSIM.Statement[] {
   pushRenameFrame(ctx);
   try {
+    const drops = scopeDrops(ctx, block.tokenId);
     const stmts: JSIM.Statement[] = block.statements.map((stmt) =>
-      parseStatement(ctx, stmt),
+      parseStatement(ctx, stmt, drops),
     );
     if (isSome(block.trailingExpression)) {
       stmts.push({
@@ -622,12 +798,18 @@ function parseBinaryExpression(
   )
     ? hedgeTypeToNumericKind(binExp.type)
     : none();
+  const startTokenId = leftmostExpressionTokenId(binExp);
   return {
     kind: binExp.kind,
     operator: binExp.operator,
     left: parseExpression(ctx, binExp.left),
     right: parseExpression(ctx, binExp.right),
     numericKind,
+    span: resolveSpan(
+      ctx.tokens,
+      startTokenId,
+      findExpressionEndTokenId(ctx.tokens, startTokenId),
+    ),
   };
 }
 

@@ -72,7 +72,7 @@ type MoveState =
 type StateMap = Map<BindingId, MoveState>;
 type ScopeStack = Map<string, BindingId>[];
 
-interface FunctionOwnership {
+export interface FunctionOwnership {
   readonly graph: ControlFlowGraph;
   /**
    * Drop points keyed by the owning `Semantics.Block`'s own tokenId,
