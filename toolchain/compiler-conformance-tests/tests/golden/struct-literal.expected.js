@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 function main() {
-  const p = ({x: 1, y: 2});
+  using p = ({x: 1, y: 2, [Symbol.dispose]() {}});
   print(p.x);
 }
 
