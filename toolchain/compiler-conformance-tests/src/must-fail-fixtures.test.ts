@@ -16,11 +16,14 @@ describe("must-fail fixtures", (): void => {
     expect(fixtures.length).toBeGreaterThanOrEqual(3);
   });
 
-  it.each(fixtures)("rejects $name with expected diagnostics", async (fixture): Promise<void> => {
-    const source = readFileSync(fixture.sourcePath, "utf8");
-    const result = compileHedgeCode(source);
-    expect(isSome(result.code), "expected compilation to fail").toBe(false);
-    const rendered = renderDiagnostics(result.diagnostics);
-    await expect(rendered).toMatchFileSnapshot(fixture.expectedPath);
-  });
+  it.each(fixtures)(
+    "rejects $name with expected diagnostics",
+    async (fixture): Promise<void> => {
+      const source = readFileSync(fixture.sourcePath, "utf8");
+      const result = compileHedgeCode(source);
+      expect(isSome(result.code), "expected compilation to fail").toBe(false);
+      const rendered = renderDiagnostics(result.diagnostics);
+      await expect(rendered).toMatchFileSnapshot(fixture.expectedPath);
+    },
+  );
 });

@@ -102,7 +102,17 @@ export function runExecutionFixture(fixture: ExecutionFixture): {
     writeFileSync(scriptPath, `${shim}\n${jsValue}`);
     const spawned = spawnSync(process.execPath, [scriptPath], {
       encoding: "utf8",
+      timeout: 5000,
     });
+    if (spawned.error) {
+      throw spawned.error;
+    }
+    if (spawned.signal) {
+      throw new Error(
+        `execution fixture "${fixture.name}" termianted by signal ${spawned.signal}`,
+        { cause: spawned },
+      );
+    }
     return { exitCode: spawned.status ?? 1, stdout: spawned.stdout };
   } finally {
     rmSync(dir, { recursive: true, force: true });
