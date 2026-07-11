@@ -59,7 +59,6 @@ export function compile(source: string): CompileResult {
   const analysis = analyze(program, tokens);
   // TODO: pass analysis.program (Semantics.Program) once the borrow checker
   // is updated to consume the semantic AST instead of the parser AST.
-  // Tracked: https://github.com/hedge-lang/hedge/issues/128
   const borrowChecked = checkBorrows(program, tokens);
   const ownershipDiagnostics = hasError(analysis.diagnostics)
     ? []

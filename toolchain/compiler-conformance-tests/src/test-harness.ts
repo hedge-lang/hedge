@@ -47,7 +47,7 @@ export function executeHedgeCode(source: string): ExecutionResult | null {
     // therefore limited to programs without `pub` items. When pub-fn execution
     // tests are needed, replace this with SourceTextModule from node:vm
     // (requires --experimental-vm-modules in the vitest pool config) and make
-    // executeHedgeCode async. Tracked: https://github.com/hedge-lang/hedge/issues/127
+    // executeHedgeCode async.
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
     const fn = new Function(...Object.keys(globalEnv), jsValue);
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call
