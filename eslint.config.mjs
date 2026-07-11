@@ -179,7 +179,6 @@ export default defineConfig([
     ignores: [
       "**/{coverage,dist,node_modules}/**",
       "**/examples/**/*.{d.ts,js}",
-      "**/.claude/**",
     ],
   },
 
