@@ -5,7 +5,42 @@ import { isErr } from "../result.js";
 import type { Program } from "./ast.js";
 import { collectInnerAttributes } from "./attribute.js";
 import { parseItem } from "./item.js";
-import { tokenAt } from "./parse-utils.js";
+import { kindAt, skipToItemStartKeyword, tokenAt } from "./parse-utils.js";
+
+/**
+ * @returns the token index of a missing `fn`/`struct` name — the one
+ * top-level failure this ticket recovers from — or `undefined` for any other
+ * failure. Detected structurally, not by message content or by `itemStart`:
+ * a `fn`/`struct`'s very first step after the keyword is always parsing its
+ * name, so a failure whose span starts exactly one token after an `fn`/
+ * `struct` keyword can only be that step, regardless of what prefixes the
+ * keyword (`pub`, attributes, ...). Anchoring on the error's own span rather
+ * than `itemStart` matters: `itemStart` points at the item's leading token
+ * (e.g. `pub`), which is *not* where the name lives once a visibility prefix
+ * is present — `tokens[itemStart + 1]` would then be `fn` itself, not the
+ * name, and a `pub`-prefixed missing name would never be recognized.
+ * Anything else (a bad param/field/type/pattern deeper in the declaration, a
+ * missing brace, a disallowed `pub` combination, ...) keeps failing fast
+ * exactly as before — retrofitting recovery onto those would silently
+ * swallow diagnostics the rest of the suite pins as hard failures (see e.g.
+ * the reference-type, generic-type, and `mut`-as-name guardrails).
+ */
+function missingItemNameIndex(
+  tokens: readonly Token[],
+  errorSpan: Diagnostic["span"],
+): number | undefined {
+  if (!isSome(errorSpan)) {
+    return undefined;
+  }
+  const badNameIdx = tokens.findIndex(
+    (tok) => tok.span.start === errorSpan.value.start,
+  );
+  const before = tokens[badNameIdx - 1];
+  const isFnOrStruct =
+    before?.kind === "keyword" &&
+    (before.text === "fn" || before.text === "struct");
+  return isFnOrStruct ? badNameIdx : undefined;
+}
 
 /**
  * Parse a token stream into a {@link Program}.
@@ -66,7 +101,23 @@ export function parse(tokens: readonly Token[]): ParseResult {
     const itemResult = parseItem(tokens, diagnostics, cursor);
     if (isErr(itemResult)) {
       diagnostics.push(itemResult.error);
-      return { program: none(), diagnostics };
+      const badNameIdx = missingItemNameIndex(tokens, itemResult.error.span);
+      if (badNameIdx === undefined) {
+        return { program: none(), diagnostics };
+      }
+      // Skip past the bad name token before scanning for the next item —
+      // otherwise a keyword reused as the bad name (`fn enum() {}`, or
+      // `pub fn enum() {}`) would have it immediately re-matched as a fresh
+      // item's start, since it's itself an `ITEM_START_KEYWORDS` member.
+      cursor = skipToItemStartKeyword(tokens, badNameIdx + 1);
+      // No further item to resync to: matches the existing convention (see
+      // `skipUnsupportedTopLevelItem`'s own EOF case) that a synchronization
+      // scan finding nothing before EOF is a hard failure, not a recovered
+      // empty program.
+      if (kindAt(tokens, cursor) === "eof") {
+        return { program: none(), diagnostics };
+      }
+      continue;
     }
     cursor = itemResult.value.next;
     const node = itemResult.value.node;

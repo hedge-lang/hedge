@@ -105,6 +105,22 @@ export function stripUnderscores(text: string): string {
 export const MUT_MESSAGE: string =
   "The keyword `mut` is reserved and cannot be used as an identifier. For a mutable binding, use `let mut`; for a mutable borrow, use `&mut`.";
 
+/**
+ * True for a diagnostic that is an established Slice-gated guardrail
+ * rejection (see the `` `x` is not supported in Slice N; ... `` convention
+ * used throughout this file and `type.ts`/`pattern.ts`) or the `mut`-as-
+ * identifier guardrail. These are permanent, deliberately fail-fast
+ * rejections of syntax that belongs to a later slice or is otherwise
+ * reserved — list-element panic-mode recovery must never swallow one, since
+ * that would silently retrofit recovery onto a guardrail the rest of the
+ * test suite pins as a total parse failure.
+ */
+export function isGuardrailDiagnostic(diagnostic: Diagnostic): boolean {
+  return (
+    diagnostic.message.includes("Slice ") || diagnostic.message === MUT_MESSAGE
+  );
+}
+
 export function unsupportedLoopMessage(keyword: string): string {
   return `\`${keyword}\` is not supported in Slice 1; loops are introduced in Slice 6`;
 }
@@ -251,6 +267,102 @@ export function skipBalancedAngleList(
     }
     cursor += 1;
   }
+}
+
+/**
+ * Scans forward from `pos` to the first token matching `predicate`, or to
+ * `eof` if none matches. The `eof` check is unconditional (independent of
+ * `predicate`), so every call terminates at or before the trailing `eof`
+ * sentinel regardless of what the predicate does.
+ */
+export function skipUntil(
+  tokens: readonly Token[],
+  pos: number,
+  predicate: (token: Token) => boolean,
+): number {
+  let cursor = pos;
+  for (;;) {
+    const tok = tokens[cursor];
+    if (tok === undefined || tok.kind === "eof" || predicate(tok)) {
+      return cursor;
+    }
+    cursor += 1;
+  }
+}
+
+/**
+ * Scans forward from `pos` to the first token whose `kind` is one of `kinds`.
+ */
+export function skipUntilKind(
+  tokens: readonly Token[],
+  pos: number,
+  ...kinds: readonly Token["kind"][]
+): number {
+  const kindSet = new Set(kinds);
+  return skipUntil(tokens, pos, (tok) => kindSet.has(tok.kind));
+}
+
+const OPENING_DELIMS: ReadonlySet<Token["kind"]> = new Set([
+  "lparen",
+  "lbracket",
+  "lbrace",
+]);
+const CLOSING_DELIMS: ReadonlySet<Token["kind"]> = new Set([
+  "rparen",
+  "rbracket",
+  "rbrace",
+]);
+
+/**
+ * Scans forward from `pos` to the first token of one of `kinds` at the same
+ * nesting depth as `pos` itself — tracking `(`/`[`/`{` depth so a token
+ * nested inside them (e.g. the closing `)` of an attribute's own
+ * `#[attr(1.5)]` argument list) is never mistaken for the enclosing list's
+ * own comma or closing delimiter. `skipUntilKind` is unsafe for list-element
+ * recovery for exactly this reason; use this instead whenever the scanned
+ * span can contain its own nested delimiters.
+ */
+export function skipUntilKindBalanced(
+  tokens: readonly Token[],
+  pos: number,
+  ...kinds: readonly Token["kind"][]
+): number {
+  const kindSet = new Set(kinds);
+  let depth = 0;
+  let cursor = pos;
+  for (;;) {
+    const tok = tokens[cursor];
+    if (tok === undefined || tok.kind === "eof") {
+      return cursor;
+    }
+    if (depth === 0 && kindSet.has(tok.kind)) {
+      return cursor;
+    }
+    if (OPENING_DELIMS.has(tok.kind)) {
+      depth += 1;
+    } else if (CLOSING_DELIMS.has(tok.kind)) {
+      depth = Math.max(0, depth - 1);
+    }
+    cursor += 1;
+  }
+}
+
+/**
+ * Scans forward from `pos` to the next token that can start a top-level item
+ * (`fn`/`struct`/`let`/`pub`/...). Matching the full set — not just
+ * `fn`/`struct`/`let` — matters: it lets recovery resume from `pub` in a
+ * `pub fn`/`pub struct`, rather than landing past it and silently losing the
+ * item's visibility.
+ */
+export function skipToItemStartKeyword(
+  tokens: readonly Token[],
+  pos: number,
+): number {
+  return skipUntil(
+    tokens,
+    pos,
+    (tok) => tok.kind === "keyword" && ITEM_START_KEYWORDS.has(tok.text),
+  );
 }
 
 /**
