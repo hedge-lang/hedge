@@ -2370,6 +2370,25 @@ describe("item error recovery", (): void => {
     ]);
   });
 
+  it("does not cascade a second diagnostic when a malformed parameter's garbage contains a comma inside `<...>`", (): void => {
+    // `x<A, B>` isn't valid Slice 1 pattern syntax: `x` parses as a binding
+    // pattern, then the missing-colon check fails since the next token is
+    // `<`, not `:` — a recoverable, non-guardrail error. If the resync scan
+    // doesn't track `<`/`>` depth, it stops at the comma between A and B
+    // (the first comma it sees) instead of the list's real separator after
+    // `>`, then tries to parse "B>, y: i32" as a bogus second element.
+    const { tokens } = tokenize("fn f(x<A, B>, y: i32) {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        params: [{ pattern: { name: { text: "y" } } }],
+      },
+    ]);
+  });
+
   it("fails fast without hanging when a parameter list is truncated before EOF with no further item to resync to", (): void => {
     const { tokens } = tokenize("fn f(x: i32, y");
     const { program, diagnostics } = parse(tokens);

@@ -7,6 +7,7 @@ import {
   skipToItemStartKeyword,
   skipUntil,
   skipUntilKind,
+  skipUntilKindBalanced,
 } from "./parse-utils.js";
 
 describe("skipBalancedBraceBlock", (): void => {
@@ -59,6 +60,31 @@ describe("skipUntilKind", (): void => {
     const { tokens } = tokenize("foo bar baz");
     const next = skipUntilKind(tokens, 0, "comma", "rparen");
     expect(tokens[next]?.kind).toBe("eof");
+  });
+});
+
+describe("skipUntilKindBalanced", (): void => {
+  it("does not stop at a comma nested inside parens", (): void => {
+    const { tokens } = tokenize("#[attr(1.5)] i32, bool");
+    const next = skipUntilKindBalanced(tokens, 0, "comma", "rparen");
+    expect(tokens[next]?.kind).toBe("comma");
+    expect(tokens[next + 1]).toMatchObject({ kind: "ident", text: "bool" });
+  });
+
+  it("does not stop at a comma nested inside a generic argument list", (): void => {
+    const { tokens } = tokenize("x<A, B>, y: i32");
+    const next = skipUntilKindBalanced(tokens, 0, "comma", "rparen");
+    // The first depth-0 comma is the one right after `x<A, B>`, not the one
+    // between A and B inside the angle brackets.
+    expect(tokens[next]?.kind).toBe("comma");
+    expect(tokens[next + 1]).toMatchObject({ kind: "ident", text: "y" });
+  });
+
+  it("does not stop at a comma nested inside a doubly-nested generic (`>>` lexes as gt_gt)", (): void => {
+    const { tokens } = tokenize("x<Vec<A, B>>, y: i32");
+    const next = skipUntilKindBalanced(tokens, 0, "comma", "rparen");
+    expect(tokens[next]?.kind).toBe("comma");
+    expect(tokens[next + 1]).toMatchObject({ kind: "ident", text: "y" });
   });
 });
 

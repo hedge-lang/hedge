@@ -302,25 +302,49 @@ export function skipUntilKind(
   return skipUntil(tokens, pos, (tok) => kindSet.has(tok.kind));
 }
 
-const OPENING_DELIMS: ReadonlySet<Token["kind"]> = new Set([
-  "lparen",
-  "lbracket",
-  "lbrace",
-]);
-const CLOSING_DELIMS: ReadonlySet<Token["kind"]> = new Set([
-  "rparen",
-  "rbracket",
-  "rbrace",
-]);
+/**
+ * @returns the nesting-depth contribution of a single token: +1/-1 for
+ * `(`/`)`, `[`/`]`, `{`/`}`, and `<`/`>`; ±2 for `lt_lt`/`gt_gt`, since `>>`
+ * lexes as one `gt_gt` token under maximal munch (see `skipBalancedAngleList`,
+ * which uses the same technique) — a naive one-token count would never see
+ * the second `>` of a doubly-nested generic close. 0 for everything else.
+ */
+function delimiterDepthDelta(kind: Token["kind"]): number {
+  switch (kind) {
+    case "lparen":
+    case "lbracket":
+    case "lbrace":
+    case "lt":
+      return 1;
+    case "lt_lt":
+      return 2;
+    case "rparen":
+    case "rbracket":
+    case "rbrace":
+    case "gt":
+      return -1;
+    case "gt_gt":
+      return -2;
+    default:
+      return 0;
+  }
+}
 
 /**
  * Scans forward from `pos` to the first token of one of `kinds` at the same
- * nesting depth as `pos` itself — tracking `(`/`[`/`{` depth so a token
- * nested inside them (e.g. the closing `)` of an attribute's own
- * `#[attr(1.5)]` argument list) is never mistaken for the enclosing list's
- * own comma or closing delimiter. `skipUntilKind` is unsafe for list-element
- * recovery for exactly this reason; use this instead whenever the scanned
- * span can contain its own nested delimiters.
+ * nesting depth as `pos` itself — tracking `(`/`[`/`{`/`<` depth so a token
+ * nested inside them is never mistaken for the enclosing list's own comma or
+ * closing delimiter. Two concrete cases this guards against: the closing `)`
+ * of an attribute's own `#[attr(1.5)]` argument list, and a comma inside a
+ * generic argument list (`x<A, B>, y: i32` — without `<`/`>` tracking, the
+ * scan would stop at the comma between `A` and `B` instead of the one after
+ * `>`). `skipUntilKind` is unsafe for list-element recovery for exactly this
+ * reason; use this instead whenever the scanned span can contain its own
+ * nested delimiters. All four delimiter kinds share one `depth` counter
+ * rather than a separate stack per kind, so a genuinely mismatched mix
+ * (e.g. `(` opened, `>` closed) can under- or over-count relative to a true
+ * per-kind balance check — an accepted imprecise-but-safe tradeoff on
+ * malformed input, matching this file's other recovery helpers.
  */
 export function skipUntilKindBalanced(
   tokens: readonly Token[],
@@ -338,11 +362,7 @@ export function skipUntilKindBalanced(
     if (depth === 0 && kindSet.has(tok.kind)) {
       return cursor;
     }
-    if (OPENING_DELIMS.has(tok.kind)) {
-      depth += 1;
-    } else if (CLOSING_DELIMS.has(tok.kind)) {
-      depth = Math.max(0, depth - 1);
-    }
+    depth = Math.max(0, depth + delimiterDepthDelta(tok.kind));
     cursor += 1;
   }
 }
