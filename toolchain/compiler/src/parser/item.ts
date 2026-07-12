@@ -21,6 +21,7 @@ import type { Parsed } from "./parse.js";
 import {
   expect,
   expectKeyword,
+  isGuardrailDiagnostic,
   isLifetimeGenericsStart,
   kindAt,
   parseIdentifier,
@@ -28,6 +29,7 @@ import {
   skipToFunctionBody,
   skipToStructBody,
   skipUnsupportedTopLevelItem,
+  skipUntilKindBalanced,
   spanAt,
   unsupportedAsyncMessage,
   unsupportedGenericsMessage,
@@ -94,8 +96,45 @@ function parseVisibility(
  * Param  ::= Pattern ":" Type
  * ```
  */
+function parseParam(tokens: readonly Token[], pos: number): PR<Parsed<Param>> {
+  const paramStart = pos;
+  const patternResult = parsePattern(tokens, pos);
+  if (isErr(patternResult)) {
+    return patternResult;
+  }
+  const pattern = patternResult.value.node;
+  let cursor = patternResult.value.next;
+
+  if (kindAt(tokens, cursor) !== "colon") {
+    const name = unwrapSomeOr(patternBindingName(pattern), "_");
+    return err({
+      severity: "error",
+      message: `expected ':' after parameter name '${name}'`,
+      span: spanAt(tokens, cursor),
+    });
+  }
+  cursor += 1;
+
+  const typeResult = parseType(tokens, cursor);
+  if (isErr(typeResult)) {
+    return typeResult;
+  }
+  cursor = typeResult.value.next;
+
+  return ok({
+    node: {
+      kind: "Param",
+      tokenId: paramStart,
+      pattern,
+      type: typeResult.value.node,
+    },
+    next: cursor,
+  });
+}
+
 function parseParams(
   tokens: readonly Token[],
+  diagnostics: Diagnostic[],
   pos: number,
 ): PR<Parsed<readonly Param[]>> {
   const afterOpen = expect(tokens, pos, "lparen");
@@ -106,39 +145,34 @@ function parseParams(
   const params: Param[] = [];
 
   for (;;) {
-    if (kindAt(tokens, cursor) === "rparen") {
+    // The `eof` check avoids attempting (and separately diagnosing) an
+    // element parse when nothing remains — the outer `expect(rparen)` below
+    // already produces the single, correct "found end of input" diagnostic
+    // for a truncated list; without this, both would fire redundantly.
+    if (
+      kindAt(tokens, cursor) === "rparen" ||
+      kindAt(tokens, cursor) === "eof"
+    ) {
       break;
     }
     const paramStart = cursor;
-    const patternResult = parsePattern(tokens, cursor);
-    if (isErr(patternResult)) {
-      return patternResult;
-    }
-    const pattern = patternResult.value.node;
-    cursor = patternResult.value.next;
+    const paramResult = parseParam(tokens, cursor);
 
-    if (kindAt(tokens, cursor) !== "colon") {
-      const name = unwrapSomeOr(patternBindingName(pattern), "_");
-      return err({
-        severity: "error",
-        message: `expected ':' after parameter name '${name}'`,
-        span: spanAt(tokens, cursor),
-      });
+    if (isErr(paramResult)) {
+      if (isGuardrailDiagnostic(paramResult.error)) {
+        return paramResult;
+      }
+      diagnostics.push(paramResult.error);
+      cursor = skipUntilKindBalanced(tokens, paramStart, "comma", "rparen");
+      if (kindAt(tokens, cursor) === "comma") {
+        cursor += 1;
+        continue;
+      }
+      break;
     }
-    cursor += 1;
 
-    const typeResult = parseType(tokens, cursor);
-    if (isErr(typeResult)) {
-      return typeResult;
-    }
-    cursor = typeResult.value.next;
-
-    params.push({
-      kind: "Param",
-      tokenId: paramStart,
-      pattern,
-      type: typeResult.value.node,
-    });
+    params.push(paramResult.value.node);
+    cursor = paramResult.value.next;
 
     if (kindAt(tokens, cursor) === "comma") {
       cursor += 1;
@@ -234,7 +268,7 @@ function parseFunction(
     diagnostics,
     nameResult.value.next,
   );
-  const paramsResult = parseParams(tokens, afterGenerics);
+  const paramsResult = parseParams(tokens, diagnostics, afterGenerics);
   if (isErr(paramsResult)) {
     return paramsResult;
   }
@@ -280,9 +314,65 @@ function parseFunction(
  * StructField     ::= Attribute* Visibility? Identifier ":" Type
  * ```
  */
-// eslint-disable-next-line complexity -- This is too difficult to split up
+function parseNamedField(
+  tokens: readonly Token[],
+  pos: number,
+): PR<Parsed<StructField>> {
+  const attrResult = collectOuterAttributes(tokens, pos);
+  if (isErr(attrResult)) {
+    return attrResult;
+  }
+  const fieldAttrs = attrResult.value.attributes;
+  let cursor = attrResult.value.next;
+
+  const visResult = parseVisibility(tokens, cursor);
+  if (isErr(visResult)) {
+    return visResult;
+  }
+  cursor = visResult.value.next;
+
+  const fieldStart = cursor;
+
+  const nameResult = parseIdentifier(tokens, cursor);
+  if (isErr(nameResult)) {
+    return nameResult;
+  }
+  const fieldName = nameResult.value.node;
+  cursor = nameResult.value.next;
+
+  if (tokens[cursor]?.kind !== "colon") {
+    const token = tokens[cursor];
+    return err({
+      severity: "error",
+      message: `expected ':' after field name '${fieldName.text}'`,
+      span: token !== undefined ? some(token.span) : none(),
+    });
+  }
+  cursor += 1;
+
+  const typeResult = parseType(tokens, cursor);
+  if (isErr(typeResult)) {
+    return typeResult;
+  }
+  cursor = typeResult.value.next;
+
+  return ok({
+    node: {
+      kind: "StructField",
+      tokenId: fieldStart,
+      attributes: fieldAttrs,
+      visibility: visResult.value.node,
+      name: fieldName,
+      type: typeResult.value.node,
+    },
+    next: cursor,
+  });
+}
+
+// eslint-disable-next-line complexity -- List-recovery loop with a guardrail/EOF branch each; splitting would obscure the control flow.
 function parseNamedFieldsBody(
   tokens: readonly Token[],
+  diagnostics: Diagnostic[],
   pos: number,
 ): PR<Parsed<NamedFieldsBody>> {
   const afterLbrace = expect(tokens, pos, "lbrace");
@@ -293,56 +383,30 @@ function parseNamedFieldsBody(
   const fields: StructField[] = [];
 
   for (;;) {
-    if (tokens[cursor]?.kind === "rbrace") {
+    // See parseParams' matching check: avoids a redundant second diagnostic
+    // when the list is truncated with nothing left to try parsing.
+    if (tokens[cursor]?.kind === "rbrace" || tokens[cursor]?.kind === "eof") {
       break;
     }
 
-    const attrResult = collectOuterAttributes(tokens, cursor);
-    if (isErr(attrResult)) {
-      return attrResult;
-    }
-    const fieldAttrs = attrResult.value.attributes;
-    cursor = attrResult.value.next;
-
-    const visResult = parseVisibility(tokens, cursor);
-    if (isErr(visResult)) {
-      return visResult;
-    }
-    cursor = visResult.value.next;
-
     const fieldStart = cursor;
+    const fieldResult = parseNamedField(tokens, cursor);
 
-    const nameResult = parseIdentifier(tokens, cursor);
-    if (isErr(nameResult)) {
-      return nameResult;
+    if (isErr(fieldResult)) {
+      if (isGuardrailDiagnostic(fieldResult.error)) {
+        return fieldResult;
+      }
+      diagnostics.push(fieldResult.error);
+      cursor = skipUntilKindBalanced(tokens, fieldStart, "comma", "rbrace");
+      if (tokens[cursor]?.kind === "comma") {
+        cursor += 1;
+        continue;
+      }
+      break;
     }
-    const fieldName = nameResult.value.node;
-    cursor = nameResult.value.next;
 
-    if (tokens[cursor]?.kind !== "colon") {
-      const token = tokens[cursor];
-      return err({
-        severity: "error",
-        message: `expected ':' after field name '${fieldName.text}'`,
-        span: token !== undefined ? some(token.span) : none(),
-      });
-    }
-    cursor += 1;
-
-    const typeResult = parseType(tokens, cursor);
-    if (isErr(typeResult)) {
-      return typeResult;
-    }
-    cursor = typeResult.value.next;
-
-    fields.push({
-      kind: "StructField",
-      tokenId: fieldStart,
-      attributes: fieldAttrs,
-      visibility: visResult.value.node,
-      name: fieldName,
-      type: typeResult.value.node,
-    });
+    fields.push(fieldResult.value.node);
+    cursor = fieldResult.value.next;
 
     if (tokens[cursor]?.kind === "comma") {
       cursor += 1;
@@ -368,8 +432,47 @@ function parseNamedFieldsBody(
  * TupleField      ::= Attribute* Visibility? Type
  * ```
  */
+function parseTupleField(
+  tokens: readonly Token[],
+  pos: number,
+): PR<Parsed<TupleField>> {
+  const attrResult = collectOuterAttributes(tokens, pos);
+  if (isErr(attrResult)) {
+    return attrResult;
+  }
+  const fieldAttrs = attrResult.value.attributes;
+  let cursor = attrResult.value.next;
+
+  const visResult = parseVisibility(tokens, cursor);
+  if (isErr(visResult)) {
+    return visResult;
+  }
+  cursor = visResult.value.next;
+
+  const fieldStart = cursor;
+
+  const typeResult = parseType(tokens, cursor);
+  if (isErr(typeResult)) {
+    return typeResult;
+  }
+  cursor = typeResult.value.next;
+
+  return ok({
+    node: {
+      kind: "TupleField",
+      tokenId: fieldStart,
+      attributes: fieldAttrs,
+      visibility: visResult.value.node,
+      type: typeResult.value.node,
+    },
+    next: cursor,
+  });
+}
+
+// eslint-disable-next-line complexity -- List-recovery loop with a guardrail/EOF branch each; splitting would obscure the control flow.
 function parseTupleFieldsBody(
   tokens: readonly Token[],
+  diagnostics: Diagnostic[],
   pos: number,
 ): PR<Parsed<TupleFieldsBody>> {
   const afterLparen = expect(tokens, pos, "lparen");
@@ -380,38 +483,30 @@ function parseTupleFieldsBody(
   const fields: TupleField[] = [];
 
   for (;;) {
-    if (tokens[cursor]?.kind === "rparen") {
+    // See parseParams' matching check: avoids a redundant second diagnostic
+    // when the list is truncated with nothing left to try parsing.
+    if (tokens[cursor]?.kind === "rparen" || tokens[cursor]?.kind === "eof") {
       break;
     }
 
-    const attrResult = collectOuterAttributes(tokens, cursor);
-    if (isErr(attrResult)) {
-      return attrResult;
-    }
-    const fieldAttrs = attrResult.value.attributes;
-    cursor = attrResult.value.next;
-
-    const visResult = parseVisibility(tokens, cursor);
-    if (isErr(visResult)) {
-      return visResult;
-    }
-    cursor = visResult.value.next;
-
     const fieldStart = cursor;
+    const fieldResult = parseTupleField(tokens, cursor);
 
-    const typeResult = parseType(tokens, cursor);
-    if (isErr(typeResult)) {
-      return typeResult;
+    if (isErr(fieldResult)) {
+      if (isGuardrailDiagnostic(fieldResult.error)) {
+        return fieldResult;
+      }
+      diagnostics.push(fieldResult.error);
+      cursor = skipUntilKindBalanced(tokens, fieldStart, "comma", "rparen");
+      if (tokens[cursor]?.kind === "comma") {
+        cursor += 1;
+        continue;
+      }
+      break;
     }
-    cursor = typeResult.value.next;
 
-    fields.push({
-      kind: "TupleField",
-      tokenId: fieldStart,
-      attributes: fieldAttrs,
-      visibility: visResult.value.node,
-      type: typeResult.value.node,
-    });
+    fields.push(fieldResult.value.node);
+    cursor = fieldResult.value.next;
 
     if (tokens[cursor]?.kind === "comma") {
       cursor += 1;
@@ -467,14 +562,14 @@ function parseStruct(
     body = { kind: "Unit" };
     cursor += 1;
   } else if (bodyToken?.kind === "lbrace") {
-    const bodyResult = parseNamedFieldsBody(tokens, cursor);
+    const bodyResult = parseNamedFieldsBody(tokens, diagnostics, cursor);
     if (isErr(bodyResult)) {
       return bodyResult;
     }
     body = bodyResult.value.node;
     cursor = bodyResult.value.next;
   } else if (bodyToken?.kind === "lparen") {
-    const bodyResult = parseTupleFieldsBody(tokens, cursor);
+    const bodyResult = parseTupleFieldsBody(tokens, diagnostics, cursor);
     if (isErr(bodyResult)) {
       return bodyResult;
     }
