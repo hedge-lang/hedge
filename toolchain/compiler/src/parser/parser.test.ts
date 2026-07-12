@@ -2271,49 +2271,351 @@ describe("unsupported item keywords", (): void => {
 });
 
 describe("item error recovery", (): void => {
-  it("reports an error for a parameter missing its type annotation", (): void => {
+  it("reports an error for a parameter missing its type annotation, and still recovers the function", (): void => {
     const { tokens } = tokenize("fn f(x) {}");
-    const { diagnostics } = parse(tokens);
-    expect(diagnostics[0]?.severity).toBe("error");
-    expect(diagnostics[0]?.message).toContain(":");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toContain(":");
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "f" }, params: [] },
+    ]);
   });
 
-  it("reports an error for a parameter missing its name", (): void => {
+  it("reports an error for a parameter missing its name, and still recovers the function", (): void => {
     const { tokens } = tokenize("fn f(: i32) {}");
-    const { diagnostics } = parse(tokens);
-    expect(diagnostics[0]?.severity).toBe("error");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toContain(":");
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "f" }, params: [] },
+    ]);
   });
 
-  it("reports an error for a struct missing its name", (): void => {
+  it("drops a malformed leading parameter but keeps a valid trailing one", (): void => {
+    const { tokens } = tokenize("fn f(x, y: i32) {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        params: [{ kind: "Param", pattern: { name: { text: "y" } } }],
+      },
+    ]);
+  });
+
+  it("drops a malformed middle parameter but keeps valid params on both sides", (): void => {
+    const { tokens } = tokenize("fn f(a: i32, x, b: bool) {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        params: [
+          { pattern: { name: { text: "a" } } },
+          { pattern: { name: { text: "b" } } },
+        ],
+      },
+    ]);
+  });
+
+  it("drops a malformed trailing parameter but keeps a valid leading one", (): void => {
+    const { tokens } = tokenize("fn f(a: i32, x) {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        params: [{ pattern: { name: { text: "a" } } }],
+      },
+    ]);
+  });
+
+  it("reports a diagnostic for every malformed parameter when all are malformed", (): void => {
+    const { tokens } = tokenize("fn f(x, y, z) {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(3);
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", params: [] },
+    ]);
+  });
+
+  it("a parameter with a reference-type guardrail stays fail-fast (not list-recoverable) with exactly one diagnostic", (): void => {
+    const { tokens } = tokenize("fn f(x: &i32) {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isNone(program), "Expected no program to come back");
+    expect(diagnostics).toHaveLength(1);
+  });
+
+  it("recovers past a leading stray comma in a parameter list", (): void => {
+    const { tokens } = tokenize("fn f(, x: i32) {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        params: [{ pattern: { name: { text: "x" } } }],
+      },
+    ]);
+  });
+
+  it("fails fast without hanging when a parameter list is truncated before EOF with no further item to resync to", (): void => {
+    const { tokens } = tokenize("fn f(x: i32, y");
+    const { program, diagnostics } = parse(tokens);
+    assert(isNone(program), "Expected no program to come back");
+    expect(diagnostics.some((d) => d.message.includes("eof"))).toBe(true);
+  });
+
+  it("recovers so a sibling function after a malformed parameter list still parses", (): void => {
+    const { tokens } = tokenize("fn f(x) {} fn g() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "f" }, params: [] },
+      { kind: "Function", name: { text: "g" } },
+    ]);
+  });
+
+  it("reports an error for a struct missing its name, recovering via top-level synchronization (there's no field list to recover within)", (): void => {
+    const { tokens } = tokenize("struct { x: i32 } fn g() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.severity).toBe("error");
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "g" } },
+    ]);
+  });
+
+  it("preserves `pub` visibility when top-level recovery resumes on a `pub`-prefixed sibling item", (): void => {
+    const { tokens } = tokenize("struct { x: i32 } pub fn bar() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        name: { text: "bar" },
+        visibility: some({ scope: none() }),
+      },
+    ]);
+  });
+
+  it("recovers a missing name on a `pub`-prefixed item itself, not just on a sibling after it", (): void => {
+    const { tokens } = tokenize("pub fn 123() {} fn bar() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "bar" } },
+    ]);
+  });
+
+  it("recovers a `pub`-prefixed item whose bad name is itself an item-start keyword, without looping forever", (): void => {
+    const { tokens } = tokenize("pub fn enum() {} fn bar() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "bar" } },
+    ]);
+  });
+
+  it("recovers past two independently malformed top-level items in sequence", (): void => {
+    const { tokens } = tokenize(
+      "struct { a: i32 } struct { b: bool } fn g() {}",
+    );
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(2);
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "g" } },
+    ]);
+  });
+
+  it("fails fast without hanging when a malformed top-level item has no further item keyword before EOF", (): void => {
     const { tokens } = tokenize("struct { x: i32 }");
-    const { diagnostics } = parse(tokens);
-    expect(diagnostics[0]?.severity).toBe("error");
+    const { program, diagnostics } = parse(tokens);
+    assert(isNone(program), "Expected no program to come back");
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
   });
 
-  it("reports an error for a struct field missing its colon", (): void => {
+  it("terminates instead of looping forever when the failed item's own leading token is itself an item-start keyword", (): void => {
+    const { tokens } = tokenize("fn 123() {} fn bar() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "bar" } },
+    ]);
+  });
+
+  it("reports an error for a struct field missing its colon, and still recovers the struct", (): void => {
     const { tokens } = tokenize("struct Foo { x i32 }");
-    const { diagnostics } = parse(tokens);
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.severity).toBe("error");
     expect(diagnostics[0]?.message).toContain(":");
+    expect(program.value.items).toMatchObject([
+      { kind: "Struct", name: { text: "Foo" }, body: { fields: [] } },
+    ]);
   });
 
-  it("reports an error for a struct field missing its type", (): void => {
+  it("reports an error for a struct field missing its type (a Slice 1 type guardrail, so the whole struct stays fail-fast)", (): void => {
+    // Same reasoning as the tuple-field "missing type" case above: every
+    // parseType failure carries the Slice-1 guardrail phrasing, so it is
+    // never eligible for per-element list recovery.
     const { tokens } = tokenize("struct Foo { x: }");
-    const { diagnostics } = parse(tokens);
-    expect(diagnostics[0]?.severity).toBe("error");
+    const { program, diagnostics } = parse(tokens);
+    assert(isNone(program), "Expected no program to come back");
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].severity).toBe("error");
   });
 
-  it("reports an error for a struct field missing its colon and type", (): void => {
+  it("reports an error for a struct field missing its colon and type, and still recovers the struct", (): void => {
     const { tokens } = tokenize("struct Foo { x }");
-    const { diagnostics } = parse(tokens);
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.severity).toBe("error");
     expect(diagnostics[0]?.message).toContain(":");
+    expect(program.value.items).toMatchObject([
+      { kind: "Struct", name: { text: "Foo" }, body: { fields: [] } },
+    ]);
   });
 
-  it("reports an error for a tuple field missing its type", (): void => {
+  it("drops a malformed leading field but keeps a valid trailing one", (): void => {
+    const { tokens } = tokenize("struct Foo { x, y: i32 }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Struct",
+        body: { fields: [{ name: { text: "y" } }] },
+      },
+    ]);
+  });
+
+  it("drops a malformed middle field but keeps valid fields on both sides", (): void => {
+    const { tokens } = tokenize("struct Foo { a: i32, x, b: bool }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Struct",
+        body: {
+          fields: [{ name: { text: "a" } }, { name: { text: "b" } }],
+        },
+      },
+    ]);
+  });
+
+  it("reports a diagnostic for every malformed field when all are malformed", (): void => {
+    const { tokens } = tokenize("struct Foo { x, y, z }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(3);
+    expect(program.value.items).toMatchObject([
+      { kind: "Struct", body: { fields: [] } },
+    ]);
+  });
+
+  it("a field with a reference-type guardrail stays fail-fast (not list-recoverable) with exactly one diagnostic", (): void => {
+    const { tokens } = tokenize("struct Foo { x: &i32 }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isNone(program), "Expected no program to come back");
+    expect(diagnostics).toHaveLength(1);
+  });
+
+  it("recovers so a sibling function after a malformed struct field list still parses", (): void => {
+    const { tokens } = tokenize("struct Foo { x } fn g() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(program.value.items).toMatchObject([
+      { kind: "Struct", body: { fields: [] } },
+      { kind: "Function", name: { text: "g" } },
+    ]);
+  });
+
+  it("reports an error for a tuple field missing its type (a Slice 1 type guardrail, so the whole struct stays fail-fast)", (): void => {
+    // Every parseType failure — even a wholly absent type — carries the
+    // "not supported in Slice 1" guardrail phrasing (see type.ts's own doc
+    // comment), so it is never eligible for per-element list recovery; see
+    // isGuardrailDiagnostic in parse-utils.ts.
     const { tokens } = tokenize("struct Foo(:);");
-    const { diagnostics } = parse(tokens);
-    expect(diagnostics[0]?.severity).toBe("error");
+    const { program, diagnostics } = parse(tokens);
+    assert(isNone(program), "Expected no program to come back");
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].severity).toBe("error");
+  });
+
+  it("drops a malformed leading tuple field (bad attribute arg) but keeps a valid trailing one", (): void => {
+    const { tokens } = tokenize("struct Foo(#[attr(1.5)] i32, bool);");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Struct",
+        body: { fields: [{ type: { path: { segments: ["bool"] } } }] },
+      },
+    ]);
+  });
+
+  it("drops a malformed middle tuple field (bad attribute arg) but keeps valid fields on both sides", (): void => {
+    const { tokens } = tokenize("struct Foo(i32, #[attr(1.5)] bool, str);");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Struct",
+        body: {
+          fields: [
+            { type: { path: { segments: ["i32"] } } },
+            { type: { path: { segments: ["str"] } } },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("reports a diagnostic for every malformed tuple field when all have a bad attribute arg", (): void => {
+    const { tokens } = tokenize(
+      "struct Foo(#[attr(1.5)] i32, #[attr(2.5)] bool);",
+    );
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(2);
+    expect(program.value.items).toMatchObject([
+      { kind: "Struct", body: { fields: [] } },
+    ]);
+  });
+
+  it("recovers so a sibling function after a malformed tuple field list still parses", (): void => {
+    const { tokens } = tokenize("struct Foo(#[attr(1.5)] i32); fn g() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(program.value.items).toMatchObject([
+      { kind: "Struct", body: { fields: [] } },
+      { kind: "Function", name: { text: "g" } },
+    ]);
   });
 });
 

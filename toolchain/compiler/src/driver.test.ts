@@ -172,4 +172,19 @@ describe("driver", (): void => {
       );
     });
   });
+
+  describe("item error recovery", (): void => {
+    it("a recovered program (malformed param + valid sibling) still produces no code", (): void => {
+      const result = compile(`
+        fn broken(x) {}
+        fn main() {}
+      `);
+      expect(isNone(result.code)).toBe(true);
+      expect(
+        result.diagnostics.some(
+          (d) => d.severity === "error" && d.message.includes(":"),
+        ),
+      ).toBe(true);
+    });
+  });
 });
