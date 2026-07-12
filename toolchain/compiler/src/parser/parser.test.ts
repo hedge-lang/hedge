@@ -2291,7 +2291,8 @@ describe("item error recovery", (): void => {
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].severity).toBe("error");
-    expect(diagnostics[0].message).toContain(":");
+    expect(diagnostics[0].message).toContain("identifier");
+    expect(diagnostics[0].message).toContain("colon");
     expect(program.value.items).toMatchObject([
       { kind: "Function", name: { text: "f" }, params: [] },
     ]);
