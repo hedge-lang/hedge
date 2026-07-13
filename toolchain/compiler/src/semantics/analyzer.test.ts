@@ -298,6 +298,22 @@ describe("semantic analysis", (): void => {
     expect(diagnostics[0].message).toContain("type mismatch");
   });
 
+  describe("range expression analysis", () => {
+    it("recurses into both operands, reporting each unresolved name once", (): void => {
+      const { diagnostics } = diagnose(
+        "fn main() { let x = missing_start..missing_end; }",
+      );
+      expect(diagnostics).toHaveLength(2);
+      expect(diagnostics[0]?.message).toContain("missing_start");
+      expect(diagnostics[1]?.message).toContain("missing_end");
+    });
+
+    it("does not cascade a spurious type-mismatch when used as a mismatched-type let initializer (UnitType is ambiguous, not genuine)", (): void => {
+      const { diagnostics } = diagnose("fn main() { let x: i32 = 1..2; }");
+      expect(diagnostics).toEqual([]);
+    });
+  });
+
   describe("function return type", () => {
     it("rejects a body whose trailing expression does not match the declared return type", (): void => {
       const { diagnostics } = diagnose('fn bad() -> i32 { "x" }');
