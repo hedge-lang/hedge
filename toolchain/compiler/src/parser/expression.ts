@@ -1134,12 +1134,12 @@ const RANGE_END_TERMINATORS: ReadonlySet<Token["kind"]> = new Set([
 /**
  * `lbrace` is only a terminator when `allowStruct` is false: every other
  * infix operator has a mandatory RHS, so this ambiguity has never come up
- * before. `if a.. { foo(); }` parses its condition with `allowStruct: false`
- * (mirroring `parseIfExpression`'s own struct-literal suppression), and `{`
- * there must always start the if-body, not the range's end. Everywhere else
- * `allowStruct` is true and a `{` is unambiguously a Block expression, so
- * `a..{ compute() }` as a plain let-initializer parses the block as the
- * range's end rather than being rejected.
+ * before. The only `allowStruct: false` context in the parser is
+ * `parseIfExpression`'s own condition parse, where `{` must always start the
+ * if-body, not the range's end (`if a.. { foo(); }`). Everywhere else
+ * `allowStruct` is true and there is no competing construct for a following
+ * `{` to belong to, so `a..{ compute() }` as a plain let-initializer parses
+ * the block as the range's end rather than being rejected.
  */
 function isRangeEndTerminator(
   token: Token | undefined,
