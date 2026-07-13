@@ -21,4 +21,9 @@ describe("copy capability", (): void => {
     const type: Semantics.Type = { kind: "StructType", name: "Boxed" };
     expect(hasCapability(type, "copy")).toBe(false);
   });
+
+  it("UnitType is Copy", (): void => {
+    const type: Semantics.Type = { kind: "UnitType", tokenId: 0 };
+    expect(hasCapability(type, "copy")).toBe(true);
+  });
 });

@@ -449,6 +449,37 @@ describe("tuple expression codegen", () => {
   });
 });
 
+describe("range expression codegen", () => {
+  it("a..b lowers to an object literal with start/end/inclusive", () => {
+    expect(stmts(gen("fn _(a: (), b: ()) { a..b; }"))).toBe(
+      "({start: a, end: b, inclusive: false});",
+    );
+  });
+  it("a..=b sets inclusive: true", () => {
+    expect(stmts(gen("fn _(a: (), b: ()) { a..=b; }"))).toBe(
+      "({start: a, end: b, inclusive: true});",
+    );
+  });
+  it("a.. omits the end key (RangeFrom)", () => {
+    expect(stmts(gen("fn _(a: ()) { a..; }"))).toBe(
+      "({start: a, inclusive: false});",
+    );
+  });
+  it("..b omits the start key (RangeTo)", () => {
+    expect(stmts(gen("fn _(b: ()) { ..b; }"))).toBe(
+      "({end: b, inclusive: false});",
+    );
+  });
+  it(".. omits both start and end keys (RangeFull)", () => {
+    expect(stmts(gen("fn _() { ..; }"))).toBe("({inclusive: false});");
+  });
+  it("a range used as a field-access receiver needs no extra parens beyond its own self-delimiting object literal", () => {
+    expect(stmts(gen("fn _(a: (), b: ()) { (a..b).foo; }"))).toBe(
+      "({start: a, end: b, inclusive: false}).foo;",
+    );
+  });
+});
+
 describe("block expression codegen", () => {
   it("empty block emits nothing", () => {
     expect(stmts(gen("fn _() { { }; }"))).toBe("");
@@ -635,6 +666,33 @@ describe("using / scope-end drop codegen", (): void => {
     // biome-ignore lint/security/noGlobalEval: test-only eval of compiler-generated fixture output, see comment above
     eval(script); // nosemgrep: javascript.browser.security.eval-detected.eval-detected,javascript_eval_rule-eval-with-expression
     expect(printed).toEqual([1]);
+  });
+
+  it("a let-bound UnitType-placeholder value never lowers to `using` because tuple/index/method-call/range constructs have no disposer", (): void => {
+    const code = genWithOwnership(
+      "fn _(a: (), b: ()) { let t = (1, 2); let i = a[0]; let m = a.method(); let r = a..b; print(t); }",
+    );
+    expect(stmts(code)).toBe(
+      [
+        "const t = [1, 2];",
+        "const i = a[0];",
+        "const m = a.method();",
+        "const r = ({start: a, end: b, inclusive: false});",
+        "print(t);",
+      ].join("\n"),
+    );
+  });
+
+  it("a const-declared range runs cleanly (regression: no [Symbol.dispose] crash from an incorrect using lowering)", (): void => {
+    const code = genWithOwnership("fn _(a: (), b: ()) { let r = a..b; }");
+    const body = stmts(code);
+    assert(body !== null, "JS output should not be null");
+    const script = `(function (a, b) { ${body} })(1, 10);`;
+    // `script` is compiler-generated JS from the hardcoded fixture above,
+    // not external or user-supplied input; same test-only pattern as the
+    // other eval-based codegen tests in this file, not a code-injection surface.
+    // biome-ignore lint/security/noGlobalEval: test-only eval of compiler-generated fixture output, see comment above
+    eval(script); // nosemgrep: javascript.browser.security.eval-detected.eval-detected,javascript_eval_rule-eval-with-expression
   });
 });
 

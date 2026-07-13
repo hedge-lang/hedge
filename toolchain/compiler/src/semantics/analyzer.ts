@@ -871,6 +871,7 @@ function isAmbiguousUnitExpr(expr: Semantics.Expression): boolean {
     case "BinaryExpression":
     case "UnaryExpression":
     case "TupleExpression":
+    case "RangeExpression":
     case "ReferenceExpression":
       return true;
     default:
@@ -1163,6 +1164,15 @@ function analyzeExpression(
         elements: expression.elements.map((elem) =>
           analyzeExpression(ctx, elem),
         ),
+        type: { kind: "UnitType", tokenId: expression.tokenId },
+      };
+    case "RangeExpression":
+      return {
+        ...expression,
+        start: mapSome(expression.start, (expr) =>
+          analyzeExpression(ctx, expr),
+        ),
+        end: mapSome(expression.end, (expr) => analyzeExpression(ctx, expr)),
         type: { kind: "UnitType", tokenId: expression.tokenId },
       };
     case "StructExpression":

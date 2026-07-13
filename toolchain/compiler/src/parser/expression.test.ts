@@ -882,10 +882,342 @@ describe("field access", (): void => {
   });
 });
 
-describe("ranges — deferred", (): void => {
-  it.todo("a..b parses as RangeExpression");
-  it.todo("a..=b parses as an inclusive RangeExpression");
-  it.todo("a..b..c is a syntax error (non-associative)");
+describe("ranges", (): void => {
+  it("a..b parses as RangeExpression", (): void => {
+    const ast = parseProgram("a..b");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "RangeExpression",
+          inclusive: false,
+          start: some({ kind: "PathExpression", path: { segments: ["a"] } }),
+          end: some({ kind: "PathExpression", path: { segments: ["b"] } }),
+        },
+      ],
+    });
+  });
+
+  it("a..=b parses as an inclusive RangeExpression", (): void => {
+    const ast = parseProgram("a..=b");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "RangeExpression",
+          inclusive: true,
+          start: some({ kind: "PathExpression", path: { segments: ["a"] } }),
+          end: some({ kind: "PathExpression", path: { segments: ["b"] } }),
+        },
+      ],
+    });
+  });
+
+  it("a..b..c is a syntax error (non-associative)", (): void => {
+    const { program, diagnostics } = parse(tokenize("a..b..c").tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("cannot chain");
+    expect(diagnostics[0].message).toContain("..");
+  });
+
+  it("a.. parses as RangeExpression with no end (RangeFrom)", (): void => {
+    const ast = parseProgram("a..");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "RangeExpression",
+          inclusive: false,
+          start: some({ kind: "PathExpression", path: { segments: ["a"] } }),
+          end: none(),
+        },
+      ],
+    });
+  });
+
+  it("..b parses as RangeExpression with no start (RangeTo)", (): void => {
+    const ast = parseProgram("..b");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "RangeExpression",
+          inclusive: false,
+          start: none(),
+          end: some({ kind: "PathExpression", path: { segments: ["b"] } }),
+        },
+      ],
+    });
+  });
+
+  it("..=b parses as an inclusive RangeExpression with no start (RangeToInclusive)", (): void => {
+    const ast = parseProgram("..=b");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "RangeExpression",
+          inclusive: true,
+          start: none(),
+          end: some({ kind: "PathExpression", path: { segments: ["b"] } }),
+        },
+      ],
+    });
+  });
+
+  it(".. alone parses as a bare RangeExpression (RangeFull)", (): void => {
+    const ast = parseProgram("..");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "RangeExpression",
+          inclusive: false,
+          start: none(),
+          end: none(),
+        },
+      ],
+    });
+  });
+
+  it("..= alone is a syntax error (inclusive range requires an end)", (): void => {
+    const { program, diagnostics } = parse(tokenize("..=").tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("..=");
+  });
+
+  it("a..= is a syntax error (inclusive range requires an end)", (): void => {
+    const { program, diagnostics } = parse(tokenize("a..=").tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("..=");
+  });
+
+  it("0..0 (empty range, equal bounds) parses fine", (): void => {
+    const ast = parseProgram("0..0");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "RangeExpression",
+          start: some({ kind: "IntLiteral", value: "0" }),
+          end: some({ kind: "IntLiteral", value: "0" }),
+        },
+      ],
+    });
+  });
+
+  it("-5..5 and -5..-5 (negative bounds) parse fine", (): void => {
+    const ast1 = parseProgram("-5..5");
+    expect(ast1).toMatchObject({
+      items: [
+        {
+          kind: "RangeExpression",
+          start: some({ kind: "UnaryExpression", operator: "Neg" }),
+          end: some({ kind: "IntLiteral", value: "5" }),
+        },
+      ],
+    });
+
+    const ast2 = parseProgram("-5..-5");
+    expect(ast2).toMatchObject({
+      items: [
+        {
+          kind: "RangeExpression",
+          start: some({ kind: "UnaryExpression", operator: "Neg" }),
+          end: some({ kind: "UnaryExpression", operator: "Neg" }),
+        },
+      ],
+    });
+  });
+
+  it.each([
+    ["a..=b..=c", "..="],
+    ["a..b..=c", ".."],
+    ["a..=b..c", "..="],
+  ])('"%s" is a syntax error (cannot chain range operators)', (source) => {
+    const { program, diagnostics } = parse(tokenize(source).tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("cannot chain");
+  });
+
+  it("(a..b)..c parses as nested Range via parens, consistent with (a < b) < c today", (): void => {
+    const ast = parseProgram("(a..b)..c");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "RangeExpression",
+          start: some({ kind: "RangeExpression" }),
+          end: some({ kind: "PathExpression", path: { segments: ["c"] } }),
+        },
+      ],
+    });
+  });
+
+  it("a.. * b fails fast via the existing dereference guardrail, no new message needed", (): void => {
+    const { program, diagnostics } = parse(tokenize("a.. * b").tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain(
+      "dereference (*) is not supported in Slice 1",
+    );
+  });
+
+  it("if a.. { foo(); }: range is the condition (RangeFrom), body not swallowed", (): void => {
+    const ast = parseProgram("if a.. { foo(); }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "IfExpression",
+          condition: {
+            kind: "RangeExpression",
+            start: some({ kind: "PathExpression", path: { segments: ["a"] } }),
+            end: none(),
+          },
+          thenBranch: { kind: "Block" },
+        },
+      ],
+    });
+  });
+
+  it("if ..b { foo(); }: range is the condition (RangeTo), body not swallowed", (): void => {
+    const ast = parseProgram("if ..b { foo(); }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "IfExpression",
+          condition: {
+            kind: "RangeExpression",
+            start: none(),
+            end: some({ kind: "PathExpression", path: { segments: ["b"] } }),
+          },
+          thenBranch: { kind: "Block" },
+        },
+      ],
+    });
+  });
+
+  it("if .. { foo(); }: bare RangeFull condition, body not swallowed", (): void => {
+    const ast = parseProgram("if .. { foo(); }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "IfExpression",
+          condition: { kind: "RangeExpression", start: none(), end: none() },
+          thenBranch: { kind: "Block" },
+        },
+      ],
+    });
+  });
+
+  it("a..{ 5 } outside a condition parses a Block as the range's end (allowStruct is true here, no ambiguity)", (): void => {
+    const ast = parseProgram("let r = a..{ 5 };");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "LetStatement",
+          initializer: some({
+            kind: "RangeExpression",
+            start: some({ kind: "PathExpression", path: { segments: ["a"] } }),
+            end: some({
+              kind: "Block",
+              trailingExpression: some({ kind: "IntLiteral", value: "5" }),
+            }),
+          }),
+        },
+      ],
+    });
+  });
+
+  it("foo(a..b): range as a call argument", (): void => {
+    const ast = parseProgram("foo(a..b)");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "CallExpression",
+          arguments: [{ kind: "RangeExpression" }],
+        },
+      ],
+    });
+  });
+
+  it("Point { r: a..b }: range as a struct field value", (): void => {
+    const ast = parseProgram("Point { r: a..b }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "StructExpression",
+          fields: [
+            { name: { text: "r" }, value: some({ kind: "RangeExpression" }) },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("a.b..c.d: field access as both range operands", (): void => {
+    const ast = parseProgram("a.b..c.d");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "RangeExpression",
+          start: some({ kind: "FieldAccessExpression" }),
+          end: some({ kind: "FieldAccessExpression" }),
+        },
+      ],
+    });
+  });
+
+  it("foo()..bar(): call expressions as both range operands", (): void => {
+    const ast = parseProgram("foo()..bar()");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "RangeExpression",
+          start: some({ kind: "CallExpression" }),
+          end: some({ kind: "CallExpression" }),
+        },
+      ],
+    });
+  });
+
+  it("a malformed range operand produces exactly one diagnostic, not a cascade", (): void => {
+    const { program, diagnostics } = parse(tokenize("a.. *").tokens);
+    expect(program).toEqual(none());
+    expect(diagnostics.filter((d) => d.severity === "error")).toHaveLength(1);
+  });
+
+  it("a || b..c parses as (a || b)..c: range binds looser than ||", (): void => {
+    const ast = parseProgram("a || b..c");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "RangeExpression",
+          start: some({
+            kind: "BinaryExpression",
+            operator: "Or",
+            left: { kind: "PathExpression", path: { segments: ["a"] } },
+            right: { kind: "PathExpression", path: { segments: ["b"] } },
+          }),
+          end: some({ kind: "PathExpression", path: { segments: ["c"] } }),
+        },
+      ],
+    });
+  });
+
+  it("a..b || c parses as a..(b || c): || binds tighter than range", (): void => {
+    const ast = parseProgram("a..b || c");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "RangeExpression",
+          start: some({ kind: "PathExpression", path: { segments: ["a"] } }),
+          end: some({
+            kind: "BinaryExpression",
+            operator: "Or",
+            left: { kind: "PathExpression", path: { segments: ["b"] } },
+            right: { kind: "PathExpression", path: { segments: ["c"] } },
+          }),
+        },
+      ],
+    });
+  });
 });
 
 describe("adversarial / edge cases", (): void => {

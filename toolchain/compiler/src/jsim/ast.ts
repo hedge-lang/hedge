@@ -83,6 +83,7 @@ export type Expression =
   | ArrowFunctionExpression
   | IndexExpression
   | TupleExpression
+  | RangeExpression
   | StructExpression;
 
 interface BooleanLiteral {
@@ -236,6 +237,13 @@ interface IndexExpression {
 interface TupleExpression {
   readonly kind: "TupleExpression";
   readonly elements: readonly Expression[];
+}
+
+interface RangeExpression {
+  readonly kind: "RangeExpression";
+  readonly start: Option<Expression>;
+  readonly end: Option<Expression>;
+  readonly inclusive: boolean;
 }
 
 interface StructExpression {

@@ -499,6 +499,14 @@ function walkExpression(
         walkExpression(ctx, element, state, scopeStack);
       }
       return;
+    case "RangeExpression":
+      if (isSome(expression.start)) {
+        walkExpression(ctx, expression.start.value, state, scopeStack);
+      }
+      if (isSome(expression.end)) {
+        walkExpression(ctx, expression.end.value, state, scopeStack);
+      }
+      return;
     case "StructExpression":
       walkStructExpression(ctx, expression, state, scopeStack);
       return;

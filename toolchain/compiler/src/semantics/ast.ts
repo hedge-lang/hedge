@@ -83,6 +83,7 @@ export type Expression =
   | MethodCallExpression
   | IndexExpression
   | TupleExpression
+  | RangeExpression
   | StructExpression
   | IfExpression
   | Block;
@@ -390,6 +391,13 @@ export interface TupleExpression extends DecoratedAstNode {
   readonly kind: "TupleExpression";
   /** Zero elements = unit `()`. One element with trailing comma = single-element tuple. */
   readonly elements: Expression[];
+}
+
+export interface RangeExpression extends DecoratedAstNode {
+  readonly kind: "RangeExpression";
+  readonly start: Option<Expression>;
+  readonly end: Option<Expression>;
+  readonly inclusive: boolean;
 }
 
 export interface FieldInit extends DecoratedAstNode {

@@ -540,6 +540,8 @@ function parseExpression(
       return jsimIndexExpression(ctx, expression);
     case "TupleExpression":
       return jsimTupleExpression(ctx, expression);
+    case "RangeExpression":
+      return jsimRangeExpression(ctx, expression);
     case "StructExpression":
       return jsimStructExpression(ctx, expression);
     case "IfExpression":
@@ -668,6 +670,18 @@ function jsimTupleExpression(
     elements: tupleExpression.elements.map((elem) =>
       parseExpression(ctx, elem),
     ),
+  };
+}
+
+function jsimRangeExpression(
+  ctx: JsimContext,
+  rangeExpression: Semantics.RangeExpression,
+): JSIM.Expression {
+  return {
+    kind: "RangeExpression",
+    start: mapSome(rangeExpression.start, (expr) => parseExpression(ctx, expr)),
+    end: mapSome(rangeExpression.end, (expr) => parseExpression(ctx, expr)),
+    inclusive: rangeExpression.inclusive,
   };
 }
 
