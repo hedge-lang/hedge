@@ -206,6 +206,61 @@ describe("toJsim", () => {
     });
   });
 
+  describe("range expressions", () => {
+    it("a range with both operands lowers with start/end present", () => {
+      const program = jsimSource("x..y");
+      expect(program.items[0]).toMatchObject({
+        kind: "RangeExpression",
+        inclusive: false,
+        start: some({ kind: "Identifier", value: "x" }),
+        end: some({ kind: "Identifier", value: "y" }),
+      });
+    });
+
+    it("an inclusive range sets inclusive: true", () => {
+      const program = jsimSource("x..=y");
+      expect(program.items[0]).toMatchObject({
+        kind: "RangeExpression",
+        inclusive: true,
+      });
+    });
+
+    it("a bare range (RangeFull) lowers with start and end both none()", () => {
+      const program = jsimSource("..");
+      expect(program.items[0]).toMatchObject({
+        kind: "RangeExpression",
+        inclusive: false,
+        start: none(),
+        end: none(),
+      });
+    });
+
+    it("an identifier inside a range's start participates in alpha-rename normally", () => {
+      const program = jsimSource("fn main() { let x = 1; let x = x..10; }");
+      const functionDecl = program.items.find(
+        (item) => item.kind === "FunctionDecl",
+      );
+      assert(
+        functionDecl !== undefined,
+        "Expected to find a function declaration block",
+      );
+      const letStatements = functionDecl.body.filter(
+        (statement) => statement.kind === "LetStatement",
+      );
+      expect(letStatements).toMatchObject([
+        { kind: "LetStatement", name: "x" },
+        {
+          kind: "LetStatement",
+          name: "x$1",
+          value: some({
+            kind: "RangeExpression",
+            start: some({ kind: "Identifier", value: "x" }),
+          }),
+        },
+      ]);
+    });
+  });
+
   describe("assign expressions", () => {
     it.each([
       ["Assign", "x = 1;"],
