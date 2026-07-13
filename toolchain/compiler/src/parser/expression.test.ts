@@ -1106,6 +1106,25 @@ describe("ranges", (): void => {
     });
   });
 
+  it("a..{ 5 } outside a condition parses a Block as the range's end (allowStruct is true here, no ambiguity)", (): void => {
+    const ast = parseProgram("let r = a..{ 5 };");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "LetStatement",
+          initializer: some({
+            kind: "RangeExpression",
+            start: some({ kind: "PathExpression", path: { segments: ["a"] } }),
+            end: some({
+              kind: "Block",
+              trailingExpression: some({ kind: "IntLiteral", value: "5" }),
+            }),
+          }),
+        },
+      ],
+    });
+  });
+
   it("foo(a..b): range as a call argument", (): void => {
     const ast = parseProgram("foo(a..b)");
     expect(ast).toMatchObject({

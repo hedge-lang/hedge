@@ -1119,11 +1119,6 @@ function parseInfixBinary(
  * Tokens that end a range's end-operand slot rather than starting one, used
  * to decide whether `a..`/`..b`/`..` left an operand out (as opposed to the
  * parser attempting to consume a following construct as the range's end).
- * `lbrace` is included unconditionally, not gated by `allowStruct`: every
- * other infix operator has a mandatory RHS, so this ambiguity has never come
- * up before. `if a.. { foo(); }` must leave the block as the if-body, not
- * swallow it as the range's end (mirrors `parseIfExpression`'s own
- * `allowStruct: false` condition parse, where `{` always starts the body).
  */
 const RANGE_END_TERMINATORS: ReadonlySet<Token["kind"]> = new Set([
   "eof",
@@ -1132,13 +1127,27 @@ const RANGE_END_TERMINATORS: ReadonlySet<Token["kind"]> = new Set([
   "rparen",
   "rbracket",
   "rbrace",
-  "lbrace",
   "dot_dot",
   "dot_dot_eq",
 ]);
 
-function isRangeEndTerminator(token: Token | undefined): boolean {
-  return token === undefined || RANGE_END_TERMINATORS.has(token.kind);
+/**
+ * `lbrace` is only a terminator when `allowStruct` is false: every other
+ * infix operator has a mandatory RHS, so this ambiguity has never come up
+ * before. `if a.. { foo(); }` parses its condition with `allowStruct: false`
+ * (mirroring `parseIfExpression`'s own struct-literal suppression), and `{`
+ * there must always start the if-body, not the range's end. Everywhere else
+ * `allowStruct` is true and a `{` is unambiguously a Block expression, so
+ * `a..{ compute() }` as a plain let-initializer parses the block as the
+ * range's end rather than being rejected.
+ */
+function isRangeEndTerminator(
+  token: Token | undefined,
+  allowStruct: boolean,
+): boolean {
+  if (token === undefined) return true;
+  if (token.kind === "lbrace") return !allowStruct;
+  return RANGE_END_TERMINATORS.has(token.kind);
 }
 
 /**
@@ -1162,7 +1171,7 @@ function parseRangeTail(
   let end: Option<Expression>;
   let next: number;
 
-  if (isRangeEndTerminator(nextTok)) {
+  if (isRangeEndTerminator(nextTok, allowStruct)) {
     if (inclusive) {
       return err({
         severity: "error",
