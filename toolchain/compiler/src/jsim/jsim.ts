@@ -679,12 +679,8 @@ function jsimRangeExpression(
 ): JSIM.Expression {
   return {
     kind: "RangeExpression",
-    start: isSome(rangeExpression.start)
-      ? some(parseExpression(ctx, rangeExpression.start.value))
-      : none(),
-    end: isSome(rangeExpression.end)
-      ? some(parseExpression(ctx, rangeExpression.end.value))
-      : none(),
+    start: mapSome(rangeExpression.start, (expr) => parseExpression(ctx, expr)),
+    end: mapSome(rangeExpression.end, (expr) => parseExpression(ctx, expr)),
     inclusive: rangeExpression.inclusive,
   };
 }

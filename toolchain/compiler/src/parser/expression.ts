@@ -1166,19 +1166,19 @@ function parseRangeTail(
   allowStruct: boolean,
 ): PR<Parsed<RangeExpression>> {
   const cursor = dotDotPos + 1;
-  const nextTok = tokens[cursor];
+  const afterOp = tokens[cursor];
 
   let end: Option<Expression>;
   let next: number;
 
-  if (isRangeEndTerminator(nextTok, allowStruct)) {
+  if (isRangeEndTerminator(afterOp, allowStruct)) {
     if (inclusive) {
       return err({
         severity: "error",
         message: "Expected an expression after '..='",
         span:
-          nextTok !== undefined && nextTok.kind !== "eof"
-            ? some(nextTok.span)
+          afterOp !== undefined && afterOp.kind !== "eof"
+            ? some(afterOp.span)
             : none(),
       });
     }

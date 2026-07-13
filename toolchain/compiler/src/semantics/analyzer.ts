@@ -1169,12 +1169,10 @@ function analyzeExpression(
     case "RangeExpression":
       return {
         ...expression,
-        start: isSome(expression.start)
-          ? some(analyzeExpression(ctx, expression.start.value))
-          : none(),
-        end: isSome(expression.end)
-          ? some(analyzeExpression(ctx, expression.end.value))
-          : none(),
+        start: mapSome(expression.start, (expr) =>
+          analyzeExpression(ctx, expr),
+        ),
+        end: mapSome(expression.end, (expr) => analyzeExpression(ctx, expr)),
         type: { kind: "UnitType", tokenId: expression.tokenId },
       };
     case "StructExpression":
