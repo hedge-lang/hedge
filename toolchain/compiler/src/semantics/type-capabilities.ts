@@ -31,6 +31,24 @@ const INTEGER_KINDS: readonly Semantics.PrimitiveIntegerType["kind"][] = [
  * so it is never `copy`. Every struct is move-only in Slice 1 (no `Copy`
  * derivation via all-fields-Copy-and-no-Drop yet; that needs the trait
  * machinery landing in Slice 4).
+ *
+ * `UnitType` is `copy`: it covers both a genuine zero-sized unit value and
+ * the ambiguous placeholder type hard-coded onto Slice-1-not-yet-implemented
+ * constructs (`TupleExpression`, `IndexExpression`, `MethodCallExpression`,
+ * `ReferenceExpression`, `RangeExpression`, see `isAmbiguousUnitExpr` in
+ * `analyzer.ts`). None of those constructs' codegen emits a `[Symbol.
+ * dispose]` method, so without this entry `recordDrops` (ownership/move-
+ * check.ts) would mark a `let`-bound value of one of these kinds for
+ * scope-end `using`, producing a runtime `TypeError` on drop.
+ *
+ * Note: `copy` also suppresses use-after-move tracking for these same
+ * constructs (see `useOrMove` in ownership/move-check.ts, the only other
+ * `copy` call site); a `let`-bound Tuple/Index/MethodCall/Reference/Range
+ * value can now be aliased across bindings without a move diagnostic, and
+ * since their codegen lowers to JS reference types (arrays/objects), two
+ * such bindings share the same underlying value. A real per-construct move
+ * semantics design is still Slice 4+ work; this is an accepted interim gap,
+ * not an intentional design choice.
  */
 const TYPE_CAPABILITIES: ReadonlyMap<
   string,
@@ -41,6 +59,7 @@ const TYPE_CAPABILITIES: ReadonlyMap<
   ["PrimitiveStringType", new Set(["equality", "copy"])],
   ["PrimitiveF32Type", new Set(["equality", "ordering", "arithmetic", "copy"])],
   ["PrimitiveF64Type", new Set(["equality", "ordering", "arithmetic", "copy"])],
+  ["UnitType", new Set(["copy"])],
   ...INTEGER_KINDS.map((k): [string, ReadonlySet<TypeCapability>] => [
     k,
     INTEGER_CAPS,

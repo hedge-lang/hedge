@@ -72,6 +72,7 @@ type PrecKey =
   | "ArrowFunctionExpression"
   | "IndexExpression"
   | "TupleExpression"
+  | "RangeExpression"
   | "StructExpression"
   | BinaryOperator;
 
@@ -273,6 +274,18 @@ function emitExpression(expression: Expression): string {
       // `Drop` for a struct; this establishes the codegen shape a later
       // slice's real Drop impls will fill in.
       return `({${[...fields, "[Symbol.dispose]() {}"].join(", ")}})`;
+    }
+    case "RangeExpression": {
+      const parts = [
+        ...(isSome(expression.start)
+          ? [`start: ${emitExpression(expression.start.value)}`]
+          : []),
+        ...(isSome(expression.end)
+          ? [`end: ${emitExpression(expression.end.value)}`]
+          : []),
+        `inclusive: ${expression.inclusive}`,
+      ];
+      return `({${parts.join(", ")}})`;
     }
     default:
       assertNever(

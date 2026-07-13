@@ -108,6 +108,14 @@ function collectUses(expression: Expression, out: Set<string>): void {
     case "TupleExpression":
       for (const elem of expression.elements) collectUses(elem, out);
       return;
+    case "RangeExpression":
+      if (isSome(expression.start)) {
+        collectUses(expression.start.value, out);
+      }
+      if (isSome(expression.end)) {
+        collectUses(expression.end.value, out);
+      }
+      return;
     case "StructExpression":
       for (const field of expression.fields) {
         if (isSome(field.value)) collectUses(field.value.value, out);

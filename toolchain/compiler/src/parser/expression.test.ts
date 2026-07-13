@@ -1037,7 +1037,7 @@ describe("ranges", (): void => {
     expect(diagnostics[0].message).toContain("cannot chain");
   });
 
-  it("(a..b)..c parses as nested Range via parens — consistent with (a < b) < c today", (): void => {
+  it("(a..b)..c parses as nested Range via parens, consistent with (a < b) < c today", (): void => {
     const ast = parseProgram("(a..b)..c");
     expect(ast).toMatchObject({
       items: [
@@ -1059,7 +1059,7 @@ describe("ranges", (): void => {
     );
   });
 
-  it("if a.. { foo(); } — range is the condition (RangeFrom), body not swallowed", (): void => {
+  it("if a.. { foo(); }: range is the condition (RangeFrom), body not swallowed", (): void => {
     const ast = parseProgram("if a.. { foo(); }");
     expect(ast).toMatchObject({
       items: [
@@ -1076,7 +1076,7 @@ describe("ranges", (): void => {
     });
   });
 
-  it("if ..b { foo(); } — range is the condition (RangeTo), body not swallowed", (): void => {
+  it("if ..b { foo(); }: range is the condition (RangeTo), body not swallowed", (): void => {
     const ast = parseProgram("if ..b { foo(); }");
     expect(ast).toMatchObject({
       items: [
@@ -1093,7 +1093,7 @@ describe("ranges", (): void => {
     });
   });
 
-  it("if .. { foo(); } — bare RangeFull condition, body not swallowed", (): void => {
+  it("if .. { foo(); }: bare RangeFull condition, body not swallowed", (): void => {
     const ast = parseProgram("if .. { foo(); }");
     expect(ast).toMatchObject({
       items: [
@@ -1106,7 +1106,7 @@ describe("ranges", (): void => {
     });
   });
 
-  it("foo(a..b) — range as a call argument", (): void => {
+  it("foo(a..b): range as a call argument", (): void => {
     const ast = parseProgram("foo(a..b)");
     expect(ast).toMatchObject({
       items: [
@@ -1118,7 +1118,7 @@ describe("ranges", (): void => {
     });
   });
 
-  it("Point { r: a..b } — range as a struct field value", (): void => {
+  it("Point { r: a..b }: range as a struct field value", (): void => {
     const ast = parseProgram("Point { r: a..b }");
     expect(ast).toMatchObject({
       items: [
@@ -1132,7 +1132,7 @@ describe("ranges", (): void => {
     });
   });
 
-  it("a.b..c.d — field access as both range operands", (): void => {
+  it("a.b..c.d: field access as both range operands", (): void => {
     const ast = parseProgram("a.b..c.d");
     expect(ast).toMatchObject({
       items: [
@@ -1145,7 +1145,7 @@ describe("ranges", (): void => {
     });
   });
 
-  it("foo()..bar() — call expressions as both range operands", (): void => {
+  it("foo()..bar(): call expressions as both range operands", (): void => {
     const ast = parseProgram("foo()..bar()");
     expect(ast).toMatchObject({
       items: [
@@ -1161,9 +1161,43 @@ describe("ranges", (): void => {
   it("a malformed range operand produces exactly one diagnostic, not a cascade", (): void => {
     const { program, diagnostics } = parse(tokenize("a.. *").tokens);
     expect(program).toEqual(none());
-    expect(
-      diagnostics.filter((d) => d.severity === "error"),
-    ).toHaveLength(1);
+    expect(diagnostics.filter((d) => d.severity === "error")).toHaveLength(1);
+  });
+
+  it("a || b..c parses as (a || b)..c: range binds looser than ||", (): void => {
+    const ast = parseProgram("a || b..c");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "RangeExpression",
+          start: some({
+            kind: "BinaryExpression",
+            operator: "Or",
+            left: { kind: "PathExpression", path: { segments: ["a"] } },
+            right: { kind: "PathExpression", path: { segments: ["b"] } },
+          }),
+          end: some({ kind: "PathExpression", path: { segments: ["c"] } }),
+        },
+      ],
+    });
+  });
+
+  it("a..b || c parses as a..(b || c): || binds tighter than range", (): void => {
+    const ast = parseProgram("a..b || c");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "RangeExpression",
+          start: some({ kind: "PathExpression", path: { segments: ["a"] } }),
+          end: some({
+            kind: "BinaryExpression",
+            operator: "Or",
+            left: { kind: "PathExpression", path: { segments: ["b"] } },
+            right: { kind: "PathExpression", path: { segments: ["c"] } },
+          }),
+        },
+      ],
+    });
   });
 });
 

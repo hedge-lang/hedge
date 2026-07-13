@@ -78,6 +78,7 @@ export type Expression =
   | IndexExpression
   | TupleExpression
   | StructExpression
+  | RangeExpression
   | IfExpression
   | Block
   | Identifier;
@@ -339,6 +340,13 @@ export interface StructExpression extends AstNode {
   readonly fields: FieldInit[];
   /** `some(expr)` for `Foo { x: 1, ..base }` spread. Semantic analysis is deferred. */
   readonly base: Option<Expression>;
+}
+
+export interface RangeExpression extends AstNode {
+  readonly kind: "RangeExpression";
+  readonly start: Option<Expression>;
+  readonly end: Option<Expression>;
+  readonly inclusive: boolean;
 }
 
 export interface IfExpression extends AstNode {

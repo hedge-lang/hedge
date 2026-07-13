@@ -2,7 +2,7 @@ import { assert, assertNever } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
 import { resolveEscape } from "../lexer/escape.js";
 import type { Token } from "../lexer/token.js";
-import { isSome, none, some } from "../option.js";
+import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import type {
   BinaryExpression,
@@ -16,6 +16,7 @@ import type {
   IntLiteral,
   MethodCallExpression,
   PathExpression,
+  RangeExpression,
   ReferenceExpression,
   StructExpression,
   TupleExpression,
@@ -102,7 +103,15 @@ type InfixEntry =
     }
   | { readonly kind: "postfix-call"; readonly leftBp: number }
   | { readonly kind: "postfix-field"; readonly leftBp: number }
-  | { readonly kind: "postfix-index"; readonly leftBp: number };
+  | { readonly kind: "postfix-index"; readonly leftBp: number }
+  | {
+      readonly kind: "range";
+      readonly inclusive: boolean;
+      readonly leftBp: number;
+      readonly rightBp: number;
+      readonly nonAssoc: boolean;
+      readonly sigil: string;
+    };
 
 // eslint-disable-next-line complexity -- dispatch table; more readable than alternatives
 function infixOp(token: Token): InfixEntry | null {
@@ -284,6 +293,25 @@ function infixOp(token: Token): InfixEntry | null {
         rightBp: 7,
         nonAssoc: false,
         sigil: "||",
+      };
+    // Prec 12: range (bp 4, non-associative)
+    case "dot_dot":
+      return {
+        kind: "range",
+        inclusive: false,
+        leftBp: 4,
+        rightBp: 5,
+        nonAssoc: true,
+        sigil: "..",
+      };
+    case "dot_dot_eq":
+      return {
+        kind: "range",
+        inclusive: true,
+        leftBp: 4,
+        rightBp: 5,
+        nonAssoc: true,
+        sigil: "..=",
       };
     // Prec 13 — assignment (bp 2, right-assoc: rightBp < leftBp)
     case "eq":
@@ -863,6 +891,18 @@ function parsePrimary(
     return parseTupleOrGroup(tokens, diagnostics, pos);
   }
 
+  // Prefix range: ..b, ..=b, or bare .. (RangeTo / RangeToInclusive / RangeFull)
+  if (token.kind === "dot_dot" || token.kind === "dot_dot_eq") {
+    return parseRangeTail(
+      tokens,
+      diagnostics,
+      pos,
+      token.kind === "dot_dot_eq",
+      none(),
+      allowStruct,
+    );
+  }
+
   // Guardrail: * in prefix position is dereference, not yet supported
   if (token.kind === "star")
     return err({
@@ -1075,6 +1115,104 @@ function parseInfixBinary(
   return ok(result);
 }
 
+/**
+ * Tokens that end a range's end-operand slot rather than starting one, used
+ * to decide whether `a..`/`..b`/`..` left an operand out (as opposed to the
+ * parser attempting to consume a following construct as the range's end).
+ * `lbrace` is included unconditionally, not gated by `allowStruct`: every
+ * other infix operator has a mandatory RHS, so this ambiguity has never come
+ * up before. `if a.. { foo(); }` must leave the block as the if-body, not
+ * swallow it as the range's end (mirrors `parseIfExpression`'s own
+ * `allowStruct: false` condition parse, where `{` always starts the body).
+ */
+const RANGE_END_TERMINATORS: ReadonlySet<Token["kind"]> = new Set([
+  "eof",
+  "semi",
+  "comma",
+  "rparen",
+  "rbracket",
+  "rbrace",
+  "lbrace",
+  "dot_dot",
+  "dot_dot_eq",
+]);
+
+function isRangeEndTerminator(token: Token | undefined): boolean {
+  return token === undefined || RANGE_END_TERMINATORS.has(token.kind);
+}
+
+/**
+ * Parses the `..`/`..=` tail of a range expression (the tokens after the
+ * operator), given an already-parsed `start` operand (`none()` for the
+ * prefix forms `..b`, `..=b`, bare `..`). Shared by both the infix
+ * continuation and `parsePrimary`'s prefix dispatch so the omissible-end
+ * logic and non-associative chain rejection are written once.
+ */
+function parseRangeTail(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  dotDotPos: number,
+  inclusive: boolean,
+  start: Option<Expression>,
+  allowStruct: boolean,
+): PR<Parsed<RangeExpression>> {
+  const cursor = dotDotPos + 1;
+  const nextTok = tokens[cursor];
+
+  let end: Option<Expression>;
+  let next: number;
+
+  if (isRangeEndTerminator(nextTok)) {
+    if (inclusive) {
+      return err({
+        severity: "error",
+        message: "Expected an expression after '..='",
+        span:
+          nextTok !== undefined && nextTok.kind !== "eof"
+            ? some(nextTok.span)
+            : none(),
+      });
+    }
+    end = none();
+    next = cursor;
+  } else {
+    const endResult = parseExpressionWithBindingPower(
+      tokens,
+      diagnostics,
+      cursor,
+      5,
+      allowStruct,
+    );
+    if (isErr(endResult)) return endResult;
+    end = some(endResult.value.node);
+    next = endResult.value.next;
+  }
+
+  const node: RangeExpression = {
+    kind: "RangeExpression",
+    tokenId: dotDotPos,
+    start,
+    end,
+    inclusive,
+  };
+  const result: Parsed<RangeExpression> = { node, next };
+
+  const peek = tokens[next];
+  if (peek !== undefined) {
+    const nextInfix = infixOp(peek);
+    if (nextInfix !== null && nextInfix.kind === "range") {
+      const sigil = inclusive ? "..=" : "..";
+      return err({
+        severity: "error",
+        message: `cannot chain '${sigil}' with '${nextInfix.sigil}'`,
+        span: some(peek.span),
+      });
+    }
+  }
+
+  return ok(result);
+}
+
 function parseInfixAssign(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -1212,6 +1350,16 @@ function parseExpressionWithBindingPower(
           result,
           opPos,
           infix,
+          allowStruct,
+        );
+        break;
+      case "range":
+        stepResult = parseRangeTail(
+          tokens,
+          diagnostics,
+          opPos,
+          infix.inclusive,
+          some(result.node),
           allowStruct,
         );
         break;
