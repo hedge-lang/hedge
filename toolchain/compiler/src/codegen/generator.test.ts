@@ -683,7 +683,7 @@ describe("using / scope-end drop codegen", (): void => {
     );
   });
 
-  it("a using-declared range runs cleanly under Node's explicit resource management (regression: no [Symbol.dispose] crash)", (): void => {
+  it("a const-declared range runs cleanly (regression: no [Symbol.dispose] crash from an incorrect using lowering)", (): void => {
     const code = genWithOwnership("fn _(a: (), b: ()) { let r = a..b; }");
     const body = stmts(code);
     assert(body !== null, "JS output should not be null");
