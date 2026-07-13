@@ -197,6 +197,16 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     ],
   },
   {
+    id: "EXEC-RANGES",
+    description:
+      "Range-expression literals compile clean end-to-end. Range<T>/RangeInclusive<T>/iterator semantics are not yet implemented (Slice 5) — this rule only covers construction, not use.",
+    specRefs: ["0025-grammar.md"],
+    testIds: [
+      "range expression as a let initializer compiles clean",
+      "bare range (RangeFull) as a let initializer compiles clean",
+    ],
+  },
+  {
     id: "EXEC-STRUCTS",
     description:
       "Struct declarations and field access execute correctly end-to-end",

@@ -320,6 +320,16 @@ describe("execution tests", (): void => {
     });
   });
 
+  describe("range grammar (EXEC-RANGES)", (): void => {
+    it("range expression as a let initializer compiles clean", (): void => {
+      assertCompilesClean(`fn main() { let r = 0..10; }`);
+    });
+
+    it("bare range (RangeFull) as a let initializer compiles clean", (): void => {
+      assertCompilesClean(`fn main() { let r = ..; }`);
+    });
+  });
+
   describe("literal types", (): void => {
     it("float literal prints correctly", (): void => {
       assertRunsTo(`fn main() { let x = 3.14; print(x); }`, ["3.14"]);
