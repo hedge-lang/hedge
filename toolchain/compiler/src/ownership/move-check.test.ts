@@ -423,6 +423,24 @@ describe("move-check", (): void => {
     expect(diagnostics[0].message).toContain("moved");
   });
 
+  it.fails(
+    "rejects passing a dereferenced non-Copy value by value out of a reference",
+    (): void => {
+      const { diagnostics } = check(
+        `${BOXED}
+        fn take(v: Boxed) { print(v.value); }
+        fn main() {
+          let x = Boxed { value: 1 };
+          let r = &x;
+          take(*r);
+        }`,
+      );
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(diagnostics[0].message).toContain("cannot move");
+    },
+  );
+
   it("moving the same owned value twice is rejected", (): void => {
     const { diagnostics } = check(
       `${BOXED}
