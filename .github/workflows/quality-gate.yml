@@ -14,7 +14,10 @@ permissions:
 jobs:
   check:
     name: Check
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -23,6 +26,7 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 26
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
@@ -32,3 +36,10 @@ jobs:
 
       - name: Run all tests
         run: npm run test
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: coverage/
+          if-no-files-found: warn

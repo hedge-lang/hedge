@@ -12,7 +12,7 @@
   },
   "scripts": {
     "test": "npm-run-all --parallel --print-label --continue-on-error --print-name test:*",
-    "test:unit": "vitest run",
+    "test:unit": "vitest run --coverage",
     "test:conformance": "npm test --workspace=@hedge-lang/compiler-conformance-tests",
     "build": "npm -ws --if-present run build",
     "clean": "rimraf node_modules toolchain/**/dist stdlib/dist",
