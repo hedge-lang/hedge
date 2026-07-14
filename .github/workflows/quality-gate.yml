@@ -15,6 +15,7 @@ jobs:
   check:
     name: Check
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -38,6 +39,7 @@ jobs:
         run: npm run test
 
       - name: Upload coverage report
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: coverage-${{ matrix.os }}
