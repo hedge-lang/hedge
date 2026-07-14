@@ -8,6 +8,7 @@ import type {
   BinaryExpression,
   BinaryOperator,
   CompoundAssignOperator,
+  DereferenceExpression,
   Expression,
   FieldInit,
   FloatLiteral,
@@ -903,13 +904,22 @@ function parsePrimary(
     );
   }
 
-  // Guardrail: * in prefix position is dereference, not yet supported
-  if (token.kind === "star")
-    return err({
-      severity: "error",
-      message: "dereference (*) is not supported in Slice 1",
-      span: some(token.span),
-    });
+  if (token.kind === "star") {
+    const operandResult = parseExpressionWithBindingPower(
+      tokens,
+      diagnostics,
+      pos + 1,
+      24,
+      allowStruct,
+    );
+    if (isErr(operandResult)) return operandResult;
+    const deref: DereferenceExpression = {
+      kind: "DereferenceExpression",
+      tokenId: pos,
+      operand: operandResult.value.node,
+    };
+    return ok({ node: deref, next: operandResult.value.next });
+  }
 
   return err({
     severity: "error",

@@ -873,6 +873,7 @@ function isAmbiguousUnitExpr(expr: Semantics.Expression): boolean {
     case "TupleExpression":
     case "RangeExpression":
     case "ReferenceExpression":
+    case "DereferenceExpression":
       return true;
     default:
       return false;
@@ -1081,6 +1082,17 @@ function analyzeExpression(
       emitError(
         ctx,
         "borrow expressions are not supported in Slice 1",
+        expression.tokenId,
+      );
+      return {
+        ...expression,
+        operand: analyzeExpression(ctx, expression.operand),
+        type: { kind: "UnitType", tokenId: expression.tokenId },
+      };
+    case "DereferenceExpression":
+      emitError(
+        ctx,
+        "dereference expressions are not supported in Slice 1",
         expression.tokenId,
       );
       return {

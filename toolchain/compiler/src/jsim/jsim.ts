@@ -522,7 +522,8 @@ function parseExpression(
         arguments: expression.arguments.map((arg) => parseExpression(ctx, arg)),
       };
     case "ReferenceExpression":
-      // References are transparent in JS — emit the operand directly.
+    case "DereferenceExpression":
+      // References and dereferences are transparent in JS - emit the operand directly.
       return parseExpression(ctx, expression.operand);
     case "BinaryExpression":
       return parseBinaryExpression(ctx, expression);

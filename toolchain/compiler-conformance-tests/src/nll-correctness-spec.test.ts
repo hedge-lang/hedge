@@ -3,6 +3,7 @@ import { describe, it } from "vitest";
 import {
   assertCompilesClean,
   assertRejectsWithMessage,
+  assertRunsTo,
 } from "./test-harness.js";
 
 describe("NLL and lifetime correctness spec", (): void => {
@@ -92,6 +93,59 @@ describe("NLL and lifetime correctness spec", (): void => {
       fn pick(a: &str, b: &str) -> &str { a }
       fn main() { print(pick("a", "b")); }
     `);
+    },
+  );
+
+  it.fails(
+    "rejects passing a dereferenced non-Copy value by value out of a reference",
+    (): void => {
+      assertRejectsWithMessage(
+        `
+      struct Resource { id: i32 }
+      fn consume(r: Resource) { print(r.id); }
+      fn main() {
+        let x = Resource { id: 1 };
+        let r = &x;
+        consume(*r);
+      }
+    `,
+        "cannot move",
+      );
+    },
+  );
+
+  it.fails(
+    "mutating a primitive through &mut is observable by the original binding after the borrow ends",
+    (): void => {
+      assertRunsTo(
+        `
+      fn main() {
+        let mut x = 1;
+        let r = &mut x;
+        *r = *r + 1;
+        print(x);
+      }
+    `,
+        ["2"],
+      );
+    },
+  );
+
+  it.fails(
+    "replacing a whole struct through &mut is observable by the original binding after the borrow ends",
+    (): void => {
+      assertRunsTo(
+        `
+      struct Foo { value: i32 }
+      fn main() {
+        let mut obj = Foo { value: 1 };
+        let obj_ref = &mut obj;
+        *obj_ref = Foo { value: 2 };
+        print(obj.value);
+      }
+    `,
+        ["2"],
+      );
     },
   );
 });

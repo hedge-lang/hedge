@@ -69,6 +69,7 @@ export type Expression =
   | PathExpression
   | CallExpression
   | ReferenceExpression
+  | DereferenceExpression
   | BinaryExpression
   | UnaryExpression
   | AssignExpression
@@ -273,6 +274,11 @@ export interface ReferenceExpression extends AstNode {
   readonly kind: "ReferenceExpression";
   /** `true` for `&mut` (exclusive), `false` for `&` (shared). */
   readonly mutable: boolean;
+  readonly operand: Expression;
+}
+
+export interface DereferenceExpression extends AstNode {
+  readonly kind: "DereferenceExpression";
   readonly operand: Expression;
 }
 
