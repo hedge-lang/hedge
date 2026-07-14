@@ -319,6 +319,16 @@ describe("toJsim", () => {
     });
   });
 
+  describe("dereference expressions", () => {
+    it("DereferenceExpression is transparent - emits the operand directly", () => {
+      const program = jsimSource("*x;");
+      expect(program.items[0]).toMatchObject({
+        kind: "Identifier",
+        value: "x",
+      });
+    });
+  });
+
   describe("int literal bases", () => {
     it("hex IntLiteral is converted to decimal", () => {
       const program = jsimSource("0xFF");
