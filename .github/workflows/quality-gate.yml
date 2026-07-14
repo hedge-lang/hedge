@@ -12,8 +12,8 @@ permissions:
   contents: read
 
 jobs:
-  check:
-    name: Check
+  check-and-test:
+    name: Check ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -45,3 +45,11 @@ jobs:
           name: coverage-${{ matrix.os }}
           path: coverage/
           if-no-files-found: warn
+
+  check-consolidated:
+    name: Check
+    needs: check-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Complete for CI
+        run: echo "All checks passed"
