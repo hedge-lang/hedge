@@ -595,6 +595,71 @@ describe("unary expressions", (): void => {
     });
   });
 
+  it("*a + b parses as (*a) + b - dereference is tighter than additive", (): void => {
+    const ast = parseProgram("*a + b");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "BinaryExpression",
+          operator: "Add",
+          left: {
+            kind: "DereferenceExpression",
+            operand: { kind: "PathExpression", path: { segments: ["a"] } },
+          },
+          right: { kind: "PathExpression", path: { segments: ["b"] } },
+        },
+      ],
+    });
+  });
+
+  it("*p.field parses as *(p.field) - field access binds tighter than dereference", (): void => {
+    const ast = parseProgram("*p.field");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "DereferenceExpression",
+          operand: { kind: "FieldAccessExpression" },
+        },
+      ],
+    });
+  });
+
+  it("*f() dereferences a call result", (): void => {
+    const ast = parseProgram("*f()");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "DereferenceExpression",
+          operand: { kind: "CallExpression" },
+        },
+      ],
+    });
+  });
+
+  it("foo(*p) passes a dereference as a call argument", (): void => {
+    const ast = parseProgram("foo(*p)");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "CallExpression",
+          arguments: [{ kind: "DereferenceExpression" }],
+        },
+      ],
+    });
+  });
+
+  it("a[*i] uses a dereference as an index expression", (): void => {
+    const ast = parseProgram("a[*i]");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "IndexExpression",
+          index: { kind: "DereferenceExpression" },
+        },
+      ],
+    });
+  });
+
   it("-a + -b parses as (-a) + (-b)", (): void => {
     const ast = parseProgram("-a + -b");
     expect(ast).toMatchObject({
@@ -1050,13 +1115,20 @@ describe("ranges", (): void => {
     });
   });
 
-  it("a.. * b fails fast via the existing dereference guardrail, no new message needed", (): void => {
-    const { program, diagnostics } = parse(tokenize("a.. * b").tokens);
-    expect(program).toEqual(none());
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain(
-      "dereference (*) is not supported in Slice 1",
-    );
+  it("a.. * b parses as a range whose end dereferences b", (): void => {
+    const ast = parseProgram("a.. * b");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "RangeExpression",
+          start: some({ kind: "PathExpression", path: { segments: ["a"] } }),
+          end: some({
+            kind: "DereferenceExpression",
+            operand: { kind: "PathExpression", path: { segments: ["b"] } },
+          }),
+        },
+      ],
+    });
   });
 
   it("if a.. { foo(); }: range is the condition (RangeFrom), body not swallowed", (): void => {

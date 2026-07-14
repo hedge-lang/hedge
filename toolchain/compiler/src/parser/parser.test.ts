@@ -1331,6 +1331,165 @@ describe("reference expressions", (): void => {
       ],
     });
   });
+
+  it("a & b parses as bit-and (infix), not a reference expression", (): void => {
+    const ast = parseProgram("a & b;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "BinaryExpression",
+            operator: "BitAnd",
+            left: { kind: "PathExpression", path: { segments: ["a"] } },
+            right: { kind: "PathExpression", path: { segments: ["b"] } },
+          },
+        },
+      ],
+    });
+  });
+
+  it("&a.b borrows a field access - matches the spec's own example", (): void => {
+    const ast = parseProgram("&a.b;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "ReferenceExpression",
+            mutable: false,
+            operand: { kind: "FieldAccessExpression" },
+          },
+        },
+      ],
+    });
+  });
+
+  it("&foo() borrows a call result", (): void => {
+    const ast = parseProgram("&foo();");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "ReferenceExpression",
+            mutable: false,
+            operand: { kind: "CallExpression" },
+          },
+        },
+      ],
+    });
+  });
+
+  it("&a[0] borrows an index expression", (): void => {
+    const ast = parseProgram("&a[0];");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "ReferenceExpression",
+            mutable: false,
+            operand: { kind: "IndexExpression" },
+          },
+        },
+      ],
+    });
+  });
+
+  it("a malformed reference operand produces exactly one diagnostic, not a cascade", (): void => {
+    const { program, diagnostics } = parse(tokenize("&;").tokens);
+    expect(program).toEqual(none());
+    expect(diagnostics.filter((d) => d.severity === "error")).toHaveLength(1);
+  });
+});
+
+describe("dereference expressions", (): void => {
+  it("parses *p as a dereference expression", (): void => {
+    const ast = parseProgram("*p;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "DereferenceExpression",
+            operand: { kind: "PathExpression", path: { segments: ["p"] } },
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses **p as nested dereference expressions", (): void => {
+    const ast = parseProgram("**p;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "DereferenceExpression",
+            operand: {
+              kind: "DereferenceExpression",
+              operand: { kind: "PathExpression", path: { segments: ["p"] } },
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("&*p borrows a dereference - reborrow pattern", (): void => {
+    const ast = parseProgram("&*p;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "ReferenceExpression",
+            mutable: false,
+            operand: { kind: "DereferenceExpression" },
+          },
+        },
+      ],
+    });
+  });
+
+  it("*&x dereferences a reference - round trip", (): void => {
+    const ast = parseProgram("*&x;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "DereferenceExpression",
+            operand: { kind: "ReferenceExpression", mutable: false },
+          },
+        },
+      ],
+    });
+  });
+
+  it("&mut *p - exclusive borrow of a dereference", (): void => {
+    const ast = parseProgram("&mut *p;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "ReferenceExpression",
+            mutable: true,
+            operand: { kind: "DereferenceExpression" },
+          },
+        },
+      ],
+    });
+  });
+
+  it("a malformed dereference operand produces exactly one diagnostic, not a cascade", (): void => {
+    const { program, diagnostics } = parse(tokenize("*;").tokens);
+    expect(program).toEqual(none());
+    expect(diagnostics.filter((d) => d.severity === "error")).toHaveLength(1);
+  });
 });
 
 describe("let binding modifiers", (): void => {
@@ -2015,36 +2174,50 @@ describe("keyword edge cases", (): void => {
   });
 });
 
-describe("deref expression guardrail", (): void => {
-  it("*x produces a Slice-1 diagnostic, not a generic 'expected expression' error", (): void => {
-    const result = parse(tokenize("*x;").tokens);
-    expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("Slice 1");
-    expect(result.diagnostics[0]?.message).toContain("dereference");
+describe("dereference parses in previously-guardrailed positions", (): void => {
+  it("*1 parses (deref of an int literal, no longer a Slice-1 rejection)", (): void => {
+    const ast = parseProgram("*1;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "DereferenceExpression",
+            operand: { kind: "IntLiteral", value: "1" },
+          },
+        },
+      ],
+    });
   });
 
-  it("*1 in expression position produces the deref Slice-1 diagnostic", (): void => {
-    const result = parse(tokenize("*1;").tokens);
-    expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+  it("let y = *x; parses as a let binding with a dereference initializer", (): void => {
+    const ast = parseProgram("let y = *x;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "LetStatement",
+          initializer: some({
+            kind: "DereferenceExpression",
+            operand: { kind: "PathExpression", path: { segments: ["x"] } },
+          }),
+        },
+      ],
+    });
   });
 
-  it("let y = *x; produces the deref Slice-1 diagnostic", (): void => {
-    const result = parse(tokenize("let y = *x;").tokens);
-    expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("Slice 1");
-    expect(result.diagnostics[0]?.message).toContain("dereference");
-  });
-
-  it("fn f() { *x } produces the deref Slice-1 diagnostic", (): void => {
-    const result = parse(tokenize("fn f() { *x }").tokens);
-    expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("Slice 1");
-  });
-
-  it("deref diagnostic span covers the * token", (): void => {
-    const result = parse(tokenize("*value;").tokens);
-    expect(result.diagnostics[0]?.span).toEqual(some({ start: 0, end: 1 }));
+  it("fn f() { *x } parses a dereference as a block's trailing expression", (): void => {
+    const ast = parseProgram("fn f() { *x }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: {
+            kind: "Block",
+            trailingExpression: some({ kind: "DereferenceExpression" }),
+          },
+        },
+      ],
+    });
   });
 });
 
