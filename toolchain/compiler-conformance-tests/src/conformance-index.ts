@@ -516,6 +516,8 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "overlapping mutable and shared borrow is rejected",
       "lifetime elision for returned reference prefers unambiguous input",
       "rejects passing a dereferenced non-Copy value by value out of a reference",
+      "mutating a primitive through &mut is observable by the original binding after the borrow ends",
+      "replacing a whole struct through &mut is observable by the original binding after the borrow ends",
     ],
   },
   {
