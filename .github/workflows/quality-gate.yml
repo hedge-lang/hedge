@@ -12,9 +12,13 @@ permissions:
   contents: read
 
 jobs:
-  check:
-    name: Check
-    runs-on: ubuntu-latest
+  check-and-test:
+    name: Check ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -23,6 +27,7 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 26
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
@@ -32,3 +37,19 @@ jobs:
 
       - name: Run all tests
         run: npm run test
+
+      - name: Upload coverage report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: coverage/
+          if-no-files-found: warn
+
+  check-consolidated:
+    name: Check
+    needs: check-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Complete for CI
+        run: echo "All checks passed"
