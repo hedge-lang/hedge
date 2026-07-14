@@ -22,6 +22,13 @@ describe("borrow checker", (): void => {
     expect(diagnostics).toEqual([]);
   });
 
+  it("counts a use through a dereference for borrow-exclusivity tracking", (): void => {
+    const diagnostics = check(
+      'fn main() { let mut x = "a"; let r = &mut x; print(*r); }',
+    );
+    expect(diagnostics).toEqual([]);
+  });
+
   it("accepts many shared borrows at once", (): void => {
     const diagnostics = check(
       'fn main() { let x = "a"; let r1 = &x; let r2 = &x; print(r1); print(r2); }',
