@@ -87,14 +87,25 @@ export function extractProofRefs(
   return result;
 }
 
-// ---------------------------------------------------------------------------
-// Word-boundary theorem lookup — a plain substring check would count a
-// theorem name found merely because it's a substring of a longer identifier
-// (e.g. "Foo" inside "FooBarLemma").
-// ---------------------------------------------------------------------------
+const IDENT_CHAR = /[A-Za-z0-9_']/;
+
+function isIdentChar(ch: string | undefined): boolean {
+  return ch !== undefined && IDENT_CHAR.test(ch);
+}
+
+// Not \b-based: JS's \b runs on \w, which excludes the apostrophe that Coq
+// identifiers can contain.
 export function theoremDeclaredIn(theorem: string, text: string): boolean {
-  const escaped = theorem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`\\b${escaped}\\b`).test(text);
+  let index = text.indexOf(theorem);
+  while (index !== -1) {
+    const before = text[index - 1];
+    const after = text[index + theorem.length];
+    if (!isIdentChar(before) && !isIdentChar(after)) {
+      return true;
+    }
+    index = text.indexOf(theorem, index + 1);
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------

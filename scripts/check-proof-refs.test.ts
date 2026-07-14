@@ -36,4 +36,16 @@ describe("theoremDeclaredIn", () => {
   it("does not match a theorem name that is only a substring of a longer identifier", () => {
     expect(theoremDeclaredIn("Foo", "Theorem FooBarLemma : True.")).toBe(false);
   });
+
+  it("finds a theorem name containing an apostrophe", () => {
+    expect(theoremDeclaredIn("Foo'", "Theorem Foo' : True.")).toBe(true);
+  });
+
+  it("does not match when an apostrophe extends the identifier", () => {
+    expect(theoremDeclaredIn("Foo", "Theorem Foo' : True.")).toBe(false);
+  });
+
+  it("skips an invalid substring occurrence and finds a later valid match", () => {
+    expect(theoremDeclaredIn("Foo", "FooBar Theorem Foo : True.")).toBe(true);
+  });
 });
