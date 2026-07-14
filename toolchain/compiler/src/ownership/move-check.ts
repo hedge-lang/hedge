@@ -482,6 +482,7 @@ function walkExpression(
       walkExpression(ctx, expression.operand, state, scopeStack);
       return;
     case "ReferenceExpression":
+    case "DereferenceExpression":
       walkExpression(ctx, expression.operand, state, scopeStack);
       return;
     case "MethodCallExpression":

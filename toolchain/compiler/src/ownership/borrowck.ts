@@ -80,6 +80,7 @@ function collectUses(expression: Expression, out: Set<string>): void {
       }
       return;
     case "ReferenceExpression":
+    case "DereferenceExpression":
       collectUses(expression.operand, out);
       return;
     case "BinaryExpression":
