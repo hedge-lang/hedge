@@ -12,6 +12,7 @@ export default defineConfig({
       "toolchain/**/test/**/*.{test,spec}.ts",
       "toolchain/**/**/*.{test,spec}.ts",
       "stdlib/**/*.{test,spec}.ts",
+      "scripts/**/*.{test,spec}.ts",
     ],
 
     exclude: [
