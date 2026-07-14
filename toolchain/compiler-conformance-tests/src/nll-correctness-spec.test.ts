@@ -94,4 +94,22 @@ describe("NLL and lifetime correctness spec", (): void => {
     `);
     },
   );
+
+  it.fails(
+    "rejects passing a dereferenced non-Copy value by value out of a reference",
+    (): void => {
+      assertRejectsWithMessage(
+        `
+      struct Resource { id: i32 }
+      fn consume(r: Resource) { print(r.id); }
+      fn main() {
+        let x = Resource { id: 1 };
+        let r = &x;
+        consume(*r);
+      }
+    `,
+        "cannot move",
+      );
+    },
+  );
 });
