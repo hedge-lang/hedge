@@ -60,6 +60,14 @@ const TYPE_CAPABILITIES: ReadonlyMap<
   ["PrimitiveF32Type", new Set(["equality", "ordering", "arithmetic", "copy"])],
   ["PrimitiveF64Type", new Set(["equality", "ordering", "arithmetic", "copy"])],
   ["UnitType", new Set(["copy"])],
+  // A reference is always Copy, regardless of what it points to - copying
+  // `&T`/`&mut T` duplicates the reference itself (a pointer), never the
+  // referent, and never changes ownership of the underlying value. Without
+  // this entry, `recordDrops` (ownership/move-check.ts) would treat a
+  // reference-typed parameter as move-only and mark it for scope-end
+  // `using`, producing a runtime TypeError (plain values have no
+  // `[Symbol.dispose]`).
+  ["ReferenceType", new Set(["copy"])],
   ...INTEGER_KINDS.map((k): [string, ReadonlySet<TypeCapability>] => [
     k,
     INTEGER_CAPS,

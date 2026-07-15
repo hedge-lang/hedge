@@ -141,6 +141,60 @@ describe("toJsim", () => {
     });
   });
 
+  it("erases a &str param and return type transparently to string - no wrapper, same as a bare str", () => {
+    const program = jsimSource("fn first(s: &str) -> &str { s }");
+    expect(program).toMatchObject({
+      items: [
+        {
+          kind: "FunctionDecl",
+          params: [
+            {
+              kind: "FunctionParam",
+              name: "s",
+              type: some({ kind: "PrimitiveType", value: "string" }),
+            },
+          ],
+          returnType: some({ kind: "PrimitiveType", value: "string" }),
+        },
+      ],
+    });
+  });
+
+  it("emits no scope-end using for an unused &str parameter, since a reference is Copy and never move-tracked for drop", () => {
+    const program = jsimSourceWithOwnership(
+      "fn longest<'a>(a: &'a str, b: &'a str) -> &'a str { a }",
+    );
+    const fn = program.items.find((item): item is JSIM.FunctionDecl => {
+      return item.kind === "FunctionDecl" && item.name === "longest";
+    });
+    assert(fn !== undefined, "Expected a longest function");
+    expect(fn.params).toHaveLength(2);
+    expect(fn.params).toMatchObject([
+      { type: some({ kind: "PrimitiveType", value: "string" }) },
+      { type: some({ kind: "PrimitiveType", value: "string" }) },
+    ]);
+    expect(fn.body).toHaveLength(1);
+    expect(fn.body).toMatchObject([{ kind: "ReturnStatement" }]);
+  });
+
+  it("erases a &mut i32 param the same as &i32 - mutability doesn't change the erased JS representation", () => {
+    const program = jsimSource("fn f(x: &mut i32) {}");
+    expect(program).toMatchObject({
+      items: [
+        {
+          kind: "FunctionDecl",
+          params: [
+            {
+              kind: "FunctionParam",
+              name: "x",
+              type: some({ kind: "PrimitiveType", value: "number" }),
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("struct declaration produces no JSIM items", () => {
     const program = jsimSource("struct Foo;");
     expect(program.items).toEqual([]);

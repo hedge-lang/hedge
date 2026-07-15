@@ -26,4 +26,21 @@ describe("copy capability", (): void => {
     const type: Semantics.Type = { kind: "UnitType", tokenId: 0 };
     expect(hasCapability(type, "copy")).toBe(true);
   });
+
+  it("ReferenceType is Copy regardless of its referent - copying a reference never duplicates or moves the pointee", (): void => {
+    const sharedStr: Semantics.Type = {
+      kind: "ReferenceType",
+      tokenId: 0,
+      mutable: false,
+      referent: { kind: "PrimitiveStringType" },
+    };
+    const mutStruct: Semantics.Type = {
+      kind: "ReferenceType",
+      tokenId: 0,
+      mutable: true,
+      referent: { kind: "StructType", name: "Boxed" },
+    };
+    expect(hasCapability(sharedStr, "copy")).toBe(true);
+    expect(hasCapability(mutStruct, "copy")).toBe(true);
+  });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { assert } from "./assert.js";
 import { isNone, isSome } from "./option.js";
 import { compile } from "./driver.js";
 
@@ -185,6 +186,69 @@ describe("driver", (): void => {
           (d) => d.severity === "error" && d.message.includes(":"),
         ),
       ).toBe(true);
+    });
+  });
+
+  describe("reference types", (): void => {
+    it("compiles and runs fn first(s: &str) -> &str { s } - AC1's elision shape", (): void => {
+      const result = compile(`
+        fn first(s: &str) -> &str { s }
+        fn main() { print(first("hello")); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(isSome(result.code)).toBe(true);
+      if (isSome(result.code) && isSome(result.code.value.javascript)) {
+        expect(result.code.value.javascript.value).toContain("hello");
+      }
+    });
+
+    it("rejects fn longest(a: &str, b: &str) -> &str as ambiguous - AC3", (): void => {
+      const result = compile(`
+        fn longest(a: &str, b: &str) -> &str { a }
+        fn main() { print(longest("a", "b")); }
+      `);
+      expect(isNone(result.code)).toBe(true);
+      expect(
+        result.diagnostics.some((d) =>
+          d.message.includes("missing lifetime specifier"),
+        ),
+      ).toBe(true);
+    });
+
+    it("compiles and runs fn longest<'a>(a: &'a str, b: &'a str) -> &'a str { a } - AC4", (): void => {
+      const result = compile(`
+        fn longest<'a>(a: &'a str, b: &'a str) -> &'a str { a }
+        fn main() { print(longest("first", "second")); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(isSome(result.code)).toBe(true);
+      if (isSome(result.code) && isSome(result.code.value.javascript)) {
+        expect(result.code.value.javascript.value).toContain("first");
+      }
+    });
+
+    it("emits byte-identical JS for two otherwise-identical programs that differ only in their lifetime name (metamorphic)", (): void => {
+      const named = compile("fn first(s: &'a str) -> &'a str { s }");
+      const renamed = compile("fn first(s: &'zzz str) -> &'zzz str { s }");
+      expect(named.diagnostics).toEqual([]);
+      expect(renamed.diagnostics).toEqual([]);
+      assert(
+        isSome(named.code) && isSome(renamed.code),
+        "Expected code from both",
+      );
+      expect(named.code.value.javascript).toEqual(
+        renamed.code.value.javascript,
+      );
+    });
+
+    it("renders &str as a plain TS string in the .d.ts output, with no reference wrapper", (): void => {
+      const result = compile("pub fn first(s: &str) -> &str { s }");
+      expect(result.diagnostics).toEqual([]);
+      assert(isSome(result.code), "Expected code");
+      assert(isSome(result.code.value.typedef), "Expected a typedef");
+      expect(result.code.value.typedef.value).toContain(
+        "function first(s: string): string",
+      );
     });
   });
 });

@@ -1,7 +1,13 @@
 import type { Token } from "../lexer/token.js";
-import { isSome, some } from "../option.js";
+import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
-import type { NamedType, Type, UnitType } from "./ast.js";
+import type {
+  Lifetime,
+  NamedType,
+  ReferenceType,
+  Type,
+  UnitType,
+} from "./ast.js";
 import type { Parsed } from "./parse.js";
 import {
   isLifetimeGenericsStart,
@@ -17,15 +23,20 @@ import { parsePathSegments } from "./path.js";
 /**
  * Parses a type.
  *
- * Slice-1 supports named types (path types) and the unit type `()`.
- * The forms `&T`, `&mut T`, `[T]`, and `!` are recognized and produce
- * specific guardrail errors; all other unsupported type syntax produces a
- * generic guardrail error.
+ * Slice-1 supports named types (path types) and the unit type `()`. Slice-2
+ * adds reference types (`&T`, `&mut T`, `&'a T`, `&'a mut T`) - the lifetime
+ * is left unresolved (`none()`) here; the elision pass fills it in as a
+ * separate step over the whole `Program`, since resolution needs the full
+ * signature (all reference parameters + the return type) in view at once.
+ * The forms `[T]` and `!` are recognized and produce specific guardrail
+ * errors; a bare `'a` in type position (no leading `&`) also still
+ * guardrails, since a lifetime alone is never a valid type. All other
+ * unsupported type syntax produces a generic guardrail error.
  *
  * Grammar:
  *
  * ```text
- * Type ::= "()" | Path
+ * Type ::= "()" | Path | "&" Lifetime? "mut"? Type
  * ```
  *
  * `(Type)` (tuple syntax) is recognized and produces a guardrail diagnostic;
@@ -114,12 +125,35 @@ export function parseType(
   }
 
   if (token.kind === "amp") {
-    return err({
-      severity: "error",
-      message:
-        "reference types are not supported in Slice 1; borrows are introduced in Slice 2",
-      span: some(token.span),
-    });
+    let cursor = pos + 1;
+    let lifetime: Option<Lifetime> = none();
+    const lifetimeToken = tokens[cursor];
+    if (lifetimeToken?.kind === "lifetime") {
+      lifetime = some({
+        kind: "Lifetime",
+        tokenId: cursor,
+        name: lifetimeToken.text,
+      });
+      cursor += 1;
+    }
+    let mutable = false;
+    const mutToken = tokens[cursor];
+    if (mutToken?.kind === "keyword" && mutToken.text === "mut") {
+      mutable = true;
+      cursor += 1;
+    }
+    const referentResult = parseType(tokens, cursor);
+    if (isErr(referentResult)) {
+      return referentResult;
+    }
+    const reference: ReferenceType = {
+      kind: "ReferenceType",
+      tokenId: pos,
+      mutable,
+      lifetime,
+      referent: referentResult.value.node,
+    };
+    return ok({ node: reference, next: referentResult.value.next });
   }
 
   if (token.kind === "lbracket") {

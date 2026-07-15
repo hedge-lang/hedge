@@ -6,6 +6,7 @@ import {
   patternBindingName,
   type Attribute,
   type FunctionDecl,
+  type GenericParam,
   type Item,
   type NamedFieldsBody,
   type Param,
@@ -188,18 +189,72 @@ function parseParams(
   return ok({ node: params, next: afterClose.value });
 }
 
+interface DeclarationGenericsResult {
+  readonly generics: readonly GenericParam[];
+  readonly next: number;
+}
+
 /**
- * @returns A Slice-1 diagnostic if the generic parameter list (`<...>`) starts
- * at `pos`; Otherwise returns `pos` unchanged.
+ * Tentatively parses `<'a, 'b, ...>` - a generics list containing only
+ * lifetime parameters (with an optional trailing comma). Returns `none()`
+ * for anything else (an empty list, a non-lifetime member anywhere, or an
+ * unclosed list), so the caller can fall through to the pre-existing
+ * Slice-4/lifetime guardrail unchanged - Slice-4 identifier type params
+ * (with or without bounds) aren't parsed here.
  */
-function skipDeclarationGenerics(
+function tryParseLifetimeOnlyGenerics(
+  tokens: readonly Token[],
+  ltPos: number,
+): Option<DeclarationGenericsResult> {
+  const first = tokens[ltPos + 1];
+  if (first?.kind !== "lifetime") {
+    return none();
+  }
+  const generics: GenericParam[] = [
+    { kind: "Lifetime", tokenId: ltPos + 1, name: first.text },
+  ];
+  let cursor = ltPos + 2;
+  for (;;) {
+    const token = tokens[cursor];
+    if (token?.kind === "gt") {
+      return some({ generics, next: cursor + 1 });
+    }
+    if (token?.kind !== "comma") {
+      return none();
+    }
+    cursor += 1;
+    const member = tokens[cursor];
+    if (member?.kind === "gt") {
+      return some({ generics, next: cursor + 1 });
+    }
+    if (member?.kind !== "lifetime") {
+      return none();
+    }
+    generics.push({ kind: "Lifetime", tokenId: cursor, name: member.text });
+    cursor += 1;
+  }
+}
+
+/**
+ * Parses the generic parameter list (`<...>`) starting at `pos`, if any.
+ * A lifetime-only list (`<'a>`, `<'a, 'b>`, with an optional trailing comma)
+ * is parsed for real. Anything else - no `<`, an empty list, a Slice-4
+ * identifier type parameter anywhere in the list, or an unclosed list -
+ * pushes the existing Slice-1/Slice-4/lifetime guardrail diagnostic and
+ * skips the list, exactly as before.
+ */
+function parseDeclarationGenerics(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
   pos: number,
-): number {
+): DeclarationGenericsResult {
   const token = tokens[pos];
   if (token?.kind !== "lt") {
-    return pos;
+    return { generics: [], next: pos };
+  }
+  const lifetimeOnly = tryParseLifetimeOnlyGenerics(tokens, pos);
+  if (isSome(lifetimeOnly)) {
+    return lifetimeOnly.value;
   }
   const message = isLifetimeGenericsStart(tokens, pos)
     ? unsupportedLifetimeMessage("lifetime parameters")
@@ -209,7 +264,7 @@ function skipDeclarationGenerics(
     message,
     span: some(token.span),
   });
-  return skipBalancedAngleList(tokens, pos).next;
+  return { generics: [], next: skipBalancedAngleList(tokens, pos).next };
 }
 
 /**
@@ -262,13 +317,12 @@ function parseFunction(
     return nameResult;
   }
 
-  // TODO: Actually parse generics, later.
-  const afterGenerics = skipDeclarationGenerics(
+  const genericsResult = parseDeclarationGenerics(
     tokens,
     diagnostics,
     nameResult.value.next,
   );
-  const paramsResult = parseParams(tokens, diagnostics, afterGenerics);
+  const paramsResult = parseParams(tokens, diagnostics, genericsResult.next);
   if (isErr(paramsResult)) {
     return paramsResult;
   }
@@ -294,7 +348,7 @@ function parseFunction(
     tokenId: start,
     visibility,
     name: nameResult.value.node,
-    generics: [],
+    generics: genericsResult.generics,
     params: paramsResult.value.node,
     returnType,
     whereClause: none(),
@@ -548,12 +602,17 @@ function parseStruct(
   if (isErr(nameResult)) {
     return nameResult;
   }
-  let cursor = skipDeclarationGenerics(
+  const genericsResult = parseDeclarationGenerics(
     tokens,
     diagnostics,
     nameResult.value.next,
   );
-  cursor = checkWhereClause(tokens, diagnostics, cursor, skipToStructBody);
+  let cursor = checkWhereClause(
+    tokens,
+    diagnostics,
+    genericsResult.next,
+    skipToStructBody,
+  );
 
   let body: StructBody;
   const bodyToken = tokens[cursor];
@@ -593,6 +652,7 @@ function parseStruct(
     tokenId: start,
     visibility,
     name: nameResult.value.node,
+    generics: genericsResult.generics,
     body,
     attributes,
   };
