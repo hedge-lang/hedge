@@ -86,7 +86,7 @@ describe("NLL and lifetime correctness spec", (): void => {
     );
   });
 
-  it("ambiguous two-parameter elision is rejected", (): void => {
+  it("rejects ambiguous two-parameter elision", (): void => {
     assertRejectsWithMessage(
       `
       fn pick(a: &str, b: &str) -> &str { a }
@@ -96,7 +96,7 @@ describe("NLL and lifetime correctness spec", (): void => {
     );
   });
 
-  it("lifetime elision fills the return type from the sole reference parameter", (): void => {
+  it("fills an elided return type from the sole reference parameter", (): void => {
     assertRunsTo(
       `
       fn first(s: &str) -> &str { s }
@@ -106,7 +106,7 @@ describe("NLL and lifetime correctness spec", (): void => {
     );
   });
 
-  it("explicit lifetime annotations resolve what elision alone cannot", (): void => {
+  it("resolves what elision alone cannot, given explicit lifetime annotations", (): void => {
     assertRunsTo(
       `
       fn longest<'a>(a: &'a str, b: &'a str) -> &'a str { a }
@@ -116,7 +116,7 @@ describe("NLL and lifetime correctness spec", (): void => {
     );
   });
 
-  it("a struct's own lifetime parameter parses and is stored on its reference field", (): void => {
+  it("parses a struct's own lifetime parameter and stores it on its reference field", (): void => {
     assertRunsTo(
       `
       struct Cursor<'a> { source: &'a str, pos: usize }
@@ -131,7 +131,7 @@ describe("NLL and lifetime correctness spec", (): void => {
   });
 
   it.fails(
-    "self-receiver elision assigns the receiver's lifetime to the returned reference",
+    "assigns the receiver's lifetime to the returned reference for self-receiver elision",
     (): void => {
       // Blocked by #51 (impl blocks / methods aren't parseable yet); this
       // documents elision rule 3's eventual behavior once methods land.

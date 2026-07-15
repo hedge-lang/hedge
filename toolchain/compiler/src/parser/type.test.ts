@@ -55,7 +55,7 @@ describe("parseType - reference types", (): void => {
     });
   });
 
-  it("&&i32 is rejected, not silently mis-parsed - the lexer emits && as one amp_amp token and no split-on-reparse exists for double references", (): void => {
+  it("rejects && rather than silently mis-parsing it as a double reference, since the lexer emits && as one amp_amp token with no split-on-reparse", (): void => {
     const { tokens } = tokenize("&&i32");
     const result = parseType(tokens, 0);
     assert(isErr(result), "Expected an error result");

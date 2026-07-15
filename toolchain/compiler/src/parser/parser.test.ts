@@ -2549,7 +2549,7 @@ describe("item error recovery", (): void => {
     ]);
   });
 
-  it("a parameter with a slice-type guardrail stays fail-fast (not list-recoverable) with exactly one diagnostic", (): void => {
+  it("keeps a parameter with a slice-type guardrail fail-fast (not list-recoverable), with exactly one diagnostic", (): void => {
     const { tokens } = tokenize("fn f(x: [i32]) {}");
     const { program, diagnostics } = parse(tokens);
     assert(isNone(program), "Expected no program to come back");
@@ -2753,7 +2753,7 @@ describe("item error recovery", (): void => {
     ]);
   });
 
-  it("a field with a slice-type guardrail stays fail-fast (not list-recoverable) with exactly one diagnostic", (): void => {
+  it("keeps a field with a slice-type guardrail fail-fast (not list-recoverable), with exactly one diagnostic", (): void => {
     const { tokens } = tokenize("struct Foo { x: [i32] }");
     const { program, diagnostics } = parse(tokens);
     assert(isNone(program), "Expected no program to come back");
@@ -2893,7 +2893,7 @@ describe("generics guardrail — declaration-name position", (): void => {
     ]);
   });
 
-  it("fn foo<'a>() {} parses a real lifetime-only generics list, zero diagnostics", (): void => {
+  it("parses a real lifetime-only generics list with zero diagnostics (fn foo<'a>() {})", (): void => {
     const { tokens } = tokenize("fn foo<'a>() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
@@ -2903,7 +2903,7 @@ describe("generics guardrail — declaration-name position", (): void => {
     ]);
   });
 
-  it("fn foo<'a, 'b>() {} parses multiple lifetime params, zero diagnostics", (): void => {
+  it("parses multiple lifetime params with zero diagnostics (fn foo<'a, 'b>() {})", (): void => {
     const { tokens } = tokenize("fn foo<'a, 'b>() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
@@ -2919,7 +2919,7 @@ describe("generics guardrail — declaration-name position", (): void => {
     ]);
   });
 
-  it("fn foo<'a,>() {} parses a lifetime-only list with a trailing comma", (): void => {
+  it("parses a lifetime-only list with a trailing comma (fn foo<'a,>() {})", (): void => {
     const { tokens } = tokenize("fn foo<'a,>() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
@@ -2963,7 +2963,7 @@ describe("generics guardrail — declaration-name position", (): void => {
     ]);
   });
 
-  it("struct Cursor<'a> { source: T } parses a real lifetime-only generics list; the unrelated field type T is untouched", (): void => {
+  it("parses a real lifetime-only generics list on a struct, leaving an unrelated field type untouched (struct Cursor<'a> { source: T })", (): void => {
     const { tokens } = tokenize("struct Cursor<'a> { source: T }");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
@@ -2987,7 +2987,7 @@ describe("generics guardrail — declaration-name position", (): void => {
     ]);
   });
 
-  it("a sibling function after a lifetime-only generic fn still parses, with zero diagnostics for either", (): void => {
+  it("still parses a sibling function after a lifetime-only generic fn, with zero diagnostics for either", (): void => {
     const { tokens } = tokenize("fn foo<'a>() {} fn bar() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
@@ -3132,7 +3132,7 @@ describe("generics guardrail — declaration-name position", (): void => {
 });
 
 describe("lifetime + reference type interactions", (): void => {
-  it("fn foo<'a>(x: &'a i32) {} parses cleanly - declared generic and param type both real, zero diagnostics", (): void => {
+  it("parses cleanly with both a declared generic and a real param type, zero diagnostics (fn foo<'a>(x: &'a i32) {})", (): void => {
     const { tokens } = tokenize("fn foo<'a>(x: &'a i32) {}");
     const { program, diagnostics } = parse(tokens);
     expect(diagnostics).toHaveLength(0);
@@ -3158,7 +3158,7 @@ describe("lifetime + reference type interactions", (): void => {
     );
   });
 
-  it("struct Ref<'a>(&'a i32); parses cleanly - same interaction via a tuple-struct field", (): void => {
+  it("parses cleanly via a tuple-struct field, the same interaction as a named field (struct Ref<'a>(&'a i32);)", (): void => {
     const { tokens } = tokenize("struct Ref<'a>(&'a i32);");
     const { program, diagnostics } = parse(tokens);
     expect(diagnostics).toHaveLength(0);

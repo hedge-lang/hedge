@@ -534,12 +534,12 @@ describe("semantic analysis", (): void => {
 });
 
 describe("reference types", (): void => {
-  it("fn first(s: &str) -> &str { s } type-checks with no diagnostics - the body never uses a &/* operator, only the declared types are references", (): void => {
+  it("type-checks a function returning its own reference-typed parameter with no diagnostics, since the body never uses a &/* operator", (): void => {
     const result = diagnose("fn first(s: &str) -> &str { s }");
     expect(result.diagnostics).toEqual([]);
   });
 
-  it("fn longest<'a>(a: &'a str, b: &'a str) -> &'a str { a } type-checks with no diagnostics", (): void => {
+  it("type-checks a signature with fully explicit lifetime annotations with no diagnostics", (): void => {
     const result = diagnose(
       "fn longest<'a>(a: &'a str, b: &'a str) -> &'a str { a }",
     );

@@ -227,7 +227,7 @@ describe("driver", (): void => {
       }
     });
 
-    it("metamorphic: only the lifetime name differs between two otherwise-identical programs, so both emit byte-identical JS", (): void => {
+    it("emits byte-identical JS for two otherwise-identical programs that differ only in their lifetime name (metamorphic)", (): void => {
       const named = compile("fn first(s: &'a str) -> &'a str { s }");
       const renamed = compile("fn first(s: &'zzz str) -> &'zzz str { s }");
       expect(named.diagnostics).toEqual([]);
@@ -241,7 +241,7 @@ describe("driver", (): void => {
       );
     });
 
-    it(".d.ts renders &str as plain TS string, with no reference wrapper", (): void => {
+    it("renders &str as a plain TS string in the .d.ts output, with no reference wrapper", (): void => {
       const result = compile("pub fn first(s: &str) -> &str { s }");
       expect(result.diagnostics).toEqual([]);
       assert(isSome(result.code), "Expected code");

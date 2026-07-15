@@ -160,7 +160,7 @@ describe("toJsim", () => {
     });
   });
 
-  it("an unused &str parameter gets no scope-end using - a reference is Copy, never move-tracked for drop", () => {
+  it("emits no scope-end using for an unused &str parameter, since a reference is Copy and never move-tracked for drop", () => {
     const program = jsimSourceWithOwnership(
       "fn longest<'a>(a: &'a str, b: &'a str) -> &'a str { a }",
     );
