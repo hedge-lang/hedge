@@ -532,3 +532,51 @@ describe("semantic analysis", (): void => {
     },
   );
 });
+
+describe("reference types", (): void => {
+  it("fn first(s: &str) -> &str { s } type-checks with no diagnostics - the body never uses a &/* operator, only the declared types are references", (): void => {
+    const result = diagnose("fn first(s: &str) -> &str { s }");
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("fn longest<'a>(a: &'a str, b: &'a str) -> &'a str { a } type-checks with no diagnostics", (): void => {
+    const result = diagnose(
+      "fn longest<'a>(a: &'a str, b: &'a str) -> &'a str { a }",
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a mutability mismatch between a &i32 parameter and a &mut i32 return type", (): void => {
+    const result = diagnose("fn f(x: &'a i32) -> &'a mut i32 { x }");
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("return type mismatch");
+    expect(result.diagnostics[0].message).toContain("&mut i32");
+    expect(result.diagnostics[0].message).toContain("&i32");
+  });
+
+  it("rejects a referent-type mismatch between a &i32 parameter and a &str return type", (): void => {
+    const result = diagnose("fn f(x: &'a i32) -> &'a str { x }");
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("return type mismatch");
+  });
+
+  it("still rejects a & expression operator inside a function whose declared types are all references (the Slice-1 borrow-expression guardrail is untouched)", (): void => {
+    const result = diagnose("fn f(x: i32) { let r = &x; print(r); }");
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain(
+      "borrow expressions are not supported in Slice 1",
+    );
+  });
+
+  it("still rejects a * expression operator the same way, even for a &i32-typed binding", (): void => {
+    const result = diagnose("fn f(x: &'a i32) -> i32 { *x }");
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain(
+      "dereference expressions are not supported in Slice 1",
+    );
+  });
+});
