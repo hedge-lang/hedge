@@ -98,8 +98,9 @@ describe("lifetime elision - synthesized-name collision avoidance", (): void => 
   it("does not synthesize a colliding name for an elided parameter when the user already wrote an explicit synthesized-looking lifetime", (): void => {
     // `a`'s lifetime is explicitly named "_0" via a synthesized-looking
     // identifier written by the user; `b` is elided and must not receive
-    // the same synthesized name, and the ambiguity check still fires since
-    // there are two reference parameters.
+    // the same synthesized name. The return type's lifetime is also
+    // explicit (`&'_0 str`), so the ambiguity check never runs here at
+    // all - it only applies to an elided return type.
     const { tokens } = tokenize("fn f(a: &'_0 str, b: &str) -> &'_0 str { a }");
     const { program, diagnostics } = parse(tokens);
     expect(diagnostics).toHaveLength(0);
