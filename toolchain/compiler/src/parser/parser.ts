@@ -5,6 +5,7 @@ import { isErr } from "../result.js";
 import type { Program } from "./ast.js";
 import { collectInnerAttributes } from "./attribute.js";
 import { parseItem } from "./item.js";
+import { elideLifetimes } from "./lifetime-elision.js";
 import { kindAt, skipToItemStartKeyword, tokenAt } from "./parse-utils.js";
 
 /**
@@ -139,5 +140,10 @@ export function parse(tokens: readonly Token[]): ParseResult {
       });
     }
   }
-  return { program: some({ kind: "Program", items, attributes }), diagnostics };
+  const program = elideLifetimes(
+    { kind: "Program", items, attributes },
+    tokens,
+    diagnostics,
+  );
+  return { program: some(program), diagnostics };
 }

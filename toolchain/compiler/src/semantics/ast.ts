@@ -220,12 +220,29 @@ export interface Path {
 }
 
 export type Type =
-  NamedType | UnitType | PrimitiveType | StructType | FunctionType;
+  | NamedType
+  | UnitType
+  | PrimitiveType
+  | StructType
+  | FunctionType
+  | ReferenceType;
 
 export interface FunctionType {
   readonly kind: "FunctionType";
   readonly params: readonly Type[];
   readonly returnType: Type;
+}
+
+/**
+ * `&T` / `&mut T`, erased of lifetime identity - nothing downstream of
+ * parsing does lifetime-aware checking yet (the borrow checker still
+ * consumes the parser-level `Program`, not this one), so only the mutability
+ * and referent type are meaningful here.
+ */
+interface ReferenceType extends AstNode {
+  readonly kind: "ReferenceType";
+  readonly mutable: boolean;
+  readonly referent: Type;
 }
 
 export type PrimitiveType =

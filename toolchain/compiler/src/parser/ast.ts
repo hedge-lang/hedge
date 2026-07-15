@@ -100,7 +100,7 @@ export interface FunctionDecl extends AstNode {
   readonly kind: "Function";
   readonly visibility: Option<Visibility>;
   readonly name: Identifier;
-  readonly generics: readonly never[];
+  readonly generics: readonly GenericParam[];
   readonly params: readonly Param[];
   readonly returnType: Option<Type>;
   readonly whereClause: Option<never>;
@@ -112,6 +112,7 @@ export interface StructDecl extends AstNode {
   readonly kind: "Struct";
   readonly visibility: Option<Visibility>;
   readonly name: Identifier;
+  readonly generics: readonly GenericParam[];
   readonly body: StructBody;
   readonly attributes: readonly Attribute[];
 }
@@ -248,7 +249,7 @@ export interface Path {
   readonly segments: string[];
 }
 
-export type Type = NamedType | UnitType;
+export type Type = NamedType | UnitType | ReferenceType;
 
 export interface NamedType extends AstNode {
   readonly kind: "NamedType";
@@ -258,6 +259,29 @@ export interface NamedType extends AstNode {
 export interface UnitType extends AstNode {
   readonly kind: "UnitType";
 }
+
+/**
+ * `&T` / `&mut T` / `&'a T` / `&'a mut T`. `lifetime` is `none()` only
+ * transiently between parsing and the lifetime-elision pass - every
+ * `ReferenceType` in a `Program` returned by `parse()` has `some(...)` here,
+ * either the source's explicit annotation or a synthesized one.
+ */
+export interface ReferenceType extends AstNode {
+  readonly kind: "ReferenceType";
+  readonly mutable: boolean;
+  readonly lifetime: Option<Lifetime>;
+  readonly referent: Type;
+}
+
+/** `'a` - bare name, no leading `'`. May be a synthesized name (`_0`, `_1`, ...). */
+export interface Lifetime extends AstNode {
+  readonly kind: "Lifetime";
+  readonly name: string;
+}
+
+/** Only lifetime params are parsed in Slice 2; a `<...>` list containing a
+ * non-lifetime member still falls through to the Slice-4 generics guardrail. */
+export type GenericParam = Lifetime;
 
 export interface PathExpression extends AstNode {
   readonly kind: "PathExpression";

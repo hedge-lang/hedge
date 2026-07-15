@@ -210,19 +210,34 @@ function validateSlice1Type(
   type: Parser.Type,
   tokenId: number,
 ): Semantics.Type {
-  if (type.kind === "NamedType" && type.path.segments.length === 1) {
-    const name = type.path.segments[0];
-    assert(name !== undefined, "Name segment missing");
-    const prim = namedTypeToPrimitive(name);
-    if (isSome(prim)) {
-      return prim.value;
+  switch (type.kind) {
+    case "NamedType": {
+      if (type.path.segments.length === 1) {
+        const name = type.path.segments[0];
+        assert(name !== undefined, "Name segment missing");
+        const prim = namedTypeToPrimitive(name);
+        if (isSome(prim)) {
+          return prim.value;
+        }
+        const structDecl = ctx.typeScope.get(name);
+        if (structDecl !== undefined) {
+          return structDecl.type;
+        }
+      }
+      break;
     }
-    const structDecl = ctx.typeScope.get(name);
-    if (structDecl !== undefined) {
-      return structDecl.type;
-    }
+    case "UnitType":
+      return type;
+    case "ReferenceType":
+      return {
+        kind: "ReferenceType",
+        tokenId,
+        mutable: type.mutable,
+        referent: validateSlice1Type(ctx, type.referent, type.referent.tokenId),
+      };
+    default:
+      assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
-  if (type.kind === "UnitType") return type;
   emitError(ctx, "type is not supported in Slice 1", tokenId);
   return { kind: "UnitType", tokenId };
 }
@@ -403,14 +418,28 @@ function resolveSlice1Type(
   type: Parser.Type,
   fallbackTokenId: number,
 ): Semantics.Type {
-  if (type.kind === "NamedType" && type.path.segments.length === 1) {
-    const name = type.path.segments[0];
-    assert(name !== undefined, "Name segment missing");
-    const prim = namedTypeToPrimitive(name);
-    if (isSome(prim)) return prim.value;
+  switch (type.kind) {
+    case "NamedType": {
+      if (type.path.segments.length === 1) {
+        const name = type.path.segments[0];
+        assert(name !== undefined, "Name segment missing");
+        const prim = namedTypeToPrimitive(name);
+        if (isSome(prim)) return prim.value;
+      }
+      return { kind: "UnitType", tokenId: fallbackTokenId };
+    }
+    case "UnitType":
+      return type;
+    case "ReferenceType":
+      return {
+        kind: "ReferenceType",
+        tokenId: fallbackTokenId,
+        mutable: type.mutable,
+        referent: resolveSlice1Type(type.referent, type.referent.tokenId),
+      };
+    default:
+      return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
-  if (type.kind === "UnitType") return type;
-  return { kind: "UnitType", tokenId: fallbackTokenId };
 }
 
 function fnSignatureType(fn: Parser.FunctionDecl): Semantics.FunctionType {
@@ -513,6 +542,7 @@ function analyzeFunctionDecl(
       type: { kind: "UnitType", tokenId: decl.name.tokenId },
     },
     attributes: decl.attributes.map((attr) => analyzeAttribute(ctx, attr)),
+    generics: [],
     params: analyzedParams,
     returnType,
     body,
@@ -709,6 +739,8 @@ function describeType(type: Semantics.Type): string {
       return type.name.split("::").pop() ?? type.name;
     case "UnitType":
       return "()";
+    case "ReferenceType":
+      return `&${type.mutable ? "mut " : ""}${describeType(type.referent)}`;
     default:
       return NUMERIC_TYPE_NAME[type.kind] ?? type.kind;
   }
@@ -830,6 +862,8 @@ function typesEqual(a: Semantics.Type, b: Semantics.Type): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === "StructType" && b.kind === "StructType")
     return a.name === b.name;
+  if (a.kind === "ReferenceType" && b.kind === "ReferenceType")
+    return a.mutable === b.mutable && typesEqual(a.referent, b.referent);
   return true;
 }
 

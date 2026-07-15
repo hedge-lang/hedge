@@ -186,6 +186,11 @@ function semanticTypeToJsPrimitive(
       return some({ kind: "PrimitiveType", value: "number" });
     case "UnitType":
       return some({ kind: "PrimitiveType", value: "null" });
+    case "ReferenceType":
+      // References erase transparently - no { v } cell boxing exists yet
+      // (that's the still-guardrailed `&mut`-cell lowering work), so a
+      // reference-typed value's JS representation is just its referent's.
+      return semanticTypeToJsPrimitive(type.referent);
     default:
       return none();
   }
@@ -233,6 +238,8 @@ function hedgeTypeToNumericKind(
       return some({ kind: "float", bits: 32 });
     case "PrimitiveF64Type":
       return some({ kind: "float", bits: 64 });
+    case "ReferenceType":
+      return hedgeTypeToNumericKind(type.referent);
     default:
       return none();
   }
