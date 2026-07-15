@@ -5,7 +5,7 @@ import { tokenize } from "../lexer/lexer.js";
 import { parse } from "./parser.js";
 
 describe("lifetime elision - rule 2 (single reference parameter)", (): void => {
-  it("fn first(s: &str) -> &str fills the elided return from the sole reference parameter, zero diagnostics", (): void => {
+  it("fills the elided return type from the sole reference parameter, with zero diagnostics (fn first(s: &str) -> &str)", (): void => {
     const { tokens } = tokenize("fn first(s: &str) -> &str { s }");
     const { program, diagnostics } = parse(tokens);
     expect(diagnostics).toHaveLength(0);
@@ -31,7 +31,7 @@ describe("lifetime elision - rule 2 (single reference parameter)", (): void => {
     expect(returnType.lifetime.value.name).toBe(paramType.lifetime.value.name);
   });
 
-  it("fn f(x: i32, s: &str) -> &str still applies rule 2 - a non-reference parameter doesn't count", (): void => {
+  it("still applies rule 2 when a non-reference parameter is present, since it doesn't count toward the total", (): void => {
     const { tokens } = tokenize("fn f(x: i32, s: &str) -> &str { s }");
     const { diagnostics } = parse(tokens);
     expect(diagnostics).toHaveLength(0);
@@ -39,7 +39,7 @@ describe("lifetime elision - rule 2 (single reference parameter)", (): void => {
 });
 
 describe("lifetime elision - ambiguity rejection", (): void => {
-  it("fn longest(a: &str, b: &str) -> &str is rejected as ambiguous (two reference parameters)", (): void => {
+  it("rejects a signature with two reference parameters as ambiguous", (): void => {
     const { tokens } = tokenize("fn longest(a: &str, b: &str) -> &str { a }");
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
@@ -47,14 +47,14 @@ describe("lifetime elision - ambiguity rejection", (): void => {
     expect(diagnostics[0].message).toContain("missing lifetime specifier");
   });
 
-  it("fn f() -> &str {} is rejected as ambiguous (zero reference parameters - boundary case)", (): void => {
+  it("rejects a signature with zero reference parameters as ambiguous (boundary case)", (): void => {
     const { tokens } = tokenize('fn f() -> &str { "x" }');
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].message).toContain("missing lifetime specifier");
   });
 
-  it("an ambiguous signature still produces a structurally complete program (synthesized placeholder), forcing code:none() via the error diagnostic rather than a missing program", (): void => {
+  it("still produces a structurally complete program for an ambiguous signature (synthesized placeholder), forcing code:none() via the error diagnostic rather than a missing program", (): void => {
     const { tokens } = tokenize("fn longest(a: &str, b: &str) -> &str { a }");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to still come back");
@@ -74,7 +74,7 @@ describe("lifetime elision - ambiguity rejection", (): void => {
 });
 
 describe("lifetime elision - fully explicit signatures are untouched", (): void => {
-  it("fn longest<'a>(a: &'a str, b: &'a str) -> &'a str compiles with explicit annotations, zero diagnostics", (): void => {
+  it("compiles a signature with fully explicit lifetime annotations, with zero diagnostics", (): void => {
     const { tokens } = tokenize(
       "fn longest<'a>(a: &'a str, b: &'a str) -> &'a str { a }",
     );
@@ -95,7 +95,7 @@ describe("lifetime elision - fully explicit signatures are untouched", (): void 
 });
 
 describe("lifetime elision - synthesized-name collision avoidance", (): void => {
-  it("fn f(a: &_0, b: &str) -> &_0 does not synthesize a colliding _0 for the second, unrelated elided parameter", (): void => {
+  it("does not synthesize a colliding name for an elided parameter when the user already wrote an explicit synthesized-looking lifetime", (): void => {
     // `a`'s lifetime is explicitly named "_0" via a synthesized-looking
     // identifier written by the user; `b` is elided and must not receive
     // the same synthesized name, and the ambiguity check still fires since
@@ -110,6 +110,60 @@ describe("lifetime elision - synthesized-name collision avoidance", (): void => 
     assert(bType?.kind === "ReferenceType", "Expected a reference param");
     assert(isSome(bType.lifetime), "Expected b's lifetime to be resolved");
     expect(bType.lifetime.value.name).not.toBe("_0");
+  });
+
+  it("does not let a let-statement's synthesized placeholder lifetime collide with the enclosing function's declared generic lifetime", (): void => {
+    // `fn f<'_0>()` declares a lifetime literally named "_0". The elided
+    // `let x: &i32;` inside its body has no name of its own to seed a
+    // synthesizer from, so an unscoped synthesizer would always pick "_0"
+    // first - accidentally reusing the enclosing function's own declared
+    // lifetime name for an unrelated placeholder.
+    const { tokens } = tokenize("fn f<'_0>() { let x: &i32; }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    assert(
+      diagnostics.some((d) => d.message.includes("missing lifetime specifier")),
+      "Expected the elided let annotation to still be rejected",
+    );
+    const fn = program.value.items[0];
+    assert(fn?.kind === "Function", "Expected a Function item");
+    const letStmt = fn.body.statements[0];
+    assert(letStmt?.kind === "LetStatement", "Expected a LetStatement");
+    assert(isSome(letStmt.type), "Expected a type annotation");
+    const type = letStmt.type.value;
+    assert(type.kind === "ReferenceType", "Expected a reference type");
+    assert(isSome(type.lifetime), "Expected the lifetime to be resolved");
+    expect(type.lifetime.value.name).not.toBe("_0");
+  });
+
+  it("does not let a let-statement's synthesized placeholder lifetime collide with a name the enclosing signature just synthesized for itself", (): void => {
+    // `fn f(a: &str) -> &str` has no explicit lifetimes at all, so `a`
+    // gets synthesized "_0" by rule 2. The elided `let x: &i32;` inside
+    // the body must not reuse "_0" for its own (rejected) placeholder,
+    // even though nothing was ever *declared* named "_0" - "_0" only
+    // exists because it was just synthesized for `a`.
+    const { tokens } = tokenize("fn f(a: &str) -> &str { let x: &i32; a }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    assert(
+      diagnostics.some((d) => d.message.includes("missing lifetime specifier")),
+      "Expected the elided let annotation to still be rejected",
+    );
+    const fn = program.value.items[0];
+    assert(fn?.kind === "Function", "Expected a Function item");
+    const paramType = fn.params[0]?.type;
+    assert(paramType?.kind === "ReferenceType", "Expected a reference param");
+    assert(
+      isSome(paramType.lifetime),
+      "Expected the param lifetime to be resolved",
+    );
+    const letStmt = fn.body.statements[0];
+    assert(letStmt?.kind === "LetStatement", "Expected a LetStatement");
+    assert(isSome(letStmt.type), "Expected a type annotation");
+    const letType = letStmt.type.value;
+    assert(letType.kind === "ReferenceType", "Expected a reference type");
+    assert(isSome(letType.lifetime), "Expected the lifetime to be resolved");
+    expect(letType.lifetime.value.name).not.toBe(paramType.lifetime.value.name);
   });
 });
 
@@ -136,7 +190,7 @@ describe("lifetime elision - nested declarations", (): void => {
     expect(diagnostics[0].message).toContain("missing lifetime specifier");
   });
 
-  it("rejects an ambiguous fn declared inside a Block expression used as a let initializer - the same construct is rejected at top level or in statement position", (): void => {
+  it("rejects an ambiguous fn declared inside a Block expression used as a let initializer, the same as at top level or in statement position", (): void => {
     const { tokens } = tokenize(`
       fn main() {
         let x = {
@@ -167,7 +221,7 @@ describe("lifetime elision - nested declarations", (): void => {
 });
 
 describe("lifetime elision - nested references", (): void => {
-  it("fn f(x: &'a mut &'b i32) -> &'a mut &'b i32 { x } - a fully explicit nested reference passes through clean", (): void => {
+  it("passes a fully explicit nested reference through clean", (): void => {
     const { tokens } = tokenize(
       "fn f(x: &'a mut &'b i32) -> &'a mut &'b i32 { x }",
     );
@@ -175,7 +229,7 @@ describe("lifetime elision - nested references", (): void => {
     expect(diagnostics).toHaveLength(0);
   });
 
-  it("fn f(x: &'a mut &i32) -> &'a mut &i32 { x } - an elided nested reference (the inner &i32) is rejected; no rule reaches below the top level", (): void => {
+  it("rejects an elided nested reference, since no elision rule reaches below the top level", (): void => {
     const { tokens } = tokenize("fn f(x: &'a mut &i32) -> &'a mut &i32 { x }");
     const { diagnostics } = parse(tokens);
     expect(
@@ -185,7 +239,7 @@ describe("lifetime elision - nested references", (): void => {
 });
 
 describe("lifetime elision - no rule outside a function signature", (): void => {
-  it("let mut x: &i32; is rejected - no elision rule applies to a let annotation", (): void => {
+  it("rejects an elided reference type on a let annotation, since no elision rule applies there", (): void => {
     const { tokens } = tokenize("let mut x: &i32;");
     const { diagnostics } = parse(tokens);
     expect(
@@ -193,13 +247,13 @@ describe("lifetime elision - no rule outside a function signature", (): void => 
     ).toBe(true);
   });
 
-  it("let mut x: &'a i32; is accepted - an explicit lifetime needs no rule", (): void => {
+  it("accepts an explicit lifetime on a let annotation, since it needs no elision rule", (): void => {
     const { tokens } = tokenize("let mut x: &'a i32;");
     const { diagnostics } = parse(tokens);
     expect(diagnostics).toHaveLength(0);
   });
 
-  it("struct Cursor<'a> { source: &'a str, pos: usize } parses clean - AC5 shape", (): void => {
+  it("parses a struct's own lifetime parameter and stores it on its reference field cleanly (AC5 shape)", (): void => {
     const { tokens } = tokenize(
       "struct Cursor<'a> { source: &'a str, pos: usize }",
     );
@@ -226,7 +280,7 @@ describe("lifetime elision - no rule outside a function signature", (): void => 
     ]);
   });
 
-  it("struct Cursor { source: &str } is rejected - a struct field never gets elision, even without a generics list", (): void => {
+  it("rejects an elided reference type on a struct field, since a field never gets elision even without a generics list", (): void => {
     const { tokens } = tokenize("struct Cursor { source: &str }");
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");

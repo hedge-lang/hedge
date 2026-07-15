@@ -42,19 +42,25 @@ function spanOf(tokens: readonly Token[], tokenId: number): Option<Span> {
  * name (`_0`, `_1`, ...) never collides with a user-written one - mirroring
  * this codebase's `$k`-suffix convention for alpha-rename collision
  * avoidance in JSIM.
+ *
+ * Mutates `usedNames` in place as it synthesizes, rather than cloning it,
+ * so a caller holding the same set reference (e.g. `elideFunctionDecl`'s
+ * `names`, threaded down to nested `let` statements as `outerNames`) sees
+ * every synthesized name too - not just the explicit ones the set started
+ * with. Without this, two independent placeholders synthesized from the
+ * same otherwise-empty starting set would both pick `_0`.
  */
 function createSynthesizer(
-  usedNames: ReadonlySet<string>,
+  usedNames: Set<string>,
 ): (anchorTokenId: number) => Lifetime {
-  const seen = new Set(usedNames);
   let counter = 0;
   return (anchorTokenId: number): Lifetime => {
     let name = `_${counter}`;
-    while (seen.has(name)) {
+    while (usedNames.has(name)) {
       counter += 1;
       name = `_${counter}`;
     }
-    seen.add(name);
+    usedNames.add(name);
     counter += 1;
     return { kind: "Lifetime", tokenId: anchorTokenId, name };
   };
@@ -115,16 +121,25 @@ function resolveNestedReferenceTypes(
  * `fn`/`struct` inside either gets the same treatment. Does not descend into
  * any other expression position (an `if`-expression's branches, a call
  * argument, ...) - see the out-of-scope note on `elideLifetimes` below.
+ *
+ * `outerNames` is every lifetime name already bound in the enclosing
+ * function's own signature (declared generics + its params/return type) -
+ * threaded down purely so a nested `let` annotation's synthesized
+ * placeholder can avoid colliding with it (see `elideLetStatement`). A
+ * nested `fn`/`struct` declaration ignores it: per Rust's own scoping
+ * rules, a nested declaration is a fresh, independent lifetime scope, not
+ * a continuation of its enclosing function's.
  */
 function elideBlockStatements(
   block: Block,
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
+  outerNames: ReadonlySet<string>,
 ): Block {
   return {
     ...block,
     statements: block.statements.map((stmt: Statement): Statement =>
-      elideStatement(stmt, tokens, diagnostics),
+      elideStatement(stmt, tokens, diagnostics, outerNames),
     ),
   };
 }
@@ -133,28 +148,38 @@ function elideLetStatement(
   stmt: LetStatement,
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
+  outerNames: ReadonlySet<string>,
 ): LetStatement {
+  // A fresh copy, not a reference to `outerNames` - each `let` gets its own
+  // local scope, but that scope always includes everything already bound
+  // above it (see `createSynthesizer`'s note on why this must be mutated
+  // in place, not read-only, as elision proceeds).
+  const localNames = new Set(outerNames);
+  if (isSome(stmt.type)) {
+    collectTypeLifetimeNames(stmt.type.value, localNames);
+  }
   const type = isSome(stmt.type)
     ? some(
         resolveNestedReferenceTypes(
           stmt.type.value,
           tokens,
           diagnostics,
-          createSynthesizer(collectNamesFromType(stmt.type.value)),
+          createSynthesizer(localNames),
         ),
       )
     : stmt.type;
   const initializer =
     isSome(stmt.initializer) && stmt.initializer.value.kind === "Block"
-      ? some(elideBlockStatements(stmt.initializer.value, tokens, diagnostics))
+      ? some(
+          elideBlockStatements(
+            stmt.initializer.value,
+            tokens,
+            diagnostics,
+            localNames,
+          ),
+        )
       : stmt.initializer;
   return { ...stmt, type, initializer };
-}
-
-function collectNamesFromType(type: Type): Set<string> {
-  const names = new Set<string>();
-  collectTypeLifetimeNames(type, names);
-  return names;
 }
 
 function elideFieldTypes<F extends { readonly type: Type }>(
@@ -242,10 +267,10 @@ function elideFunctionDecl(
   const synth = createSynthesizer(names);
 
   // Rule 1: each unannotated top-level reference parameter gets its own
-  // fresh lifetime. Track whether exactly one reference parameter exists,
-  // and if so its lifetime, for rule 2 below.
-  let referenceParamCount = 0;
-  let theSoleReferenceParamLifetime: Option<Lifetime> = none();
+  // fresh lifetime. Resolve every param's type first, as a pure per-element
+  // transform, then derive rule 2's "is there exactly one reference
+  // parameter, and if so what's its lifetime" from the resolved result -
+  // rather than counting via a mutable outer variable from inside the map.
   const newParams = decl.params.map((param: Param): Param => {
     if (param.type.kind !== "ReferenceType") {
       return param;
@@ -253,9 +278,6 @@ function elideFunctionDecl(
     const lifetime = isSome(param.type.lifetime)
       ? param.type.lifetime.value
       : synth(param.type.tokenId);
-    referenceParamCount += 1;
-    theSoleReferenceParamLifetime =
-      referenceParamCount === 1 ? some(lifetime) : none();
     const referent = resolveNestedReferenceTypes(
       param.type.referent,
       tokens,
@@ -267,6 +289,13 @@ function elideFunctionDecl(
       type: { ...param.type, lifetime: some(lifetime), referent },
     };
   });
+  const referenceParamLifetimes = newParams.flatMap((param) =>
+    param.type.kind === "ReferenceType" && isSome(param.type.lifetime)
+      ? [param.type.lifetime.value]
+      : [],
+  );
+  const referenceParamCount = referenceParamLifetimes.length;
+  const soleReferenceParamLifetime = referenceParamLifetimes[0];
 
   let newReturnType = decl.returnType;
   if (
@@ -279,9 +308,9 @@ function elideFunctionDecl(
       lifetime = returnRef.lifetime.value;
     } else if (
       referenceParamCount === 1 &&
-      isSome(theSoleReferenceParamLifetime)
+      soleReferenceParamLifetime !== undefined
     ) {
-      lifetime = theSoleReferenceParamLifetime.value;
+      lifetime = soleReferenceParamLifetime;
     } else {
       diagnostics.push({
         severity: "error",
@@ -299,7 +328,7 @@ function elideFunctionDecl(
     newReturnType = some({ ...returnRef, lifetime: some(lifetime), referent });
   }
 
-  const newBody = elideBlockStatements(decl.body, tokens, diagnostics);
+  const newBody = elideBlockStatements(decl.body, tokens, diagnostics, names);
 
   return {
     ...decl,
@@ -309,14 +338,21 @@ function elideFunctionDecl(
   };
 }
 
+/**
+ * `outerNames` is only ever consulted by the `LetStatement` case (see
+ * `elideLetStatement`) - a nested `Function`/`Struct` builds its own,
+ * independent name scope and ignores it, matching Rust's own scoping rules
+ * for a nested item declaration.
+ */
 function elideStatement(
   stmt: Statement,
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
+  outerNames: ReadonlySet<string>,
 ): Statement {
   switch (stmt.kind) {
     case "LetStatement":
-      return elideLetStatement(stmt, tokens, diagnostics);
+      return elideLetStatement(stmt, tokens, diagnostics, outerNames);
     case "ExpressionStatement":
       return stmt;
     case "Function":
@@ -376,7 +412,7 @@ export function elideLifetimes(
     ...program,
     items: program.items.map((item: Item): Item =>
       isTypeBearingItem(item)
-        ? elideStatement(item, tokens, diagnostics)
+        ? elideStatement(item, tokens, diagnostics, new Set())
         : item,
     ),
   };
