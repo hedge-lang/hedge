@@ -336,7 +336,7 @@ function recordConfinedStatement(
 
 /**
  * Confined counterpart of `lowerScope`, for a value-position scope that
- * never forks the graph {@link recordConfinedStatement}.
+ * never forks the graph. See {@link recordConfinedStatement}.
  */
 function recordConfinedScope(
   target: MutableBlock,
