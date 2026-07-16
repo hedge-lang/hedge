@@ -4,8 +4,15 @@ import { assert } from "../assert.js";
 import { isSome } from "../option.js";
 import type * as Semantics from "../semantics/ast.js";
 import { analyzeSource } from "../testing/analyze-source.js";
-import type { BasicBlock, ControlFlowGraph } from "./control-flow-graph.js";
-import { buildControlFlowGraph } from "./control-flow-graph.js";
+import type {
+  BasicBlock,
+  BindingId,
+  ControlFlowGraph,
+} from "./control-flow-graph.js";
+import {
+  buildControlFlowGraph,
+  collectDeclarations,
+} from "./control-flow-graph.js";
 
 function mainGraph(source: string): ControlFlowGraph {
   const { program } = analyzeSource(source);
@@ -20,6 +27,22 @@ function mainGraph(source: string): ControlFlowGraph {
 function scopeExitNames(block: BasicBlock): readonly string[] {
   assert(isSome(block.scopeExit), "Expected a scope exit on this block");
   return block.scopeExit.value.declarations.map((d) => d.name);
+}
+
+/** The `BindingId`s of every declaration named `name`, in CFG-visitation order. */
+function idsNamed(graph: ControlFlowGraph, name: string): readonly BindingId[] {
+  return collectDeclarations(graph)
+    .filter((d) => d.name === name)
+    .map((d) => d.id);
+}
+
+/** The single `BindingId` declared for `name`; fails if there isn't exactly one. */
+function idNamed(graph: ControlFlowGraph, name: string): BindingId {
+  const ids = idsNamed(graph, name);
+  assert(ids.length === 1, `Expected exactly one declaration named ${name}`);
+  const id = ids[0];
+  assert(id !== undefined);
+  return id;
 }
 
 describe("buildControlFlowGraph", (): void => {
@@ -227,5 +250,185 @@ describe("buildControlFlowGraph", (): void => {
     expect(inner).toBeDefined();
     expect(outer).toBeDefined();
     expect(inner?.id).not.toBe(outer?.id);
+  });
+
+  describe("uses/defs (place-level GEN/KILL)", (): void => {
+    it("records a use for a variable read in a let initializer", (): void => {
+      const graph = mainGraph(`
+        fn main(p: i32) {
+          let a = p;
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined);
+      expect(block.uses.has(idNamed(graph, "p"))).toBe(true);
+    });
+
+    it("records a def for a let-declared variable itself", (): void => {
+      const graph = mainGraph(`
+        fn main() {
+          let a = 1;
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined);
+      expect(block.defs.has(idNamed(graph, "a"))).toBe(true);
+    });
+
+    it("records a reassignment as a def only, never a use, of the overwritten variable", (): void => {
+      const graph = mainGraph(`
+        fn main(p: i32) {
+          let mut n = p;
+          n = 2;
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined);
+      const p = idNamed(graph, "p");
+      const n = idNamed(graph, "n");
+      expect(block.uses.has(p)).toBe(true);
+      expect(block.uses.has(n)).toBe(false);
+      expect(block.defs.has(n)).toBe(true);
+    });
+
+    it("records a compound assignment as both a use and a def of the target", (): void => {
+      const graph = mainGraph(`
+        fn main(mut n: i32) {
+          n += 2;
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined);
+      const n = idNamed(graph, "n");
+      expect(block.uses.has(n)).toBe(true);
+      expect(block.defs.has(n)).toBe(true);
+    });
+
+    it("does not record a use for a name shadowed and then read within the same block", (): void => {
+      const graph = mainGraph(`
+        fn main(x: i32) {
+          let y = x;
+          let x = 2;
+          let z = x;
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined);
+      const [paramX, shadowX] = idsNamed(graph, "x");
+      assert(paramX !== undefined && shadowX !== undefined);
+      expect(block.uses.has(paramX)).toBe(true);
+      expect(block.uses.has(shadowX)).toBe(false);
+      expect(block.defs.has(shadowX)).toBe(true);
+    });
+
+    it("records a field access's object as a use of the base binding", (): void => {
+      const graph = mainGraph(`
+        struct Boxed { value: i32 }
+        fn main(b: Boxed) {
+          let v = b.value;
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined);
+      expect(block.uses.has(idNamed(graph, "b"))).toBe(true);
+    });
+
+    it("records the if condition's uses on the forking block, not the then-branch", (): void => {
+      const graph = mainGraph(`
+        fn main(cond: bool) {
+          if cond {
+            let a = 1;
+          }
+          let done = true;
+        }
+      `);
+      const pre = graph.blocks.find((b) => b.id === graph.entry);
+      assert(pre !== undefined);
+      const [thenId] = pre.successors;
+      const thenBlock = graph.blocks.find((b) => b.id === thenId);
+      assert(thenBlock !== undefined);
+      const cond = idNamed(graph, "cond");
+      expect(pre.uses.has(cond)).toBe(true);
+      expect(thenBlock.uses.has(cond)).toBe(false);
+    });
+
+    it("does not leak a then-branch's shadowed binding into the else-branch's resolution", (): void => {
+      const graph = mainGraph(`
+        fn main(x: i32) {
+          if x == 1 {
+            let x = 2;
+            let inner = x;
+          } else {
+            let outer = x;
+          }
+          let done = true;
+        }
+      `);
+      const pre = graph.blocks.find((b) => b.id === graph.entry);
+      assert(pre !== undefined);
+      const [thenId, elseId] = pre.successors;
+      const thenBlock = graph.blocks.find((b) => b.id === thenId);
+      const elseBlock = graph.blocks.find((b) => b.id === elseId);
+      assert(thenBlock !== undefined && elseBlock !== undefined);
+      // idsNamed scans blocks in CFG order (then-branch before the join
+      // block that carries the param's own scopeExit), not source order, so
+      // pick the id the condition itself resolved to rather than assuming
+      // array position.
+      const outerX = idsNamed(graph, "x").find((id) => pre.uses.has(id));
+      assert(
+        outerX !== undefined,
+        "Expected the param x to be used in the condition",
+      );
+      expect(thenBlock.uses.has(outerX)).toBe(false);
+      expect(elseBlock.uses.has(outerX)).toBe(true);
+    });
+
+    it("resolves a name inside a nested bare block to its enclosing scope's binding", (): void => {
+      const graph = mainGraph(`
+        fn main(x: i32) {
+          {
+            let y = x;
+          }
+          let done = true;
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined);
+      expect(block.uses.has(idNamed(graph, "x"))).toBe(true);
+    });
+
+    it("records uses inside a value-position if's confined branches", (): void => {
+      const graph = mainGraph(`
+        fn main(cond: bool, q: i32) {
+          let v = if cond { q } else { 0 };
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined);
+      expect(block.uses.has(idNamed(graph, "q"))).toBe(true);
+    });
+
+    it("records uses inside a value-position bare block's confined scope", (): void => {
+      const graph = mainGraph(`
+        fn main(p: i32) {
+          let v = { let t = p; t };
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined);
+      expect(block.uses.has(idNamed(graph, "p"))).toBe(true);
+    });
+
+    it("records a field-target assignment's base object as a use, not a def", (): void => {
+      const graph = mainGraph(`
+        struct Boxed { value: i32 }
+        fn main(mut b: Boxed) {
+          b.value = 1;
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined);
+      expect(block.uses.has(idNamed(graph, "b"))).toBe(true);
+    });
   });
 });
