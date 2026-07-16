@@ -122,11 +122,10 @@ describe("computeLiveness", (): void => {
         }
       `);
       const dump = dumpLiveness(computeLiveness(graph));
-      expect(dump).toMatch(
-        new RegExp(
-          `block ${String(graph.entry)}:\\n  liveIn:.*\\n  liveOut: \\{q\\}`,
-        ),
-      );
+      const lines = dump.split("\n");
+      const blockLine = lines.indexOf(`block ${String(graph.entry)}:`);
+      assert(blockLine !== -1, "Expected a dump line for the entry block");
+      expect(lines[blockLine + 2]).toBe("  liveOut: {q}");
     });
   });
 });

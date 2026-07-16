@@ -70,7 +70,11 @@ function predecessorsOf(
   );
   for (const block of graph.blocks) {
     for (const successor of block.successors) {
-      predecessors.get(successor)?.push(block.id);
+      const successorPredecessors = predecessors.get(successor);
+      if (successorPredecessors === undefined) {
+        throw new Error(`Unknown successor block ${successor}`);
+      }
+      successorPredecessors.push(block.id);
     }
   }
   return predecessors;
@@ -101,7 +105,7 @@ export function computeLiveness(graph: ControlFlowGraph): Liveness {
     }
     const block = blockById.get(id);
     if (block === undefined) {
-      continue;
+      throw new Error(`Unknown block ${id}`);
     }
 
     const newLiveOut = union(
