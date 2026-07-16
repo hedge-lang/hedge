@@ -292,9 +292,6 @@ describe("buildControlFlowGraph", (): void => {
     });
 
     it("records a compound assignment as both a use and a def of the target", (): void => {
-      // `n` is a param, not a local `let`, so its first block-local event is
-      // the compound assign itself — a local `let mut n = 1;` beforehand
-      // would already put `n` in `defs`, masking whether `+=` records a use.
       const graph = mainGraph(`
         fn main(mut n: i32) {
           n += 2;
@@ -325,8 +322,6 @@ describe("buildControlFlowGraph", (): void => {
     });
 
     it("records a field access's object as a use of the base binding", (): void => {
-      // `b` is a param so its own field read is the first block-local event
-      // touching it, for the same reason as the compound-assign test above.
       const graph = mainGraph(`
         struct Boxed { value: i32 }
         fn main(b: Boxed) {
@@ -339,12 +334,6 @@ describe("buildControlFlowGraph", (): void => {
     });
 
     it("records the if condition's uses on the forking block, not the then-branch", (): void => {
-      // `cond` is a param (see the compound-assign test above for why: a
-      // local `let cond = true;` beforehand would already put `cond` in
-      // `pre.defs`, masking whether the condition itself records a use). A
-      // trailing statement after the `if` is required so it's parsed as a
-      // statement-position (forking) if, not the function body's own
-      // trailing-expression (value-position, non-forking) if.
       const graph = mainGraph(`
         fn main(cond: bool) {
           if cond {
@@ -364,7 +353,6 @@ describe("buildControlFlowGraph", (): void => {
     });
 
     it("does not leak a then-branch's shadowed binding into the else-branch's resolution", (): void => {
-      // `x` is a param for the same reason as the previous test.
       const graph = mainGraph(`
         fn main(x: i32) {
           if x == 1 {
@@ -396,7 +384,6 @@ describe("buildControlFlowGraph", (): void => {
     });
 
     it("resolves a name inside a nested bare block to its enclosing scope's binding", (): void => {
-      // `x` is a param for the same reason as the field-access test above.
       const graph = mainGraph(`
         fn main(x: i32) {
           {
@@ -411,10 +398,6 @@ describe("buildControlFlowGraph", (): void => {
     });
 
     it("records uses inside a value-position if's confined branches", (): void => {
-      // Unlike the forking-if tests above, this `if` has no trailing
-      // statement after it and is used as the `let` initializer's value, so
-      // it's parsed as a value-position (confined, non-forking) if — a
-      // separate code path from `lowerIf`.
       const graph = mainGraph(`
         fn main(cond: bool, q: i32) {
           let v = if cond { q } else { 0 };

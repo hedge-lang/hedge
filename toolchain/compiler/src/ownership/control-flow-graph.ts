@@ -9,12 +9,10 @@
  * This is still a single forward walk with no back-edges and no fixpoint
  * iteration until loops are implemented.
  *
- * The same walk also resolves every `PathExpression` to the `BindingId` it
- * refers to (via a scope stack, mirroring `ownership/move-check.ts`'s own
- * resolution) and records each block's own place-level GEN/KILL sets
- * (`uses`/`defs`) as it goes — one combined pass rather than a second
- * independent tree-walk, so block ids and their use/def sets can never drift
- * out of sync with each other.
+ * The same walk also resolves every `PathExpression` to a `BindingId` and
+ * records each block's own place-level GEN/KILL sets (`uses`/`defs`) - one
+ * combined pass rather than a second independent tree-walk, so block ids and
+ * use/def sets can't drift out of sync.
  */
 
 import { assertNever } from "../assert.js";
@@ -75,18 +73,9 @@ export interface BasicBlock {
    * to live on the block.
    */
   readonly forkCondition: Option<Semantics.Expression>;
-  /**
-   * Places (bindings) read in this block before any local redefinition of
-   * them — this block's own GEN set. A name already in `defs` by the time
-   * it's read is excluded, since that read observes a value produced inside
-   * this block, not one flowing in from a predecessor.
-   */
+  /** This block's GEN set for the backward liveness dataflow in `liveness.ts` (see `recordUse`). */
   readonly uses: ReadonlySet<BindingId>;
-  /**
-   * Places (bindings) written in this block — this block's own KILL set.
-   * Includes a `let`'s own declaration (the point a place starts existing),
-   * not only reassignment of an existing mutable binding.
-   */
+  /** This block's KILL set - includes a `let`'s own declaration, not only reassignment (see `recordDef`). */
   readonly defs: ReadonlySet<BindingId>;
 }
 
@@ -98,21 +87,15 @@ export interface ControlFlowGraph {
 /**
  * Every `Declaration` reachable anywhere in the graph, params included, for
  * resolving a `BindingId` back to a source-level name (e.g. for a debug
- * dump). Reads only each block's `scopeExit.declarations`, never a block's
- * own `.declarations` (a strict subset already folded in there), since every
- * lexical scope's full declaration list surfaces exactly once, at the block
- * where that scope closes.
+ * dump). Reads only `scopeExit.declarations` - also scanning a block's own
+ * `.declarations` would double-count.
  */
 export function collectDeclarations(
   graph: ControlFlowGraph,
 ): readonly Declaration[] {
-  const out: Declaration[] = [];
-  for (const block of graph.blocks) {
-    if (isSome(block.scopeExit)) {
-      out.push(...block.scopeExit.value.declarations);
-    }
-  }
-  return out;
+  return graph.blocks.flatMap((block) =>
+    isSome(block.scopeExit) ? block.scopeExit.value.declarations : [],
+  );
 }
 
 interface MutableBlock {
@@ -127,12 +110,7 @@ interface MutableBlock {
   defs: Set<BindingId>;
 }
 
-/**
- * Lexical scope stack for resolving a `PathExpression` to the `BindingId` it
- * refers to. Innermost frame wins, matching move-check.ts's own `resolve` —
- * a stack (rather than one flat map) is what lets a shadowing declaration in
- * a nested scope stop resolving once that scope's frame is popped.
- */
+/** Lexical scope stack for resolving a `PathExpression` to a `BindingId`; innermost frame wins (matches move-check.ts's `resolve`). */
 type ScopeStack = Map<string, BindingId>[];
 
 function resolveName(
@@ -173,12 +151,7 @@ function resolvePathExpression(
   return name === undefined ? undefined : resolveName(scopeStack, name);
 }
 
-/**
- * Standard forward GEN/KILL accumulation for one block: a read only
- * contributes to `uses` (GEN) if the place isn't already locally defined
- * earlier in this same block, since such a read observes a value produced
- * inside the block, not one flowing in from a predecessor.
- */
+/** Standard forward GEN/KILL: a read only contributes to `uses` (GEN) if not already defined (KILL) earlier in this block. */
 function recordUse(block: MutableBlock, id: BindingId): void {
   if (!block.defs.has(id)) {
     block.uses.add(id);
@@ -191,13 +164,8 @@ function recordDef(block: MutableBlock, id: BindingId): void {
 
 /**
  * Record every place-use reachable from `expression` onto `target`, without
- * creating any new BasicBlock — used both for ordinary (non-forking)
- * expressions and for a *value-position* `if`/`Block` (inside a `let`
- * initializer, call argument, etc.), which per this module's own CFG-forking
- * rules never splits the graph no matter how deeply it's nested. A
- * value-position `if`/`Block` still opens its own lexical scope, so its
- * branches get their own scope-stack frame here even though they share the
- * enclosing statement's physical block.
+ * creating any new BasicBlock. A value-position `if`/`Block` is handled here
+ * too, via `recordConfinedScope`.
  */
 // eslint-disable-next-line complexity -- routing function, mirrors move-check.ts's walkExpression
 function recordExpressionUses(
@@ -231,10 +199,8 @@ function recordExpressionUses(
       recordExpressionUses(target, scopeStack, expression.operand);
       return;
     case "AssignExpression":
-      // The overwritten value is never read, so a bare-path lhs is a def
-      // only — mirrors move-check.ts's `reassign`. A non-path lhs (e.g. a
-      // field-access target) isn't a whole-place def, so it falls through to
-      // an ordinary read of whatever it resolves to.
+      // A bare-path lhs is a def only (mirrors move-check.ts's `reassign`);
+      // anything else (e.g. a field target) is an ordinary read.
       recordExpressionUses(target, scopeStack, expression.rhs);
       if (expression.lhs.kind === "PathExpression") {
         const id = resolvePathExpression(expression.lhs, scopeStack);
@@ -246,9 +212,7 @@ function recordExpressionUses(
       }
       return;
     case "CompoundAssignExpression":
-      // `x += expr` both reads and writes `x`, in that order: the use must
-      // land before the def so it observes the incoming value, not the one
-      // this statement is about to produce.
+      // `x += expr` reads then writes `x`; the use must land before the def.
       recordExpressionUses(target, scopeStack, expression.rhs);
       if (expression.lhs.kind === "PathExpression") {
         const id = resolvePathExpression(expression.lhs, scopeStack);
@@ -261,9 +225,8 @@ function recordExpressionUses(
       }
       return;
     case "FieldAccessExpression":
-      // The object is a use, not a def: Slice 1/2 don't track field-level
-      // (partial) places, only the whole base binding (mirrors
-      // move-check.ts's own FieldAccessExpression treatment).
+      // The object is a use, not a def - Slice 1/2 don't track field-level
+      // places (mirrors move-check.ts).
       recordExpressionUses(target, scopeStack, expression.object);
       return;
     case "MethodCallExpression":
@@ -328,7 +291,12 @@ function recordExpressionUses(
   }
 }
 
-/** Confined counterpart of `lowerStatements`, for a value-position scope that never forks the graph. */
+/**
+ * Confined counterpart of `lowerStatements`, for a value-position scope that
+ * never forks the graph. A new `Semantics.Statement` kind needs a case here
+ * too, not just in `lowerStatements` - the two dispatches don't share code
+ * since one may fork the block chain and the other never does.
+ */
 function recordConfinedStatement(
   target: MutableBlock,
   scopeStack: ScopeStack,
@@ -366,7 +334,10 @@ function recordConfinedStatement(
   }
 }
 
-/** Confined counterpart of `lowerScope`, for a value-position scope that never forks the graph. */
+/**
+ * Confined counterpart of `lowerScope`, for a value-position scope that
+ * never forks the graph {@link recordConfinedStatement}.
+ */
 function recordConfinedScope(
   target: MutableBlock,
   scopeStack: ScopeStack,
@@ -518,7 +489,9 @@ function lowerExpressionStatement(
  * `if`/`Block` expressions (inside a `let` initializer, call argument, etc.)
  * are not lowered into the CFG structure — only statement-position control
  * flow forks the graph; a value-position `if`/`Block` stays an ordinary
- * nested expression on whichever statement contains it.
+ * nested expression on whichever statement contains it, handled by
+ * `recordConfinedStatement` instead. A new `Semantics.Statement` kind needs a
+ * case in both places.
  */
 function lowerStatements(
   statements: readonly Semantics.Statement[],

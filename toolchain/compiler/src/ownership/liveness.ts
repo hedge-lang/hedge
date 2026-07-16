@@ -3,9 +3,9 @@
  *
  * Backward liveness dataflow over a `ControlFlowGraph`: a place (binding) is
  * live at a point if some path forward from that point reaches a use of it
- * before any redefinition. Computed at block granularity —
- * `LiveIn(B) = Use(B) ∪ (LiveOut(B) − Def(B))`,
- * `LiveOut(B) = ∪ LiveIn(successors of B)` — via the standard worklist
+ * before any redefinition. Computed at block granularity -
+ * `LiveIn(B) = Use(B) union (LiveOut(B) - Def(B))`,
+ * `LiveOut(B) = union of LiveIn(successors of B)` - via the standard worklist
  * fixpoint, not a single reverse-topological pass: Hedge's CFG is currently a
  * DAG (no loops until ROADMAP Slice 6), but the worklist is the textbook
  * shape for any CFG dataflow and needs no rewrite once back-edges exist.
@@ -36,26 +36,14 @@ export interface Liveness {
 }
 
 function union(sets: readonly ReadonlySet<BindingId>[]): Set<BindingId> {
-  const out = new Set<BindingId>();
-  for (const set of sets) {
-    for (const id of set) {
-      out.add(id);
-    }
-  }
-  return out;
+  return new Set(sets.flatMap((set) => [...set]));
 }
 
 function minus(
   set: ReadonlySet<BindingId>,
   exclude: ReadonlySet<BindingId>,
 ): Set<BindingId> {
-  const out = new Set<BindingId>();
-  for (const id of set) {
-    if (!exclude.has(id)) {
-      out.add(id);
-    }
-  }
-  return out;
+  return new Set([...set].filter((id) => !exclude.has(id)));
 }
 
 function setsEqual(
@@ -89,13 +77,9 @@ function predecessorsOf(
 }
 
 /**
- * Backward worklist fixpoint. Seeds every block's LiveIn/LiveOut at the
- * empty set and repeatedly recomputes a block's LiveOut from its successors'
- * current LiveIn, then its own LiveIn from that — whenever a block's LiveIn
- * changes, its predecessors are re-queued, since their own LiveOut depends on
- * it. Converges because the lattice (finite sets of `BindingId`, ordered by
- * inclusion) is finite and every step only ever grows a set, never shrinks
- * it.
+ * Backward worklist fixpoint (see the module doc for the LiveIn/LiveOut
+ * formula). Converges because the lattice (finite sets of `BindingId`) is
+ * finite and each step only ever grows a set, never shrinks it.
  */
 export function computeLiveness(graph: ControlFlowGraph): Liveness {
   const blockById = new Map<number, BasicBlock>(
@@ -165,22 +149,20 @@ function formatSet(
 
 /**
  * Render each block's LiveIn/LiveOut by source-level name, for inspecting
- * checker decisions during development — not a stable/parseable format.
+ * checker decisions during development - not a stable/parseable format.
  */
 export function dumpLiveness(liveness: Liveness): string {
   const names = new Map(
     collectDeclarations(liveness.graph).map((decl) => [decl.id, decl.name]),
   );
-  const lines: string[] = [];
-  for (const block of liveness.graph.blocks) {
-    const blockLiveness = liveness.blocks.get(block.id);
-    lines.push(`block ${String(block.id)}:`);
-    lines.push(
-      `  liveIn:  ${formatSet(names, blockLiveness?.liveIn ?? new Set())}`,
-    );
-    lines.push(
-      `  liveOut: ${formatSet(names, blockLiveness?.liveOut ?? new Set())}`,
-    );
-  }
-  return lines.join("\n");
+  return liveness.graph.blocks
+    .flatMap((block) => {
+      const blockLiveness = liveness.blocks.get(block.id);
+      return [
+        `block ${String(block.id)}:`,
+        `  liveIn:  ${formatSet(names, blockLiveness?.liveIn ?? new Set())}`,
+        `  liveOut: ${formatSet(names, blockLiveness?.liveOut ?? new Set())}`,
+      ];
+    })
+    .join("\n");
 }
