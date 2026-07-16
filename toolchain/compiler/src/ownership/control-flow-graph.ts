@@ -335,22 +335,21 @@ function recordConfinedStatement(
   statement: Semantics.Statement,
 ): void {
   switch (statement.kind) {
-    case "LetStatement":
+    case "LetStatement": {
       if (isSome(statement.initializer)) {
         recordExpressionUses(target, scopeStack, statement.initializer.value);
       }
-      {
-        const declaration = declarationOf(statement.pattern, statement.mutable);
-        if (declaration.kind === "Some") {
-          recordDef(target, declaration.value.id);
-          registerScopeName(
-            scopeStack,
-            declaration.value.name,
-            declaration.value.id,
-          );
-        }
+      const declaration = declarationOf(statement.pattern, statement.mutable);
+      if (declaration.kind === "Some") {
+        recordDef(target, declaration.value.id);
+        registerScopeName(
+          scopeStack,
+          declaration.value.name,
+          declaration.value.id,
+        );
       }
       return;
+    }
     case "ExpressionStatement":
       recordExpressionUses(target, scopeStack, statement.expression);
       return;

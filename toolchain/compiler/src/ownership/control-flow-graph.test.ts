@@ -409,5 +409,43 @@ describe("buildControlFlowGraph", (): void => {
       assert(block !== undefined);
       expect(block.uses.has(idNamed(graph, "x"))).toBe(true);
     });
+
+    it("records uses inside a value-position if's confined branches", (): void => {
+      // Unlike the forking-if tests above, this `if` has no trailing
+      // statement after it and is used as the `let` initializer's value, so
+      // it's parsed as a value-position (confined, non-forking) if — a
+      // separate code path from `lowerIf`.
+      const graph = mainGraph(`
+        fn main(cond: bool, q: i32) {
+          let v = if cond { q } else { 0 };
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined);
+      expect(block.uses.has(idNamed(graph, "q"))).toBe(true);
+    });
+
+    it("records uses inside a value-position bare block's confined scope", (): void => {
+      const graph = mainGraph(`
+        fn main(p: i32) {
+          let v = { let t = p; t };
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined);
+      expect(block.uses.has(idNamed(graph, "p"))).toBe(true);
+    });
+
+    it("records a field-target assignment's base object as a use, not a def", (): void => {
+      const graph = mainGraph(`
+        struct Boxed { value: i32 }
+        fn main(mut b: Boxed) {
+          b.value = 1;
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined);
+      expect(block.uses.has(idNamed(graph, "b"))).toBe(true);
+    });
   });
 });
