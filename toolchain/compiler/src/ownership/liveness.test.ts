@@ -49,15 +49,21 @@ describe("computeLiveness", (): void => {
     expect(block.liveIn.has(idNamed(graph, "p"))).toBe(true);
   });
 
-  it("has an empty liveOut at the function's own exit block", (): void => {
+  it("has an empty liveOut at every block with no successors (the function's own exit points)", (): void => {
     const graph = mainGraph(`
-      fn main(p: i32) {
-        let a = p;
+      fn main(q: i32) {
+        if true {
+          let a = q;
+        }
+        let done = true;
       }
     `);
     const liveness = computeLiveness(graph);
-    const block = livenessOf(liveness, graph.entry);
-    expect(block.liveOut.size).toBe(0);
+    const exitBlocks = graph.blocks.filter((b) => b.successors.length === 0);
+    expect(exitBlocks.length).toBeGreaterThan(0);
+    for (const block of exitBlocks) {
+      expect(livenessOf(liveness, block.id).liveOut.size).toBe(0);
+    }
   });
 
   it("propagates a variable used only in the then-branch back into the forking block's liveOut", (): void => {
