@@ -21,7 +21,6 @@ import type {
   BasicBlock,
   BindingId,
   ControlFlowGraph,
-  Declaration,
 } from "./control-flow-graph.js";
 import { collectDeclarations } from "./control-flow-graph.js";
 
@@ -138,56 +137,35 @@ export function computeLiveness(graph: ControlFlowGraph): Liveness {
   return { graph, blocks };
 }
 
-/** Names shared by 2+ declarations - shadowed bindings whose bare name alone can't tell them apart in a dump. */
-function ambiguousNames(
-  declarations: readonly Declaration[],
-): ReadonlySet<string> {
-  const counts = new Map<string, number>();
-  for (const { name } of declarations) {
-    counts.set(name, (counts.get(name) ?? 0) + 1);
-  }
-  return new Set(
-    [...counts].filter(([, count]) => count > 1).map(([name]) => name),
-  );
-}
-
-function nameOf(
-  names: ReadonlyMap<BindingId, string>,
-  ambiguous: ReadonlySet<string>,
-  id: BindingId,
-): string {
-  const name = names.get(id) ?? `#${String(id)}`;
-  return ambiguous.has(name) ? `${name}#${String(id)}` : name;
+function nameOf(names: ReadonlyMap<BindingId, string>, id: BindingId): string {
+  return names.get(id) ?? `#${String(id)}`;
 }
 
 function formatSet(
   names: ReadonlyMap<BindingId, string>,
-  ambiguous: ReadonlySet<string>,
   set: ReadonlySet<BindingId>,
 ): string {
   return `{${[...set]
-    .map((id) => nameOf(names, ambiguous, id))
+    .map((id) => nameOf(names, id))
     .sort()
     .join(", ")}}`;
 }
 
 /**
  * Render each block's LiveIn/LiveOut by source-level name, for inspecting
- * checker decisions during development - not a stable/parseable format. A
- * name shared by shadowed bindings is suffixed with its `BindingId` (e.g.
- * `x#7`) so two distinct places don't render as the same ambiguous `x`.
+ * checker decisions during development - not a stable/parseable format.
  */
 export function dumpLiveness(liveness: Liveness): string {
-  const declarations = collectDeclarations(liveness.graph);
-  const names = new Map(declarations.map((decl) => [decl.id, decl.name]));
-  const ambiguous = ambiguousNames(declarations);
+  const names = new Map(
+    collectDeclarations(liveness.graph).map((decl) => [decl.id, decl.name]),
+  );
   return liveness.graph.blocks
     .flatMap((block) => {
       const blockLiveness = liveness.blocks.get(block.id);
       return [
         `block ${String(block.id)}:`,
-        `  liveIn:  ${formatSet(names, ambiguous, blockLiveness?.liveIn ?? new Set())}`,
-        `  liveOut: ${formatSet(names, ambiguous, blockLiveness?.liveOut ?? new Set())}`,
+        `  liveIn:  ${formatSet(names, blockLiveness?.liveIn ?? new Set())}`,
+        `  liveOut: ${formatSet(names, blockLiveness?.liveOut ?? new Set())}`,
       ];
     })
     .join("\n");
