@@ -127,5 +127,35 @@ describe("computeLiveness", (): void => {
       assert(blockLine !== -1, "Expected a dump line for the entry block");
       expect(lines[blockLine + 2]).toBe("  liveOut: {q}");
     });
+
+    it("disambiguates shadowed bindings that share a name", (): void => {
+      // Trailing statements after both `if`s force statement position
+      // (forking, with a real scopeExit) rather than the function/branch's
+      // own trailing expression (confined) - see the note above the
+      // "records the if condition's uses" test in control-flow-graph.test.ts.
+      const graph = mainGraph(`
+        fn main(x: i32) {
+          if true {
+            let x = 2;
+            if true {
+              let y = x;
+            }
+            let innerDone = true;
+          } else {
+            let z = x;
+          }
+          let done = true;
+        }
+      `);
+      const dump = dumpLiveness(computeLiveness(graph));
+      const xIds = collectDeclarations(graph)
+        .filter((d) => d.name === "x")
+        .map((d) => d.id);
+      expect(xIds).toHaveLength(2);
+      expect(dump).not.toContain("{x}");
+      for (const id of xIds) {
+        expect(dump).toContain(`x#${String(id)}`);
+      }
+    });
   });
 });
