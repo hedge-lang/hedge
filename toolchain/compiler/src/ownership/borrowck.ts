@@ -10,11 +10,11 @@
  * A borrow's base is resolved to the {@link BindingId} it actually refers to
  * via {@link resolveBorrowBases}, a second, independent scope-stack walk over
  * the same {@link Semantics.FunctionDecl} - mirroring `move-check.ts`'s own
- * rationale for a separate walk (see {@link move-check.ts} for details):
- * {@link collectBorrowsFromGraph} itself iterates the already-built CFG's flat
- * block list, which doesn't preserve nested lexical scope, so two same-named
- * bindings in different {@link Semantics.IfStatement} branches would otherwise
- * be indistinguishable by name alone.
+ * rationale for a separate walk: {@link collectBorrowsFromGraph} itself
+ * iterates the already-built CFG's flat block list, which doesn't preserve
+ * nested lexical scope, so two same-named bindings in different `if`-branches
+ * {@link Semantics.IfExpression} would otherwise be indistinguishable by name
+ * alone.
  */
 import { assert, assertNever } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
