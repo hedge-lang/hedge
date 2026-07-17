@@ -1,3 +1,22 @@
+/**
+ * @module
+ *
+ * NLL borrow checking (spec §0005, §0006, §0002): enforces the four borrow
+ * rules over a per-function `ControlFlowGraph`/`Liveness` (from
+ * `control-flow-graph.ts`/`liveness.ts`), so a borrow's extent ends at its
+ * last use rather than its lexical scope, across block boundaries as well as
+ * within one.
+ *
+ * Known gap: a borrow's `base` (the variable it borrows from) is matched by
+ * source name, not by resolved `BindingId` - see `Borrow.base`. This was a
+ * low-risk simplification when only the top-level statement list was
+ * scanned; now that every block is scanned, two structurally unrelated
+ * same-named bindings in different scopes (e.g. two different `if`-branches
+ * each declaring their own local `x` with different mutability) can clobber
+ * each other in `capabilitiesFromDeclarations`'s flat name-keyed map. Fixing
+ * this needs place-aware resolution of the borrow's own base expression, not
+ * just a bigger lookup table.
+ */
 import { assertNever } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
 import type { Span, Token } from "../lexer/token.js";
@@ -223,6 +242,17 @@ function borrowLocalExtent(
  * moment a path's liveIn no longer contains `bindingId`, since that means the
  * binding is already dead along that path by the dataflow's own fixpoint.
  */
+function requireBlock(
+  blockById: ReadonlyMap<number, BasicBlock>,
+  id: number,
+): BasicBlock {
+  const block = blockById.get(id);
+  if (block === undefined) {
+    throw new Error(`Unknown block ${String(id)}`);
+  }
+  return block;
+}
+
 function reachableWhileLive(
   startBlockId: number,
   bindingId: BindingId,
@@ -230,11 +260,7 @@ function reachableWhileLive(
   liveness: Liveness,
 ): ReadonlySet<number> {
   const visited = new Set<number>();
-  const start = blockById.get(startBlockId);
-  if (start === undefined) {
-    return visited;
-  }
-  const stack = [...start.successors];
+  const stack = [...requireBlock(blockById, startBlockId).successors];
   while (stack.length > 0) {
     const id = stack.pop();
     if (id === undefined || visited.has(id)) {
@@ -245,37 +271,46 @@ function reachableWhileLive(
       continue;
     }
     visited.add(id);
-    const block = blockById.get(id);
-    if (block !== undefined) {
-      stack.push(...block.successors);
-    }
+    stack.push(...requireBlock(blockById, id).successors);
   }
   return visited;
+}
+
+/** Every borrow's own `reachableWhileLive` set, computed once so `checkExclusivity`'s pairwise loop never recomputes the same borrow's reach set against every other borrow it's compared to. */
+function reachSetsOf(
+  borrows: readonly Borrow[],
+  blockById: ReadonlyMap<number, BasicBlock>,
+  liveness: Liveness,
+): ReadonlyMap<Borrow, ReadonlySet<number>> {
+  return new Map(
+    borrows.map((borrow) => [
+      borrow,
+      reachableWhileLive(borrow.blockId, borrow.bindingId, blockById, liveness),
+    ]),
+  );
 }
 
 /**
  * Whether two borrows' extents overlap. Same-block borrows compare
  * declaration/end indices directly (`borrowLocalExtent`); cross-block borrows
  * overlap iff either borrow's binding is still live by the time the other's
- * declaring block is reached (`reachableWhileLive`).
+ * declaring block is reached (each borrow's own precomputed `reachSets` entry).
  */
 function borrowsOverlap(
   a: Borrow,
   b: Borrow,
   blockById: ReadonlyMap<number, BasicBlock>,
   liveness: Liveness,
+  reachSets: ReadonlyMap<Borrow, ReadonlySet<number>>,
 ): boolean {
   if (a.blockId === b.blockId) {
-    const block = blockById.get(a.blockId);
-    if (block === undefined) {
-      return false;
-    }
+    const block = requireBlock(blockById, a.blockId);
     const aEnd = borrowLocalExtent(a, block, liveness);
     const bEnd = borrowLocalExtent(b, block, liveness);
     return a.declIndex <= bEnd && b.declIndex <= aEnd;
   }
-  const aReach = reachableWhileLive(a.blockId, a.bindingId, blockById, liveness);
-  const bReach = reachableWhileLive(b.blockId, b.bindingId, blockById, liveness);
+  const aReach = reachSets.get(a) ?? new Set<number>();
+  const bReach = reachSets.get(b) ?? new Set<number>();
   return aReach.has(b.blockId) || bReach.has(a.blockId);
 }
 
@@ -385,6 +420,7 @@ function checkExclusivity(
   diagnostics: Diagnostic[],
   tokens: readonly Token[],
 ): void {
+  const reachSets = reachSetsOf(borrows, blockById, liveness);
   for (let i = 0; i < borrows.length; i += 1) {
     const a = borrows[i];
     if (a === undefined) {
@@ -398,7 +434,7 @@ function checkExclusivity(
       if (!a.mutable && !b.mutable) {
         continue; // any number of shared borrows may coexist
       }
-      if (!borrowsOverlap(a, b, blockById, liveness)) {
+      if (!borrowsOverlap(a, b, blockById, liveness, reachSets)) {
         continue; // the borrows are not simultaneously live
       }
       diagnostics.push({
