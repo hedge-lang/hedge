@@ -55,6 +55,14 @@ describe("borrow checker", (): void => {
     expect(diagnostics[0]?.message).toContain("Conflicting borrows");
   });
 
+  it("rejects an overlapping mutable and shared borrow of the same base", (): void => {
+    const diagnostics = check(
+      'fn main() { let mut x = "a"; let rw = &mut x; let r = &x; print(rw); print(r); }',
+    );
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+  });
+
   it("names both borrow sites' own offsets in a conflicting-borrows diagnostic", (): void => {
     const diagnostics = check(
       'fn main() { let mut x = "a"; let r1 = &mut x; let r2 = &mut x; print(r1); print(r2); }',
