@@ -55,6 +55,17 @@ describe("borrow checker", (): void => {
     expect(diagnostics[0]?.message).toContain("Conflicting borrows");
   });
 
+  it("names both borrow sites' own offsets in a conflicting-borrows diagnostic", (): void => {
+    const diagnostics = check(
+      'fn main() { let mut x = "a"; let r1 = &mut x; let r2 = &mut x; print(r1); print(r2); }',
+    );
+    expect(diagnostics).toHaveLength(1);
+    const offsetMentions =
+      diagnostics[0]?.message.match(/at offset \d+/g) ?? [];
+    expect(offsetMentions).toHaveLength(2);
+    expect(offsetMentions[0]).not.toEqual(offsetMentions[1]);
+  });
+
   it("accepts sequential mutable borrows (non-lexical, last-use)", (): void => {
     const diagnostics = check(
       'fn main() { let mut x = "a"; let r1 = &mut x; print(r1); let r2 = &mut x; print(r2); }',
@@ -117,5 +128,54 @@ describe("borrow checker", (): void => {
     `);
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.message).toContain("not declared mut");
+  });
+
+  it("accepts two mutable borrows of the same base declared in sibling branches", (): void => {
+    const diagnostics = check(`
+      fn main() {
+        let mut x = "a";
+        if true {
+          let r1 = &mut x;
+          print(r1);
+        }
+        if true {
+          let r2 = &mut x;
+          print(r2);
+        }
+      }
+    `);
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("rejects a borrow taken inside a branch while an outer borrow is still live going into that branch", (): void => {
+    const diagnostics = check(`
+      fn main() {
+        let mut x = "a";
+        let r1 = &mut x;
+        if true {
+          let r2 = &mut x;
+          print(r2);
+        }
+        print(r1);
+      }
+    `);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+  });
+
+  it("accepts a borrow taken inside a branch after an outer borrow's last use ends before the fork", (): void => {
+    const diagnostics = check(`
+      fn main() {
+        let mut x = "a";
+        let r1 = &mut x;
+        print(r1);
+        if true {
+          let r2 = &mut x;
+          print(r2);
+        }
+        let done = true;
+      }
+    `);
+    expect(diagnostics).toEqual([]);
   });
 });
