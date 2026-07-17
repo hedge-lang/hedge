@@ -16,7 +16,7 @@
  * bindings in different {@link Semantics.IfStatement} branches would otherwise
  * be indistinguishable by name alone.
  */
-import { assertNever } from "../assert.js";
+import { assert, assertNever } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
@@ -620,8 +620,11 @@ function spanOf(tokens: readonly Token[], id: number): Option<Span> {
   return token !== undefined ? some(token.span) : none();
 }
 
+/** `id` always comes from a real parsed `ReferenceExpression`'s own `tokenId`, so a missing token here is unreachable given a well-formed compile - an ICE, not a legitimate "unknown offset" (offset `0` would otherwise look like a plausible real location). */
 function offsetOf(tokens: readonly Token[], id: number): number {
-  return tokens[id]?.span.start ?? 0;
+  const token = tokens[id];
+  assert(token !== undefined, `Unknown token ${String(id)}`);
+  return token.span.start;
 }
 
 function checkCapabilities(
