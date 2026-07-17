@@ -218,20 +218,48 @@ function localLastUseIndex(
 }
 
 /**
- * A borrow's extent within its own declaring block: its last intra-block use
- * (see `localLastUseIndex`), or `+Infinity` if the borrowing binding is still
- * live out of this block (its extent continues into a successor block, and
- * `borrowsOverlap` handles that continuation via `reachableWhileLive`).
+ * A binding's extent within a single block: its last use starting just after
+ * `fromIndex` (see `localLastUseIndex`), or `+Infinity` if the binding is
+ * still live out of this block (its extent continues into a successor
+ * block, handled by `borrowsOverlap` via `reachSets`/`reachableWhileLive`).
+ *
+ * @param name - The binding's source name.
+ * @param bindingId - The binding's own `BindingId`.
+ * @param block - The block to compute the extent within.
+ * @param liveness - The enclosing function's liveness dataflow result.
+ * @param fromIndex - Where to start scanning for uses: the binding's own
+ *   `declIndex` when `block` is where it was declared (`borrowLocalExtent`),
+ *   or `-1` to scan the whole block when the binding merely enters `block`
+ *   already live, from an earlier block (`borrowReachesInto`).
+ *
+ * @returns The last statement index at which `name` is used within `block`,
+ *   or `Number.POSITIVE_INFINITY` if the binding remains live past it.
  */
+function extentWithinBlock(
+  name: string,
+  bindingId: BindingId,
+  block: BasicBlock,
+  liveness: Liveness,
+  fromIndex: number,
+): number {
+  const last = localLastUseIndex(block, name, fromIndex);
+  const liveOut =
+    liveness.blocks.get(block.id)?.liveOut ?? new Set<BindingId>();
+  return liveOut.has(bindingId) ? Number.POSITIVE_INFINITY : last;
+}
+
 function borrowLocalExtent(
   borrow: Borrow,
   block: BasicBlock,
   liveness: Liveness,
 ): number {
-  const last = localLastUseIndex(block, borrow.name, borrow.declIndex);
-  const liveOut =
-    liveness.blocks.get(block.id)?.liveOut ?? new Set<BindingId>();
-  return liveOut.has(borrow.bindingId) ? Number.POSITIVE_INFINITY : last;
+  return extentWithinBlock(
+    borrow.name,
+    borrow.bindingId,
+    block,
+    liveness,
+    borrow.declIndex,
+  );
 }
 
 /**
@@ -291,10 +319,39 @@ function reachSetsOf(
 }
 
 /**
+ * Whether `borrow` is still alive at `atBlock`'s own `declIndex`, for some
+ * other borrow declared there. `reach` (from `reachableWhileLive`) only
+ * establishes that `borrow` is live-in to `atBlock` - it says nothing about
+ * *where within* `atBlock` `borrow` actually dies. Scanning `atBlock` from
+ * its start (`extentWithinBlock(..., -1)`) answers that, so a borrow whose
+ * last use falls early in a shared block isn't mistaken for still conflicting
+ * with a later, unrelated borrow declared further down that same block.
+ */
+function borrowReachesInto(
+  borrow: Borrow,
+  reach: ReadonlySet<number>,
+  atBlock: BasicBlock,
+  declIndex: number,
+  liveness: Liveness,
+): boolean {
+  if (!reach.has(atBlock.id)) {
+    return false;
+  }
+  const extent = extentWithinBlock(
+    borrow.name,
+    borrow.bindingId,
+    atBlock,
+    liveness,
+    -1,
+  );
+  return declIndex <= extent;
+}
+
+/**
  * Whether two borrows' extents overlap. Same-block borrows compare
  * declaration/end indices directly (`borrowLocalExtent`); cross-block borrows
- * overlap iff either borrow's binding is still live by the time the other's
- * declaring block is reached (each borrow's own precomputed `reachSets` entry).
+ * overlap iff either borrow's binding is still live at the other's own
+ * declaration point (`borrowReachesInto`), not merely live-in to its block.
  */
 function borrowsOverlap(
   a: Borrow,
@@ -311,7 +368,22 @@ function borrowsOverlap(
   }
   const aReach = reachSets.get(a) ?? new Set<number>();
   const bReach = reachSets.get(b) ?? new Set<number>();
-  return aReach.has(b.blockId) || bReach.has(a.blockId);
+  return (
+    borrowReachesInto(
+      a,
+      aReach,
+      requireBlock(blockById, b.blockId),
+      b.declIndex,
+      liveness,
+    ) ||
+    borrowReachesInto(
+      b,
+      bReach,
+      requireBlock(blockById, a.blockId),
+      a.declIndex,
+      liveness,
+    )
+  );
 }
 
 /**
