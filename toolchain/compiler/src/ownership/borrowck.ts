@@ -1,69 +1,226 @@
-import { assertNever } from "../assert.js";
+/**
+ * @module
+ *
+ * NLL borrow checking (spec §0005, §0006, §0002): enforces the four borrow
+ * rules over a per-function {@link ControlFlowGraph}/{@link Liveness} (from
+ * `control-flow-graph.ts`/`liveness.ts`), so a borrow's extent ends at its
+ * last use rather than its lexical scope, across block boundaries as well as
+ * within one.
+ *
+ * A borrow's base is resolved to the {@link BindingId} it actually refers to
+ * via {@link resolveBorrowBases}, a second, independent scope-stack walk over
+ * the same {@link Semantics.FunctionDecl} - mirroring `move-check.ts`'s own
+ * rationale for a separate walk: {@link collectBorrowsFromGraph} itself
+ * iterates the already-built CFG's flat block list, which doesn't preserve
+ * nested lexical scope, so two same-named bindings in different `if`-branches
+ * {@link Semantics.IfExpression} would otherwise be indistinguishable by name
+ * alone.
+ */
+import { assert, assertNever } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
+import type * as Semantics from "../semantics/ast.js";
 import type {
-  Expression,
-  FunctionDecl,
-  Item,
-  Pattern,
-  Program,
-  Statement,
-} from "../parser/ast.js";
+  BasicBlock,
+  BindingId,
+  ControlFlowGraph,
+  Declaration,
+} from "./control-flow-graph.js";
+import {
+  buildControlFlowGraph,
+  collectDeclarations,
+  declarationOf,
+} from "./control-flow-graph.js";
+import { computeLiveness, type Liveness } from "./liveness.js";
 
-/** A binding's name and write-capability, or `none()` for a pattern that binds nothing (`_`). */
-function patternCapability(
-  pattern: Pattern,
-): Option<{ readonly name: string; readonly mutable: boolean }> {
-  switch (pattern.kind) {
-    case "BindingPattern":
-      return some({ name: pattern.name.text, mutable: pattern.mutable });
-    case "WildcardPattern":
-      return none();
+/**
+ * A borrow introduced by `let r = &[mut] base;`, tagged with the CFG block
+ * and intra-block statement index it was declared at (see `collectBorrowsFromGraph`).
+ */
+interface Borrow {
+  /** The borrowing binding's own name. */
+  readonly name: string;
+  /** The borrowing binding's own `BindingId` (its declaration's tokenId). */
+  readonly bindingId: BindingId;
+  /** The borrowed variable's name, for diagnostic messages. */
+  readonly base: string;
+  /** The specific declaration `base` resolves to at this point (see `resolveBorrowBases`), or `undefined` if it didn't resolve to a tracked local binding. */
+  readonly baseId: BindingId | undefined;
+  readonly mutable: boolean;
+  readonly blockId: number;
+  /** Index into `block.statements` where this borrow's own `let` lands. */
+  readonly declIndex: number;
+  /** The token ID of the reference, used for diagnostics. */
+  readonly tokenId: number;
+}
+
+/** Lexical scope stack for resolving a borrow's base name to the `BindingId` it refers to at that point; innermost frame wins (mirrors `move-check.ts`'s own `resolve`/`registerBinding`). */
+type ScopeStack = Map<string, BindingId>[];
+
+function resolveScopedName(
+  scopeStack: ScopeStack,
+  name: string,
+): BindingId | undefined {
+  for (let i = scopeStack.length - 1; i >= 0; i -= 1) {
+    const id = scopeStack[i]?.get(name);
+    if (id !== undefined) {
+      return id;
+    }
+  }
+  return undefined;
+}
+
+function registerScopedName(
+  scopeStack: ScopeStack,
+  name: string,
+  id: BindingId,
+): void {
+  const frame = scopeStack[scopeStack.length - 1];
+  if (frame === undefined) {
+    throw new Error("No active scope frame");
+  }
+  frame.set(name, id);
+}
+
+function recordBorrowBase(
+  statement: Semantics.LetStatement,
+  scopeStack: ScopeStack,
+  resolved: Map<Semantics.LetStatement, BindingId>,
+): void {
+  if (!isSome(statement.initializer)) {
+    return;
+  }
+  const init = statement.initializer.value;
+  if (
+    init.kind !== "ReferenceExpression" ||
+    init.operand.kind !== "PathExpression"
+  ) {
+    return;
+  }
+  const { segments } = init.operand.path;
+  const name = segments.length === 1 ? segments[0] : undefined;
+  if (name === undefined) {
+    return;
+  }
+  const id = resolveScopedName(scopeStack, name);
+  if (id !== undefined) {
+    resolved.set(statement, id);
+  }
+}
+
+function walkStatementForBorrowBases(
+  statement: Semantics.Statement,
+  scopeStack: ScopeStack,
+  resolved: Map<Semantics.LetStatement, BindingId>,
+): void {
+  switch (statement.kind) {
+    case "LetStatement": {
+      recordBorrowBase(statement, scopeStack, resolved);
+      const declaration = declarationOf(statement.pattern, statement.mutable);
+      if (isSome(declaration)) {
+        registerScopedName(
+          scopeStack,
+          declaration.value.name,
+          declaration.value.id,
+        );
+      }
+      return;
+    }
+    case "ExpressionStatement":
+      walkStatementPositionExpression(
+        statement.expression,
+        scopeStack,
+        resolved,
+      );
+      return;
+    case "Function":
+    case "Struct":
+      return;
     default:
-      return assertNever(
-        pattern,
-        `Unexpected pattern: ${JSON.stringify(pattern)}`,
+      assertNever(
+        statement,
+        `Unexpected AST node: ${JSON.stringify(statement)}`,
       );
   }
 }
 
-/** A borrow introduced by `let r = &[write] base`. */
-interface Borrow {
-  /**
-   * The borrowing binding.
-   */
-  readonly name: string;
+/**
+ * Only statement-position `if`/nested `{ }` introduce lexical scope that
+ * `collectBorrowsFromGraph`'s own CFG-block scan can see (see
+ * `control-flow-graph.ts`'s "confined vs. forking" note) - a value-position
+ * `if`/`Block` isn't reachable there either, so it's out of scope here too.
+ */
+function walkStatementPositionExpression(
+  expression: Semantics.Expression,
+  scopeStack: ScopeStack,
+  resolved: Map<Semantics.LetStatement, BindingId>,
+): void {
+  if (expression.kind === "IfExpression") {
+    walkScopeForBorrowBases(expression.thenBranch, scopeStack, resolved);
+    if (isSome(expression.elseBranch)) {
+      const elseBranch = expression.elseBranch.value;
+      if (elseBranch.kind === "Block") {
+        walkScopeForBorrowBases(elseBranch, scopeStack, resolved);
+      } else {
+        walkStatementPositionExpression(elseBranch, scopeStack, resolved);
+      }
+    }
+    return;
+  }
+  if (expression.kind === "Block") {
+    walkScopeForBorrowBases(expression, scopeStack, resolved);
+  }
+}
 
-  /**
-   * The borrowed variable.
-   */
-  readonly base: string;
+function walkScopeForBorrowBases(
+  scope: Semantics.Block,
+  scopeStack: ScopeStack,
+  resolved: Map<Semantics.LetStatement, BindingId>,
+): void {
+  scopeStack.push(new Map<string, BindingId>());
+  for (const statement of scope.statements) {
+    walkStatementForBorrowBases(statement, scopeStack, resolved);
+  }
+  scopeStack.pop();
+}
 
-  /**
-   * Whether the variable is mutable.
-   */
-  readonly mutable: boolean;
-
-  /**
-   * The index of the statement where the borrow is created.
-   */
-  readonly declIndex: number;
-
-  /**
-   * The token ID of the reference, used for diagnostics.
-   */
-  readonly tokenId: number;
+/**
+ * Resolve every borrow's base `PathExpression` to the `BindingId` it refers
+ * to at that point, keyed by the borrow's own `LetStatement` (object
+ * identity - `buildControlFlowGraph` never clones nodes, so the same
+ * statement objects appear in `graph.blocks[].statements`).
+ */
+function resolveBorrowBases(
+  fn: Semantics.FunctionDecl,
+): ReadonlyMap<Semantics.LetStatement, BindingId> {
+  const resolved = new Map<Semantics.LetStatement, BindingId>();
+  const scopeStack: ScopeStack = [new Map<string, BindingId>()];
+  for (const param of fn.params) {
+    const declaration = declarationOf(param.pattern, param.mutable);
+    if (isSome(declaration)) {
+      registerScopedName(
+        scopeStack,
+        declaration.value.name,
+        declaration.value.id,
+      );
+    }
+  }
+  for (const statement of fn.body.statements) {
+    walkStatementForBorrowBases(statement, scopeStack, resolved);
+  }
+  return resolved;
 }
 
 /**
  * Collect the names of single-segment paths referenced in an expression.
- *
- * @param expression The expression to analyze.
- * @param out A set to which the names of referenced paths will be added.
+ * Deliberately name-based, not `BindingId`-based: matching by resolved
+ * binding identity is `collectDeclarations`' job for cross-scope capability
+ * lookups, but a borrow's own last-use tracking only needs to know whether
+ * its name is mentioned again later in the same block.
  */
 // eslint-disable-next-line complexity -- This is a routing function
-function collectUses(expression: Expression, out: Set<string>): void {
+function collectUses(expression: Semantics.Expression, out: Set<string>): void {
   switch (expression.kind) {
     case "PathExpression": {
       const { segments } = expression.path;
@@ -100,14 +257,14 @@ function collectUses(expression: Expression, out: Set<string>): void {
       return;
     case "MethodCallExpression":
       collectUses(expression.receiver, out);
-      for (const arg of expression.arguments) collectUses(arg, out);
+      for (const argument of expression.arguments) collectUses(argument, out);
       return;
     case "IndexExpression":
       collectUses(expression.object, out);
       collectUses(expression.index, out);
       return;
     case "TupleExpression":
-      for (const elem of expression.elements) collectUses(elem, out);
+      for (const element of expression.elements) collectUses(element, out);
       return;
     case "RangeExpression":
       if (isSome(expression.start)) {
@@ -144,7 +301,6 @@ function collectUses(expression: Expression, out: Set<string>): void {
     case "FloatLiteral":
     case "BoolLiteral":
     case "CharLiteral":
-    case "Identifier":
       return;
     default:
       assertNever(
@@ -154,13 +310,8 @@ function collectUses(expression: Expression, out: Set<string>): void {
   }
 }
 
-/**
- * Collect the names of single-segment paths referenced in a statement.
- *
- * @param statement The statement to analyze.
- * @param out A set to which the names of referenced paths will be added.
- */
-function statementUses(statement: Statement, out: Set<string>): void {
+/** Collect the names of single-segment paths referenced in a statement. */
+function statementUses(statement: Semantics.Statement, out: Set<string>): void {
   switch (statement.kind) {
     case "LetStatement":
       if (isSome(statement.initializer)) {
@@ -172,7 +323,7 @@ function statementUses(statement: Statement, out: Set<string>): void {
       return;
     case "Function":
     case "Struct":
-      // TODO: Local item declarations do not directly use outer bindings in Slice 1.
+      // Local item declarations do not directly use outer bindings in Slice 1/2.
       return;
     default:
       assertNever(
@@ -182,157 +333,312 @@ function statementUses(statement: Statement, out: Set<string>): void {
   }
 }
 
-/**
- * Map each binding to whether it was declared with the `mut` capability.
- * Seeds from function parameters first, then let statements.
- */
-function writeCapabilities(decl: FunctionDecl): Map<string, boolean> {
-  const capabilities = new Map<string, boolean>();
-  for (const param of decl.params) {
-    const capability = patternCapability(param.pattern);
-    if (isSome(capability)) {
-      capabilities.set(capability.value.name, capability.value.mutable);
-    }
+/** Names used by a block's own fork condition and/or trailing expression - the "tail" past its own statement list. */
+function tailUses(block: BasicBlock): Set<string> {
+  const uses = new Set<string>();
+  if (isSome(block.forkCondition)) {
+    collectUses(block.forkCondition.value, uses);
   }
-  for (const statement of decl.body.statements) {
-    if (statement.kind !== "LetStatement") {
-      continue;
-    }
-    const capability = patternCapability(statement.pattern);
-    if (isSome(capability)) {
-      capabilities.set(capability.value.name, capability.value.mutable);
-    }
+  if (isSome(block.trailingExpression)) {
+    collectUses(block.trailingExpression.value, uses);
   }
-  return capabilities;
+  return uses;
 }
 
 /**
- * Collect borrows created by `let r = &[write] base;`.
- *
- * @param statements The statements to analyze.
- * @returns An array of borrows found in the statements.
+ * The last statement index (within `block.statements`) at which `name` is
+ * used, starting the scan just after `declIndex`. Returns `block.statements.length`
+ * (a sentinel past the last real index) if `name` is only used in the block's
+ * own tail (fork condition / trailing expression), or `declIndex` itself if
+ * `name` is never used again in this block.
  */
-function collectBorrows(statements: readonly Statement[]): Borrow[] {
-  const borrows: Borrow[] = [];
-  for (let index = 0; index < statements.length; index += 1) {
-    const statement = statements[index];
-    if (statement === undefined || statement.kind !== "LetStatement") {
-      continue;
-    }
-    const capability = patternCapability(statement.pattern);
-    if (!isSome(capability)) {
-      continue;
-    }
-    const { initializer } = statement;
-    if (!isSome(initializer)) {
-      continue;
-    }
-    const init = initializer.value;
-    if (init.kind !== "ReferenceExpression") {
-      continue;
-    }
-    const { operand } = init;
-    if (operand.kind !== "PathExpression") {
-      continue;
-    }
-    const { segments } = operand.path;
-    const base = segments.length === 1 ? segments[0] : undefined;
-    if (base === undefined) {
-      continue;
-    }
-    borrows.push({
-      name: capability.value.name,
-      base,
-      mutable: init.mutable,
-      declIndex: index,
-      tokenId: init.tokenId,
-    });
-  }
-  return borrows;
-}
-
-/**
- * Last statement index at which each binding is used: its NLL end-of-life.
- *
- * @param statements The statements to analyze.
- * @returns A map from binding names to the last statement index at which they are used.
- */
-function computeLastUse(statements: readonly Statement[]): Map<string, number> {
-  const lastUse = new Map<string, number>();
-  for (let index = 0; index < statements.length; index += 1) {
-    const statement = statements[index];
+function localLastUseIndex(
+  block: BasicBlock,
+  name: string,
+  declIndex: number,
+): number {
+  let last = declIndex;
+  for (let index = declIndex + 1; index < block.statements.length; index += 1) {
+    const statement = block.statements[index];
     if (statement === undefined) {
       continue;
     }
     const uses = new Set<string>();
     statementUses(statement, uses);
-    for (const name of uses) {
-      lastUse.set(name, index);
+    if (uses.has(name)) {
+      last = index;
     }
   }
-  return lastUse;
+  if (tailUses(block).has(name)) {
+    last = block.statements.length;
+  }
+  return last;
 }
 
 /**
- * Compute the end of a borrow's lifetime.
+ * A binding's extent within a single block: its last use starting just after
+ * `fromIndex` (see `localLastUseIndex`), or `+Infinity` if the binding is
+ * still live out of this block (its extent continues into a successor
+ * block, handled by `borrowsOverlap` via `reachSets`/`reachableWhileLive`).
  *
- * @param borrow The borrow to analyze.
- * @param lastUse A map from binding names to the last statement index at which they are used.
- * @returns The index of the last statement at which the borrow is used.
+ * @param name - The binding's source name.
+ * @param bindingId - The binding's own `BindingId`.
+ * @param block - The block to compute the extent within.
+ * @param liveness - The enclosing function's liveness dataflow result.
+ * @param fromIndex - Where to start scanning for uses: the binding's own
+ *   `declIndex` when `block` is where it was declared (`borrowLocalExtent`),
+ *   or `-1` to scan the whole block when the binding merely enters `block`
+ *   already live, from an earlier block (`borrowReachesInto`).
+ *
+ * @returns The last statement index at which `name` is used within `block`,
+ *   or `Number.POSITIVE_INFINITY` if the binding remains live past it.
  */
-function borrowEnd(borrow: Borrow, lastUse: Map<string, number>): number {
-  return lastUse.get(borrow.name) ?? borrow.declIndex;
+function extentWithinBlock(
+  name: string,
+  bindingId: BindingId,
+  block: BasicBlock,
+  liveness: Liveness,
+  fromIndex: number,
+): number {
+  const last = localLastUseIndex(block, name, fromIndex);
+  const liveOut =
+    liveness.blocks.get(block.id)?.liveOut ?? new Set<BindingId>();
+  return liveOut.has(bindingId) ? Number.POSITIVE_INFINITY : last;
 }
 
-/**
- * Determines whether two live ranges overlap based on their declaration indices
- * and the last use information.
- *
- * @param a The first borrow object, containing information about its live range.
- * @param b The second borrow object, containing information about its live range.
- * @param lastUse A map associating variable names with their last use index.
- * @returns Returns true if the live ranges of `a` and `b` overlap, otherwise false.
- */
-function liveRangesOverlap(
-  a: Borrow,
-  b: Borrow,
-  lastUse: Map<string, number>,
-): boolean {
-  return (
-    a.declIndex <= borrowEnd(b, lastUse) && b.declIndex <= borrowEnd(a, lastUse)
+function borrowLocalExtent(
+  borrow: Borrow,
+  block: BasicBlock,
+  liveness: Liveness,
+): number {
+  return extentWithinBlock(
+    borrow.name,
+    borrow.bindingId,
+    block,
+    liveness,
+    borrow.declIndex,
   );
 }
 
 /**
+ * Every block reachable from `startBlockId`'s successors while `bindingId`
+ * remains live-in - the cross-block boundary condition `liveness.ts`'s module
+ * doc describes as the missing half of NLL extent computation (the other half
+ * being `borrowLocalExtent`'s intra-block last-use). Expansion stops the
+ * moment a path's liveIn no longer contains `bindingId`, since that means the
+ * binding is already dead along that path by the dataflow's own fixpoint.
+ */
+function requireBlock(
+  blockById: ReadonlyMap<number, BasicBlock>,
+  id: number,
+): BasicBlock {
+  const block = blockById.get(id);
+  if (block === undefined) {
+    throw new Error(`Unknown block ${String(id)}`);
+  }
+  return block;
+}
+
+function reachableWhileLive(
+  startBlockId: number,
+  bindingId: BindingId,
+  blockById: ReadonlyMap<number, BasicBlock>,
+  liveness: Liveness,
+): ReadonlySet<number> {
+  const visited = new Set<number>();
+  const stack = [...requireBlock(blockById, startBlockId).successors];
+  while (stack.length > 0) {
+    const id = stack.pop();
+    if (id === undefined || visited.has(id)) {
+      continue;
+    }
+    const liveIn = liveness.blocks.get(id)?.liveIn ?? new Set<BindingId>();
+    if (!liveIn.has(bindingId)) {
+      continue;
+    }
+    visited.add(id);
+    stack.push(...requireBlock(blockById, id).successors);
+  }
+  return visited;
+}
+
+/** Every borrow's own `reachableWhileLive` set, computed once so `checkExclusivity`'s pairwise loop never recomputes the same borrow's reach set against every other borrow it's compared to. */
+function reachSetsOf(
+  borrows: readonly Borrow[],
+  blockById: ReadonlyMap<number, BasicBlock>,
+  liveness: Liveness,
+): ReadonlyMap<Borrow, ReadonlySet<number>> {
+  return new Map(
+    borrows.map((borrow) => [
+      borrow,
+      reachableWhileLive(borrow.blockId, borrow.bindingId, blockById, liveness),
+    ]),
+  );
+}
+
+/**
+ * Whether `borrow` is still alive at `atBlock`'s own `declIndex`, for some
+ * other borrow declared there. `reach` (from `reachableWhileLive`) only
+ * establishes that `borrow` is live-in to `atBlock` - it says nothing about
+ * *where within* `atBlock` `borrow` actually dies. Scanning `atBlock` from
+ * its start (`extentWithinBlock(..., -1)`) answers that, so a borrow whose
+ * last use falls early in a shared block isn't mistaken for still conflicting
+ * with a later, unrelated borrow declared further down that same block.
+ */
+function borrowReachesInto(
+  borrow: Borrow,
+  reach: ReadonlySet<number>,
+  atBlock: BasicBlock,
+  declIndex: number,
+  liveness: Liveness,
+): boolean {
+  if (!reach.has(atBlock.id)) {
+    return false;
+  }
+  const extent = extentWithinBlock(
+    borrow.name,
+    borrow.bindingId,
+    atBlock,
+    liveness,
+    -1,
+  );
+  return declIndex <= extent;
+}
+
+/**
+ * Whether two borrows' extents overlap. Same-block borrows compare
+ * declaration/end indices directly (`borrowLocalExtent`); cross-block borrows
+ * overlap iff either borrow's binding is still live at the other's own
+ * declaration point (`borrowReachesInto`), not merely live-in to its block.
+ */
+function borrowsOverlap(
+  a: Borrow,
+  b: Borrow,
+  blockById: ReadonlyMap<number, BasicBlock>,
+  liveness: Liveness,
+  reachSets: ReadonlyMap<Borrow, ReadonlySet<number>>,
+): boolean {
+  if (a.blockId === b.blockId) {
+    const block = requireBlock(blockById, a.blockId);
+    const aEnd = borrowLocalExtent(a, block, liveness);
+    const bEnd = borrowLocalExtent(b, block, liveness);
+    return a.declIndex <= bEnd && b.declIndex <= aEnd;
+  }
+  const aReach = reachSets.get(a) ?? new Set<number>();
+  const bReach = reachSets.get(b) ?? new Set<number>();
+  return (
+    borrowReachesInto(
+      a,
+      aReach,
+      requireBlock(blockById, b.blockId),
+      b.declIndex,
+      liveness,
+    ) ||
+    borrowReachesInto(
+      b,
+      bReach,
+      requireBlock(blockById, a.blockId),
+      a.declIndex,
+      liveness,
+    )
+  );
+}
+
+/**
+ * Collect borrows created anywhere in the graph by `let r = &[mut] base;`.
+ * Discovers borrows in every block, not just the entry block - fixes a real
+ * gap where a borrow declared inside an `if`/`else` branch was previously
+ * invisible to the checker entirely (see the module's own history).
+ */
+function collectBorrowsFromGraph(
+  graph: ControlFlowGraph,
+  baseIds: ReadonlyMap<Semantics.LetStatement, BindingId>,
+): Borrow[] {
+  const borrows: Borrow[] = [];
+  for (const block of graph.blocks) {
+    for (let index = 0; index < block.statements.length; index += 1) {
+      const statement = block.statements[index];
+      if (statement === undefined || statement.kind !== "LetStatement") {
+        continue;
+      }
+      const declaration = declarationOf(statement.pattern, statement.mutable);
+      if (!isSome(declaration)) {
+        continue;
+      }
+      const { initializer } = statement;
+      if (!isSome(initializer)) {
+        continue;
+      }
+      const init = initializer.value;
+      if (init.kind !== "ReferenceExpression") {
+        continue;
+      }
+      const { operand } = init;
+      if (operand.kind !== "PathExpression") {
+        continue;
+      }
+      const { segments } = operand.path;
+      const base = segments.length === 1 ? segments[0] : undefined;
+      if (base === undefined) {
+        continue;
+      }
+      borrows.push({
+        name: declaration.value.name,
+        bindingId: declaration.value.id,
+        base,
+        baseId: baseIds.get(statement),
+        mutable: init.mutable,
+        blockId: block.id,
+        declIndex: index,
+        tokenId: init.tokenId,
+      });
+    }
+  }
+  return borrows;
+}
+
+/** Map each reachable declaration (params and every block-owned `let`) to whether it was declared with the `mut` capability, keyed by `BindingId` so same-named bindings in different scopes never collide (see the module doc). */
+function capabilitiesFromDeclarations(
+  declarations: readonly Declaration[],
+): Map<BindingId, boolean> {
+  const capabilities = new Map<BindingId, boolean>();
+  for (const declaration of declarations) {
+    capabilities.set(declaration.id, declaration.mutable);
+  }
+  return capabilities;
+}
+
+/**
  * Describe a borrow for diagnostic messages.
- *
- * @param borrow The borrow to describe.
- * @returns A string representation of the borrow.
  */
 function describeBorrow(borrow: Borrow): string {
   return borrow.mutable ? "&mut" : "&";
 }
 
-/**
- * Get the span of a token by its ID.
- *
- * @param tokens The array of tokens.
- * @param id The ID of the token.
- * @returns The span of the token, or `none` if the token is not found.
- */
 function spanOf(tokens: readonly Token[], id: number): Option<Span> {
   const token = tokens[id];
   return token !== undefined ? some(token.span) : none();
 }
 
+/** `id` always comes from a real parsed `ReferenceExpression`'s own `tokenId`, so a missing token here is unreachable given a well-formed compile - an ICE, not a legitimate "unknown offset" (offset `0` would otherwise look like a plausible real location). */
+function offsetOf(tokens: readonly Token[], id: number): number {
+  const token = tokens[id];
+  assert(token !== undefined, `Unknown token ${String(id)}`);
+  return token.span.start;
+}
+
 function checkCapabilities(
   borrows: readonly Borrow[],
-  capabilities: Map<string, boolean>,
+  capabilities: ReadonlyMap<BindingId, boolean>,
   diagnostics: Diagnostic[],
   tokens: readonly Token[],
 ): void {
   for (const borrow of borrows) {
-    if (borrow.mutable && capabilities.get(borrow.base) === false) {
+    if (
+      borrow.mutable &&
+      borrow.baseId !== undefined &&
+      capabilities.get(borrow.baseId) === false
+    ) {
       diagnostics.push({
         severity: "error",
         message: `Cannot borrow "${borrow.base}" as &mut because it is not declared mut.`,
@@ -342,12 +648,20 @@ function checkCapabilities(
   }
 }
 
+/**
+ * Conflicts are checked pairwise, over every borrow anywhere in the function
+ * (not just its entry block - see `collectBorrowsFromGraph`), using
+ * `borrowsOverlap` to combine intra-block last-use with cross-block liveness
+ * as the extent's boundary condition.
+ */
 function checkExclusivity(
   borrows: readonly Borrow[],
-  lastUse: Map<string, number>,
+  blockById: ReadonlyMap<number, BasicBlock>,
+  liveness: Liveness,
   diagnostics: Diagnostic[],
   tokens: readonly Token[],
 ): void {
+  const reachSets = reachSetsOf(borrows, blockById, liveness);
   for (let i = 0; i < borrows.length; i += 1) {
     const a = borrows[i];
     if (a === undefined) {
@@ -361,12 +675,14 @@ function checkExclusivity(
       if (!a.mutable && !b.mutable) {
         continue; // any number of shared borrows may coexist
       }
-      if (!liveRangesOverlap(a, b, lastUse)) {
+      if (!borrowsOverlap(a, b, blockById, liveness, reachSets)) {
         continue; // the borrows are not simultaneously live
       }
       diagnostics.push({
         severity: "error",
-        message: `Conflicting borrows of "${a.base}": ${describeBorrow(a)} and ${describeBorrow(b)} are both live.`,
+        message:
+          `Conflicting borrows of "${a.base}": ${describeBorrow(a)} at offset ${String(offsetOf(tokens, a.tokenId))} ` +
+          `and ${describeBorrow(b)} at offset ${String(offsetOf(tokens, b.tokenId))} are both live.`,
         span: spanOf(tokens, b.tokenId),
       });
     }
@@ -374,27 +690,24 @@ function checkExclusivity(
 }
 
 function checkFunction(
-  decl: FunctionDecl,
+  fn: Semantics.FunctionDecl,
   diagnostics: Diagnostic[],
   tokens: readonly Token[],
 ): void {
-  const statements = decl.body.statements;
-  checkCapabilities(
-    collectBorrows(statements),
-    writeCapabilities(decl),
-    diagnostics,
-    tokens,
+  const graph = buildControlFlowGraph(fn);
+  const liveness = computeLiveness(graph);
+  const blockById = new Map<number, BasicBlock>(
+    graph.blocks.map((block) => [block.id, block]),
   );
-  checkExclusivity(
-    collectBorrows(statements),
-    computeLastUse(statements),
-    diagnostics,
-    tokens,
-  );
+  const baseIds = resolveBorrowBases(fn);
+  const borrows = collectBorrowsFromGraph(graph, baseIds);
+  const capabilities = capabilitiesFromDeclarations(collectDeclarations(graph));
+  checkCapabilities(borrows, capabilities, diagnostics, tokens);
+  checkExclusivity(borrows, blockById, liveness, diagnostics, tokens);
 }
 
 function checkItem(
-  item: Item,
+  item: Semantics.Item,
   diagnostics: Diagnostic[],
   tokens: readonly Token[],
 ): void {
@@ -404,18 +717,18 @@ function checkItem(
 }
 
 /**
- * Ownership analysis for slice 1: enforces `&mut` capability and borrow
- * exclusivity (at most one `&mut` xor any number of `&`) using last-use
- * liveness. Each function body is a single straight-line basic block; the
- * explicit multi-block CFG arrives with control flow (ADR 0002).
+ * NLL ownership analysis: enforces `&mut` capability and borrow exclusivity
+ * (at most one `&mut` xor any number of `&`) using per-function CFG/liveness
+ * (`control-flow-graph.ts`/`liveness.ts`, from #21) so that borrow extents end
+ * at last use across block boundaries, not just within one straight-line list.
  *
- * @param program The parsed program.
+ * @param program The semantically analyzed program.
  * @param tokens The array of tokens.
  *
  * @returns An array of diagnostics indicating any borrow-checking violations found in the program.
  */
 export function checkBorrows(
-  program: Program,
+  program: Semantics.Program,
   tokens: readonly Token[],
 ): readonly Diagnostic[] {
   const diagnostics: Diagnostic[] = [];

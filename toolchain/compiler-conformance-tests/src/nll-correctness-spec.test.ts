@@ -86,6 +86,34 @@ describe("NLL and lifetime correctness spec", (): void => {
     );
   });
 
+  it("overlapping mutable and mutable borrows are rejected", (): void => {
+    assertRejectsWithMessage(
+      `
+      fn main() {
+        let mut x = "a";
+        let r1 = &mut x;
+        let r2 = &mut x;
+        print(r1);
+        print(r2);
+      }
+    `,
+      "Conflicting",
+    );
+  });
+
+  it("a mutable borrow of a binding not declared mut is rejected", (): void => {
+    assertRejectsWithMessage(
+      `
+      fn main() {
+        let x = "a";
+        let r = &mut x;
+        print(r);
+      }
+    `,
+      "not declared mut",
+    );
+  });
+
   it("rejects ambiguous two-parameter elision", (): void => {
     assertRejectsWithMessage(
       `
