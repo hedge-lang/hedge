@@ -186,4 +186,20 @@ describe("borrow checker", (): void => {
     `);
     expect(diagnostics).toEqual([]);
   });
+
+  it("accepts a borrow taken in a join block after a borrow live into that block has its own last use earlier in the same join block", (): void => {
+    const diagnostics = check(`
+      fn main() {
+        let mut x = "a";
+        let r1 = &mut x;
+        if true {
+          print("branch");
+        }
+        print(r1);
+        let r2 = &mut x;
+        print(r2);
+      }
+    `);
+    expect(diagnostics).toEqual([]);
+  });
 });
