@@ -202,4 +202,24 @@ describe("borrow checker", (): void => {
     `);
     expect(diagnostics).toEqual([]);
   });
+
+  it("resolves a borrow's mut capability against its own scope's declaration, not a same-named binding in a different scope", (): void => {
+    const diagnostics = check(`
+      fn main() {
+        if true {
+          let mut x = "a";
+          let r = &mut x;
+          print(r);
+        }
+        if true {
+          let x = "b";
+          let s = &mut x;
+          print(s);
+        }
+        let done = true;
+      }
+    `);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("not declared mut");
+  });
 });
