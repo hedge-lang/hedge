@@ -47,21 +47,30 @@ describe("drop determinism and RAII spec", (): void => {
   });
 
   it.fails(
-    "conditional initialization uses drop flags to avoid double-drop",
+    "emits a drop flag to avoid double-drop when a binding is moved on only one branch",
     (): void => {
       const js = requireJavascript(`
       struct R { id: i32 }
       fn main() {
         let mut cond = true;
+        let x = R { id: 1 };
         if cond {
-          let x = R { id: 1 };
-          print(x.id);
+          let y = x;
+          print(y.id);
         } else {
           print(0);
         }
       }
     `);
-      expect(js).toContain("dropFlag");
+      expect(js).toMatch(/dropFlag_x\s*=\s*true/);
+      expect(js).toMatch(/dropFlag_x\s*=\s*false/);
+      expect(js).toMatch(/if\s*\(\s*dropFlag_x\s*\)\s*\{[^}]*Symbol\.dispose/);
+
+      const setTrueIndex = js.search(/dropFlag_x\s*=\s*true/);
+      const setFalseIndex = js.search(/dropFlag_x\s*=\s*false/);
+      const guardIndex = js.search(/if\s*\(\s*dropFlag_x\s*\)/);
+      expect(setTrueIndex).toBeLessThan(setFalseIndex);
+      expect(setFalseIndex).toBeLessThan(guardIndex);
     },
   );
 
