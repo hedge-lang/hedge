@@ -65,7 +65,7 @@ describe("drop determinism and RAII spec", (): void => {
       }
     `);
     expect(js).not.toMatch(/dropFlag/);
-    expect(js).toMatch(/else\s*\{[^}]*print\(0\);\s*x\[Symbol\.dispose\]\(\);/);
+    expect(js).toMatch(/else\s*\{\s*using dropShadow_x\s*=\s*x;\s*print\(0\);/);
   });
 
   it("resolves a binding moved on only the else branch by dropping it in then, the symmetric case", (): void => {
@@ -84,7 +84,7 @@ describe("drop determinism and RAII spec", (): void => {
     `);
     expect(js).not.toMatch(/dropFlag/);
     expect(js).toMatch(
-      /if\s*\(cond\)\s*\{[^}]*print\(0\);\s*x\[Symbol\.dispose\]\(\);/,
+      /if\s*\(cond\)\s*\{\s*using dropShadow_x\s*=\s*x;\s*print\(0\);/,
     );
   });
 
@@ -106,6 +106,7 @@ describe("drop determinism and RAII spec", (): void => {
     expect(js).not.toMatch(/dropFlag/);
     expect(js).not.toContain("x[Symbol.dispose]");
     expect(js).not.toMatch(/using x\b/);
+    expect(js).not.toContain("dropShadow_x");
   });
 
   it("resolves a value moved partway down an else-if chain to two static drop sites, not a flag", (): void => {
@@ -125,12 +126,17 @@ describe("drop determinism and RAII spec", (): void => {
       }
     `);
     expect(js).not.toMatch(/dropFlag/);
-    const disposeCount = (js.match(/x\[Symbol\.dispose\]\(\);/g) ?? []).length;
-    expect(disposeCount).toBe(2);
+    // Two independent shadow sites for the same declaration get distinct
+    // alpha-renamed names (dropShadow_x, dropShadow_x$1).
+    const shadowCount = (js.match(/using dropShadow_x\$?\d*\s*=\s*x;/g) ?? [])
+      .length;
+    expect(shadowCount).toBe(2);
     expect(js).toMatch(
-      /if\s*\(n === 1\)\s*\{[^}]*print\(0\);\s*x\[Symbol\.dispose\]\(\);/,
+      /if\s*\(n === 1\)\s*\{\s*using dropShadow_x\s*=\s*x;\s*print\(0\);/,
     );
-    expect(js).toMatch(/else\s*\{[^}]*print\(2\);\s*x\[Symbol\.dispose\]\(\);/);
+    expect(js).toMatch(
+      /else\s*\{\s*using dropShadow_x\$1\s*=\s*x;\s*print\(2\);/,
+    );
   });
 
   it("resolves two independent bindings each conditionally moved in separate if/else pairs without interference", (): void => {
@@ -156,9 +162,9 @@ describe("drop determinism and RAII spec", (): void => {
       }
     `);
     expect(js).not.toMatch(/dropFlag/);
-    expect(js).toMatch(/else\s*\{[^}]*print\(0\);\s*x\[Symbol\.dispose\]\(\);/);
+    expect(js).toMatch(/else\s*\{\s*using dropShadow_x\s*=\s*x;\s*print\(0\);/);
     expect(js).toMatch(
-      /if\s*\(cond2\)\s*\{[^}]*print\(1\);\s*w\[Symbol\.dispose\]\(\);/,
+      /if\s*\(cond2\)\s*\{\s*using dropShadow_w\s*=\s*w;\s*print\(1\);/,
     );
   });
 
@@ -181,7 +187,7 @@ describe("drop determinism and RAII spec", (): void => {
       }
     `);
     expect(js).not.toMatch(/dropFlag/);
-    expect(js).toMatch(/else\s*\{[^}]*print\(1\);\s*x\[Symbol\.dispose\]\(\);/);
+    expect(js).toMatch(/else\s*\{\s*using dropShadow_x\s*=\s*x;\s*print\(1\);/);
   });
 
   it("synthesizes an else branch to carry the drop when a conditional move has no source else at all", (): void => {
@@ -198,14 +204,16 @@ describe("drop determinism and RAII spec", (): void => {
       }
     `);
     expect(js).not.toMatch(/dropFlag/);
-    expect(js).toMatch(/else\s*\{\s*x\[Symbol\.dispose\]\(\);\s*\}/);
+    expect(js).toMatch(/else\s*\{\s*using dropShadow_x\s*=\s*x;\s*\}/);
   });
 
   it("places a branch-attributed drop before the return in a function with a declared return type", (): void => {
-    // jsimIfStatement's insertBeforeTrailingReturn exists specifically to
-    // prevent this drop from landing after `return 1;`, where it would be
-    // dead code -- the trailing expression becomes a real `return` only
-    // because the function declares a non-unit return type.
+    // A branch-attributed drop is unconditional within its own branch, so
+    // it lowers to a `using` shadow declaration rather than an explicit
+    // dispose call -- `using`'s native scope-exit semantics dispose it on
+    // any exit path, including this early `return`, with no special
+    // placement logic needed (the trailing expression becomes a real
+    // `return` because the function declares a non-unit return type).
     const js = requireJavascript(`
       struct Boxed { value: i32 }
       fn f(cond: bool, x: Boxed) -> i32 {
@@ -219,15 +227,18 @@ describe("drop determinism and RAII spec", (): void => {
     `);
     expect(js).not.toMatch(/dropFlag/);
     expect(js).toMatch(
-      /else\s*\{\s*x\[Symbol\.dispose\]\(\);\s*return 1;\s*\}/,
+      /else\s*\{\s*using dropShadow_x\s*=\s*x;\s*return 1;\s*\}/,
     );
   });
 
-  it("attributes a drop to a conditionally moved parameter without shadow-rebinding it", (): void => {
+  it("attributes a drop to a conditionally moved parameter via its own shadow, not dropParamShadows's unconditional one", (): void => {
     // dropParamShadows only shadows a parameter found in the unconditional
     // `drops` list; a branch-attributed conditional drop must not trigger
-    // it, since `x` is still read directly by name in the branch that
-    // doesn't move it.
+    // that mechanism (there's no bare `using x = x;`/`using x$1 = x;`
+    // rebind of the original parameter), since `x` is still read directly
+    // by name in the branch that doesn't move it. It gets its own
+    // `dropShadow_`-prefixed shadow instead, same as any other
+    // branch-attributed drop.
     const js = requireJavascript(`
       struct Boxed { value: i32 }
       fn f(cond: bool, x: Boxed) {
@@ -242,7 +253,7 @@ describe("drop determinism and RAII spec", (): void => {
     expect(js).not.toMatch(/dropFlag/);
     expect(js).toContain("function f(cond, x)");
     expect(js).not.toMatch(/using x\$?\d*\s*=\s*x;/);
-    expect(js).toMatch(/else\s*\{[^}]*print\(0\);\s*x\[Symbol\.dispose\]\(\);/);
+    expect(js).toMatch(/else\s*\{\s*using dropShadow_x\s*=\s*x;\s*print\(0\);/);
   });
 
   it("a branch-attributed drop coexists with an unconditional using drop in the same scope without disturbing either", (): void => {
@@ -263,10 +274,74 @@ describe("drop determinism and RAII spec", (): void => {
     `);
     expect(js).not.toMatch(/dropFlag/);
     expect(js).toMatch(/using a\s*=/);
-    expect(js).toMatch(/else\s*\{[^}]*print\(0\);\s*x\[Symbol\.dispose\]\(\);/);
-    // `a`'s drop stays implicit (native `using` semantics), not duplicated
-    // as an explicit call the way x's conditional drop is.
+    expect(js).toMatch(/else\s*\{\s*using dropShadow_x\s*=\s*x;\s*print\(0\);/);
     expect(js).not.toContain("a[Symbol.dispose]");
+  });
+
+  it("drops a branch-attributed binding in correct reverse-declaration-order against a using local declared inside the same branch", (): void => {
+    // z is declared inside the else branch (newer, more nested) than x
+    // (declared outside, older) -- reverse-declaration-order means z must
+    // dispose before x. Both now lower to `using`, so native LIFO
+    // scope-exit semantics get this right: whichever using is declared
+    // first in the branch disposes last, and the branch-attributed shadow
+    // for x is deliberately the first statement in the branch.
+    const js = requireJavascript(`
+      struct Boxed { value: i32 }
+      fn main() {
+        let mut cond = true;
+        let x = Boxed { value: 1 };
+        if cond {
+          let y = x;
+          print(y.value);
+        } else {
+          let z = Boxed { value: 2 };
+          print(z.value);
+        }
+      }
+    `);
+    expect(js).not.toMatch(/dropFlag/);
+    expect(js).toMatch(
+      /else\s*\{\s*using dropShadow_x\s*=\s*x;\s*using z\s*=[\s\S]*print\(z\.value\);/,
+    );
+  });
+
+  it("resolves a conditional move nested inside a confined (value-position) trailing if via static duplication, not a flag", (): void => {
+    // Regression test for a real bug: a binding declared inside a branch
+    // that is itself confined (nothing follows the outer if, so it lowers
+    // via the value-position IIFE path, not the statement-position fork
+    // path) was invisible to attributeConditionalMoves, because
+    // declarationsById used to be built from collectDeclarations(graph),
+    // which only reads a BasicBlock's own scopeExit.declarations -- a
+    // confined scope never sets one. The conditional move fell through
+    // unresolved to the dormant flag mechanism instead, whose own guard
+    // fired before the code that would have cleared it ever ran: x got
+    // disposed immediately, then used afterward anyway. Fixed by building
+    // declarationsById incrementally during the walk itself, which sees
+    // every declaration regardless of confinement.
+    const js = requireJavascript(`
+      struct Boxed { value: i32 }
+      fn main() {
+        let mut outerCond = true;
+        let mut innerCond = true;
+        let x = Boxed { value: 1 };
+        if outerCond {
+          let x = Boxed { value: 2 };
+          if innerCond {
+            let y = x;
+            print(y.value);
+          } else {
+            print(0);
+          }
+        } else {
+          print(1);
+        }
+      }
+    `);
+    expect(js).not.toMatch(/dropFlag/);
+    expect(js).not.toMatch(/x\$1\[Symbol\.dispose\]/);
+    expect(js).toMatch(
+      /else\s*\{\s*using dropShadow_x\s*=\s*x\$1;\s*print\(0\);/,
+    );
   });
 
   it.fails("drop cannot occur while mutable borrow is live", (): void => {

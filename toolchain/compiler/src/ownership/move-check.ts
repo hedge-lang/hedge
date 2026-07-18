@@ -34,11 +34,7 @@ import type {
   ControlFlowGraph,
   Declaration,
 } from "./control-flow-graph.js";
-import {
-  buildControlFlowGraph,
-  collectDeclarations,
-  declarationOf,
-} from "./control-flow-graph.js";
+import { buildControlFlowGraph, declarationOf } from "./control-flow-graph.js";
 
 /**
  * A binding's move state within one function body. This vocabulary is
@@ -143,8 +139,19 @@ interface Ctx {
   readonly drops: Map<number, Declaration[]>;
   readonly conditionalDrops: Map<number, ConditionalDrop[]>;
   readonly branchDrops: BranchDrop[];
-  /** Every declaration in the function currently being walked, keyed by its own `BindingId`. */
-  readonly declarationsById: ReadonlyMap<BindingId, Declaration>;
+  /**
+   * Every declaration in the function currently being walked, keyed by its
+   * own `BindingId`. Populated incrementally as `walkStatement`'s
+   * `LetStatement` case and `walkFunction`'s param loop each discover a
+   * real `Declaration` -- not derived from `collectDeclarations(graph)`,
+   * which only reads a `BasicBlock`'s own `scopeExit.declarations` and so
+   * has a documented blind spot for declarations made inside a confined
+   * (value-position) scope (see `control-flow-graph.ts`'s
+   * `recordConfinedScope`, which never sets a `scopeExit` at all). This
+   * walk visits every `LetStatement` uniformly regardless of confinement,
+   * so building the map here has no equivalent gap.
+   */
+  readonly declarationsById: Map<BindingId, Declaration>;
   /** See `CompileOptions.warnDropFlags` in driver.ts. */
   readonly warnDropFlags: boolean;
   /**
@@ -796,6 +803,7 @@ function walkStatement(
       const declaration = declarationOf(statement.pattern, statement.mutable);
       if (declaration.kind === "Some") {
         declarations.push(declaration.value);
+        ctx.declarationsById.set(declaration.value.id, declaration.value);
       }
       return;
     }
@@ -972,6 +980,11 @@ function walkScope(
     walkStatement(ctx, statement, state, scopeStack, declarations);
   }
   if (isSome(scope.trailingExpression)) {
+    // currentStatementTokenId is otherwise only updated by walkStatement; a
+    // move inside a trailing expression (never itself a statement) would
+    // otherwise inherit whatever statement last ran, which can be a
+    // completely unrelated point in the function.
+    ctx.currentStatementTokenId = scope.trailingExpression.value.tokenId;
     walkExpression(ctx, scope.trailingExpression.value, state, scopeStack);
   }
   recordDrops(ctx, scope.tokenId, declarations, state);
@@ -995,6 +1008,7 @@ function walkFunction(ctx: Ctx, fn: Semantics.FunctionDecl): void {
     const declaration = declarationOf(param.pattern, param.mutable);
     if (declaration.kind === "Some") {
       paramDeclarations.push(declaration.value);
+      ctx.declarationsById.set(declaration.value.id, declaration.value);
     }
   }
   walkScope(ctx, fn.body, state, scopeStack, false, paramDeclarations);
@@ -1021,9 +1035,7 @@ export function analyzeOwnership(
     const drops = new Map<number, Declaration[]>();
     const conditionalDrops = new Map<number, ConditionalDrop[]>();
     const branchDrops: BranchDrop[] = [];
-    const declarationsById = new Map<BindingId, Declaration>(
-      collectDeclarations(graph).map((d) => [d.id, d]),
-    );
+    const declarationsById = new Map<BindingId, Declaration>();
     const ctx: Ctx = {
       tokens,
       diagnostics,
