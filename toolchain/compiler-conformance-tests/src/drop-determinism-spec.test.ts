@@ -201,6 +201,74 @@ describe("drop determinism and RAII spec", (): void => {
     expect(js).toMatch(/else\s*\{\s*x\[Symbol\.dispose\]\(\);\s*\}/);
   });
 
+  it("places a branch-attributed drop before the return in a function with a declared return type", (): void => {
+    // jsimIfStatement's insertBeforeTrailingReturn exists specifically to
+    // prevent this drop from landing after `return 1;`, where it would be
+    // dead code -- the trailing expression becomes a real `return` only
+    // because the function declares a non-unit return type.
+    const js = requireJavascript(`
+      struct Boxed { value: i32 }
+      fn f(cond: bool, x: Boxed) -> i32 {
+        if cond {
+          let y = x;
+          y.value
+        } else {
+          1
+        }
+      }
+    `);
+    expect(js).not.toMatch(/dropFlag/);
+    expect(js).toMatch(
+      /else\s*\{\s*x\[Symbol\.dispose\]\(\);\s*return 1;\s*\}/,
+    );
+  });
+
+  it("attributes a drop to a conditionally moved parameter without shadow-rebinding it", (): void => {
+    // dropParamShadows only shadows a parameter found in the unconditional
+    // `drops` list; a branch-attributed conditional drop must not trigger
+    // it, since `x` is still read directly by name in the branch that
+    // doesn't move it.
+    const js = requireJavascript(`
+      struct Boxed { value: i32 }
+      fn f(cond: bool, x: Boxed) {
+        if cond {
+          let y = x;
+          print(y.value);
+        } else {
+          print(0);
+        }
+      }
+    `);
+    expect(js).not.toMatch(/dropFlag/);
+    expect(js).toContain("function f(cond, x)");
+    expect(js).not.toMatch(/using x\$?\d*\s*=\s*x;/);
+    expect(js).toMatch(/else\s*\{[^}]*print\(0\);\s*x\[Symbol\.dispose\]\(\);/);
+  });
+
+  it("a branch-attributed drop coexists with an unconditional using drop in the same scope without disturbing either", (): void => {
+    const js = requireJavascript(`
+      struct Boxed { value: i32 }
+      fn main() {
+        let mut cond = true;
+        let a = Boxed { value: 1 };
+        let x = Boxed { value: 2 };
+        if cond {
+          let y = x;
+          print(y.value);
+        } else {
+          print(0);
+        }
+        print(a.value);
+      }
+    `);
+    expect(js).not.toMatch(/dropFlag/);
+    expect(js).toMatch(/using a\s*=/);
+    expect(js).toMatch(/else\s*\{[^}]*print\(0\);\s*x\[Symbol\.dispose\]\(\);/);
+    // `a`'s drop stays implicit (native `using` semantics), not duplicated
+    // as an explicit call the way x's conditional drop is.
+    expect(js).not.toContain("a[Symbol.dispose]");
+  });
+
   it.fails("drop cannot occur while mutable borrow is live", (): void => {
     const result = compile(`
       fn main() {
