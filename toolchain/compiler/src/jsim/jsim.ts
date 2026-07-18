@@ -53,6 +53,14 @@ interface JsimContext {
    * Looked up by the `if` expression's own tokenId at `jsimIfStatement`.
    */
   readonly branchDrops: (readonly BranchDrop[])[];
+  /**
+   * Per-function stack of `conditionalDrops`, pre-flattened once per
+   * function (see `withFunctionCtx`) rather than on every
+   * `allConditionalDrops` call -- `lowerStatementWithDropFlags` calls it up
+   * to twice per statement, and re-flattening the map's values each time
+   * would scale with statement count for no reason.
+   */
+  readonly allConditionalDrops: (readonly ConditionalDrop[])[];
 }
 
 function createJsimContext(
@@ -67,6 +75,7 @@ function createJsimContext(
     conditionalDrops: [],
     dropFlagNames: [],
     branchDrops: [],
+    allConditionalDrops: [],
   };
 }
 
@@ -94,8 +103,7 @@ function scopeConditionalDrops(
 
 /** Every conditional drop recorded anywhere in the function currently being lowered. */
 function allConditionalDrops(ctx: JsimContext): readonly ConditionalDrop[] {
-  const byScope = ctx.conditionalDrops.at(-1);
-  return byScope === undefined ? [] : [...byScope.values()].flat();
+  return ctx.allConditionalDrops.at(-1) ?? [];
 }
 
 /**
@@ -255,9 +263,10 @@ function withFunctionCtx<T>(
     emittedNames: new Set<string>(),
   });
   ctx.drops.push(ctx.ownership.get(functionName)?.drops ?? new Map());
-  ctx.conditionalDrops.push(
-    ctx.ownership.get(functionName)?.conditionalDrops ?? new Map(),
-  );
+  const conditionalDrops =
+    ctx.ownership.get(functionName)?.conditionalDrops ?? new Map();
+  ctx.conditionalDrops.push(conditionalDrops);
+  ctx.allConditionalDrops.push([...conditionalDrops.values()].flat());
   ctx.dropFlagNames.push(new Map());
   ctx.branchDrops.push(ctx.ownership.get(functionName)?.branchDrops ?? []);
   try {
@@ -266,6 +275,7 @@ function withFunctionCtx<T>(
     ctx.rename.pop();
     ctx.drops.pop();
     ctx.conditionalDrops.pop();
+    ctx.allConditionalDrops.pop();
     ctx.dropFlagNames.pop();
     ctx.branchDrops.pop();
   }
