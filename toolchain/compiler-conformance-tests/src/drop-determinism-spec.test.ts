@@ -108,6 +108,31 @@ describe("drop determinism and RAII spec", (): void => {
     expect(js).not.toMatch(/using x\b/);
   });
 
+  it("resolves a value moved partway down an else-if chain to two static drop sites, not a flag", (): void => {
+    const js = requireJavascript(`
+      struct Boxed { value: i32 }
+      fn main() {
+        let mut n = 1;
+        let x = Boxed { value: 1 };
+        if n == 1 {
+          print(0);
+        } else if n == 2 {
+          let y = x;
+          print(y.value);
+        } else {
+          print(2);
+        }
+      }
+    `);
+    expect(js).not.toMatch(/dropFlag/);
+    const disposeCount = (js.match(/x\[Symbol\.dispose\]\(\);/g) ?? []).length;
+    expect(disposeCount).toBe(2);
+    expect(js).toMatch(
+      /if\s*\(n === 1\)\s*\{[^}]*print\(0\);\s*x\[Symbol\.dispose\]\(\);/,
+    );
+    expect(js).toMatch(/else\s*\{[^}]*print\(2\);\s*x\[Symbol\.dispose\]\(\);/);
+  });
+
   it.fails("drop cannot occur while mutable borrow is live", (): void => {
     const result = compile(`
       fn main() {

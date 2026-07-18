@@ -201,6 +201,36 @@ describe("move-check", (): void => {
     expect(main.branchDrops).toEqual([]);
   });
 
+  it("a value moved partway down an else-if chain resolves to two independent static drop sites, not a flag", (): void => {
+    const result = check(
+      `${BOXED}
+      fn main() {
+        let mut n = 1;
+        let x = Boxed { value: 1 };
+        if n == 1 {
+          print(0);
+        } else if n == 2 {
+          let y = x; // moved only in this arm
+          print(y.value);
+        } else {
+          print(2);
+        }
+      }`,
+    );
+    expect(result.diagnostics).toEqual([]);
+    const main = result.functions.get("main");
+    assert(main !== undefined, "Expected main's ownership result");
+    expect([...main.conditionalDrops.values()].flat()).toEqual([]);
+    const xDrops = main.branchDrops.filter((d) => d.declaration.name === "x");
+    expect(xDrops).toHaveLength(2);
+    // Attributed independently to the outer `if n == 1` (then) and the
+    // innermost fallthrough `else` -- the two concrete paths where x is
+    // still owned. Only one of the two ever runs, so there is no
+    // double-drop risk despite two static sites.
+    expect(xDrops.map((d) => d.branch).sort()).toEqual(["else", "then"]);
+    expect(new Set(xDrops.map((d) => d.ifTokenId)).size).toBe(2);
+  });
+
   it("a struct possibly-uninitialized at scope close (no else branch initializes it) is rejected", (): void => {
     const { diagnostics } = check(
       `${BOXED}
