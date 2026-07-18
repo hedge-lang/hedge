@@ -961,4 +961,32 @@ describe("conditional-drop-flag codegen (synthetic ownership)", () => {
     expect(setTrueIndex).toBeLessThan(setFalseIndex);
     expect(setFalseIndex).toBeLessThan(guardIndex);
   });
+
+  it("guards the *original* binding's dispose, not a same-scope shadow's, when the source name repeats", () => {
+    // Regression test for a real (if currently unreachable through
+    // analyzeOwnership) naming bug: a later `let x = ...;` in the *same*
+    // scope alpha-renames to `x$1` and overwrites that scope's own rename
+    // frame entry for "x" (same-scope shadowing shares one frame, unlike a
+    // nested confined scope's own frame, which pops before this guard
+    // runs). By the time dropCheckStatements's guard is emitted at the
+    // block's own close, lookupLocalName(ctx, "x") would resolve to the
+    // shadow's "x$1", not the original `x` the synthetic ConditionalDrop
+    // actually names -- disposing the wrong binding. emittedNameForBinding
+    // resolves by the declaration's own BindingId instead, so it can't be
+    // fooled by a same-name binding that shows up later in the same scope.
+    const js = synthesizeConditionalDrop(`
+      struct Boxed { value: i32 }
+      fn main() {
+        let x = Boxed { value: 1 };
+        let y = x;
+        let x = Boxed { value: 99 };
+        print(x.value);
+      }
+    `);
+
+    expect(js).toMatch(
+      /if\s*\(\s*dropFlag_x\s*\)\s*\{\s*x\[Symbol\.dispose\]\(\);\s*\}/,
+    );
+    expect(js).not.toMatch(/x\$1\[Symbol\.dispose\]/);
+  });
 });

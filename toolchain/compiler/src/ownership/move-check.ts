@@ -983,7 +983,11 @@ function walkScope(
     // currentStatementTokenId is otherwise only updated by walkStatement; a
     // move inside a trailing expression (never itself a statement) would
     // otherwise inherit whatever statement last ran, which can be a
-    // completely unrelated point in the function.
+    // completely unrelated point in the function. Untestable by real
+    // analysis today, same as the rest of moveStatementTokenId's only
+    // consumer (ConditionalDrop, see its own doc comment): unlike jsim.ts,
+    // this module has no injectable synthetic-ownership seam to construct
+    // an adversarial case against directly.
     ctx.currentStatementTokenId = scope.trailingExpression.value.tokenId;
     walkExpression(ctx, scope.trailingExpression.value, state, scopeStack);
   }
