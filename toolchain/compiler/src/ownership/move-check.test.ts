@@ -231,6 +231,41 @@ describe("move-check", (): void => {
     expect(new Set(xDrops.map((d) => d.ifTokenId)).size).toBe(2);
   });
 
+  it("two independent bindings each conditionally moved in separate if/else pairs get independent attribution", (): void => {
+    const result = check(
+      `${BOXED}
+      fn main() {
+        let mut cond1 = true;
+        let mut cond2 = true;
+        let x = Boxed { value: 1 };
+        let w = Boxed { value: 2 };
+        if cond1 {
+          let y = x; // moved only here
+          print(y.value);
+        } else {
+          print(0);
+        }
+        if cond2 {
+          print(1);
+        } else {
+          let z = w; // moved only here
+          print(z.value);
+        }
+      }`,
+    );
+    expect(result.diagnostics).toEqual([]);
+    const main = result.functions.get("main");
+    assert(main !== undefined, "Expected main's ownership result");
+    expect([...main.conditionalDrops.values()].flat()).toEqual([]);
+    const xDrop = main.branchDrops.find((d) => d.declaration.name === "x");
+    const wDrop = main.branchDrops.find((d) => d.declaration.name === "w");
+    assert(xDrop !== undefined, "Expected a branch drop for x");
+    assert(wDrop !== undefined, "Expected a branch drop for w");
+    expect(xDrop.branch).toBe("else");
+    expect(wDrop.branch).toBe("then");
+    expect(xDrop.ifTokenId).not.toBe(wDrop.ifTokenId);
+  });
+
   it("a struct possibly-uninitialized at scope close (no else branch initializes it) is rejected", (): void => {
     const { diagnostics } = check(
       `${BOXED}

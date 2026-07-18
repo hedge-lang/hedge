@@ -535,6 +535,7 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "resolves a binding moved on only the else branch by dropping it in then, the symmetric case",
       "emits no drop of any kind for a binding moved on every branch",
       "resolves a value moved partway down an else-if chain to two static drop sites, not a flag",
+      "resolves two independent bindings each conditionally moved in separate if/else pairs without interference",
       "drop cannot occur while mutable borrow is live",
       "early drop occurs at last use instead of lexical scope end",
     ],

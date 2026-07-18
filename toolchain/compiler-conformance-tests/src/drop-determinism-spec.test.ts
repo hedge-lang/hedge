@@ -133,6 +133,35 @@ describe("drop determinism and RAII spec", (): void => {
     expect(js).toMatch(/else\s*\{[^}]*print\(2\);\s*x\[Symbol\.dispose\]\(\);/);
   });
 
+  it("resolves two independent bindings each conditionally moved in separate if/else pairs without interference", (): void => {
+    const js = requireJavascript(`
+      struct Boxed { value: i32 }
+      fn main() {
+        let mut cond1 = true;
+        let mut cond2 = true;
+        let x = Boxed { value: 1 };
+        let w = Boxed { value: 2 };
+        if cond1 {
+          let y = x;
+          print(y.value);
+        } else {
+          print(0);
+        }
+        if cond2 {
+          print(1);
+        } else {
+          let z = w;
+          print(z.value);
+        }
+      }
+    `);
+    expect(js).not.toMatch(/dropFlag/);
+    expect(js).toMatch(/else\s*\{[^}]*print\(0\);\s*x\[Symbol\.dispose\]\(\);/);
+    expect(js).toMatch(
+      /if\s*\(cond2\)\s*\{[^}]*print\(1\);\s*w\[Symbol\.dispose\]\(\);/,
+    );
+  });
+
   it.fails("drop cannot occur while mutable borrow is live", (): void => {
     const result = compile(`
       fn main() {
