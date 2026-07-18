@@ -47,6 +47,10 @@ describe("drop determinism and RAII spec", (): void => {
   });
 
   it("resolves a binding moved on only one branch by dropping it in the other branch, not with a runtime flag", (): void => {
+    // Matches rustc's drop elaboration: the moved/not-moved decision is
+    // already known statically here (x is owned on the else path, moved on
+    // the then path), so the drop is duplicated directly into the else
+    // branch instead of costing a runtime boolean and a scope-exit check.
     const js = requireJavascript(`
       struct R { id: i32 }
       fn main() {

@@ -107,8 +107,8 @@ describe("move-check", (): void => {
     expect(diagnostics[0].message).toContain("x");
   });
 
-  it("a struct ambiguously moved across a branch merge and never used again is rejected at scope close", (): void => {
-    const { diagnostics } = check(
+  it("resolves a struct that is moved on only one branch and never used again via static duplication, without using a runtime flag", (): void => {
+    const result = check(
       `${BOXED}
       fn main() {
         let mut cond = true;
@@ -120,13 +120,18 @@ describe("move-check", (): void => {
           print(0);
         }
         // x is never read again: on the else path it is still Owned, but
-        // Slice 1 has no drop-flag mechanism to conditionally drop it.
+        // that's known statically here, not at runtime -- the drop attributes
+        // to the else branch instead of needing a flag (see branchDrops).
       }`,
     );
-    expect(diagnostics).toHaveLength(1);
-    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("moved");
-    expect(diagnostics[0].message).toContain("x");
+    expect(result.diagnostics).toEqual([]);
+    const main = result.functions.get("main");
+    assert(main !== undefined, "Expected main's ownership result");
+    const allDrops = [...main.drops.values()].flat();
+    expect(allDrops.map((d) => d.name)).not.toContain("x");
+    expect([...main.conditionalDrops.values()].flat()).toEqual([]);
+    expect(main.branchDrops.map((d) => d.declaration.name)).toEqual(["x"]);
+    expect(main.branchDrops.map((d) => d.branch)).toEqual(["else"]);
   });
 
   it("a value fully moved on every branch merges to an unconditional Unbound, not an ambiguous state", (): void => {
