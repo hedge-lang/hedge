@@ -4,11 +4,14 @@ import { assert } from "../assert.js";
 import { isSome } from "../option.js";
 import { analyzeSource } from "../testing/analyze-source.js";
 import type { OwnershipCheckResult } from "./move-check.js";
-import { analyzeOwnership } from "./move-check.js";
+import { analyzeOwnership, conditionalDropFlagWarning } from "./move-check.js";
 
-function check(source: string): OwnershipCheckResult {
+function check(
+  source: string,
+  options?: { readonly warnDropFlags?: boolean },
+): OwnershipCheckResult {
   const { tokens, program } = analyzeSource(source);
-  return analyzeOwnership(program, tokens);
+  return analyzeOwnership(program, tokens, options);
 }
 
 const BOXED = "struct Boxed { value: i32 }\n";
@@ -107,8 +110,8 @@ describe("move-check", (): void => {
     expect(diagnostics[0].message).toContain("x");
   });
 
-  it("a struct ambiguously moved across a branch merge and never used again is rejected at scope close", (): void => {
-    const { diagnostics } = check(
+  it("resolves a struct that is moved on only one branch and never used again via static duplication, without using a runtime flag", (): void => {
+    const result = check(
       `${BOXED}
       fn main() {
         let mut cond = true;
@@ -120,13 +123,39 @@ describe("move-check", (): void => {
           print(0);
         }
         // x is never read again: on the else path it is still Owned, but
-        // Slice 1 has no drop-flag mechanism to conditionally drop it.
+        // that's known statically here, not at runtime -- the drop attributes
+        // to the else branch instead of needing a flag (see branchDrops).
       }`,
     );
-    expect(diagnostics).toHaveLength(1);
-    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("moved");
-    expect(diagnostics[0].message).toContain("x");
+    expect(result.diagnostics).toEqual([]);
+    const main = result.functions.get("main");
+    assert(main !== undefined, "Expected main's ownership result");
+    const allDrops = [...main.drops.values()].flat();
+    expect(allDrops.map((d) => d.name)).not.toContain("x");
+    expect([...main.conditionalDrops.values()].flat()).toEqual([]);
+    expect(main.branchDrops.map((d) => d.declaration.name)).toEqual(["x"]);
+    expect(main.branchDrops.map((d) => d.branch)).toEqual(["else"]);
+  });
+
+  it("resolves a struct moved on only the else branch by attributing the drop to then, the symmetric case", (): void => {
+    const result = check(
+      `${BOXED}
+      fn main() {
+        let mut cond = true;
+        let x = Boxed { value: 1 };
+        if cond {
+          print(0);
+        } else {
+          let y = x; // moved on this path only
+          print(y.value);
+        }
+      }`,
+    );
+    expect(result.diagnostics).toEqual([]);
+    const main = result.functions.get("main");
+    assert(main !== undefined, "Expected main's ownership result");
+    expect(main.branchDrops.map((d) => d.declaration.name)).toEqual(["x"]);
+    expect(main.branchDrops.map((d) => d.branch)).toEqual(["then"]);
   });
 
   it("a value fully moved on every branch merges to an unconditional Unbound, not an ambiguous state", (): void => {
@@ -149,6 +178,165 @@ describe("move-check", (): void => {
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].message).toContain("moved");
     expect(diagnostics[0].message).not.toContain("possibly");
+  });
+
+  it("a value moved on every branch and never used again needs no drop of any kind, static or flagged", (): void => {
+    const result = check(
+      `${BOXED}
+      fn main() {
+        let mut cond = true;
+        let x = Boxed { value: 1 };
+        if cond {
+          let y = x;
+          print(y.value);
+        } else {
+          let z = x;
+          print(z.value);
+        }
+      }`,
+    );
+    expect(result.diagnostics).toEqual([]);
+    const main = result.functions.get("main");
+    assert(main !== undefined, "Expected main's ownership result");
+    const allDrops = [...main.drops.values()].flat();
+    expect(allDrops.map((d) => d.name)).not.toContain("x");
+    expect([...main.conditionalDrops.values()].flat()).toEqual([]);
+    expect(main.branchDrops).toEqual([]);
+  });
+
+  it("a value moved partway down an else-if chain resolves to two independent static drop sites, not a flag", (): void => {
+    const result = check(
+      `${BOXED}
+      fn main() {
+        let mut n = 1;
+        let x = Boxed { value: 1 };
+        if n == 1 {
+          print(0);
+        } else if n == 2 {
+          let y = x; // moved only in this arm
+          print(y.value);
+        } else {
+          print(2);
+        }
+      }`,
+    );
+    expect(result.diagnostics).toEqual([]);
+    const main = result.functions.get("main");
+    assert(main !== undefined, "Expected main's ownership result");
+    expect([...main.conditionalDrops.values()].flat()).toEqual([]);
+    const xDrops = main.branchDrops.filter((d) => d.declaration.name === "x");
+    expect(xDrops).toHaveLength(2);
+    // Attributed independently to the outer `if n == 1` (then) and the
+    // innermost fallthrough `else` -- the two concrete paths where x is
+    // still owned. Only one of the two ever runs, so there is no
+    // double-drop risk despite two static sites.
+    expect(xDrops.map((d) => d.branch).sort()).toEqual(["else", "then"]);
+    expect(new Set(xDrops.map((d) => d.ifTokenId)).size).toBe(2);
+  });
+
+  it("two independent bindings each conditionally moved in separate if/else pairs get independent attribution", (): void => {
+    const result = check(
+      `${BOXED}
+      fn main() {
+        let mut cond1 = true;
+        let mut cond2 = true;
+        let x = Boxed { value: 1 };
+        let w = Boxed { value: 2 };
+        if cond1 {
+          let y = x; // moved only here
+          print(y.value);
+        } else {
+          print(0);
+        }
+        if cond2 {
+          print(1);
+        } else {
+          let z = w; // moved only here
+          print(z.value);
+        }
+      }`,
+    );
+    expect(result.diagnostics).toEqual([]);
+    const main = result.functions.get("main");
+    assert(main !== undefined, "Expected main's ownership result");
+    expect([...main.conditionalDrops.values()].flat()).toEqual([]);
+    const xDrop = main.branchDrops.find((d) => d.declaration.name === "x");
+    const wDrop = main.branchDrops.find((d) => d.declaration.name === "w");
+    assert(xDrop !== undefined, "Expected a branch drop for x");
+    assert(wDrop !== undefined, "Expected a branch drop for w");
+    expect(xDrop.branch).toBe("else");
+    expect(wDrop.branch).toBe("then");
+    expect(xDrop.ifTokenId).not.toBe(wDrop.ifTokenId);
+  });
+
+  it("a conditional move inside a nested block within a branch still resolves at the enclosing if's merge", (): void => {
+    const result = check(
+      `${BOXED}
+      fn main() {
+        let mut cond = true;
+        let x = Boxed { value: 1 };
+        if cond {
+          {
+            let y = x; // moved inside a nested block within the then branch
+            print(y.value);
+          }
+          let done = true;
+          print(0);
+        } else {
+          print(1);
+        }
+      }`,
+    );
+    expect(result.diagnostics).toEqual([]);
+    const main = result.functions.get("main");
+    assert(main !== undefined, "Expected main's ownership result");
+    expect([...main.conditionalDrops.values()].flat()).toEqual([]);
+    const xDrop = main.branchDrops.find((d) => d.declaration.name === "x");
+    assert(xDrop !== undefined, "Expected a branch drop for x");
+    expect(xDrop.branch).toBe("else");
+  });
+
+  it("a Copy-typed value duplicated on only one branch never triggers conditional-move attribution", (): void => {
+    const result = check(`
+      fn main() {
+        let mut cond = true;
+        let n = 1;
+        if cond {
+          let m = n; // copied, not moved -- n stays Owned regardless of branch
+          print(m);
+        } else {
+          print(0);
+        }
+        print(n); // still usable: n was never conditionally moved
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    const main = result.functions.get("main");
+    assert(main !== undefined, "Expected main's ownership result");
+    expect(main.branchDrops).toEqual([]);
+    expect([...main.conditionalDrops.values()].flat()).toEqual([]);
+  });
+
+  it("a struct moved on the then branch with no source else at all attributes the drop to else anyway", (): void => {
+    const result = check(
+      `${BOXED}
+      fn main() {
+        let mut cond = true;
+        let x = Boxed { value: 1 };
+        if cond {
+          let y = x;
+          print(y.value);
+        }
+        print(1);
+      }`,
+    );
+    expect(result.diagnostics).toEqual([]);
+    const main = result.functions.get("main");
+    assert(main !== undefined, "Expected main's ownership result");
+    expect([...main.conditionalDrops.values()].flat()).toEqual([]);
+    const xDrop = main.branchDrops.find((d) => d.declaration.name === "x");
+    assert(xDrop !== undefined, "Expected a branch drop for x");
+    expect(xDrop.branch).toBe("else");
   });
 
   it("a struct possibly-uninitialized at scope close (no else branch initializes it) is rejected", (): void => {
@@ -468,5 +656,51 @@ describe("move-check", (): void => {
       }`,
     );
     expect(diagnostics).toEqual([]);
+  });
+
+  describe("--warn-drop-flags", (): void => {
+    it("names the binding in the warning message", (): void => {
+      expect(conditionalDropFlagWarning("x")).toContain("x");
+      expect(conditionalDropFlagWarning("x")).toContain("drop flag");
+    });
+
+    it("emits no warnings for a statically-resolved conditional move, since it never reaches the flag path", (): void => {
+      const result = check(
+        `${BOXED}
+        fn main() {
+          let mut cond = true;
+          let x = Boxed { value: 1 };
+          if cond {
+            let y = x;
+            print(y.value);
+          } else {
+            print(0);
+          }
+        }`,
+        { warnDropFlags: true },
+      );
+      expect(
+        result.diagnostics.filter((d) => d.severity === "warning"),
+      ).toEqual([]);
+    });
+
+    it("emits no warnings by default (option omitted) for the same program", (): void => {
+      const result = check(
+        `${BOXED}
+        fn main() {
+          let mut cond = true;
+          let x = Boxed { value: 1 };
+          if cond {
+            let y = x;
+            print(y.value);
+          } else {
+            print(0);
+          }
+        }`,
+      );
+      expect(
+        result.diagnostics.filter((d) => d.severity === "warning"),
+      ).toEqual([]);
+    });
   });
 });

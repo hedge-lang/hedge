@@ -136,4 +136,23 @@ describe("move semantics spec", (): void => {
       ["1", "2"],
     );
   });
+
+  it("a Copy-typed value duplicated on only one branch is still usable after the merge", (): void => {
+    assertRunsTo(
+      `
+      fn main() {
+        let mut cond = true;
+        let n = 1;
+        if cond {
+          let m = n;
+          print(m);
+        } else {
+          print(0);
+        }
+        print(n);
+      }
+    `,
+      ["1", "1"],
+    );
+  });
 });

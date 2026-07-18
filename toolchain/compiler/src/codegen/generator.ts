@@ -6,6 +6,7 @@ import type {
   NumericKind,
   UnaryOperator,
   BlockStatement,
+  DisposeCallStatement,
   DocComment,
   Expression,
   FunctionDecl,
@@ -352,6 +353,10 @@ function emitLet(statement: LetStatement): string {
     : `let ${statement.name};`;
 }
 
+function emitDisposeCall(statement: DisposeCallStatement): string {
+  return `${statement.target}[Symbol.dispose]();`;
+}
+
 function emitStatement(statement: Statement): string {
   switch (statement.kind) {
     case "LetStatement":
@@ -362,6 +367,8 @@ function emitStatement(statement: Statement): string {
       return emitIfStatement(statement);
     case "ReturnStatement":
       return emitReturn(statement);
+    case "DisposeCallStatement":
+      return emitDisposeCall(statement);
     case "FunctionDecl":
       return emitFunction(statement);
     default:
@@ -454,6 +461,8 @@ function emitItem(item: Item): string {
       return emitIfStatement(item);
     case "ReturnStatement":
       return emitReturn(item);
+    case "DisposeCallStatement":
+      return emitDisposeCall(item);
     default:
       return `${emitExpression(item)};`;
   }

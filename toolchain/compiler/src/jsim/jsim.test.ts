@@ -1,10 +1,20 @@
 import { describe, it, expect } from "vitest";
 import { assert } from "../assert.js";
+import { generate } from "../codegen/generator.js";
 import { isSome, none, some } from "../option.js";
 import { tokenize } from "../lexer/lexer.js";
+import {
+  buildControlFlowGraph,
+  declarationOf,
+} from "../ownership/control-flow-graph.js";
 import { analyzeOwnership } from "../ownership/move-check.js";
+import type {
+  ConditionalDrop,
+  FunctionOwnership,
+} from "../ownership/move-check.js";
 import { parse } from "../parser/parser.js";
 import { analyze } from "../semantics/analyzer.js";
+import type * as Semantics from "../semantics/ast.js";
 import { toJsim } from "./jsim.js";
 import type * as JSIM from "./ast.js";
 
@@ -865,5 +875,118 @@ describe("scope-end drop", () => {
     );
     assert(f !== undefined, "Expected function f");
     expect(f.body.some((s) => s.kind === "LetStatement")).toBe(false);
+  });
+});
+
+/**
+ * `attributeConditionalMoves` (move-check.ts) resolves every conditional
+ * move a loop-free program can express via static duplication, so
+ * `FunctionOwnership.conditionalDrops` is never actually populated by real
+ * analysis today -- the drop-flag codegen path it feeds
+ * (`dropFlagName`/`dropFlagDeclareStatement`/`dropFlagClearStatement`/
+ * `dropCheckStatements`) has no reachable test through `compile()`. This
+ * describe block tests it directly instead: `toJsim` takes its ownership
+ * map as a plain parameter, so a synthetic `FunctionOwnership` with a
+ * hand-built `conditionalDrops` entry can drive the real codegen without
+ * needing move-check.ts to ever actually produce one. This pins the
+ * contract between move-check.ts's output shape and jsim.ts's consumption
+ * of it, so it doesn't silently break before ROADMAP Slice 6 (loops) makes
+ * the path reachable for real.
+ */
+describe("conditional-drop-flag codegen (synthetic ownership)", () => {
+  function synthesizeConditionalDrop(source: string): string {
+    const { tokens } = tokenize(source);
+    const { program, diagnostics: parseDiagnostics } = parse(tokens);
+    assert(isSome(program), parseDiagnostics[0]?.message ?? "Parse failed");
+    const analysis = analyze(program.value, tokens);
+    assert(
+      analysis.diagnostics.every((d) => d.severity !== "error"),
+      analysis.diagnostics.map((d) => d.message).join("; "),
+    );
+
+    const mainFn = analysis.program.items.find(
+      (item): item is Semantics.FunctionDecl =>
+        item.kind === "Function" && item.name.text === "main",
+    );
+    assert(mainFn !== undefined, "Expected a main function");
+
+    const [letX, letY] = mainFn.body.statements;
+    assert(letX?.kind === "LetStatement", "Expected `let x = ...;` first");
+    assert(letY?.kind === "LetStatement", "Expected `let y = x;` second");
+
+    const xDeclOption = declarationOf(letX.pattern, letX.mutable);
+    assert(xDeclOption.kind === "Some", "Expected a real declaration for x");
+
+    const conditionalDrop: ConditionalDrop = {
+      declaration: xDeclOption.value,
+      moveStatementTokenId: letY.tokenId,
+    };
+    const ownership: ReadonlyMap<string, FunctionOwnership> = new Map([
+      [
+        "main",
+        {
+          graph: buildControlFlowGraph(mainFn),
+          drops: new Map(),
+          conditionalDrops: new Map([[mainFn.body.tokenId, [conditionalDrop]]]),
+          branchDrops: [],
+        },
+      ],
+    ]);
+
+    const jsim = toJsim(analysis.program, tokens, ownership);
+    const { javascript } = generate(jsim);
+    assert(isSome(javascript), "Expected generated JavaScript");
+    return javascript.value;
+  }
+
+  it("declares the flag true, clears it false at the move site, and guards the dispose call", () => {
+    const js = synthesizeConditionalDrop(`
+      struct Boxed { value: i32 }
+      fn main() {
+        let x = Boxed { value: 1 };
+        let y = x;
+        print(y.value);
+      }
+    `);
+
+    expect(js).toMatch(/dropFlag_x\s*=\s*true/);
+    expect(js).toMatch(/dropFlag_x\s*=\s*false/);
+    expect(js).toMatch(
+      /if\s*\(\s*dropFlag_x\s*\)\s*\{\s*x\[Symbol\.dispose\]\(\);\s*\}/,
+    );
+
+    const setTrueIndex = js.search(/dropFlag_x\s*=\s*true/);
+    const setFalseIndex = js.search(/dropFlag_x\s*=\s*false/);
+    const guardIndex = js.search(/if\s*\(\s*dropFlag_x\s*\)/);
+    expect(setTrueIndex).toBeLessThan(setFalseIndex);
+    expect(setFalseIndex).toBeLessThan(guardIndex);
+  });
+
+  it("guards the *original* binding's dispose, not a same-scope shadow's, when the source name repeats", () => {
+    // Regression test for a real (if currently unreachable through
+    // analyzeOwnership) naming bug: a later `let x = ...;` in the *same*
+    // scope alpha-renames to `x$1` and overwrites that scope's own rename
+    // frame entry for "x" (same-scope shadowing shares one frame, unlike a
+    // nested confined scope's own frame, which pops before this guard
+    // runs). By the time dropCheckStatements's guard is emitted at the
+    // block's own close, lookupLocalName(ctx, "x") would resolve to the
+    // shadow's "x$1", not the original `x` the synthetic ConditionalDrop
+    // actually names -- disposing the wrong binding. emittedNameForBinding
+    // resolves by the declaration's own BindingId instead, so it can't be
+    // fooled by a same-name binding that shows up later in the same scope.
+    const js = synthesizeConditionalDrop(`
+      struct Boxed { value: i32 }
+      fn main() {
+        let x = Boxed { value: 1 };
+        let y = x;
+        let x = Boxed { value: 99 };
+        print(x.value);
+      }
+    `);
+
+    expect(js).toMatch(
+      /if\s*\(\s*dropFlag_x\s*\)\s*\{\s*x\[Symbol\.dispose\]\(\);\s*\}/,
+    );
+    expect(js).not.toMatch(/x\$1\[Symbol\.dispose\]/);
   });
 });

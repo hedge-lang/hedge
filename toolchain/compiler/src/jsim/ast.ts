@@ -34,8 +34,20 @@ export type Statement =
   | BlockStatement
   | IfStatement
   | ReturnStatement
+  | DisposeCallStatement
   | Expression
   | FunctionDecl;
+
+/**
+ * The explicit disposer call a conditionally dropped binding needs, since it
+ * can't lower to `using` (see ADR 0003: `using` can't express a drop flag).
+ * {@link target} is already the emitted (alpha-renamed) name; there is no
+ * receiver expression to lower further.
+ */
+export interface DisposeCallStatement {
+  readonly kind: "DisposeCallStatement";
+  readonly target: string;
+}
 
 export interface BlockStatement {
   readonly kind: "BlockStatement";

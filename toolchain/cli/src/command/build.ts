@@ -2,13 +2,16 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { stderr, stdout } from "node:process";
 
-import { compile, isSome } from "@hedge-lang/compiler";
+import { compile, isSome, type CompileOptions } from "@hedge-lang/compiler";
 
 import { renderDiagnostics } from "../util/render.js";
 
-export async function build(file: string): Promise<number> {
+export async function build(
+  file: string,
+  options: CompileOptions = {},
+): Promise<number> {
   const source = await readFile(file, "utf8");
-  const result = compile(source);
+  const result = compile(source, options);
   if (result.diagnostics.length > 0) {
     stderr.write(`${renderDiagnostics(result.diagnostics)}\n`);
   }

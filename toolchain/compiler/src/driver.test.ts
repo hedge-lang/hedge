@@ -251,4 +251,31 @@ describe("driver", (): void => {
       );
     });
   });
+
+  describe("CompileOptions.warnDropFlags", (): void => {
+    it("accepts the option without erroring and produces no warnings for a program with no conditional-drop sites", (): void => {
+      const result = compile(
+        `
+        fn main() {
+          let greeting = "Hello, world!";
+          print(greeting);
+        }
+      `,
+        { warnDropFlags: true },
+      );
+      expect(result.diagnostics).toEqual([]);
+      expect(isSome(result.code)).toBe(true);
+    });
+
+    it("defaults to false when options is omitted entirely", (): void => {
+      const result = compile(`
+        fn main() {
+          let greeting = "Hello, world!";
+          print(greeting);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(isSome(result.code)).toBe(true);
+    });
+  });
 });

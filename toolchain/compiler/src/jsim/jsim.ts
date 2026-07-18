@@ -1,7 +1,14 @@
 import { isSome, mapSome, none, type Option, some } from "../option.js";
 import type { Token } from "../lexer/token.js";
-import type { Declaration } from "../ownership/control-flow-graph.js";
-import type { FunctionOwnership } from "../ownership/move-check.js";
+import type {
+  BindingId,
+  Declaration,
+} from "../ownership/control-flow-graph.js";
+import type {
+  BranchDrop,
+  ConditionalDrop,
+  FunctionOwnership,
+} from "../ownership/move-check.js";
 import type * as Semantics from "../semantics/ast.js";
 import type * as JSIM from "./ast.js";
 import { toDocComment } from "./parts/doc-comment.js";
@@ -26,6 +33,45 @@ interface JsimContext {
    * keyed by block tokenId.
    */
   readonly drops: ReadonlyMap<number, readonly Declaration[]>[];
+  /**
+   * Per-function stack of that function's own conditional-drop map, keyed
+   * the same way as `drops`. A conditionally-dropped binding needs a
+   * synthesized drop-flag guard instead of `using` (see `dropFlagName`,
+   * `dropCheckStatements`).
+   */
+  readonly conditionalDrops: ReadonlyMap<number, readonly ConditionalDrop[]>[];
+  /**
+   * Per-function map from a conditionally-dropped binding's own `BindingId`
+   * to its synthesized flag's emitted name, allocated lazily on first
+   * reference (declare site, move site, or scope-exit guard -- whichever is
+   * lowered first) and reused at every later reference.
+   */
+  readonly dropFlagNames: Map<BindingId, string>[];
+  /**
+   * Per-function stack of that function's own statically-resolved
+   * conditional moves (see `move-check.ts`'s `attributeConditionalMoves`).
+   * Looked up by the `if` expression's own tokenId at `jsimIfStatement`.
+   */
+  readonly branchDrops: (readonly BranchDrop[])[];
+  /**
+   * Per-function stack of `conditionalDrops`, pre-flattened once per
+   * function (see `withFunctionCtx`) rather than on every
+   * `allConditionalDrops` call -- `lowerStatementWithDropFlags` calls it up
+   * to twice per statement, and re-flattening the map's values each time
+   * would scale with statement count for no reason.
+   */
+  readonly allConditionalDrops: (readonly ConditionalDrop[])[];
+  /**
+   * Per-function map from a binding's own `BindingId` to the emitted
+   * (alpha-renamed) name it was originally bound to, recorded once at its
+   * own bind site (a `LetStatement` in `parseStatement`, or a parameter in
+   * `parseFunction`). A drop site needs to resolve the exact binding
+   * instance a `Declaration` names, not whatever its source name currently
+   * resolves to via `lookupLocalName` -- that's name-based and can find a
+   * shadow instead of the original if one with the same source name is
+   * currently in scope. See `emittedNameForBinding`.
+   */
+  readonly emittedNameByBindingId: Map<BindingId, string>[];
 }
 
 function createJsimContext(
@@ -37,6 +83,11 @@ function createJsimContext(
     ownership,
     rename: [],
     drops: [],
+    conditionalDrops: [],
+    dropFlagNames: [],
+    branchDrops: [],
+    allConditionalDrops: [],
+    emittedNameByBindingId: [],
   };
 }
 
@@ -49,6 +100,175 @@ function scopeDrops(
   blockTokenId: number,
 ): readonly Declaration[] {
   return ctx.drops.at(-1)?.get(blockTokenId) ?? [];
+}
+
+/**
+ * Conditionally-dropped declarations owned by the block owning
+ * `blockTokenId`, for the function currently being lowered.
+ */
+function scopeConditionalDrops(
+  ctx: JsimContext,
+  blockTokenId: number,
+): readonly ConditionalDrop[] {
+  return ctx.conditionalDrops.at(-1)?.get(blockTokenId) ?? [];
+}
+
+/** Every conditional drop recorded anywhere in the function currently being lowered. */
+function allConditionalDrops(ctx: JsimContext): readonly ConditionalDrop[] {
+  return ctx.allConditionalDrops.at(-1) ?? [];
+}
+
+/**
+ * The synthesized boolean flag name for `declaration`, allocated through the
+ * usual alpha-rename collision-avoidance machinery on first reference so it
+ * can never collide with a real user binding, and cached so every later
+ * reference (declare, move-site clear, scope-exit guard) agrees on the name.
+ */
+function dropFlagName(ctx: JsimContext, declaration: Declaration): string {
+  const names = ctx.dropFlagNames.at(-1);
+  assert(names !== undefined, "dropFlagName called outside a function context");
+  const existing = names.get(declaration.id);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const allocated = bindLocalName(ctx, `dropFlag_${declaration.name}`);
+  names.set(declaration.id, allocated);
+  return allocated;
+}
+
+/** `let mut <flag> = true;` -- synthesized right after the binding's own declaration. */
+function dropFlagDeclareStatement(
+  ctx: JsimContext,
+  declaration: Declaration,
+  span: JSIM.LetStatement["span"],
+): JSIM.LetStatement {
+  return {
+    kind: "LetStatement",
+    name: dropFlagName(ctx, declaration),
+    mutable: true,
+    value: some({ kind: "BooleanLiteral", value: true }),
+    docComment: none(),
+    span,
+    dispose: false,
+  };
+}
+
+/** `<flag> = false;` -- synthesized immediately after the statement that performed the move. */
+function dropFlagClearStatement(
+  ctx: JsimContext,
+  declaration: Declaration,
+): JSIM.Statement {
+  return {
+    kind: "AssignExpression",
+    operator: "Assign",
+    lhs: {
+      kind: "Identifier",
+      value: dropFlagName(ctx, declaration),
+      type: none(),
+    },
+    rhs: { kind: "BooleanLiteral", value: false },
+  };
+}
+
+/**
+ * `if (<flag>) { <binding>[Symbol.dispose](); }` for every conditionally
+ * dropped declaration owned by the block owning `blockTokenId`, in reverse
+ * declaration order (matching unconditional drops). Must be spliced in
+ * before any statement that can exit the block early (a trailing-expression
+ * `return`) -- placed after, it would never run. These are ordinary
+ * statements, not `using`, so unlike unconditional drops they do not run on
+ * an exceptional (thrown) exit from the block; that gap is a known,
+ * deliberately deferred limitation (`using` can't express a drop flag at
+ * all -- ADR 0003 -- and wrapping every conditional drop site in try/finally
+ * is unscoped extra work beyond what conditional-move tracking itself asks
+ * for).
+ *
+ * A second, related gap: every caller (`parseFunctionBody`,
+ * `jsimBlockStatement`, `jsimBranchBody`) places this call's output
+ * unconditionally before a trailing-expression `return`, never after the
+ * trailing expression has actually *run*. If the trailing expression is
+ * itself what would clear the flag this call reads (e.g. a nested
+ * conditional move inside it), the guard fires before the clear ever has a
+ * chance to happen -- a real correctness bug, not just an ordering nuance.
+ * It's currently unreachable: `move-check.ts`'s `attributeConditionalMoves`
+ * resolves every conditional move a loop-free program can express via
+ * static duplication before it ever reaches `ConditionalDrop`/this
+ * function, regardless of how deeply the move is nested or confined
+ * (verified directly, not just argued). Once loops (ROADMAP Slice 6) make
+ * this function reachable for real, this ordering needs a proper fix --
+ * likely computing the trailing value into a temporary, running the checks,
+ * then returning the temporary -- rather than the current unconditional
+ * "checks, then return" order.
+ */
+function dropCheckStatements(
+  ctx: JsimContext,
+  blockTokenId: number,
+): JSIM.Statement[] {
+  return scopeConditionalDrops(ctx, blockTokenId).map(
+    (conditional): JSIM.Statement => ({
+      kind: "IfStatement",
+      condition: {
+        kind: "Identifier",
+        value: dropFlagName(ctx, conditional.declaration),
+        type: none(),
+      },
+      thenBranch: [
+        {
+          kind: "DisposeCallStatement",
+          target: emittedNameForBinding(ctx, conditional.declaration),
+        },
+      ],
+      elseBranch: none(),
+    }),
+  );
+}
+
+/**
+ * Lowers one source statement to one-or-more JSIM statements: the statement
+ * itself, plus any synthesized drop-flag machinery it triggers --
+ * `let mut <flag> = true;` right after the declaration of a binding that
+ * ends up conditionally dropped, and a `<flag> = false;` right after the
+ * statement that actually performed the move making it conditional (see
+ * `dropFlagDeclareStatement`/`dropFlagClearStatement`). Depends on
+ * `parseStatement` for the lowering of `statement` itself.
+ */
+function lowerStatementWithDropFlags(
+  ctx: JsimContext,
+  statement: Semantics.Statement,
+  scopeDropsForBlock: readonly Declaration[],
+): JSIM.Statement[] {
+  const lowered = parseStatement(ctx, statement, scopeDropsForBlock);
+  const result: JSIM.Statement[] = [lowered];
+
+  if (statement.kind === "LetStatement" && lowered.kind === "LetStatement") {
+    const conditional = allConditionalDrops(ctx).find(
+      (c) => c.declaration.id === statement.pattern.name.tokenId,
+    );
+    if (conditional !== undefined) {
+      result.push(
+        dropFlagDeclareStatement(ctx, conditional.declaration, lowered.span),
+      );
+    }
+  }
+
+  for (const conditional of allConditionalDrops(ctx)) {
+    if (conditional.moveStatementTokenId === statement.tokenId) {
+      result.push(dropFlagClearStatement(ctx, conditional.declaration));
+    }
+  }
+
+  return result;
+}
+
+/** Lowers a statement list, threading drop-flag synthesis through `lowerStatementWithDropFlags`. */
+function lowerStatementsWithDropFlags(
+  ctx: JsimContext,
+  statements: readonly Semantics.Statement[],
+  scopeDropsForBlock: readonly Declaration[],
+): JSIM.Statement[] {
+  return statements.flatMap((stmt) =>
+    lowerStatementWithDropFlags(ctx, stmt, scopeDropsForBlock),
+  );
 }
 
 /**
@@ -72,11 +292,23 @@ function withFunctionCtx<T>(
     emittedNames: new Set<string>(),
   });
   ctx.drops.push(ctx.ownership.get(functionName)?.drops ?? new Map());
+  const conditionalDrops =
+    ctx.ownership.get(functionName)?.conditionalDrops ?? new Map();
+  ctx.conditionalDrops.push(conditionalDrops);
+  ctx.allConditionalDrops.push([...conditionalDrops.values()].flat());
+  ctx.dropFlagNames.push(new Map());
+  ctx.branchDrops.push(ctx.ownership.get(functionName)?.branchDrops ?? []);
+  ctx.emittedNameByBindingId.push(new Map());
   try {
     return fn();
   } finally {
     ctx.rename.pop();
     ctx.drops.pop();
+    ctx.conditionalDrops.pop();
+    ctx.allConditionalDrops.pop();
+    ctx.dropFlagNames.pop();
+    ctx.branchDrops.pop();
+    ctx.emittedNameByBindingId.pop();
   }
 }
 
@@ -140,6 +372,42 @@ function lookupLocalName(ctx: JsimContext, sourceName: string): string {
     }
   }
   return sourceName;
+}
+
+/**
+ * Records that `declaration`'s own `BindingId` was emitted as `emittedName`
+ * -- called once, at the binding's own bind site. See
+ * `emittedNameForBinding` for why a drop site needs this instead of
+ * `lookupLocalName`.
+ */
+function recordEmittedName(
+  ctx: JsimContext,
+  bindingId: BindingId,
+  emittedName: string,
+): void {
+  ctx.emittedNameByBindingId.at(-1)?.set(bindingId, emittedName);
+}
+
+/**
+ * The emitted (alpha-renamed) name `declaration` was originally bound to,
+ * resolved by its own `BindingId` rather than by re-resolving its source
+ * name through the current frame stack. `lookupLocalName` is name-based:
+ * if a shadow binding with the same source name is currently in scope (or,
+ * for a use after the shadow's own frame has closed, was ever in scope),
+ * it can silently return the wrong emitted name. A drop site needs the
+ * exact binding instance a `Declaration`/`BindingId` names, never
+ * "whatever this source name currently resolves to".
+ */
+function emittedNameForBinding(
+  ctx: JsimContext,
+  declaration: Declaration,
+): string {
+  const name = ctx.emittedNameByBindingId.at(-1)?.get(declaration.id);
+  assert(
+    name !== undefined,
+    `ICE: no emitted name recorded for binding \`${declaration.name}\``,
+  );
+  return name;
 }
 
 export function toJsim(
@@ -271,10 +539,11 @@ function parseFunction(
     // Capture the emitted name so the function declaration stays in sync with
     // whatever the rename context assigns (defensive: currently always identity
     // since params are the first things bound in a fresh function scope).
-    const emittedParams = fn.params.map((p) => ({
-      param: p,
-      emittedName: bindLocalName(ctx, p.pattern.name.text),
-    }));
+    const emittedParams = fn.params.map((p) => {
+      const emittedName = bindLocalName(ctx, p.pattern.name.text);
+      recordEmittedName(ctx, p.pattern.name.tokenId, emittedName);
+      return { param: p, emittedName };
+    });
     return parseFunctionBody(ctx, fn, emittedParams);
   });
 }
@@ -353,15 +622,29 @@ function parseFunctionBody(
   const paramShadows = dropParamShadows(ctx, emittedParams, rootDrops);
   const statements: JSIM.Statement[] = [
     ...paramShadows,
-    ...fn.body.statements.map((stmt) => parseStatement(ctx, stmt, rootDrops)),
+    ...lowerStatementsWithDropFlags(ctx, fn.body.statements, rootDrops),
   ];
+  // The guard-check must run before any `return` the trailing expression
+  // produces, or it would be dead code -- but after everything else, so it
+  // sees whichever branch actually ran. A declared return type turns the
+  // trailing expression into a real `return` (via jsimTailStatements), so
+  // the guard goes immediately before it; otherwise the trailing expression
+  // is just evaluated in place and the guard can safely follow it.
   if (isSome(fn.body.trailingExpression)) {
     const trailing = fn.body.trailingExpression.value;
-    statements.push(
-      ...(isSome(declaredReturnType)
-        ? jsimTailStatements(ctx, trailing)
-        : [parseExpression(ctx, trailing)]),
-    );
+    if (isSome(declaredReturnType)) {
+      statements.push(
+        ...dropCheckStatements(ctx, fn.body.tokenId),
+        ...jsimTailStatements(ctx, trailing),
+      );
+    } else {
+      statements.push(
+        parseExpression(ctx, trailing),
+        ...dropCheckStatements(ctx, fn.body.tokenId),
+      );
+    }
+  } else {
+    statements.push(...dropCheckStatements(ctx, fn.body.tokenId));
   }
 
   const scope: JSIM.FunctionDecl["scope"] = mapSome(
@@ -416,6 +699,7 @@ function parseStatement(
         parseExpression(ctx, expr),
       );
       const name = bindLocalName(ctx, statement.pattern.name.text);
+      recordEmittedName(ctx, statement.pattern.name.tokenId, name);
       const dispose =
         !statement.mutable &&
         scopeDrops.some((d) => d.id === statement.pattern.name.tokenId);
@@ -475,9 +759,10 @@ function jsimBlockStatement(
   pushRenameFrame(ctx);
   try {
     const drops = scopeDrops(ctx, block.tokenId);
-    const body = block.statements.map((stmt) =>
-      parseStatement(ctx, stmt, drops),
-    );
+    const body = [
+      ...lowerStatementsWithDropFlags(ctx, block.statements, drops),
+      ...dropCheckStatements(ctx, block.tokenId),
+    ];
     return { kind: "BlockStatement", body };
   } finally {
     popRenameFrame(ctx);
@@ -601,9 +886,10 @@ function jsimBranchBody(
   pushRenameFrame(ctx);
   try {
     const drops = scopeDrops(ctx, block.tokenId);
-    const stmts: JSIM.Statement[] = block.statements.map((stmt) =>
-      parseStatement(ctx, stmt, drops),
-    );
+    const stmts: JSIM.Statement[] = [
+      ...lowerStatementsWithDropFlags(ctx, block.statements, drops),
+      ...dropCheckStatements(ctx, block.tokenId),
+    ];
     if (isSome(block.trailingExpression)) {
       stmts.push({
         kind: "ReturnStatement",
@@ -624,15 +910,80 @@ function jsimBranchElse(
   return jsimBranchBody(ctx, branch);
 }
 
+/**
+ * `using <shadow> = <original>;` declarations for every declaration a
+ * static duplication (`move-check.ts`'s `attributeConditionalMoves`)
+ * attributed to `branch` of the `if` expression `ifTokenId` names.
+ * Prepended to the front of the branch's own statement list (see
+ * `jsimIfStatement`) rather than emitted as an explicit dispose call at the
+ * end: within its own branch the drop is unconditional (that's the whole
+ * point of static duplication), so `using`'s native scope-exit semantics
+ * handle every exit path correctly -- normal fall-through, an early
+ * `return`, a thrown exception -- without the branch needing to track
+ * where its own last statement is. An explicit call placed near the end
+ * would also run *before* a more-nested `using`-declared local's own
+ * scope-exit disposal, inverting reverse-declaration-order; a `using`
+ * declared first in the branch disposes last, which is correct since the
+ * original binding is always the "oldest" declaration in scope here.
+ * Mirrors `dropParamShadows`'s existing shadow-rebind pattern -- the
+ * original binding can't itself become `using` (`using x = x;` is a
+ * `SyntaxError`, and rebinding the same name would just shadow it).
+ */
+function branchAttributedDropDeclarations(
+  ctx: JsimContext,
+  ifTokenId: number,
+  branch: "then" | "else",
+): JSIM.LetStatement[] {
+  const drops = ctx.branchDrops.at(-1) ?? [];
+  return drops
+    .filter((d) => d.ifTokenId === ifTokenId && d.branch === branch)
+    .map((d): JSIM.LetStatement => ({
+      kind: "LetStatement",
+      name: bindLocalName(ctx, `dropShadow_${d.declaration.name}`),
+      mutable: false,
+      value: some({
+        kind: "Identifier",
+        value: emittedNameForBinding(ctx, d.declaration),
+        type: none(),
+      }),
+      docComment: none(),
+      span: resolveSpan(
+        ctx.tokens,
+        d.declaration.tokenId,
+        d.declaration.tokenId,
+      ),
+      dispose: true,
+    }));
+}
+
 function jsimIfStatement(
   ctx: JsimContext,
   ifExpr: Semantics.IfExpression,
 ): JSIM.IfStatement {
+  const condition = parseExpression(ctx, ifExpr.condition);
+  const thenBranch = [
+    ...branchAttributedDropDeclarations(ctx, ifExpr.tokenId, "then"),
+    ...jsimBranchBody(ctx, ifExpr.thenBranch),
+  ];
+  const elseShadows = branchAttributedDropDeclarations(
+    ctx,
+    ifExpr.tokenId,
+    "else",
+  );
+  // A source-written `else` (even an empty one) always survives as `Some`,
+  // matching the pre-existing behavior for an explicit empty else block --
+  // only a *synthesized* else (no source else at all) collapses back to
+  // `none()` when there's nothing to carry.
+  const elseBranch: Option<JSIM.Statement[]> = isSome(ifExpr.elseBranch)
+    ? some([...elseShadows, ...jsimBranchElse(ctx, ifExpr.elseBranch.value)])
+    : elseShadows.length > 0
+      ? some(elseShadows)
+      : none();
   return {
     kind: "IfStatement",
-    condition: parseExpression(ctx, ifExpr.condition),
-    thenBranch: jsimBranchBody(ctx, ifExpr.thenBranch),
-    elseBranch: mapSome(ifExpr.elseBranch, (eb) => jsimBranchElse(ctx, eb)),
+    condition,
+    thenBranch,
+    elseBranch,
   };
 }
 

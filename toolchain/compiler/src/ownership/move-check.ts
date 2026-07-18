@@ -65,12 +65,51 @@ import { buildControlFlowGraph, declarationOf } from "./control-flow-graph.js";
 type MoveState =
   | { readonly kind: "Uninitialized" }
   | { readonly kind: "Owned" }
-  | { readonly kind: "Unbound"; readonly moveSite: Span }
-  | { readonly kind: "ConditionallyMoved"; readonly moveSite: Span }
+  | {
+      readonly kind: "Unbound";
+      readonly moveSite: Span;
+      readonly moveStatementTokenId: number;
+    }
+  | {
+      readonly kind: "ConditionallyMoved";
+      readonly moveSite: Span;
+      readonly moveStatementTokenId: number;
+    }
   | { readonly kind: "PossiblyUninitialized" };
 
 type StateMap = Map<BindingId, MoveState>;
 type ScopeStack = Map<string, BindingId>[];
+
+/**
+ * A declaration whose scope-end drop can't be statically decided: it was
+ * moved on some reachable path but not others (see the `MoveState` doc
+ * comment's `ConditionallyMoved` case), and unlike `BranchDrop` below, no
+ * single fork's branches can be shown to fully account for it (chiefly:
+ * loops, ROADMAP Slice 6 -- a value moved on some iterations but not others
+ * can't be attributed to a specific static branch, since the same code point
+ * is reached with different history across iterations). `moveStatementTokenId`
+ * names the exact statement whose move makes this ambiguous, so JSIM lowering
+ * can inject the flag-clear write immediately after it. Currently unreachable
+ * without loops -- see `attributeConditionalMoves`, which resolves every
+ * fork-local conditional move statically before it ever reaches here.
+ */
+export interface ConditionalDrop {
+  readonly declaration: Declaration;
+  readonly moveStatementTokenId: number;
+}
+
+/**
+ * A conditional move fully resolved by static duplication (matches rustc's
+ * drop elaboration): `declaration` is Owned on exactly one side of the `if`
+ * named by `ifTokenId` and definitely moved on the other, so the drop is
+ * attributed directly to the still-owning `branch` instead of needing a
+ * runtime flag. See `attributeConditionalMoves`.
+ */
+export interface BranchDrop {
+  readonly declaration: Declaration;
+  readonly ifTokenId: number;
+  readonly branch: "then" | "else";
+}
 
 export interface FunctionOwnership {
   readonly graph: ControlFlowGraph;
@@ -79,6 +118,14 @@ export interface FunctionOwnership {
    * in reverse declaration order.
    */
   readonly drops: ReadonlyMap<number, readonly Declaration[]>;
+  /**
+   * Conditionally-dropped declarations, keyed the same way as `drops`.
+   * These need a drop-flag guard at codegen instead of a plain `using`.
+   * Currently always empty without loops -- see `ConditionalDrop`.
+   */
+  readonly conditionalDrops: ReadonlyMap<number, readonly ConditionalDrop[]>;
+  /** Conditional moves resolved via static duplication. See `BranchDrop`. */
+  readonly branchDrops: readonly BranchDrop[];
 }
 
 export interface OwnershipCheckResult {
@@ -90,6 +137,30 @@ interface Ctx {
   readonly tokens: readonly Token[];
   readonly diagnostics: Diagnostic[];
   readonly drops: Map<number, Declaration[]>;
+  readonly conditionalDrops: Map<number, ConditionalDrop[]>;
+  readonly branchDrops: BranchDrop[];
+  /**
+   * Every declaration in the function currently being walked, keyed by its
+   * own `BindingId`. Populated incrementally as `walkStatement`'s
+   * `LetStatement` case and `walkFunction`'s param loop each discover a
+   * real `Declaration` -- not derived from `collectDeclarations(graph)`,
+   * which only reads a `BasicBlock`'s own `scopeExit.declarations` and so
+   * has a documented blind spot for declarations made inside a confined
+   * (value-position) scope (see `control-flow-graph.ts`'s
+   * `recordConfinedScope`, which never sets a `scopeExit` at all). This
+   * walk visits every `LetStatement` uniformly regardless of confinement,
+   * so building the map here has no equivalent gap.
+   */
+  readonly declarationsById: Map<BindingId, Declaration>;
+  /** See `CompileOptions.warnDropFlags` in driver.ts. */
+  readonly warnDropFlags: boolean;
+  /**
+   * The tokenId of the statement currently being walked, updated at the top
+   * of `walkStatement`. Read by `useOrMove` to stamp a move's
+   * `moveStatementTokenId` -- the granularity JSIM lowering needs to inject a
+   * drop-flag-clear write right after the statement that performed the move.
+   */
+  currentStatementTokenId: number;
 }
 
 function tokenSpan(tokens: readonly Token[], tokenId: number): Span {
@@ -110,6 +181,25 @@ function emitDiagnostic(ctx: Ctx, message: string, tokenId: number): void {
     message,
     span: diagnosticSpan(ctx.tokens, tokenId),
   });
+}
+
+function emitWarning(ctx: Ctx, message: string, tokenId: number): void {
+  ctx.diagnostics.push({
+    severity: "warning",
+    message,
+    span: diagnosticSpan(ctx.tokens, tokenId),
+  });
+}
+
+/**
+ * The --warn-drop-flags message for a conditionally dropped declaration
+ * (see CompileOptions.warnDropFlags in driver.ts). A pure function, kept
+ * independently testable from the code path that calls it -- which, with no
+ * loops yet (ROADMAP Slice 6), no program compilable today can reach; see
+ * ConditionalDrop's own doc comment.
+ */
+export function conditionalDropFlagWarning(name: string): string {
+  return `\`${name}\` needs a runtime drop flag to decide whether it is still owned at scope exit`;
 }
 
 /**
@@ -242,6 +332,7 @@ function useOrMove(
         state.set(id, {
           kind: "Unbound",
           moveSite: tokenSpan(ctx.tokens, pathExpr.tokenId),
+          moveStatementTokenId: ctx.currentStatementTokenId,
         });
       }
       return;
@@ -295,7 +386,11 @@ function combineStates(av: MoveState, bv: MoveState): MoveState {
           return { kind: "PossiblyUninitialized" };
         case "Unbound":
         case "ConditionallyMoved":
-          return { kind: "ConditionallyMoved", moveSite: bv.moveSite };
+          return {
+            kind: "ConditionallyMoved",
+            moveSite: bv.moveSite,
+            moveStatementTokenId: bv.moveStatementTokenId,
+          };
         case "PossiblyUninitialized":
           return { kind: "PossiblyUninitialized" };
         default:
@@ -313,12 +408,20 @@ function combineStates(av: MoveState, bv: MoveState): MoveState {
           // to drop either way — fold to Unbound rather than inventing a
           // third "doubly dead" state for a case with no drop-safety
           // consequence.
-          return { kind: "Unbound", moveSite: bv.moveSite };
+          return {
+            kind: "Unbound",
+            moveSite: bv.moveSite,
+            moveStatementTokenId: bv.moveStatementTokenId,
+          };
         case "ConditionallyMoved":
           // `bv` may still be Owned on one of its own sub-paths — that
           // possibility must survive the merge, not be discarded just
           // because `av` is definitely-uninitialized.
-          return { kind: "ConditionallyMoved", moveSite: bv.moveSite };
+          return {
+            kind: "ConditionallyMoved",
+            moveSite: bv.moveSite,
+            moveStatementTokenId: bv.moveStatementTokenId,
+          };
         case "PossiblyUninitialized":
           return { kind: "PossiblyUninitialized" };
         default:
@@ -327,13 +430,29 @@ function combineStates(av: MoveState, bv: MoveState): MoveState {
     case "Unbound":
       switch (bv.kind) {
         case "Owned":
-          return { kind: "ConditionallyMoved", moveSite: av.moveSite };
+          return {
+            kind: "ConditionallyMoved",
+            moveSite: av.moveSite,
+            moveStatementTokenId: av.moveStatementTokenId,
+          };
         case "Uninitialized":
-          return { kind: "Unbound", moveSite: av.moveSite };
+          return {
+            kind: "Unbound",
+            moveSite: av.moveSite,
+            moveStatementTokenId: av.moveStatementTokenId,
+          };
         case "Unbound":
-          return { kind: "Unbound", moveSite: av.moveSite };
+          return {
+            kind: "Unbound",
+            moveSite: av.moveSite,
+            moveStatementTokenId: av.moveStatementTokenId,
+          };
         case "ConditionallyMoved":
-          return { kind: "ConditionallyMoved", moveSite: av.moveSite };
+          return {
+            kind: "ConditionallyMoved",
+            moveSite: av.moveSite,
+            moveStatementTokenId: av.moveStatementTokenId,
+          };
         case "PossiblyUninitialized":
           // `av` is definitely moved (never owned from here on); `bv` may
           // still be Owned on one of its own sub-paths, which must survive.
@@ -346,16 +465,28 @@ function combineStates(av: MoveState, bv: MoveState): MoveState {
         case "Owned":
         case "Unbound":
         case "ConditionallyMoved":
-          return { kind: "ConditionallyMoved", moveSite: av.moveSite };
+          return {
+            kind: "ConditionallyMoved",
+            moveSite: av.moveSite,
+            moveStatementTokenId: av.moveStatementTokenId,
+          };
         case "Uninitialized":
-          return { kind: "ConditionallyMoved", moveSite: av.moveSite };
+          return {
+            kind: "ConditionallyMoved",
+            moveSite: av.moveSite,
+            moveStatementTokenId: av.moveStatementTokenId,
+          };
         case "PossiblyUninitialized":
           // Compound ambiguity (moved on some path, uninitialized on
           // another) — both are "may still be Owned somewhere"; picking
           // ConditionallyMoved as the reported reason only affects
           // diagnostic wording, not correctness (either way this is
           // rejected, not silently resolved).
-          return { kind: "ConditionallyMoved", moveSite: av.moveSite };
+          return {
+            kind: "ConditionallyMoved",
+            moveSite: av.moveSite,
+            moveStatementTokenId: av.moveStatementTokenId,
+          };
         default:
           return assertNever(bv);
       }
@@ -366,7 +497,11 @@ function combineStates(av: MoveState, bv: MoveState): MoveState {
         case "Unbound":
           return { kind: "PossiblyUninitialized" };
         case "ConditionallyMoved":
-          return { kind: "ConditionallyMoved", moveSite: bv.moveSite };
+          return {
+            kind: "ConditionallyMoved",
+            moveSite: bv.moveSite,
+            moveStatementTokenId: bv.moveStatementTokenId,
+          };
         case "PossiblyUninitialized":
           return { kind: "PossiblyUninitialized" };
         default:
@@ -532,13 +667,88 @@ function walkExpression(
 }
 
 /**
+ * If exactly one of `tv`/`ev` is `Owned` and the other is definitely
+ * `Unbound`, the branch still holding it is unambiguous -- that side is
+ * where a static drop belongs. Anything else (both Owned, both Unbound,
+ * either side still ambiguous itself, either side Uninitialized-flavored)
+ * is left for the ordinary merge in `combineStates` to handle unchanged.
+ */
+function resolveAttributionBranch(
+  tv: MoveState,
+  ev: MoveState,
+): "then" | "else" | undefined {
+  if (tv.kind === "Owned" && ev.kind === "Unbound") {
+    return "then";
+  }
+  if (ev.kind === "Owned" && tv.kind === "Unbound") {
+    return "else";
+  }
+  return undefined;
+}
+
+/**
+ * Static duplication, matching rustc's drop elaboration: when a binding is
+ * Owned on exactly one side of this fork and definitely moved on the other,
+ * the moved/not-moved decision is already fully known here -- no runtime
+ * flag is needed. Push a `BranchDrop` onto the still-owning side and
+ * collapse *both* sides' state for this binding to the real `Unbound` that
+ * already exists on the moved side, so the merge that follows sees a plain,
+ * unconditional "already accounted for" instead of an ambiguity -- and so
+ * does every consumer downstream of it (an outer `if` around this one, or
+ * the enclosing scope's own `recordDrops`).
+ *
+ * Because `walkIf` recurses depth-first (an `else if` chain resolves its
+ * own inner forks before this function ever sees their merged result), this
+ * only ever needs to look one fork at a time: by the time either `thenState`
+ * or `elseState` reaches here, any ambiguity nested inside it has already
+ * been resolved to a definite `Owned`/`Unbound` by a deeper call to this
+ * same function. With no loops yet (ROADMAP Slice 6), that means a "pure"
+ * move-based `ConditionallyMoved` can never actually survive to
+ * `recordDrops` -- every case is resolvable here. `ConditionalDrop` (the
+ * runtime-flag path) stays in place for when loops make that no longer true.
+ */
+function attributeConditionalMoves(
+  ctx: Ctx,
+  ifExpr: Semantics.IfExpression,
+  thenState: StateMap,
+  elseState: StateMap,
+): void {
+  const ids = new Set<BindingId>([...thenState.keys(), ...elseState.keys()]);
+  for (const id of ids) {
+    const tv = thenState.get(id);
+    const ev = elseState.get(id);
+    if (tv === undefined || ev === undefined) {
+      continue;
+    }
+    const branch = resolveAttributionBranch(tv, ev);
+    if (branch === undefined) {
+      continue;
+    }
+    const declaration = ctx.declarationsById.get(id);
+    if (declaration === undefined) {
+      continue; // wildcard `_` binding -- never tracked, never dropped.
+    }
+    const movedState = branch === "then" ? ev : tv;
+    assert(
+      movedState.kind === "Unbound",
+      "resolveAttributionBranch guarantees the non-owning side is Unbound",
+    );
+    ctx.branchDrops.push({ declaration, ifTokenId: ifExpr.tokenId, branch });
+    thenState.set(id, movedState);
+    elseState.set(id, movedState);
+  }
+}
+
+/**
  * Clone the incoming state once per branch, walk each branch to completion
  * against its own clone, then merge the two results back into `state` via
  * the meet rule (`mergeStates`). Cloning means the two branches can never
  * see each other's moves — e.g. moving `x` in `then` cannot affect the
  * state `else` starts from. A missing `else` still gets an `elseState`
  * clone of the pre-`if` state (unmodified), representing the "condition was
- * false, nothing in the body ran" path.
+ * false, nothing in the body ran" path. `attributeConditionalMoves` runs
+ * before the merge so a resolvable conditional move never becomes ambiguous
+ * in the first place -- see its own doc comment.
  */
 function walkIf(
   ctx: Ctx,
@@ -561,6 +771,8 @@ function walkIf(
     }
   }
 
+  attributeConditionalMoves(ctx, expression, thenState, elseState);
+
   const merged = mergeStates(thenState, elseState);
   state.clear();
   for (const [id, moveState] of merged) {
@@ -575,6 +787,7 @@ function walkStatement(
   scopeStack: ScopeStack,
   declarations: Declaration[],
 ): void {
+  ctx.currentStatementTokenId = statement.tokenId;
   switch (statement.kind) {
     case "LetStatement": {
       // The initializer is walked *before* registerBinding, so `let x = x;`
@@ -590,6 +803,7 @@ function walkStatement(
       const declaration = declarationOf(statement.pattern, statement.mutable);
       if (declaration.kind === "Some") {
         declarations.push(declaration.value);
+        ctx.declarationsById.set(declaration.value.id, declaration.value);
       }
       return;
     }
@@ -617,16 +831,21 @@ function walkStatement(
   }
 }
 
-type DropDecision = "Drop" | "NoDrop" | "Ambiguous";
+type DropDecision = "Drop" | "NoDrop" | "ConditionalDrop" | "Ambiguous";
 
 /**
  * Exhaustive over `MoveState["kind"]` so a still-`ConditionallyMoved`
  * binding can't be silently treated as safe to skip (that was the actual
  * bug Codacy found: collapsing an ambiguous branch-merge state into
  * `Unbound` meant a binding still `Owned` on the untaken branch silently
- * never appeared in the drop list either). `Ambiguous` is handled by the
- * caller, not folded into `NoDrop` here — Slice 1 has no drop-flag
- * mechanism to correctly resolve it, so the caller rejects it instead.
+ * never appeared in the drop list either). `ConditionallyMoved` resolves to
+ * `"ConditionalDrop"`: Slice 2 has a drop-flag mechanism for exactly this
+ * case (specification/0007-drop-and-raii.md's "Conditional moves" section),
+ * so the caller emits a flag-guarded drop instead of rejecting it.
+ * `PossiblyUninitialized` stays `"Ambiguous"` and is handled by the caller as
+ * a hard error -- that's a different question (nothing was ever constructed
+ * on some path, so there's nothing a drop flag could conditionally dispose
+ * of), not one a drop flag resolves.
  */
 function dropDecision(state: MoveState | undefined): DropDecision {
   if (state === undefined) {
@@ -639,6 +858,7 @@ function dropDecision(state: MoveState | undefined): DropDecision {
     case "Unbound":
       return "NoDrop";
     case "ConditionallyMoved":
+      return "ConditionalDrop";
     case "PossiblyUninitialized":
       return "Ambiguous";
     default:
@@ -647,18 +867,17 @@ function dropDecision(state: MoveState | undefined): DropDecision {
 }
 
 /**
- * Exhaustive over the two ambiguous `MoveState` kinds — never called for the
- * other three, which `recordDrops` never routes here (see `dropDecision`).
+ * Only ever called for `PossiblyUninitialized` -- `recordDrops` routes
+ * `ConditionallyMoved` to a flag-guarded drop instead (see `dropDecision`).
  */
 function ambiguousDropMessage(name: string, state: MoveState): string {
   switch (state.kind) {
-    case "ConditionallyMoved":
-      return `\`${name}\` may or may not have been moved depending on the branch taken; Slice 1 cannot conditionally drop it (no drop-flag support yet)`;
     case "PossiblyUninitialized":
       return `\`${name}\` may or may not have been initialized depending on the branch taken; Slice 1 cannot conditionally drop it (no drop-flag support yet)`;
     case "Owned":
     case "Uninitialized":
     case "Unbound":
+    case "ConditionallyMoved":
       throw new Error(
         `ICE: ambiguousDropMessage called with non-ambiguous state ${state.kind}`,
       );
@@ -676,10 +895,12 @@ function ambiguousDropMessage(name: string, state: MoveState): string {
  * only after walking the scope's trailing expression, so a
  * `fn f() -> Boxed { let x = ...; x }` body has already marked `x` `Unbound`
  * (moved out to the caller) before its drop list is computed, and it's
- * correctly excluded. A binding still `"Ambiguous"` at scope close (moved on
- * some branch but not others, and never resolved by a later use or
- * reassignment) is rejected here rather than silently dropped or silently
- * skipped — see `dropDecision`'s doc comment.
+ * correctly excluded. A binding still `"ConditionalDrop"` at scope close
+ * (moved on some branch but not others, and never resolved by a later use or
+ * reassignment) gets a flag-guarded drop instead of an unconditional
+ * `Declaration` entry -- see `ConditionalDrop`. A binding still `"Ambiguous"`
+ * (possibly-uninitialized) is rejected here rather than silently dropped or
+ * silently skipped -- see `dropDecision`'s doc comment.
  */
 function recordDrops(
   ctx: Ctx,
@@ -688,6 +909,7 @@ function recordDrops(
   state: StateMap,
 ): void {
   const drops: Declaration[] = [];
+  const conditionalDrops: ConditionalDrop[] = [];
   for (let i = declarations.length - 1; i >= 0; i -= 1) {
     const declaration = declarations[i];
     if (declaration === undefined || hasCapability(declaration.type, "copy")) {
@@ -701,6 +923,24 @@ function recordDrops(
         break;
       case "NoDrop":
         break;
+      case "ConditionalDrop": {
+        assert(
+          declState?.kind === "ConditionallyMoved",
+          "ConditionalDrop implies a ConditionallyMoved state",
+        );
+        conditionalDrops.push({
+          declaration,
+          moveStatementTokenId: declState.moveStatementTokenId,
+        });
+        if (ctx.warnDropFlags) {
+          emitWarning(
+            ctx,
+            conditionalDropFlagWarning(declaration.name),
+            declaration.tokenId,
+          );
+        }
+        break;
+      }
       case "Ambiguous": {
         assert(declState !== undefined, "Ambiguous implies a known state");
         emitDiagnostic(
@@ -715,6 +955,7 @@ function recordDrops(
     }
   }
   ctx.drops.set(scopeTokenId, drops);
+  ctx.conditionalDrops.set(scopeTokenId, conditionalDrops);
 }
 
 /**
@@ -739,6 +980,15 @@ function walkScope(
     walkStatement(ctx, statement, state, scopeStack, declarations);
   }
   if (isSome(scope.trailingExpression)) {
+    // currentStatementTokenId is otherwise only updated by walkStatement; a
+    // move inside a trailing expression (never itself a statement) would
+    // otherwise inherit whatever statement last ran, which can be a
+    // completely unrelated point in the function. Untestable by real
+    // analysis today, same as the rest of moveStatementTokenId's only
+    // consumer (ConditionalDrop, see its own doc comment): unlike jsim.ts,
+    // this module has no injectable synthetic-ownership seam to construct
+    // an adversarial case against directly.
+    ctx.currentStatementTokenId = scope.trailingExpression.value.tokenId;
     walkExpression(ctx, scope.trailingExpression.value, state, scopeStack);
   }
   recordDrops(ctx, scope.tokenId, declarations, state);
@@ -762,6 +1012,7 @@ function walkFunction(ctx: Ctx, fn: Semantics.FunctionDecl): void {
     const declaration = declarationOf(param.pattern, param.mutable);
     if (declaration.kind === "Some") {
       paramDeclarations.push(declaration.value);
+      ctx.declarationsById.set(declaration.value.id, declaration.value);
     }
   }
   walkScope(ctx, fn.body, state, scopeStack, false, paramDeclarations);
@@ -776,6 +1027,7 @@ function walkFunction(ctx: Ctx, fn: Semantics.FunctionDecl): void {
 export function analyzeOwnership(
   program: Semantics.Program,
   tokens: readonly Token[],
+  options: { readonly warnDropFlags?: boolean } = {},
 ): OwnershipCheckResult {
   const diagnostics: Diagnostic[] = [];
   const functions = new Map<string, FunctionOwnership>();
@@ -785,9 +1037,26 @@ export function analyzeOwnership(
     }
     const graph = buildControlFlowGraph(item);
     const drops = new Map<number, Declaration[]>();
-    const ctx: Ctx = { tokens, diagnostics, drops };
+    const conditionalDrops = new Map<number, ConditionalDrop[]>();
+    const branchDrops: BranchDrop[] = [];
+    const declarationsById = new Map<BindingId, Declaration>();
+    const ctx: Ctx = {
+      tokens,
+      diagnostics,
+      drops,
+      conditionalDrops,
+      branchDrops,
+      declarationsById,
+      warnDropFlags: options.warnDropFlags ?? false,
+      currentStatementTokenId: item.tokenId,
+    };
     walkFunction(ctx, item);
-    functions.set(item.name.text, { graph, drops });
+    functions.set(item.name.text, {
+      graph,
+      drops,
+      conditionalDrops,
+      branchDrops,
+    });
   }
   return { diagnostics, functions };
 }
