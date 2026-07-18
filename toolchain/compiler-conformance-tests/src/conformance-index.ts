@@ -531,7 +531,7 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     testIds: [
       "generated JS emits Symbol.dispose wiring for owned cleanup paths",
       "drop order for distinct owned bindings is reverse declaration order",
-      "emits a drop flag to avoid double-drop when a binding is moved on only one branch",
+      "resolves a binding moved on only one branch by dropping it in the other branch, not with a runtime flag",
       "drop cannot occur while mutable borrow is live",
       "early drop occurs at last use instead of lexical scope end",
     ],

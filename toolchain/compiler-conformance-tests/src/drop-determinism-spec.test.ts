@@ -46,10 +46,8 @@ describe("drop determinism and RAII spec", (): void => {
     expect(usingB).toBeGreaterThan(usingA);
   });
 
-  it.fails(
-    "emits a drop flag to avoid double-drop when a binding is moved on only one branch",
-    (): void => {
-      const js = requireJavascript(`
+  it("resolves a binding moved on only one branch by dropping it in the other branch, not with a runtime flag", (): void => {
+    const js = requireJavascript(`
       struct R { id: i32 }
       fn main() {
         let mut cond = true;
@@ -62,17 +60,9 @@ describe("drop determinism and RAII spec", (): void => {
         }
       }
     `);
-      expect(js).toMatch(/dropFlag_x\s*=\s*true/);
-      expect(js).toMatch(/dropFlag_x\s*=\s*false/);
-      expect(js).toMatch(/if\s*\(\s*dropFlag_x\s*\)\s*\{[^}]*Symbol\.dispose/);
-
-      const setTrueIndex = js.search(/dropFlag_x\s*=\s*true/);
-      const setFalseIndex = js.search(/dropFlag_x\s*=\s*false/);
-      const guardIndex = js.search(/if\s*\(\s*dropFlag_x\s*\)/);
-      expect(setTrueIndex).toBeLessThan(setFalseIndex);
-      expect(setFalseIndex).toBeLessThan(guardIndex);
-    },
-  );
+    expect(js).not.toMatch(/dropFlag/);
+    expect(js).toMatch(/else\s*\{[^}]*print\(0\);\s*x\[Symbol\.dispose\]\(\);/);
+  });
 
   it.fails("drop cannot occur while mutable borrow is live", (): void => {
     const result = compile(`
