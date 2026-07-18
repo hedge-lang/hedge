@@ -177,6 +177,30 @@ describe("move-check", (): void => {
     expect(diagnostics[0].message).not.toContain("possibly");
   });
 
+  it("a value moved on every branch and never used again needs no drop of any kind, static or flagged", (): void => {
+    const result = check(
+      `${BOXED}
+      fn main() {
+        let mut cond = true;
+        let x = Boxed { value: 1 };
+        if cond {
+          let y = x;
+          print(y.value);
+        } else {
+          let z = x;
+          print(z.value);
+        }
+      }`,
+    );
+    expect(result.diagnostics).toEqual([]);
+    const main = result.functions.get("main");
+    assert(main !== undefined, "Expected main's ownership result");
+    const allDrops = [...main.drops.values()].flat();
+    expect(allDrops.map((d) => d.name)).not.toContain("x");
+    expect([...main.conditionalDrops.values()].flat()).toEqual([]);
+    expect(main.branchDrops).toEqual([]);
+  });
+
   it("a struct possibly-uninitialized at scope close (no else branch initializes it) is rejected", (): void => {
     const { diagnostics } = check(
       `${BOXED}

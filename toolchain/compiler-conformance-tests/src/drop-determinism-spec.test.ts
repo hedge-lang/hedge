@@ -88,6 +88,26 @@ describe("drop determinism and RAII spec", (): void => {
     );
   });
 
+  it("emits no drop of any kind for a binding moved on every branch", (): void => {
+    const js = requireJavascript(`
+      struct Boxed { value: i32 }
+      fn main() {
+        let mut cond = true;
+        let x = Boxed { value: 1 };
+        if cond {
+          let y = x;
+          print(y.value);
+        } else {
+          let z = x;
+          print(z.value);
+        }
+      }
+    `);
+    expect(js).not.toMatch(/dropFlag/);
+    expect(js).not.toContain("x[Symbol.dispose]");
+    expect(js).not.toMatch(/using x\b/);
+  });
+
   it.fails("drop cannot occur while mutable borrow is live", (): void => {
     const result = compile(`
       fn main() {
