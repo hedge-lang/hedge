@@ -266,6 +266,76 @@ describe("move-check", (): void => {
     expect(xDrop.ifTokenId).not.toBe(wDrop.ifTokenId);
   });
 
+  it("a conditional move inside a nested block within a branch still resolves at the enclosing if's merge", (): void => {
+    const result = check(
+      `${BOXED}
+      fn main() {
+        let mut cond = true;
+        let x = Boxed { value: 1 };
+        if cond {
+          {
+            let y = x; // moved inside a nested block within the then branch
+            print(y.value);
+          }
+          let done = true;
+          print(0);
+        } else {
+          print(1);
+        }
+      }`,
+    );
+    expect(result.diagnostics).toEqual([]);
+    const main = result.functions.get("main");
+    assert(main !== undefined, "Expected main's ownership result");
+    expect([...main.conditionalDrops.values()].flat()).toEqual([]);
+    const xDrop = main.branchDrops.find((d) => d.declaration.name === "x");
+    assert(xDrop !== undefined, "Expected a branch drop for x");
+    expect(xDrop.branch).toBe("else");
+  });
+
+  it("a Copy-typed value duplicated on only one branch never triggers conditional-move attribution", (): void => {
+    const result = check(`
+      fn main() {
+        let mut cond = true;
+        let n = 1;
+        if cond {
+          let m = n; // copied, not moved -- n stays Owned regardless of branch
+          print(m);
+        } else {
+          print(0);
+        }
+        print(n); // still usable: n was never conditionally moved
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    const main = result.functions.get("main");
+    assert(main !== undefined, "Expected main's ownership result");
+    expect(main.branchDrops).toEqual([]);
+    expect([...main.conditionalDrops.values()].flat()).toEqual([]);
+  });
+
+  it("a struct moved on the then branch with no source else at all attributes the drop to else anyway", (): void => {
+    const result = check(
+      `${BOXED}
+      fn main() {
+        let mut cond = true;
+        let x = Boxed { value: 1 };
+        if cond {
+          let y = x;
+          print(y.value);
+        }
+        print(1);
+      }`,
+    );
+    expect(result.diagnostics).toEqual([]);
+    const main = result.functions.get("main");
+    assert(main !== undefined, "Expected main's ownership result");
+    expect([...main.conditionalDrops.values()].flat()).toEqual([]);
+    const xDrop = main.branchDrops.find((d) => d.declaration.name === "x");
+    assert(xDrop !== undefined, "Expected a branch drop for x");
+    expect(xDrop.branch).toBe("else");
+  });
+
   it("a struct possibly-uninitialized at scope close (no else branch initializes it) is rejected", (): void => {
     const { diagnostics } = check(
       `${BOXED}

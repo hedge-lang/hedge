@@ -502,6 +502,7 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "rejects reading moved struct value",
       "rejects double move of the same owned binding",
       "a let mut struct binding reassigned after a move still runs (deferred: not scope-end dropped until Slice 2)",
+      "a Copy-typed value duplicated on only one branch is still usable after the merge",
     ],
   },
   {
@@ -536,6 +537,8 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "emits no drop of any kind for a binding moved on every branch",
       "resolves a value moved partway down an else-if chain to two static drop sites, not a flag",
       "resolves two independent bindings each conditionally moved in separate if/else pairs without interference",
+      "resolves a conditional move inside a nested block within a branch at the enclosing if's merge",
+      "synthesizes an else branch to carry the drop when a conditional move has no source else at all",
       "drop cannot occur while mutable borrow is live",
       "early drop occurs at last use instead of lexical scope end",
     ],

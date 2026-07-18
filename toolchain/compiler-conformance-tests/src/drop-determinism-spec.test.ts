@@ -162,6 +162,45 @@ describe("drop determinism and RAII spec", (): void => {
     );
   });
 
+  it("resolves a conditional move inside a nested block within a branch at the enclosing if's merge", (): void => {
+    const js = requireJavascript(`
+      struct Boxed { value: i32 }
+      fn main() {
+        let mut cond = true;
+        let x = Boxed { value: 1 };
+        if cond {
+          {
+            let y = x;
+            print(y.value);
+          }
+          let done = true;
+          print(0);
+        } else {
+          print(1);
+        }
+      }
+    `);
+    expect(js).not.toMatch(/dropFlag/);
+    expect(js).toMatch(/else\s*\{[^}]*print\(1\);\s*x\[Symbol\.dispose\]\(\);/);
+  });
+
+  it("synthesizes an else branch to carry the drop when a conditional move has no source else at all", (): void => {
+    const js = requireJavascript(`
+      struct Boxed { value: i32 }
+      fn main() {
+        let mut cond = true;
+        let x = Boxed { value: 1 };
+        if cond {
+          let y = x;
+          print(y.value);
+        }
+        print(1);
+      }
+    `);
+    expect(js).not.toMatch(/dropFlag/);
+    expect(js).toMatch(/else\s*\{\s*x\[Symbol\.dispose\]\(\);\s*\}/);
+  });
+
   it.fails("drop cannot occur while mutable borrow is live", (): void => {
     const result = compile(`
       fn main() {
