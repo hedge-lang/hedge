@@ -4,11 +4,14 @@ import { assert } from "../assert.js";
 import { isSome } from "../option.js";
 import { analyzeSource } from "../testing/analyze-source.js";
 import type { OwnershipCheckResult } from "./move-check.js";
-import { analyzeOwnership } from "./move-check.js";
+import { analyzeOwnership, conditionalDropFlagWarning } from "./move-check.js";
 
-function check(source: string): OwnershipCheckResult {
+function check(
+  source: string,
+  options?: { readonly warnDropFlags?: boolean },
+): OwnershipCheckResult {
   const { tokens, program } = analyzeSource(source);
-  return analyzeOwnership(program, tokens);
+  return analyzeOwnership(program, tokens, options);
 }
 
 const BOXED = "struct Boxed { value: i32 }\n";
@@ -653,5 +656,51 @@ describe("move-check", (): void => {
       }`,
     );
     expect(diagnostics).toEqual([]);
+  });
+
+  describe("--warn-drop-flags", (): void => {
+    it("names the binding in the warning message", (): void => {
+      expect(conditionalDropFlagWarning("x")).toContain("x");
+      expect(conditionalDropFlagWarning("x")).toContain("drop flag");
+    });
+
+    it("emits no warnings for a statically-resolved conditional move, since it never reaches the flag path", (): void => {
+      const result = check(
+        `${BOXED}
+        fn main() {
+          let mut cond = true;
+          let x = Boxed { value: 1 };
+          if cond {
+            let y = x;
+            print(y.value);
+          } else {
+            print(0);
+          }
+        }`,
+        { warnDropFlags: true },
+      );
+      expect(
+        result.diagnostics.filter((d) => d.severity === "warning"),
+      ).toEqual([]);
+    });
+
+    it("emits no warnings by default (option omitted) for the same program", (): void => {
+      const result = check(
+        `${BOXED}
+        fn main() {
+          let mut cond = true;
+          let x = Boxed { value: 1 };
+          if cond {
+            let y = x;
+            print(y.value);
+          } else {
+            print(0);
+          }
+        }`,
+      );
+      expect(
+        result.diagnostics.filter((d) => d.severity === "warning"),
+      ).toEqual([]);
+    });
   });
 });

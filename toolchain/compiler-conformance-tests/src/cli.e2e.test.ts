@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 function runCli(args: readonly string[]): SpawnSyncReturns<string> {
   const cliEntry = fileURLToPath(
-    new URL("../../cli/dist/index.js", import.meta.url),
+    new URL("../../cli/dist/bin.js", import.meta.url),
   );
   return spawnSync(process.execPath, [cliEntry, ...args], {
     encoding: "utf8",

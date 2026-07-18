@@ -145,6 +145,8 @@ interface Ctx {
   readonly branchDrops: BranchDrop[];
   /** Every declaration in the function currently being walked, keyed by its own `BindingId`. */
   readonly declarationsById: ReadonlyMap<BindingId, Declaration>;
+  /** See `CompileOptions.warnDropFlags` in driver.ts. */
+  readonly warnDropFlags: boolean;
   /**
    * The tokenId of the statement currently being walked, updated at the top
    * of `walkStatement`. Read by `useOrMove` to stamp a move's
@@ -172,6 +174,25 @@ function emitDiagnostic(ctx: Ctx, message: string, tokenId: number): void {
     message,
     span: diagnosticSpan(ctx.tokens, tokenId),
   });
+}
+
+function emitWarning(ctx: Ctx, message: string, tokenId: number): void {
+  ctx.diagnostics.push({
+    severity: "warning",
+    message,
+    span: diagnosticSpan(ctx.tokens, tokenId),
+  });
+}
+
+/**
+ * The --warn-drop-flags message for a conditionally dropped declaration
+ * (see CompileOptions.warnDropFlags in driver.ts). A pure function, kept
+ * independently testable from the code path that calls it -- which, with no
+ * loops yet (ROADMAP Slice 6), no program compilable today can reach; see
+ * ConditionalDrop's own doc comment.
+ */
+export function conditionalDropFlagWarning(name: string): string {
+  return `\`${name}\` needs a runtime drop flag to decide whether it is still owned at scope exit`;
 }
 
 /**
@@ -903,6 +924,13 @@ function recordDrops(
           declaration,
           moveStatementTokenId: declState.moveStatementTokenId,
         });
+        if (ctx.warnDropFlags) {
+          emitWarning(
+            ctx,
+            conditionalDropFlagWarning(declaration.name),
+            declaration.tokenId,
+          );
+        }
         break;
       }
       case "Ambiguous": {
@@ -981,6 +1009,7 @@ function walkFunction(ctx: Ctx, fn: Semantics.FunctionDecl): void {
 export function analyzeOwnership(
   program: Semantics.Program,
   tokens: readonly Token[],
+  options: { readonly warnDropFlags?: boolean } = {},
 ): OwnershipCheckResult {
   const diagnostics: Diagnostic[] = [];
   const functions = new Map<string, FunctionOwnership>();
@@ -1002,6 +1031,7 @@ export function analyzeOwnership(
       conditionalDrops,
       branchDrops,
       declarationsById,
+      warnDropFlags: options.warnDropFlags ?? false,
       currentStatementTokenId: item.tokenId,
     };
     walkFunction(ctx, item);

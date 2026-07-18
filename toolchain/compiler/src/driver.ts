@@ -18,6 +18,19 @@ export interface CompileResult {
   readonly code: Option<Code>;
 }
 
+export interface CompileOptions {
+  /**
+   * Report a warning diagnostic at every site where a conditional move
+   * needed a runtime drop flag instead of being resolved statically (see
+   * specification/0007-drop-and-raii.md's "Conditional moves" section).
+   * Defaults to false. Currently a no-op without loops (ROADMAP Slice 6):
+   * every conditional move a loop-free program can express is resolved by
+   * static duplication (move-check.ts's attributeConditionalMoves), so no
+   * program compilable today can ever trigger this warning.
+   */
+  readonly warnDropFlags?: boolean;
+}
+
 interface ParseSourceResult {
   readonly program: Option<Program>;
   readonly lexDiagnostics: readonly Diagnostic[];
@@ -42,7 +55,10 @@ function hasError(diagnostics: readonly Diagnostic[]): boolean {
  * resolve, borrow-check, optimize, generate — and collects diagnostics. `code`
  * is `none()` when any error diagnostic is reported.
  */
-export function compile(source: string): CompileResult {
+export function compile(
+  source: string,
+  options: CompileOptions = {},
+): CompileResult {
   const {
     program: programOpt,
     lexDiagnostics,
@@ -60,7 +76,7 @@ export function compile(source: string): CompileResult {
   const borrowChecked = checkBorrows(analysis.program, tokens);
   const ownership = hasError(analysis.diagnostics)
     ? { diagnostics: [], functions: new Map() }
-    : analyzeOwnership(analysis.program, tokens);
+    : analyzeOwnership(analysis.program, tokens, options);
   const diagnostics = [
     ...lexDiagnostics,
     ...parseDiagnostics,

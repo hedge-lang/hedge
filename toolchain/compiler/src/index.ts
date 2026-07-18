@@ -17,7 +17,7 @@ export { generate } from "./codegen/generator.js";
 export type { Code } from "./codegen/output.js";
 
 export { compile } from "./driver.js";
-export type { CompileResult } from "./driver.js";
+export type { CompileOptions, CompileResult } from "./driver.js";
 
 export type { Option } from "./option.js";
 export { some, none, isSome, isNone } from "./option.js";
