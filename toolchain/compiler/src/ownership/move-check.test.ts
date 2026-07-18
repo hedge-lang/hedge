@@ -134,6 +134,27 @@ describe("move-check", (): void => {
     expect(main.branchDrops.map((d) => d.branch)).toEqual(["else"]);
   });
 
+  it("resolves a struct moved on only the else branch by attributing the drop to then, the symmetric case", (): void => {
+    const result = check(
+      `${BOXED}
+      fn main() {
+        let mut cond = true;
+        let x = Boxed { value: 1 };
+        if cond {
+          print(0);
+        } else {
+          let y = x; // moved on this path only
+          print(y.value);
+        }
+      }`,
+    );
+    expect(result.diagnostics).toEqual([]);
+    const main = result.functions.get("main");
+    assert(main !== undefined, "Expected main's ownership result");
+    expect(main.branchDrops.map((d) => d.declaration.name)).toEqual(["x"]);
+    expect(main.branchDrops.map((d) => d.branch)).toEqual(["then"]);
+  });
+
   it("a value fully moved on every branch merges to an unconditional Unbound, not an ambiguous state", (): void => {
     const { diagnostics } = check(
       `${BOXED}
