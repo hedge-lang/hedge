@@ -572,7 +572,7 @@ describe("reference types", (): void => {
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(result.diagnostics[0].message).toContain(
-      "borrowing a field or index place is not yet supported",
+      "only a local binding or parameter can be borrowed directly",
     );
   });
 
@@ -583,8 +583,20 @@ describe("reference types", (): void => {
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(result.diagnostics[0].message).toContain(
-      "borrowing a field or index place is not yet supported",
+      "only a local binding or parameter can be borrowed directly",
     );
+  });
+
+  it("rejects a &mut expression operator borrowing a non-place expression, without misnaming it as a field or index place", (): void => {
+    const result = diagnose(
+      "fn f() { let mut x = 1; let r = &mut (x + 1); print(r); }",
+    );
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain(
+      "only a local binding or parameter can be borrowed directly",
+    );
+    expect(result.diagnostics[0].message).not.toContain("field or index place");
   });
 
   it("type-checks *x as the referent type of a &i32 parameter, with no diagnostics", (): void => {

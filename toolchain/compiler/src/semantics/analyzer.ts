@@ -1249,7 +1249,7 @@ function analyzeReferenceExpression(
   if (!isBareLocalPlace(expression.operand)) {
     emitError(
       ctx,
-      "borrowing a field or index place is not yet supported; only a local binding or parameter can be borrowed directly",
+      "only a local binding or parameter can be borrowed directly",
       expression.tokenId,
     );
     return {
