@@ -751,6 +751,13 @@ describe("mutable reference cell codegen", (): void => {
     expect(stmts(code)).toBe("print(r.value);");
   });
 
+  it("lowers (*r).field = x to r.v.field = x without crashing on the parenthesized deref", (): void => {
+    const code = gen(
+      "struct Foo { value: i32 } fn _(r: &mut Foo) { (*r).value = 2; }",
+    );
+    expect(stmts(code)).toBe("r.v.value = 2;");
+  });
+
   it("lowers *r += 1; to r.v += 1; when r is a &mut reference", (): void => {
     const code = gen("fn _(r: &mut i32) { *r += 1; }");
     expect(stmts(code)).toBe("r.v += 1;");

@@ -44,26 +44,34 @@ export function findMatchingCloseBraceTokenId(
 }
 
 /**
- * Finds the tokenId of the first depth-0 `;` at or after
- * `letKeywordTokenId`, the terminator of a `let` statement, inclusive
- * (the span of a `let` statement covers its own trailing `;`).
+ * Finds the tokenId of the first depth-0 `;` at or after `startTokenId`, the
+ * terminator of a statement, inclusive (the returned span covers the
+ * statement's own trailing `;`).
+ *
+ * `startTokenId` isn't always the true left edge of the enclosing text: a
+ * parenthesized sub-expression like `(*r).value` parses transparently (no
+ * grouping node), so a lowered node's own `tokenId` can start *inside*
+ * already-open parens the caller never opened from this function's point of
+ * view. Depth is clamped at 0 rather than going negative on such an
+ * unmatched closer, so the scan still recognizes the statement's real `;`
+ * instead of running off the end of the token stream.
  */
 export function findStatementEndTokenId(
   tokens: readonly Token[],
-  letKeywordTokenId: number,
+  startTokenId: number,
 ): number {
   let depth = 0;
-  for (let cursor = letKeywordTokenId; cursor < tokens.length; cursor += 1) {
+  for (let cursor = startTokenId; cursor < tokens.length; cursor += 1) {
     const token = tokenAt(tokens, cursor);
     if (OPENERS.has(token.kind)) {
       depth += 1;
     } else if (CLOSERS.has(token.kind)) {
-      depth -= 1;
+      depth = Math.max(0, depth - 1);
     } else if (token.kind === "semi" && depth === 0) {
       return cursor;
     }
   }
-  assert(false, "Unterminated let statement: no depth-0 `;` found");
+  assert(false, "Unterminated statement: no depth-0 `;` found");
 }
 
 /**

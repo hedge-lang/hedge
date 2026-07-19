@@ -1361,64 +1361,79 @@ function analyzeFieldAccessExpression(
   };
 }
 
-function rootBinding(expr: Parser.Expression): Option<string> {
-  if (expr.kind === "PathExpression" && expr.path.segments.length === 1) {
-    assert(expr.path.segments[0] !== undefined, "Name segment missing");
-    return some(expr.path.segments[0]);
+type PlaceMutabilityViolation = "immutable-binding" | "shared-reference";
+
+/**
+ * A place expression's writability, checked recursively:
+ * - A bare identifier at the *root* of the lhs (not reached through a
+ *   projection) is writable exactly when its own binding is `let mut` -
+ *   this is the "rebind the binding itself" case (`r = &mut y;`).
+ * - A bare identifier reached *through* a field/index projection
+ *   (`isRoot: false`) is writable according to its own type first: if it's
+ *   a reference, write permission comes from the reference's own
+ *   mutability, not from whether the binding holding it is itself `let
+ *   mut` (`let mut r = &foo;` still can't write through the shared `r`).
+ *   Otherwise it falls back to the binding's own `let mut`, same as the
+ *   root case.
+ * - `place.field`/`place[index]` is writable exactly when `place` is.
+ * - `*r` is writable exactly when `r`'s own type is a mutable reference -
+ *   this doesn't recurse into whether `r` itself is a writable place, since
+ *   what matters is the pointer's type, not how it was produced.
+ *
+ * Returns `undefined` for a genuinely writable place, or for any lhs shape
+ * this function doesn't track (multi-segment paths, an unresolved name) -
+ * matching this check's original permissive default.
+ */
+function placeMutabilityViolation(
+  ctx: AnalysisContext,
+  expr: Semantics.Expression,
+  isRoot: boolean,
+): PlaceMutabilityViolation | undefined {
+  switch (expr.kind) {
+    case "PathExpression": {
+      if (expr.path.segments.length !== 1) return undefined;
+      const name = expr.path.segments[0];
+      assert(name !== undefined, "Name segment missing");
+      return placeMutabilityViolationForBinding(ctx, name, isRoot);
+    }
+    case "FieldAccessExpression":
+      return placeMutabilityViolation(ctx, expr.object, false);
+    case "IndexExpression":
+      return placeMutabilityViolation(ctx, expr.object, false);
+    case "DereferenceExpression": {
+      const operandType = getType(expr.operand);
+      if (operandType.kind === "ReferenceType" && !operandType.mutable) {
+        return "shared-reference";
+      }
+      return undefined;
+    }
+    default:
+      return undefined;
   }
-  if (expr.kind === "Identifier") {
-    return some(expr.text);
+}
+
+function placeMutabilityViolationForBinding(
+  ctx: AnalysisContext,
+  name: string,
+  isRoot: boolean,
+): PlaceMutabilityViolation | undefined {
+  const resolved = resolve(ctx, name);
+  if (!isSome(resolved)) return undefined;
+  if (!isRoot && resolved.value.type.kind === "ReferenceType") {
+    return resolved.value.type.mutable ? undefined : "shared-reference";
   }
-  if (expr.kind === "FieldAccessExpression") {
-    return rootBinding(expr.object);
-  }
-  if (expr.kind === "IndexExpression") {
-    return rootBinding(expr.object);
-  }
-  return none();
+  return resolved.value.mutable ? undefined : "immutable-binding";
 }
 
 function checkLhsMutability(
   ctx: AnalysisContext,
-  lhs: Parser.Expression,
-  tokenId: number,
-): void {
-  const name = rootBinding(lhs);
-  if (!isSome(name)) return;
-  const resolved = resolve(ctx, name.value);
-  if (!isSome(resolved) || resolved.value.mutable) return;
-
-  // A field/index projection through a `&mut` reference is writable
-  // regardless of whether the reference binding itself is `let mut` - that
-  // write permission comes from the reference's own mutability. A bare
-  // identifier lhs is different: it rebinds the reference binding itself
-  // (`r = &mut y;`), which is still governed by `r`'s own `let`/`let mut`.
-  if (
-    lhs.kind !== "PathExpression" &&
-    lhs.kind !== "Identifier" &&
-    resolved.value.type.kind === "ReferenceType" &&
-    resolved.value.type.mutable
-  ) {
-    return;
-  }
-
-  emitError(ctx, "cannot assign to immutable binding", tokenId);
-}
-
-/**
- * Assigning through `*r` doesn't go through `checkLhsMutability` (its
- * `rootBinding` doesn't descend into `DereferenceExpression`, since `r`
- * itself is never reassigned by `*r = value`) - write permission instead
- * comes from the reference's own mutability, checked here instead.
- */
-function checkDerefAssignMutability(
-  ctx: AnalysisContext,
   lhs: Semantics.Expression,
   tokenId: number,
 ): void {
-  if (lhs.kind !== "DereferenceExpression") return;
-  const operandType = getType(lhs.operand);
-  if (operandType.kind === "ReferenceType" && !operandType.mutable) {
+  const violation = placeMutabilityViolation(ctx, lhs, true);
+  if (violation === "immutable-binding") {
+    emitError(ctx, "cannot assign to immutable binding", tokenId);
+  } else if (violation === "shared-reference") {
     emitError(ctx, "cannot assign through a shared reference", tokenId);
   }
 }
@@ -1427,9 +1442,8 @@ function analyzeAssignmentExpression(
   ctx: AnalysisContext,
   assignExpression: Parser.AssignExpression,
 ): Semantics.AssignExpression {
-  checkLhsMutability(ctx, assignExpression.lhs, assignExpression.tokenId);
   const lhs = analyzeExpression(ctx, assignExpression.lhs);
-  checkDerefAssignMutability(ctx, lhs, assignExpression.tokenId);
+  checkLhsMutability(ctx, lhs, assignExpression.tokenId);
   return {
     ...assignExpression,
     lhs,
@@ -1442,13 +1456,8 @@ function analyzeCompoundAssignmentExpression(
   ctx: AnalysisContext,
   compoundAssignExpression: Parser.CompoundAssignExpression,
 ): Semantics.CompoundAssignExpression {
-  checkLhsMutability(
-    ctx,
-    compoundAssignExpression.lhs,
-    compoundAssignExpression.tokenId,
-  );
   const lhs = analyzeExpression(ctx, compoundAssignExpression.lhs);
-  checkDerefAssignMutability(ctx, lhs, compoundAssignExpression.tokenId);
+  checkLhsMutability(ctx, lhs, compoundAssignExpression.tokenId);
   return {
     ...compoundAssignExpression,
     lhs,
