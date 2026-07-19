@@ -576,6 +576,17 @@ describe("reference types", (): void => {
     );
   });
 
+  it("rejects a &mut expression operator borrowing an absolute path, since it isn't a bare local", (): void => {
+    const result = diagnose(
+      "fn f() { let mut x = 1; let r = &mut ::x; print(r); }",
+    );
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain(
+      "borrowing a field or index place is not yet supported",
+    );
+  });
+
   it("type-checks *x as the referent type of a &i32 parameter, with no diagnostics", (): void => {
     const result = diagnose("fn f(x: &'a i32) -> i32 { *x }");
     expect(result.diagnostics).toEqual([]);
