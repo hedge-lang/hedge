@@ -642,4 +642,33 @@ describe("reference types", (): void => {
     );
     expect(result.diagnostics).toEqual([]);
   });
+
+  it("rejects field assignment through a shared reference even when the reference binding itself is `let mut`", (): void => {
+    const result = diagnose(
+      "struct Foo { value: i32 } fn f(foo: Foo) { let mut r = &foo; r.value = 1; }",
+    );
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain(
+      "cannot assign through a shared reference",
+    );
+  });
+
+  it("rejects field assignment through a parenthesized dereference of a shared reference", (): void => {
+    const result = diagnose(
+      "struct Foo { value: i32 } fn f(foo: Foo) { let r = &foo; (*r).value = 1; }",
+    );
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain(
+      "cannot assign through a shared reference",
+    );
+  });
+
+  it("accepts field assignment through a parenthesized dereference of a mutable reference", (): void => {
+    const result = diagnose(
+      "struct Foo { value: i32 } fn f(mut foo: Foo) { let r = &mut foo; (*r).value = 1; }",
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
 });
