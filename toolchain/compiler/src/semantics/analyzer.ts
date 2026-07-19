@@ -1433,10 +1433,15 @@ function checkLhsMutability(
 ): void {
   const violation = placeMutabilityViolation(ctx, lhs, true);
   if (isSome(violation)) {
-    if (violation.value === "immutable-binding") {
-      emitError(ctx, "cannot assign to immutable binding", tokenId);
-    } else if (violation.value === "shared-reference") {
-      emitError(ctx, "cannot assign through a shared reference", tokenId);
+    switch (violation.value) {
+      case "immutable-binding":
+        emitError(ctx, "cannot assign to immutable binding", tokenId);
+        break;
+      case "shared-reference":
+        emitError(ctx, "cannot assign through a shared reference", tokenId);
+        break;
+      default:
+        assertNever(violation.value, `Unexpected place mutability violation: ${violation.value}`);
     }
   }
 }
