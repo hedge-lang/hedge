@@ -1113,27 +1113,9 @@ function analyzeExpression(
     case "CallExpression":
       return analyzeCall(ctx, expression);
     case "ReferenceExpression":
-      emitError(
-        ctx,
-        "borrow expressions are not supported in Slice 1",
-        expression.tokenId,
-      );
-      return {
-        ...expression,
-        operand: analyzeExpression(ctx, expression.operand),
-        type: { kind: "UnitType", tokenId: expression.tokenId },
-      };
+      return analyzeReferenceExpression(ctx, expression);
     case "DereferenceExpression":
-      emitError(
-        ctx,
-        "dereference expressions are not supported in Slice 1",
-        expression.tokenId,
-      );
-      return {
-        ...expression,
-        operand: analyzeExpression(ctx, expression.operand),
-        type: { kind: "UnitType", tokenId: expression.tokenId },
-      };
+      return analyzeDereferenceExpression(ctx, expression);
     case "BinaryExpression": {
       let left = analyzeExpression(ctx, expression.left);
       let right = analyzeExpression(ctx, expression.right);
@@ -1241,6 +1223,83 @@ function analyzeExpression(
   }
 }
 
+/**
+ * A borrow's operand is in scope for cell lowering only when it is a bare
+ * local binding or parameter name - a single-segment `PathExpression`. A
+ * field/index place (`&mut user.field`, `&mut arr[0]`) isn't resolved to a
+ * `BindingId` by `borrowck.ts`'s `resolveBorrowBases` yet, so accepting it
+ * here would let overlapping/conflicting place borrows compile with zero
+ * exclusivity checking - a soundness gap, not just a missing optimization.
+ * Place-projection borrow checking is issue #25's job.
+ */
+function isBareLocalPlace(expr: Parser.Expression): boolean {
+  return (
+    expr.kind === "PathExpression" &&
+    expr.path.segments.length === 1 &&
+    !expr.path.absolute
+  );
+}
+
+function analyzeReferenceExpression(
+  ctx: AnalysisContext,
+  expression: Parser.ReferenceExpression,
+): Semantics.ReferenceExpression {
+  const operand = analyzeExpression(ctx, expression.operand);
+
+  if (!isBareLocalPlace(expression.operand)) {
+    emitError(
+      ctx,
+      "only a local binding or parameter can be borrowed directly",
+      expression.tokenId,
+    );
+    return {
+      ...expression,
+      operand,
+      type: { kind: "UnitType", tokenId: expression.tokenId },
+    };
+  }
+
+  return {
+    ...expression,
+    operand,
+    type: {
+      kind: "ReferenceType",
+      tokenId: expression.tokenId,
+      mutable: expression.mutable,
+      referent: getType(operand),
+    },
+  };
+}
+
+function analyzeDereferenceExpression(
+  ctx: AnalysisContext,
+  expression: Parser.DereferenceExpression,
+): Semantics.DereferenceExpression {
+  const operand = analyzeExpression(ctx, expression.operand);
+  const operandType = getType(operand);
+
+  if (operandType.kind !== "ReferenceType") {
+    // A UnitType operand from one of `isAmbiguousUnitExpr`'s buckets is
+    // itself an error-recovery placeholder (e.g. an unresolved name) that
+    // already emitted its own diagnostic - reporting a second one here would
+    // be a cascade, not a genuine second fault.
+    if (!(operandType.kind === "UnitType" && isAmbiguousUnitExpr(operand))) {
+      emitError(
+        ctx,
+        "cannot dereference a non-reference type",
+        expression.tokenId,
+      );
+    }
+    return {
+      ...expression,
+      operand,
+      type: { kind: "UnitType", tokenId: expression.tokenId },
+    };
+  }
+
+  return { ...expression, operand, type: operandType.referent };
+}
+
 function analyzeFieldAccessExpression(
   ctx: AnalysisContext,
   expression: Parser.FieldAccessExpression,
@@ -1256,12 +1315,17 @@ function analyzeFieldAccessExpression(
 
   if (objectType.kind === "UnitType") return unresolved();
 
-  if (objectType.kind !== "StructType") {
+  // Field access reaches through a borrow automatically (spec 0005),
+  // shared or mutable alike - resolve against the referent's type.
+  const structType =
+    objectType.kind === "ReferenceType" ? objectType.referent : objectType;
+
+  if (structType.kind !== "StructType") {
     emitError(ctx, "field access on non-struct type", expression.field.tokenId);
     return unresolved();
   }
 
-  const structName = objectType.name.split("::").pop() ?? objectType.name;
+  const structName = structType.name.split("::").pop() ?? structType.name;
   const structDecl = ctx.typeScope.get(structName);
   const fieldName = expression.field.text;
 
@@ -1297,33 +1361,90 @@ function analyzeFieldAccessExpression(
   };
 }
 
-function rootBinding(expr: Parser.Expression): Option<string> {
-  if (expr.kind === "PathExpression" && expr.path.segments.length === 1) {
-    assert(expr.path.segments[0] !== undefined, "Name segment missing");
-    return some(expr.path.segments[0]);
+type PlaceMutabilityViolation = "immutable-binding" | "shared-reference";
+
+/**
+ * A place expression's writability, checked recursively:
+ * - Any place reached *through* a projection (`isRoot: false`) whose own
+ *   type is a reference stops the walk immediately: write permission comes
+ *   from that reference's own mutability from that point on, regardless of
+ *   what contains it (`let mut r = &foo;` still can't write through the
+ *   shared `r`; conversely `foo.b.value = 2` is fine when `foo.b: &mut Bar`
+ *   even though `foo` itself isn't `mut` - the reference field's own
+ *   mutability is what governs, not the struct holding it).
+ * - A bare identifier at the *root* of the lhs (not reached through a
+ *   projection) is writable exactly when its own binding is `let mut` -
+ *   this is the "rebind the binding itself" case (`r = &mut y;`), which
+ *   never gets the reference-type bypass above since it's never `isRoot:
+ *   false`.
+ * - `place.field`/`place[index]` is writable exactly when `place` is
+ *   (falling through to the recursive call when the reference-type check
+ *   above didn't already resolve it).
+ * - `*r` is writable exactly when `r`'s own type is a mutable reference -
+ *   this doesn't recurse into whether `r` itself is a writable place, since
+ *   what matters is the pointer's type, not how it was produced. (`*r`'s
+ *   own type is always the referent, never a reference itself, so this
+ *   never overlaps with the reference-type check above.)
+ *
+ * Returns `undefined` for a genuinely writable place, or for any lhs shape
+ * this function doesn't track (multi-segment paths, an unresolved name) -
+ * matching this check's original permissive default.
+ */
+// eslint-disable-next-line complexity -- This is a routing function
+function placeMutabilityViolation(
+  ctx: AnalysisContext,
+  expr: Semantics.Expression,
+  isRoot: boolean,
+): Option<PlaceMutabilityViolation> {
+  const exprType = getType(expr);
+  if (!isRoot && exprType.kind === "ReferenceType") {
+    return exprType.mutable ? none() : some("shared-reference");
   }
-  if (expr.kind === "Identifier") {
-    return some(expr.text);
+
+  switch (expr.kind) {
+    case "PathExpression": {
+      if (expr.path.segments.length !== 1) return none();
+      const name = expr.path.segments[0];
+      assert(name !== undefined, "Name segment missing");
+      const resolved = resolve(ctx, name);
+      if (!isSome(resolved)) return none();
+      return resolved.value.mutable ? none() : some("immutable-binding");
+    }
+    case "FieldAccessExpression":
+      return placeMutabilityViolation(ctx, expr.object, false);
+    case "IndexExpression":
+      return placeMutabilityViolation(ctx, expr.object, false);
+    case "DereferenceExpression": {
+      const operandType = getType(expr.operand);
+      if (operandType.kind === "ReferenceType" && !operandType.mutable) {
+        return some("shared-reference");
+      }
+      return none();
+    }
+    default:
+      return none();
   }
-  if (expr.kind === "FieldAccessExpression") {
-    return rootBinding(expr.object);
-  }
-  if (expr.kind === "IndexExpression") {
-    return rootBinding(expr.object);
-  }
-  return none();
 }
 
 function checkLhsMutability(
   ctx: AnalysisContext,
-  lhs: Parser.Expression,
+  lhs: Semantics.Expression,
   tokenId: number,
 ): void {
-  const name = rootBinding(lhs);
-  if (isSome(name)) {
-    const resolved = resolve(ctx, name.value);
-    if (isSome(resolved) && !resolved.value.mutable) {
-      emitError(ctx, "cannot assign to immutable binding", tokenId);
+  const violation = placeMutabilityViolation(ctx, lhs, true);
+  if (isSome(violation)) {
+    switch (violation.value) {
+      case "immutable-binding":
+        emitError(ctx, "cannot assign to immutable binding", tokenId);
+        break;
+      case "shared-reference":
+        emitError(ctx, "cannot assign through a shared reference", tokenId);
+        break;
+      default:
+        assertNever(
+          violation.value,
+          `Unexpected place mutability violation: ${String(violation.value)}`,
+        );
     }
   }
 }
@@ -1332,10 +1453,11 @@ function analyzeAssignmentExpression(
   ctx: AnalysisContext,
   assignExpression: Parser.AssignExpression,
 ): Semantics.AssignExpression {
-  checkLhsMutability(ctx, assignExpression.lhs, assignExpression.tokenId);
+  const lhs = analyzeExpression(ctx, assignExpression.lhs);
+  checkLhsMutability(ctx, lhs, assignExpression.tokenId);
   return {
     ...assignExpression,
-    lhs: analyzeExpression(ctx, assignExpression.lhs),
+    lhs,
     rhs: analyzeExpression(ctx, assignExpression.rhs),
     type: { kind: "UnitType", tokenId: assignExpression.tokenId },
   };
@@ -1345,14 +1467,11 @@ function analyzeCompoundAssignmentExpression(
   ctx: AnalysisContext,
   compoundAssignExpression: Parser.CompoundAssignExpression,
 ): Semantics.CompoundAssignExpression {
-  checkLhsMutability(
-    ctx,
-    compoundAssignExpression.lhs,
-    compoundAssignExpression.tokenId,
-  );
+  const lhs = analyzeExpression(ctx, compoundAssignExpression.lhs);
+  checkLhsMutability(ctx, lhs, compoundAssignExpression.tokenId);
   return {
     ...compoundAssignExpression,
-    lhs: analyzeExpression(ctx, compoundAssignExpression.lhs),
+    lhs,
     rhs: analyzeExpression(ctx, compoundAssignExpression.rhs),
     type: { kind: "UnitType", tokenId: compoundAssignExpression.tokenId },
   };

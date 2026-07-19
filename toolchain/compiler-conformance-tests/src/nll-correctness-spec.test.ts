@@ -7,10 +7,8 @@ import {
 } from "./test-harness.js";
 
 describe("NLL and lifetime correctness spec", (): void => {
-  it.fails(
-    "sequential mutable borrows are accepted after last use",
-    (): void => {
-      assertCompilesClean(`
+  it("sequential mutable borrows are accepted after last use", (): void => {
+    assertCompilesClean(`
       fn main() {
         let mut x = "a";
         let r1 = &mut x;
@@ -19,13 +17,10 @@ describe("NLL and lifetime correctness spec", (): void => {
         print(r2);
       }
     `);
-    },
-  );
+  });
 
-  it.fails(
-    "last-use ends shared borrow before later mutable borrow",
-    (): void => {
-      assertCompilesClean(`
+  it("last-use ends shared borrow before later mutable borrow", (): void => {
+    assertCompilesClean(`
       fn main() {
         let mut x = "a";
         let r = &x;
@@ -34,10 +29,9 @@ describe("NLL and lifetime correctness spec", (): void => {
         print(rw);
       }
     `);
-    },
-  );
+  });
 
-  it.fails("branch-local borrow release allows use after join", (): void => {
+  it("branch-local borrow release allows use after join", (): void => {
     assertCompilesClean(`
       fn main() {
         let mut x = "a";
@@ -52,10 +46,8 @@ describe("NLL and lifetime correctness spec", (): void => {
     `);
   });
 
-  it.fails(
-    "loop-scoped mutable borrow can be recreated each iteration",
-    (): void => {
-      assertCompilesClean(`
+  it("loop-scoped mutable borrow can be recreated each iteration", (): void => {
+    assertCompilesClean(`
       fn main() {
         let mut x = "a";
         if true {
@@ -68,8 +60,7 @@ describe("NLL and lifetime correctness spec", (): void => {
         }
       }
     `);
-    },
-  );
+  });
 
   it("overlapping mutable and shared borrow is rejected", (): void => {
     assertRejectsWithMessage(
@@ -197,11 +188,9 @@ describe("NLL and lifetime correctness spec", (): void => {
     },
   );
 
-  it.fails(
-    "mutating a primitive through &mut is observable by the original binding after the borrow ends",
-    (): void => {
-      assertRunsTo(
-        `
+  it("mutating a primitive through &mut is observable by the original binding after the borrow ends", (): void => {
+    assertRunsTo(
+      `
       fn main() {
         let mut x = 1;
         let r = &mut x;
@@ -209,16 +198,13 @@ describe("NLL and lifetime correctness spec", (): void => {
         print(x);
       }
     `,
-        ["2"],
-      );
-    },
-  );
+      ["2"],
+    );
+  });
 
-  it.fails(
-    "replacing a whole struct through &mut is observable by the original binding after the borrow ends",
-    (): void => {
-      assertRunsTo(
-        `
+  it("replacing a whole struct through &mut is observable by the original binding after the borrow ends", (): void => {
+    assertRunsTo(
+      `
       struct Foo { value: i32 }
       fn main() {
         let mut obj = Foo { value: 1 };
@@ -227,8 +213,53 @@ describe("NLL and lifetime correctness spec", (): void => {
         print(obj.value);
       }
     `,
-        ["2"],
-      );
-    },
-  );
+      ["2"],
+    );
+  });
+
+  it("mutating a struct field through &mut is observable by the original binding after the borrow ends", (): void => {
+    assertRunsTo(
+      `
+      struct Foo { value: i32 }
+      fn main() {
+        let mut obj = Foo { value: 1 };
+        let r = &mut obj;
+        r.value = 2;
+        print(obj.value);
+      }
+    `,
+      ["2"],
+    );
+  });
+
+  it("mutating a &mut function parameter is observable by the caller across the call boundary", (): void => {
+    assertRunsTo(
+      `
+      fn increment(r: &mut i32) {
+        *r = *r + 1;
+      }
+      fn main() {
+        let mut n = 1;
+        increment(&mut n);
+        print(n);
+      }
+    `,
+      ["2"],
+    );
+  });
+
+  it("reading a struct field through &mut reflects a prior mutation made through the same reference", (): void => {
+    assertRunsTo(
+      `
+      struct Foo { value: i32 }
+      fn main() {
+        let mut obj = Foo { value: 1 };
+        let r = &mut obj;
+        r.value = 2;
+        print(r.value);
+      }
+    `,
+      ["2"],
+    );
+  });
 });

@@ -353,14 +353,14 @@ export interface CallExpression extends DecoratedAstNode {
   readonly arguments: Expression[];
 }
 
-interface ReferenceExpression extends DecoratedAstNode {
+export interface ReferenceExpression extends DecoratedAstNode {
   readonly kind: "ReferenceExpression";
   /** `true` for `&mut` (exclusive), `false` for `&` (shared). */
   readonly mutable: boolean;
   readonly operand: Expression;
 }
 
-interface DereferenceExpression extends DecoratedAstNode {
+export interface DereferenceExpression extends DecoratedAstNode {
   readonly kind: "DereferenceExpression";
   readonly operand: Expression;
 }

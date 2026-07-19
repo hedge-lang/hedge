@@ -6,7 +6,7 @@ import type * as Semantics from "../../semantics/ast.js";
 import { analyzeSource } from "../../testing/analyze-source.js";
 import {
   findExpressionEndTokenId,
-  findLetStatementEndTokenId,
+  findStatementEndTokenId,
   findMatchingCloseBraceTokenId,
   leftmostExpressionTokenId,
   resolveSpan,
@@ -61,14 +61,14 @@ describe("findMatchingCloseBraceTokenId", (): void => {
   });
 });
 
-describe("findLetStatementEndTokenId", (): void => {
+describe("findStatementEndTokenId", (): void => {
   it("returns the trailing semicolon for a simple let", (): void => {
     const tokens = tokensOf("fn main() { let x = 1 + 2; print(x); }");
     const letId = findFirstTokenId(
       tokens,
       (t) => t.kind === "keyword" && t.text === "let",
     );
-    const end = findLetStatementEndTokenId(tokens, letId);
+    const end = findStatementEndTokenId(tokens, letId);
     expect(tokens[end]?.kind).toBe("semi");
     // the semicolon found belongs to the let statement, not the print() call
     expect(tokens[end - 1]?.kind).toBe("int");
@@ -82,7 +82,7 @@ describe("findLetStatementEndTokenId", (): void => {
       tokens,
       (t) => t.kind === "keyword" && t.text === "let",
     );
-    const end = findLetStatementEndTokenId(tokens, letId);
+    const end = findStatementEndTokenId(tokens, letId);
     expect(tokens[end]?.kind).toBe("semi");
     expect(tokens[end - 1]?.kind).toBe("rbrace");
   });

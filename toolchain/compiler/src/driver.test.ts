@@ -94,9 +94,8 @@ describe("driver", (): void => {
       'fn main() { let x = "a"; let r = &mut x; print(r); }',
     );
     expect(isNone(result.code)).toBe(true);
-    expect(result.diagnostics).toHaveLength(2);
-    expect(result.diagnostics[0]?.message).toContain("Slice 1");
-    expect(result.diagnostics[1]?.message).toContain("not declared mut");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toContain("not declared mut");
   });
 
   it("reports a use-after-move error and produces no code", (): void => {

@@ -617,6 +617,15 @@ function walkExpression(
       walkExpression(ctx, expression.operand, state, scopeStack);
       return;
     case "ReferenceExpression":
+      // Borrowing (`&`/`&mut`) is a *use*, not a move: the operand's
+      // ownership never transfers, matching FieldAccessExpression's own
+      // use-not-move treatment above.
+      if (expression.operand.kind === "PathExpression") {
+        useOrMove(ctx, expression.operand, state, scopeStack, false);
+      } else {
+        walkExpression(ctx, expression.operand, state, scopeStack);
+      }
+      return;
     case "DereferenceExpression":
       walkExpression(ctx, expression.operand, state, scopeStack);
       return;

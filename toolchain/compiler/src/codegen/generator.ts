@@ -75,6 +75,7 @@ type PrecKey =
   | "TupleExpression"
   | "RangeExpression"
   | "StructExpression"
+  | "RefCellExpression"
   | BinaryOperator;
 
 // Ascending precedence: earlier entries bind looser → more likely to need parens.
@@ -276,6 +277,10 @@ function emitExpression(expression: Expression): string {
       // slice's real Drop impls will fill in.
       return `({${[...fields, "[Symbol.dispose]() {}"].join(", ")}})`;
     }
+    case "RefCellExpression": {
+      const { name } = expression;
+      return `({ get v() { return ${name}; }, set v(nv) { ${name} = nv; } })`;
+    }
     case "RangeExpression": {
       const parts = [
         ...(isSome(expression.start)
@@ -432,6 +437,16 @@ function emitFunctionPart(decl: FunctionDecl): EmittedPart {
           sourceEnd: binExpr.span.end,
         });
       }
+    } else if (
+      entry.stmt.kind === "AssignExpression" &&
+      isSome(entry.stmt.span)
+    ) {
+      mappings.push({
+        generatedStart: cursor,
+        generatedEnd: cursor + line.length,
+        sourceStart: entry.stmt.span.value.start,
+        sourceEnd: entry.stmt.span.value.end,
+      });
     }
     cursor += line.length + 1; // + the "\n" following this line
   }

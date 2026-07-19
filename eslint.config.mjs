@@ -81,27 +81,27 @@ export default defineConfig([
           default: "disallow",
           policies: [
             {
-              from: { type: "compiler" },
+              from: { element: { type: "compiler" } },
               allow: [
-                { to: { type: "compiler" } },
-                { to: { type: "runtime" } },
+                { to: { element: { type: "compiler" } } },
+                { to: { element: { type: "runtime" } } },
               ],
             },
             {
-              from: { type: "runtime" },
-              allow: [{ to: { type: "runtime" } }],
+              from: { element: { type: "runtime" } },
+              allow: [{ to: { element: { type: "runtime" } } }],
             },
             {
-              from: { type: "cli" },
+              from: { element: { type: "cli" } },
               allow: [
-                { to: { type: "compiler" } },
-                { to: { type: "runtime" } },
-                { to: { type: "cli" } },
+                { to: { element: { type: "compiler" } } },
+                { to: { element: { type: "runtime" } } },
+                { to: { element: { type: "cli" } } },
               ],
             },
             {
-              from: { type: "compiler-conformance-tests" },
-              allow: [{ to: { type: "compiler" } }],
+              from: { element: { type: "compiler-conformance-tests" } },
+              allow: [{ to: { element: { type: "compiler" } } }],
             },
           ],
         },
