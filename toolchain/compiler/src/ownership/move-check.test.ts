@@ -637,7 +637,7 @@ describe("move-check", (): void => {
     expect(diagnostics).toEqual([]);
   });
 
-  it.fails(
+  it(
     "rejects passing a dereferenced non-Copy value by value out of a reference",
     (): void => {
       const { diagnostics } = check(

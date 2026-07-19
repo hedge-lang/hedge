@@ -170,7 +170,7 @@ describe("NLL and lifetime correctness spec", (): void => {
     },
   );
 
-  it.fails(
+  it(
     "rejects passing a dereferenced non-Copy value by value out of a reference",
     (): void => {
       assertRejectsWithMessage(
