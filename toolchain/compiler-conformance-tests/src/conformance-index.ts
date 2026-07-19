@@ -523,6 +523,9 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "rejects passing a dereferenced non-Copy value by value out of a reference",
       "mutating a primitive through &mut is observable by the original binding after the borrow ends",
       "replacing a whole struct through &mut is observable by the original binding after the borrow ends",
+      "mutating a struct field through &mut is observable by the original binding after the borrow ends",
+      "mutating a &mut function parameter is observable by the caller across the call boundary",
+      "reading a struct field through &mut reflects a prior mutation made through the same reference",
     ],
   },
   {
