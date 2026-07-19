@@ -1365,36 +1365,50 @@ type PlaceMutabilityViolation = "immutable-binding" | "shared-reference";
 
 /**
  * A place expression's writability, checked recursively:
+ * - Any place reached *through* a projection (`isRoot: false`) whose own
+ *   type is a reference stops the walk immediately: write permission comes
+ *   from that reference's own mutability from that point on, regardless of
+ *   what contains it (`let mut r = &foo;` still can't write through the
+ *   shared `r`; conversely `foo.b.value = 2` is fine when `foo.b: &mut Bar`
+ *   even though `foo` itself isn't `mut` - the reference field's own
+ *   mutability is what governs, not the struct holding it).
  * - A bare identifier at the *root* of the lhs (not reached through a
  *   projection) is writable exactly when its own binding is `let mut` -
- *   this is the "rebind the binding itself" case (`r = &mut y;`).
- * - A bare identifier reached *through* a field/index projection
- *   (`isRoot: false`) is writable according to its own type first: if it's
- *   a reference, write permission comes from the reference's own
- *   mutability, not from whether the binding holding it is itself `let
- *   mut` (`let mut r = &foo;` still can't write through the shared `r`).
- *   Otherwise it falls back to the binding's own `let mut`, same as the
- *   root case.
- * - `place.field`/`place[index]` is writable exactly when `place` is.
+ *   this is the "rebind the binding itself" case (`r = &mut y;`), which
+ *   never gets the reference-type bypass above since it's never `isRoot:
+ *   false`.
+ * - `place.field`/`place[index]` is writable exactly when `place` is
+ *   (falling through to the recursive call when the reference-type check
+ *   above didn't already resolve it).
  * - `*r` is writable exactly when `r`'s own type is a mutable reference -
  *   this doesn't recurse into whether `r` itself is a writable place, since
- *   what matters is the pointer's type, not how it was produced.
+ *   what matters is the pointer's type, not how it was produced. (`*r`'s
+ *   own type is always the referent, never a reference itself, so this
+ *   never overlaps with the reference-type check above.)
  *
  * Returns `undefined` for a genuinely writable place, or for any lhs shape
  * this function doesn't track (multi-segment paths, an unresolved name) -
  * matching this check's original permissive default.
  */
+// eslint-disable-next-line complexity -- This is a routing function
 function placeMutabilityViolation(
   ctx: AnalysisContext,
   expr: Semantics.Expression,
   isRoot: boolean,
-): PlaceMutabilityViolation | undefined {
+): Option<PlaceMutabilityViolation> {
+  const exprType = getType(expr);
+  if (!isRoot && exprType.kind === "ReferenceType") {
+    return exprType.mutable ? none : some("shared-reference");
+  }
+
   switch (expr.kind) {
     case "PathExpression": {
-      if (expr.path.segments.length !== 1) return undefined;
+      if (expr.path.segments.length !== 1) return none;
       const name = expr.path.segments[0];
       assert(name !== undefined, "Name segment missing");
-      return placeMutabilityViolationForBinding(ctx, name, isRoot);
+      const resolved = resolve(ctx, name);
+      if (!isSome(resolved)) return none;
+      return resolved.value.mutable ? none : some("immutable-binding");
     }
     case "FieldAccessExpression":
       return placeMutabilityViolation(ctx, expr.object, false);
@@ -1403,26 +1417,13 @@ function placeMutabilityViolation(
     case "DereferenceExpression": {
       const operandType = getType(expr.operand);
       if (operandType.kind === "ReferenceType" && !operandType.mutable) {
-        return "shared-reference";
+        return some("shared-reference");
       }
-      return undefined;
+      return none;
     }
     default:
-      return undefined;
+      return none;
   }
-}
-
-function placeMutabilityViolationForBinding(
-  ctx: AnalysisContext,
-  name: string,
-  isRoot: boolean,
-): PlaceMutabilityViolation | undefined {
-  const resolved = resolve(ctx, name);
-  if (!isSome(resolved)) return undefined;
-  if (!isRoot && resolved.value.type.kind === "ReferenceType") {
-    return resolved.value.type.mutable ? undefined : "shared-reference";
-  }
-  return resolved.value.mutable ? undefined : "immutable-binding";
 }
 
 function checkLhsMutability(
@@ -1431,10 +1432,12 @@ function checkLhsMutability(
   tokenId: number,
 ): void {
   const violation = placeMutabilityViolation(ctx, lhs, true);
-  if (violation === "immutable-binding") {
-    emitError(ctx, "cannot assign to immutable binding", tokenId);
-  } else if (violation === "shared-reference") {
-    emitError(ctx, "cannot assign through a shared reference", tokenId);
+  if (isSome(violation)) {
+    if (violation.value === "immutable-binding") {
+      emitError(ctx, "cannot assign to immutable binding", tokenId);
+    } else if (violation.value === "shared-reference") {
+      emitError(ctx, "cannot assign through a shared reference", tokenId);
+    }
   }
 }
 
