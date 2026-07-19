@@ -671,4 +671,26 @@ describe("reference types", (): void => {
     );
     expect(result.diagnostics).toEqual([]);
   });
+
+  it("accepts writing through a struct field that itself holds a &mut reference, regardless of the containing binding's own mutability", (): void => {
+    const result = diagnose(`
+      struct Bar { value: i32 }
+      struct Foo<'a> { b: &'a mut Bar }
+      fn f(foo: Foo) { foo.b.value = 2; }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects writing through a struct field that holds a shared & reference, even when the containing binding is mut", (): void => {
+    const result = diagnose(`
+      struct Bar { value: i32 }
+      struct Foo<'a> { b: &'a Bar }
+      fn f(mut foo: Foo) { foo.b.value = 2; }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain(
+      "cannot assign through a shared reference",
+    );
+  });
 });
