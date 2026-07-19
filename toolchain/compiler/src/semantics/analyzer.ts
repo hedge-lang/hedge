@@ -1441,7 +1441,10 @@ function checkLhsMutability(
         emitError(ctx, "cannot assign through a shared reference", tokenId);
         break;
       default:
-        assertNever(violation.value, `Unexpected place mutability violation: ${violation.value}`);
+        assertNever(
+          violation.value,
+          `Unexpected place mutability violation: ${String(violation.value)}`,
+        );
     }
   }
 }
