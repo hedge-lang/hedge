@@ -1233,7 +1233,11 @@ function analyzeExpression(
  * Place-projection borrow checking is issue #25's job.
  */
 function isBareLocalPlace(expr: Parser.Expression): boolean {
-  return expr.kind === "PathExpression" && expr.path.segments.length === 1;
+  return (
+    expr.kind === "PathExpression" &&
+    expr.path.segments.length === 1 &&
+    !expr.path.absolute
+  );
 }
 
 function analyzeReferenceExpression(
