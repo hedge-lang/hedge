@@ -1311,12 +1311,17 @@ function analyzeFieldAccessExpression(
 
   if (objectType.kind === "UnitType") return unresolved();
 
-  if (objectType.kind !== "StructType") {
+  // Field access reaches through a borrow automatically (spec 0005),
+  // shared or mutable alike - resolve against the referent's type.
+  const structType =
+    objectType.kind === "ReferenceType" ? objectType.referent : objectType;
+
+  if (structType.kind !== "StructType") {
     emitError(ctx, "field access on non-struct type", expression.field.tokenId);
     return unresolved();
   }
 
-  const structName = objectType.name.split("::").pop() ?? objectType.name;
+  const structName = structType.name.split("::").pop() ?? structType.name;
   const structDecl = ctx.typeScope.get(structName);
   const fieldName = expression.field.text;
 
@@ -1375,12 +1380,25 @@ function checkLhsMutability(
   tokenId: number,
 ): void {
   const name = rootBinding(lhs);
-  if (isSome(name)) {
-    const resolved = resolve(ctx, name.value);
-    if (isSome(resolved) && !resolved.value.mutable) {
-      emitError(ctx, "cannot assign to immutable binding", tokenId);
-    }
+  if (!isSome(name)) return;
+  const resolved = resolve(ctx, name.value);
+  if (!isSome(resolved) || resolved.value.mutable) return;
+
+  // A field/index projection through a `&mut` reference is writable
+  // regardless of whether the reference binding itself is `let mut` - that
+  // write permission comes from the reference's own mutability. A bare
+  // identifier lhs is different: it rebinds the reference binding itself
+  // (`r = &mut y;`), which is still governed by `r`'s own `let`/`let mut`.
+  if (
+    lhs.kind !== "PathExpression" &&
+    lhs.kind !== "Identifier" &&
+    resolved.value.type.kind === "ReferenceType" &&
+    resolved.value.type.mutable
+  ) {
+    return;
   }
+
+  emitError(ctx, "cannot assign to immutable binding", tokenId);
 }
 
 /**

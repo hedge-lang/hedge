@@ -48,7 +48,7 @@ export function findMatchingCloseBraceTokenId(
  * `letKeywordTokenId`, the terminator of a `let` statement, inclusive
  * (the span of a `let` statement covers its own trailing `;`).
  */
-export function findLetStatementEndTokenId(
+export function findStatementEndTokenId(
   tokens: readonly Token[],
   letKeywordTokenId: number,
 ): number {

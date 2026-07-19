@@ -14,7 +14,7 @@ import type * as JSIM from "./ast.js";
 import { toDocComment } from "./parts/doc-comment.js";
 import {
   findExpressionEndTokenId,
-  findLetStatementEndTokenId,
+  findStatementEndTokenId,
   findMatchingCloseBraceTokenId,
   leftmostExpressionTokenId,
   resolveSpan,
@@ -167,6 +167,7 @@ function dropFlagClearStatement(
       type: none(),
     },
     rhs: { kind: "BooleanLiteral", value: false },
+    span: none(),
   };
 }
 
@@ -712,7 +713,7 @@ function parseStatement(
         span: resolveSpan(
           ctx.tokens,
           statement.tokenId,
-          findLetStatementEndTokenId(ctx.tokens, statement.tokenId),
+          findStatementEndTokenId(ctx.tokens, statement.tokenId),
         ),
         dispose,
       };
@@ -723,6 +724,12 @@ function parseStatement(
       }
       if (statement.expression.kind === "IfExpression") {
         return jsimIfExpressionAsStatement(ctx, statement.expression);
+      }
+      if (
+        statement.expression.kind === "AssignExpression" ||
+        statement.expression.kind === "CompoundAssignExpression"
+      ) {
+        return parseAssignStatement(ctx, statement.expression);
       }
       return parseExpression(ctx, statement.expression);
     case "Function":
@@ -814,9 +821,22 @@ function parseExpression(
         arguments: expression.arguments.map((arg) => parseExpression(ctx, arg)),
       };
     case "ReferenceExpression":
+      // A shared borrow is transparent in JS - emit the operand directly. A
+      // `&mut` borrow needs the getter/setter cell (see root CLAUDE.md's
+      // borrow/reference lowering decision).
+      return expression.mutable
+        ? parseMutableReferenceExpression(ctx, expression)
+        : parseExpression(ctx, expression.operand);
     case "DereferenceExpression":
-      // References and dereferences are transparent in JS - emit the operand directly.
-      return parseExpression(ctx, expression.operand);
+      // A shared borrow's referent reads transparently; a `&mut` borrow
+      // reads through the cell's `.v` accessor.
+      return isMutableReferenceTyped(expression.operand)
+        ? {
+            kind: "FieldAccessExpression",
+            object: parseExpression(ctx, expression.operand),
+            field: "v",
+          }
+        : parseExpression(ctx, expression.operand);
     case "BinaryExpression":
       return parseBinaryExpression(ctx, expression);
     case "UnaryExpression":
@@ -1149,34 +1169,97 @@ function parseUnaryExpression(
 function parseAssignExpression(
   ctx: JsimContext,
   assignExp: Semantics.AssignExpression,
-): JSIM.Expression {
+): JSIM.AssignExpression {
   return {
     kind: "AssignExpression",
     operator: "Assign",
     lhs: parseExpression(ctx, assignExp.lhs),
     rhs: parseExpression(ctx, assignExp.rhs),
+    span: none(),
   };
 }
 
 function parseCompoundAssignExpression(
   ctx: JsimContext,
   compoundAssignExp: Semantics.CompoundAssignExpression,
-): JSIM.Expression {
+): JSIM.AssignExpression {
   return {
     kind: "AssignExpression",
     operator: compoundAssignExp.operator,
     lhs: parseExpression(ctx, compoundAssignExp.lhs),
     rhs: parseExpression(ctx, compoundAssignExp.rhs),
+    span: none(),
   };
+}
+
+/**
+ * An assignment used as a bare statement (`*r = 1;`) gets its own
+ * source-map span, from its lhs's leftmost token through the matching
+ * depth-0 `;` - the same technique `LetStatement` already uses. A nested
+ * occurrence (inside a larger expression) keeps `span: none()` from
+ * `parseAssignExpression`/`parseCompoundAssignExpression` instead, since it
+ * has no statement-level `;` of its own to bound a span with.
+ */
+function parseAssignStatement(
+  ctx: JsimContext,
+  expression: Semantics.AssignExpression | Semantics.CompoundAssignExpression,
+): JSIM.Statement {
+  const lowered =
+    expression.kind === "AssignExpression"
+      ? parseAssignExpression(ctx, expression)
+      : parseCompoundAssignExpression(ctx, expression);
+  return {
+    ...lowered,
+    span: some(
+      resolveSpan(
+        ctx.tokens,
+        expression.lhs.tokenId,
+        findStatementEndTokenId(ctx.tokens, expression.lhs.tokenId),
+      ),
+    ),
+  };
+}
+
+function isMutableReferenceTyped(expression: Semantics.Expression): boolean {
+  const type = expression.type;
+  return type.kind === "ReferenceType" && type.mutable;
+}
+
+/**
+ * The analyzer's bare-local-place restriction (`isBareLocalPlace`) guarantees
+ * a `&mut` borrow's operand is always a single-segment `PathExpression` by
+ * the time a program reaches JSIM lowering (any other shape is a compile
+ * error, so `toJsim` never runs on it) - so lowering the operand always
+ * yields a bare `Identifier`, whose emitted name the cell closes over.
+ */
+function parseMutableReferenceExpression(
+  ctx: JsimContext,
+  expression: Semantics.ReferenceExpression,
+): JSIM.Expression {
+  const lowered = parseExpression(ctx, expression.operand);
+  assert(
+    lowered.kind === "Identifier",
+    `Expected a &mut operand to lower to a bare identifier, got "${lowered.kind}"`,
+  );
+  return { kind: "RefCellExpression", name: lowered.value };
 }
 
 function parseFieldAccessExpression(
   ctx: JsimContext,
   fieldAccessExp: Semantics.FieldAccessExpression,
 ): JSIM.Expression {
+  const object = parseExpression(ctx, fieldAccessExp.object);
+  // Field access reaches through a borrow automatically (spec 0005). A
+  // shared borrow's object lowers transparently already; a `&mut` borrow's
+  // object is the getter/setter cell, so an extra `.v` hop is needed to
+  // reach the referent before projecting the field.
+  let referent: JSIM.Expression = object;
+  if (isMutableReferenceTyped(fieldAccessExp.object)) {
+    referent = { kind: "FieldAccessExpression", object, field: "v" };
+  }
   return {
     kind: "FieldAccessExpression",
-    object: parseExpression(ctx, fieldAccessExp.object),
+    object: referent,
     field: fieldAccessExp.field.text,
   };
 }

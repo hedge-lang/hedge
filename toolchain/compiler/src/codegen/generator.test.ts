@@ -696,6 +696,67 @@ describe("using / scope-end drop codegen", (): void => {
   });
 });
 
+describe("mutable reference cell codegen", (): void => {
+  it("lowers a &mut local to a getter/setter cell capturing that local", (): void => {
+    const code = gen("fn _() { let mut n = 1; let r = &mut n; print(r); }");
+    expect(stmts(code)).toBe(
+      [
+        "let n = 1;",
+        "const r = ({ get v() { return n; }, set v(nv) { n = nv; } });",
+        "print(r);",
+      ].join("\n"),
+    );
+  });
+
+  it("lowers a shared & of a local transparently, with no cell", (): void => {
+    const code = gen("fn _() { let n = 1; let r = &n; print(r); }");
+    expect(stmts(code)).toBe(
+      ["const n = 1;", "const r = n;", "print(r);"].join("\n"),
+    );
+  });
+
+  it("lowers *r to r.v when r is a &mut reference", (): void => {
+    const code = gen("fn _(r: &mut i32) { print(*r); }");
+    expect(stmts(code)).toBe("print(r.v);");
+  });
+
+  it("lowers *r = value to r.v = value when r is a &mut reference", (): void => {
+    const code = gen("fn _(r: &mut i32) { *r = 1; }");
+    expect(stmts(code)).toBe("r.v = 1;");
+  });
+
+  it("lowers *r transparently when r is a shared reference", (): void => {
+    const code = gen("fn _(r: &i32) { print(*r); }");
+    expect(stmts(code)).toBe("print(r);");
+  });
+
+  it("lowers r.field to r.v.field when r is a &mut struct reference", (): void => {
+    const code = gen(
+      "struct Foo { value: i32 } fn _(r: &mut Foo) { print(r.value); }",
+    );
+    expect(stmts(code)).toBe("print(r.v.value);");
+  });
+
+  it("lowers r.field = x to r.v.field = x when r is a &mut struct reference", (): void => {
+    const code = gen(
+      "struct Foo { value: i32 } fn _(r: &mut Foo) { r.value = 2; }",
+    );
+    expect(stmts(code)).toBe("r.v.value = 2;");
+  });
+
+  it("lowers r.field transparently when r is a shared struct reference", (): void => {
+    const code = gen(
+      "struct Foo { value: i32 } fn _(r: &Foo) { print(r.value); }",
+    );
+    expect(stmts(code)).toBe("print(r.value);");
+  });
+
+  it("lowers *r += 1; to r.v += 1; when r is a &mut reference", (): void => {
+    const code = gen("fn _(r: &mut i32) { *r += 1; }");
+    expect(stmts(code)).toBe("r.v += 1;");
+  });
+});
+
 describe("source maps", (): void => {
   it("maps the whole function declaration back to its own source span", (): void => {
     const source = "fn _() { print(1); }";
@@ -724,6 +785,38 @@ describe("source maps", (): void => {
     assert(mapping !== undefined, "Expected a covering let-statement mapping");
     expect(source.slice(mapping.sourceStart, mapping.sourceEnd)).toBe(
       "let x = 1 + 2;",
+    );
+  });
+
+  it("maps a &mut cell-producing let binding's generated text through its trailing semicolon", (): void => {
+    const source = "fn _() { let mut n = 1; let r = &mut n; print(r); }";
+    const code = gen(source);
+    const output = js(code);
+    assert(output !== null);
+    const letTextStart = output.indexOf("const r = ");
+    const letTextEnd = output.indexOf(";", letTextStart) + 1;
+    const mapping = code.sourceMap.mappings.find(
+      (m) => m.generatedStart <= letTextStart && m.generatedEnd >= letTextEnd,
+    );
+    assert(mapping !== undefined, "Expected a covering let-statement mapping");
+    expect(source.slice(mapping.sourceStart, mapping.sourceEnd)).toBe(
+      "let r = &mut n;",
+    );
+  });
+
+  it("maps a *r = value; expression-statement back to its own source span", (): void => {
+    const source = "fn _(r: &mut i32) { *r = 1; print(1); }";
+    const code = gen(source);
+    const output = js(code);
+    assert(output !== null);
+    const assignStart = output.indexOf("r.v = 1;");
+    const assignEnd = assignStart + "r.v = 1;".length;
+    const mapping = code.sourceMap.mappings.find(
+      (m) => m.generatedStart <= assignStart && m.generatedEnd >= assignEnd,
+    );
+    assert(mapping !== undefined, "Expected a covering assignment mapping");
+    expect(source.slice(mapping.sourceStart, mapping.sourceEnd)).toBe(
+      "*r = 1;",
     );
   });
 

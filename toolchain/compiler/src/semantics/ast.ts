@@ -239,7 +239,7 @@ export interface FunctionType {
  * consumes the parser-level `Program`, not this one), so only the mutability
  * and referent type are meaningful here.
  */
-export interface ReferenceType extends AstNode {
+interface ReferenceType extends AstNode {
   readonly kind: "ReferenceType";
   readonly mutable: boolean;
   readonly referent: Type;

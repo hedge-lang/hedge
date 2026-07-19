@@ -611,6 +611,32 @@ describe("move-check", (): void => {
     expect(diagnostics[0].message).toContain("moved");
   });
 
+  it("borrowing a non-Copy struct binding with &mut is a use, not a move", (): void => {
+    const { diagnostics } = check(
+      `${BOXED}
+      fn main() {
+        let mut x = Boxed { value: 1 };
+        let r = &mut x;
+        print(r);
+        print(x.value);
+      }`,
+    );
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("borrowing a non-Copy struct binding with & is a use, not a move", (): void => {
+    const { diagnostics } = check(
+      `${BOXED}
+      fn main() {
+        let x = Boxed { value: 1 };
+        let r = &x;
+        print(r);
+        print(x.value);
+      }`,
+    );
+    expect(diagnostics).toEqual([]);
+  });
+
   it.fails(
     "rejects passing a dereferenced non-Copy value by value out of a reference",
     (): void => {

@@ -96,7 +96,8 @@ export type Expression =
   | IndexExpression
   | TupleExpression
   | RangeExpression
-  | StructExpression;
+  | StructExpression
+  | RefCellExpression;
 
 interface BooleanLiteral {
   readonly kind: "BooleanLiteral";
@@ -208,11 +209,18 @@ export type AssignOperator =
   | "BitXorAssign"
   | "ShlAssign"
   | "ShrAssign";
-interface AssignExpression {
+export interface AssignExpression {
   readonly kind: "AssignExpression";
   readonly operator: AssignOperator;
   readonly lhs: Expression;
   readonly rhs: Expression;
+  /**
+   * `some(...)` only when this assignment is itself a statement (not nested
+   * inside a larger expression) - that's the only position `emitFunctionPart`
+   * can give it its own source-map mapping, since a nested occurrence has no
+   * statement-level `;` of its own to bound a span with.
+   */
+  readonly span: Option<Span>;
 }
 
 interface FieldAccessExpression {
@@ -261,6 +269,18 @@ interface RangeExpression {
 interface StructExpression {
   readonly kind: "StructExpression";
   readonly fields: readonly StructExpressionField[];
+}
+
+/**
+ * A `&mut` reference's runtime representation: a getter/setter accessor
+ * object closing over `name` (the captured local's own emitted binding),
+ * not a data cell - `ref.v` reads/writes route through the closure, so
+ * mutating through the reference is observed by every other alias of the
+ * same local without the local's own storage ever being boxed or rewritten.
+ */
+interface RefCellExpression {
+  readonly kind: "RefCellExpression";
+  readonly name: string;
 }
 
 type StructExpressionField = StructField | SpreadExpression;
