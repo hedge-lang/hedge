@@ -1113,27 +1113,9 @@ function analyzeExpression(
     case "CallExpression":
       return analyzeCall(ctx, expression);
     case "ReferenceExpression":
-      emitError(
-        ctx,
-        "borrow expressions are not supported in Slice 1",
-        expression.tokenId,
-      );
-      return {
-        ...expression,
-        operand: analyzeExpression(ctx, expression.operand),
-        type: { kind: "UnitType", tokenId: expression.tokenId },
-      };
+      return analyzeReferenceExpression(ctx, expression);
     case "DereferenceExpression":
-      emitError(
-        ctx,
-        "dereference expressions are not supported in Slice 1",
-        expression.tokenId,
-      );
-      return {
-        ...expression,
-        operand: analyzeExpression(ctx, expression.operand),
-        type: { kind: "UnitType", tokenId: expression.tokenId },
-      };
+      return analyzeDereferenceExpression(ctx, expression);
     case "BinaryExpression": {
       let left = analyzeExpression(ctx, expression.left);
       let right = analyzeExpression(ctx, expression.right);
@@ -1241,6 +1223,79 @@ function analyzeExpression(
   }
 }
 
+/**
+ * A borrow's operand is in scope for cell lowering only when it is a bare
+ * local binding or parameter name - a single-segment `PathExpression`. A
+ * field/index place (`&mut user.field`, `&mut arr[0]`) isn't resolved to a
+ * `BindingId` by `borrowck.ts`'s `resolveBorrowBases` yet, so accepting it
+ * here would let overlapping/conflicting place borrows compile with zero
+ * exclusivity checking - a soundness gap, not just a missing optimization.
+ * Place-projection borrow checking is issue #25's job.
+ */
+function isBareLocalPlace(expr: Parser.Expression): boolean {
+  return expr.kind === "PathExpression" && expr.path.segments.length === 1;
+}
+
+function analyzeReferenceExpression(
+  ctx: AnalysisContext,
+  expression: Parser.ReferenceExpression,
+): Semantics.ReferenceExpression {
+  const operand = analyzeExpression(ctx, expression.operand);
+
+  if (!isBareLocalPlace(expression.operand)) {
+    emitError(
+      ctx,
+      "borrowing a field or index place is not yet supported; only a local binding or parameter can be borrowed directly",
+      expression.tokenId,
+    );
+    return {
+      ...expression,
+      operand,
+      type: { kind: "UnitType", tokenId: expression.tokenId },
+    };
+  }
+
+  return {
+    ...expression,
+    operand,
+    type: {
+      kind: "ReferenceType",
+      tokenId: expression.tokenId,
+      mutable: expression.mutable,
+      referent: getType(operand),
+    },
+  };
+}
+
+function analyzeDereferenceExpression(
+  ctx: AnalysisContext,
+  expression: Parser.DereferenceExpression,
+): Semantics.DereferenceExpression {
+  const operand = analyzeExpression(ctx, expression.operand);
+  const operandType = getType(operand);
+
+  if (operandType.kind !== "ReferenceType") {
+    // A UnitType operand from one of `isAmbiguousUnitExpr`'s buckets is
+    // itself an error-recovery placeholder (e.g. an unresolved name) that
+    // already emitted its own diagnostic - reporting a second one here would
+    // be a cascade, not a genuine second fault.
+    if (!(operandType.kind === "UnitType" && isAmbiguousUnitExpr(operand))) {
+      emitError(
+        ctx,
+        "cannot dereference a non-reference type",
+        expression.tokenId,
+      );
+    }
+    return {
+      ...expression,
+      operand,
+      type: { kind: "UnitType", tokenId: expression.tokenId },
+    };
+  }
+
+  return { ...expression, operand, type: operandType.referent };
+}
+
 function analyzeFieldAccessExpression(
   ctx: AnalysisContext,
   expression: Parser.FieldAccessExpression,
@@ -1328,14 +1383,34 @@ function checkLhsMutability(
   }
 }
 
+/**
+ * Assigning through `*r` doesn't go through `checkLhsMutability` (its
+ * `rootBinding` doesn't descend into `DereferenceExpression`, since `r`
+ * itself is never reassigned by `*r = value`) - write permission instead
+ * comes from the reference's own mutability, checked here instead.
+ */
+function checkDerefAssignMutability(
+  ctx: AnalysisContext,
+  lhs: Semantics.Expression,
+  tokenId: number,
+): void {
+  if (lhs.kind !== "DereferenceExpression") return;
+  const operandType = getType(lhs.operand);
+  if (operandType.kind === "ReferenceType" && !operandType.mutable) {
+    emitError(ctx, "cannot assign through a shared reference", tokenId);
+  }
+}
+
 function analyzeAssignmentExpression(
   ctx: AnalysisContext,
   assignExpression: Parser.AssignExpression,
 ): Semantics.AssignExpression {
   checkLhsMutability(ctx, assignExpression.lhs, assignExpression.tokenId);
+  const lhs = analyzeExpression(ctx, assignExpression.lhs);
+  checkDerefAssignMutability(ctx, lhs, assignExpression.tokenId);
   return {
     ...assignExpression,
-    lhs: analyzeExpression(ctx, assignExpression.lhs),
+    lhs,
     rhs: analyzeExpression(ctx, assignExpression.rhs),
     type: { kind: "UnitType", tokenId: assignExpression.tokenId },
   };
@@ -1350,9 +1425,11 @@ function analyzeCompoundAssignmentExpression(
     compoundAssignExpression.lhs,
     compoundAssignExpression.tokenId,
   );
+  const lhs = analyzeExpression(ctx, compoundAssignExpression.lhs);
+  checkDerefAssignMutability(ctx, lhs, compoundAssignExpression.tokenId);
   return {
     ...compoundAssignExpression,
-    lhs: analyzeExpression(ctx, compoundAssignExpression.lhs),
+    lhs,
     rhs: analyzeExpression(ctx, compoundAssignExpression.rhs),
     type: { kind: "UnitType", tokenId: compoundAssignExpression.tokenId },
   };

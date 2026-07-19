@@ -239,7 +239,7 @@ export interface FunctionType {
  * consumes the parser-level `Program`, not this one), so only the mutability
  * and referent type are meaningful here.
  */
-interface ReferenceType extends AstNode {
+export interface ReferenceType extends AstNode {
   readonly kind: "ReferenceType";
   readonly mutable: boolean;
   readonly referent: Type;
@@ -353,14 +353,14 @@ export interface CallExpression extends DecoratedAstNode {
   readonly arguments: Expression[];
 }
 
-interface ReferenceExpression extends DecoratedAstNode {
+export interface ReferenceExpression extends DecoratedAstNode {
   readonly kind: "ReferenceExpression";
   /** `true` for `&mut` (exclusive), `false` for `&` (shared). */
   readonly mutable: boolean;
   readonly operand: Expression;
 }
 
-interface DereferenceExpression extends DecoratedAstNode {
+export interface DereferenceExpression extends DecoratedAstNode {
   readonly kind: "DereferenceExpression";
   readonly operand: Expression;
 }

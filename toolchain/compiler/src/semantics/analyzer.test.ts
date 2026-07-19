@@ -145,11 +145,9 @@ describe("semantic analysis", (): void => {
     });
   });
 
-  it("rejects &x with a Slice 1 diagnostic", (): void => {
+  it("accepts &x as a shared borrow of a parameter, with no diagnostics", (): void => {
     const result = diagnose("fn f(x: i32) { &x; }");
-    expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+    expect(result.diagnostics).toEqual([]);
   });
 
   it("rejects an unsupported param type with a Slice 1 diagnostic", (): void => {
@@ -562,21 +560,75 @@ describe("reference types", (): void => {
     expect(result.diagnostics[0].message).toContain("return type mismatch");
   });
 
-  it("still rejects a & expression operator inside a function whose declared types are all references (the Slice-1 borrow-expression guardrail is untouched)", (): void => {
+  it("accepts a & expression operator borrowing a bare local, with no diagnostics", (): void => {
     const result = diagnose("fn f(x: i32) { let r = &x; print(r); }");
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a &mut expression operator borrowing a field place, deferring place-projection borrows to a later ticket", (): void => {
+    const result = diagnose(
+      "struct Foo { value: i32 } fn f(mut foo: Foo) { let r = &mut foo.value; print(r); }",
+    );
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(result.diagnostics[0].message).toContain(
-      "borrow expressions are not supported in Slice 1",
+      "borrowing a field or index place is not yet supported",
     );
   });
 
-  it("still rejects a * expression operator the same way, even for a &i32-typed binding", (): void => {
+  it("type-checks *x as the referent type of a &i32 parameter, with no diagnostics", (): void => {
     const result = diagnose("fn f(x: &'a i32) -> i32 { *x }");
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts assignment through a &mut i32 parameter, with no diagnostics", (): void => {
+    const result = diagnose("fn f(x: &'a mut i32) { *x = 1; }");
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects assignment through a shared &i32 parameter", (): void => {
+    const result = diagnose("fn f(x: &'a i32) { *x = 1; }");
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(result.diagnostics[0].message).toContain(
-      "dereference expressions are not supported in Slice 1",
+      "cannot assign through a shared reference",
     );
+  });
+
+  it("rejects dereferencing a non-reference type", (): void => {
+    const result = diagnose("fn f(x: i32) { *x; }");
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain(
+      "cannot dereference a non-reference type",
+    );
+  });
+
+  it("does not cascade a second dereference diagnostic for an unresolved operand", (): void => {
+    const result = diagnose("fn f() { *missing; }");
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("missing");
+  });
+
+  it("resolves a field read through a shared reference to the referent struct's field type", (): void => {
+    const result = diagnose(
+      "struct Foo { value: i32 } fn f(r: &Foo) -> i32 { r.value }",
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("resolves a field read through a mutable reference to the referent struct's field type", (): void => {
+    const result = diagnose(
+      "struct Foo { value: i32 } fn f(r: &mut Foo) -> i32 { r.value }",
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts field assignment through a &mut reference even though the reference binding itself isn't `let mut`", (): void => {
+    const result = diagnose(
+      "struct Foo { value: i32 } fn f(mut foo: Foo) { let r = &mut foo; r.value = 2; }",
+    );
+    expect(result.diagnostics).toEqual([]);
   });
 });
