@@ -57,7 +57,7 @@ describe("must-fail corpus — rejection tests", (): void => {
       );
     });
 
-    it.fails("accepts sequential mutable borrows (NLL)", (): void => {
+    it("accepts sequential mutable borrows (NLL)", (): void => {
       assertCompilesClean(`
         fn main() {
           let mut x = "a";
@@ -69,7 +69,7 @@ describe("must-fail corpus — rejection tests", (): void => {
       `);
     });
 
-    it.fails("accepts many shared borrows", (): void => {
+    it("accepts many shared borrows", (): void => {
       assertCompilesClean(`
         fn main() {
           let x = "a";
@@ -144,10 +144,8 @@ describe("must-fail corpus — rejection tests", (): void => {
       );
     });
 
-    it.fails(
-      "accepts a second mutable borrow when the first borrow has no uses",
-      (): void => {
-        assertCompilesClean(`
+    it("accepts a second mutable borrow when the first borrow has no uses", (): void => {
+      assertCompilesClean(`
         fn main() {
           let mut x = "a";
           let r1 = &mut x;
@@ -155,8 +153,7 @@ describe("must-fail corpus — rejection tests", (): void => {
           print(r2);
         }
       `);
-      },
-    );
+    });
   });
 
   describe("diagnostic span precision", (): void => {
