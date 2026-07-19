@@ -1398,21 +1398,17 @@ function placeMutabilityViolation(
 ): Option<PlaceMutabilityViolation> {
   const exprType = getType(expr);
   if (!isRoot && exprType.kind === "ReferenceType") {
-    return exprType.mutable
-      ? none
-      : some<PlaceMutabilityViolation>("shared-reference");
+    return exprType.mutable ? none() : some("shared-reference");
   }
 
   switch (expr.kind) {
     case "PathExpression": {
-      if (expr.path.segments.length !== 1) return none;
+      if (expr.path.segments.length !== 1) return none();
       const name = expr.path.segments[0];
       assert(name !== undefined, "Name segment missing");
       const resolved = resolve(ctx, name);
-      if (!isSome(resolved)) return none;
-      return resolved.value.mutable
-        ? none
-        : some<PlaceMutabilityViolation>("immutable-binding");
+      if (!isSome(resolved)) return none();
+      return resolved.value.mutable ? none() : some("immutable-binding");
     }
     case "FieldAccessExpression":
       return placeMutabilityViolation(ctx, expr.object, false);
@@ -1421,12 +1417,12 @@ function placeMutabilityViolation(
     case "DereferenceExpression": {
       const operandType = getType(expr.operand);
       if (operandType.kind === "ReferenceType" && !operandType.mutable) {
-        return some<PlaceMutabilityViolation>("shared-reference");
+        return some("shared-reference");
       }
-      return none;
+      return none();
     }
     default:
-      return none;
+      return none();
   }
 }
 
