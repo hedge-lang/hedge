@@ -559,8 +559,47 @@ function walkAssignExpression(
   if (expression.lhs.kind === "PathExpression") {
     reassign(expression.lhs, state, scopeStack);
   } else {
-    walkExpression(ctx, expression.lhs, state, scopeStack);
+    walkNonMovingPlace(ctx, expression.lhs, state, scopeStack);
   }
+}
+
+/**
+ * Walk a place expression that is being read or written *through*, not
+ * moved out of: a `FieldAccessExpression`'s object, a `ReferenceExpression`'s
+ * operand, or an `AssignExpression`'s lhs. A bare `PathExpression` is a use,
+ * not a move (see `useOrMove`'s `asMove: false`); a `DereferenceExpression`
+ * recurses the same way, since `(*r).field` and `*r = value` both access the
+ * referent without moving it out — only a `DereferenceExpression` reached
+ * from a genuinely moving position (the default case in `walkExpression`)
+ * needs the move-out check. Any other shape falls through to the ordinary
+ * moving walk, unchanged from before this distinction existed.
+ */
+/** Name a dereferenced place for a move diagnostic, e.g. `*r`. Falls back to a generic description for an operand shape this pass doesn't name (full place-path rendering is issue #25's own borrow-checker work, not move-check's). */
+function derefPlaceDescription(operand: Semantics.Expression): string {
+  if (operand.kind === "PathExpression" && operand.path.segments.length === 1) {
+    const name = operand.path.segments[0];
+    if (name !== undefined) {
+      return `\`*${name}\``;
+    }
+  }
+  return "the dereferenced value";
+}
+
+function walkNonMovingPlace(
+  ctx: Ctx,
+  expression: Semantics.Expression,
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  if (expression.kind === "PathExpression") {
+    useOrMove(ctx, expression, state, scopeStack, false);
+    return;
+  }
+  if (expression.kind === "DereferenceExpression") {
+    walkNonMovingPlace(ctx, expression.operand, state, scopeStack);
+    return;
+  }
+  walkExpression(ctx, expression, state, scopeStack);
 }
 
 /**
@@ -572,9 +611,16 @@ function walkAssignExpression(
  * "move" is a no-op — `useOrMove` only actually transitions a binding to
  * `Unbound` when its type has no `copy` capability, and a non-`Copy` struct
  * could never legally reach a `BinaryExpression` operand in the first place.
- * The one deliberate exception is `FieldAccessExpression`: the object being
- * read is a *use*, not a move, since Slice 1 doesn't track partial
- * (field-level) moves out of a struct.
+ * `FieldAccessExpression`/`ReferenceExpression`/`AssignExpression` are
+ * deliberate exceptions, routed through `walkNonMovingPlace` instead: the
+ * object/operand/lhs being accessed is a *use*, not a move, since Slice 1
+ * doesn't track partial (field-level) moves out of a struct, and borrowing
+ * or writing through a reference never moves its referent either.
+ * `DereferenceExpression` is the remaining exception in the other direction:
+ * unlike a `BinaryExpression` operand, a dereferenced place's referent *can*
+ * be non-`Copy`, so reaching one here (a genuinely moving position — a call
+ * argument, a `let` initializer, …) is a real move-out-of-a-reference check,
+ * not a no-op.
  */
 // eslint-disable-next-line complexity -- This is a routing function
 function walkExpression(
@@ -588,13 +634,7 @@ function walkExpression(
       useOrMove(ctx, expression, state, scopeStack, true);
       return;
     case "FieldAccessExpression":
-      // The object is a *use*, not a move: Slice 1 does not track partial
-      // (field-level) moves out of a struct.
-      if (expression.object.kind === "PathExpression") {
-        useOrMove(ctx, expression.object, state, scopeStack, false);
-      } else {
-        walkExpression(ctx, expression.object, state, scopeStack);
-      }
+      walkNonMovingPlace(ctx, expression.object, state, scopeStack);
       return;
     case "CallExpression":
       walkExpression(ctx, expression.callee, state, scopeStack);
@@ -620,13 +660,23 @@ function walkExpression(
       // Borrowing (`&`/`&mut`) is a *use*, not a move: the operand's
       // ownership never transfers, matching FieldAccessExpression's own
       // use-not-move treatment above.
-      if (expression.operand.kind === "PathExpression") {
-        useOrMove(ctx, expression.operand, state, scopeStack, false);
-      } else {
-        walkExpression(ctx, expression.operand, state, scopeStack);
-      }
+      walkNonMovingPlace(ctx, expression.operand, state, scopeStack);
       return;
     case "DereferenceExpression":
+      // Reached here only from a genuinely moving position (see this
+      // function's own doc comment) - a non-`Copy` referent can't be moved
+      // out through a reference, matching Rust's "cannot move out of a
+      // reference" rule (root CLAUDE.md's settled decision). `UnitType` (the
+      // error-recovery placeholder for a deref of a non-reference type) is
+      // always `copy`, so a prior diagnostic there never cascades into this
+      // one.
+      if (!hasCapability(expression.type, "copy")) {
+        emitDiagnostic(
+          ctx,
+          `cannot move ${derefPlaceDescription(expression.operand)} out of a reference`,
+          expression.tokenId,
+        );
+      }
       walkExpression(ctx, expression.operand, state, scopeStack);
       return;
     case "MethodCallExpression":

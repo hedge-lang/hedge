@@ -655,6 +655,58 @@ describe("move-check", (): void => {
     },
   );
 
+  it("rejects moving a non-Copy value out through a &mut reference too, not just &", (): void => {
+    const { diagnostics } = check(
+      `${BOXED}
+      fn take(v: Boxed) { print(v.value); }
+      fn main() {
+        let mut x = Boxed { value: 1 };
+        let r = &mut x;
+        take(*r);
+      }`,
+    );
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("cannot move");
+  });
+
+  it("does not reject reading a field through a dereferenced non-Copy value", (): void => {
+    const { diagnostics } = check(
+      `${BOXED}
+      fn main() {
+        let x = Boxed { value: 1 };
+        let r = &x;
+        print((*r).value);
+      }`,
+    );
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("does not reject writing the whole referent through a &mut dereference", (): void => {
+    const { diagnostics } = check(
+      `${BOXED}
+      fn main() {
+        let mut x = Boxed { value: 1 };
+        let r = &mut x;
+        *r = Boxed { value: 2 };
+        print(x.value);
+      }`,
+    );
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("does not reject passing a dereferenced Copy value by value out of a reference", (): void => {
+    const { diagnostics } = check(
+      `fn take(v: i32) { print(v); }
+      fn main() {
+        let x = 1;
+        let r = &x;
+        take(*r);
+      }`,
+    );
+    expect(diagnostics).toEqual([]);
+  });
+
   it("moving the same owned value twice is rejected", (): void => {
     const { diagnostics } = check(
       `${BOXED}
