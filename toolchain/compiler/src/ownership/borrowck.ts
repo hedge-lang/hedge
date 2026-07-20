@@ -263,10 +263,48 @@ function registerScopedName(
   frame.set(name, id);
 }
 
+/**
+ * Reference types are `Copy` (root CLAUDE.md's settled decision), so
+ * `let s = r;` duplicates the pointer, not the referent - `s` and `r` are two
+ * independently-named bindings that alias the exact same underlying place
+ * once dereferenced. `aliases` maps a binding straight to the earliest
+ * binding in its own copy-chain (never through the copied-from binding's own
+ * *borrow*, only through further plain-copy `let`s), so `&mut *r` and
+ * `&mut *s` resolve to the same base and can be compared for conflict -
+ * without also making a borrow's own base (e.g. `x` in `let r = &mut x;`)
+ * comparable against a reborrow taken through it, which would wrongly flag
+ * `let r = &mut x; let a = &mut *r;` as self-conflicting at the exact
+ * statement where `r`'s own extent ends and `a`'s begins.
+ */
+function recordAlias(
+  statement: Semantics.LetStatement,
+  scopeStack: ScopeStack,
+  newId: BindingId,
+  aliases: Map<BindingId, BindingId>,
+): void {
+  if (!isSome(statement.initializer)) {
+    return;
+  }
+  const init = statement.initializer.value;
+  if (init.kind !== "PathExpression" || init.type.kind !== "ReferenceType") {
+    return;
+  }
+  const { segments } = init.path;
+  const name = segments.length === 1 ? segments[0] : undefined;
+  if (name === undefined) {
+    return;
+  }
+  const id = resolveScopedName(scopeStack, name);
+  if (id !== undefined) {
+    aliases.set(newId, aliases.get(id) ?? id);
+  }
+}
+
 function recordBorrowBase(
   statement: Semantics.LetStatement,
   scopeStack: ScopeStack,
   resolved: Map<Semantics.LetStatement, BindingId>,
+  aliases: ReadonlyMap<BindingId, BindingId>,
 ): void {
   if (!isSome(statement.initializer)) {
     return;
@@ -281,7 +319,7 @@ function recordBorrowBase(
   }
   const id = resolveScopedName(scopeStack, place.baseName);
   if (id !== undefined) {
-    resolved.set(statement, id);
+    resolved.set(statement, aliases.get(id) ?? id);
   }
 }
 
@@ -289,12 +327,14 @@ function walkStatementForBorrowBases(
   statement: Semantics.Statement,
   scopeStack: ScopeStack,
   resolved: Map<Semantics.LetStatement, BindingId>,
+  aliases: Map<BindingId, BindingId>,
 ): void {
   switch (statement.kind) {
     case "LetStatement": {
-      recordBorrowBase(statement, scopeStack, resolved);
+      recordBorrowBase(statement, scopeStack, resolved, aliases);
       const declaration = declarationOf(statement.pattern, statement.mutable);
       if (isSome(declaration)) {
+        recordAlias(statement, scopeStack, declaration.value.id, aliases);
         registerScopedName(
           scopeStack,
           declaration.value.name,
@@ -308,6 +348,7 @@ function walkStatementForBorrowBases(
         statement.expression,
         scopeStack,
         resolved,
+        aliases,
       );
       return;
     case "Function":
@@ -331,21 +372,27 @@ function walkStatementPositionExpression(
   expression: Semantics.Expression,
   scopeStack: ScopeStack,
   resolved: Map<Semantics.LetStatement, BindingId>,
+  aliases: Map<BindingId, BindingId>,
 ): void {
   if (expression.kind === "IfExpression") {
-    walkScopeForBorrowBases(expression.thenBranch, scopeStack, resolved);
+    walkScopeForBorrowBases(expression.thenBranch, scopeStack, resolved, aliases);
     if (isSome(expression.elseBranch)) {
       const elseBranch = expression.elseBranch.value;
       if (elseBranch.kind === "Block") {
-        walkScopeForBorrowBases(elseBranch, scopeStack, resolved);
+        walkScopeForBorrowBases(elseBranch, scopeStack, resolved, aliases);
       } else {
-        walkStatementPositionExpression(elseBranch, scopeStack, resolved);
+        walkStatementPositionExpression(
+          elseBranch,
+          scopeStack,
+          resolved,
+          aliases,
+        );
       }
     }
     return;
   }
   if (expression.kind === "Block") {
-    walkScopeForBorrowBases(expression, scopeStack, resolved);
+    walkScopeForBorrowBases(expression, scopeStack, resolved, aliases);
   }
 }
 
@@ -353,10 +400,11 @@ function walkScopeForBorrowBases(
   scope: Semantics.Block,
   scopeStack: ScopeStack,
   resolved: Map<Semantics.LetStatement, BindingId>,
+  aliases: Map<BindingId, BindingId>,
 ): void {
   scopeStack.push(new Map<string, BindingId>());
   for (const statement of scope.statements) {
-    walkStatementForBorrowBases(statement, scopeStack, resolved);
+    walkStatementForBorrowBases(statement, scopeStack, resolved, aliases);
   }
   scopeStack.pop();
 }
@@ -365,12 +413,16 @@ function walkScopeForBorrowBases(
  * Resolve every borrow's base `PathExpression` to the `BindingId` it refers
  * to at that point, keyed by the borrow's own `LetStatement` (object
  * identity - `buildControlFlowGraph` never clones nodes, so the same
- * statement objects appear in `graph.blocks[].statements`).
+ * statement objects appear in `graph.blocks[].statements`). Reference-typed
+ * plain-copy aliases (see `recordAlias`) are resolved internally and never
+ * exposed - callers only ever see the canonical `BindingId` a borrow's base
+ * ultimately names.
  */
 function resolveBorrowBases(
   fn: Semantics.FunctionDecl,
 ): ReadonlyMap<Semantics.LetStatement, BindingId> {
   const resolved = new Map<Semantics.LetStatement, BindingId>();
+  const aliases = new Map<BindingId, BindingId>();
   const scopeStack: ScopeStack = [new Map<string, BindingId>()];
   for (const param of fn.params) {
     const declaration = declarationOf(param.pattern, param.mutable);
@@ -383,7 +435,7 @@ function resolveBorrowBases(
     }
   }
   for (const statement of fn.body.statements) {
-    walkStatementForBorrowBases(statement, scopeStack, resolved);
+    walkStatementForBorrowBases(statement, scopeStack, resolved, aliases);
   }
   return resolved;
 }
