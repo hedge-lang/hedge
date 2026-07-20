@@ -572,6 +572,34 @@ describe("reference types", (): void => {
     expect(result.diagnostics).toEqual([]);
   });
 
+  it("accepts a &mut expression operator borrowing a nested field chain, with no diagnostics", (): void => {
+    const result = diagnose(
+      `struct Inner { v: i32 }
+       struct Outer { inner: Inner }
+       fn f(mut o: Outer) { let r = &mut o.inner.v; print(r); }`,
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts a &mut expression operator borrowing an index place, with no diagnostics", (): void => {
+    const result = diagnose("fn f(mut x: i32) { let r = &mut x[0]; print(r); }");
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts a &mut expression operator reborrowing a dereferenced place, with no diagnostics", (): void => {
+    const result = diagnose(
+      "fn f(r: &'a mut i32) { let rr = &mut *r; print(rr); }",
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts a &mut expression operator borrowing a field reached through a dereference, with no diagnostics", (): void => {
+    const result = diagnose(
+      "struct Foo { value: i32 } fn f(r: &'a mut Foo) { let rr = &mut (*r).value; print(rr); }",
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
   it("rejects a &mut expression operator borrowing an absolute path, since it isn't a bare local", (): void => {
     const result = diagnose(
       "fn f() { let mut x = 1; let r = &mut ::x; print(r); }",
@@ -579,7 +607,7 @@ describe("reference types", (): void => {
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(result.diagnostics[0].message).toContain(
-      "only a local binding or parameter can be borrowed directly",
+      "only a local binding, a parameter, or a field, index, or dereference of one can be borrowed directly",
     );
   });
 
@@ -590,7 +618,7 @@ describe("reference types", (): void => {
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(result.diagnostics[0].message).toContain(
-      "only a local binding or parameter can be borrowed directly",
+      "only a local binding, a parameter, or a field, index, or dereference of one can be borrowed directly",
     );
     expect(result.diagnostics[0].message).not.toContain("field or index place");
   });
