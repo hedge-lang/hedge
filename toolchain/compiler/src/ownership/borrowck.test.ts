@@ -431,6 +431,19 @@ describe("place-projection borrows", (): void => {
     expect(diagnostics[0]?.message).toContain("r");
   });
 
+  it("describes the blocking reference as shared, not as an active borrow, since no borrow bookkeeping is involved in this check", (): void => {
+    const diagnostics = check(`
+      fn f(r: &i32) {
+        let a = &mut *r;
+        print(a);
+      }
+    `);
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected diagnostic");
+    expect(diagnostics[0].message).toContain("shared reference");
+    expect(diagnostics[0].message).not.toContain("borrowed as immutable");
+  });
+
   it("accepts taking &mut through a dereference of a mutable reference (a reborrow)", (): void => {
     const diagnostics = check(`
       fn f(r: &mut i32) {

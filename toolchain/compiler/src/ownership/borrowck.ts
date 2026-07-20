@@ -866,7 +866,7 @@ function checkCapabilities(
       case "blocked":
         diagnostics.push({
           severity: "error",
-          message: `cannot borrow \`${describePlace(borrow.place)}\` as mutable because \`${borrow.capability.through}\` is borrowed as immutable.`,
+          message: `cannot borrow \`${describePlace(borrow.place)}\` as mutable because \`${borrow.capability.through}\` is a shared reference.`,
           span: spanOf(tokens, borrow.tokenId),
         });
         continue;
