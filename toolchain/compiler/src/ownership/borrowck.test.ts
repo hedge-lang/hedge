@@ -433,9 +433,11 @@ describe("place-projection borrows", (): void => {
     expect(diagnostics).toEqual([]);
   });
 
-  it("does not require the underlying binding to be declared mut when the write capability comes entirely from a &mut reference field", (): void => {
+  it("does not require the reference-holding local itself to be declared mut, since write capability comes from the reference's own type", (): void => {
     const diagnostics = check(`
-      fn f(r: &mut i32) {
+      fn main() {
+        let mut x = 1;
+        let r = &mut x;
         let a = &mut *r;
         print(a);
       }

@@ -1227,8 +1227,8 @@ function analyzeExpression(
  * A borrow's operand is a legal place when it is a projection chain - any
  * combination of `FieldAccessExpression`/`IndexExpression`/
  * `DereferenceExpression` - grounded at its root in a bare local binding or
- * parameter name (a single-segment, non-absolute `PathExpression`). This is
- * issue #25's widening of Hedge-24's original bare-local-only restriction;
+ * parameter name (a single-segment, non-absolute `PathExpression`). This
+ * widens the original bare-local-only restriction on a borrow's operand;
  * `ownership/borrowck.ts`'s `resolveBorrowBases`/place model widens in
  * lockstep to resolve the same root to a `BindingId` and walk the same
  * projection chain for conflict-checking and write-capability checking, so

@@ -170,11 +170,9 @@ describe("NLL and lifetime correctness spec", (): void => {
     },
   );
 
-  it(
-    "rejects passing a dereferenced non-Copy value by value out of a reference",
-    (): void => {
-      assertRejectsWithMessage(
-        `
+  it("rejects passing a dereferenced non-Copy value by value out of a reference", (): void => {
+    assertRejectsWithMessage(
+      `
       struct Resource { id: i32 }
       fn consume(r: Resource) { print(r.id); }
       fn main() {
@@ -183,10 +181,9 @@ describe("NLL and lifetime correctness spec", (): void => {
         consume(*r);
       }
     `,
-        "cannot move",
-      );
-    },
-  );
+      "cannot move",
+    );
+  });
 
   it("mutating a primitive through &mut is observable by the original binding after the borrow ends", (): void => {
     assertRunsTo(
@@ -260,6 +257,41 @@ describe("NLL and lifetime correctness spec", (): void => {
       }
     `,
       ["2"],
+    );
+  });
+
+  it("mutating two distinct struct fields through two separate &mut field borrows is observable on the original struct", (): void => {
+    assertRunsTo(
+      `
+      struct Point { x: i32, y: i32 }
+      fn main() {
+        let mut p = Point { x: 1, y: 1 };
+        let rx = &mut p.x;
+        *rx = 10;
+        let ry = &mut p.y;
+        *ry = 20;
+        print(p.x);
+        print(p.y);
+      }
+    `,
+      ["10", "20"],
+    );
+  });
+
+  it("mutating through a reborrow of a &mut parameter is observable by the original caller-side binding", (): void => {
+    assertRunsTo(
+      `
+      fn set_to_five(r: &mut i32) {
+        let rr = &mut *r;
+        *rr = 5;
+      }
+      fn main() {
+        let mut n = 1;
+        set_to_five(&mut n);
+        print(n);
+      }
+    `,
+      ["5"],
     );
   });
 });

@@ -278,8 +278,8 @@ function emitExpression(expression: Expression): string {
       return `({${[...fields, "[Symbol.dispose]() {}"].join(", ")}})`;
     }
     case "RefCellExpression": {
-      const { name } = expression;
-      return `({ get v() { return ${name}; }, set v(nv) { ${name} = nv; } })`;
+      const place = emitExpression(expression.place);
+      return `({ get v() { return ${place}; }, set v(nv) { ${place} = nv; } })`;
     }
     case "RangeExpression": {
       const parts = [

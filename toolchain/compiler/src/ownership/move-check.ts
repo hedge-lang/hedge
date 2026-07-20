@@ -563,6 +563,17 @@ function walkAssignExpression(
   }
 }
 
+/** Name a dereferenced place for a move diagnostic, e.g. `*r`. Falls back to a generic description for an operand shape this pass doesn't name (full place-path rendering belongs to the borrow checker's own place model, not move-check's). */
+function derefPlaceDescription(operand: Semantics.Expression): string {
+  if (operand.kind === "PathExpression" && operand.path.segments.length === 1) {
+    const name = operand.path.segments[0];
+    if (name !== undefined) {
+      return `\`*${name}\``;
+    }
+  }
+  return "the dereferenced value";
+}
+
 /**
  * Walk a place expression that is being read or written *through*, not
  * moved out of: a `FieldAccessExpression`'s object, a `ReferenceExpression`'s
@@ -574,17 +585,6 @@ function walkAssignExpression(
  * needs the move-out check. Any other shape falls through to the ordinary
  * moving walk, unchanged from before this distinction existed.
  */
-/** Name a dereferenced place for a move diagnostic, e.g. `*r`. Falls back to a generic description for an operand shape this pass doesn't name (full place-path rendering is issue #25's own borrow-checker work, not move-check's). */
-function derefPlaceDescription(operand: Semantics.Expression): string {
-  if (operand.kind === "PathExpression" && operand.path.segments.length === 1) {
-    const name = operand.path.segments[0];
-    if (name !== undefined) {
-      return `\`*${name}\``;
-    }
-  }
-  return "the dereferenced value";
-}
-
 function walkNonMovingPlace(
   ctx: Ctx,
   expression: Semantics.Expression,

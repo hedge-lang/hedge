@@ -637,23 +637,20 @@ describe("move-check", (): void => {
     expect(diagnostics).toEqual([]);
   });
 
-  it(
-    "rejects passing a dereferenced non-Copy value by value out of a reference",
-    (): void => {
-      const { diagnostics } = check(
-        `${BOXED}
+  it("rejects passing a dereferenced non-Copy value by value out of a reference", (): void => {
+    const { diagnostics } = check(
+      `${BOXED}
         fn take(v: Boxed) { print(v.value); }
         fn main() {
           let x = Boxed { value: 1 };
           let r = &x;
           take(*r);
         }`,
-      );
-      expect(diagnostics).toHaveLength(1);
-      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(diagnostics[0].message).toContain("cannot move");
-    },
-  );
+    );
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("cannot move");
+  });
 
   it("rejects moving a non-Copy value out through a &mut reference too, not just &", (): void => {
     const { diagnostics } = check(

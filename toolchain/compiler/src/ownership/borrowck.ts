@@ -36,9 +36,8 @@ import { computeLiveness, type Liveness } from "./liveness.js";
 
 /**
  * A single step in a place's projection chain, applied outward from the
- * base (issue #25's place model): `(*r).field` is `r`'s base with
- * projections `[Deref, Field("field")]`, matching the issue's own worked
- * example. `Index` deliberately carries no expression - conflict-checking
+ * base: `(*r).field` is `r`'s base with projections
+ * `[Deref, Field("field")]`. `Index` deliberately carries no expression - conflict-checking
  * never needs to compare two index values (dynamic indices are never
  * statically provable distinct; see `placesOverlap`), and the borrow-check
  * pass has no use for the index expression's own runtime value.
@@ -163,7 +162,7 @@ function placesOverlap(a: PlacePath, b: PlacePath): boolean {
   return true;
 }
 
-/** Whether two borrows share the same root binding - by resolved `BindingId` when both resolved, else by base name (mirrors the pre-#25 name-only comparison for the unresolved case). */
+/** Whether two borrows share the same root binding - by resolved `BindingId` when both resolved, else by base name (the fallback for an unresolved base). */
 function samePlaceBase(a: Place, b: Place): boolean {
   return a.baseId !== undefined && b.baseId !== undefined
     ? a.baseId === b.baseId
@@ -196,7 +195,12 @@ function capabilityDecision(
   if (!isRoot && exprType.kind === "ReferenceType") {
     return exprType.mutable
       ? { kind: "allowed" }
-      : { kind: "blocked", through: describePlace(placeOf(expr) ?? { baseName: "_", projections: [] }) };
+      : {
+          kind: "blocked",
+          through: describePlace(
+            placeOf(expr) ?? { baseName: "_", projections: [] },
+          ),
+        };
   }
   switch (expr.kind) {
     case "FieldAccessExpression":
