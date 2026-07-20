@@ -403,6 +403,20 @@ describe("place-projection borrows", (): void => {
     expect(diagnostics[0]?.message).toContain("Conflicting borrows");
   });
 
+  it("rejects overlapping mutable borrows reached by dereferencing an alias of a &mut function parameter, not just a local borrow", (): void => {
+    const diagnostics = check(`
+      fn f(r: &mut i32) {
+        let s = r;
+        let a = &mut *r;
+        let b = &mut *s;
+        print(a);
+        print(b);
+      }
+    `);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+  });
+
   it("accepts sequential dereferenced borrows through aliased bindings when one alias's last use precedes the other's borrow", (): void => {
     const diagnostics = check(`
       fn main() {

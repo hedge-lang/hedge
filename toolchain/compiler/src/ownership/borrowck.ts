@@ -375,7 +375,12 @@ function walkStatementPositionExpression(
   aliases: Map<BindingId, BindingId>,
 ): void {
   if (expression.kind === "IfExpression") {
-    walkScopeForBorrowBases(expression.thenBranch, scopeStack, resolved, aliases);
+    walkScopeForBorrowBases(
+      expression.thenBranch,
+      scopeStack,
+      resolved,
+      aliases,
+    );
     if (isSome(expression.elseBranch)) {
       const elseBranch = expression.elseBranch.value;
       if (elseBranch.kind === "Block") {
