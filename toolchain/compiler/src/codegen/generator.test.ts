@@ -769,6 +769,23 @@ describe("mutable reference cell codegen", (): void => {
       'print(((_arr, _i) => _i < 0 || _i >= _arr.length ? (() => { throw new RangeError("index out of bounds"); })() : (_arr[_i]))(r.v, 0));',
     );
   });
+
+  it("lowers &mut arr[i] to a cell that captures the array and index once, bounds-checked once, instead of re-evaluating the place on every access", (): void => {
+    // Every fixture here constructs an array, which triggers the
+    // array-disposer helper's own emission as a second top-level function -
+    // `stmts()` assumes single-function output, so this checks `js()`'s full
+    // text via `.toContain()` instead (same reasoning as the array-literal
+    // codegen tests above).
+    const code = js(
+      gen(
+        "fn _() { let mut arr: [i32; 3] = [1, 2, 3]; let i: usize = 0; let r = &mut arr[i]; print(r); }",
+      ),
+    );
+    assert(code !== null, "Expected JS output");
+    expect(code).toContain(
+      'const r = ((_arr, _i) => { if (_i < 0 || _i >= _arr.length) { throw new RangeError("index out of bounds"); } return { get v() { return _arr[_i]; }, set v(nv) { _arr[_i] = nv; } }; })(arr, i);',
+    );
+  });
 });
 
 describe("source maps", (): void => {
