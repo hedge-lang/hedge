@@ -1068,9 +1068,13 @@ function jsimTupleExpression(
 }
 
 /**
- * A successfully-analyzed `ArrayExpression`'s own `type` is always `ArrayType`
- * - a non-Copy or otherwise rejected element type is a compile error, so
- * `driver.compile()` never reaches JSIM lowering for it.
+ * A successfully-analyzed `ArrayExpression`'s own `type` is always
+ * `ArrayType` - an otherwise-rejected element type (e.g. a mismatched or
+ * unresolved one) is a compile error, so `driver.compile()` never reaches
+ * JSIM lowering for it. A non-Copy element type is not itself rejected -
+ * `[T; N]` is always move-only regardless of `T`, and a non-Copy element
+ * disposes via the recursive array-disposal helper
+ * (`codegen/generator.ts`'s `ARRAY_DISPOSE_HELPER`).
  */
 function jsimArrayExpression(
   ctx: JsimContext,
