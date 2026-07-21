@@ -896,12 +896,12 @@ describe("array literal codegen", (): void => {
   });
 
   it("the emitted array-disposer helper recursively disposes each element that has its own [Symbol.dispose]", () => {
-    // No real Hedge program can construct a disposable-element array yet
-    // (array elements are currently restricted to Copy types - #201), so
-    // this extracts the actual emitted helper text from a real compile and
-    // exercises it against hand-built disposable fixtures, rather than
-    // hand-copying the helper's own logic into the test (which could drift
-    // from what the compiler actually emits).
+    // No real Hedge program can observe disposal order yet - a struct's
+    // [Symbol.dispose] is always a no-op, since Hedge has no user-defined
+    // Drop trait to run - so this extracts the actual emitted helper text
+    // from a real compile and exercises it against hand-built disposable
+    // fixtures, rather than hand-copying the helper's own logic into the
+    // test (which could drift from what the compiler actually emits).
     const output = js(gen("fn _() { let arr: [i32; 3] = [1, 2, 3]; }"));
     assert(output !== null, "Expected JS output");
     const helperMatch =
