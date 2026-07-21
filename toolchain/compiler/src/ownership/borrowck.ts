@@ -353,6 +353,8 @@ function walkStatementForBorrowBases(
       return;
     case "Function":
     case "Struct":
+    case "Const":
+    case "Static":
       return;
     default:
       assertNever(
@@ -562,6 +564,8 @@ function statementUses(statement: Semantics.Statement, out: Set<string>): void {
       return;
     case "Function":
     case "Struct":
+    case "Const":
+    case "Static":
       // Local item declarations do not directly use outer bindings in Slice 1/2.
       return;
     default:

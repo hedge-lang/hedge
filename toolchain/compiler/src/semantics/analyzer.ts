@@ -12,6 +12,12 @@ import {
 import { patternMutable } from "../parser/ast.js";
 import type * as Parser from "../parser/ast.js";
 import type * as Semantics from "./ast.js";
+import {
+  foldConstExpression,
+  intLiteralValue,
+  type ConstFoldOutcome,
+  type FoldWidth,
+} from "./const-eval.js";
 import { hasCapability } from "./type-capabilities.js";
 
 export interface AnalysisResult {
@@ -28,6 +34,28 @@ interface AnalysisContext {
   readonly typeScope: Map<string, Semantics.StructDecl>;
   readonly diagnostics: Diagnostic[];
   readonly tokens: readonly Token[];
+  /**
+   * One frame per scope (top-level program is frame 0, then one pushed per
+   * `analyzeBlock`), mirroring `scopes`. A name is looked up innermost-first
+   * so a block-local const/static can shadow an outer one of the same name;
+   * a name already used in the *current* frame is a redefinition diagnostic,
+   * not shadowing (see `registerConstsAndStatics`).
+   */
+  readonly constDeclScopes: Map<string, Parser.ConstDecl>[];
+  readonly constValueScopes: Map<string, ConstEntry>[];
+  readonly staticTypeScopes: Map<string, Semantics.Type>[];
+  /**
+   * Flat, not scoped - only tracks names currently mid-resolution on the
+   * call stack for cycle detection, which never spans scopes (an outer
+   * const's fold can't recurse into an inner block that hasn't been entered
+   * yet).
+   */
+  readonly constResolving: Set<string>;
+}
+
+interface ConstEntry {
+  readonly declaredType: Semantics.Type;
+  readonly value: Option<Semantics.ConstValue>;
 }
 
 interface ScopedVariable {
@@ -205,28 +233,6 @@ function intSuffixToPrimitive(suffix: IntSuffix): Semantics.PrimitiveType {
   }
 }
 
-/**
- * Base-prefix-aware `IntLiteral` string-to-`bigint` conversion, shared by
- * every call site that needs a literal's actual numeric value:
- * `resolveArrayLength` (an `ArrayType`'s length), `analyzeIndexExpression`
- * (a literal index's compile-time bounds check), and `checkPosLiteralRange`/
- * `checkNegLiteralRange` (annotation range checks).
- */
-function intLiteralValue(literal: {
-  readonly base: 2 | 8 | 10 | 16;
-  readonly value: string;
-}): bigint {
-  const prefix =
-    literal.base === 16
-      ? "0x"
-      : literal.base === 8
-        ? "0o"
-        : literal.base === 2
-          ? "0b"
-          : "";
-  return BigInt(prefix + literal.value);
-}
-
 function resolveArrayLength(length: Parser.Expression): number {
   assert(
     length.kind === "IntLiteral",
@@ -316,6 +322,443 @@ function validateSlice1Type(
   return { kind: "UnitType", tokenId };
 }
 
+/** Maps a resolved declared type to the width const-folding wraps/rounds at; `none()` for a non-numeric type. */
+// eslint-disable-next-line complexity - This is a routing function
+function foldWidthOf(type: Semantics.Type): Option<FoldWidth> {
+  switch (type.kind) {
+    case "PrimitiveI8Type":
+      return some({ kind: "signed", bits: 8 });
+    case "PrimitiveI16Type":
+      return some({ kind: "signed", bits: 16 });
+    case "PrimitiveI32Type":
+    case "PrimitiveIsizeType":
+      return some({ kind: "signed", bits: 32 });
+    case "PrimitiveU8Type":
+      return some({ kind: "unsigned", bits: 8 });
+    case "PrimitiveU16Type":
+      return some({ kind: "unsigned", bits: 16 });
+    case "PrimitiveU32Type":
+    case "PrimitiveUsizeType":
+      return some({ kind: "unsigned", bits: 32 });
+    case "PrimitiveI64Type":
+      return some({ kind: "bigint", signed: true });
+    case "PrimitiveU64Type":
+      return some({ kind: "bigint", signed: false });
+    case "PrimitiveF32Type":
+      return some({ kind: "float", bits: 32 });
+    case "PrimitiveF64Type":
+      return some({ kind: "float", bits: 64 });
+    default:
+      return none();
+  }
+}
+
+function valueMatchesDeclaredType(
+  value: Semantics.ConstValue,
+  declaredType: Semantics.Type,
+): boolean {
+  const width = foldWidthOf(declaredType);
+  switch (value.kind) {
+    case "Int":
+      return isSome(width) && width.value.kind !== "float";
+    case "Float":
+      return isSome(width) && width.value.kind === "float";
+    case "Bool":
+      return declaredType.kind === "PrimitiveBooleanType";
+    case "Char":
+      return declaredType.kind === "PrimitiveCharType";
+    case "Str":
+      return declaredType.kind === "PrimitiveStringType";
+    default:
+      return assertNever(value, `Unexpected const value: ${JSON.stringify(value)}`);
+  }
+}
+
+/**
+ * Builds the literal `Semantics.Expression` a const reference is inlined to
+ * - a const has no runtime storage (spec 0008), so every reference site
+ * becomes this literal directly rather than a `PathExpression`.
+ */
+function constValueToLiteralExpression(
+  value: Semantics.ConstValue,
+  type: Semantics.Type,
+  tokenId: number,
+): Semantics.Expression {
+  switch (value.kind) {
+    case "Int": {
+      const negative = value.value < 0n;
+      const literal: Semantics.IntLiteral = {
+        kind: "IntLiteral",
+        tokenId,
+        value: (negative ? -value.value : value.value).toString(),
+        base: 10,
+        suffix: none(),
+        type,
+      };
+      return negative
+        ? { kind: "UnaryExpression", tokenId, operator: "Neg", operand: literal, type }
+        : literal;
+    }
+    case "Float": {
+      const negative = value.value < 0 || Object.is(value.value, -0);
+      const literal: Semantics.FloatLiteral = {
+        kind: "FloatLiteral",
+        tokenId,
+        value: String(Math.abs(value.value)),
+        suffix: none(),
+        type,
+      };
+      return negative
+        ? { kind: "UnaryExpression", tokenId, operator: "Neg", operand: literal, type }
+        : literal;
+    }
+    case "Bool":
+      return { kind: "BoolLiteral", tokenId, value: value.value, type };
+    case "Char":
+      return { kind: "CharLiteral", tokenId, value: value.value, type };
+    case "Str":
+      return { kind: "StringLiteral", tokenId, value: value.value, type };
+    default:
+      return assertNever(value, `Unexpected const value: ${JSON.stringify(value)}`);
+  }
+}
+
+/** Innermost-to-outermost frame index declaring `name`, or -1 if none does. */
+function findConstFrameIndex(ctx: AnalysisContext, name: string): number {
+  for (let i = ctx.constDeclScopes.length - 1; i >= 0; i -= 1) {
+    if (ctx.constDeclScopes[i]?.has(name)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function findStaticFrameIndex(ctx: AnalysisContext, name: string): number {
+  for (let i = ctx.staticTypeScopes.length - 1; i >= 0; i -= 1) {
+    if (ctx.staticTypeScopes[i]?.has(name)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/** The declared type `registerConstsAndStatics` already resolved for a static - avoids re-validating it (and re-diagnosing a bad type) in `analyzeStaticDecl`. */
+function resolveStaticType(ctx: AnalysisContext, name: string): Semantics.Type {
+  const frameIndex = findStaticFrameIndex(ctx, name);
+  assert(frameIndex >= 0, `resolveStaticType called for undeclared static \`${name}\``);
+  const type = ctx.staticTypeScopes[frameIndex]?.get(name);
+  assert(type !== undefined, `resolveStaticType found no type for \`${name}\` in its own frame`);
+  return type;
+}
+
+/**
+ * Resolves a bare-identifier reference inside a const-folded expression to
+ * another const's value, a "references a static" rejection, or "undeclared"
+ * - cycle-safe via `ctx.constResolving`. Shared by `resolveConstDecl`'s own
+ * initializer fold and, later, array-length const-folding (Hedge-200's
+ * `[T; N]` restriction).
+ */
+function resolveConstRef(
+  ctx: AnalysisContext,
+  name: string,
+  tokenId: number,
+): ConstFoldOutcome {
+  if (ctx.constResolving.has(name)) {
+    emitError(
+      ctx,
+      `const \`${name}\` cannot be defined in terms of itself`,
+      tokenId,
+    );
+    return { kind: "AlreadyDiagnosed", tokenId };
+  }
+  if (findConstFrameIndex(ctx, name) >= 0) {
+    const entry = resolveConstDecl(ctx, name);
+    return isSome(entry.value)
+      ? { kind: "Ok", value: entry.value.value }
+      : { kind: "AlreadyDiagnosed", tokenId };
+  }
+  if (findStaticFrameIndex(ctx, name) >= 0) {
+    return { kind: "NotFoldable", tokenId };
+  }
+  return { kind: "Undeclared", tokenId, name };
+}
+
+/**
+ * Resolves (and memoizes) a const's folded value, in whichever scope frame
+ * innermost-shadows `name`. Safe to call in any order - forward references
+ * and const-to-const chains resolve recursively via `resolveConstRef`, with
+ * `ctx.constResolving` guarding against cycles. Emits exactly one diagnostic
+ * for a genuinely broken const, at the point the problem actually is;
+ * anything that transitively depends on a broken const inherits
+ * `value: none()` silently (no cascade).
+ */
+function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
+  const frameIndex = findConstFrameIndex(ctx, name);
+  assert(frameIndex >= 0, `resolveConstDecl called for undeclared const \`${name}\``);
+  const valueFrame = ctx.constValueScopes[frameIndex];
+  assert(valueFrame !== undefined, "const value scope frame missing");
+
+  const cached = valueFrame.get(name);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const decl = ctx.constDeclScopes[frameIndex]?.get(name);
+  assert(decl !== undefined, `resolveConstDecl found no decl for \`${name}\` in its own frame`);
+
+  const declaredType = validateSlice1Type(ctx, decl.type, decl.type.tokenId);
+  const width = foldWidthOf(declaredType);
+  ctx.constResolving.add(name);
+  const outcome = foldConstExpression(decl.value, width, (refName, refTokenId) =>
+    resolveConstRef(ctx, refName, refTokenId),
+  );
+  ctx.constResolving.delete(name);
+
+  let value: Option<Semantics.ConstValue> = none();
+  if (outcome.kind === "Ok") {
+    if (valueMatchesDeclaredType(outcome.value, declaredType)) {
+      value = some(outcome.value);
+    } else {
+      emitError(
+        ctx,
+        `const \`${name}\`'s initializer does not match its declared type ${describeType(declaredType)}`,
+        decl.value.tokenId,
+      );
+    }
+  } else if (outcome.kind === "NotFoldable") {
+    emitError(
+      ctx,
+      `const \`${name}\`'s initializer must be a compile-time constant expression`,
+      outcome.tokenId,
+    );
+  } else if (outcome.kind === "DivideByZero") {
+    emitError(
+      ctx,
+      "attempt to divide by zero in a constant expression",
+      outcome.tokenId,
+    );
+  } else if (outcome.kind === "Undeclared") {
+    emitError(
+      ctx,
+      `Cannot find name "${outcome.name}" in this scope.`,
+      outcome.tokenId,
+    );
+  }
+  // "AlreadyDiagnosed": the failure was already reported where it actually
+  // happened (the cycle's own reference, or a broken dependency) - no new
+  // diagnostic here.
+
+  const entry: ConstEntry = { declaredType, value };
+  valueFrame.set(name, entry);
+  return entry;
+}
+
+/**
+ * If `path` is a single-segment reference to a declared const, resolves and
+ * inlines it - `none()` for anything else (a static, a function, an
+ * undeclared name, a multi-segment path), so the caller falls back to
+ * ordinary `analyzePath` scope resolution.
+ */
+function analyzeConstReference(
+  ctx: AnalysisContext,
+  path: Parser.PathExpression,
+): Option<Semantics.Expression> {
+  if (path.path.absolute || path.path.segments.length !== 1) {
+    return none();
+  }
+  const name = path.path.segments[0];
+  if (name === undefined || findConstFrameIndex(ctx, name) < 0) {
+    return none();
+  }
+  const entry = resolveConstDecl(ctx, name);
+  return isSome(entry.value)
+    ? some(
+        constValueToLiteralExpression(
+          entry.value.value,
+          entry.declaredType,
+          path.tokenId,
+        ),
+      )
+    : some({ ...path, type: { kind: "UnitType", tokenId: path.tokenId } });
+}
+
+/**
+ * Whether `name` resolves (innermost-first, matching `resolve()`'s own
+ * search order) to a static's binding specifically, not a same-named local
+ * variable shadowing it. `scopes` and `staticTypeScopes` are always pushed
+ * and popped together (`analyzeBlock`), so the frame where `name` is first
+ * found in `scopes` has a corresponding `staticTypeScopes` entry if and only
+ * if that binding actually came from a static, not a shadowing `let`/param.
+ */
+function resolvedNameIsStatic(ctx: AnalysisContext, name: string): boolean {
+  for (let i = ctx.scopes.length - 1; i >= 0; i -= 1) {
+    if (ctx.scopes[i]?.has(name)) {
+      return ctx.staticTypeScopes[i]?.has(name) ?? false;
+    }
+  }
+  return false;
+}
+
+/**
+ * If `path` is a single-segment reference to a static (and not shadowed by
+ * a same-named local), rewrites it into a zero-argument call to the
+ * static's own name - a static has no plain-value JS binding (it's a
+ * lazily-initialized accessor function, see `codegen/generator.ts`), so
+ * every reference site needs to *call* it. Reuses the ordinary
+ * `CallExpression` lowering/codegen path entirely; no new AST node needed.
+ * `none()` for anything else, so the caller falls back to `analyzePath`.
+ */
+function analyzeStaticReference(
+  ctx: AnalysisContext,
+  path: Parser.PathExpression,
+): Option<Semantics.Expression> {
+  if (path.path.absolute || path.path.segments.length !== 1) {
+    return none();
+  }
+  const name = path.path.segments[0];
+  if (name === undefined || !resolvedNameIsStatic(ctx, name)) {
+    return none();
+  }
+  const resolved = resolve(ctx, name);
+  if (!isSome(resolved)) {
+    return none();
+  }
+  const type = resolved.value.type;
+  const callee: Semantics.PathExpression = {
+    kind: "PathExpression",
+    tokenId: path.tokenId,
+    path: path.path,
+    type,
+  };
+  return some({
+    kind: "CallExpression",
+    tokenId: path.tokenId,
+    callee,
+    arguments: [],
+    type,
+  });
+}
+
+/**
+ * Registers every `Const`/`Static` declared directly in `items` into the
+ * *current* (innermost) const/static scope frame - called once per scope,
+ * right after that scope's frame is pushed (top-level `analyze()` for frame
+ * 0, `analyzeBlock` for every nested one) and before any sequential
+ * statement analysis, so forward/chained references within the same scope
+ * resolve regardless of textual order. A name already registered in this
+ * same frame is a redefinition diagnostic; a name only present in an outer
+ * frame is shadowing, which is allowed.
+ */
+function registerConstsAndStatics(
+  ctx: AnalysisContext,
+  items: readonly Parser.Item[],
+): void {
+  const constFrame = ctx.constDeclScopes[ctx.constDeclScopes.length - 1];
+  const staticFrame = ctx.staticTypeScopes[ctx.staticTypeScopes.length - 1];
+  assert(
+    constFrame !== undefined && staticFrame !== undefined,
+    "registerConstsAndStatics called with no active scope frame",
+  );
+  for (const item of items) {
+    if (item.kind === "Const") {
+      if (constFrame.has(item.name.text)) {
+        emitError(
+          ctx,
+          `const \`${item.name.text}\` is defined more than once`,
+          item.name.tokenId,
+        );
+      } else {
+        constFrame.set(item.name.text, item);
+      }
+    } else if (item.kind === "Static") {
+      if (staticFrame.has(item.name.text)) {
+        emitError(
+          ctx,
+          `static \`${item.name.text}\` is defined more than once`,
+          item.name.tokenId,
+        );
+      } else {
+        if (isSome(item.visibility)) {
+          emitError(
+            ctx,
+            "static items cannot be pub yet",
+            item.tokenId,
+          );
+        }
+        const declaredType = validateSlice1Type(ctx, item.type, item.type.tokenId);
+        staticFrame.set(item.name.text, declaredType);
+        bind(ctx, item.name.text, { type: declaredType, mutable: false });
+      }
+    }
+  }
+  // Eagerly resolve every const in this frame, not just referenced ones - an
+  // unused const can still be malformed (cycle, non-foldable initializer,
+  // undeclared reference), and this also guarantees every forward/chained
+  // reference within the frame is resolvable before the sequential
+  // statement walk needs it.
+  for (const name of constFrame.keys()) {
+    resolveConstDecl(ctx, name);
+  }
+}
+
+function analyzeStaticDecl(
+  ctx: AnalysisContext,
+  item: Parser.StaticDecl,
+): Semantics.StaticDecl {
+  const declaredType = resolveStaticType(ctx, item.name.text);
+  const analyzedValue = analyzeExpression(ctx, item.value);
+  const { expr: value, mismatch } = reconcileExpressionType(
+    ctx,
+    analyzedValue,
+    declaredType,
+    item.value.tokenId,
+  );
+  if (mismatch) {
+    emitError(
+      ctx,
+      "type mismatch: static's declared type does not match its initializer",
+      item.value.tokenId,
+    );
+  }
+  if (value.kind === "IntLiteral") {
+    checkPosLiteralRange(ctx, value, declaredType);
+  }
+  return {
+    kind: "Static",
+    tokenId: item.tokenId,
+    visibility: item.visibility,
+    name: { ...item.name, type: declaredType },
+    value,
+    attributes: item.attributes.map((attr) => analyzeAttribute(ctx, attr)),
+    type: declaredType,
+  };
+}
+
+/**
+ * Builds the `Semantics.ConstDecl` for an already-registered-and-resolved
+ * `Const` item - shared by top-level `analyzeItem` and block-local
+ * `analyzeStatement`, since `registerConstsAndStatics` has already done the
+ * actual folding for both by the time either one is reached.
+ */
+function analyzeConstStatement(
+  ctx: AnalysisContext,
+  item: Parser.ConstDecl,
+): Semantics.ConstDecl {
+  const entry = resolveConstDecl(ctx, item.name.text);
+  const resolved = entry.value;
+  return {
+    kind: "Const",
+    tokenId: item.tokenId,
+    visibility: item.visibility,
+    name: { ...item.name, type: entry.declaredType },
+    value: isSome(resolved) ? resolved.value : { kind: "Int", value: 0n },
+    attributes: item.attributes.map((attr) => analyzeAttribute(ctx, attr)),
+    type: entry.declaredType,
+  };
+}
+
+const TOP_LEVEL_ITEM_RESTRICTION_MESSAGE =
+  "only function, struct, const, and static declarations are allowed at the top level";
+
 function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
   switch (item.kind) {
     case "Function":
@@ -326,24 +769,20 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
         ? cached
         : analyzeStruct(ctx, item);
     }
+    case "Const":
+      return analyzeConstStatement(ctx, item);
+    case "Static":
+      return analyzeStaticDecl(ctx, item);
     case "LetStatement":
     case "ExpressionStatement": {
-      emitError(
-        ctx,
-        "only function and struct declarations are allowed at the top level",
-        item.tokenId,
-      );
+      emitError(ctx, TOP_LEVEL_ITEM_RESTRICTION_MESSAGE, item.tokenId);
       const prevLen = ctx.diagnostics.length;
       const analyzed = analyzeStatement(ctx, item);
       ctx.diagnostics.splice(prevLen); // suppress cascading errors — the restriction error is good enough
       return analyzed;
     }
     default:
-      emitError(
-        ctx,
-        "only function and struct declarations are allowed at the top level",
-        item.tokenId,
-      );
+      emitError(ctx, TOP_LEVEL_ITEM_RESTRICTION_MESSAGE, item.tokenId);
       return analyzeExpression(ctx, item);
   }
 }
@@ -639,7 +1078,11 @@ function analyzeBlock(
   block: Parser.Block,
 ): Semantics.Block {
   ctx.scopes.push(new Map());
+  ctx.constDeclScopes.push(new Map());
+  ctx.constValueScopes.push(new Map());
+  ctx.staticTypeScopes.push(new Map());
   const typeScopeBefore = new Set(ctx.typeScope.keys());
+  registerConstsAndStatics(ctx, block.statements);
   const analyzedStatements = block.statements.map((statement) =>
     analyzeStatement(ctx, statement),
   );
@@ -659,6 +1102,9 @@ function analyzeBlock(
     type,
   };
   ctx.scopes.pop();
+  ctx.constDeclScopes.pop();
+  ctx.constValueScopes.pop();
+  ctx.staticTypeScopes.pop();
   for (const key of ctx.typeScope.keys()) {
     if (!typeScopeBefore.has(key)) ctx.typeScope.delete(key);
   }
@@ -699,6 +1145,15 @@ function analyzeStatement(
       ctx.typeScope.set(statement.name.text, analyzed);
       return analyzed;
     }
+    case "Const":
+      // Already registered and folded by `registerConstsAndStatics`, at the
+      // start of this block, so every reference within the block - before
+      // or after this statement - resolves regardless of order.
+      return analyzeConstStatement(ctx, statement);
+    case "Static":
+      // Name and type already registered by `registerConstsAndStatics`;
+      // this analyzes the (runtime, not const-folded) initializer itself.
+      return analyzeStaticDecl(ctx, statement);
     default:
       assertNever(
         statement,
@@ -966,7 +1421,7 @@ function isIntegerType(type: Semantics.Type): boolean {
  * for a failed sub-analysis (unresolved name/field/struct, or a Slice-1
  * not-yet-implemented construct), or a type inherited/propagated from such
  * a placeholder (`BinaryExpression`/`UnaryExpression`, which never compute
- * `UnitType` themselves — only ever pass one through from an operand) —
+ * `UnitType` themselves - only ever pass one through from an operand) -
  * never a genuine unit value. A `UnitType` from one of these suppresses a
  * redundant diagnostic, since the failure already reported its own error
  * (or, for not-yet-implemented constructs, isn't a reliable type signal
@@ -1203,8 +1658,13 @@ function analyzeExpression(
       return analyzeBoolLiteral(ctx, expression);
     case "CharLiteral":
       return analyzeCharLiteral(ctx, expression);
-    case "PathExpression":
+    case "PathExpression": {
+      const constRef = analyzeConstReference(ctx, expression);
+      if (isSome(constRef)) return constRef.value;
+      const staticRef = analyzeStaticReference(ctx, expression);
+      if (isSome(staticRef)) return staticRef.value;
       return analyzePath(ctx, expression);
+    }
     case "CallExpression":
       return analyzeCall(ctx, expression);
     case "ReferenceExpression":
@@ -1817,7 +2277,7 @@ function analyzeStructExpression(
 /**
  * Checks each provided field against the struct's declaration: duplicate
  * names, unknown names, value-type mismatches (coercing an unsuffixed-
- * integer-literal value first), and — unless a `..base` spread is present —
+ * integer-literal value first), and - unless a `..base` spread is present -
  * missing required fields. Returns the fields with any coerced values
  * threaded back in, since downstream JSIM lowering reads each field value's
  * `.type` to pick numeric wrapping.
@@ -2005,6 +2465,10 @@ export function analyze(
     typeScope: new Map(),
     diagnostics: [],
     tokens,
+    constDeclScopes: [new Map()],
+    constValueScopes: [new Map()],
+    staticTypeScopes: [new Map()],
+    constResolving: new Set(),
   };
   const topLevelFunctionNames = new Set<string>();
   for (const item of program.items) {
@@ -2034,6 +2498,7 @@ export function analyze(
       }
     }
   }
+  registerConstsAndStatics(ctx, program.items);
   const attributes = program.attributes.map((attr) =>
     analyzeAttribute(ctx, attr),
   );

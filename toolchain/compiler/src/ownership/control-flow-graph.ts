@@ -331,6 +331,8 @@ function recordConfinedStatement(
       return;
     case "Function":
     case "Struct":
+    case "Const":
+    case "Static":
       // Local item declarations have no CFG effect in Slice 1 (see the
       // equivalent note in lowerStatements below).
       return;
@@ -524,6 +526,8 @@ function lowerStatements(
         break;
       case "Function":
       case "Struct":
+      case "Const":
+      case "Static":
         // Local item declarations have no CFG effect in Slice 1 (they don't
         // use outer bindings — see the equivalent TODO in ownership/borrowck.ts).
         blockAt(blocks, currentId).statements.push(statement);
