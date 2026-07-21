@@ -945,9 +945,8 @@ describe("execution tests", (): void => {
     });
 
     it("mutates through an index borrowed from an array reached via an existing &mut reference", (): void => {
-      // Exercises the .v hop (AC6) and the capture-once cell (AC5) together:
-      // `r[0]` first reaches through `r`'s own reference cell via `.v`,
-      // then the borrowed index place gets its own capturing cell.
+      // `r[0]` first reaches through `r`'s own reference cell via `.v`, then
+      // the borrowed index place gets its own capturing cell.
       assertRunsTo(
         `
         fn bump(r: &mut [i32; 3]) {

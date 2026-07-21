@@ -771,11 +771,9 @@ describe("mutable reference cell codegen", (): void => {
   });
 
   it("lowers &mut arr[i] to a cell that captures the array and index once, bounds-checked once, instead of re-evaluating the place on every access", (): void => {
-    // Every fixture here constructs an array, which triggers the
-    // array-disposer helper's own emission as a second top-level function -
-    // `stmts()` assumes single-function output, so this checks `js()`'s full
-    // text via `.toContain()` instead (same reasoning as the array-literal
-    // codegen tests above).
+    // The array-disposer helper is a second top-level function, breaking
+    // stmts()'s single-function assumption - see the array-literal codegen
+    // tests above for why this uses js()/.toContain() instead.
     const code = js(
       gen(
         "fn _() { let mut arr: [i32; 3] = [1, 2, 3]; let i: usize = 0; let r = &mut arr[i]; print(r); }",
