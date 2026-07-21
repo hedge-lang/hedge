@@ -554,15 +554,19 @@ describe("place-projection borrows", (): void => {
     expect(diagnostics[0]?.message).toContain("Conflicting borrows");
   });
 
-  it("rejects overlapping mutable borrows of the same array field reached through a struct, mixing field-then-index projections", (): void => {
+  it("rejects overlapping mutable borrows of a struct's array field at statically distinct indices, mixing field-then-index projections", (): void => {
     // The opposite mixing order from the test above (Index-then-Field,
     // `arr[0].field`) - this is Field-then-Index (`s.arr[0]`), closing the
     // other direction of AC5's "mixed field/index projections" coverage.
+    // Distinct indices (0 vs 1), mirroring the test above's own rigor: the
+    // shared Field prefix always overlaps regardless of the index divergence
+    // that follows it, the same "regardless of further divergence" property
+    // that test demonstrates for the opposite projection order.
     const diagnostics = check(`
       struct Holder { arr: [i32; 3] }
       fn f(mut s: Holder) {
         let a = &mut s.arr[0];
-        let b = &mut s.arr[0];
+        let b = &mut s.arr[1];
         print(a);
         print(b);
       }
