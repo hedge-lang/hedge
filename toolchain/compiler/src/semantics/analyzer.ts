@@ -235,6 +235,32 @@ function resolveArrayLength(length: Parser.Expression): number {
   return Number(intLiteralValue(length));
 }
 
+/**
+ * Rejects an array length/repeat-count literal that doesn't fit in a safe
+ * integer, before `resolveArrayLength`'s own `Number(bigint)` conversion has
+ * a chance to silently produce `Infinity` or an imprecise value - which
+ * would otherwise surface far from the mistake, as a confusing runtime
+ * `RangeError` from `new Array(Infinity)`/`new Int32Array(Infinity)` in the
+ * *compiled* program rather than a compile-time diagnostic here. `literal`
+ * is assumed already known to be an `IntLiteral` (callers check
+ * `.kind !== "IntLiteral"` separately, for the "must be a literal" case).
+ */
+function checkArrayLengthRange(
+  ctx: AnalysisContext,
+  literal: Parser.IntLiteral,
+): boolean {
+  const value = intLiteralValue(literal);
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    emitError(
+      ctx,
+      `array length ${literal.value} is too large to represent`,
+      literal.tokenId,
+    );
+    return false;
+  }
+  return true;
+}
+
 function validateSlice1Type(
   ctx: AnalysisContext,
   type: Parser.Type,
@@ -271,6 +297,12 @@ function validateSlice1Type(
         type.elementType,
         type.elementType.tokenId,
       );
+      if (
+        type.length.kind === "IntLiteral" &&
+        !checkArrayLengthRange(ctx, type.length)
+      ) {
+        return { kind: "UnitType", tokenId };
+      }
       return {
         kind: "ArrayType",
         elementType,
@@ -1424,6 +1456,9 @@ function analyzeArrayRepeatExpression(
       "array repeat count must be a literal integer; const expressions are not yet supported",
       expression.count.tokenId,
     );
+    return { ...expression, value, count: 0, type: UNIT };
+  }
+  if (!checkArrayLengthRange(ctx, expression.count)) {
     return { ...expression, value, count: 0, type: UNIT };
   }
   const count = resolveArrayLength(expression.count);

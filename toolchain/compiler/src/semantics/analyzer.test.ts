@@ -773,6 +773,33 @@ describe("array types", (): void => {
     expect(result.diagnostics[0].message).toContain("literal integer");
   });
 
+  it("rejects a repeat-form count too large to represent as a safe integer", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let arr = [1; 99999999999999999999999999];
+        print(arr[0]);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("too large");
+  });
+
+  it("rejects an array type annotation whose length is too large to represent as a safe integer", (): void => {
+    // Uses a function parameter's type, not a `let` annotation, so the only
+    // diagnostic in play is the length check itself - a `let` annotation
+    // this invalid would independently trigger a second, pre-existing
+    // "type mismatch" diagnostic against its initializer (unrelated to this
+    // check), the same cascade an unresolved struct-name annotation already
+    // produces today.
+    const result = diagnose(`
+      fn f(arr: [i32; 99999999999999999999999999]) { print(arr); }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("too large");
+  });
+
   it("rejects list-literal elements that do not all share the same type", (): void => {
     const result = diagnose(`
       fn main() {
