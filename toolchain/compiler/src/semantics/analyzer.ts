@@ -1450,6 +1450,21 @@ function analyzeArrayRepeatExpression(
   expression: Parser.ArrayRepeatExpression,
 ): Semantics.ArrayRepeatExpression {
   const value = analyzeExpression(ctx, expression.value);
+  const valueType = getType(value);
+  if (!hasCapability(valueType, "copy")) {
+    // Unlike the list form (each element its own expression), `value` is
+    // evaluated once and codegen reuses the same result for every slot via
+    // `.fill(value)` - a non-Copy value would alias the identical JS object
+    // reference across the whole array instead of each slot holding a
+    // distinct value. Matches Rust's own `[expr; N]` rule (`expr: Copy`, or
+    // a const item - Hedge has no const-evaluation yet).
+    emitError(
+      ctx,
+      `repeat-form array element type must be Copy, found \`${describeType(valueType)}\`; const expressions are not yet supported`,
+      expression.value.tokenId,
+    );
+    return { ...expression, value, count: 0, type: UNIT };
+  }
   if (expression.count.kind !== "IntLiteral") {
     emitError(
       ctx,

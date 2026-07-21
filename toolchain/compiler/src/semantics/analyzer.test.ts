@@ -760,6 +760,25 @@ describe("array types", (): void => {
     expect(result.diagnostics).toEqual([]);
   });
 
+  it("rejects a repeat-form array literal whose element type is not Copy", (): void => {
+    // Unlike the list form (each element is its own expression), a repeat
+    // form's single value expression is evaluated once and its result
+    // reused for every slot - codegen lowers this to `.fill(value)`, which
+    // would put the exact same JS object reference in every element rather
+    // than a distinct value per slot. Matches Rust's own rule that `[expr; N]`
+    // requires `expr: Copy` (or a const item, which Hedge doesn't have yet).
+    const result = diagnose(`
+      struct Boxed { value: i32 }
+      fn main() {
+        let arr = [Boxed { value: 1 }; 3];
+        print(arr[0].value);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("Copy");
+  });
+
   it("rejects a repeat-form count that is not a literal integer", (): void => {
     const result = diagnose(`
       fn main() {
