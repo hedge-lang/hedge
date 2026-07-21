@@ -729,4 +729,98 @@ describe("move-check", (): void => {
       ).toEqual([]);
     });
   });
+
+  describe("arrays are move-only, even with Copy elements", (): void => {
+    it("reads an array through indexing multiple times without treating each read as a move, matching field access's own use-not-move treatment", (): void => {
+      const { diagnostics } = check(`
+        fn main() {
+          let arr: [i32; 3] = [1, 2, 3];
+          print(arr[0]);
+          print(arr[1]);
+          print(arr[2]);
+        }
+      `);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("rejects using an array after it has been moved into another binding", (): void => {
+      const { diagnostics } = check(`
+        fn main() {
+          let a: [i32; 3] = [1, 2, 3];
+          let b = a; // move occurs here
+          print(a[0]); // use of moved value
+          print(b[0]);
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(diagnostics[0].message).toContain("moved");
+    });
+
+    it("rejects using an array after passing it by value into a function call", (): void => {
+      const { diagnostics } = check(`
+        fn take(arr: [i32; 3]) { print(arr[0]); }
+        fn main() {
+          let a: [i32; 3] = [1, 2, 3];
+          take(a); // moved here
+          print(a[0]);
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(diagnostics[0].message).toContain("moved");
+    });
+
+    it("accepts reassigning an array binding after it was moved away", (): void => {
+      const { diagnostics } = check(`
+        fn main() {
+          let mut a: [i32; 3] = [1, 2, 3];
+          let b = a; // move occurs here
+          a = [4, 5, 6];
+          print(a[0]);
+          print(b[0]);
+        }
+      `);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("rejects using an array of non-Copy struct elements after it has been moved into another binding", (): void => {
+      const { diagnostics } = check(`
+        struct Boxed { value: i32 }
+        fn main() {
+          let arr = [Boxed { value: 1 }, Boxed { value: 2 }];
+          let moved = arr; // move occurs here
+          print(arr[0].value); // use of moved value
+          print(moved[0].value);
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(diagnostics[0].message).toContain("moved");
+    });
+
+    it.fails(
+      "rejects binding a non-Copy array element to a new variable by value out of an index",
+      (): void => {
+        // arr[i] is treated as a use of arr (not a move), matching field
+        // access - but nothing yet stops the *result* of that index from
+        // being bound elsewhere, and a JS object read this way is a true
+        // alias, not a copy. Both `x` and `arr` would dispose the same
+        // underlying object at scope end. Same class of gap as the
+        // dereferenced-non-Copy-value it.fails above, just reached through
+        // indexing instead of a reference.
+        const { diagnostics } = check(`
+          struct Boxed { value: i32 }
+          fn main() {
+            let arr = [Boxed { value: 1 }, Boxed { value: 2 }];
+            let x = arr[0];
+            print(x.value);
+          }
+        `);
+        expect(diagnostics).toHaveLength(1);
+        assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+        expect(diagnostics[0].message).toContain("cannot move");
+      },
+    );
+  });
 });

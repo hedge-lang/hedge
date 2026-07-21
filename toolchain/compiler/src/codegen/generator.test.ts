@@ -839,3 +839,90 @@ describe("source maps", (): void => {
     expect(wildcardMappings).toEqual([]);
   });
 });
+
+describe("array literal codegen", (): void => {
+  // Every fixture here constructs an array, which triggers the array-disposer
+  // helper's own emission (see the dedicated tests for that below) as a
+  // second top-level function - `stmts()` assumes single-function output, so
+  // these check `js()`'s full text via `.toContain()` instead.
+
+  it("emits a numeric-element array literal as a disposer-wrapped typed array (Int32Array for i32)", (): void => {
+    expect(js(gen("fn _() { let arr: [i32; 3] = [1, 2, 3]; }"))).toContain(
+      "const arr = __hedgeDisposeArray(new Int32Array([1, 2, 3]));",
+    );
+  });
+
+  it("emits a u8-element array literal as a disposer-wrapped Uint8Array", (): void => {
+    expect(js(gen("fn _() { let arr: [u8; 2] = [1u8, 2u8]; }"))).toContain(
+      "const arr = __hedgeDisposeArray(new Uint8Array([1, 2]));",
+    );
+  });
+
+  it("emits an f64-element array literal as a disposer-wrapped Float64Array", (): void => {
+    expect(js(gen("fn _() { let arr: [f64; 2] = [1.0, 2.0]; }"))).toContain(
+      "const arr = __hedgeDisposeArray(new Float64Array([1.0, 2.0]));",
+    );
+  });
+
+  it("emits a non-numeric-element (bool) array literal as a disposer-wrapped plain Array", (): void => {
+    expect(js(gen("fn _() { let arr: [bool; 2] = [true, false]; }"))).toContain(
+      "const arr = __hedgeDisposeArray([true, false]);",
+    );
+  });
+
+  it("emits a numeric-element repeat-form array literal as a disposer-wrapped typed array fill", (): void => {
+    expect(js(gen("fn _() { let arr: [i32; 5] = [0; 5]; }"))).toContain(
+      "const arr = __hedgeDisposeArray(new Int32Array(5).fill(0));",
+    );
+  });
+
+  it("emits a non-numeric-element repeat-form array literal as a disposer-wrapped plain Array fill", (): void => {
+    expect(js(gen("fn _() { let arr: [bool; 3] = [true; 3]; }"))).toContain(
+      "const arr = __hedgeDisposeArray(new Array(3).fill(true));",
+    );
+  });
+
+  it("emits the array-disposer helper function once, near the top of the file, only when an array is constructed", (): void => {
+    const withArray = js(gen("fn _() { let arr: [i32; 3] = [1, 2, 3]; }"));
+    assert(withArray !== null, "Expected JS output");
+    expect(withArray).toContain("function __hedgeDisposeArray(arr)");
+    expect(withArray.match(/function __hedgeDisposeArray/g)).toHaveLength(1);
+  });
+
+  it("does not emit the array-disposer helper when no array is constructed", (): void => {
+    const withoutArray = js(gen("fn _() { let x = 1; print(x); }"));
+    assert(withoutArray !== null, "Expected JS output");
+    expect(withoutArray).not.toContain("__hedgeDisposeArray");
+  });
+
+  it("the emitted array-disposer helper recursively disposes each element that has its own [Symbol.dispose]", () => {
+    // No real Hedge program can observe disposal order yet - a struct's
+    // [Symbol.dispose] is always a no-op, since Hedge has no user-defined
+    // Drop trait to run - so this extracts the actual emitted helper text
+    // from a real compile and exercises it against hand-built disposable
+    // fixtures, rather than hand-copying the helper's own logic into the
+    // test (which could drift from what the compiler actually emits).
+    const output = js(gen("fn _() { let arr: [i32; 3] = [1, 2, 3]; }"));
+    assert(output !== null, "Expected JS output");
+    const helperMatch =
+      /function __hedgeDisposeArray\([^)]*\) \{[\s\S]*?\n}/.exec(output);
+    assert(
+      helperMatch !== null,
+      "Expected to find the emitted helper function",
+    );
+    const script = `
+      ${helperMatch[0]}
+      let disposed = [];
+      const child1 = { [Symbol.dispose]() { disposed.push(1); } };
+      const child2 = { [Symbol.dispose]() { disposed.push(2); } };
+      const arr = __hedgeDisposeArray([child1, child2]);
+      arr[Symbol.dispose]();
+      disposed;
+    `;
+    // `script` interpolates only compiler-generated helper text plus a
+    // hand-written fixture below it, not external or user-supplied input;
+    // same test-only pattern as the other eval-based codegen tests in this file.
+    // biome-ignore lint/security/noGlobalEval: test-only eval of compiler-generated helper text, see comment above
+    expect(eval(script)).toEqual([1, 2]); // nosemgrep: javascript.browser.security.eval-detected.eval-detected,javascript_eval_rule-eval-with-expression
+  });
+});

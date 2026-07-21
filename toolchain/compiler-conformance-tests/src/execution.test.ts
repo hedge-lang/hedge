@@ -756,4 +756,158 @@ describe("execution tests", (): void => {
       );
     });
   });
+
+  describe("array types", (): void => {
+    it("reads back the correct element for a literal in-range index", (): void => {
+      assertRunsTo(
+        `
+        fn main() {
+          let arr: [i32; 3] = [10, 20, 30];
+          print(arr[0]);
+          print(arr[1]);
+          print(arr[2]);
+        }
+      `,
+        ["10", "20", "30"],
+      );
+    });
+
+    it("reads back the correct element for a dynamic usize-typed index", (): void => {
+      assertRunsTo(
+        `
+        fn main() {
+          let arr: [i32; 3] = [10, 20, 30];
+          let i: usize = 1;
+          print(arr[i]);
+        }
+      `,
+        ["20"],
+      );
+    });
+
+    it("reads back all elements of a repeat-form array literal", (): void => {
+      assertRunsTo(
+        `
+        fn main() {
+          let arr: [i32; 3] = [7; 3];
+          print(arr[0]);
+          print(arr[1]);
+          print(arr[2]);
+        }
+      `,
+        ["7", "7", "7"],
+      );
+    });
+
+    it("reflects a write through an index on a mut array binding", (): void => {
+      assertRunsTo(
+        `
+        fn main() {
+          let mut arr: [i32; 3] = [1, 2, 3];
+          arr[1] = 99;
+          print(arr[0]);
+          print(arr[1]);
+          print(arr[2]);
+        }
+      `,
+        ["1", "99", "3"],
+      );
+    });
+
+    it("moves an array into a new binding and runs cleanly, including scope-end disposal, without a runtime crash", (): void => {
+      // [T; N] is move-only, not Copy (even with Copy elements - a JS
+      // Array/TypedArray is itself a reference type, so a naive copy would
+      // alias rather than duplicate). This exercises the move (only `b` is
+      // used afterward, matching move-check.ts's own compile-time rules)
+      // and confirms the array-disposer helper doesn't crash at scope exit.
+      assertRunsTo(
+        `
+        fn main() {
+          let mut a: [i32; 3] = [1, 2, 3];
+          let mut b = a;
+          b[0] = 99;
+          print(b[0]);
+          print(b[1]);
+        }
+      `,
+        ["99", "2"],
+      );
+    });
+
+    it("indexes into an array of non-Copy struct elements and disposes it cleanly at scope end", (): void => {
+      // A struct element is move-only just like the array itself; this
+      // exercises the recursive array-disposer helper against a real
+      // non-Copy element type (the case #201 originally deferred), calling
+      // each struct's own [Symbol.dispose] without crashing at scope exit.
+      assertRunsTo(
+        `
+        struct Boxed { value: i32 }
+        fn main() {
+          let arr = [Boxed { value: 1 }, Boxed { value: 2 }];
+          print(arr[0].value);
+          print(arr[1].value);
+        }
+      `,
+        ["1", "2"],
+      );
+    });
+
+    it("throws a runtime RangeError reading a dynamic out-of-range index, rather than silently returning undefined", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          let arr: [i32; 3] = [1, 2, 3];
+          let i: usize = 5;
+          print(arr[i]);
+        }
+      `);
+      expect(result?.exitCode).not.toBe(0);
+    });
+
+    it("throws a runtime RangeError writing a dynamic out-of-range index, rather than silently growing the array", (): void => {
+      const result = executeHedgeCode(`
+        fn main() {
+          let mut arr: [i32; 3] = [1, 2, 3];
+          let i: usize = 5;
+          arr[i] = 99;
+        }
+      `);
+      expect(result?.exitCode).not.toBe(0);
+    });
+
+    it("does not throw reading or writing a dynamic in-range index", (): void => {
+      assertRunsTo(
+        `
+        fn main() {
+          let mut arr: [i32; 3] = [1, 2, 3];
+          let i: usize = 2;
+          arr[i] = 99;
+          print(arr[i]);
+        }
+      `,
+        ["99"],
+      );
+    });
+
+    it.fails(
+      "accepts a const-evaluated array length, not just a literal integer",
+      (): void => {
+        // Blocked by #204 (const/static declarations don't exist at all yet);
+        // this documents the eventual behavior once const-evaluation lands -
+        // Hedge-200 restricts [T; N]'s length to a literal integer in the
+        // meantime, since there's nothing yet to const-evaluate anything else.
+        assertRunsTo(
+          `
+          const N: usize = 3;
+          fn main() {
+            let arr: [i32; N] = [1, 2, 3];
+            print(arr[0]);
+            print(arr[1]);
+            print(arr[2]);
+          }
+        `,
+          ["1", "2", "3"],
+        );
+      },
+    );
+  });
 });

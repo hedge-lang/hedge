@@ -78,6 +78,8 @@ export type Expression =
   | MethodCallExpression
   | IndexExpression
   | TupleExpression
+  | ArrayExpression
+  | ArrayRepeatExpression
   | StructExpression
   | RangeExpression
   | IfExpression
@@ -249,7 +251,7 @@ export interface Path {
   readonly segments: string[];
 }
 
-export type Type = NamedType | UnitType | ReferenceType;
+export type Type = NamedType | UnitType | ReferenceType | ArrayType;
 
 export interface NamedType extends AstNode {
   readonly kind: "NamedType";
@@ -271,6 +273,19 @@ export interface ReferenceType extends AstNode {
   readonly mutable: boolean;
   readonly lifetime: Option<Lifetime>;
   readonly referent: Type;
+}
+
+/**
+ * `[T; N]` - a fixed-size array type. `length` is a general `Expression` per
+ * the grammar, though semantic analysis currently accepts only a literal
+ * integer (no const-evaluation exists yet). The distinct, semicolon-less
+ * slice-type grammar `[T]` is a separate, still-unsupported construct
+ * (`parseType`'s own guardrail), not a degenerate case of this type.
+ */
+export interface ArrayType extends AstNode {
+  readonly kind: "ArrayType";
+  readonly elementType: Type;
+  readonly length: Expression;
 }
 
 /** `'a` - bare name, no leading `'`. May be a synthesized name (`_0`, `_1`, ...). */
@@ -355,6 +370,19 @@ export interface TupleExpression extends AstNode {
   readonly kind: "TupleExpression";
   /** Zero elements = unit `()`. One element with trailing comma = single-element tuple. */
   readonly elements: Expression[];
+}
+
+/** `[a, b, c]` - the list form of an array literal (grammar's `ArrayElems`, comma-separated branch). */
+export interface ArrayExpression extends AstNode {
+  readonly kind: "ArrayExpression";
+  readonly elements: Expression[];
+}
+
+/** `[value; count]` - the repeat form of an array literal (grammar's `ArrayElems`, `Expression ";" Expression` branch). */
+export interface ArrayRepeatExpression extends AstNode {
+  readonly kind: "ArrayRepeatExpression";
+  readonly value: Expression;
+  readonly count: Expression;
 }
 
 export interface FieldInit extends AstNode {

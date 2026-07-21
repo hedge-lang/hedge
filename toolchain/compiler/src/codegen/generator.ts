@@ -73,6 +73,8 @@ type PrecKey =
   | "ArrowFunctionExpression"
   | "IndexExpression"
   | "TupleExpression"
+  | "ArrayExpression"
+  | "ArrayRepeatExpression"
   | "RangeExpression"
   | "StructExpression"
   | "RefCellExpression"
@@ -195,6 +197,75 @@ function emitNumericUnaryOp(nk: NumericKind, inner: string): string {
   }
 }
 
+/**
+ * `[T; N]` is move-only (never `Copy`, even when `T` is - see
+ * `semantics/type-capabilities.ts`'s own note on why), so every array
+ * reaching scope end without being moved needs disposing like any other
+ * move-only value. A bare JS `Array`/`TypedArray` has no `[Symbol.dispose]`
+ * of its own, so every array construction attaches one via this shared
+ * helper - emitted once per compiled program, only when an array is
+ * actually constructed (see `generate`'s own `usesArrayDisposeHelper`
+ * check). The disposer recursively disposes each element that has its own
+ * `[Symbol.dispose]` (a nested array, or a struct - every struct literal
+ * always emits one, even if a no-op, see `StructExpression` codegen below) -
+ * an element type with neither (every primitive) is a no-op.
+ */
+const ARRAY_DISPOSE_HELPER_NAME = "__hedgeDisposeArray";
+const ARRAY_DISPOSE_HELPER = `function ${ARRAY_DISPOSE_HELPER_NAME}(arr) {
+  arr[Symbol.dispose] = function () {
+    for (const el of arr) {
+      if (el != null && typeof el[Symbol.dispose] === "function") {
+        el[Symbol.dispose]();
+      }
+    }
+  };
+  return arr;
+}`;
+
+/**
+ * Wraps an array index access (read via `IndexExpression`, or write via
+ * `AssignExpression`'s own special-cased lhs handling) in the same
+ * zero-guard IIFE shape `emitNumericBinaryOp` already uses for division -
+ * out-of-range panics with a `RangeError` instead of silently returning
+ * `undefined` (a read) or growing a plain `Array` with holes (a write).
+ * `accessExpr` is the already-built `_arr`/`_i`-referencing access (a bare
+ * read, or a full assignment like `_arr[_i] += v`) so both call sites share
+ * one bounds check instead of duplicating the read/write shapes twice each.
+ */
+function indexBoundsCheck(
+  object: string,
+  index: string,
+  accessExpr: string,
+): string {
+  return `((_arr, _i) => _i < 0 || _i >= _arr.length ? (() => { throw new RangeError("index out of bounds"); })() : (${accessExpr}))(${object}, ${index})`;
+}
+
+/**
+ * Selects the `TypedArray` constructor backing a numeric-element `[T; N]`
+ * (spec section 0012: `Vec<u8>`/`[u8; N]` is a `Uint8Array`,
+ * `Vec<i32>`/`[i32; N]` an `Int32Array`, and so on). A non-numeric element
+ * type uses a plain `Array` instead - see the
+ * `ArrayExpression`/`ArrayRepeatExpression` codegen cases below.
+ */
+function typedArrayConstructor(nk: NumericKind): string {
+  switch (nk.kind) {
+    case "signed":
+      if (nk.bits === 8) return "Int8Array";
+      if (nk.bits === 16) return "Int16Array";
+      return "Int32Array";
+    case "unsigned":
+      if (nk.bits === 8) return "Uint8Array";
+      if (nk.bits === 16) return "Uint16Array";
+      return "Uint32Array";
+    case "bigint":
+      return nk.signed ? "BigInt64Array" : "BigUint64Array";
+    case "float":
+      return nk.bits === 32 ? "Float32Array" : "Float64Array";
+    default:
+      return assertNever(nk, `Unexpected numeric kind: ${JSON.stringify(nk)}`);
+  }
+}
+
 // eslint-disable-next-line complexity -- This is a routing function
 function emitExpression(expression: Expression): string {
   switch (expression.kind) {
@@ -236,8 +307,19 @@ function emitExpression(expression: Expression): string {
       }
       return `(${inner})`;
     }
-    case "AssignExpression":
+    case "AssignExpression": {
+      if (
+        expression.lhs.kind === "IndexExpression" &&
+        expression.lhs.isArrayIndex
+      ) {
+        const object = emitExpression(expression.lhs.object);
+        const index = emitExpression(expression.lhs.index);
+        const rhs = emitExpression(expression.rhs);
+        const op = ASSIGN_OPS[expression.operator];
+        return indexBoundsCheck(object, index, `_arr[_i] ${op} ${rhs}`);
+      }
       return `${emitExpression(expression.lhs)} ${ASSIGN_OPS[expression.operator]} ${emitExpression(expression.rhs)}`;
+    }
     case "FieldAccessExpression":
       return `${needsAtLeast(expression.object, "FieldAccessExpression")}.${expression.field}`;
     case "MethodCallExpression":
@@ -251,10 +333,29 @@ function emitExpression(expression: Expression): string {
         lines.length === 0 ? "{}" : `{\n${lines.map(indent).join("\n")}\n}`;
       return `(${params}) => ${body}`;
     }
-    case "IndexExpression":
-      return `${needsAtLeast(expression.object, "IndexExpression")}[${emitExpression(expression.index)}]`;
+    case "IndexExpression": {
+      const object = needsAtLeast(expression.object, "IndexExpression");
+      const index = emitExpression(expression.index);
+      return expression.isArrayIndex
+        ? indexBoundsCheck(object, index, "_arr[_i]")
+        : `${object}[${index}]`;
+    }
     case "TupleExpression":
       return `[${expression.elements.map(emitExpression).join(", ")}]`;
+    case "ArrayExpression": {
+      const elements = `[${expression.elements.map(emitExpression).join(", ")}]`;
+      const value = isSome(expression.numericKind)
+        ? `new ${typedArrayConstructor(expression.numericKind.value)}(${elements})`
+        : elements;
+      return `${ARRAY_DISPOSE_HELPER_NAME}(${value})`;
+    }
+    case "ArrayRepeatExpression": {
+      const ctor = isSome(expression.numericKind)
+        ? typedArrayConstructor(expression.numericKind.value)
+        : "Array";
+      const value = `new ${ctor}(${String(expression.count)}).fill(${emitExpression(expression.value)})`;
+      return `${ARRAY_DISPOSE_HELPER_NAME}(${value})`;
+    }
     case "StructExpression": {
       const fields = expression.fields.map((f) =>
         f.kind === "SpreadExpression"
@@ -589,6 +690,18 @@ function absoluteMappings(parts: readonly EmittedPart[]): SourceMapMapping[] {
  */
 export function generate(program: Program): Code {
   const parts = emitItemParts(program);
+
+  // The helper call itself (`__hedgeDisposeArray(`) only ever appears in
+  // emitted text when this pass's own ArrayExpression/ArrayRepeatExpression
+  // cases produced it - checking the generated text directly, rather than
+  // threading a "did this program construct an array" flag through every
+  // recursive emit* function, keeps the helper's own presence a pure
+  // function of what actually got emitted.
+  if (
+    parts.some((part) => part.text.includes(`${ARRAY_DISPOSE_HELPER_NAME}(`))
+  ) {
+    parts.unshift({ text: ARRAY_DISPOSE_HELPER, mappings: [] });
+  }
 
   if (hasMain(program)) {
     const [shebang, mainCall] = mainEntryPointParts(program);

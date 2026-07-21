@@ -244,6 +244,14 @@ function recordExpressionUses(
         recordExpressionUses(target, scopeStack, element);
       }
       return;
+    case "ArrayExpression":
+      for (const element of expression.elements) {
+        recordExpressionUses(target, scopeStack, element);
+      }
+      return;
+    case "ArrayRepeatExpression":
+      recordExpressionUses(target, scopeStack, expression.value);
+      return;
     case "RangeExpression":
       if (isSome(expression.start)) {
         recordExpressionUses(target, scopeStack, expression.start.value);

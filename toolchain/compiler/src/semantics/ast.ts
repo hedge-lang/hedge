@@ -84,6 +84,8 @@ export type Expression =
   | MethodCallExpression
   | IndexExpression
   | TupleExpression
+  | ArrayExpression
+  | ArrayRepeatExpression
   | RangeExpression
   | StructExpression
   | IfExpression
@@ -225,7 +227,20 @@ export type Type =
   | PrimitiveType
   | StructType
   | FunctionType
-  | ReferenceType;
+  | ReferenceType
+  | ArrayType;
+
+/**
+ * `[T; N]`, a fixed-size array. `length` is a resolved, non-negative integer
+ * - the parser guarantees the source's own length expression is a literal
+ * integer (no const-evaluation exists yet), so by the time a program reaches
+ * this layer there's nothing left to evaluate.
+ */
+interface ArrayType {
+  readonly kind: "ArrayType";
+  readonly elementType: Type;
+  readonly length: number;
+}
 
 export interface FunctionType {
   readonly kind: "FunctionType";
@@ -414,6 +429,20 @@ export interface TupleExpression extends DecoratedAstNode {
   readonly kind: "TupleExpression";
   /** Zero elements = unit `()`. One element with trailing comma = single-element tuple. */
   readonly elements: Expression[];
+}
+
+/** `[a, b, c]` - the list form of an array literal; `type` is always an `ArrayType`. */
+export interface ArrayExpression extends DecoratedAstNode {
+  readonly kind: "ArrayExpression";
+  readonly elements: Expression[];
+}
+
+/** `[value; count]` - the repeat form of an array literal; `type` is always an `ArrayType`. */
+export interface ArrayRepeatExpression extends DecoratedAstNode {
+  readonly kind: "ArrayRepeatExpression";
+  readonly value: Expression;
+  /** Resolved element count, mirroring `ArrayType.length` - see that type's own doc comment. */
+  readonly count: number;
 }
 
 export interface RangeExpression extends DecoratedAstNode {
