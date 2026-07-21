@@ -762,6 +762,13 @@ describe("mutable reference cell codegen", (): void => {
     const code = gen("fn _(r: &mut i32) { *r += 1; }");
     expect(stmts(code)).toBe("r.v += 1;");
   });
+
+  it("lowers r[0] to index through r.v when r is a &mut array reference", (): void => {
+    const code = gen("fn _(r: &mut [i32; 3]) { print(r[0]); }");
+    expect(stmts(code)).toBe(
+      'print(((_arr, _i) => _i < 0 || _i >= _arr.length ? (() => { throw new RangeError("index out of bounds"); })() : (_arr[_i]))(r.v, 0));',
+    );
+  });
 });
 
 describe("source maps", (): void => {
