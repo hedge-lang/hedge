@@ -1,0 +1,7 @@
+fn main() {
+  let mut arr: [i32; 3] = [1, 2, 3];
+  let a = &mut arr[0];
+  let b = &mut arr[1];
+  print(a);
+  print(b);
+}
