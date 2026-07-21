@@ -598,10 +598,7 @@ function parseArrayLiteral(
     return ok({ node: repeat, next: closeResult.value });
   }
 
-  if (
-    tokens[cursor]?.kind !== "comma" &&
-    tokens[cursor]?.kind !== "rbracket"
-  ) {
+  if (tokens[cursor]?.kind !== "comma" && tokens[cursor]?.kind !== "rbracket") {
     const tok = tokens[cursor];
     return err({
       severity: "error",

@@ -572,9 +572,10 @@ function walkAssignExpression(
  * "move" is a no-op — `useOrMove` only actually transitions a binding to
  * `Unbound` when its type has no `copy` capability, and a non-`Copy` struct
  * could never legally reach a `BinaryExpression` operand in the first place.
- * The one deliberate exception is `FieldAccessExpression`: the object being
- * read is a *use*, not a move, since Slice 1 doesn't track partial
- * (field-level) moves out of a struct.
+ * The deliberate exceptions are `FieldAccessExpression` and
+ * `IndexExpression`: the object being read is a *use*, not a move, since
+ * Slice 1 doesn't track partial (field- or element-level) moves out of a
+ * struct or array.
  */
 // eslint-disable-next-line complexity -- This is a routing function
 function walkExpression(
@@ -636,7 +637,15 @@ function walkExpression(
       }
       return;
     case "IndexExpression":
-      walkExpression(ctx, expression.object, state, scopeStack);
+      // The object is a *use*, not a move, mirroring FieldAccessExpression's
+      // own treatment above: `arr[i]` reads through the array, it doesn't
+      // move `arr` out (Slice 1 doesn't track partial/element-level moves
+      // out of an array any more than it does out of a struct's fields).
+      if (expression.object.kind === "PathExpression") {
+        useOrMove(ctx, expression.object, state, scopeStack, false);
+      } else {
+        walkExpression(ctx, expression.object, state, scopeStack);
+      }
       walkExpression(ctx, expression.index, state, scopeStack);
       return;
     case "TupleExpression":

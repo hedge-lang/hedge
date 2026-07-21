@@ -206,13 +206,12 @@ function intSuffixToPrimitive(suffix: IntSuffix): Semantics.PrimitiveType {
 }
 
 /**
- * Resolves an `ArrayType`'s length to a plain number. The parser guarantees
- * `length` is always an `IntLiteral` (no const-evaluation exists yet, so
- * `parseType` rejects anything else at parse time) - this is purely a
- * base-prefix-aware string-to-number conversion, mirroring
- * `checkPosLiteralRange`'s own literal-value parsing.
+ * Base-prefix-aware `IntLiteral` string-to-`bigint` conversion, shared by
+ * every call site that needs a literal's actual numeric value:
+ * `resolveArrayLength` (an `ArrayType`'s length), `analyzeIndexExpression`
+ * (a literal index's compile-time bounds check), and `checkPosLiteralRange`/
+ * `checkNegLiteralRange` (annotation range checks).
  */
-/** Shared by `resolveArrayLength` (parser-level) and `analyzeIndexExpression` (semantics-level) - both `IntLiteral` shapes carry the same `base`/`value` fields. */
 function intLiteralValue(literal: {
   readonly base: 2 | 8 | 10 | 16;
   readonly value: string;
@@ -272,19 +271,6 @@ function validateSlice1Type(
         type.elementType,
         type.elementType.tokenId,
       );
-      if (!hasCapability(elementType, "copy")) {
-        // TODO(#201): a non-Copy array element (e.g. a struct) needs a real
-        // disposer design before this restriction can lift - a plain JS
-        // Array/TypedArray has no [Symbol.dispose], so move-check.ts's
-        // existing using-wrapping for non-Copy bindings would crash at
-        // runtime the moment such an array reached scope exit.
-        emitError(
-          ctx,
-          "array element types must currently be Copy; a non-Copy element (e.g. a struct) is not yet supported",
-          type.elementType.tokenId,
-        );
-        return { kind: "UnitType", tokenId };
-      }
       return {
         kind: "ArrayType",
         elementType,
@@ -822,7 +808,6 @@ function describeType(type: Semantics.Type): string {
   }
 }
 
-// eslint-disable-next-line complexity -- This is difficult to split up
 function checkNegLiteralRange(
   operand: Semantics.Expression,
   annotationType: Semantics.Type,
@@ -831,15 +816,7 @@ function checkNegLiteralRange(
   if (typeName === undefined) return none();
 
   if (operand.kind === "IntLiteral") {
-    const prefix =
-      operand.base === 16
-        ? "0x"
-        : operand.base === 8
-          ? "0o"
-          : operand.base === 2
-            ? "0b"
-            : "";
-    const val = -BigInt(prefix + operand.value);
+    const val = -intLiteralValue(operand);
     const [min, max] = INT_BOUNDS[annotationType.kind] ?? [];
     if (min === undefined || max === undefined) {
       return some(`unexpected int-literal range check for type ${typeName}`);
@@ -867,15 +844,7 @@ function checkPosLiteralRange(
 ): void {
   const bounds = INT_BOUNDS[type.kind];
   if (bounds === undefined) return;
-  const prefix =
-    literal.base === 16
-      ? "0x"
-      : literal.base === 8
-        ? "0o"
-        : literal.base === 2
-          ? "0b"
-          : "";
-  const val = BigInt(prefix + literal.value);
+  const val = intLiteralValue(literal);
   const [, max] = bounds;
   if (val > max) {
     const name = NUMERIC_TYPE_NAME[type.kind] ?? type.kind;
@@ -973,25 +942,24 @@ function isIntegerType(type: Semantics.Type): boolean {
  * `AssignExpression`, `CompoundAssignExpression`, `IfExpression`, ...) is
  * genuine and must be compared normally.
  */
+const AMBIGUOUS_UNIT_EXPR_KINDS: ReadonlySet<Semantics.Expression["kind"]> =
+  new Set([
+    "PathExpression",
+    "FieldAccessExpression",
+    "StructExpression",
+    "MethodCallExpression",
+    "IndexExpression",
+    "BinaryExpression",
+    "UnaryExpression",
+    "TupleExpression",
+    "RangeExpression",
+    "ReferenceExpression",
+    "DereferenceExpression",
+    "ArrayRepeatExpression",
+  ]);
+
 function isAmbiguousUnitExpr(expr: Semantics.Expression): boolean {
-  switch (expr.kind) {
-    case "PathExpression":
-    case "FieldAccessExpression":
-    case "StructExpression":
-    case "MethodCallExpression":
-    case "IndexExpression":
-    case "BinaryExpression":
-    case "UnaryExpression":
-    case "TupleExpression":
-    case "RangeExpression":
-    case "ReferenceExpression":
-    case "DereferenceExpression":
-    case "ArrayExpression":
-    case "ArrayRepeatExpression":
-      return true;
-    default:
-      return false;
-  }
+  return AMBIGUOUS_UNIT_EXPR_KINDS.has(expr.kind);
 }
 
 /**
@@ -1013,6 +981,7 @@ function isAmbiguousUnitExpr(expr: Semantics.Expression): boolean {
  * diagnostic. A genuinely unit-typed result (e.g. a `print(...)` call) is
  * compared normally, not suppressed.
  */
+// eslint-disable-next-line complexity -- Reconciliation checks several independent coercion cases in sequence
 function reconcileExpressionType(
   ctx: AnalysisContext,
   expr: Semantics.Expression,
@@ -1402,11 +1371,12 @@ const USIZE_TYPE: Semantics.PrimitiveType = { kind: "PrimitiveUsizeType" };
  * empty literal (`[]`) has no element to infer from; its `type` here is an
  * ambiguous placeholder (`elementType: UnitType`) that only resolves
  * successfully when `analyzeLetStatement` reconciles it against an explicit
- * `[T; 0]` annotation - see that function's own handling. A non-Copy element
- * type (see #201) is a genuine failure, not ambiguous-pending-context - it
- * returns bare `UnitType` (this pass's universal failed-sub-analysis
- * placeholder) and is listed in `isAmbiguousUnitExpr`'s bucket so the
- * already-emitted diagnostic doesn't cascade into a second one upstream.
+ * `[T; 0]` annotation - see that function's own handling. An element type
+ * need not be `Copy` - `[T; N]` is itself always move-only regardless of
+ * `T` (see `type-capabilities.ts`), and a non-Copy element disposes via the
+ * recursive array-disposal helper (`codegen/generator.ts`'s
+ * `ARRAY_DISPOSE_HELPER`), so there is nothing left for this function to
+ * reject on that basis.
  */
 function analyzeArrayExpression(
   ctx: AnalysisContext,
@@ -1434,16 +1404,6 @@ function analyzeArrayExpression(
       );
       break;
     }
-  }
-  if (!hasCapability(elementType, "copy")) {
-    // TODO(#201): see the matching check in validateSlice1Type - a non-Copy
-    // array element needs a real disposer design before this can lift.
-    emitError(
-      ctx,
-      "array element types must currently be Copy; a non-Copy element (e.g. a struct) is not yet supported",
-      first.tokenId,
-    );
-    return { ...expression, elements, type: UNIT };
   }
   return {
     ...expression,

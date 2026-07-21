@@ -30,7 +30,15 @@ const INTEGER_KINDS: readonly Semantics.PrimitiveIntegerType["kind"][] = [
  * become the set of traits the type implements. `StructType` has no entry,
  * so it is never `copy`. Every struct is move-only in Slice 1 (no `Copy`
  * derivation via all-fields-Copy-and-no-Drop yet; that needs the trait
- * machinery landing in Slice 4).
+ * machinery landing in Slice 4). `ArrayType` also has no entry - deliberately
+ * never `Copy` even when its element type is, regardless of what a real
+ * per-element Copy rule would say: a JS `Array`/`TypedArray` is itself a
+ * reference type, so a naive "copy" (`const b = a;`) would alias the same
+ * underlying storage rather than duplicating it, silently breaking Copy's
+ * own value-semantics guarantee. Move-only sidesteps that hazard entirely
+ * (only one binding can ever be live), at the cost of arrays needing the
+ * same scope-end disposal story every other move-only type does - see
+ * `codegen/generator.ts`'s array-disposal helper.
  *
  * `UnitType` is `copy`: it covers both a genuine zero-sized unit value and
  * the ambiguous placeholder type hard-coded onto Slice-1-not-yet-implemented
@@ -74,22 +82,9 @@ const TYPE_CAPABILITIES: ReadonlyMap<
   ]),
 ]);
 
-/**
- * `[T; N]` is `Copy` exactly when `T` is - unlike every other entry here,
- * this can't be a flat `TYPE_CAPABILITIES` row, since the answer depends on
- * a nested type rather than being fixed per `kind`. (Currently every
- * `ArrayType` that reaches this function already has a `Copy` element -
- * `analyzer.ts`'s `validateSlice1Type` rejects a non-`Copy` element type
- * before constructing one, see #201 - but this stays a real recursive rule
- * rather than a hard-coded "always copy" entry, so lifting that restriction
- * later needs no change here.)
- */
 export function hasCapability(
   type: Semantics.Type,
   cap: TypeCapability,
 ): boolean {
-  if (type.kind === "ArrayType" && cap === "copy") {
-    return hasCapability(type.elementType, "copy");
-  }
   return TYPE_CAPABILITIES.get(type.kind)?.has(cap) ?? false;
 }

@@ -845,6 +845,20 @@ describe("array types", (): void => {
     expect(result.diagnostics[0].message).toContain("usize");
   });
 
+  it("rejects an i32-typed variable index, since indices must specifically be usize, not just any integer type", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let arr: [i32; 3] = [1, 2, 3];
+        let i: i32 = 1;
+        let x = arr[i];
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("usize");
+  });
+
   it("rejects indexing a non-array type", (): void => {
     const result = diagnose(`
       fn main() {
@@ -893,19 +907,18 @@ describe("array types", (): void => {
     expect(result.diagnostics).toHaveLength(1);
   });
 
-  it("accepts using an array of Copy elements again after copying it into another binding", (): void => {
+  it("type-checks binding an array's own value to a second let, regardless of move-checking (a separate pass)", (): void => {
     const result = diagnose(`
       fn main() {
         let a: [i32; 3] = [1, 2, 3];
         let b = a;
-        print(a);
         print(b);
       }
     `);
     expect(result.diagnostics).toEqual([]);
   });
 
-  it("rejects a non-Copy struct element type inferred from an array literal with a not-yet-supported diagnostic", (): void => {
+  it("type-checks a non-Copy struct element type inferred from an array literal", (): void => {
     const result = diagnose(`
       struct Boxed { value: i32 }
       fn main() {
@@ -913,19 +926,15 @@ describe("array types", (): void => {
         print(arr);
       }
     `);
-    expect(result.diagnostics).toHaveLength(1);
-    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("Copy");
+    expect(result.diagnostics).toEqual([]);
   });
 
-  it("rejects a non-Copy struct element type in an explicit array type annotation with a not-yet-supported diagnostic", (): void => {
+  it("type-checks a non-Copy struct element type in an explicit array type annotation", (): void => {
     const result = diagnose(`
       struct Boxed { value: i32 }
       fn f(arr: [Boxed; 2]) { print(arr); }
     `);
-    expect(result.diagnostics).toHaveLength(1);
-    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("Copy");
+    expect(result.diagnostics).toEqual([]);
   });
 
   it("accepts writing through an index on a mut array binding", (): void => {
