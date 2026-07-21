@@ -205,6 +205,62 @@ function intSuffixToPrimitive(suffix: IntSuffix): Semantics.PrimitiveType {
   }
 }
 
+/**
+ * Base-prefix-aware `IntLiteral` string-to-`bigint` conversion, shared by
+ * every call site that needs a literal's actual numeric value:
+ * `resolveArrayLength` (an `ArrayType`'s length), `analyzeIndexExpression`
+ * (a literal index's compile-time bounds check), and `checkPosLiteralRange`/
+ * `checkNegLiteralRange` (annotation range checks).
+ */
+function intLiteralValue(literal: {
+  readonly base: 2 | 8 | 10 | 16;
+  readonly value: string;
+}): bigint {
+  const prefix =
+    literal.base === 16
+      ? "0x"
+      : literal.base === 8
+        ? "0o"
+        : literal.base === 2
+          ? "0b"
+          : "";
+  return BigInt(prefix + literal.value);
+}
+
+function resolveArrayLength(length: Parser.Expression): number {
+  assert(
+    length.kind === "IntLiteral",
+    "Array length must be a literal integer (parser guarantee)",
+  );
+  return Number(intLiteralValue(length));
+}
+
+/**
+ * Rejects an array length/repeat-count literal that doesn't fit in a safe
+ * integer, before `resolveArrayLength`'s own `Number(bigint)` conversion has
+ * a chance to silently produce `Infinity` or an imprecise value - which
+ * would otherwise surface far from the mistake, as a confusing runtime
+ * `RangeError` from `new Array(Infinity)`/`new Int32Array(Infinity)` in the
+ * *compiled* program rather than a compile-time diagnostic here. `literal`
+ * is assumed already known to be an `IntLiteral` (callers check
+ * `.kind !== "IntLiteral"` separately, for the "must be a literal" case).
+ */
+function checkArrayLengthRange(
+  ctx: AnalysisContext,
+  literal: Parser.IntLiteral,
+): boolean {
+  const value = intLiteralValue(literal);
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    emitError(
+      ctx,
+      `array length ${literal.value} is too large to represent`,
+      literal.tokenId,
+    );
+    return false;
+  }
+  return true;
+}
+
 function validateSlice1Type(
   ctx: AnalysisContext,
   type: Parser.Type,
@@ -235,6 +291,24 @@ function validateSlice1Type(
         mutable: type.mutable,
         referent: validateSlice1Type(ctx, type.referent, type.referent.tokenId),
       };
+    case "ArrayType": {
+      const elementType = validateSlice1Type(
+        ctx,
+        type.elementType,
+        type.elementType.tokenId,
+      );
+      if (
+        type.length.kind === "IntLiteral" &&
+        !checkArrayLengthRange(ctx, type.length)
+      ) {
+        return { kind: "UnitType", tokenId };
+      }
+      return {
+        kind: "ArrayType",
+        elementType,
+        length: resolveArrayLength(type.length),
+      };
+    }
     default:
       assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
@@ -436,6 +510,15 @@ function resolveSlice1Type(
         tokenId: fallbackTokenId,
         mutable: type.mutable,
         referent: resolveSlice1Type(type.referent, type.referent.tokenId),
+      };
+    case "ArrayType":
+      return {
+        kind: "ArrayType",
+        elementType: resolveSlice1Type(
+          type.elementType,
+          type.elementType.tokenId,
+        ),
+        length: resolveArrayLength(type.length),
       };
     default:
       return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
@@ -658,6 +741,15 @@ function analyzeLetStatement(
         );
       }
       bindingType = annotationType;
+    } else if (
+      analyzedInitializer.value.kind === "ArrayExpression" &&
+      analyzedInitializer.value.elements.length === 0
+    ) {
+      emitError(
+        ctx,
+        "cannot infer element type of an empty array literal without an explicit type annotation",
+        statement.tokenId,
+      );
     }
   } else if (isSome(statement.type)) {
     bindingType = validateSlice1Type(
@@ -741,12 +833,13 @@ function describeType(type: Semantics.Type): string {
       return "()";
     case "ReferenceType":
       return `&${type.mutable ? "mut " : ""}${describeType(type.referent)}`;
+    case "ArrayType":
+      return `[${describeType(type.elementType)}; ${String(type.length)}]`;
     default:
       return NUMERIC_TYPE_NAME[type.kind] ?? type.kind;
   }
 }
 
-// eslint-disable-next-line complexity -- This is difficult to split up
 function checkNegLiteralRange(
   operand: Semantics.Expression,
   annotationType: Semantics.Type,
@@ -755,15 +848,7 @@ function checkNegLiteralRange(
   if (typeName === undefined) return none();
 
   if (operand.kind === "IntLiteral") {
-    const prefix =
-      operand.base === 16
-        ? "0x"
-        : operand.base === 8
-          ? "0o"
-          : operand.base === 2
-            ? "0b"
-            : "";
-    const val = -BigInt(prefix + operand.value);
+    const val = -intLiteralValue(operand);
     const [min, max] = INT_BOUNDS[annotationType.kind] ?? [];
     if (min === undefined || max === undefined) {
       return some(`unexpected int-literal range check for type ${typeName}`);
@@ -791,15 +876,7 @@ function checkPosLiteralRange(
 ): void {
   const bounds = INT_BOUNDS[type.kind];
   if (bounds === undefined) return;
-  const prefix =
-    literal.base === 16
-      ? "0x"
-      : literal.base === 8
-        ? "0o"
-        : literal.base === 2
-          ? "0b"
-          : "";
-  const val = BigInt(prefix + literal.value);
+  const val = intLiteralValue(literal);
   const [, max] = bounds;
   if (val > max) {
     const name = NUMERIC_TYPE_NAME[type.kind] ?? type.kind;
@@ -864,6 +941,8 @@ function typesEqual(a: Semantics.Type, b: Semantics.Type): boolean {
     return a.name === b.name;
   if (a.kind === "ReferenceType" && b.kind === "ReferenceType")
     return a.mutable === b.mutable && typesEqual(a.referent, b.referent);
+  if (a.kind === "ArrayType" && b.kind === "ArrayType")
+    return a.length === b.length && typesEqual(a.elementType, b.elementType);
   return true;
 }
 
@@ -895,23 +974,24 @@ function isIntegerType(type: Semantics.Type): boolean {
  * `AssignExpression`, `CompoundAssignExpression`, `IfExpression`, ...) is
  * genuine and must be compared normally.
  */
+const AMBIGUOUS_UNIT_EXPR_KINDS: ReadonlySet<Semantics.Expression["kind"]> =
+  new Set([
+    "PathExpression",
+    "FieldAccessExpression",
+    "StructExpression",
+    "MethodCallExpression",
+    "IndexExpression",
+    "BinaryExpression",
+    "UnaryExpression",
+    "TupleExpression",
+    "RangeExpression",
+    "ReferenceExpression",
+    "DereferenceExpression",
+    "ArrayRepeatExpression",
+  ]);
+
 function isAmbiguousUnitExpr(expr: Semantics.Expression): boolean {
-  switch (expr.kind) {
-    case "PathExpression":
-    case "FieldAccessExpression":
-    case "StructExpression":
-    case "MethodCallExpression":
-    case "IndexExpression":
-    case "BinaryExpression":
-    case "UnaryExpression":
-    case "TupleExpression":
-    case "RangeExpression":
-    case "ReferenceExpression":
-    case "DereferenceExpression":
-      return true;
-    default:
-      return false;
-  }
+  return AMBIGUOUS_UNIT_EXPR_KINDS.has(expr.kind);
 }
 
 /**
@@ -933,6 +1013,7 @@ function isAmbiguousUnitExpr(expr: Semantics.Expression): boolean {
  * diagnostic. A genuinely unit-typed result (e.g. a `print(...)` call) is
  * compared normally, not suppressed.
  */
+// eslint-disable-next-line complexity -- Reconciliation checks several independent coercion cases in sequence
 function reconcileExpressionType(
   ctx: AnalysisContext,
   expr: Semantics.Expression,
@@ -944,6 +1025,20 @@ function reconcileExpressionType(
 
   if (isUnsuffixedLiteralExpr(expr) && isIntegerType(expectedType)) {
     result = coerceToIntegerType(expr, expectedType);
+    suppressed = true;
+  }
+
+  // An empty array literal (`[]`) has no element to infer a type from -
+  // `analyzeArrayExpression` gives it an ambiguous `elementType: UnitType`
+  // placeholder that only resolves once an explicit `[T; 0]` annotation is
+  // in view, mirroring the unsuffixed-literal coercion just above.
+  if (
+    expr.kind === "ArrayExpression" &&
+    expr.elements.length === 0 &&
+    expectedType.kind === "ArrayType" &&
+    expectedType.length === 0
+  ) {
+    result = { ...expr, type: expectedType };
     suppressed = true;
   }
 
@@ -1180,12 +1275,7 @@ function analyzeExpression(
       };
     }
     case "IndexExpression":
-      return {
-        ...expression,
-        object: analyzeExpression(ctx, expression.object),
-        index: analyzeExpression(ctx, expression.index),
-        type: { kind: "UnitType", tokenId: expression.tokenId },
-      };
+      return analyzeIndexExpression(ctx, expression);
     case "TupleExpression":
       return {
         ...expression,
@@ -1194,6 +1284,10 @@ function analyzeExpression(
         ),
         type: { kind: "UnitType", tokenId: expression.tokenId },
       };
+    case "ArrayExpression":
+      return analyzeArrayExpression(ctx, expression);
+    case "ArrayRepeatExpression":
+      return analyzeArrayRepeatExpression(ctx, expression);
     case "RangeExpression":
       return {
         ...expression,
@@ -1309,6 +1403,152 @@ function analyzeDereferenceExpression(
   }
 
   return { ...expression, operand, type: operandType.referent };
+}
+
+const USIZE_TYPE: Semantics.PrimitiveType = { kind: "PrimitiveUsizeType" };
+
+/**
+ * `[a, b, c]` infers its element type from the first element and requires
+ * every other element to match it (no fallback to `UnitType` per element -
+ * a genuinely mismatched element gets its own diagnostic, not a cascade). An
+ * empty literal (`[]`) has no element to infer from; its `type` here is an
+ * ambiguous placeholder (`elementType: UnitType`) that only resolves
+ * successfully when `analyzeLetStatement` reconciles it against an explicit
+ * `[T; 0]` annotation - see that function's own handling. An element type
+ * need not be `Copy` - `[T; N]` is itself always move-only regardless of
+ * `T` (see `type-capabilities.ts`), and a non-Copy element disposes via the
+ * recursive array-disposal helper (`codegen/generator.ts`'s
+ * `ARRAY_DISPOSE_HELPER`), so there is nothing left for this function to
+ * reject on that basis.
+ */
+function analyzeArrayExpression(
+  ctx: AnalysisContext,
+  expression: Parser.ArrayExpression,
+): Semantics.ArrayExpression {
+  const elements = expression.elements.map((elem) =>
+    analyzeExpression(ctx, elem),
+  );
+  const first = elements[0];
+  if (first === undefined) {
+    return {
+      ...expression,
+      elements,
+      type: { kind: "ArrayType", elementType: UNIT, length: 0 },
+    };
+  }
+  const elementType = getType(first);
+  for (const elem of elements.slice(1)) {
+    const elemType = getType(elem);
+    if (!typesEqual(elementType, elemType)) {
+      emitError(
+        ctx,
+        `array elements must all have the same type; expected \`${describeType(elementType)}\`, found \`${describeType(elemType)}\``,
+        elem.tokenId,
+      );
+      break;
+    }
+  }
+  return {
+    ...expression,
+    elements,
+    type: { kind: "ArrayType", elementType, length: elements.length },
+  };
+}
+
+/** `[value; count]` - `count` is guaranteed a literal integer by the parser (see `parseArrayLiteral`'s own precondition doc). */
+function analyzeArrayRepeatExpression(
+  ctx: AnalysisContext,
+  expression: Parser.ArrayRepeatExpression,
+): Semantics.ArrayRepeatExpression {
+  const value = analyzeExpression(ctx, expression.value);
+  const valueType = getType(value);
+  if (!hasCapability(valueType, "copy")) {
+    // Unlike the list form (each element its own expression), `value` is
+    // evaluated once and codegen reuses the same result for every slot via
+    // `.fill(value)` - a non-Copy value would alias the identical JS object
+    // reference across the whole array instead of each slot holding a
+    // distinct value. Matches Rust's own `[expr; N]` rule (`expr: Copy`, or
+    // a const item - Hedge has no const-evaluation yet).
+    emitError(
+      ctx,
+      `repeat-form array element type must be Copy, found \`${describeType(valueType)}\`; const expressions are not yet supported`,
+      expression.value.tokenId,
+    );
+    return { ...expression, value, count: 0, type: UNIT };
+  }
+  if (expression.count.kind !== "IntLiteral") {
+    emitError(
+      ctx,
+      "array repeat count must be a literal integer; const expressions are not yet supported",
+      expression.count.tokenId,
+    );
+    return { ...expression, value, count: 0, type: UNIT };
+  }
+  if (!checkArrayLengthRange(ctx, expression.count)) {
+    return { ...expression, value, count: 0, type: UNIT };
+  }
+  const count = resolveArrayLength(expression.count);
+  return {
+    ...expression,
+    value,
+    count,
+    type: { kind: "ArrayType", elementType: getType(value), length: count },
+  };
+}
+
+function analyzeIndexExpression(
+  ctx: AnalysisContext,
+  expression: Parser.IndexExpression,
+): Semantics.IndexExpression {
+  const object = analyzeExpression(ctx, expression.object);
+  const rawIndex = analyzeExpression(ctx, expression.index);
+  const { expr: index, mismatch: indexMismatch } = reconcileExpressionType(
+    ctx,
+    rawIndex,
+    USIZE_TYPE,
+    expression.index.tokenId,
+  );
+  const objectType = getType(object);
+
+  if (objectType.kind === "UnitType") {
+    return { ...expression, object, index, type: UNIT };
+  }
+
+  // Indexing reaches through a borrow automatically (spec 0005), mirroring
+  // field access - resolve against the referent's type.
+  const arrayType =
+    objectType.kind === "ReferenceType" ? objectType.referent : objectType;
+
+  if (arrayType.kind !== "ArrayType") {
+    emitError(
+      ctx,
+      `cannot index into non-array type \`${describeType(objectType)}\``,
+      expression.tokenId,
+    );
+    return { ...expression, object, index, type: UNIT };
+  }
+
+  if (indexMismatch) {
+    emitError(
+      ctx,
+      `array index must be \`usize\`, found \`${describeType(getType(index))}\``,
+      expression.index.tokenId,
+    );
+    return { ...expression, object, index, type: arrayType.elementType };
+  }
+
+  if (index.kind === "IntLiteral") {
+    const literalIndex = Number(intLiteralValue(index));
+    if (literalIndex < 0 || literalIndex >= arrayType.length) {
+      emitError(
+        ctx,
+        `index ${String(literalIndex)} out of bounds for array of length ${String(arrayType.length)}`,
+        expression.index.tokenId,
+      );
+    }
+  }
+
+  return { ...expression, object, index, type: arrayType.elementType };
 }
 
 function analyzeFieldAccessExpression(

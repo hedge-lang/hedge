@@ -1860,6 +1860,106 @@ describe("tuple expressions and unit", (): void => {
   });
 });
 
+describe("array expressions", (): void => {
+  it("[1, 2, 3] — list-form array literal", (): void => {
+    const ast = parseProgram("[1, 2, 3]");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ArrayExpression",
+          elements: [
+            { kind: "IntLiteral", value: "1" },
+            { kind: "IntLiteral", value: "2" },
+            { kind: "IntLiteral", value: "3" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("[1, 2, 3,] — trailing comma on a list-form array literal is accepted", (): void => {
+    const ast = parseProgram("[1, 2, 3,]");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ArrayExpression",
+          elements: [
+            { kind: "IntLiteral" },
+            { kind: "IntLiteral" },
+            { kind: "IntLiteral" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("[] — empty list-form array literal parses with zero elements", (): void => {
+    const ast = parseProgram("[]");
+    expect(ast).toMatchObject({
+      items: [{ kind: "ArrayExpression", elements: [] }],
+    });
+  });
+
+  it("[0; 5] — repeat-form array literal", (): void => {
+    const ast = parseProgram("[0; 5]");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ArrayRepeatExpression",
+          value: { kind: "IntLiteral", value: "0" },
+          count: { kind: "IntLiteral", value: "5" },
+        },
+      ],
+    });
+  });
+
+  it("[[1, 2], [3, 4]] — nested array literals", (): void => {
+    const ast = parseProgram("[[1, 2], [3, 4]]");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ArrayExpression",
+          elements: [
+            {
+              kind: "ArrayExpression",
+              elements: [{ kind: "IntLiteral" }, { kind: "IntLiteral" }],
+            },
+            {
+              kind: "ArrayExpression",
+              elements: [{ kind: "IntLiteral" }, { kind: "IntLiteral" }],
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("[a + b, c * d] — expressions as array elements", (): void => {
+    const ast = parseProgram("[a + b, c * d]");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ArrayExpression",
+          elements: [
+            { kind: "BinaryExpression", operator: "Add" },
+            { kind: "BinaryExpression", operator: "Mul" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("[1, with no closing bracket is an error", (): void => {
+    const result = parse(tokenize("[1,").tokens);
+    expect(result.program).toEqual(none());
+  });
+
+  it("[1 2] — missing comma between array elements is an error", (): void => {
+    const result = parse(tokenize("[1 2]").tokens);
+    expect(result.program).toEqual(none());
+  });
+});
+
 describe("index expressions", (): void => {
   it("a[0] — simple integer index", (): void => {
     const ast = parseProgram("a[0]");

@@ -30,7 +30,15 @@ const INTEGER_KINDS: readonly Semantics.PrimitiveIntegerType["kind"][] = [
  * become the set of traits the type implements. `StructType` has no entry,
  * so it is never `copy`. Every struct is move-only in Slice 1 (no `Copy`
  * derivation via all-fields-Copy-and-no-Drop yet; that needs the trait
- * machinery landing in Slice 4).
+ * machinery landing in Slice 4). `ArrayType` also has no entry - deliberately
+ * never `Copy` even when its element type is, regardless of what a real
+ * per-element Copy rule would say: a JS `Array`/`TypedArray` is itself a
+ * reference type, so a naive "copy" (`const b = a;`) would alias the same
+ * underlying storage rather than duplicating it, silently breaking Copy's
+ * own value-semantics guarantee. Move-only sidesteps that hazard entirely
+ * (only one binding can ever be live), at the cost of arrays needing the
+ * same scope-end disposal story every other move-only type does - see
+ * `codegen/generator.ts`'s array-disposal helper.
  *
  * `UnitType` is `copy`: it covers both a genuine zero-sized unit value and
  * the ambiguous placeholder type hard-coded onto Slice-1-not-yet-implemented

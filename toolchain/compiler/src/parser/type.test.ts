@@ -70,3 +70,46 @@ describe("parseType - reference types", (): void => {
     expect(result.error.message).toContain("lifetime");
   });
 });
+
+describe("parseType - array types", (): void => {
+  it("parses [i32; 3] as a fixed-size array type", (): void => {
+    const { tokens } = tokenize("[i32; 3]");
+    const result = parseType(tokens, 0);
+    assert(!isErr(result), "Expected a successful parse");
+    expect(result.value.node).toMatchObject({
+      kind: "ArrayType",
+      elementType: { kind: "NamedType", path: { segments: ["i32"] } },
+      length: { kind: "IntLiteral", value: "3" },
+    });
+    expect(result.value.next).toBe(tokens.length - 1);
+  });
+
+  it("still rejects a slice type ([T], no semicolon) with the existing Slice 1 guardrail", (): void => {
+    const { tokens } = tokenize("[i32]");
+    const result = parseType(tokens, 0);
+    assert(isErr(result), "Expected an error result");
+    expect(result.error.message).toContain("slice types");
+  });
+
+  it("parses [[i32; 2]; 3] as a nested array type", (): void => {
+    const { tokens } = tokenize("[[i32; 2]; 3]");
+    const result = parseType(tokens, 0);
+    assert(!isErr(result), "Expected a successful parse");
+    expect(result.value.node).toMatchObject({
+      kind: "ArrayType",
+      elementType: {
+        kind: "ArrayType",
+        elementType: { kind: "NamedType", path: { segments: ["i32"] } },
+        length: { kind: "IntLiteral", value: "2" },
+      },
+      length: { kind: "IntLiteral", value: "3" },
+    });
+  });
+
+  it("rejects a non-literal array length as not yet supported", (): void => {
+    const { tokens } = tokenize("[i32; N]");
+    const result = parseType(tokens, 0);
+    assert(isErr(result), "Expected an error result");
+    expect(result.error.message).toContain("literal integer");
+  });
+});

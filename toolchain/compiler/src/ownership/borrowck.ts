@@ -499,6 +499,12 @@ function collectUses(expression: Semantics.Expression, out: Set<string>): void {
     case "TupleExpression":
       for (const element of expression.elements) collectUses(element, out);
       return;
+    case "ArrayExpression":
+      for (const element of expression.elements) collectUses(element, out);
+      return;
+    case "ArrayRepeatExpression":
+      collectUses(expression.value, out);
+      return;
     case "RangeExpression":
       if (isSome(expression.start)) {
         collectUses(expression.start.value, out);

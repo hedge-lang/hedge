@@ -611,11 +611,12 @@ function walkNonMovingPlace(
  * "move" is a no-op — `useOrMove` only actually transitions a binding to
  * `Unbound` when its type has no `copy` capability, and a non-`Copy` struct
  * could never legally reach a `BinaryExpression` operand in the first place.
- * `FieldAccessExpression`/`ReferenceExpression`/`AssignExpression` are
- * deliberate exceptions, routed through `walkNonMovingPlace` instead: the
- * object/operand/lhs being accessed is a *use*, not a move, since Slice 1
- * doesn't track partial (field-level) moves out of a struct, and borrowing
- * or writing through a reference never moves its referent either.
+ * `FieldAccessExpression`/`ReferenceExpression`/`AssignExpression`/
+ * `IndexExpression` are deliberate exceptions, routed through
+ * `walkNonMovingPlace` instead: the object/operand/lhs being accessed is a
+ * *use*, not a move, since Slice 1 doesn't track partial (field- or
+ * element-level) moves out of a struct or array, and borrowing or writing
+ * through a reference never moves its referent either.
  * `DereferenceExpression` is the remaining exception in the other direction:
  * unlike a `BinaryExpression` operand, a dereferenced place's referent *can*
  * be non-`Copy`, so reaching one here (a genuinely moving position — a call
@@ -686,13 +687,29 @@ function walkExpression(
       }
       return;
     case "IndexExpression":
-      walkExpression(ctx, expression.object, state, scopeStack);
+      // The object is a *use*, not a move, mirroring FieldAccessExpression's
+      // own treatment above: `arr[i]` reads through the array, it doesn't
+      // move `arr` out (Slice 1 doesn't track partial/element-level moves
+      // out of an array any more than it does out of a struct's fields).
+      if (expression.object.kind === "PathExpression") {
+        useOrMove(ctx, expression.object, state, scopeStack, false);
+      } else {
+        walkExpression(ctx, expression.object, state, scopeStack);
+      }
       walkExpression(ctx, expression.index, state, scopeStack);
       return;
     case "TupleExpression":
       for (const element of expression.elements) {
         walkExpression(ctx, element, state, scopeStack);
       }
+      return;
+    case "ArrayExpression":
+      for (const element of expression.elements) {
+        walkExpression(ctx, element, state, scopeStack);
+      }
+      return;
+    case "ArrayRepeatExpression":
+      walkExpression(ctx, expression.value, state, scopeStack);
       return;
     case "RangeExpression":
       if (isSome(expression.start)) {

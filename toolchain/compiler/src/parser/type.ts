@@ -2,14 +2,17 @@ import type { Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import type {
+  ArrayType,
   Lifetime,
   NamedType,
   ReferenceType,
   Type,
   UnitType,
 } from "./ast.js";
+import { parseIntLiteral } from "./expression.js";
 import type { Parsed } from "./parse.js";
 import {
+  expect,
   isLifetimeGenericsStart,
   pathKeywordAt,
   pathSepBeforeLt,
@@ -157,11 +160,52 @@ export function parseType(
   }
 
   if (token.kind === "lbracket") {
-    return err({
-      severity: "error",
-      message: "slice types ([T]) are not supported in Slice 1",
-      span: some(token.span),
-    });
+    const elementResult = parseType(tokens, pos + 1);
+    if (isErr(elementResult)) {
+      return elementResult;
+    }
+    const afterElement = elementResult.value.next;
+    const afterElementToken = tokens[afterElement];
+    if (afterElementToken?.kind === "rbracket") {
+      return err({
+        severity: "error",
+        message: "slice types ([T]) are not supported in Slice 1",
+        span: some(token.span),
+      });
+    }
+    if (afterElementToken?.kind !== "semi") {
+      return err({
+        severity: "error",
+        message: `expected ';' or ']' in array type, found "${afterElementToken?.kind ?? "eof"}"`,
+        span:
+          afterElementToken !== undefined
+            ? some(afterElementToken.span)
+            : some(token.span),
+      });
+    }
+    const lengthPos = afterElement + 1;
+    const lengthToken = tokens[lengthPos];
+    if (lengthToken?.kind !== "int") {
+      return err({
+        severity: "error",
+        message:
+          "array length must be a literal integer; const expressions are not yet supported",
+        span:
+          lengthToken !== undefined ? some(lengthToken.span) : some(token.span),
+      });
+    }
+    const lengthLiteral = parseIntLiteral(lengthPos, lengthToken);
+    const closeResult = expect(tokens, lengthLiteral.next, "rbracket");
+    if (isErr(closeResult)) {
+      return closeResult;
+    }
+    const array: ArrayType = {
+      kind: "ArrayType",
+      tokenId: pos,
+      elementType: elementResult.value.node,
+      length: lengthLiteral.node,
+    };
+    return ok({ node: array, next: closeResult.value });
   }
 
   if (token.kind === "bang") {

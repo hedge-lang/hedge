@@ -95,6 +95,8 @@ export type Expression =
   | ArrowFunctionExpression
   | IndexExpression
   | TupleExpression
+  | ArrayExpression
+  | ArrayRepeatExpression
   | RangeExpression
   | StructExpression
   | RefCellExpression;
@@ -248,15 +250,42 @@ interface ArrowFunctionExpression {
   readonly body: readonly Statement[];
 }
 
+/**
+ * `isArrayIndex` is `true` only when the object actually resolved to a real
+ * `ArrayType` (see `jsim.ts`'s `jsimIndexExpression`) - `false` for the
+ * Slice-1 ambiguous-`UnitType` placeholder case, so `codegen/generator.ts`'s
+ * runtime bounds check only wraps a genuine array access, never a
+ * generic/not-yet-typed indexable value.
+ */
 interface IndexExpression {
   readonly kind: "IndexExpression";
   readonly object: Expression;
   readonly index: Expression;
+  readonly isArrayIndex: boolean;
 }
 
 interface TupleExpression {
   readonly kind: "TupleExpression";
   readonly elements: readonly Expression[];
+}
+
+/**
+ * `numericKind` is `some(...)` for a numeric element type (spec section 0012:
+ * backed by the matching `TypedArray`), `none()` for a plain JS `Array` (any
+ * other element type - see `codegen/generator.ts`'s own
+ * constructor-selection logic).
+ */
+interface ArrayExpression {
+  readonly kind: "ArrayExpression";
+  readonly elements: readonly Expression[];
+  readonly numericKind: Option<NumericKind>;
+}
+
+interface ArrayRepeatExpression {
+  readonly kind: "ArrayRepeatExpression";
+  readonly value: Expression;
+  readonly count: number;
+  readonly numericKind: Option<NumericKind>;
 }
 
 interface RangeExpression {

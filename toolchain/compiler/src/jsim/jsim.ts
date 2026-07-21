@@ -853,6 +853,10 @@ function parseExpression(
       return jsimIndexExpression(ctx, expression);
     case "TupleExpression":
       return jsimTupleExpression(ctx, expression);
+    case "ArrayExpression":
+      return jsimArrayExpression(ctx, expression);
+    case "ArrayRepeatExpression":
+      return jsimArrayRepeatExpression(ctx, expression);
     case "RangeExpression":
       return jsimRangeExpression(ctx, expression);
     case "StructExpression":
@@ -1029,6 +1033,16 @@ function jsimTailStatements(
   return [{ kind: "ReturnStatement", value: some(parseExpression(ctx, expr)) }];
 }
 
+/**
+ * Indexing reaches through a reference automatically (mirrors field access) -
+ * resolve against the referent before checking for a real `ArrayType`.
+ */
+function isArrayIndexTarget(objectType: Semantics.Type): boolean {
+  const resolved =
+    objectType.kind === "ReferenceType" ? objectType.referent : objectType;
+  return resolved.kind === "ArrayType";
+}
+
 function jsimIndexExpression(
   ctx: JsimContext,
   indexExpression: Semantics.IndexExpression,
@@ -1037,6 +1051,7 @@ function jsimIndexExpression(
     kind: "IndexExpression",
     object: parseExpression(ctx, indexExpression.object),
     index: parseExpression(ctx, indexExpression.index),
+    isArrayIndex: isArrayIndexTarget(indexExpression.object.type),
   };
 }
 
@@ -1049,6 +1064,48 @@ function jsimTupleExpression(
     elements: tupleExpression.elements.map((elem) =>
       parseExpression(ctx, elem),
     ),
+  };
+}
+
+/**
+ * A successfully-analyzed `ArrayExpression`'s own `type` is always
+ * `ArrayType` - an otherwise-rejected element type (e.g. a mismatched or
+ * unresolved one) is a compile error, so `driver.compile()` never reaches
+ * JSIM lowering for it. A non-Copy element type is not itself rejected -
+ * `[T; N]` is always move-only regardless of `T`, and a non-Copy element
+ * disposes via the recursive array-disposal helper
+ * (`codegen/generator.ts`'s `ARRAY_DISPOSE_HELPER`).
+ */
+function jsimArrayExpression(
+  ctx: JsimContext,
+  arrayExpression: Semantics.ArrayExpression,
+): JSIM.Expression {
+  assert(
+    arrayExpression.type.kind === "ArrayType",
+    `Expected an ArrayExpression to resolve to ArrayType, got "${arrayExpression.type.kind}"`,
+  );
+  return {
+    kind: "ArrayExpression",
+    elements: arrayExpression.elements.map((elem) =>
+      parseExpression(ctx, elem),
+    ),
+    numericKind: hedgeTypeToNumericKind(arrayExpression.type.elementType),
+  };
+}
+
+function jsimArrayRepeatExpression(
+  ctx: JsimContext,
+  repeatExpression: Semantics.ArrayRepeatExpression,
+): JSIM.Expression {
+  assert(
+    repeatExpression.type.kind === "ArrayType",
+    `Expected an ArrayRepeatExpression to resolve to ArrayType, got "${repeatExpression.type.kind}"`,
+  );
+  return {
+    kind: "ArrayRepeatExpression",
+    value: parseExpression(ctx, repeatExpression.value),
+    count: repeatExpression.count,
+    numericKind: hedgeTypeToNumericKind(repeatExpression.type.elementType),
   };
 }
 
