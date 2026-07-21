@@ -923,6 +923,6 @@ describe("array literal codegen", (): void => {
     // hand-written fixture below it, not external or user-supplied input;
     // same test-only pattern as the other eval-based codegen tests in this file.
     // biome-ignore lint/security/noGlobalEval: test-only eval of compiler-generated helper text, see comment above
-    expect(eval(script)).toEqual([1, 2]);
+    expect(eval(script)).toEqual([1, 2]); // nosemgrep: javascript.browser.security.eval-detected.eval-detected,javascript_eval_rule-eval-with-expression
   });
 });
