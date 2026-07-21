@@ -853,6 +853,10 @@ function parseExpression(
       return jsimIndexExpression(ctx, expression);
     case "TupleExpression":
       return jsimTupleExpression(ctx, expression);
+    case "ArrayExpression":
+      return jsimArrayExpression(ctx, expression);
+    case "ArrayRepeatExpression":
+      return jsimArrayRepeatExpression(ctx, expression);
     case "RangeExpression":
       return jsimRangeExpression(ctx, expression);
     case "StructExpression":
@@ -1049,6 +1053,29 @@ function jsimTupleExpression(
     elements: tupleExpression.elements.map((elem) =>
       parseExpression(ctx, elem),
     ),
+  };
+}
+
+function jsimArrayExpression(
+  ctx: JsimContext,
+  arrayExpression: Semantics.ArrayExpression,
+): JSIM.Expression {
+  return {
+    kind: "ArrayExpression",
+    elements: arrayExpression.elements.map((elem) =>
+      parseExpression(ctx, elem),
+    ),
+  };
+}
+
+function jsimArrayRepeatExpression(
+  ctx: JsimContext,
+  repeatExpression: Semantics.ArrayRepeatExpression,
+): JSIM.Expression {
+  return {
+    kind: "ArrayRepeatExpression",
+    value: parseExpression(ctx, repeatExpression.value),
+    count: repeatExpression.count,
   };
 }
 

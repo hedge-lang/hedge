@@ -73,6 +73,8 @@ type PrecKey =
   | "ArrowFunctionExpression"
   | "IndexExpression"
   | "TupleExpression"
+  | "ArrayExpression"
+  | "ArrayRepeatExpression"
   | "RangeExpression"
   | "StructExpression"
   | "RefCellExpression"
@@ -255,6 +257,10 @@ function emitExpression(expression: Expression): string {
       return `${needsAtLeast(expression.object, "IndexExpression")}[${emitExpression(expression.index)}]`;
     case "TupleExpression":
       return `[${expression.elements.map(emitExpression).join(", ")}]`;
+    case "ArrayExpression":
+      return `[${expression.elements.map(emitExpression).join(", ")}]`;
+    case "ArrayRepeatExpression":
+      return `new Array(${String(expression.count)}).fill(${emitExpression(expression.value)})`;
     case "StructExpression": {
       const fields = expression.fields.map((f) =>
         f.kind === "SpreadExpression"

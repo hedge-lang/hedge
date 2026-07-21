@@ -74,9 +74,22 @@ const TYPE_CAPABILITIES: ReadonlyMap<
   ]),
 ]);
 
+/**
+ * `[T; N]` is `Copy` exactly when `T` is - unlike every other entry here,
+ * this can't be a flat `TYPE_CAPABILITIES` row, since the answer depends on
+ * a nested type rather than being fixed per `kind`. (Currently every
+ * `ArrayType` that reaches this function already has a `Copy` element -
+ * `analyzer.ts`'s `validateSlice1Type` rejects a non-`Copy` element type
+ * before constructing one, see #201 - but this stays a real recursive rule
+ * rather than a hard-coded "always copy" entry, so lifting that restriction
+ * later needs no change here.)
+ */
 export function hasCapability(
   type: Semantics.Type,
   cap: TypeCapability,
 ): boolean {
+  if (type.kind === "ArrayType" && cap === "copy") {
+    return hasCapability(type.elementType, "copy");
+  }
   return TYPE_CAPABILITIES.get(type.kind)?.has(cap) ?? false;
 }

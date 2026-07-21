@@ -95,6 +95,8 @@ export type Expression =
   | ArrowFunctionExpression
   | IndexExpression
   | TupleExpression
+  | ArrayExpression
+  | ArrayRepeatExpression
   | RangeExpression
   | StructExpression
   | RefCellExpression;
@@ -257,6 +259,17 @@ interface IndexExpression {
 interface TupleExpression {
   readonly kind: "TupleExpression";
   readonly elements: readonly Expression[];
+}
+
+interface ArrayExpression {
+  readonly kind: "ArrayExpression";
+  readonly elements: readonly Expression[];
+}
+
+interface ArrayRepeatExpression {
+  readonly kind: "ArrayRepeatExpression";
+  readonly value: Expression;
+  readonly count: number;
 }
 
 interface RangeExpression {

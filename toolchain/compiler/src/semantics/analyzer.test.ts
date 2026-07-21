@@ -706,3 +706,249 @@ describe("reference types", (): void => {
     );
   });
 });
+
+describe("array types", (): void => {
+  it("type-checks a [i32; 3] annotation against a matching array literal", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let arr: [i32; 3] = [1, 2, 3];
+        print(arr);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects an array literal whose element count does not match the declared length", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let arr: [i32; 3] = [1, 2];
+        print(arr);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("type mismatch");
+  });
+
+  it("rejects an array literal whose element type does not match the declared element type", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let arr: [i32; 3] = [1, 2, true];
+        print(arr);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("infers [i32; 3] from an array literal with no explicit annotation", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let arr = [1, 2, 3];
+        print(arr);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("type-checks the repeat-form array literal [0; 5]", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let arr = [0; 5];
+        print(arr);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a repeat-form count that is not a literal integer", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let n = 5;
+        let arr = [0; n];
+        print(arr);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("literal integer");
+  });
+
+  it("rejects list-literal elements that do not all share the same type", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let arr = [1, true, "x"];
+        print(arr);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain(
+      "array elements must all have the same type",
+    );
+  });
+
+  it("rejects an empty array literal with no explicit annotation, since the element type can't be inferred", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let arr = [];
+        print(arr);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("infer");
+  });
+
+  it("accepts an empty array literal with an explicit [i32; 0] annotation", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let arr: [i32; 0] = [];
+        print(arr);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("type-checks indexing an array with a literal in-range index", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let arr: [i32; 3] = [1, 2, 3];
+        let x: i32 = arr[0];
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("type-checks indexing an array with a usize-typed variable index", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let arr: [i32; 3] = [1, 2, 3];
+        let i: usize = 1;
+        let x: i32 = arr[i];
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a non-integer array index", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let arr: [i32; 3] = [1, 2, 3];
+        let x = arr[true];
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("usize");
+  });
+
+  it("rejects indexing a non-array type", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let x: i32 = 1;
+        let y = x[0];
+        print(y);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("cannot index");
+  });
+
+  it("accepts a literal index equal to the last valid position (length - 1)", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let arr: [i32; 3] = [1, 2, 3];
+        let x: i32 = arr[2];
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a literal index one past the end (length) as a compile-time out-of-bounds error", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let arr: [i32; 3] = [1, 2, 3];
+        let x: i32 = arr[3];
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("out of bounds");
+  });
+
+  it("rejects a literal negative index as a compile-time error", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let arr: [i32; 3] = [1, 2, 3];
+        let x: i32 = arr[-1];
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("accepts using an array of Copy elements again after copying it into another binding", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let a: [i32; 3] = [1, 2, 3];
+        let b = a;
+        print(a);
+        print(b);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a non-Copy struct element type inferred from an array literal with a not-yet-supported diagnostic", (): void => {
+    const result = diagnose(`
+      struct Boxed { value: i32 }
+      fn main() {
+        let arr = [Boxed { value: 1 }, Boxed { value: 2 }];
+        print(arr);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("Copy");
+  });
+
+  it("rejects a non-Copy struct element type in an explicit array type annotation with a not-yet-supported diagnostic", (): void => {
+    const result = diagnose(`
+      struct Boxed { value: i32 }
+      fn f(arr: [Boxed; 2]) { print(arr); }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("Copy");
+  });
+
+  it("accepts writing through an index on a mut array binding", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let mut arr: [i32; 3] = [1, 2, 3];
+        arr[0] = 99;
+        print(arr);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects writing through an index on a non-mut array binding", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let arr: [i32; 3] = [1, 2, 3];
+        arr[0] = 99;
+        print(arr);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("immutable");
+  });
+});

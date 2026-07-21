@@ -644,6 +644,14 @@ function walkExpression(
         walkExpression(ctx, element, state, scopeStack);
       }
       return;
+    case "ArrayExpression":
+      for (const element of expression.elements) {
+        walkExpression(ctx, element, state, scopeStack);
+      }
+      return;
+    case "ArrayRepeatExpression":
+      walkExpression(ctx, expression.value, state, scopeStack);
+      return;
     case "RangeExpression":
       if (isSome(expression.start)) {
         walkExpression(ctx, expression.start.value, state, scopeStack);
