@@ -1,0 +1,9 @@
+fn main() {
+  let mut arr: [i32; 3] = [1, 2, 3];
+  let i: usize = 0;
+  let j: usize = 1;
+  let a = &mut arr[i];
+  let b = &mut arr[j];
+  print(a);
+  print(b);
+}

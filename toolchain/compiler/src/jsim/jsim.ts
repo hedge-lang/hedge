@@ -830,13 +830,10 @@ function parseExpression(
     case "DereferenceExpression":
       // A shared borrow's referent reads transparently; a `&mut` borrow
       // reads through the cell's `.v` accessor.
-      return isMutableReferenceTyped(expression.operand)
-        ? {
-            kind: "FieldAccessExpression",
-            object: parseExpression(ctx, expression.operand),
-            field: "v",
-          }
-        : parseExpression(ctx, expression.operand);
+      return throughMutableReferenceCell(
+        parseExpression(ctx, expression.operand),
+        expression.operand,
+      );
     case "BinaryExpression":
       return parseBinaryExpression(ctx, expression);
     case "UnaryExpression":
@@ -1047,9 +1044,12 @@ function jsimIndexExpression(
   ctx: JsimContext,
   indexExpression: Semantics.IndexExpression,
 ): JSIM.Expression {
+  const object = parseExpression(ctx, indexExpression.object);
+  // Indexing reaches through a borrow automatically (spec 0005), mirroring
+  // field access.
   return {
     kind: "IndexExpression",
-    object: parseExpression(ctx, indexExpression.object),
+    object: throughMutableReferenceCell(object, indexExpression.object),
     index: parseExpression(ctx, indexExpression.index),
     isArrayIndex: isArrayIndexTarget(indexExpression.object.type),
   };
@@ -1283,6 +1283,21 @@ function isMutableReferenceTyped(expression: Semantics.Expression): boolean {
 }
 
 /**
+ * Applies the `.v` hop needed to read through a `&mut` borrow's cell before
+ * projecting into its referent. No-op unless `semanticExpr`'s type is a
+ * mutable `ReferenceType` - a shared reference's `lowered` form is already
+ * transparent.
+ */
+function throughMutableReferenceCell(
+  lowered: JSIM.Expression,
+  semanticExpr: Semantics.Expression,
+): JSIM.Expression {
+  return isMutableReferenceTyped(semanticExpr)
+    ? { kind: "FieldAccessExpression", object: lowered, field: "v" }
+    : lowered;
+}
+
+/**
  * The analyzer's borrowable-place check ({@link isBorrowablePlace}) guarantees
  * a `&mut` borrow's operand is always some place - a bare local/parameter, or
  * a {@link FieldAccessExpression}/{@link IndexExpression}/{@link DereferenceExpression}
@@ -1306,17 +1321,10 @@ function parseFieldAccessExpression(
   fieldAccessExp: Semantics.FieldAccessExpression,
 ): JSIM.Expression {
   const object = parseExpression(ctx, fieldAccessExp.object);
-  // Field access reaches through a borrow automatically (spec 0005). A
-  // shared borrow's object lowers transparently already; a `&mut` borrow's
-  // object is the getter/setter cell, so an extra `.v` hop is needed to
-  // reach the referent before projecting the field.
-  let referent: JSIM.Expression = object;
-  if (isMutableReferenceTyped(fieldAccessExp.object)) {
-    referent = { kind: "FieldAccessExpression", object, field: "v" };
-  }
+  // Field access reaches through a borrow automatically (spec 0005).
   return {
     kind: "FieldAccessExpression",
-    object: referent,
+    object: throughMutableReferenceCell(object, fieldAccessExp.object),
     field: fieldAccessExp.field.text,
   };
 }

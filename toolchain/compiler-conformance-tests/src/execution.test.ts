@@ -909,5 +909,58 @@ describe("execution tests", (): void => {
         );
       },
     );
+
+    it("writes through a &mut reference to a dynamic array index without crashing", (): void => {
+      assertRunsTo(
+        `
+        fn main() {
+          let mut arr: [i32; 3] = [1, 2, 3];
+          let i: usize = 1;
+          let r = &mut arr[i];
+          *r = 99;
+          print(arr[0]);
+          print(arr[1]);
+          print(arr[2]);
+        }
+      `,
+        ["1", "99", "3"],
+      );
+    });
+
+    it("keeps a &mut arr[i] reference pinned to the index's value at creation time, even if the index variable changes afterward", (): void => {
+      assertRunsTo(
+        `
+        fn main() {
+          let mut arr: [i32; 3] = [1, 2, 3];
+          let mut i: usize = 0;
+          let r = &mut arr[i];
+          i = 2;
+          *r = 99;
+          print(arr[0]);
+          print(arr[2]);
+        }
+      `,
+        ["99", "3"],
+      );
+    });
+
+    it("mutates through an index borrowed from an array reached via an existing &mut reference", (): void => {
+      // `r[0]` first reaches through `r`'s own reference cell via `.v`, then
+      // the borrowed index place gets its own capturing cell.
+      assertRunsTo(
+        `
+        fn bump(r: &mut [i32; 3]) {
+          let cell = &mut r[0];
+          *cell = *cell + 1;
+        }
+        fn main() {
+          let mut arr: [i32; 3] = [1, 2, 3];
+          bump(&mut arr);
+          print(arr[0]);
+        }
+      `,
+        ["2"],
+      );
+    });
   });
 });

@@ -762,6 +762,28 @@ describe("mutable reference cell codegen", (): void => {
     const code = gen("fn _(r: &mut i32) { *r += 1; }");
     expect(stmts(code)).toBe("r.v += 1;");
   });
+
+  it("lowers r[0] to index through r.v when r is a &mut array reference", (): void => {
+    const code = gen("fn _(r: &mut [i32; 3]) { print(r[0]); }");
+    expect(stmts(code)).toBe(
+      'print(((_arr, _i) => _i < 0 || _i >= _arr.length ? (() => { throw new RangeError("index out of bounds"); })() : (_arr[_i]))(r.v, 0));',
+    );
+  });
+
+  it("lowers &mut arr[i] to a cell that captures the array and index once, bounds-checked once, instead of re-evaluating the place on every access", (): void => {
+    // The array-disposer helper is a second top-level function, breaking
+    // stmts()'s single-function assumption - see the array-literal codegen
+    // tests above for why this uses js()/.toContain() instead.
+    const code = js(
+      gen(
+        "fn _() { let mut arr: [i32; 3] = [1, 2, 3]; let i: usize = 0; let r = &mut arr[i]; print(r); }",
+      ),
+    );
+    assert(code !== null, "Expected JS output");
+    expect(code).toContain(
+      'const r = ((_arr, _i) => { if (_i < 0 || _i >= _arr.length) { throw new RangeError("index out of bounds"); } return { get v() { return _arr[_i]; }, set v(nv) { _arr[_i] = nv; } }; })(arr, i);',
+    );
+  });
 });
 
 describe("source maps", (): void => {

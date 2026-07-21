@@ -232,12 +232,16 @@ const ARRAY_DISPOSE_HELPER = `function ${ARRAY_DISPOSE_HELPER_NAME}(arr) {
  * read, or a full assignment like `_arr[_i] += v`) so both call sites share
  * one bounds check instead of duplicating the read/write shapes twice each.
  */
+const ARRAY_INDEX_OUT_OF_RANGE_CONDITION = "_i < 0 || _i >= _arr.length";
+const ARRAY_INDEX_OUT_OF_RANGE_THROW =
+  'throw new RangeError("index out of bounds")';
+
 function indexBoundsCheck(
   object: string,
   index: string,
   accessExpr: string,
 ): string {
-  return `((_arr, _i) => _i < 0 || _i >= _arr.length ? (() => { throw new RangeError("index out of bounds"); })() : (${accessExpr}))(${object}, ${index})`;
+  return `((_arr, _i) => ${ARRAY_INDEX_OUT_OF_RANGE_CONDITION} ? (() => { ${ARRAY_INDEX_OUT_OF_RANGE_THROW}; })() : (${accessExpr}))(${object}, ${index})`;
 }
 
 /**
@@ -379,8 +383,19 @@ function emitExpression(expression: Expression): string {
       return `({${[...fields, "[Symbol.dispose]() {}"].join(", ")}})`;
     }
     case "RefCellExpression": {
-      const place = emitExpression(expression.place);
-      return `({ get v() { return ${place}; }, set v(nv) { ${place} = nv; } })`;
+      const place = expression.place;
+      // A dynamic array-index place's emitted text is a bounds-check call
+      // expression, not an assignable target, so reusing it as
+      // `${place} = nv` crashes. Capturing `arr`/`i` once in a wrapping IIFE
+      // fixes that and pins the reference to the index's value at borrow
+      // time, instead of re-evaluating `i` on every access.
+      if (place.kind === "IndexExpression" && place.isArrayIndex) {
+        const object = emitExpression(place.object);
+        const index = emitExpression(place.index);
+        return `((_arr, _i) => { if (${ARRAY_INDEX_OUT_OF_RANGE_CONDITION}) { ${ARRAY_INDEX_OUT_OF_RANGE_THROW}; } return { get v() { return _arr[_i]; }, set v(nv) { _arr[_i] = nv; } }; })(${object}, ${index})`;
+      }
+      const placeText = emitExpression(place);
+      return `({ get v() { return ${placeText}; }, set v(nv) { ${placeText} = nv; } })`;
     }
     case "RangeExpression": {
       const parts = [
