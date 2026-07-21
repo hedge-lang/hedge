@@ -583,7 +583,7 @@ describe("reference types", (): void => {
 
   it("accepts a &mut expression operator borrowing an index place, with no diagnostics", (): void => {
     const result = diagnose(
-      "fn f(mut x: i32) { let r = &mut x[0]; print(r); }",
+      "fn f(mut x: [i32; 3]) { let r = &mut x[0]; print(r); }",
     );
     expect(result.diagnostics).toEqual([]);
   });
