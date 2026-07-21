@@ -1283,22 +1283,22 @@ function isMutableReferenceTyped(expression: Semantics.Expression): boolean {
 }
 
 /**
- * The analyzer's bare-local-place restriction (`isBareLocalPlace`) guarantees
- * a `&mut` borrow's operand is always a single-segment `PathExpression` by
- * the time a program reaches JSIM lowering (any other shape is a compile
- * error, so `toJsim` never runs on it) - so lowering the operand always
- * yields a bare `Identifier`, whose emitted name the cell closes over.
+ * The analyzer's borrowable-place check ({@link isBorrowablePlace}) guarantees
+ * a `&mut` borrow's operand is always some place - a bare local/parameter, or
+ * a {@link FieldAccessExpression}/{@link IndexExpression}/{@link DereferenceExpression}
+ * projection chain grounded in one - by the time a program reaches
+ * JSIM lowering. Lowering the operand the same way an ordinary read of that
+ * place would ({@link parseExpression}, already `.v`-hop-aware via
+ * {@link parseFieldAccessExpression}/{@link parseDereferenceExpression})
+ * gives the cell's own get/set body: closing over a bare local's
+ * {@link Identifier} is the degenerate one-node case of the same mechanism.
  */
 function parseMutableReferenceExpression(
   ctx: JsimContext,
   expression: Semantics.ReferenceExpression,
 ): JSIM.Expression {
-  const lowered = parseExpression(ctx, expression.operand);
-  assert(
-    lowered.kind === "Identifier",
-    `Expected a &mut operand to lower to a bare identifier, got "${lowered.kind}"`,
-  );
-  return { kind: "RefCellExpression", name: lowered.value };
+  const place = parseExpression(ctx, expression.operand);
+  return { kind: "RefCellExpression", place };
 }
 
 function parseFieldAccessExpression(

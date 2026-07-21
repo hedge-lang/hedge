@@ -35,7 +35,187 @@ import {
 import { computeLiveness, type Liveness } from "./liveness.js";
 
 /**
- * A borrow introduced by `let r = &[mut] base;`, tagged with the CFG block
+ * A single step in a place's projection chain, applied outward from the
+ * base: `(*r).field` is `r`'s base with projections
+ * `[Deref, Field("field")]`. `Index` deliberately carries no expression - conflict-checking
+ * never needs to compare two index values (dynamic indices are never
+ * statically provable distinct; see `placesOverlap`), and the borrow-check
+ * pass has no use for the index expression's own runtime value.
+ */
+type Projection =
+  | { readonly kind: "Field"; readonly name: string }
+  | { readonly kind: "Index" }
+  | { readonly kind: "Deref" };
+
+/** A place's base identifier plus its projection chain, independent of whether the base resolved to a tracked `BindingId` - the shape `placeOf` produces and `describePlace`/`placesOverlap` consume. */
+interface PlacePath {
+  readonly baseName: string;
+  readonly projections: readonly Projection[];
+}
+
+/** A `PlacePath` whose base has also been resolved to the `BindingId` it refers to at the point of borrow (see `resolveBorrowBases`), or `undefined` if it didn't resolve to a tracked local binding. */
+interface Place extends PlacePath {
+  readonly baseId: BindingId | undefined;
+}
+
+/**
+ * Flatten a borrow operand's expression tree into its base identifier and
+ * projection chain, or `undefined` if `expr` isn't a place expression at
+ * all (mirrors `semantics/analyzer.ts`'s `isBorrowablePlace`, which already
+ * guarantees every `&`/`&mut` operand reaching this pass is one). Projections
+ * are discovered outer-to-inner while descending toward the base, so they're
+ * collected in reverse application order and reversed once before returning.
+ */
+function placeOf(expr: Semantics.Expression): PlacePath | undefined {
+  const projections: Projection[] = [];
+  let current = expr;
+  for (;;) {
+    switch (current.kind) {
+      case "PathExpression": {
+        const { segments } = current.path;
+        const baseName = segments.length === 1 ? segments[0] : undefined;
+        if (baseName === undefined) {
+          return undefined;
+        }
+        projections.reverse();
+        return { baseName, projections };
+      }
+      case "FieldAccessExpression":
+        projections.push({ kind: "Field", name: current.field.text });
+        current = current.object;
+        continue;
+      case "IndexExpression":
+        projections.push({ kind: "Index" });
+        current = current.object;
+        continue;
+      case "DereferenceExpression":
+        projections.push({ kind: "Deref" });
+        current = current.operand;
+        continue;
+      default:
+        return undefined;
+    }
+  }
+}
+
+/** Render a place path as diagnostic-facing source text, e.g. `s.a.b`, `*r`, `(*r).field`. Field/Index access on a `Deref`-rooted place needs parens (`*r.field` would otherwise mean `*(r.field)`); `Deref` itself never does, since unary `*` already binds looser than a following projection in Rust-like precedence. */
+function describePlace(path: PlacePath): string {
+  let rendered = path.baseName;
+  for (const projection of path.projections) {
+    switch (projection.kind) {
+      case "Field":
+        rendered = rendered.startsWith("*")
+          ? `(${rendered}).${projection.name}`
+          : `${rendered}.${projection.name}`;
+        break;
+      case "Index":
+        rendered = rendered.startsWith("*")
+          ? `(${rendered})[_]`
+          : `${rendered}[_]`;
+        break;
+      case "Deref":
+        rendered = `*${rendered}`;
+        break;
+      default:
+        assertNever(projection);
+    }
+  }
+  return rendered;
+}
+
+/**
+ * Whether two places' projection chains can alias. Diverging at a `Field`
+ * with different names proves disjointness (spec §0013 "Borrowing fields");
+ * two `Index` projections at the same depth always overlap, since a dynamic
+ * index is never statically provable distinct; `Deref` is transparent and
+ * never itself introduces disjointness. One chain running out before the
+ * other (a prefix relationship, including the equal-length case) means one
+ * place contains or is exactly the other, which always overlaps.
+ */
+function placesOverlap(a: PlacePath, b: PlacePath): boolean {
+  const len = Math.min(a.projections.length, b.projections.length);
+  for (let i = 0; i < len; i += 1) {
+    const pa = a.projections[i];
+    const pb = b.projections[i];
+    if (pa === undefined || pb === undefined) {
+      break;
+    }
+    if (pa.kind === "Field" && pb.kind === "Field") {
+      if (pa.name !== pb.name) {
+        return false;
+      }
+      continue;
+    }
+    if (pa.kind === "Index" && pb.kind === "Index") {
+      return true;
+    }
+    if (pa.kind === "Deref" && pb.kind === "Deref") {
+      continue;
+    }
+    // Two places sharing the same base and both well-typed can't actually
+    // diverge in projection *kind* at the same depth (the base's own type
+    // fixes what kind of projection is even well-typed there) - unreached
+    // in practice, but conservatively overlapping rather than silently
+    // disjoint if it ever were.
+    return true;
+  }
+  return true;
+}
+
+/** Whether two borrows share the same root binding - by resolved `BindingId` when both resolved, else by base name (the fallback for an unresolved base). */
+function samePlaceBase(a: Place, b: Place): boolean {
+  return a.baseId !== undefined && b.baseId !== undefined
+    ? a.baseId === b.baseId
+    : a.baseName === b.baseName;
+}
+
+/**
+ * Whether a `&mut` borrow's operand is actually writable, mirroring
+ * `semantics/analyzer.ts`'s `placeMutabilityViolation` (used for assignment
+ * lhs) - taking `&mut` of a place and assigning through it require the same
+ * capability, so the recursion shape is identical: a non-root place whose
+ * own type is a reference decides write permission from that reference's
+ * own mutability from that point on, regardless of what contains it
+ * (`&mut (*r).x` is fine when `r: &mut T`, even if `r` itself isn't `let
+ * mut` - the reference's own mutability governs, not the local variable
+ * holding it). Reaching the root without ever crossing a reference type
+ * defers to the existing root-binding-mut check (`checkCapabilities`'s
+ * `root-mut-required` case), unchanged from before this ticket.
+ */
+type CapabilityDecision =
+  | { readonly kind: "allowed" }
+  | { readonly kind: "blocked"; readonly through: string }
+  | { readonly kind: "root-mut-required" };
+
+function capabilityDecision(
+  expr: Semantics.Expression,
+  isRoot: boolean,
+): CapabilityDecision {
+  const exprType = expr.type;
+  if (!isRoot && exprType.kind === "ReferenceType") {
+    return exprType.mutable
+      ? { kind: "allowed" }
+      : {
+          kind: "blocked",
+          through: describePlace(
+            placeOf(expr) ?? { baseName: "_", projections: [] },
+          ),
+        };
+  }
+  switch (expr.kind) {
+    case "FieldAccessExpression":
+      return capabilityDecision(expr.object, false);
+    case "IndexExpression":
+      return capabilityDecision(expr.object, false);
+    case "DereferenceExpression":
+      return capabilityDecision(expr.operand, false);
+    default:
+      return { kind: "root-mut-required" };
+  }
+}
+
+/**
+ * A borrow introduced by `let r = &[mut] place;`, tagged with the CFG block
  * and intra-block statement index it was declared at (see `collectBorrowsFromGraph`).
  */
 interface Borrow {
@@ -43,10 +223,10 @@ interface Borrow {
   readonly name: string;
   /** The borrowing binding's own `BindingId` (its declaration's tokenId). */
   readonly bindingId: BindingId;
-  /** The borrowed variable's name, for diagnostic messages. */
-  readonly base: string;
-  /** The specific declaration `base` resolves to at this point (see `resolveBorrowBases`), or `undefined` if it didn't resolve to a tracked local binding. */
-  readonly baseId: BindingId | undefined;
+  /** The borrowed place, for conflict-checking and diagnostic messages. */
+  readonly place: Place;
+  /** Whether this borrow's own write-capability is satisfied (see `capabilityDecision`); only consulted for a `mutable` borrow. */
+  readonly capability: CapabilityDecision;
   readonly mutable: boolean;
   readonly blockId: number;
   /** Index into `block.statements` where this borrow's own `let` lands. */
@@ -83,29 +263,63 @@ function registerScopedName(
   frame.set(name, id);
 }
 
-function recordBorrowBase(
+/**
+ * Reference types are `Copy` (root CLAUDE.md's settled decision), so
+ * `let s = r;` duplicates the pointer, not the referent - `s` and `r` are two
+ * independently-named bindings that alias the exact same underlying place
+ * once dereferenced. `aliases` maps a binding straight to the earliest
+ * binding in its own copy-chain (never through the copied-from binding's own
+ * *borrow*, only through further plain-copy `let`s), so `&mut *r` and
+ * `&mut *s` resolve to the same base and can be compared for conflict -
+ * without also making a borrow's own base (e.g. `x` in `let r = &mut x;`)
+ * comparable against a reborrow taken through it, which would wrongly flag
+ * `let r = &mut x; let a = &mut *r;` as self-conflicting at the exact
+ * statement where `r`'s own extent ends and `a`'s begins.
+ */
+function recordAlias(
   statement: Semantics.LetStatement,
   scopeStack: ScopeStack,
-  resolved: Map<Semantics.LetStatement, BindingId>,
+  newId: BindingId,
+  aliases: Map<BindingId, BindingId>,
 ): void {
   if (!isSome(statement.initializer)) {
     return;
   }
   const init = statement.initializer.value;
-  if (
-    init.kind !== "ReferenceExpression" ||
-    init.operand.kind !== "PathExpression"
-  ) {
+  if (init.kind !== "PathExpression" || init.type.kind !== "ReferenceType") {
     return;
   }
-  const { segments } = init.operand.path;
+  const { segments } = init.path;
   const name = segments.length === 1 ? segments[0] : undefined;
   if (name === undefined) {
     return;
   }
   const id = resolveScopedName(scopeStack, name);
   if (id !== undefined) {
-    resolved.set(statement, id);
+    aliases.set(newId, aliases.get(id) ?? id);
+  }
+}
+
+function recordBorrowBase(
+  statement: Semantics.LetStatement,
+  scopeStack: ScopeStack,
+  resolved: Map<Semantics.LetStatement, BindingId>,
+  aliases: ReadonlyMap<BindingId, BindingId>,
+): void {
+  if (!isSome(statement.initializer)) {
+    return;
+  }
+  const init = statement.initializer.value;
+  if (init.kind !== "ReferenceExpression") {
+    return;
+  }
+  const place = placeOf(init.operand);
+  if (place === undefined) {
+    return;
+  }
+  const id = resolveScopedName(scopeStack, place.baseName);
+  if (id !== undefined) {
+    resolved.set(statement, aliases.get(id) ?? id);
   }
 }
 
@@ -113,12 +327,14 @@ function walkStatementForBorrowBases(
   statement: Semantics.Statement,
   scopeStack: ScopeStack,
   resolved: Map<Semantics.LetStatement, BindingId>,
+  aliases: Map<BindingId, BindingId>,
 ): void {
   switch (statement.kind) {
     case "LetStatement": {
-      recordBorrowBase(statement, scopeStack, resolved);
+      recordBorrowBase(statement, scopeStack, resolved, aliases);
       const declaration = declarationOf(statement.pattern, statement.mutable);
       if (isSome(declaration)) {
+        recordAlias(statement, scopeStack, declaration.value.id, aliases);
         registerScopedName(
           scopeStack,
           declaration.value.name,
@@ -132,6 +348,7 @@ function walkStatementForBorrowBases(
         statement.expression,
         scopeStack,
         resolved,
+        aliases,
       );
       return;
     case "Function":
@@ -155,21 +372,32 @@ function walkStatementPositionExpression(
   expression: Semantics.Expression,
   scopeStack: ScopeStack,
   resolved: Map<Semantics.LetStatement, BindingId>,
+  aliases: Map<BindingId, BindingId>,
 ): void {
   if (expression.kind === "IfExpression") {
-    walkScopeForBorrowBases(expression.thenBranch, scopeStack, resolved);
+    walkScopeForBorrowBases(
+      expression.thenBranch,
+      scopeStack,
+      resolved,
+      aliases,
+    );
     if (isSome(expression.elseBranch)) {
       const elseBranch = expression.elseBranch.value;
       if (elseBranch.kind === "Block") {
-        walkScopeForBorrowBases(elseBranch, scopeStack, resolved);
+        walkScopeForBorrowBases(elseBranch, scopeStack, resolved, aliases);
       } else {
-        walkStatementPositionExpression(elseBranch, scopeStack, resolved);
+        walkStatementPositionExpression(
+          elseBranch,
+          scopeStack,
+          resolved,
+          aliases,
+        );
       }
     }
     return;
   }
   if (expression.kind === "Block") {
-    walkScopeForBorrowBases(expression, scopeStack, resolved);
+    walkScopeForBorrowBases(expression, scopeStack, resolved, aliases);
   }
 }
 
@@ -177,10 +405,11 @@ function walkScopeForBorrowBases(
   scope: Semantics.Block,
   scopeStack: ScopeStack,
   resolved: Map<Semantics.LetStatement, BindingId>,
+  aliases: Map<BindingId, BindingId>,
 ): void {
   scopeStack.push(new Map<string, BindingId>());
   for (const statement of scope.statements) {
-    walkStatementForBorrowBases(statement, scopeStack, resolved);
+    walkStatementForBorrowBases(statement, scopeStack, resolved, aliases);
   }
   scopeStack.pop();
 }
@@ -189,12 +418,16 @@ function walkScopeForBorrowBases(
  * Resolve every borrow's base `PathExpression` to the `BindingId` it refers
  * to at that point, keyed by the borrow's own `LetStatement` (object
  * identity - `buildControlFlowGraph` never clones nodes, so the same
- * statement objects appear in `graph.blocks[].statements`).
+ * statement objects appear in `graph.blocks[].statements`). Reference-typed
+ * plain-copy aliases (see `recordAlias`) are resolved internally and never
+ * exposed - callers only ever see the canonical `BindingId` a borrow's base
+ * ultimately names.
  */
 function resolveBorrowBases(
   fn: Semantics.FunctionDecl,
 ): ReadonlyMap<Semantics.LetStatement, BindingId> {
   const resolved = new Map<Semantics.LetStatement, BindingId>();
+  const aliases = new Map<BindingId, BindingId>();
   const scopeStack: ScopeStack = [new Map<string, BindingId>()];
   for (const param of fn.params) {
     const declaration = declarationOf(param.pattern, param.mutable);
@@ -207,7 +440,7 @@ function resolveBorrowBases(
     }
   }
   for (const statement of fn.body.statements) {
-    walkStatementForBorrowBases(statement, scopeStack, resolved);
+    walkStatementForBorrowBases(statement, scopeStack, resolved, aliases);
   }
   return resolved;
 }
@@ -579,20 +812,15 @@ function collectBorrowsFromGraph(
       if (init.kind !== "ReferenceExpression") {
         continue;
       }
-      const { operand } = init;
-      if (operand.kind !== "PathExpression") {
-        continue;
-      }
-      const { segments } = operand.path;
-      const base = segments.length === 1 ? segments[0] : undefined;
-      if (base === undefined) {
+      const path = placeOf(init.operand);
+      if (path === undefined) {
         continue;
       }
       borrows.push({
         name: declaration.value.name,
         bindingId: declaration.value.id,
-        base,
-        baseId: baseIds.get(statement),
+        place: { ...path, baseId: baseIds.get(statement) },
+        capability: capabilityDecision(init.operand, true),
         mutable: init.mutable,
         blockId: block.id,
         declIndex: index,
@@ -640,16 +868,33 @@ function checkCapabilities(
   tokens: readonly Token[],
 ): void {
   for (const borrow of borrows) {
-    if (
-      borrow.mutable &&
-      borrow.baseId !== undefined &&
-      capabilities.get(borrow.baseId) === false
-    ) {
-      diagnostics.push({
-        severity: "error",
-        message: `Cannot borrow "${borrow.base}" as &mut because it is not declared mut.`,
-        span: spanOf(tokens, borrow.tokenId),
-      });
+    if (!borrow.mutable) {
+      continue;
+    }
+    switch (borrow.capability.kind) {
+      case "allowed":
+        continue;
+      case "blocked":
+        diagnostics.push({
+          severity: "error",
+          message: `cannot borrow \`${describePlace(borrow.place)}\` as mutable because \`${borrow.capability.through}\` is a shared reference.`,
+          span: spanOf(tokens, borrow.tokenId),
+        });
+        continue;
+      case "root-mut-required":
+        if (
+          borrow.place.baseId !== undefined &&
+          capabilities.get(borrow.place.baseId) === false
+        ) {
+          diagnostics.push({
+            severity: "error",
+            message: `Cannot borrow "${borrow.place.baseName}" as &mut because it is not declared mut.`,
+            span: spanOf(tokens, borrow.tokenId),
+          });
+        }
+        continue;
+      default:
+        assertNever(borrow.capability);
     }
   }
 }
@@ -675,11 +920,14 @@ function checkExclusivity(
     }
     for (let j = i + 1; j < borrows.length; j += 1) {
       const b = borrows[j];
-      if (b === undefined || a.base !== b.base) {
+      if (b === undefined || !samePlaceBase(a.place, b.place)) {
         continue;
       }
       if (!a.mutable && !b.mutable) {
         continue; // any number of shared borrows may coexist
+      }
+      if (!placesOverlap(a.place, b.place)) {
+        continue; // statically distinct places (e.g. disjoint fields) never conflict
       }
       if (!borrowsOverlap(a, b, blockById, liveness, reachSets)) {
         continue; // the borrows are not simultaneously live
@@ -687,7 +935,7 @@ function checkExclusivity(
       diagnostics.push({
         severity: "error",
         message:
-          `Conflicting borrows of "${a.base}": ${describeBorrow(a)} at offset ${String(offsetOf(tokens, a.tokenId))} ` +
+          `Conflicting borrows of "${describePlace(a.place)}": ${describeBorrow(a)} at offset ${String(offsetOf(tokens, a.tokenId))} ` +
           `and ${describeBorrow(b)} at offset ${String(offsetOf(tokens, b.tokenId))} are both live.`,
         span: spanOf(tokens, b.tokenId),
       });

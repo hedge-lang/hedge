@@ -302,14 +302,20 @@ interface StructExpression {
 
 /**
  * A `&mut` reference's runtime representation: a getter/setter accessor
- * object closing over `name` (the captured local's own emitted binding),
- * not a data cell - `ref.v` reads/writes route through the closure, so
- * mutating through the reference is observed by every other alias of the
- * same local without the local's own storage ever being boxed or rewritten.
+ * object closing over `place` (the already-lowered read-form of the
+ * borrowed place - a bare {@link Identifier} for a bare local/parameter, or a
+ * {@link FieldAccessExpression}/{@link IndexExpression}/`.v`-hopped chain for a
+ * projected place), not a data cell - `ref.v` reads/writes route
+ * through the closure, so mutating through the reference is observed by
+ * every other alias of the same place without the place's own storage ever
+ * being boxed or rewritten. `place` is emitted twice (once for the getter's
+ * return, once for the setter's assignment target) since it's the same
+ * source text either way - see `codegen/generator.ts`'s
+ * {@link RefCellExpression} case.
  */
 interface RefCellExpression {
   readonly kind: "RefCellExpression";
-  readonly name: string;
+  readonly place: Expression;
 }
 
 type StructExpressionField = StructField | SpreadExpression;

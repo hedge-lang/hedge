@@ -1318,20 +1318,31 @@ function analyzeExpression(
 }
 
 /**
- * A borrow's operand is in scope for cell lowering only when it is a bare
- * local binding or parameter name - a single-segment `PathExpression`. A
- * field/index place (`&mut user.field`, `&mut arr[0]`) isn't resolved to a
- * `BindingId` by `borrowck.ts`'s `resolveBorrowBases` yet, so accepting it
- * here would let overlapping/conflicting place borrows compile with zero
- * exclusivity checking - a soundness gap, not just a missing optimization.
- * Place-projection borrow checking is issue #25's job.
+ * A borrow's operand is a legal place when it is a projection chain - any
+ * combination of `FieldAccessExpression`/`IndexExpression`/
+ * `DereferenceExpression` - grounded at its root in a bare local binding or
+ * parameter name (a single-segment, non-absolute `PathExpression`). This
+ * widens the original bare-local-only restriction on a borrow's operand;
+ * `ownership/borrowck.ts`'s `resolveBorrowBases`/place model widens in
+ * lockstep to resolve the same root to a `BindingId` and walk the same
+ * projection chain for conflict-checking and write-capability checking, so
+ * accepting a wider set of operands here never outpaces what `borrowck.ts`
+ * can actually reason about - the soundness gap this guard originally
+ * existed to prevent.
  */
-function isBareLocalPlace(expr: Parser.Expression): boolean {
-  return (
-    expr.kind === "PathExpression" &&
-    expr.path.segments.length === 1 &&
-    !expr.path.absolute
-  );
+function isBorrowablePlace(expr: Parser.Expression): boolean {
+  switch (expr.kind) {
+    case "PathExpression":
+      return expr.path.segments.length === 1 && !expr.path.absolute;
+    case "FieldAccessExpression":
+      return isBorrowablePlace(expr.object);
+    case "IndexExpression":
+      return isBorrowablePlace(expr.object);
+    case "DereferenceExpression":
+      return isBorrowablePlace(expr.operand);
+    default:
+      return false;
+  }
 }
 
 function analyzeReferenceExpression(
@@ -1340,10 +1351,10 @@ function analyzeReferenceExpression(
 ): Semantics.ReferenceExpression {
   const operand = analyzeExpression(ctx, expression.operand);
 
-  if (!isBareLocalPlace(expression.operand)) {
+  if (!isBorrowablePlace(expression.operand)) {
     emitError(
       ctx,
-      "only a local binding or parameter can be borrowed directly",
+      "only a local binding, a parameter, or a field, index, or dereference of one can be borrowed directly",
       expression.tokenId,
     );
     return {
