@@ -10,11 +10,10 @@ import { checkBorrows } from "./borrowck.js";
 
 /**
  * Unlike `testing/analyze-source.js`'s `analyzeSource`, this does not assert
- * zero analysis errors: some fixtures here index into a struct as a
- * placeholder for a real indexable type (Vec/array types aren't implemented
- * yet, ROADMAP Slice 5), which the analyzer's own Slice-1 `IndexExpression`
- * stub silently accepts. `checkBorrows`'s own returned diagnostics are
- * independent of whatever `analyze` itself did or didn't flag.
+ * zero analysis errors - `checkBorrows` only needs the `Semantics.Program`'s
+ * places to be resolvable, so its own returned diagnostics are meaningful
+ * regardless of whatever else `analyze` did or didn't flag on the same
+ * fixture.
  */
 function check(source: string): readonly Diagnostic[] {
   const { tokens } = tokenize(source);
@@ -505,8 +504,7 @@ describe("place-projection borrows", (): void => {
 
   it("rejects two overlapping mutable borrows of the same dynamic index, since dynamic indices are never provably distinct", (): void => {
     const diagnostics = check(`
-      struct Arr { placeholder: i32 }
-      fn f(mut arr: Arr) {
+      fn f(mut arr: [i32; 3]) {
         let a = &mut arr[0];
         let b = &mut arr[0];
         print(a);
@@ -519,8 +517,7 @@ describe("place-projection borrows", (): void => {
 
   it("rejects two overlapping mutable borrows of statically distinct dynamic indices, since indices are never provably distinct", (): void => {
     const diagnostics = check(`
-      struct Arr { placeholder: i32 }
-      fn f(mut arr: Arr) {
+      fn f(mut arr: [i32; 3]) {
         let a = &mut arr[0];
         let b = &mut arr[1];
         print(a);
@@ -533,8 +530,7 @@ describe("place-projection borrows", (): void => {
 
   it("accepts any number of shared borrows of the same dynamic index", (): void => {
     const diagnostics = check(`
-      struct Arr { placeholder: i32 }
-      fn f(mut arr: Arr) {
+      fn f(mut arr: [i32; 3]) {
         let a = &arr[0];
         let b = &arr[0];
         print(a);
@@ -547,10 +543,26 @@ describe("place-projection borrows", (): void => {
   it("rejects overlapping mutable borrows of the same field reached through a dynamic index, since the shared Index prefix always overlaps regardless of further divergence", (): void => {
     const diagnostics = check(`
       struct Elem { field: i32 }
-      struct Arr { placeholder: Elem }
-      fn f(mut arr: Arr) {
+      fn f(mut arr: [Elem; 2]) {
         let a = &mut arr[0].field;
         let b = &mut arr[1].field;
+        print(a);
+        print(b);
+      }
+    `);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+  });
+
+  it("rejects overlapping mutable borrows of the same array field reached through a struct, mixing field-then-index projections", (): void => {
+    // The opposite mixing order from the test above (Index-then-Field,
+    // `arr[0].field`) - this is Field-then-Index (`s.arr[0]`), closing the
+    // other direction of AC5's "mixed field/index projections" coverage.
+    const diagnostics = check(`
+      struct Holder { arr: [i32; 3] }
+      fn f(mut s: Holder) {
+        let a = &mut s.arr[0];
+        let b = &mut s.arr[0];
         print(a);
         print(b);
       }
