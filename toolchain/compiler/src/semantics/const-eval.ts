@@ -37,7 +37,15 @@ export function intLiteralValue(literal: {
 export type IntWidth =
   | { readonly kind: "signed"; readonly bits: 8 | 16 | 32 }
   | { readonly kind: "unsigned"; readonly bits: 8 | 16 | 32 }
-  | { readonly kind: "bigint"; readonly signed: boolean };
+  | { readonly kind: "bigint"; readonly signed: boolean }
+  /**
+   * No wrap at all - used for folding an array length/repeat-count
+   * (`analyzer.ts`'s `foldArrayLength`), which has no fixed runtime width
+   * of its own and must never silently wrap an oversized value down into a
+   * deceptively "valid" small one; the caller range-checks the exact
+   * result itself instead.
+   */
+  | { readonly kind: "unbounded" };
 
 export type FoldWidth = IntWidth | { readonly kind: "float"; readonly bits: 32 | 64 };
 
@@ -52,6 +60,8 @@ function wrapInt(value: bigint, width: IntWidth): bigint {
       return width.signed
         ? BigInt.asIntN(64, value)
         : BigInt.asUintN(64, value);
+    case "unbounded":
+      return value;
     default:
       return assertNever(width, `Unexpected int width: ${JSON.stringify(width)}`);
   }

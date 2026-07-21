@@ -794,6 +794,81 @@ describe("toJsim", () => {
   });
 });
 
+describe("const and static lowering", () => {
+  it("erases a non-pub top-level const entirely", () => {
+    const program = jsimSource("const N: i32 = 3;");
+    expect(program.items).toEqual([]);
+  });
+
+  it("lowers a pub top-level const to a ConstDecl carrying both its .d.ts type and its exported JS value", () => {
+    const program = jsimSource("pub const N: i32 = 3;");
+    expect(program.items).toMatchObject([
+      {
+        kind: "ConstDecl",
+        name: "N",
+        type: some({ kind: "PrimitiveType", value: "number" }),
+        value: { kind: "NumberLiteral", value: "3" },
+      },
+    ]);
+  });
+
+  it("erases a function-local const to an empty block statement, and inlines its trailing-expression reference", () => {
+    const program = jsimSource("fn f() -> i32 { const N: i32 = 3; N }");
+    const fn = program.items[0];
+    assert(fn?.kind === "FunctionDecl", "expected a FunctionDecl item");
+    expect(fn.body).toMatchObject([
+      { kind: "BlockStatement", body: [] },
+      { kind: "ReturnStatement", value: some({ kind: "NumberLiteral", value: "3" }) },
+    ]);
+  });
+
+  it("inlines a const's folded value at its reference site, not a name lookup", () => {
+    const program = jsimSource("const MAX: i32 = 100; fn f() -> i32 { MAX }");
+    const fn = program.items.find((item) => item.kind === "FunctionDecl");
+    assert(fn?.kind === "FunctionDecl", "expected a FunctionDecl item");
+    expect(fn.body).toMatchObject([
+      { kind: "ReturnStatement", value: some({ kind: "NumberLiteral", value: "100" }) },
+    ]);
+  });
+
+  it("lowers a static to a StaticDecl with a mangled backing name", () => {
+    const program = jsimSource("static COUNT: i32 = 0;");
+    expect(program.items).toMatchObject([
+      {
+        kind: "StaticDecl",
+        name: "COUNT",
+        backingName: "__hedgeStatic_COUNT",
+        init: { kind: "NumberLiteral", value: "0" },
+      },
+    ]);
+  });
+
+  it("mangles a static's backing name further when it collides with an existing top-level name", () => {
+    const program = jsimSource(
+      "fn __hedgeStatic_COUNT() -> i32 { 1 } static COUNT: i32 = 0;",
+    );
+    const staticDecl = program.items.find((item) => item.kind === "StaticDecl");
+    assert(staticDecl?.kind === "StaticDecl", "expected a StaticDecl item");
+    expect(staticDecl.backingName).not.toBe("__hedgeStatic_COUNT");
+  });
+
+  it("lowers a reference to a static as a zero-argument call to its own name", () => {
+    const program = jsimSource("static COUNT: i32 = 0; fn f() -> i32 { COUNT }");
+    const fn = program.items.find((item) => item.kind === "FunctionDecl");
+    assert(fn?.kind === "FunctionDecl", "expected a FunctionDecl item");
+    expect(fn.body).toMatchObject([
+      {
+        kind: "ReturnStatement",
+        value: some({
+          kind: "CallExpression",
+          callee: { kind: "Identifier", value: "COUNT" },
+          arguments: [],
+        }),
+      },
+    ]);
+  });
+});
+
 describe("scope-end drop", () => {
   it("a non-mut struct binding never moved is marked for dispose", () => {
     const program = jsimSourceWithOwnership(

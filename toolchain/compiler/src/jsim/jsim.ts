@@ -9,6 +9,7 @@ import type {
   ConditionalDrop,
   FunctionOwnership,
 } from "../ownership/move-check.js";
+import { constValueToLiteralExpression } from "../semantics/analyzer.js";
 import type * as Semantics from "../semantics/ast.js";
 import type * as JSIM from "./ast.js";
 import { toDocComment } from "./parts/doc-comment.js";
@@ -72,11 +73,20 @@ interface JsimContext {
    * currently in scope. See `emittedNameForBinding`.
    */
   readonly emittedNameByBindingId: Map<BindingId, string>[];
+  /**
+   * Every top-level JS binding name already claimed (function names, and
+   * each static's own accessor name) - not `$k`-suffixed alpha-rename
+   * (that machinery is per-function local scope only), but the same
+   * probe-until-free strategy, used by `staticBackingName` to keep a
+   * static's hidden backing variable from colliding with any of these.
+   */
+  readonly topLevelNames: Set<string>;
 }
 
 function createJsimContext(
   tokens: readonly Token[],
   ownership: ReadonlyMap<string, FunctionOwnership>,
+  topLevelNames: Set<string>,
 ): JsimContext {
   return {
     tokens,
@@ -88,7 +98,26 @@ function createJsimContext(
     branchDrops: [],
     allConditionalDrops: [],
     emittedNameByBindingId: [],
+    topLevelNames,
   };
+}
+
+/**
+ * Collision-safe backing-variable name for a static's hidden storage -
+ * `__hedgeStatic_NAME`, or that with a numeric suffix if already claimed
+ * (by a user identifier, another static, or a function). Reserves the
+ * chosen name in `ctx.topLevelNames` so a later static can't reuse it.
+ */
+function staticBackingName(ctx: JsimContext, name: string): string {
+  const base = `__hedgeStatic_${name}`;
+  let candidate = base;
+  let suffix = 2;
+  while (ctx.topLevelNames.has(candidate)) {
+    candidate = `${base}_${suffix}`;
+    suffix += 1;
+  }
+  ctx.topLevelNames.add(candidate);
+  return candidate;
 }
 
 /**
@@ -416,7 +445,13 @@ export function toJsim(
   tokens: readonly Token[],
   ownership: ReadonlyMap<string, FunctionOwnership> = new Map(),
 ): JSIM.Program {
-  const ctx = createJsimContext(tokens, ownership);
+  const topLevelNames = new Set<string>();
+  for (const item of program.items) {
+    if (item.kind === "Function") {
+      topLevelNames.add(item.name.text);
+    }
+  }
+  const ctx = createJsimContext(tokens, ownership, topLevelNames);
   return {
     kind: "Program",
     docComment: toDocComment(program.attributes),
@@ -522,7 +557,51 @@ function parseItem(
   if (item.kind === "LetStatement" || item.kind === "ExpressionStatement")
     return parseStatement(ctx, item);
   if (item.kind === "Struct") return parseStruct(item);
+  // Every reference to a const already lowered to a literal at analysis
+  // time (see `analyzer.ts`'s `analyzeConstReference`), so a non-pub
+  // const's own declaration has no external consumer and erases entirely
+  // (spec 0008: no runtime storage). A pub const still needs one real
+  // exported JS binding for a plain-JS consumer, built the same way a
+  // reference site's literal is (`constValueToLiteralExpression`).
+  if (item.kind === "Const") {
+    if (!isSome(item.visibility)) return [];
+    return [
+      {
+        kind: "ConstDecl",
+        name: item.name.text,
+        type: semanticTypeToJsPrimitive(item.type),
+        value: parseExpression(
+          ctx,
+          constValueToLiteralExpression(item.value, item.type, item.tokenId),
+        ),
+        span: resolveSpan(
+          ctx.tokens,
+          item.tokenId,
+          findStatementEndTokenId(ctx.tokens, item.tokenId),
+        ),
+      },
+    ];
+  }
+  if (item.kind === "Static") return parseStaticDecl(ctx, item);
   return parseExpression(ctx, item);
+}
+
+function parseStaticDecl(
+  ctx: JsimContext,
+  decl: Semantics.StaticDecl,
+): JSIM.StaticDecl {
+  return {
+    kind: "StaticDecl",
+    name: decl.name.text,
+    backingName: staticBackingName(ctx, decl.name.text),
+    init: parseExpression(ctx, decl.value),
+    docComment: toDocComment(decl.attributes),
+    span: resolveSpan(
+      ctx.tokens,
+      decl.tokenId,
+      findStatementEndTokenId(ctx.tokens, decl.tokenId),
+    ),
+  };
 }
 
 function parseStruct(struct: Semantics.StructDecl): JSIM.Item[] {
@@ -737,6 +816,19 @@ function parseStatement(
     case "Struct":
       // Struct declarations are type-only — no JS runtime representation.
       return { kind: "BlockStatement", body: [] };
+    case "Const":
+      // Same erasure as a top-level const (see `parseItem`) - every
+      // reference already lowered to a literal at analysis time.
+      return { kind: "BlockStatement", body: [] };
+    case "Static":
+      // The parser rejects `static` in block position (see
+      // `parser/statement.ts`'s local item dispatch) - a local static's
+      // initializer could otherwise capture an enclosing call's local
+      // state despite only ever running once. This case can't be reached
+      // by a real parse.
+      throw new Error(
+        "a Static statement reached JSIM lowering, which should be structurally impossible",
+      );
     default:
       assertNever(
         statement,

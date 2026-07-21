@@ -233,38 +233,76 @@ function intSuffixToPrimitive(suffix: IntSuffix): Semantics.PrimitiveType {
   }
 }
 
-function resolveArrayLength(length: Parser.Expression): number {
-  assert(
-    length.kind === "IntLiteral",
-    "Array length must be a literal integer (parser guarantee)",
-  );
-  return Number(intLiteralValue(length));
-}
-
 /**
- * Rejects an array length/repeat-count literal that doesn't fit in a safe
- * integer, before `resolveArrayLength`'s own `Number(bigint)` conversion has
- * a chance to silently produce `Infinity` or an imprecise value - which
- * would otherwise surface far from the mistake, as a confusing runtime
- * `RangeError` from `new Array(Infinity)`/`new Int32Array(Infinity)` in the
- * *compiled* program rather than a compile-time diagnostic here. `literal`
- * is assumed already known to be an `IntLiteral` (callers check
- * `.kind !== "IntLiteral"` separately, for the "must be a literal" case).
+ * Const-folds an array type's length, or an array-repeat expression's
+ * count, to a resolved `number` - `none()` if it isn't a compile-time
+ * integer constant (after emitting the appropriate diagnostic; a
+ * dependency-already-failed `AlreadyDiagnosed` outcome emits nothing new,
+ * matching `resolveConstDecl`'s own cascade suppression). Folds unbounded
+ * (no wrap) rather than at any fixed width - an array length has no
+ * runtime width of its own, and wrapping an oversized value would turn it
+ * into a deceptively "valid" small one instead of rejecting it. This
+ * function range-checks the exact unwrapped result itself, before
+ * `Number(bigint)` has a chance to silently produce `Infinity` or an
+ * imprecise value - which would otherwise surface far from the mistake, as
+ * a confusing runtime `RangeError` from `new Array(Infinity)` in the
+ * *compiled* program rather than here.
  */
-function checkArrayLengthRange(
+function foldArrayLength(
   ctx: AnalysisContext,
-  literal: Parser.IntLiteral,
-): boolean {
-  const value = intLiteralValue(literal);
-  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+  length: Parser.Expression,
+): Option<number> {
+  const outcome = foldConstExpression(
+    length,
+    some({ kind: "unbounded" }),
+    (name, tokenId) => resolveConstRef(ctx, name, tokenId),
+  );
+  switch (outcome.kind) {
+    case "NotFoldable":
+      emitError(
+        ctx,
+        "array length must be a compile-time constant expression",
+        outcome.tokenId,
+      );
+      return none();
+    case "Undeclared":
+      emitError(
+        ctx,
+        `Cannot find name "${outcome.name}" in this scope.`,
+        outcome.tokenId,
+      );
+      return none();
+    case "DivideByZero":
+      emitError(
+        ctx,
+        "attempt to divide by zero in a constant expression",
+        outcome.tokenId,
+      );
+      return none();
+    case "AlreadyDiagnosed":
+      return none();
+    case "Ok":
+      break;
+    default:
+      assertNever(outcome, `Unexpected fold outcome: ${JSON.stringify(outcome)}`);
+  }
+  if (outcome.value.kind !== "Int") {
+    emitError(ctx, "array length must be an integer", length.tokenId);
+    return none();
+  }
+  if (outcome.value.value < 0n) {
+    emitError(ctx, "array length cannot be negative", length.tokenId);
+    return none();
+  }
+  if (outcome.value.value > BigInt(Number.MAX_SAFE_INTEGER)) {
     emitError(
       ctx,
-      `array length ${literal.value} is too large to represent`,
-      literal.tokenId,
+      `array length ${outcome.value.value} is too large to represent`,
+      length.tokenId,
     );
-    return false;
+    return none();
   }
-  return true;
+  return some(Number(outcome.value.value));
 }
 
 function validateSlice1Type(
@@ -303,17 +341,10 @@ function validateSlice1Type(
         type.elementType,
         type.elementType.tokenId,
       );
-      if (
-        type.length.kind === "IntLiteral" &&
-        !checkArrayLengthRange(ctx, type.length)
-      ) {
-        return { kind: "UnitType", tokenId };
-      }
-      return {
-        kind: "ArrayType",
-        elementType,
-        length: resolveArrayLength(type.length),
-      };
+      const length = foldArrayLength(ctx, type.length);
+      return isSome(length)
+        ? { kind: "ArrayType", elementType, length: length.value }
+        : { kind: "UnitType", tokenId };
     }
     default:
       assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
@@ -376,10 +407,13 @@ function valueMatchesDeclaredType(
 
 /**
  * Builds the literal `Semantics.Expression` a const reference is inlined to
- * - a const has no runtime storage (spec 0008), so every reference site
- * becomes this literal directly rather than a `PathExpression`.
+ * - a non-pub const has no runtime storage (spec 0008), so every reference
+ * site becomes this literal directly rather than a `PathExpression`. Also
+ * reused by `jsim.ts` for a `pub const`'s own exported JS value - unlike a
+ * reference site, a `pub const` still needs one real runtime binding, since
+ * a plain-JS (non-Hedge) consumer importing it has no inlining of its own.
  */
-function constValueToLiteralExpression(
+export function constValueToLiteralExpression(
   value: Semantics.ConstValue,
   type: Semantics.Type,
   tokenId: number,
@@ -670,6 +704,7 @@ function registerConstsAndStatics(
         constFrame.set(item.name.text, item);
       }
     } else if (item.kind === "Static") {
+      const currentScope = ctx.scopes[ctx.scopes.length - 1];
       if (staticFrame.has(item.name.text)) {
         emitError(
           ctx,
@@ -677,6 +712,18 @@ function registerConstsAndStatics(
           item.name.tokenId,
         );
       } else {
+        if (currentScope?.has(item.name.text)) {
+          // A static lowers to a real top-level accessor function of its
+          // own name (see jsim.ts's StaticDecl lowering) - sharing a name
+          // with an existing function would collide at codegen, not just
+          // shadow. Still registers below so `analyzeStaticDecl` has an
+          // entry to resolve; the diagnostic already blocks codegen.
+          emitError(
+            ctx,
+            `static \`${item.name.text}\` collides with an existing function name`,
+            item.name.tokenId,
+          );
+        }
         if (isSome(item.visibility)) {
           emitError(
             ctx,
@@ -957,7 +1004,14 @@ function resolveSlice1Type(
           type.elementType,
           type.elementType.tokenId,
         ),
-        length: resolveArrayLength(type.length),
+        // No `ctx` here (see this function's own callers - only used for a
+        // function's pre-registration signature type, before its body is
+        // analyzed), so a non-literal length can't be const-folded yet.
+        // `validateSlice1Type` resolves the real length later, with full
+        // context, when the function's own parameters are actually
+        // analyzed - this placeholder only affects a caller that resolves
+        // against this function's forward-registered signature before then.
+        length: type.length.kind === "IntLiteral" ? Number(intLiteralValue(type.length)) : 0,
       };
     default:
       return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
@@ -1915,7 +1969,7 @@ function analyzeArrayExpression(
   };
 }
 
-/** `[value; count]` - `count` is guaranteed a literal integer by the parser (see `parseArrayLiteral`'s own precondition doc). */
+/** `[value; count]` - `count` must const-fold to a known integer (see `foldArrayLength`). */
 function analyzeArrayRepeatExpression(
   ctx: AnalysisContext,
   expression: Parser.ArrayRepeatExpression,
@@ -1928,31 +1982,26 @@ function analyzeArrayRepeatExpression(
     // `.fill(value)` - a non-Copy value would alias the identical JS object
     // reference across the whole array instead of each slot holding a
     // distinct value. Matches Rust's own `[expr; N]` rule (`expr: Copy`, or
-    // a const item - Hedge has no const-evaluation yet).
+    // a const item - a const reference here is already inlined to a Copy
+    // literal by `analyzeConstReference` before this check runs, so a
+    // primitive const's value naturally passes; a struct-typed const isn't
+    // in this ticket's const-eval scope, so still hits this diagnostic).
     emitError(
       ctx,
-      `repeat-form array element type must be Copy, found \`${describeType(valueType)}\`; const expressions are not yet supported`,
+      `repeat-form array element type must be Copy, found \`${describeType(valueType)}\``,
       expression.value.tokenId,
     );
     return { ...expression, value, count: 0, type: UNIT };
   }
-  if (expression.count.kind !== "IntLiteral") {
-    emitError(
-      ctx,
-      "array repeat count must be a literal integer; const expressions are not yet supported",
-      expression.count.tokenId,
-    );
+  const count = foldArrayLength(ctx, expression.count);
+  if (!isSome(count)) {
     return { ...expression, value, count: 0, type: UNIT };
   }
-  if (!checkArrayLengthRange(ctx, expression.count)) {
-    return { ...expression, value, count: 0, type: UNIT };
-  }
-  const count = resolveArrayLength(expression.count);
   return {
     ...expression,
     value,
-    count,
-    type: { kind: "ArrayType", elementType: getType(value), length: count },
+    count: count.value,
+    type: { kind: "ArrayType", elementType: getType(value), length: count.value },
   };
 }
 

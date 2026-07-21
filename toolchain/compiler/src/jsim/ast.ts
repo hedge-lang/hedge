@@ -7,7 +7,25 @@ export interface Program {
   readonly docComment: Option<DocComment>;
 }
 
-export type Item = FunctionDecl | Statement;
+export type Item = FunctionDecl | StaticDecl | ConstDecl | Statement;
+
+/**
+ * A `pub const`'s exported shape. Every *reference* to a const is inlined
+ * to a literal at analysis time (see `semantics/analyzer.ts`'s
+ * `analyzeConstReference`) since a const has no runtime storage inside
+ * Hedge itself - but a `pub const` still needs one real exported JS
+ * binding, since a plain-JS (non-Hedge) consumer importing it has no
+ * inlining of its own. A non-`pub` const never lowers to one of these at
+ * all (see `jsim.ts`'s `parseItem`) - it has no external consumer, so it
+ * erases completely, matching the no-runtime-storage semantics.
+ */
+export interface ConstDecl {
+  readonly kind: "ConstDecl";
+  readonly name: string;
+  readonly type: Option<Type>;
+  readonly value: Expression;
+  readonly span: Span;
+}
 
 export interface DocComment {
   readonly kind: "DocComment";
@@ -37,6 +55,25 @@ export type Statement =
   | DisposeCallStatement
   | Expression
   | FunctionDecl;
+
+/**
+ * A `static` lowers to a module-private backing variable plus a
+ * lazily-initializing accessor function of the static's own name - every
+ * reference site is a `CallExpression` targeting that name (see
+ * `semantics/analyzer.ts`'s `analyzeStaticReference`), not a plain
+ * `Identifier` read, so `backingName` is only ever touched by this node's
+ * own codegen. `pub static` is rejected in semantic analysis, so there is
+ * no `scope` field here (unlike `FunctionDecl`) - a `StaticDecl` reaching
+ * codegen is always module-private.
+ */
+export interface StaticDecl {
+  readonly kind: "StaticDecl";
+  readonly name: string;
+  readonly backingName: string;
+  readonly init: Expression;
+  readonly docComment: Option<DocComment>;
+  readonly span: Span;
+}
 
 /**
  * The explicit disposer call a conditionally dropped binding needs, since it
@@ -138,8 +175,8 @@ export interface FunctionParam {
   readonly type: Option<Type>;
 }
 
-type Type = PrimitiveType;
-interface PrimitiveType {
+export type Type = PrimitiveType;
+export interface PrimitiveType {
   readonly kind: "PrimitiveType";
   readonly value: "string" | "number" | "bigint" | "boolean" | "null";
 }

@@ -106,10 +106,14 @@ describe("parseType - array types", (): void => {
     });
   });
 
-  it("rejects a non-literal array length as not yet supported", (): void => {
+  it("parses a non-literal (identifier) array length, since semantic analysis const-folds it", (): void => {
     const { tokens } = tokenize("[i32; N]");
     const result = parseType(tokens, 0);
-    assert(isErr(result), "Expected an error result");
-    expect(result.error.message).toContain("literal integer");
+    assert(!isErr(result), "Expected a successful parse");
+    expect(result.value.node).toMatchObject({
+      kind: "ArrayType",
+      elementType: { kind: "NamedType", path: { segments: ["i32"] } },
+      length: { kind: "PathExpression", path: { segments: ["N"] } },
+    });
   });
 });
