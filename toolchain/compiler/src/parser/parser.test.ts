@@ -962,6 +962,26 @@ describe("struct declarations", (): void => {
   });
 });
 
+describe("const declarations", (): void => {
+  it("parses a top-level const with a typed literal initializer", (): void => {
+    const ast = parseProgram("const N: usize = 3;");
+    expect(ast).toMatchObject({
+      kind: "Program",
+      items: [
+        {
+          kind: "Const",
+          name: { kind: "Identifier", text: "N" },
+          type: {
+            kind: "NamedType",
+            path: { absolute: false, segments: ["usize"] },
+          },
+          value: { kind: "IntLiteral", value: "3" },
+        },
+      ],
+    });
+  });
+});
+
 describe("attributes on let statements", (): void => {
   it("attaches an outer attribute to a top-level let", (): void => {
     const ast = parseProgram("#[attr] let x = 1;");
