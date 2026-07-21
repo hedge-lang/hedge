@@ -5,6 +5,8 @@ import type { Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import type {
+  ArrayExpression,
+  ArrayRepeatExpression,
   BinaryExpression,
   BinaryOperator,
   CompoundAssignOperator,
@@ -544,6 +546,98 @@ function parseTupleOrGroup(
   return ok({ node: tuple, next: closeResult.value });
 }
 
+/** Parses `[]` (empty), `[a, b, ...]` (list form), or `[value; count]` (repeat form). */
+// eslint-disable-next-line complexity
+function parseArrayLiteral(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<Expression>> {
+  const start = pos;
+  let cursor = pos + 1; // skip `[`
+
+  // Empty list: []
+  if (tokens[cursor]?.kind === "rbracket") {
+    const array: ArrayExpression = {
+      kind: "ArrayExpression",
+      tokenId: start,
+      elements: [],
+    };
+    return ok({ node: array, next: cursor + 1 });
+  }
+
+  const firstResult = parseExpressionWithBindingPower(
+    tokens,
+    diagnostics,
+    cursor,
+    0,
+    true,
+  );
+  if (isErr(firstResult)) return firstResult;
+  cursor = firstResult.value.next;
+
+  // Repeat form: [value; count]
+  if (tokens[cursor]?.kind === "semi") {
+    cursor += 1; // skip `;`
+    const countResult = parseExpressionWithBindingPower(
+      tokens,
+      diagnostics,
+      cursor,
+      0,
+      true,
+    );
+    if (isErr(countResult)) return countResult;
+    const closeResult = expect(tokens, countResult.value.next, "rbracket");
+    if (isErr(closeResult)) return closeResult;
+    const repeat: ArrayRepeatExpression = {
+      kind: "ArrayRepeatExpression",
+      tokenId: start,
+      value: firstResult.value.node,
+      count: countResult.value.node,
+    };
+    return ok({ node: repeat, next: closeResult.value });
+  }
+
+  if (
+    tokens[cursor]?.kind !== "comma" &&
+    tokens[cursor]?.kind !== "rbracket"
+  ) {
+    const tok = tokens[cursor];
+    return err({
+      severity: "error",
+      message: `Expected ',', ';', or ']' after expression in array literal`,
+      span: tok !== undefined ? some(tok.span) : none(),
+    });
+  }
+
+  // Collect remaining list elements
+  const elements: Expression[] = [firstResult.value.node];
+  while (tokens[cursor]?.kind === "comma") {
+    cursor += 1; // skip comma
+    if (tokens[cursor]?.kind === "rbracket") break; // trailing comma
+    const elemResult = parseExpressionWithBindingPower(
+      tokens,
+      diagnostics,
+      cursor,
+      0,
+      true,
+    );
+    if (isErr(elemResult)) return elemResult;
+    elements.push(elemResult.value.node);
+    cursor = elemResult.value.next;
+  }
+
+  const closeResult = expect(tokens, cursor, "rbracket");
+  if (isErr(closeResult)) return closeResult;
+
+  const array: ArrayExpression = {
+    kind: "ArrayExpression",
+    tokenId: start,
+    elements,
+  };
+  return ok({ node: array, next: closeResult.value });
+}
+
 /** Parses `if cond { then } (else (if ... | { else }))?`. */
 // eslint-disable-next-line complexity -- This is mostly a routing function
 function parseIfExpression(
@@ -890,6 +984,11 @@ function parsePrimary(
   // Tuple, grouping, or unit
   if (token.kind === "lparen") {
     return parseTupleOrGroup(tokens, diagnostics, pos);
+  }
+
+  // Array literal: list form [a, b, c] or repeat form [value; count]
+  if (token.kind === "lbracket") {
+    return parseArrayLiteral(tokens, diagnostics, pos);
   }
 
   // Prefix range: ..b, ..=b, or bare .. (RangeTo / RangeToInclusive / RangeFull)
