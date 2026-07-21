@@ -188,8 +188,14 @@ describe("semantic analysis", (): void => {
       const fn = result.program.items.find((item) => item.kind === "Function");
       assert(fn?.kind === "Function", "expected a Function item");
       const trailing = fn.body.trailingExpression;
-      assert(isSome(trailing), "expected the function body to have a trailing expression");
-      expect(trailing.value).toMatchObject({ kind: "IntLiteral", value: "100" });
+      assert(
+        isSome(trailing),
+        "expected the function body to have a trailing expression",
+      );
+      expect(trailing.value).toMatchObject({
+        kind: "IntLiteral",
+        value: "100",
+      });
     });
 
     describe("operator coverage", () => {
@@ -229,7 +235,9 @@ describe("semantic analysis", (): void => {
           "const N: i32 = 2147483647 + 1; fn f() -> i32 { N }",
         );
         expect(result.diagnostics).toEqual([]);
-        const fn = result.program.items.find((item) => item.kind === "Function");
+        const fn = result.program.items.find(
+          (item) => item.kind === "Function",
+        );
         assert(fn !== undefined, "expected a Function item");
         const trailing = fn.body.trailingExpression;
         assert(isSome(trailing), "expected a trailing expression");
@@ -245,7 +253,9 @@ describe("semantic analysis", (): void => {
           "const N: i32 = -7 / 2; fn f() -> i32 { N }",
         );
         expect(result.diagnostics).toEqual([]);
-        const fn = result.program.items.find((item) => item.kind === "Function");
+        const fn = result.program.items.find(
+          (item) => item.kind === "Function",
+        );
         assert(fn?.kind === "Function", "expected a Function item");
         const trailing = fn.body.trailingExpression;
         assert(isSome(trailing), "expected a trailing expression");
@@ -261,7 +271,9 @@ describe("semantic analysis", (): void => {
           "const N: f64 = 1.0 / 0.0; fn f() -> f64 { N }",
         );
         expect(result.diagnostics).toEqual([]);
-        const fn = result.program.items.find((item) => item.kind === "Function");
+        const fn = result.program.items.find(
+          (item) => item.kind === "Function",
+        );
         assert(fn?.kind === "Function", "expected a Function item");
         const trailing = fn.body.trailingExpression;
         assert(isSome(trailing), "expected a trailing expression");
@@ -297,9 +309,7 @@ describe("semantic analysis", (): void => {
       });
 
       it("rejects a call to a non-const function as a non-const-foldable initializer", () => {
-        const result = diagnose(
-          "fn one() -> i32 { 1 } const N: i32 = one();",
-        );
+        const result = diagnose("fn one() -> i32 { 1 } const N: i32 = one();");
         expect(result.diagnostics).toHaveLength(1);
         expect(result.diagnostics[0]?.message).toContain(
           "compile-time constant expression",
@@ -307,9 +317,7 @@ describe("semantic analysis", (): void => {
       });
 
       it("rejects a reference to a static in a const initializer as non-const-foldable", () => {
-        const result = diagnose(
-          "static COUNT: i32 = 0; const N: i32 = COUNT;",
-        );
+        const result = diagnose("static COUNT: i32 = 0; const N: i32 = COUNT;");
         expect(result.diagnostics).toHaveLength(1);
         expect(result.diagnostics[0]?.message).toContain(
           "compile-time constant expression",

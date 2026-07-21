@@ -215,9 +215,16 @@ describe("generator", (): void => {
 describe("const and static codegen", (): void => {
   it("emits no JS at all for a top-level const", () => {
     expect(js(gen("const N: i32 = 3; fn main() { print(N); }"))).toBe(
-      ["#!/usr/bin/env node", "", "function main() {", "  print(3);", "}", "", "main();", ""].join(
-        "\n",
-      ),
+      [
+        "#!/usr/bin/env node",
+        "",
+        "function main() {",
+        "  print(3);",
+        "}",
+        "",
+        "main();",
+        "",
+      ].join("\n"),
     );
   });
 
@@ -232,7 +239,9 @@ describe("const and static codegen", (): void => {
   });
 
   it("emits a negative pub const's exported JS value with the same i32 wrap as any other unary neg", () => {
-    expect(js(gen("pub const MIN: i32 = -5;"))).toBe("export const MIN = ((-5)|0);\n");
+    expect(js(gen("pub const MIN: i32 = -5;"))).toBe(
+      "export const MIN = ((-5)|0);\n",
+    );
   });
 
   it("lowers a static to a backing variable and a lazily-initializing accessor function", () => {

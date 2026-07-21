@@ -175,8 +175,8 @@ export interface FunctionParam {
   readonly type: Option<Type>;
 }
 
-export type Type = PrimitiveType;
-export interface PrimitiveType {
+type Type = PrimitiveType;
+interface PrimitiveType {
   readonly kind: "PrimitiveType";
   readonly value: "string" | "number" | "bigint" | "boolean" | "null";
 }

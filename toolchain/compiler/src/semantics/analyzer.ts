@@ -284,7 +284,10 @@ function foldArrayLength(
     case "Ok":
       break;
     default:
-      assertNever(outcome, `Unexpected fold outcome: ${JSON.stringify(outcome)}`);
+      assertNever(
+        outcome,
+        `Unexpected fold outcome: ${JSON.stringify(outcome)}`,
+      );
   }
   if (outcome.value.kind !== "Int") {
     emitError(ctx, "array length must be an integer", length.tokenId);
@@ -354,7 +357,7 @@ function validateSlice1Type(
 }
 
 /** Maps a resolved declared type to the width const-folding wraps/rounds at; `none()` for a non-numeric type. */
-// eslint-disable-next-line complexity - This is a routing function
+// eslint-disable-next-line complexity -- This is a routing function
 function foldWidthOf(type: Semantics.Type): Option<FoldWidth> {
   switch (type.kind) {
     case "PrimitiveI8Type":
@@ -401,7 +404,10 @@ function valueMatchesDeclaredType(
     case "Str":
       return declaredType.kind === "PrimitiveStringType";
     default:
-      return assertNever(value, `Unexpected const value: ${JSON.stringify(value)}`);
+      return assertNever(
+        value,
+        `Unexpected const value: ${JSON.stringify(value)}`,
+      );
   }
 }
 
@@ -430,7 +436,13 @@ export function constValueToLiteralExpression(
         type,
       };
       return negative
-        ? { kind: "UnaryExpression", tokenId, operator: "Neg", operand: literal, type }
+        ? {
+            kind: "UnaryExpression",
+            tokenId,
+            operator: "Neg",
+            operand: literal,
+            type,
+          }
         : literal;
     }
     case "Float": {
@@ -443,7 +455,13 @@ export function constValueToLiteralExpression(
         type,
       };
       return negative
-        ? { kind: "UnaryExpression", tokenId, operator: "Neg", operand: literal, type }
+        ? {
+            kind: "UnaryExpression",
+            tokenId,
+            operator: "Neg",
+            operand: literal,
+            type,
+          }
         : literal;
     }
     case "Bool":
@@ -453,7 +471,10 @@ export function constValueToLiteralExpression(
     case "Str":
       return { kind: "StringLiteral", tokenId, value: value.value, type };
     default:
-      return assertNever(value, `Unexpected const value: ${JSON.stringify(value)}`);
+      return assertNever(
+        value,
+        `Unexpected const value: ${JSON.stringify(value)}`,
+      );
   }
 }
 
@@ -479,9 +500,15 @@ function findStaticFrameIndex(ctx: AnalysisContext, name: string): number {
 /** The declared type `registerConstsAndStatics` already resolved for a static - avoids re-validating it (and re-diagnosing a bad type) in `analyzeStaticDecl`. */
 function resolveStaticType(ctx: AnalysisContext, name: string): Semantics.Type {
   const frameIndex = findStaticFrameIndex(ctx, name);
-  assert(frameIndex >= 0, `resolveStaticType called for undeclared static \`${name}\``);
+  assert(
+    frameIndex >= 0,
+    `resolveStaticType called for undeclared static \`${name}\``,
+  );
   const type = ctx.staticTypeScopes[frameIndex]?.get(name);
-  assert(type !== undefined, `resolveStaticType found no type for \`${name}\` in its own frame`);
+  assert(
+    type !== undefined,
+    `resolveStaticType found no type for \`${name}\` in its own frame`,
+  );
   return type;
 }
 
@@ -528,7 +555,10 @@ function resolveConstRef(
  */
 function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
   const frameIndex = findConstFrameIndex(ctx, name);
-  assert(frameIndex >= 0, `resolveConstDecl called for undeclared const \`${name}\``);
+  assert(
+    frameIndex >= 0,
+    `resolveConstDecl called for undeclared const \`${name}\``,
+  );
   const valueFrame = ctx.constValueScopes[frameIndex];
   assert(valueFrame !== undefined, "const value scope frame missing");
 
@@ -537,13 +567,18 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
     return cached;
   }
   const decl = ctx.constDeclScopes[frameIndex]?.get(name);
-  assert(decl !== undefined, `resolveConstDecl found no decl for \`${name}\` in its own frame`);
+  assert(
+    decl !== undefined,
+    `resolveConstDecl found no decl for \`${name}\` in its own frame`,
+  );
 
   const declaredType = validateSlice1Type(ctx, decl.type, decl.type.tokenId);
   const width = foldWidthOf(declaredType);
   ctx.constResolving.add(name);
-  const outcome = foldConstExpression(decl.value, width, (refName, refTokenId) =>
-    resolveConstRef(ctx, refName, refTokenId),
+  const outcome = foldConstExpression(
+    decl.value,
+    width,
+    (refName, refTokenId) => resolveConstRef(ctx, refName, refTokenId),
   );
   ctx.constResolving.delete(name);
 
@@ -725,13 +760,13 @@ function registerConstsAndStatics(
           );
         }
         if (isSome(item.visibility)) {
-          emitError(
-            ctx,
-            "static items cannot be pub yet",
-            item.tokenId,
-          );
+          emitError(ctx, "static items cannot be pub yet", item.tokenId);
         }
-        const declaredType = validateSlice1Type(ctx, item.type, item.type.tokenId);
+        const declaredType = validateSlice1Type(
+          ctx,
+          item.type,
+          item.type.tokenId,
+        );
         staticFrame.set(item.name.text, declaredType);
         bind(ctx, item.name.text, { type: declaredType, mutable: false });
       }
@@ -1011,7 +1046,10 @@ function resolveSlice1Type(
         // context, when the function's own parameters are actually
         // analyzed - this placeholder only affects a caller that resolves
         // against this function's forward-registered signature before then.
-        length: type.length.kind === "IntLiteral" ? Number(intLiteralValue(type.length)) : 0,
+        length:
+          type.length.kind === "IntLiteral"
+            ? Number(intLiteralValue(type.length))
+            : 0,
       };
     default:
       return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
@@ -2001,7 +2039,11 @@ function analyzeArrayRepeatExpression(
     ...expression,
     value,
     count: count.value,
-    type: { kind: "ArrayType", elementType: getType(value), length: count.value },
+    type: {
+      kind: "ArrayType",
+      elementType: getType(value),
+      length: count.value,
+    },
   };
 }
 
@@ -2514,9 +2556,9 @@ export function analyze(
     typeScope: new Map(),
     diagnostics: [],
     tokens,
-    constDeclScopes: [new Map()],
-    constValueScopes: [new Map()],
-    staticTypeScopes: [new Map()],
+    constDeclScopes: [new Map<string, Parser.ConstDecl>()],
+    constValueScopes: [new Map<string, ConstEntry>()],
+    staticTypeScopes: [new Map<string, Semantics.Type>()],
     constResolving: new Set(),
   };
   const topLevelFunctionNames = new Set<string>();

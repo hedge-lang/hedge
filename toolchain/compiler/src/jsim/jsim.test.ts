@@ -818,7 +818,10 @@ describe("const and static lowering", () => {
     assert(fn?.kind === "FunctionDecl", "expected a FunctionDecl item");
     expect(fn.body).toMatchObject([
       { kind: "BlockStatement", body: [] },
-      { kind: "ReturnStatement", value: some({ kind: "NumberLiteral", value: "3" }) },
+      {
+        kind: "ReturnStatement",
+        value: some({ kind: "NumberLiteral", value: "3" }),
+      },
     ]);
   });
 
@@ -827,7 +830,10 @@ describe("const and static lowering", () => {
     const fn = program.items.find((item) => item.kind === "FunctionDecl");
     assert(fn?.kind === "FunctionDecl", "expected a FunctionDecl item");
     expect(fn.body).toMatchObject([
-      { kind: "ReturnStatement", value: some({ kind: "NumberLiteral", value: "100" }) },
+      {
+        kind: "ReturnStatement",
+        value: some({ kind: "NumberLiteral", value: "100" }),
+      },
     ]);
   });
 
@@ -853,7 +859,9 @@ describe("const and static lowering", () => {
   });
 
   it("lowers a reference to a static as a zero-argument call to its own name", () => {
-    const program = jsimSource("static COUNT: i32 = 0; fn f() -> i32 { COUNT }");
+    const program = jsimSource(
+      "static COUNT: i32 = 0; fn f() -> i32 { COUNT }",
+    );
     const fn = program.items.find((item) => item.kind === "FunctionDecl");
     assert(fn?.kind === "FunctionDecl", "expected a FunctionDecl item");
     expect(fn.body).toMatchObject([

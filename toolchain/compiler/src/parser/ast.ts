@@ -24,12 +24,7 @@ export interface Attribute {
 
 /** A top-level entry. Slice 1 is lenient and also accepts bare statements. */
 export type Item =
-  | FunctionDecl
-  | StructDecl
-  | ConstDecl
-  | StaticDecl
-  | Statement
-  | Expression;
+  FunctionDecl | StructDecl | ConstDecl | StaticDecl | Statement | Expression;
 
 export type Statement =
   | LetStatement

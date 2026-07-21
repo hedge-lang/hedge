@@ -34,7 +34,7 @@ export function intLiteralValue(literal: {
   return BigInt(prefix + literal.value);
 }
 
-export type IntWidth =
+type IntWidth =
   | { readonly kind: "signed"; readonly bits: 8 | 16 | 32 }
   | { readonly kind: "unsigned"; readonly bits: 8 | 16 | 32 }
   | { readonly kind: "bigint"; readonly signed: boolean }
@@ -47,7 +47,8 @@ export type IntWidth =
    */
   | { readonly kind: "unbounded" };
 
-export type FoldWidth = IntWidth | { readonly kind: "float"; readonly bits: 32 | 64 };
+export type FoldWidth =
+  IntWidth | { readonly kind: "float"; readonly bits: 32 | 64 };
 
 /** Two's-complement wrap matching `codegen/generator.ts`'s runtime wrapping. */
 function wrapInt(value: bigint, width: IntWidth): bigint {
@@ -63,7 +64,10 @@ function wrapInt(value: bigint, width: IntWidth): bigint {
     case "unbounded":
       return value;
     default:
-      return assertNever(width, `Unexpected int width: ${JSON.stringify(width)}`);
+      return assertNever(
+        width,
+        `Unexpected int width: ${JSON.stringify(width)}`,
+      );
   }
 }
 
@@ -74,7 +78,11 @@ function wrapFloat(value: number, width: { readonly bits: 32 | 64 }): number {
 export type ConstFoldOutcome =
   | { readonly kind: "Ok"; readonly value: ConstValue }
   | { readonly kind: "NotFoldable"; readonly tokenId: number }
-  | { readonly kind: "Undeclared"; readonly tokenId: number; readonly name: string }
+  | {
+      readonly kind: "Undeclared";
+      readonly tokenId: number;
+      readonly name: string;
+    }
   | { readonly kind: "DivideByZero"; readonly tokenId: number }
   /** A dependency already failed and was diagnosed at its own declaration - propagate silently, no cascade. */
   | { readonly kind: "AlreadyDiagnosed"; readonly tokenId: number };
@@ -193,7 +201,11 @@ function applyBinaryOp(
         value: { kind: "Int", value: wrapInt(raw, requireIntWidth(width)) },
       };
     }
-    if (left.kind === "Float" && right.kind === "Float" && ARITHMETIC_OPS.has(op)) {
+    if (
+      left.kind === "Float" &&
+      right.kind === "Float" &&
+      ARITHMETIC_OPS.has(op)
+    ) {
       const raw =
         op === "Add"
           ? left.value + right.value
@@ -206,7 +218,10 @@ function applyBinaryOp(
                 : left.value % right.value;
       return {
         kind: "Ok",
-        value: { kind: "Float", value: wrapFloat(raw, requireFloatWidth(width)) },
+        value: {
+          kind: "Float",
+          value: wrapFloat(raw, requireFloatWidth(width)),
+        },
       };
     }
     return { kind: "NotFoldable", tokenId };
@@ -218,7 +233,8 @@ function applyBinaryOp(
       (left.kind === "Char" && right.kind === "Char") ||
       (left.kind === "Str" && right.kind === "Str")
     ) {
-      const order = left.value < right.value ? -1 : left.value > right.value ? 1 : 0;
+      const order =
+        left.value < right.value ? -1 : left.value > right.value ? 1 : 0;
       return { kind: "Ok", value: { kind: "Bool", value: compare(op, order) } };
     }
     if (left.kind === "Bool" && right.kind === "Bool") {
@@ -229,7 +245,8 @@ function applyBinaryOp(
   }
   // "And" / "Or"
   if (left.kind === "Bool" && right.kind === "Bool") {
-    const value = op === "And" ? left.value && right.value : left.value || right.value;
+    const value =
+      op === "And" ? left.value && right.value : left.value || right.value;
     return { kind: "Ok", value: { kind: "Bool", value } };
   }
   return { kind: "NotFoldable", tokenId };
@@ -249,13 +266,19 @@ function applyUnaryOp(
   if (operand.kind === "Int") {
     return {
       kind: "Ok",
-      value: { kind: "Int", value: wrapInt(-operand.value, requireIntWidth(width)) },
+      value: {
+        kind: "Int",
+        value: wrapInt(-operand.value, requireIntWidth(width)),
+      },
     };
   }
   if (operand.kind === "Float") {
     return {
       kind: "Ok",
-      value: { kind: "Float", value: wrapFloat(-operand.value, requireFloatWidth(width)) },
+      value: {
+        kind: "Float",
+        value: wrapFloat(-operand.value, requireFloatWidth(width)),
+      },
     };
   }
   return { kind: "NotFoldable", tokenId };
@@ -324,7 +347,13 @@ export function foldConstExpression(
       if (right.kind !== "Ok") {
         return right;
       }
-      return applyBinaryOp(expr.operator, left.value, right.value, width, expr.tokenId);
+      return applyBinaryOp(
+        expr.operator,
+        left.value,
+        right.value,
+        width,
+        expr.tokenId,
+      );
     }
     case "CallExpression":
     case "ReferenceExpression":
@@ -344,6 +373,9 @@ export function foldConstExpression(
     case "Identifier":
       return { kind: "NotFoldable", tokenId: expr.tokenId };
     default:
-      return assertNever(expr, `Unexpected expression: ${JSON.stringify(expr)}`);
+      return assertNever(
+        expr,
+        `Unexpected expression: ${JSON.stringify(expr)}`,
+      );
   }
 }

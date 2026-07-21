@@ -888,15 +888,9 @@ describe("execution tests", (): void => {
       );
     });
 
-    it.fails(
-      "accepts a const-evaluated array length, not just a literal integer",
-      (): void => {
-        // Blocked by #204 (const/static declarations don't exist at all yet);
-        // this documents the eventual behavior once const-evaluation lands -
-        // Hedge-200 restricts [T; N]'s length to a literal integer in the
-        // meantime, since there's nothing yet to const-evaluate anything else.
-        assertRunsTo(
-          `
+    it("accepts a const-evaluated array length, not just a literal integer", (): void => {
+      assertRunsTo(
+        `
           const N: usize = 3;
           fn main() {
             let arr: [i32; N] = [1, 2, 3];
@@ -905,10 +899,9 @@ describe("execution tests", (): void => {
             print(arr[2]);
           }
         `,
-          ["1", "2", "3"],
-        );
-      },
-    );
+        ["1", "2", "3"],
+      );
+    });
 
     it("writes through a &mut reference to a dynamic array index without crashing", (): void => {
       assertRunsTo(
@@ -960,6 +953,103 @@ describe("execution tests", (): void => {
         }
       `,
         ["2"],
+      );
+    });
+  });
+
+  describe("const and static", (): void => {
+    it("uses a const's folded value in runtime arithmetic", (): void => {
+      assertRunsTo(
+        `
+        const MAX: i32 = 100;
+        fn main() { print(MAX + 1); }
+      `,
+        ["101"],
+      );
+    });
+
+    it("chains a const reference to another const correctly at runtime", (): void => {
+      assertRunsTo(
+        `
+        const A: i32 = 2;
+        const B: i32 = A * 3;
+        fn main() { print(B); }
+      `,
+        ["6"],
+      );
+    });
+
+    it("initializes a static lazily, exactly once, on first access", (): void => {
+      assertRunsTo(
+        `
+        fn make() -> i32 {
+          print("init");
+          42
+        }
+        static X: i32 = make();
+        fn main() {
+          print(X);
+          print(X);
+        }
+      `,
+        ["init", "42", "42"],
+      );
+    });
+
+    it("runs a static's initializer on first access, not eagerly at module load", (): void => {
+      assertRunsTo(
+        `
+        fn make() -> i32 {
+          print("init");
+          42
+        }
+        static X: i32 = make();
+        fn main() {
+          print("before");
+          print(X);
+        }
+      `,
+        ["before", "init", "42"],
+      );
+    });
+
+    it("resolves a static referencing a const in its initializer", (): void => {
+      assertRunsTo(
+        `
+        const BASE: i32 = 10;
+        static COUNT: i32 = BASE + 1;
+        fn main() { print(COUNT); }
+      `,
+        ["11"],
+      );
+    });
+
+    it("executes an array whose [T; N] length is const-resolved", (): void => {
+      assertRunsTo(
+        `
+        const N: usize = 3;
+        fn main() {
+          let arr: [i32; N] = [1, 2, 3];
+          print(arr[0]);
+          print(arr[1]);
+          print(arr[2]);
+        }
+      `,
+        ["1", "2", "3"],
+      );
+    });
+
+    it("executes a repeat-form array whose count is const-resolved", (): void => {
+      assertRunsTo(
+        `
+        const N: usize = 3;
+        fn main() {
+          let arr = [7; N];
+          print(arr[0]);
+          print(arr[2]);
+        }
+      `,
+        ["7", "7"],
       );
     });
   });

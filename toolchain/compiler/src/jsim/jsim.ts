@@ -766,6 +766,7 @@ function parseFunctionBody(
  * only the block-lowering call sites (`parseFunctionBody`,
  * `jsimBlockStatement`, `jsimBranchBody`) do.
  */
+// eslint-disable-next-line complexity -- Routing function
 function parseStatement(
   ctx: JsimContext,
   statement: Semantics.Statement,
