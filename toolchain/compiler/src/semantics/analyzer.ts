@@ -488,6 +488,26 @@ function findConstFrameIndex(ctx: AnalysisContext, name: string): number {
   return -1;
 }
 
+/**
+ * Innermost frame index where `name` resolves as an ordinary binding
+ * (let/param/function/static), or -1. `scopes` and `constDeclScopes` are
+ * always pushed/popped together (`analyzeBlock`, `analyzeFunctionDecl`), so
+ * comparing this against `findConstFrameIndex`'s result tells
+ * `analyzeConstReference` whether a closer ordinary binding shadows an
+ * outer const of the same name - a const's own frame index does not
+ * appear in `scopes` at all (consts are never `bind()`-ed), so without
+ * this check a same-named parameter or local `let` would be silently
+ * ignored in favor of the const's inlined value.
+ */
+function scopeFrameIndexOf(ctx: AnalysisContext, name: string): number {
+  for (let i = ctx.scopes.length - 1; i >= 0; i -= 1) {
+    if (ctx.scopes[i]?.has(name)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 function findStaticFrameIndex(ctx: AnalysisContext, name: string): number {
   for (let i = ctx.staticTypeScopes.length - 1; i >= 0; i -= 1) {
     if (ctx.staticTypeScopes[i]?.has(name)) {
@@ -532,11 +552,19 @@ function resolveConstRef(
     );
     return { kind: "AlreadyDiagnosed", tokenId };
   }
-  if (findConstFrameIndex(ctx, name) >= 0) {
+  const constFrameIndex = findConstFrameIndex(ctx, name);
+  const scopeFrameIndex = scopeFrameIndexOf(ctx, name);
+  if (constFrameIndex >= 0 && scopeFrameIndex <= constFrameIndex) {
     const entry = resolveConstDecl(ctx, name);
     return isSome(entry.value)
       ? { kind: "Ok", value: entry.value.value }
       : { kind: "AlreadyDiagnosed", tokenId };
+  }
+  if (scopeFrameIndex >= 0) {
+    // Shadowed by (or resolves only to) an ordinary binding - a function,
+    // parameter, or `let` - none of which is usable in a constant
+    // expression.
+    return { kind: "NotFoldable", tokenId };
   }
   if (findStaticFrameIndex(ctx, name) >= 0) {
     return { kind: "NotFoldable", tokenId };
@@ -635,7 +663,17 @@ function analyzeConstReference(
     return none();
   }
   const name = path.path.segments[0];
-  if (name === undefined || findConstFrameIndex(ctx, name) < 0) {
+  if (name === undefined) {
+    return none();
+  }
+  const constFrameIndex = findConstFrameIndex(ctx, name);
+  if (constFrameIndex < 0) {
+    return none();
+  }
+  const scopeFrameIndex = scopeFrameIndexOf(ctx, name);
+  if (scopeFrameIndex > constFrameIndex) {
+    // A closer let/param/function shadows the const - fall back to
+    // ordinary scope resolution instead of inlining the const's value.
     return none();
   }
   const entry = resolveConstDecl(ctx, name);
@@ -717,6 +755,7 @@ function analyzeStaticReference(
  * same frame is a redefinition diagnostic; a name only present in an outer
  * frame is shadowing, which is allowed.
  */
+// eslint-disable-next-line complexity -- Registration loop with a duplicate/collision/pub-rejection branch per item kind; each is a necessary, independent check.
 function registerConstsAndStatics(
   ctx: AnalysisContext,
   items: readonly Parser.Item[],
@@ -727,6 +766,7 @@ function registerConstsAndStatics(
     constFrame !== undefined && staticFrame !== undefined,
     "registerConstsAndStatics called with no active scope frame",
   );
+  const currentScope = ctx.scopes[ctx.scopes.length - 1];
   for (const item of items) {
     if (item.kind === "Const") {
       if (constFrame.has(item.name.text)) {
@@ -736,10 +776,23 @@ function registerConstsAndStatics(
           item.name.tokenId,
         );
       } else {
+        if (currentScope?.has(item.name.text)) {
+          // A reference to this name would be ambiguous: `analyzeExpression`
+          // always tries `analyzeConstReference` first (see its
+          // "PathExpression" case), so `X()` against a same-named function
+          // would inline the const and try to call its literal value
+          // instead of calling the function - a real miscompile, not just
+          // shadowing. Still registers below so the const is still usable
+          // under its own name; the diagnostic already blocks codegen.
+          emitError(
+            ctx,
+            `const \`${item.name.text}\` collides with an existing function name`,
+            item.name.tokenId,
+          );
+        }
         constFrame.set(item.name.text, item);
       }
     } else if (item.kind === "Static") {
-      const currentScope = ctx.scopes[ctx.scopes.length - 1];
       if (staticFrame.has(item.name.text)) {
         emitError(
           ctx,
@@ -1121,7 +1174,16 @@ function analyzeFunctionDecl(
   ctx: AnalysisContext,
   decl: Parser.FunctionDecl,
 ): Semantics.FunctionDecl {
+  // Pushed in lockstep with `scopes` (matching `analyzeBlock`'s own
+  // invariant) even though a const/static can never actually be declared
+  // in param position - `resolvedNameIsStatic` and the const-shadowing
+  // check in `analyzeConstReference` both compare frame *indices* across
+  // `scopes` and these stacks, which only lines up if every `scopes` push
+  // has a matching push here, everywhere, not just in `analyzeBlock`.
   ctx.scopes.push(new Map());
+  ctx.constDeclScopes.push(new Map());
+  ctx.constValueScopes.push(new Map());
+  ctx.staticTypeScopes.push(new Map());
   const analyzedParams = decl.params.map(
     (param: Parser.Param): Semantics.Param => {
       const paramType = validateSlice1Type(ctx, param.type, param.type.tokenId);
@@ -1162,6 +1224,9 @@ function analyzeFunctionDecl(
     body,
   };
   ctx.scopes.pop();
+  ctx.constDeclScopes.pop();
+  ctx.constValueScopes.pop();
+  ctx.staticTypeScopes.pop();
   return result;
 }
 

@@ -356,6 +356,18 @@ describe("semantic analysis", (): void => {
         );
         expect(result.diagnostics).toHaveLength(1);
       });
+
+      it("rejects a const whose name collides with an existing top-level function", () => {
+        // A reference to the shared name always tries the const first (see
+        // `analyzeExpression`'s "PathExpression" case), so `X()` against a
+        // same-named function would otherwise try to call the const's
+        // inlined literal value instead of the function - a real miscompile,
+        // not just shadowing.
+        const result = diagnose("const X: i32 = 100; fn X() -> i32 { 1 }");
+        expect(result.diagnostics).toHaveLength(1);
+        assert(result.diagnostics[0] !== undefined, "Expected diagnostics");
+        expect(result.diagnostics[0].message).toContain("collides");
+      });
     });
   });
 
@@ -453,6 +465,58 @@ describe("semantic analysis", (): void => {
       expect(result.program).toEqual(none());
       assert(result.diagnostics[0] !== undefined, "expected a diagnostic");
       expect(result.diagnostics[0].message).toContain("Static");
+    });
+
+    it("lets a function parameter shadow an outer const of the same name", () => {
+      const { result } = analyzeWithTokens(
+        "const X: i32 = 100; fn f(X: i32) -> i32 { X }",
+      );
+      expect(result.diagnostics).toEqual([]);
+      const fn = result.program.items.find((item) => item.kind === "Function");
+      assert(fn !== undefined, "expected a Function item");
+      const trailing = fn.body.trailingExpression;
+      assert(isSome(trailing), "expected a trailing expression");
+      // The parameter, not the const's inlined value - a genuine
+      // PathExpression reading the parameter, not an IntLiteral.
+      expect(trailing.value).toMatchObject({ kind: "PathExpression" });
+    });
+
+    it("lets a local let binding shadow an outer const of the same name", () => {
+      const { result } = analyzeWithTokens(
+        "const X: i32 = 100; fn f() -> i32 { let X = 7; X }",
+      );
+      expect(result.diagnostics).toEqual([]);
+      const fn = result.program.items.find((item) => item.kind === "Function");
+      assert(fn !== undefined, "expected a Function item");
+      const trailing = fn.body.trailingExpression;
+      assert(isSome(trailing), "expected a trailing expression");
+      expect(trailing.value).toMatchObject({ kind: "PathExpression" });
+    });
+
+    it("rejects a const initializer referencing a name shadowed by an outer function's parameter", () => {
+      const result = diagnose(
+        "const X: i32 = 100; fn f(X: i32) -> i32 { const Y: i32 = X + 1; Y }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(result.diagnostics[0].message).toContain(
+        "compile-time constant expression",
+      );
+    });
+
+    it("resolves a const array length correctly even from inside a function whose parameter shadows the const's name elsewhere", () => {
+      // Regression check for the scope-stack alignment `analyzeFunctionDecl`
+      // and `analyzeBlock` must share: a same-named parameter in a sibling
+      // function must not desync const/static frame indices for this one.
+      const result = diagnose(`
+        const N: usize = 3;
+        fn g(N: i32) -> i32 { N }
+        fn f() {
+          let arr: [i32; N] = [1, 2, 3];
+          print(arr);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
     });
   });
 
