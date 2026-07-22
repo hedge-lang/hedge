@@ -1240,12 +1240,16 @@ describe("array types", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    // `n` is a real, declared local - just not a const/static, which is all
-    // `foldArrayLength`'s resolver checks - so this is the generic
-    // "cannot find name" diagnostic rather than a bespoke message. Still a
-    // real rejection either way (see the ticket-level note on this
-    // imprecision).
-    expect(result.diagnostics[0].message).toContain("n");
+    // `n` is a real, declared local shadowing nothing - `resolveConstRef`'s
+    // shadow check (see `analyzer.ts`) resolves it to an ordinary binding
+    // and reports the generic "not a constant expression" message, which
+    // never actually names `n`. Assert the real message text, not a
+    // substring that happens to match by coincidence (a prior version of
+    // this assertion checked for the literal character "n", which passes
+    // against "consta**n**t" regardless of what the diagnostic says).
+    expect(result.diagnostics[0].message).toBe(
+      "array length must be a compile-time constant expression",
+    );
   });
 
   it("rejects a repeat-form count too large to represent as a safe integer", (): void => {
