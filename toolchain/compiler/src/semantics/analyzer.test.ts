@@ -350,6 +350,33 @@ describe("semantic analysis", (): void => {
         expect(result.diagnostics[0]?.message).toContain("divide by zero");
       });
 
+      it("rejects a negative shift amount in a const initializer as a diagnostic, not a crash", () => {
+        const result = diagnose("const N: i32 = 1 << -1;");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain("shift");
+      });
+
+      it("rejects an excessively large shift amount in a const initializer as a diagnostic, not a crash", () => {
+        // A raw BigInt `<<` with a huge positive shift tries to allocate an
+        // astronomically large value before any wrapping ever gets a chance
+        // to run - this must be rejected before the shift is attempted, not
+        // after, or it throws instead of diagnosing.
+        const result = diagnose("const N: i32 = 1 << 100000000000;");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain("shift");
+      });
+
+      it("rejects an out-of-range shift amount via >> the same way as <<", () => {
+        const result = diagnose("const N: i32 = 1 >> 100000000000;");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain("shift");
+      });
+
+      it("accepts a shift amount at the boundary of a 64-bit width", () => {
+        const result = diagnose("const N: i64 = 1 << 63;");
+        expect(result.diagnostics).toEqual([]);
+      });
+
       it("does not cascade past the one diagnostic for a broken const referenced elsewhere", () => {
         const result = diagnose(
           "const A: i32 = MISSING; const B: i32 = A + 1; fn f() -> i32 { A + B }",

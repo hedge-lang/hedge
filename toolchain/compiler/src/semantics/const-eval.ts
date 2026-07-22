@@ -84,6 +84,16 @@ export type ConstFoldOutcome =
       readonly name: string;
     }
   | { readonly kind: "DivideByZero"; readonly tokenId: number }
+  /**
+   * A `<<`/`>>` shift amount outside `[0, 64)` - negative is meaningless
+   * (Hedge has no runtime `<<`/`>>` overload that reads a negative RHS as
+   * "shift the other way"), and 64 already exceeds every Hedge integer
+   * width, so nothing beyond it can mean anything either. Checked before
+   * the shift ever runs: a sufficiently large positive amount would
+   * otherwise try to materialize an astronomically large `bigint` and
+   * throw `RangeError: Maximum BigInt size exceeded` mid-fold.
+   */
+  | { readonly kind: "InvalidShift"; readonly tokenId: number }
   /** A dependency already failed and was diagnosed at its own declaration - propagate silently, no cascade. */
   | { readonly kind: "AlreadyDiagnosed"; readonly tokenId: number };
 
@@ -168,6 +178,12 @@ function applyBinaryOp(
   if (ARITHMETIC_OPS.has(op) || BITWISE_OPS.has(op)) {
     if (left.kind === "Int" && right.kind === "Int") {
       if (BITWISE_OPS.has(op)) {
+        if (
+          (op === "Shl" || op === "Shr") &&
+          (right.value < 0n || right.value >= 64n)
+        ) {
+          return { kind: "InvalidShift", tokenId };
+        }
         const raw =
           op === "Shl"
             ? left.value << right.value

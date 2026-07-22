@@ -279,6 +279,13 @@ function foldArrayLength(
         outcome.tokenId,
       );
       return none();
+    case "InvalidShift":
+      emitError(
+        ctx,
+        "shift amount must be between 0 and 63 in a constant expression",
+        outcome.tokenId,
+      );
+      return none();
     case "AlreadyDiagnosed":
       return none();
     case "Ok":
@@ -611,38 +618,56 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
   ctx.constResolving.delete(name);
 
   let value: Option<Semantics.ConstValue> = none();
-  if (outcome.kind === "Ok") {
-    if (valueMatchesDeclaredType(outcome.value, declaredType)) {
-      value = some(outcome.value);
-    } else {
+  switch (outcome.kind) {
+    case "Ok":
+      if (valueMatchesDeclaredType(outcome.value, declaredType)) {
+        value = some(outcome.value);
+      } else {
+        emitError(
+          ctx,
+          `const \`${name}\`'s initializer does not match its declared type ${describeType(declaredType)}`,
+          decl.value.tokenId,
+        );
+      }
+      break;
+    case "NotFoldable":
       emitError(
         ctx,
-        `const \`${name}\`'s initializer does not match its declared type ${describeType(declaredType)}`,
-        decl.value.tokenId,
+        `const \`${name}\`'s initializer must be a compile-time constant expression`,
+        outcome.tokenId,
       );
-    }
-  } else if (outcome.kind === "NotFoldable") {
-    emitError(
-      ctx,
-      `const \`${name}\`'s initializer must be a compile-time constant expression`,
-      outcome.tokenId,
-    );
-  } else if (outcome.kind === "DivideByZero") {
-    emitError(
-      ctx,
-      "attempt to divide by zero in a constant expression",
-      outcome.tokenId,
-    );
-  } else if (outcome.kind === "Undeclared") {
-    emitError(
-      ctx,
-      `Cannot find name "${outcome.name}" in this scope.`,
-      outcome.tokenId,
-    );
+      break;
+    case "DivideByZero":
+      emitError(
+        ctx,
+        "attempt to divide by zero in a constant expression",
+        outcome.tokenId,
+      );
+      break;
+    case "InvalidShift":
+      emitError(
+        ctx,
+        "shift amount must be between 0 and 63 in a constant expression",
+        outcome.tokenId,
+      );
+      break;
+    case "Undeclared":
+      emitError(
+        ctx,
+        `Cannot find name "${outcome.name}" in this scope.`,
+        outcome.tokenId,
+      );
+      break;
+    case "AlreadyDiagnosed":
+      // The failure was already reported where it actually happened (the
+      // cycle's own reference, or a broken dependency) - no new diagnostic.
+      break;
+    default:
+      assertNever(
+        outcome,
+        `Unexpected fold outcome: ${JSON.stringify(outcome)}`,
+      );
   }
-  // "AlreadyDiagnosed": the failure was already reported where it actually
-  // happened (the cycle's own reference, or a broken dependency) - no new
-  // diagnostic here.
 
   const entry: ConstEntry = { declaredType, value };
   valueFrame.set(name, entry);
