@@ -449,6 +449,11 @@ export function toJsim(
   for (const item of program.items) {
     if (item.kind === "Function") {
       topLevelNames.add(item.name.text);
+    } else if (item.kind === "Const" && isSome(item.visibility)) {
+      // A pub const's own name becomes a real top-level JS binding too
+      // (see `emitConstPart`), same as a function's - a static's mangled
+      // backing name needs the same collision protection against it.
+      topLevelNames.add(item.name.text);
     }
   }
   const ctx = createJsimContext(tokens, ownership, topLevelNames);
