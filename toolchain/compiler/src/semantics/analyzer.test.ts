@@ -395,6 +395,27 @@ describe("semantic analysis", (): void => {
         assert(result.diagnostics[0] !== undefined, "Expected diagnostics");
         expect(result.diagnostics[0].message).toContain("collides");
       });
+
+      it("rejects a const/static name collision with exactly one correctly-labeled diagnostic, const declared first", () => {
+        const result = diagnose("const X: i32 = 1; static X: i32 = 0;");
+        expect(result.diagnostics).toHaveLength(1);
+        assert(result.diagnostics[0] !== undefined, "Expected diagnostics");
+        expect(result.diagnostics[0].message).toContain("collides");
+        expect(result.diagnostics[0].message).not.toContain("function");
+      });
+
+      it("rejects a const/static name collision with exactly one correctly-labeled diagnostic, static declared first", () => {
+        // Regression: statics get `bind()`-registered into scope as
+        // `registerConstsAndStatics`'s loop runs, so a naive same-scope
+        // check against that scope map is order-dependent - this ordering
+        // used to produce a misleading "collides with an existing function
+        // name" diagnostic instead of correctly naming the static.
+        const result = diagnose("static X: i32 = 0; const X: i32 = 1;");
+        expect(result.diagnostics).toHaveLength(1);
+        assert(result.diagnostics[0] !== undefined, "Expected diagnostics");
+        expect(result.diagnostics[0].message).toContain("collides");
+        expect(result.diagnostics[0].message).not.toContain("function");
+      });
     });
   });
 
@@ -1514,3 +1535,4 @@ describe("array types", (): void => {
     expect(result.diagnostics[0].message).toContain("immutable");
   });
 });
+
