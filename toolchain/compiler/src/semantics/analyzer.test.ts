@@ -1535,4 +1535,3 @@ describe("array types", (): void => {
     expect(result.diagnostics[0].message).toContain("immutable");
   });
 });
-

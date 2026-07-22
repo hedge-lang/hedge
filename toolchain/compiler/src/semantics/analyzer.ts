@@ -792,6 +792,17 @@ function registerConstsAndStatics(
     "registerConstsAndStatics called with no active scope frame",
   );
   const currentScope = ctx.scopes[ctx.scopes.length - 1];
+  // Pre-scanned up front, independent of registration order: a static gets
+  // `bind()`-registered into `currentScope` as this loop runs (below), so a
+  // same-frame const/static name collision would otherwise be order-
+  // dependent - caught (mislabeled "collides with an existing function
+  // name") only when the static happens to be processed first, missed
+  // entirely when the const comes first. Checking against this frame's full
+  // const-name set, decided before either kind is registered, reports
+  // exactly one correctly-labeled diagnostic regardless of file order.
+  const constNamesInFrame = new Set(
+    items.filter((item) => item.kind === "Const").map((item) => item.name.text),
+  );
   for (const item of items) {
     if (item.kind === "Const") {
       if (constFrame.has(item.name.text)) {
@@ -801,7 +812,15 @@ function registerConstsAndStatics(
           item.name.tokenId,
         );
       } else {
-        if (currentScope?.has(item.name.text)) {
+        // A same-frame static collision is reported once, from the static
+        // branch below (via `constNamesInFrame`) - skip the function check
+        // here for a name that's actually a static, so a static processed
+        // earlier in this same loop (and thus already `bind()`-ed into
+        // `currentScope`) doesn't produce a second, mislabeled diagnostic.
+        if (
+          !staticFrame.has(item.name.text) &&
+          currentScope?.has(item.name.text)
+        ) {
           // A reference to this name would be ambiguous: `analyzeExpression`
           // always tries `analyzeConstReference` first (see its
           // "PathExpression" case), so `X()` against a same-named function
@@ -825,7 +844,17 @@ function registerConstsAndStatics(
           item.name.tokenId,
         );
       } else {
-        if (currentScope?.has(item.name.text)) {
+        if (constNamesInFrame.has(item.name.text)) {
+          // A static lowers to a real accessor function of its own name
+          // (see jsim.ts's StaticDecl lowering), but a reference to this
+          // name always tries the const first (`analyzeConstReference`),
+          // making the static unreachable/ambiguous either way.
+          emitError(
+            ctx,
+            `static \`${item.name.text}\` collides with a const of the same name`,
+            item.name.tokenId,
+          );
+        } else if (currentScope?.has(item.name.text)) {
           // A static lowers to a real top-level accessor function of its
           // own name (see jsim.ts's StaticDecl lowering) - sharing a name
           // with an existing function would collide at codegen, not just
