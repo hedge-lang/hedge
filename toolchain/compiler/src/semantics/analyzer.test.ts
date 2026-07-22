@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { assert } from "../assert.js";
 
 import { tokenize } from "../lexer/lexer.js";
-import { isSome, none } from "../option.js";
+import { isSome, none, some } from "../option.js";
 import { parse } from "../parser/parser.js";
 import type { AnalysisResult } from "./analyzer.js";
 import { analyze } from "./analyzer.js";
@@ -850,6 +850,61 @@ describe("semantic analysis", (): void => {
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
       expect(diagnostics[0].message).toContain("return type mismatch");
     });
+  });
+
+  describe("borrow outliving referent (HEDGE-LIFETIME-002)", () => {
+    it("rejects a bare returned reference to a let-local declared in the function body", (): void => {
+      const { diagnostics } = diagnose(
+        "fn confusing(y: &i32) -> &i32 { let x = 5; &x }",
+      );
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].message).toContain("x");
+    });
+
+    it("rejects a bare returned reference to a fresh borrow of a by-value parameter", (): void => {
+      const { diagnostics } = diagnose("fn f(x: i32) -> &i32 { &x }");
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+    });
+
+    it("rejects a struct literal field that borrows a let-local, when the struct instance is returned", (): void => {
+      const { diagnostics } = diagnose(`
+        struct Cursor<'a> { source: &'a str, pos: i32 }
+        fn make() -> Cursor {
+          let s = "hello";
+          Cursor { source: &s, pos: 0 }
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].message).toContain("s");
+    });
+
+    it("accepts a bare parameter of reference type passed straight through, since no fresh borrow is taken", (): void => {
+      const { diagnostics } = diagnose("fn first(s: &str) -> &str { s }");
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("accepts a reborrow through a dereference of a reference parameter", (): void => {
+      const { diagnostics } = diagnose("fn peek(x: &i32) -> &i32 { &*x }");
+      expect(diagnostics).toEqual([]);
+    });
+
+    it.fails(
+      "rejects a returned reference to a let-local laundered through an intermediate alias binding, a known gap since the check is single-hop and does not trace through `let r = &x; r`",
+      (): void => {
+        const { diagnostics } = diagnose(
+          "fn confusing() -> &i32 { let x = 5; let r = &x; r }",
+        );
+        expect(diagnostics).toHaveLength(1);
+        assert(diagnostics[0] !== undefined, "Expected diagnostics");
+        expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      },
+    );
   });
 
   describe("struct field type", () => {
