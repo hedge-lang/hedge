@@ -53,6 +53,21 @@ describe("borrow checker", (): void => {
     expect(diagnostics[0]?.message).toContain("Conflicting borrows");
   });
 
+  it("tags a conflicting-borrows diagnostic with the HEDGE-BORROW-CHECK-001 code and names the first borrow's span as a related span", (): void => {
+    const source =
+      'fn main() { let mut x = "a"; let r1 = &mut x; let r2 = &mut x; print(r1); print(r2); }';
+    const diagnostics = check(source);
+    expect(diagnostics).toHaveLength(1);
+    const diagnostic = diagnostics[0];
+    assert(diagnostic !== undefined, "Expected diagnostic");
+    expect(diagnostic.code).toEqual(some("HEDGE-BORROW-CHECK-001"));
+    expect(diagnostic.relatedSpans).toHaveLength(1);
+    const firstBorrowOffset = source.indexOf("&mut x", source.indexOf("r1"));
+    const relatedSpan = diagnostic.relatedSpans[0];
+    assert(relatedSpan !== undefined, "Expected related span");
+    expect(relatedSpan.span.start).toBe(firstBorrowOffset);
+  });
+
   it("rejects an overlapping mutable and shared borrow of the same base", (): void => {
     const diagnostics = check(
       'fn main() { let mut x = "a"; let rw = &mut x; let r = &x; print(rw); print(r); }',
