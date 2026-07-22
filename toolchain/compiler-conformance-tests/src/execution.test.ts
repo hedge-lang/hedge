@@ -1013,6 +1013,28 @@ describe("execution tests", (): void => {
       );
     });
 
+    it("initializes a unit-typed static exactly once, not on every access", (): void => {
+      // Regression: a unit-returning function's trailing expression never
+      // gets an explicit `return` (see jsim.ts's jsimTailStatements), so
+      // `make()` here returns JS `undefined` - a lazy-init built on `??=`
+      // treats `undefined` as "not yet initialized" and re-runs the
+      // initializer on every single access instead of caching it once.
+      assertRunsTo(
+        `
+        fn make() -> () {
+          print("init");
+        }
+        static X: () = make();
+        fn main() {
+          X;
+          X;
+          print("done");
+        }
+      `,
+        ["init", "done"],
+      );
+    });
+
     it("resolves a static referencing a const in its initializer", (): void => {
       assertRunsTo(
         `
