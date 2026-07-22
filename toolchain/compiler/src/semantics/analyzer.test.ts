@@ -377,6 +377,18 @@ describe("semantic analysis", (): void => {
         expect(result.diagnostics).toEqual([]);
       });
 
+      it("rejects a shift amount within [0, 64) but past a narrower declared width's own bit count", () => {
+        // Regression: the shift-amount bound must track the const's actual
+        // declared width, not a flat 64 - a runtime (non-const) i32 shift
+        // lowers to JS's native `<<`, which masks the shift count to 5 bits
+        // (mod 32). A const fold using full-precision BigInt shift + 32-bit
+        // wrap would otherwise silently disagree with that: `1 << 40` folds
+        // to 0 at compile time but runs to 256, a real determinism break.
+        const result = diagnose("const N: i32 = 1 << 40;");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain("shift");
+      });
+
       it("does not cascade past the one diagnostic for a broken const referenced elsewhere", () => {
         const result = diagnose(
           "const A: i32 = MISSING; const B: i32 = A + 1; fn f() -> i32 { A + B }",

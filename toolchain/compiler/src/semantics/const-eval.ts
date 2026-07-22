@@ -178,11 +178,21 @@ function applyBinaryOp(
   if (ARITHMETIC_OPS.has(op) || BITWISE_OPS.has(op)) {
     if (left.kind === "Int" && right.kind === "Int") {
       if (BITWISE_OPS.has(op)) {
-        if (
-          (op === "Shl" || op === "Shr") &&
-          (right.value < 0n || right.value >= 64n)
-        ) {
-          return { kind: "InvalidShift", tokenId };
+        const intWidth = requireIntWidth(width);
+        if (op === "Shl" || op === "Shr") {
+          // The bound must track the resolved width's own bit count, not a
+          // flat 64: a runtime (non-const) shift on an 8/16/32-bit value
+          // lowers to JS's native `<<`/`>>` (see codegen/generator.ts),
+          // which masks the shift count to 5 bits (mod 32) - a full-
+          // precision BigInt fold that only rejects >=64 would silently
+          // disagree with that for any shift amount in [width, 64).
+          const maxShift =
+            intWidth.kind === "signed" || intWidth.kind === "unsigned"
+              ? BigInt(intWidth.bits)
+              : 64n; // bigint (i64/u64) and unbounded (array-length context)
+          if (right.value < 0n || right.value >= maxShift) {
+            return { kind: "InvalidShift", tokenId };
+          }
         }
         const raw =
           op === "Shl"
@@ -196,7 +206,7 @@ function applyBinaryOp(
                   : left.value | right.value;
         return {
           kind: "Ok",
-          value: { kind: "Int", value: wrapInt(raw, requireIntWidth(width)) },
+          value: { kind: "Int", value: wrapInt(raw, intWidth) },
         };
       }
       if ((op === "Div" || op === "Rem") && right.value === 0n) {
