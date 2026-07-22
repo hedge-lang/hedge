@@ -169,6 +169,12 @@ describe("generator", (): void => {
     );
   });
 
+  it("declares a unit-typed parameter as undefined in .d.ts, not null - matching the undefined runtime value a () literal now lowers to", (): void => {
+    expect(dts(gen("pub fn f(x: ()) {}"))).toBe(
+      "export declare function f(x: undefined): void;\n",
+    );
+  });
+
   it("generates code with comments", () => {
     const code = gen(`
       //! This is a doc-comment for the main module.
@@ -514,8 +520,14 @@ describe("index expression codegen", () => {
 });
 
 describe("tuple expression codegen", () => {
-  it("() lowers to [] (unit)", () => {
-    expect(stmts(gen("fn _() { (); }"))).toBe("[];");
+  it("() lowers to void 0, not an empty array (unit)", () => {
+    expect(stmts(gen("fn _() { (); }"))).toBe("void 0;");
+  });
+  it("() passed as a call argument also lowers to void 0, not []", () => {
+    expect(js(gen("fn f(x: ()) {} fn _() { f(()); }"))).toContain("f(void 0);");
+  });
+  it("reassigning a mut unit param stays a plain assignment, not a { v } cell", () => {
+    expect(stmts(gen("fn _(mut x: ()) { x = (); }"))).toBe("x = void 0;");
   });
   it("(1,) lowers to [1]", () => {
     expect(stmts(gen("fn _() { (1,); }"))).toBe("[1];");

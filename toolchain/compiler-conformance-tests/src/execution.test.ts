@@ -338,6 +338,22 @@ describe("execution tests", (): void => {
     it("char literal prints as its character", (): void => {
       assertRunsTo(`fn main() { let c = 'A'; print(c); }`, ["A"]);
     });
+
+    it("two unit values compare equal under ==", (): void => {
+      assertRunsTo(`fn main() { let a = (); let b = (); print(a == b); }`, [
+        "true",
+      ]);
+    });
+
+    it("two unit values compare unequal as false under !=", (): void => {
+      assertRunsTo(`fn main() { let a = (); let b = (); print(a != b); }`, [
+        "false",
+      ]);
+    });
+
+    it("a unit value from a unit-returning function call compares equal to a unit literal", (): void => {
+      assertRunsTo(`fn noop() {} fn main() { print(noop() == ()); }`, ["true"]);
+    });
   });
 
   describe("structs", (): void => {

@@ -44,3 +44,10 @@ describe("copy capability", (): void => {
     expect(hasCapability(mutStruct, "copy")).toBe(true);
   });
 });
+
+describe("equality capability", (): void => {
+  it("UnitType is equality-comparable - every unit value is trivially equal to every other", (): void => {
+    const type: Semantics.Type = { kind: "UnitType", tokenId: 0 };
+    expect(hasCapability(type, "equality")).toBe(true);
+  });
+});

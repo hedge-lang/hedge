@@ -57,6 +57,12 @@ const INTEGER_KINDS: readonly Semantics.PrimitiveIntegerType["kind"][] = [
  * such bindings share the same underlying value. A real per-construct move
  * semantics design is still Slice 4+ work; this is an accepted interim gap,
  * not an intentional design choice.
+ *
+ * `UnitType` is also `equality`: every unit value is trivially equal to
+ * every other. This only matters for the genuine-unit-value bucket above -
+ * `inferBinaryType` (analyzer.ts) already skips the capability check
+ * entirely for the ambiguous-placeholder bucket via `isAmbiguousUnitExpr`,
+ * so this entry doesn't change those constructs' behavior at all.
  */
 const TYPE_CAPABILITIES: ReadonlyMap<
   string,
@@ -67,7 +73,9 @@ const TYPE_CAPABILITIES: ReadonlyMap<
   ["PrimitiveStringType", new Set(["equality", "copy"])],
   ["PrimitiveF32Type", new Set(["equality", "ordering", "arithmetic", "copy"])],
   ["PrimitiveF64Type", new Set(["equality", "ordering", "arithmetic", "copy"])],
-  ["UnitType", new Set(["copy"])],
+  // Every unit value is trivially equal to every other, matching Rust's own
+  // `()` (which implements `PartialEq`/`Eq` unconditionally).
+  ["UnitType", new Set(["equality", "copy"])],
   // A reference is always Copy, regardless of what it points to - copying
   // `&T`/`&mut T` duplicates the reference itself (a pointer), never the
   // referent, and never changes ownership of the underlying value. Without
