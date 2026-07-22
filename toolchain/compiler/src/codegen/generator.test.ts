@@ -244,12 +244,17 @@ describe("const and static codegen", (): void => {
     );
   });
 
-  it("lowers a static to a backing variable and a lazily-initializing accessor function", () => {
+  it("lowers a static to a backing variable, an init flag, and a lazily-initializing accessor function", () => {
     expect(js(gen("static COUNT: i32 = 0;"))).toBe(
       [
         "let __hedgeStatic_COUNT;",
+        "let __hedgeStaticInit_COUNT = false;",
         "function COUNT() {",
-        "  return __hedgeStatic_COUNT ??= 0;",
+        "  if (!__hedgeStaticInit_COUNT) {",
+        "    __hedgeStaticInit_COUNT = true;",
+        "    __hedgeStatic_COUNT = 0;",
+        "  }",
+        "  return __hedgeStatic_COUNT;",
         "}",
         "",
       ].join("\n"),
@@ -262,8 +267,13 @@ describe("const and static codegen", (): void => {
         "#!/usr/bin/env node",
         "",
         "let __hedgeStatic_COUNT;",
+        "let __hedgeStaticInit_COUNT = false;",
         "function COUNT() {",
-        "  return __hedgeStatic_COUNT ??= 0;",
+        "  if (!__hedgeStaticInit_COUNT) {",
+        "    __hedgeStaticInit_COUNT = true;",
+        "    __hedgeStatic_COUNT = 0;",
+        "  }",
+        "  return __hedgeStatic_COUNT;",
         "}",
         "",
         "function main() {",

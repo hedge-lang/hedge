@@ -593,7 +593,7 @@ function emitFunction(decl: FunctionDecl): string {
  * statics at all.
  */
 function emitStaticPart(decl: StaticDecl): EmittedPart {
-  const text = `let ${decl.backingName};\nfunction ${decl.name}() {\n  return ${decl.backingName} ??= ${emitExpression(decl.init)};\n}`;
+  const text = `let ${decl.backingName};\nlet ${decl.initFlagName} = false;\nfunction ${decl.name}() {\n  if (!${decl.initFlagName}) {\n    ${decl.initFlagName} = true;\n    ${decl.backingName} = ${emitExpression(decl.init)};\n  }\n  return ${decl.backingName};\n}`;
   return {
     text,
     mappings: [

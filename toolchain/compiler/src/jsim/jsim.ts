@@ -103,13 +103,12 @@ function createJsimContext(
 }
 
 /**
- * Collision-safe backing-variable name for a static's hidden storage -
- * `__hedgeStatic_NAME`, or that with a numeric suffix if already claimed
- * (by a user identifier, another static, or a function). Reserves the
- * chosen name in `ctx.topLevelNames` so a later static can't reuse it.
+ * Collision-safe name derived from `base` - `base` itself, or that with a
+ * numeric suffix if already claimed (by a user identifier, another
+ * static's backing/init-flag name, or a function). Reserves the chosen
+ * name in `ctx.topLevelNames` so nothing lowered afterward can reuse it.
  */
-function staticBackingName(ctx: JsimContext, name: string): string {
-  const base = `__hedgeStatic_${name}`;
+function reserveTopLevelName(ctx: JsimContext, base: string): string {
   let candidate = base;
   let suffix = 2;
   while (ctx.topLevelNames.has(candidate)) {
@@ -118,6 +117,26 @@ function staticBackingName(ctx: JsimContext, name: string): string {
   }
   ctx.topLevelNames.add(candidate);
   return candidate;
+}
+
+/**
+ * Collision-safe backing-variable name for a static's hidden storage -
+ * `__hedgeStatic_NAME`, or a numeric-suffixed variant.
+ */
+function staticBackingName(ctx: JsimContext, name: string): string {
+  return reserveTopLevelName(ctx, `__hedgeStatic_${name}`);
+}
+
+/**
+ * Collision-safe name for a static's hidden boolean "has this run yet"
+ * flag - `__hedgeStaticInit_NAME`, or a numeric-suffixed variant. A
+ * separate flag (rather than checking whether the backing variable is
+ * still nullish via `??=`) is required because a unit-returning
+ * initializer's JS value is `undefined` - see `jsim/ast.ts`'s `StaticDecl`
+ * doc comment.
+ */
+function staticInitFlagName(ctx: JsimContext, name: string): string {
+  return reserveTopLevelName(ctx, `__hedgeStaticInit_${name}`);
 }
 
 /**
@@ -599,6 +618,7 @@ function parseStaticDecl(
     kind: "StaticDecl",
     name: decl.name.text,
     backingName: staticBackingName(ctx, decl.name.text),
+    initFlagName: staticInitFlagName(ctx, decl.name.text),
     init: parseExpression(ctx, decl.value),
     docComment: toDocComment(decl.attributes),
     span: resolveSpan(

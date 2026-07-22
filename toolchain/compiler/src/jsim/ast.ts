@@ -61,15 +61,23 @@ export type Statement =
  * lazily-initializing accessor function of the static's own name - every
  * reference site is a `CallExpression` targeting that name (see
  * `semantics/analyzer.ts`'s `analyzeStaticReference`), not a plain
- * `Identifier` read, so `backingName` is only ever touched by this node's
- * own codegen. `pub static` is rejected in semantic analysis, so there is
- * no `scope` field here (unlike `FunctionDecl`) - a `StaticDecl` reaching
- * codegen is always module-private.
+ * `Identifier` read, so `backingName`/`initFlagName` are only ever touched
+ * by this node's own codegen. `pub static` is rejected in semantic
+ * analysis, so there is no `scope` field here (unlike `FunctionDecl`) - a
+ * `StaticDecl` reaching codegen is always module-private.
+ *
+ * Laziness is tracked by `initFlagName`, a separate boolean - not by
+ * checking whether `backingName` is still nullish (`??=`), since a
+ * unit-returning initializer's JS value is `undefined` (see
+ * `jsimTailStatements`'s note on why a unit-returning function never emits
+ * an explicit `return`), which `??=` would treat as "not yet initialized"
+ * forever and rerun the initializer on every single access.
  */
 export interface StaticDecl {
   readonly kind: "StaticDecl";
   readonly name: string;
   readonly backingName: string;
+  readonly initFlagName: string;
   readonly init: Expression;
   readonly docComment: Option<DocComment>;
   readonly span: Span;

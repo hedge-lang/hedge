@@ -844,6 +844,7 @@ describe("const and static lowering", () => {
         kind: "StaticDecl",
         name: "COUNT",
         backingName: "__hedgeStatic_COUNT",
+        initFlagName: "__hedgeStaticInit_COUNT",
         init: { kind: "NumberLiteral", value: "0" },
       },
     ]);
