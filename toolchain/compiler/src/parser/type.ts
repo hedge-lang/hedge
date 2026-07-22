@@ -9,7 +9,7 @@ import type {
   Type,
   UnitType,
 } from "./ast.js";
-import { parseIntLiteral } from "./expression.js";
+import { parseExpression } from "./expression.js";
 import type { Parsed } from "./parse.js";
 import {
   expect,
@@ -184,18 +184,19 @@ export function parseType(
       });
     }
     const lengthPos = afterElement + 1;
-    const lengthToken = tokens[lengthPos];
-    if (lengthToken?.kind !== "int") {
-      return err({
-        severity: "error",
-        message:
-          "array length must be a literal integer; const expressions are not yet supported",
-        span:
-          lengthToken !== undefined ? some(lengthToken.span) : some(token.span),
-      });
+    // Any expression is accepted syntactically here - semantic analysis
+    // (`validateSlice1Type`'s `ArrayType` case) requires it to const-fold to
+    // a known integer, but that is a semantic property, not a grammar one.
+    // A malformed length still fails fast, matching the rest of type
+    // position; recovery diagnostics from a construct like a rejected
+    // `loop`/`while` inside the length position are discarded rather than
+    // propagated, since recovering mid-type would leave the enclosing
+    // declaration in an inconsistent state.
+    const lengthResult = parseExpression(tokens, [], lengthPos);
+    if (isErr(lengthResult)) {
+      return lengthResult;
     }
-    const lengthLiteral = parseIntLiteral(lengthPos, lengthToken);
-    const closeResult = expect(tokens, lengthLiteral.next, "rbracket");
+    const closeResult = expect(tokens, lengthResult.value.next, "rbracket");
     if (isErr(closeResult)) {
       return closeResult;
     }
@@ -203,7 +204,7 @@ export function parseType(
       kind: "ArrayType",
       tokenId: pos,
       elementType: elementResult.value.node,
-      length: lengthLiteral.node,
+      length: lengthResult.value.node,
     };
     return ok({ node: array, next: closeResult.value });
   }

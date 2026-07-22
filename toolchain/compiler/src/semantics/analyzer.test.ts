@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { assert } from "../assert.js";
 
 import { tokenize } from "../lexer/lexer.js";
-import { isSome } from "../option.js";
+import { isSome, none } from "../option.js";
 import { parse } from "../parser/parser.js";
 import type { AnalysisResult } from "./analyzer.js";
 import { analyze } from "./analyzer.js";
@@ -114,7 +114,7 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
       expect(result.diagnostics[0]?.message).toContain(
-        "only function and struct declarations are allowed at the top level",
+        "only function, struct, const, and static declarations are allowed at the top level",
       );
     });
 
@@ -122,7 +122,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("let x = 1;");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toContain(
-        "only function and struct declarations are allowed at the top level",
+        "only function, struct, const, and static declarations are allowed at the top level",
       );
     });
 
@@ -130,7 +130,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("{ 1; }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toContain(
-        "only function and struct declarations are allowed at the top level",
+        "only function, struct, const, and static declarations are allowed at the top level",
       );
     });
 
@@ -141,6 +141,441 @@ describe("semantic analysis", (): void => {
 
     it("struct declaration at top level is accepted", () => {
       const result = diagnose("struct Foo;");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("const declaration at top level is accepted", () => {
+      const result = diagnose("const N: usize = 3;");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("static declaration at top level is accepted", () => {
+      const result = diagnose("static COUNT: i32 = 0;");
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
+  describe("const declarations", () => {
+    it.each([
+      "const N: i32 = 3;",
+      "const N: i32 = -3;",
+      "const N: bool = true;",
+      "const N: char = 'x';",
+      "const N: f64 = 1.5;",
+      'const N: str = "hello";',
+    ])("folds a %s literal initializer with no diagnostics", (source) => {
+      const result = diagnose(source);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("folds the boundary values i32::MIN and i32::MAX", () => {
+      const result = diagnose(
+        "const MIN: i32 = -2147483648; const MAX: i32 = 2147483647;",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("folds zero", () => {
+      const result = diagnose("const ZERO: i32 = 0;");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("inlines a const's folded value at its reference site", () => {
+      const { result } = analyzeWithTokens(
+        "const MAX: i32 = 100; fn f() -> i32 { MAX }",
+      );
+      expect(result.diagnostics).toEqual([]);
+      const fn = result.program.items.find((item) => item.kind === "Function");
+      assert(fn?.kind === "Function", "expected a Function item");
+      const trailing = fn.body.trailingExpression;
+      assert(
+        isSome(trailing),
+        "expected the function body to have a trailing expression",
+      );
+      expect(trailing.value).toMatchObject({
+        kind: "IntLiteral",
+        value: "100",
+      });
+    });
+
+    describe("operator coverage", () => {
+      it.each([
+        ["const N: i32 = 1 + 2;"],
+        ["const N: i32 = 5 - 2;"],
+        ["const N: i32 = 3 * 4;"],
+        ["const N: i32 = 7 / 2;"],
+        ["const N: i32 = 7 % 2;"],
+        ["const N: i32 = 1 & 3;"],
+        ["const N: i32 = 1 | 2;"],
+        ["const N: i32 = 1 ^ 3;"],
+        ["const N: i32 = 1 << 2;"],
+        ["const N: i32 = 8 >> 2;"],
+        ["const N: bool = 1 < 2;"],
+        ["const N: bool = 2 > 1;"],
+        ["const N: bool = 1 <= 1;"],
+        ["const N: bool = 1 >= 1;"],
+        ["const N: bool = 1 == 1;"],
+        ["const N: bool = 1 != 2;"],
+        ["const N: bool = true && false;"],
+        ["const N: bool = true || false;"],
+        ["const N: i32 = -5;"],
+        ["const N: bool = !true;"],
+        ['const N: bool = "a" == "a";'],
+        ['const N: bool = "a" != "b";'],
+        ['const N: bool = "a" < "b";'],
+      ])("folds %s with no diagnostics", (source) => {
+        const result = diagnose(source);
+        expect(result.diagnostics).toEqual([]);
+      });
+    });
+
+    describe("settled-semantics interactions", () => {
+      it("wraps on integer overflow (two's complement), matching runtime i32 arithmetic", () => {
+        const { result } = analyzeWithTokens(
+          "const N: i32 = 2147483647 + 1; fn f() -> i32 { N }",
+        );
+        expect(result.diagnostics).toEqual([]);
+        const fn = result.program.items.find(
+          (item) => item.kind === "Function",
+        );
+        assert(fn !== undefined, "expected a Function item");
+        const trailing = fn.body.trailingExpression;
+        assert(isSome(trailing), "expected a trailing expression");
+        expect(trailing.value).toMatchObject({
+          kind: "UnaryExpression",
+          operator: "Neg",
+          operand: { kind: "IntLiteral", value: "2147483648" },
+        });
+      });
+
+      it("truncates negative division toward zero", () => {
+        const { result } = analyzeWithTokens(
+          "const N: i32 = -7 / 2; fn f() -> i32 { N }",
+        );
+        expect(result.diagnostics).toEqual([]);
+        const fn = result.program.items.find(
+          (item) => item.kind === "Function",
+        );
+        assert(fn?.kind === "Function", "expected a Function item");
+        const trailing = fn.body.trailingExpression;
+        assert(isSome(trailing), "expected a trailing expression");
+        expect(trailing.value).toMatchObject({
+          kind: "UnaryExpression",
+          operator: "Neg",
+          operand: { kind: "IntLiteral", value: "3" },
+        });
+      });
+
+      it("folds float division by zero to Infinity with no zero-guard diagnostic", () => {
+        const { result } = analyzeWithTokens(
+          "const N: f64 = 1.0 / 0.0; fn f() -> f64 { N }",
+        );
+        expect(result.diagnostics).toEqual([]);
+        const fn = result.program.items.find(
+          (item) => item.kind === "Function",
+        );
+        assert(fn?.kind === "Function", "expected a Function item");
+        const trailing = fn.body.trailingExpression;
+        assert(isSome(trailing), "expected a trailing expression");
+        expect(trailing.value).toMatchObject({
+          kind: "FloatLiteral",
+          value: "Infinity",
+        });
+      });
+    });
+
+    describe("chaining and forward references", () => {
+      it("resolves a const initializer that references another const", () => {
+        const result = diagnose("const A: i32 = 1; const B: i32 = A + 1;");
+        expect(result.diagnostics).toEqual([]);
+      });
+
+      it("resolves a const initializer that forward-references a const declared later in the file", () => {
+        const result = diagnose("const B: i32 = A + 1; const A: i32 = 1;");
+        expect(result.diagnostics).toEqual([]);
+      });
+    });
+
+    describe("malformed and adversarial initializers", () => {
+      it("rejects a self-referencing const as a cycle, not a stack overflow", () => {
+        const result = diagnose("const A: i32 = A;");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain("itself");
+      });
+
+      it("rejects a mutually cyclic pair of consts with exactly one diagnostic", () => {
+        const result = diagnose("const A: i32 = B; const B: i32 = A;");
+        expect(result.diagnostics).toHaveLength(1);
+      });
+
+      it("rejects a call to a non-const function as a non-const-foldable initializer", () => {
+        const result = diagnose("fn one() -> i32 { 1 } const N: i32 = one();");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain(
+          "compile-time constant expression",
+        );
+      });
+
+      it("rejects a reference to a static in a const initializer as non-const-foldable", () => {
+        const result = diagnose("static COUNT: i32 = 0; const N: i32 = COUNT;");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain(
+          "compile-time constant expression",
+        );
+      });
+
+      it("rejects a reference to an undeclared name in a const initializer", () => {
+        const result = diagnose("const N: i32 = MISSING;");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain("MISSING");
+      });
+
+      it("rejects string concatenation as non-const-foldable, since it is not primitive arithmetic", () => {
+        const result = diagnose('const N: str = "a" + "b";');
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain(
+          "compile-time constant expression",
+        );
+      });
+
+      it("rejects a const whose folded value doesn't match its declared type", () => {
+        const result = diagnose("const N: bool = 1 + 2;");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain("declared type");
+      });
+
+      it("rejects division by zero in a const initializer as a diagnostic, not a crash", () => {
+        const result = diagnose("const N: i32 = 1 / 0;");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain("divide by zero");
+      });
+
+      it("rejects a negative shift amount in a const initializer as a diagnostic, not a crash", () => {
+        const result = diagnose("const N: i32 = 1 << -1;");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain("shift");
+      });
+
+      it("rejects an excessively large shift amount in a const initializer as a diagnostic, not a crash", () => {
+        // A raw BigInt `<<` with a huge positive shift tries to allocate an
+        // astronomically large value before any wrapping ever gets a chance
+        // to run - this must be rejected before the shift is attempted, not
+        // after, or it throws instead of diagnosing.
+        const result = diagnose("const N: i32 = 1 << 100000000000;");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain("shift");
+      });
+
+      it("rejects an out-of-range shift amount via >> the same way as <<", () => {
+        const result = diagnose("const N: i32 = 1 >> 100000000000;");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain("shift");
+      });
+
+      it("accepts a shift amount at the boundary of a 64-bit width", () => {
+        const result = diagnose("const N: i64 = 1 << 63;");
+        expect(result.diagnostics).toEqual([]);
+      });
+
+      it("rejects a shift amount within [0, 64) but past a narrower declared width's own bit count", () => {
+        // Regression: the shift-amount bound must track the const's actual
+        // declared width, not a flat 64 - a runtime (non-const) i32 shift
+        // lowers to JS's native `<<`, which masks the shift count to 5 bits
+        // (mod 32). A const fold using full-precision BigInt shift + 32-bit
+        // wrap would otherwise silently disagree with that: `1 << 40` folds
+        // to 0 at compile time but runs to 256, a real determinism break.
+        const result = diagnose("const N: i32 = 1 << 40;");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain("shift");
+      });
+
+      it("does not cascade past the one diagnostic for a broken const referenced elsewhere", () => {
+        const result = diagnose(
+          "const A: i32 = MISSING; const B: i32 = A + 1; fn f() -> i32 { A + B }",
+        );
+        expect(result.diagnostics).toHaveLength(1);
+      });
+
+      it("rejects a const whose name collides with an existing top-level function", () => {
+        // A reference to the shared name always tries the const first (see
+        // `analyzeExpression`'s "PathExpression" case), so `X()` against a
+        // same-named function would otherwise try to call the const's
+        // inlined literal value instead of the function - a real miscompile,
+        // not just shadowing.
+        const result = diagnose("const X: i32 = 100; fn X() -> i32 { 1 }");
+        expect(result.diagnostics).toHaveLength(1);
+        assert(result.diagnostics[0] !== undefined, "Expected diagnostics");
+        expect(result.diagnostics[0].message).toContain("collides");
+      });
+
+      it("rejects a const/static name collision with exactly one correctly-labeled diagnostic, const declared first", () => {
+        const result = diagnose("const X: i32 = 1; static X: i32 = 0;");
+        expect(result.diagnostics).toHaveLength(1);
+        assert(result.diagnostics[0] !== undefined, "Expected diagnostics");
+        expect(result.diagnostics[0].message).toContain("collides");
+        expect(result.diagnostics[0].message).not.toContain("function");
+      });
+
+      it("rejects a const/static name collision with exactly one correctly-labeled diagnostic, static declared first", () => {
+        // Regression: statics get `bind()`-registered into scope as
+        // `registerConstsAndStatics`'s loop runs, so a naive same-scope
+        // check against that scope map is order-dependent - this ordering
+        // used to produce a misleading "collides with an existing function
+        // name" diagnostic instead of correctly naming the static.
+        const result = diagnose("static X: i32 = 0; const X: i32 = 1;");
+        expect(result.diagnostics).toHaveLength(1);
+        assert(result.diagnostics[0] !== undefined, "Expected diagnostics");
+        expect(result.diagnostics[0].message).toContain("collides");
+        expect(result.diagnostics[0].message).not.toContain("function");
+      });
+    });
+  });
+
+  describe("static declarations", () => {
+    it("accepts a static with a literal initializer, with no diagnostics", () => {
+      const result = diagnose("static COUNT: i32 = 0;");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("accepts a static whose initializer calls an ordinary (non-const) function", () => {
+      const result = diagnose(
+        "fn make() -> i32 { 42 } static X: i32 = make();",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a reference to an undeclared name in a static initializer", () => {
+      const result = diagnose("static X: i32 = MISSING;");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("MISSING");
+    });
+
+    it("rejects a static whose initializer doesn't match its declared type", () => {
+      const result = diagnose("static X: bool = 1;");
+      expect(result.diagnostics).toHaveLength(1);
+    });
+
+    it("rejects pub on a static declaration", () => {
+      const result = diagnose("pub static X: i32 = 0;");
+      expect(result.diagnostics).toHaveLength(1);
+      assert(result.diagnostics[0] !== undefined, "Expected diagnostic");
+      expect(result.diagnostics[0].message).toContain("pub");
+    });
+
+    it("rejects a static whose name collides with an existing top-level function", () => {
+      const result = diagnose("fn foo() {} static foo: i32 = 0;");
+      expect(result.diagnostics).toHaveLength(1);
+      assert(result.diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(result.diagnostics[0].message).toContain("collides");
+    });
+
+    it("a reference to a static lowers to a zero-argument call to its own name", () => {
+      const { result } = analyzeWithTokens(
+        "static COUNT: i32 = 0; fn f() -> i32 { COUNT }",
+      );
+      expect(result.diagnostics).toEqual([]);
+      const fn = result.program.items.find((item) => item.kind === "Function");
+      assert(fn !== undefined, "expected a Function item");
+      const trailing = fn.body.trailingExpression;
+      assert(isSome(trailing), "expected a trailing expression");
+      expect(trailing.value).toMatchObject({
+        kind: "CallExpression",
+        callee: { kind: "PathExpression" },
+        arguments: [],
+      });
+    });
+  });
+
+  describe("function-local const and static", () => {
+    it("accepts a const declared inside a function body, with no diagnostics", () => {
+      const result = diagnose("fn f() -> i32 { const N: i32 = 3; N }");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a function-local const that forward-references another local const", () => {
+      const result = diagnose(
+        "fn f() -> i32 { const B: i32 = A + 1; const A: i32 = 1; B }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("lets a block-local const shadow an outer const of the same name", () => {
+      const { result } = analyzeWithTokens(
+        "const N: i32 = 1; fn f() -> i32 { const N: i32 = 2; N }",
+      );
+      expect(result.diagnostics).toEqual([]);
+      const fn = result.program.items.find((item) => item.kind === "Function");
+      assert(fn !== undefined, "expected a Function item");
+      const trailing = fn.body.trailingExpression;
+      assert(isSome(trailing), "expected a trailing expression");
+      expect(trailing.value).toMatchObject({ kind: "IntLiteral", value: "2" });
+    });
+
+    it("rejects redefining a const twice in the same block", () => {
+      const result = diagnose(
+        "fn f() -> i32 { const N: i32 = 1; const N: i32 = 2; N }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      assert(result.diagnostics[0] !== undefined, "Expected diagnostic");
+      expect(result.diagnostics[0].message).toContain("defined more than once");
+    });
+
+    it("rejects a static declared inside a function body", () => {
+      const result = parse(tokenize("fn f() { static X: i32 = 0; }").tokens);
+      expect(result.program).toEqual(none());
+      assert(result.diagnostics[0] !== undefined, "expected a diagnostic");
+      expect(result.diagnostics[0].message).toContain("Static");
+    });
+
+    it("lets a function parameter shadow an outer const of the same name", () => {
+      const { result } = analyzeWithTokens(
+        "const X: i32 = 100; fn f(X: i32) -> i32 { X }",
+      );
+      expect(result.diagnostics).toEqual([]);
+      const fn = result.program.items.find((item) => item.kind === "Function");
+      assert(fn !== undefined, "expected a Function item");
+      const trailing = fn.body.trailingExpression;
+      assert(isSome(trailing), "expected a trailing expression");
+      // The parameter, not the const's inlined value - a genuine
+      // PathExpression reading the parameter, not an IntLiteral.
+      expect(trailing.value).toMatchObject({ kind: "PathExpression" });
+    });
+
+    it("lets a local let binding shadow an outer const of the same name", () => {
+      const { result } = analyzeWithTokens(
+        "const X: i32 = 100; fn f() -> i32 { let X = 7; X }",
+      );
+      expect(result.diagnostics).toEqual([]);
+      const fn = result.program.items.find((item) => item.kind === "Function");
+      assert(fn !== undefined, "expected a Function item");
+      const trailing = fn.body.trailingExpression;
+      assert(isSome(trailing), "expected a trailing expression");
+      expect(trailing.value).toMatchObject({ kind: "PathExpression" });
+    });
+
+    it("rejects a const initializer referencing a name shadowed by an outer function's parameter", () => {
+      const result = diagnose(
+        "const X: i32 = 100; fn f(X: i32) -> i32 { const Y: i32 = X + 1; Y }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(result.diagnostics[0].message).toContain(
+        "compile-time constant expression",
+      );
+    });
+
+    it("resolves a const array length correctly even from inside a function whose parameter shadows the const's name elsewhere", () => {
+      // Regression check for the scope-stack alignment `analyzeFunctionDecl`
+      // and `analyzeBlock` must share: a same-named parameter in a sibling
+      // function must not desync const/static frame indices for this one.
+      const result = diagnose(`
+        const N: usize = 3;
+        fn g(N: i32) -> i32 { N }
+        fn f() {
+          let arr: [i32; N] = [1, 2, 3];
+          print(arr);
+        }
+      `);
       expect(result.diagnostics).toEqual([]);
     });
   });
@@ -525,7 +960,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose(`${stmt}; fn main() {}`);
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toContain(
-        "only function and struct declarations are allowed at the top level",
+        "only function, struct, const, and static declarations are allowed at the top level",
       );
     },
   );
@@ -792,7 +1227,9 @@ describe("array types", (): void => {
     // reused for every slot - codegen lowers this to `.fill(value)`, which
     // would put the exact same JS object reference in every element rather
     // than a distinct value per slot. Matches Rust's own rule that `[expr; N]`
-    // requires `expr: Copy` (or a const item, which Hedge doesn't have yet).
+    // requires `expr: Copy` (a struct-typed const isn't in this ticket's
+    // const-eval scope, so still hits this check the same as any other
+    // non-Copy value).
     const result = diagnose(`
       struct Boxed { value: i32 }
       fn main() {
@@ -805,7 +1242,7 @@ describe("array types", (): void => {
     expect(result.diagnostics[0].message).toContain("Copy");
   });
 
-  it("rejects a repeat-form count that is not a literal integer", (): void => {
+  it("rejects a repeat-form count that is a runtime variable, not a compile-time constant", (): void => {
     const result = diagnose(`
       fn main() {
         let n = 5;
@@ -815,7 +1252,16 @@ describe("array types", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("literal integer");
+    // `n` is a real, declared local shadowing nothing - `resolveConstRef`'s
+    // shadow check (see `analyzer.ts`) resolves it to an ordinary binding
+    // and reports the generic "not a constant expression" message, which
+    // never actually names `n`. Assert the real message text, not a
+    // substring that happens to match by coincidence (a prior version of
+    // this assertion checked for the literal character "n", which passes
+    // against "consta**n**t" regardless of what the diagnostic says).
+    expect(result.diagnostics[0].message).toBe(
+      "array length must be a compile-time constant expression",
+    );
   });
 
   it("rejects a repeat-form count too large to represent as a safe integer", (): void => {
@@ -843,6 +1289,78 @@ describe("array types", (): void => {
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(result.diagnostics[0].message).toContain("too large");
+  });
+
+  describe("const-length arrays", (): void => {
+    it("resolves a [T; N] array type whose length is a const", (): void => {
+      const result = diagnose(`
+        const N: usize = 3;
+        fn main() {
+          let arr: [i32; N] = [1, 2, 3];
+          print(arr);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a [value; N] repeat-form array whose count is a const", (): void => {
+      const result = diagnose(`
+        const N: usize = 3;
+        fn main() {
+          let arr = [0; N];
+          print(arr);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a const array length that is itself a const arithmetic expression", (): void => {
+      const result = diagnose(`
+        const N: usize = 1 + 2;
+        fn main() {
+          let arr: [i32; N] = [1, 2, 3];
+          print(arr);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("accepts a zero-length const array", (): void => {
+      const result = diagnose(`
+        const N: usize = 0;
+        fn f(arr: [i32; N]) { print(arr); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a const array length that references a const of a non-integer type", (): void => {
+      const result = diagnose(`
+        const N: bool = true;
+        fn f(arr: [i32; N]) { print(arr); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(result.diagnostics[0].message).toContain("integer");
+    });
+
+    it("rejects a negative const array length", (): void => {
+      const result = diagnose(`
+        const N: i32 = -1;
+        fn f(arr: [i32; N]) { print(arr); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(result.diagnostics[0].message).toContain("negative");
+    });
+
+    it("rejects a [T; N] array length referencing an undeclared name", (): void => {
+      const result = diagnose(`
+        fn f(arr: [i32; MISSING]) { print(arr); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(result.diagnostics[0].message).toContain("MISSING");
+    });
   });
 
   it("rejects list-literal elements that do not all share the same type", (): void => {

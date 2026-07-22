@@ -6,6 +6,7 @@ import type {
   NumericKind,
   UnaryOperator,
   BlockStatement,
+  ConstDecl,
   DisposeCallStatement,
   DocComment,
   Expression,
@@ -16,6 +17,7 @@ import type {
   Program,
   ReturnStatement,
   Statement,
+  StaticDecl,
 } from "../jsim/ast.js";
 import type { Code, SourceMapMapping } from "./output.js";
 
@@ -580,10 +582,59 @@ function emitFunction(decl: FunctionDecl): string {
   return emitFunctionPart(decl).text;
 }
 
+/**
+ * A `static` lowers to a module-private backing variable plus an accessor
+ * function of its own name that lazily initializes it on first call
+ * (`??=` short-circuits after the first real assignment) - avoids the
+ * ES-module init-order/circular-import hazard a plain top-level `const`
+ * would have (spec 0008). Every reference site is already a `CallExpression`
+ * targeting this same name (see `semantics/analyzer.ts`'s
+ * `analyzeStaticReference`), so no other codegen path needs to know about
+ * statics at all.
+ */
+function emitStaticPart(decl: StaticDecl): EmittedPart {
+  const text = `let ${decl.backingName};\nlet ${decl.initFlagName} = false;\nfunction ${decl.name}() {\n  if (!${decl.initFlagName}) {\n    ${decl.initFlagName} = true;\n    ${decl.backingName} = ${emitExpression(decl.init)};\n  }\n  return ${decl.backingName};\n}`;
+  return {
+    text,
+    mappings: [
+      {
+        generatedStart: 0,
+        generatedEnd: text.length,
+        sourceStart: decl.span.start,
+        sourceEnd: decl.span.end,
+      },
+    ],
+  };
+}
+
+/**
+ * A `pub const`'s exported JS value - see `jsim/ast.ts`'s `ConstDecl` doc
+ * comment for why this exists (a plain-JS consumer needs a real binding,
+ * unlike an in-Hedge reference site, which is already inlined).
+ */
+function emitConstPart(decl: ConstDecl): EmittedPart {
+  const text = `export const ${decl.name} = ${emitExpression(decl.value)};`;
+  return {
+    text,
+    mappings: [
+      {
+        generatedStart: 0,
+        generatedEnd: text.length,
+        sourceStart: decl.span.start,
+        sourceEnd: decl.span.end,
+      },
+    ],
+  };
+}
+
 function emitItem(item: Item): string {
   switch (item.kind) {
     case "FunctionDecl":
       return emitFunction(item);
+    case "StaticDecl":
+      return emitStaticPart(item).text;
+    case "ConstDecl":
+      return emitConstPart(item).text;
     case "LetStatement":
       return emitLet(item);
     case "BlockStatement":
@@ -624,6 +675,11 @@ function emitDtsFunction(
 }
 
 function emitDtsItem(item: Item): string | null {
+  if (item.kind === "ConstDecl") {
+    return isSome(item.type)
+      ? `export declare const ${item.name}: ${item.type.value.value};`
+      : null;
+  }
   if (item.kind !== "FunctionDecl" || !isSome(item.scope)) {
     return null;
   }
@@ -643,6 +699,14 @@ function emitItemParts(program: Program): EmittedPart[] {
     if (item.kind === "FunctionDecl") {
       const part = emitFunctionPart(item);
       if (part.text.length > 0) parts.push(part);
+      continue;
+    }
+    if (item.kind === "StaticDecl") {
+      parts.push(emitStaticPart(item));
+      continue;
+    }
+    if (item.kind === "ConstDecl") {
+      parts.push(emitConstPart(item));
       continue;
     }
     const emitted = emitItem(item);

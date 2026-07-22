@@ -29,10 +29,29 @@ export interface Attribute {
 }
 
 /** A top-level entry. Slice 1 is lenient and also accepts bare statements. */
-export type Item = FunctionDecl | StructDecl | Statement | Expression;
+export type Item =
+  FunctionDecl | StructDecl | ConstDecl | StaticDecl | Statement | Expression;
+
+/**
+ * A `const`'s fully compile-time-evaluated value. Unlike `Expression`, this
+ * carries no unevaluated subtree - a `const` is inlined at each use site
+ * (spec 0008 "Constants and statics"), so by the time analysis finishes a
+ * `ConstDecl` there is nothing left to lower but this resolved value.
+ */
+export type ConstValue =
+  | { readonly kind: "Int"; readonly value: bigint }
+  | { readonly kind: "Float"; readonly value: number }
+  | { readonly kind: "Bool"; readonly value: boolean }
+  | { readonly kind: "Char"; readonly value: string }
+  | { readonly kind: "Str"; readonly value: string };
 
 export type Statement =
-  LetStatement | ExpressionStatement | FunctionDecl | StructDecl;
+  | LetStatement
+  | ExpressionStatement
+  | FunctionDecl
+  | StructDecl
+  | ConstDecl
+  | StaticDecl;
 
 type BinaryOperator =
   | "Add"
@@ -121,6 +140,31 @@ export interface StructDecl extends DecoratedAstNode {
   readonly visibility: Option<Visibility>;
   readonly name: Identifier;
   readonly body: StructBody;
+  readonly attributes: readonly Attribute[];
+}
+
+/**
+ * `const NAME: Type = <folded value>;`. Only ever produced for a top-level
+ * declaration - see `parser/ast.ts`'s `ConstDecl` doc comment.
+ */
+export interface ConstDecl extends DecoratedAstNode {
+  readonly kind: "Const";
+  readonly visibility: Option<Visibility>;
+  readonly name: Identifier;
+  readonly value: ConstValue;
+  readonly attributes: readonly Attribute[];
+}
+
+/**
+ * `static NAME: Type = Expression;`. Unlike `ConstDecl`, `value` stays a real
+ * `Expression` - a static's initializer runs once, at runtime, on first
+ * access, and may call arbitrary functions (spec 0008).
+ */
+export interface StaticDecl extends DecoratedAstNode {
+  readonly kind: "Static";
+  readonly visibility: Option<Visibility>;
+  readonly name: Identifier;
+  readonly value: Expression;
   readonly attributes: readonly Attribute[];
 }
 

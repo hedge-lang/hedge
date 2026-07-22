@@ -4,12 +4,14 @@ import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import type {
   Block,
+  ConstDecl,
   FunctionDecl,
   Item,
   LetStatement,
   Lifetime,
   Param,
   Program,
+  StaticDecl,
   Statement,
   StructBody,
   StructDecl,
@@ -339,6 +341,32 @@ function elideFunctionDecl(
 }
 
 /**
+ * `Const`/`Static` items have their own, standalone `type` field (not
+ * optional, unlike `LetStatement`'s) that can hold a `ReferenceType` just
+ * like a `let`'s annotation can - elides it the same way, but doesn't walk
+ * into `value` (an initializer `Block` isn't given the same special-cased
+ * elision `LetStatement`'s own initializer gets; see this file's own note on
+ * that being a deliberate, narrow scope boundary).
+ */
+function elideConstOrStaticDecl<T extends { readonly type: Type }>(
+  decl: T,
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+): T {
+  const names = new Set<string>();
+  collectTypeLifetimeNames(decl.type, names);
+  return {
+    ...decl,
+    type: resolveNestedReferenceTypes(
+      decl.type,
+      tokens,
+      diagnostics,
+      createSynthesizer(names),
+    ),
+  };
+}
+
+/**
  * `outerNames` is only ever consulted by the `LetStatement` case (see
  * `elideLetStatement`) - a nested `Function`/`Struct` builds its own,
  * independent name scope and ignores it, matching Rust's own scoping rules
@@ -359,6 +387,9 @@ function elideStatement(
       return elideFunctionDecl(stmt, tokens, diagnostics);
     case "Struct":
       return elideStructDecl(stmt, tokens, diagnostics);
+    case "Const":
+    case "Static":
+      return elideConstOrStaticDecl(stmt, tokens, diagnostics);
     default:
       return assertNever(stmt, `Unexpected statement: ${JSON.stringify(stmt)}`);
   }
@@ -383,11 +414,13 @@ function elideStatement(
  */
 function isTypeBearingItem(
   item: Item,
-): item is FunctionDecl | StructDecl | LetStatement {
+): item is FunctionDecl | StructDecl | LetStatement | ConstDecl | StaticDecl {
   return (
     item.kind === "Function" ||
     item.kind === "Struct" ||
-    item.kind === "LetStatement"
+    item.kind === "LetStatement" ||
+    item.kind === "Const" ||
+    item.kind === "Static"
   );
 }
 

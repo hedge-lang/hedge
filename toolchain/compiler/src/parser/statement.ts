@@ -269,10 +269,22 @@ export function parseBlock(
       break;
     }
     const token = tokens[cursor];
-    // Item declarations (fn, struct, or pub-prefixed variants) in block position.
+    // Item declarations (fn, struct, const, static, or pub-prefixed variants) in block position.
+    // `static` is recognized here (so it gets this function's clear
+    // "unexpected item kind" diagnostic) but deliberately excluded from the
+    // allowed-kind check below: a local static's initializer could
+    // otherwise reference an enclosing function's local variable/parameter,
+    // but the static only ever initializes once - there's no sound "which
+    // call's value" answer, so local `static` isn't supported yet (unlike
+    // local `const`, whose initializer can only ever reference other
+    // consts/literals and has no such ambiguity).
     if (
       token?.kind === "keyword" &&
-      (token.text === "fn" || token.text === "struct" || token.text === "pub")
+      (token.text === "fn" ||
+        token.text === "struct" ||
+        token.text === "const" ||
+        token.text === "static" ||
+        token.text === "pub")
     ) {
       const itemResult = parseItem(tokens, diagnostics, preAttrCursor);
       if (isErr(itemResult)) {
@@ -283,7 +295,11 @@ export function parseBlock(
       if (!isSome(item)) {
         continue;
       }
-      if (item.value.kind !== "Function" && item.value.kind !== "Struct") {
+      if (
+        item.value.kind !== "Function" &&
+        item.value.kind !== "Struct" &&
+        item.value.kind !== "Const"
+      ) {
         const token = tokens[item.value.tokenId];
         return err({
           severity: "error",

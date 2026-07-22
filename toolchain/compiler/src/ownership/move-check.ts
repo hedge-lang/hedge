@@ -47,12 +47,12 @@ import { buildControlFlowGraph, declarationOf } from "./control-flow-graph.js";
  * `Unbound` and `ConditionallyMoved` are deliberately distinct states, not
  * one state with a comment explaining the difference: `Unbound` means moved
  * on every reachable path (nothing to drop, unambiguously);
- * `ConditionallyMoved` means moved on some reachable path but not others —
+ * `ConditionallyMoved` means moved on some reachable path but not others -
  * the binding may still be Owned depending on which branch actually ran.
  * `Uninitialized` and `PossiblyUninitialized` are the same distinction on
  * the other axis: `Uninitialized` means never constructed on any reachable
  * path; `PossiblyUninitialized` means constructed on some path but not
- * others — the binding may still be Owned depending on which branch ran.
+ * others - the binding may still be Owned depending on which branch ran.
  * Slice 1 has no drop-flag mechanism (that's Slice 2, per ROADMAP.md), so it
  * cannot correctly decide whether to drop a `ConditionallyMoved` or
  * `PossiblyUninitialized` binding; collapsing either into its "definitely
@@ -896,6 +896,8 @@ function walkStatement(
     }
     case "Function":
     case "Struct":
+    case "Const":
+    case "Static":
       // Local item declarations don't use outer bindings in Slice 1 (mirrors
       // the equivalent TODO in ownership/borrowck.ts).
       return;

@@ -212,6 +212,85 @@ describe("generator", (): void => {
   });
 });
 
+describe("const and static codegen", (): void => {
+  it("emits no JS at all for a top-level const", () => {
+    expect(js(gen("const N: i32 = 3; fn main() { print(N); }"))).toBe(
+      [
+        "#!/usr/bin/env node",
+        "",
+        "function main() {",
+        "  print(3);",
+        "}",
+        "",
+        "main();",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("emits both .d.ts and a real exported JS binding for a pub const", () => {
+    const code = gen("pub const MAX: i32 = 100;");
+    expect(dts(code)).toBe("export declare const MAX: number;\n");
+    expect(js(code)).toBe("export const MAX = 100;\n");
+  });
+
+  it("emits nothing in .d.ts for a non-pub const", () => {
+    expect(dts(gen("const N: i32 = 3;"))).toBe(null);
+  });
+
+  it("emits a negative pub const's exported JS value with the same i32 wrap as any other unary neg", () => {
+    expect(js(gen("pub const MIN: i32 = -5;"))).toBe(
+      "export const MIN = ((-5)|0);\n",
+    );
+  });
+
+  it("lowers a static to a backing variable, an init flag, and a lazily-initializing accessor function", () => {
+    expect(js(gen("static COUNT: i32 = 0;"))).toBe(
+      [
+        "let __hedgeStatic_COUNT;",
+        "let __hedgeStaticInit_COUNT = false;",
+        "function COUNT() {",
+        "  if (!__hedgeStaticInit_COUNT) {",
+        "    __hedgeStaticInit_COUNT = true;",
+        "    __hedgeStatic_COUNT = 0;",
+        "  }",
+        "  return __hedgeStatic_COUNT;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("calls a static's accessor function at every reference site", () => {
+    expect(js(gen("static COUNT: i32 = 0; fn main() { print(COUNT); }"))).toBe(
+      [
+        "#!/usr/bin/env node",
+        "",
+        "let __hedgeStatic_COUNT;",
+        "let __hedgeStaticInit_COUNT = false;",
+        "function COUNT() {",
+        "  if (!__hedgeStaticInit_COUNT) {",
+        "    __hedgeStaticInit_COUNT = true;",
+        "    __hedgeStatic_COUNT = 0;",
+        "  }",
+        "  return __hedgeStatic_COUNT;",
+        "}",
+        "",
+        "function main() {",
+        "  print(COUNT());",
+        "}",
+        "",
+        "main();",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("emits no .d.ts entry for a static, since pub static is rejected in semantic analysis", () => {
+    expect(dts(gen("static COUNT: i32 = 0;"))).toBe(null);
+  });
+});
+
 describe("binary expression codegen", () => {
   it.each([
     ["Add", "i32", "x + y", "((x + y)|0)"],

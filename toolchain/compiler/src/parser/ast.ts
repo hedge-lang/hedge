@@ -23,10 +23,16 @@ export interface Attribute {
 }
 
 /** A top-level entry. Slice 1 is lenient and also accepts bare statements. */
-export type Item = FunctionDecl | StructDecl | Statement | Expression;
+export type Item =
+  FunctionDecl | StructDecl | ConstDecl | StaticDecl | Statement | Expression;
 
 export type Statement =
-  LetStatement | ExpressionStatement | FunctionDecl | StructDecl;
+  | LetStatement
+  | ExpressionStatement
+  | FunctionDecl
+  | StructDecl
+  | ConstDecl
+  | StaticDecl;
 
 export type BinaryOperator =
   | "Add"
@@ -116,6 +122,35 @@ export interface StructDecl extends AstNode {
   readonly name: Identifier;
   readonly generics: readonly GenericParam[];
   readonly body: StructBody;
+  readonly attributes: readonly Attribute[];
+}
+
+/**
+ * `const NAME: Type = Expression;` - a compile-time constant. Legal at the
+ * top level and inside a function body (see `parser/statement.ts`'s local
+ * item dispatch).
+ */
+export interface ConstDecl extends AstNode {
+  readonly kind: "Const";
+  readonly visibility: Option<Visibility>;
+  readonly name: Identifier;
+  readonly type: Type;
+  readonly value: Expression;
+  readonly attributes: readonly Attribute[];
+}
+
+/**
+ * `static NAME: Type = Expression;` - a lazily-initialized, module-level
+ * singleton. Only legal at the top level, unlike `ConstDecl` - a local
+ * static's initializer could otherwise reference an enclosing function's
+ * local variable, but the static only ever initializes once.
+ */
+export interface StaticDecl extends AstNode {
+  readonly kind: "Static";
+  readonly visibility: Option<Visibility>;
+  readonly name: Identifier;
+  readonly type: Type;
+  readonly value: Expression;
   readonly attributes: readonly Attribute[];
 }
 

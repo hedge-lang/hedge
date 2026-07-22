@@ -962,6 +962,103 @@ describe("struct declarations", (): void => {
   });
 });
 
+describe("const declarations", (): void => {
+  it("parses a top-level const with a typed literal initializer", (): void => {
+    const ast = parseProgram("const N: usize = 3;");
+    expect(ast).toMatchObject({
+      kind: "Program",
+      items: [
+        {
+          kind: "Const",
+          name: { kind: "Identifier", text: "N" },
+          type: {
+            kind: "NamedType",
+            path: { absolute: false, segments: ["usize"] },
+          },
+          value: { kind: "IntLiteral", value: "3" },
+        },
+      ],
+    });
+  });
+
+  it("parses a const with a binary-expression initializer", (): void => {
+    const ast = parseProgram("const N: i32 = 1 + 2;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Const",
+          value: {
+            kind: "BinaryExpression",
+            operator: "Add",
+            left: { kind: "IntLiteral", value: "1" },
+            right: { kind: "IntLiteral", value: "2" },
+          },
+        },
+      ],
+    });
+  });
+
+  it("rejects a const declaration missing its type annotation", (): void => {
+    const result = parse(tokenize("const N = 3;").tokens);
+    expect(result.program).toEqual(none());
+    assert(result.diagnostics[0] !== undefined, "expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("colon");
+  });
+
+  it("rejects a const declaration missing its initializer", (): void => {
+    const result = parse(tokenize("const N: usize;").tokens);
+    expect(result.program).toEqual(none());
+    assert(result.diagnostics[0] !== undefined, "expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("eq");
+  });
+
+  it("rejects a const declaration missing its trailing semicolon", (): void => {
+    const result = parse(tokenize("const N: usize = 3").tokens);
+    expect(result.program).toEqual(none());
+    assert(result.diagnostics[0] !== undefined, "expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("semi");
+  });
+});
+
+describe("static declarations", (): void => {
+  it("parses a top-level static with a literal initializer", (): void => {
+    const ast = parseProgram("static COUNT: i32 = 0;");
+    expect(ast).toMatchObject({
+      kind: "Program",
+      items: [
+        {
+          kind: "Static",
+          name: { kind: "Identifier", text: "COUNT" },
+          type: {
+            kind: "NamedType",
+            path: { absolute: false, segments: ["i32"] },
+          },
+          value: { kind: "IntLiteral", value: "0" },
+        },
+      ],
+    });
+  });
+
+  it("parses a static with a call-expression initializer", (): void => {
+    const ast = parseProgram("static TABLE: i32 = build_table();");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Static",
+          value: { kind: "CallExpression" },
+        },
+      ],
+    });
+  });
+
+  it("rejects static mut, since the grammar has no mut slot for static items", (): void => {
+    const result = parse(tokenize("static mut COUNT: i32 = 0;").tokens);
+    expect(result.program).toEqual(none());
+    assert(result.diagnostics[0] !== undefined, "expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("mut");
+  });
+});
+
 describe("attributes on let statements", (): void => {
   it("attaches an outer attribute to a top-level let", (): void => {
     const ast = parseProgram("#[attr] let x = 1;");

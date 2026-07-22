@@ -5,11 +5,13 @@ import { err, isErr, ok } from "../result.js";
 import {
   patternBindingName,
   type Attribute,
+  type ConstDecl,
   type FunctionDecl,
   type GenericParam,
   type Item,
   type NamedFieldsBody,
   type Param,
+  type StaticDecl,
   type StructBody,
   type StructDecl,
   type StructField,
@@ -269,7 +271,7 @@ function parseDeclarationGenerics(
 
 /**
  * If a `where` clause starts at `pos`, pushes a Slice-1 diagnostic and skips
- * it via `skip` (which knows the declaration kind's own body-start shape —
+ * it via `skip` (which knows the declaration kind's own body-start shape -
  * a function's body is always `{`, a struct's can be `{`/`(`/`;`). Otherwise
  * returns `pos` unchanged.
  */
@@ -659,6 +661,72 @@ function parseStruct(
   return ok({ node: decl, next: cursor });
 }
 
+/**
+ * Parses a `const` or `static` declaration.
+ *
+ * Grammar:
+ *
+ * ```text
+ * Const  ::= "const" Identifier ":" Type "=" Expression ";"
+ * Static ::= "static" Identifier ":" Type "=" Expression ";"
+ * ```
+ */
+function parseConstOrStatic(
+  kind: "Const" | "Static",
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  attributes: readonly Attribute[] = [],
+  visibility: Option<Visibility> = none(),
+): PR<Parsed<ConstDecl | StaticDecl>> {
+  const start = pos;
+  const afterKeyword = expectKeyword(
+    tokens,
+    pos,
+    kind === "Const" ? "const" : "static",
+  );
+  if (isErr(afterKeyword)) {
+    return afterKeyword;
+  }
+  const nameResult = parseIdentifier(tokens, afterKeyword.value);
+  if (isErr(nameResult)) {
+    return nameResult;
+  }
+  const name = nameResult.value.node;
+
+  const afterColon = expect(tokens, nameResult.value.next, "colon");
+  if (isErr(afterColon)) {
+    return afterColon;
+  }
+
+  const typeResult = parseType(tokens, afterColon.value);
+  if (isErr(typeResult)) {
+    return typeResult;
+  }
+  const type = typeResult.value.node;
+
+  const afterEq = expect(tokens, typeResult.value.next, "eq");
+  if (isErr(afterEq)) {
+    return afterEq;
+  }
+
+  const valueResult = parseExpression(tokens, diagnostics, afterEq.value);
+  if (isErr(valueResult)) {
+    return valueResult;
+  }
+  const value = valueResult.value.node;
+
+  const afterSemi = expect(tokens, valueResult.value.next, "semi");
+  if (isErr(afterSemi)) {
+    return afterSemi;
+  }
+
+  return ok({
+    node: { kind, tokenId: start, visibility, name, type, value, attributes },
+    next: afterSemi.value,
+  });
+}
+
 const UNSUPPORTED_TOP_LEVEL_KEYWORD_MESSAGES: ReadonlyMap<string, string> =
   new Map([
     ["enum", "`enum` declarations are not supported in Slice 1"],
@@ -740,6 +808,26 @@ export function parseItem(
     return ok({
       node: some(structResult.value.node),
       next: structResult.value.next,
+    });
+  }
+  if (
+    token?.kind === "keyword" &&
+    (token.text === "const" || token.text === "static")
+  ) {
+    const constResult = parseConstOrStatic(
+      token.text === "const" ? "Const" : "Static",
+      tokens,
+      diagnostics,
+      afterVis,
+      attributes,
+      vis.node,
+    );
+    if (isErr(constResult)) {
+      return constResult;
+    }
+    return ok({
+      node: some(constResult.value.node),
+      next: constResult.value.next,
     });
   }
   if (token?.kind === "keyword" && token.text === "let") {

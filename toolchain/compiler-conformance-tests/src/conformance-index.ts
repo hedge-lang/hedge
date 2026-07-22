@@ -219,6 +219,22 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     ],
   },
   {
+    id: "EXEC-CONST-STATIC",
+    description:
+      "const/static item declarations execute correctly end-to-end: uses a const's folded value in runtime arithmetic and can chain to another const, a static initializes lazily and exactly once on first access (not eagerly at module load), a static can reference a const, and a [T; N]/[value; N] array whose length/count is a const resolves and runs correctly",
+    specRefs: ["0008-expressions-and-control-flow.md", "0012-collections.md"],
+    testIds: [
+      "uses a const's folded value in runtime arithmetic",
+      "chains a const reference to another const correctly at runtime",
+      "initializes a static lazily, exactly once, on first access",
+      "runs a static's initializer on first access, not eagerly at module load",
+      "resolves a static referencing a const in its initializer",
+      "executes an array whose [T; N] length is const-resolved",
+      "executes a repeat-form array whose count is const-resolved",
+      "accepts a const-evaluated array length, not just a literal integer",
+    ],
+  },
+  {
     id: "EXEC-FUNCTIONS",
     description:
       "User-defined functions with non-unit return types return their trailing expression's value, including tail-position if/else chains, end-to-end",
