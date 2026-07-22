@@ -210,7 +210,7 @@ describe("toJsim", () => {
     expect(program.items).toEqual([]);
   });
 
-  it("unit-typed param is kept in JSIM output with null type", () => {
+  it("unit-typed param is kept in JSIM output with undefined type", () => {
     const program = jsimSource("fn f(x: ()) {}");
     expect(program).toMatchObject({
       items: [
@@ -220,7 +220,7 @@ describe("toJsim", () => {
             {
               kind: "FunctionParam",
               name: "x",
-              type: some({ kind: "PrimitiveType", value: "null" }),
+              type: some({ kind: "PrimitiveType", value: "undefined" }),
             },
           ],
         },

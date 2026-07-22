@@ -347,7 +347,14 @@ function emitExpression(expression: Expression): string {
         : `${object}[${index}]`;
     }
     case "TupleExpression":
-      return `[${expression.elements.map(emitExpression).join(", ")}]`;
+      // Unit (`()`) has no fields to carry - representing it as an array is
+      // misleading (a truthy, non-nullish value where none was intended) and
+      // diverges from the `undefined` a unit-returning function already
+      // produces via its implicit return. Non-empty tuples (once they exist
+      // as a real type) stay on the array representation.
+      return expression.elements.length === 0
+        ? "void 0"
+        : `[${expression.elements.map(emitExpression).join(", ")}]`;
     case "ArrayExpression": {
       const elements = `[${expression.elements.map(emitExpression).join(", ")}]`;
       const value = isSome(expression.numericKind)

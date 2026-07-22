@@ -249,6 +249,13 @@ describe("must-fail corpus — rejection tests", (): void => {
       assertRejectsWithMessage(`fn main() { print(1 == "1"); }`, "type");
     });
 
+    it("rejects equality comparison between a genuinely unit-typed operand and a mismatched type", (): void => {
+      assertRejectsWithMessage(
+        `fn noop() {} fn main() { print(noop() == 5); }`,
+        "type",
+      );
+    });
+
     it("rejects let binding type annotation mismatch: integer vs bool annotation", (): void => {
       assertRejectsWithMessage(
         `fn main() { let x: bool = 5; print(x); }`,

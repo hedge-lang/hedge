@@ -260,6 +260,9 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     testIds: [
       "float literal prints correctly",
       "char literal prints as its character",
+      "two unit values compare equal under ==",
+      "two unit values compare unequal as false under !=",
+      "a unit value from a unit-returning function call compares equal to a unit literal",
     ],
   },
   {

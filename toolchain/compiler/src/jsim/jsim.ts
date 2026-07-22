@@ -483,15 +483,10 @@ export function toJsim(
   };
 }
 
-interface JsPrimitiveType {
-  kind: "PrimitiveType";
-  value: "string" | "number" | "bigint" | "boolean" | "null";
-}
-
 // eslint-disable-next-line complexity -- Routing function
 function semanticTypeToJsPrimitive(
   type: Semantics.Type,
-): Option<JsPrimitiveType> {
+): Option<JSIM.PrimitiveType> {
   switch (type.kind) {
     case "PrimitiveStringType":
     case "PrimitiveCharType":
@@ -513,7 +508,10 @@ function semanticTypeToJsPrimitive(
     case "PrimitiveF64Type":
       return some({ kind: "PrimitiveType", value: "number" });
     case "UnitType":
-      return some({ kind: "PrimitiveType", value: "null" });
+      // Matches the runtime value a () literal (and a unit-returning
+      // function's implicit return) actually produce - see codegen's
+      // TupleExpression case and jsimTailStatements.
+      return some({ kind: "PrimitiveType", value: "undefined" });
     case "ReferenceType":
       // References erase transparently - no { v } cell boxing exists yet
       // (that's the still-guardrailed `&mut`-cell lowering work), so a
