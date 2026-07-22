@@ -858,6 +858,19 @@ describe("const and static lowering", () => {
     expect(staticDecl.backingName).not.toBe("__hedgeStatic_COUNT");
   });
 
+  it("mangles a static's backing name when it collides with a pub const's exported name", () => {
+    // A pub const's own name becomes a real top-level JS binding (see
+    // codegen's emitConstPart), just like a function's - it needs the same
+    // collision protection a static's mangled backing name already gets
+    // against function names.
+    const program = jsimSource(
+      "pub const __hedgeStatic_COUNT: i32 = 1; static COUNT: i32 = 0;",
+    );
+    const staticDecl = program.items.find((item) => item.kind === "StaticDecl");
+    assert(staticDecl?.kind === "StaticDecl", "expected a StaticDecl item");
+    expect(staticDecl.backingName).not.toBe("__hedgeStatic_COUNT");
+  });
+
   it("lowers a reference to a static as a zero-argument call to its own name", () => {
     const program = jsimSource(
       "static COUNT: i32 = 0; fn f() -> i32 { COUNT }",
