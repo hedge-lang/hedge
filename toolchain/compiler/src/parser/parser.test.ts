@@ -962,6 +962,27 @@ describe("struct declarations", (): void => {
   });
 });
 
+describe("enum declarations", (): void => {
+  it("parses a unit variant", (): void => {
+    const ast = parseProgram("enum Message { Quit }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Enum",
+          name: { kind: "Identifier", text: "Message" },
+          variants: [
+            {
+              kind: "Variant",
+              name: { kind: "Identifier", text: "Quit" },
+              body: none(),
+            },
+          ],
+        },
+      ],
+    });
+  });
+});
+
 describe("const declarations", (): void => {
   it("parses a top-level const with a typed literal initializer", (): void => {
     const ast = parseProgram("const N: usize = 3;");
