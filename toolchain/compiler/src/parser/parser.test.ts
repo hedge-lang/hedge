@@ -1364,6 +1364,22 @@ describe("enum declarations", (): void => {
     expect(diagnostics[0].message).toContain("rbrace");
   });
 
+  it("a missing closing brace immediately followed by a sibling declaration recovers: the sibling still parses, with exactly one diagnostic", (): void => {
+    const { tokens } = tokenize("enum Foo { Quit fn bar() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("rbrace");
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Enum",
+        name: { text: "Foo" },
+        variants: [{ name: { text: "Quit" } }],
+      },
+      { kind: "Function", name: { text: "bar" } },
+    ]);
+  });
+
   it("a malformed field inside a struct variant's body recovers at the field-list level, keeping the variant (with the bad field dropped) and its sibling, with exactly one diagnostic (no cascade)", (): void => {
     const { tokens } = tokenize("enum Foo { Bad { x }, Ok }");
     const { program, diagnostics } = parse(tokens);

@@ -27,6 +27,7 @@ import {
   expect,
   expectKeyword,
   isGuardrailDiagnostic,
+  isItemStartKeyword,
   isLifetimeGenericsStart,
   kindAt,
   parseIdentifier,
@@ -785,6 +786,14 @@ function parseVariantList(
 
   const afterRbrace = expect(tokens, cursor, "rbrace");
   if (isErr(afterRbrace)) {
+    // Recover only when an item-start keyword follows - the one signal that
+    // the enum's body actually ended here. Any other token, including EOF,
+    // stays fail-fast.
+    const token = tokens[cursor];
+    if (token !== undefined && isItemStartKeyword(token)) {
+      diagnostics.push(afterRbrace.error);
+      return ok({ node: variants, next: cursor });
+    }
     return afterRbrace;
   }
   return ok({ node: variants, next: afterRbrace.value });

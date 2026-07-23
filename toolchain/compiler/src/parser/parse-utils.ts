@@ -449,15 +449,18 @@ const ITEM_START_KEYWORDS: ReadonlySet<string> = new Set([
   "trait",
 ]);
 
+/** True for a token that starts a new item declaration - signals that
+ * whatever construct precedes it must have already ended. */
+export function isItemStartKeyword(tok: Token): boolean {
+  return tok.kind === "keyword" && ITEM_START_KEYWORDS.has(tok.text);
+}
+
 /**
  * True for tokens that can never legally appear inside a `where`-clause
  * bound list (paths, `:`, `,`, `<...>`).
  */
 function isWhereClauseBoundary(tok: Token): boolean {
-  return (
-    tok.kind === "rbrace" ||
-    (tok.kind === "keyword" && ITEM_START_KEYWORDS.has(tok.text))
-  );
+  return tok.kind === "rbrace" || isItemStartKeyword(tok);
 }
 
 /**
