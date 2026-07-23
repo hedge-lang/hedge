@@ -477,9 +477,10 @@ function elideStatement(
 }
 
 /**
- * Only `FunctionDecl`/`StructDecl`/`EnumDecl`/`LetStatement` carry `Type`
- * fields that can hold a `ReferenceType` - every other `Item` kind is a bare
- * expression or `ExpressionStatement`, neither of which does. Narrowing to
+ * Only `FunctionDecl`/`StructDecl`/`EnumDecl`/`LetStatement`/`ConstDecl`/
+ * `StaticDecl` carry `Type` fields that can hold a `ReferenceType` - every
+ * other `Item` kind is a bare expression or `ExpressionStatement`, neither
+ * of which does. Narrowing to
  * this subset up front (rather than giving `elideStatement` a
  * `default: return item` branch over the full `Item` union) keeps
  * `elideStatement`'s own switch genuinely exhaustive: `Item` includes every
