@@ -1263,10 +1263,14 @@ function checkEscapingStructExpression(
 /**
  * Hedge-26's narrow "borrow outliving referent" check: a function's
  * trailing/return-position expression must not carry a fresh borrow of a
- * value grounded in this function's own frame. Only the single-hop
- * syntactic shapes named in the ticket are covered - a bare `&local`, and
- * a struct literal field initialized with `&local` - not general
- * escape/alias analysis (see `blockLetNames`'s doc comment).
+ * value grounded in this function's own frame. The two leaf shapes named in
+ * the ticket - a bare `&local`, and a struct literal field initialized with
+ * `&local` - are checked wherever they appear in return position, including
+ * inside an `if`/`else` branch or a nested block's own trailing expression
+ * (recursing via `checkEscapingReferenceInBranch`/`checkEscapingReferenceInBlock`).
+ * This still does not trace through an intermediate alias binding (`let r =
+ * &x; r`) - that remains general escape/alias analysis, out of scope here
+ * (see the `it.fails` pinning it below).
  */
 function checkEscapingReference(
   ctx: AnalysisContext,
@@ -1278,6 +1282,37 @@ function checkEscapingReference(
   }
   if (expr.kind === "StructExpression") {
     checkEscapingStructExpression(ctx, expr);
+    return;
+  }
+  if (expr.kind === "IfExpression") {
+    checkEscapingReferenceInBlock(ctx, expr.thenBranch);
+    if (isSome(expr.elseBranch)) {
+      checkEscapingReferenceInBranch(ctx, expr.elseBranch.value);
+    }
+    return;
+  }
+  if (expr.kind === "Block") {
+    checkEscapingReferenceInBlock(ctx, expr);
+  }
+}
+
+function checkEscapingReferenceInBranch(
+  ctx: AnalysisContext,
+  branch: Semantics.IfExpression | Semantics.Block,
+): void {
+  if (branch.kind === "IfExpression") {
+    checkEscapingReference(ctx, branch);
+    return;
+  }
+  checkEscapingReferenceInBlock(ctx, branch);
+}
+
+function checkEscapingReferenceInBlock(
+  ctx: AnalysisContext,
+  block: Semantics.Block,
+): void {
+  if (isSome(block.trailingExpression)) {
+    checkEscapingReference(ctx, block.trailingExpression.value);
   }
 }
 

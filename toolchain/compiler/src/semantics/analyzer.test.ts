@@ -894,6 +894,70 @@ describe("semantic analysis", (): void => {
       expect(diagnostics).toEqual([]);
     });
 
+    it("rejects a dangling reference returned from one branch of an if/else trailing expression", (): void => {
+      const { diagnostics } = diagnose(`
+        fn confusing(cond: bool, y: &i32) -> &i32 {
+          if cond {
+            let x = 5;
+            &x
+          } else {
+            y
+          }
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].message).toContain("x");
+    });
+
+    it("rejects a dangling reference in the final else of an if/else-if/else chain", (): void => {
+      const { diagnostics } = diagnose(`
+        fn confusing(a: bool, b: bool, y: &i32) -> &i32 {
+          if a {
+            y
+          } else if b {
+            y
+          } else {
+            let x = 5;
+            &x
+          }
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].message).toContain("x");
+    });
+
+    it("rejects a dangling reference returned through a nested block's own trailing expression", (): void => {
+      const { diagnostics } = diagnose(`
+        fn confusing() -> &i32 {
+          {
+            let x = 5;
+            &x
+          }
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].message).toContain("x");
+    });
+
+    it("accepts an if/else trailing expression when both branches pass a reference parameter through cleanly", (): void => {
+      const { diagnostics } = diagnose(`
+        fn safe(cond: bool, y: &i32) -> &i32 {
+          if cond {
+            y
+          } else {
+            y
+          }
+        }
+      `);
+      expect(diagnostics).toEqual([]);
+    });
+
     it("does not cascade into a second diagnostic when the borrowed name is itself unresolved and the reconciled return type happens to match (no independent type-mismatch diagnostic to mask the check)", (): void => {
       const { diagnostics } = diagnose("fn f() -> &() { &missing_name }");
       expect(diagnostics).toHaveLength(1);
