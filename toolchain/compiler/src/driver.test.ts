@@ -132,6 +132,79 @@ describe("driver", (): void => {
     expect(result.diagnostics.some((d) => d.severity === "warning")).toBe(true);
   });
 
+  describe("multi-error recovery for ownership diagnostics", (): void => {
+    it("reports two independent conflicting-borrow errors in the same compile, not just the first", (): void => {
+      const result = compile(`
+        fn main() {
+          let mut a = 1;
+          let r1 = &mut a;
+          let r2 = &mut a;
+          print(r1);
+          print(r2);
+          let mut b = 2;
+          let r3 = &mut b;
+          let r4 = &mut b;
+          print(r3);
+          print(r4);
+        }
+      `);
+      expect(isNone(result.code)).toBe(true);
+      const conflicts = result.diagnostics.filter((d) =>
+        d.message.includes("Conflicting borrows"),
+      );
+      expect(conflicts).toHaveLength(2);
+    });
+
+    it("reports a use-after-move error and an unrelated borrow-conflict error in the same compile", (): void => {
+      const result = compile(`
+        struct Boxed { value: i32 }
+        fn main() {
+          let x = Boxed { value: 1 };
+          let y = x;
+          print(x.value);
+          let mut a = 1;
+          let r1 = &mut a;
+          let r2 = &mut a;
+          print(r1);
+          print(r2);
+        }
+      `);
+      expect(isNone(result.code)).toBe(true);
+      expect(
+        result.diagnostics.some((d) => d.message.includes("moved")),
+      ).toBe(true);
+      expect(
+        result.diagnostics.some((d) =>
+          d.message.includes("Conflicting borrows"),
+        ),
+      ).toBe(true);
+    });
+
+    it("reports a lifetime-ambiguity error (a parser-stage diagnostic) and an unrelated borrow-conflict error (a semantic-stage diagnostic) in the same compile", (): void => {
+      const result = compile(`
+        fn longest(a: &str, b: &str) -> &str { a }
+        fn main() {
+          let mut x = 1;
+          let r1 = &mut x;
+          let r2 = &mut x;
+          print(r1);
+          print(r2);
+        }
+      `);
+      expect(isNone(result.code)).toBe(true);
+      expect(
+        result.diagnostics.some((d) =>
+          d.message.includes("missing lifetime specifier"),
+        ),
+      ).toBe(true);
+      expect(
+        result.diagnostics.some((d) =>
+          d.message.includes("Conflicting borrows"),
+        ),
+      ).toBe(true);
+    });
+  });
+
   describe("Slice 1 loop/label rejection", (): void => {
     it.each([
       ["loop", "fn main() { loop {} }"],
