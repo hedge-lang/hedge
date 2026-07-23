@@ -1,5 +1,5 @@
 import type { Diagnostic } from "../diagnostics.js";
-import { some } from "../option.js";
+import { none, some } from "../option.js";
 import { scanEscapeSeq } from "./escape.js";
 import { isIdentStart } from "./ident.js";
 import { scanLifetime } from "./lifetime.js";
@@ -31,6 +31,8 @@ function scanCharLiteral(
           severity: "error",
           message: `unterminated char literal at offset ${start}`,
           span: some({ start, end: source.length }),
+          code: none(),
+          relatedSpans: [],
         });
         tokens.push({
           kind: "error",
@@ -48,6 +50,8 @@ function scanCharLiteral(
         severity: "error",
         message: `unterminated char literal at offset ${start}`,
         span: some({ start, end: escEnd }),
+        code: none(),
+        relatedSpans: [],
       });
       tokens.push({
         kind: "error",
@@ -101,6 +105,8 @@ export function scanCharOrLifetime(
       severity: "error",
       message: `empty char literal at offset ${start}`,
       span: some({ start, end: start + 2 }),
+      code: none(),
+      relatedSpans: [],
     });
     tokens.push({ kind: "error", span: { start, end: start + 2 }, text: "''" });
     return start + 2;
@@ -130,6 +136,8 @@ export function scanCharOrLifetime(
     severity: "error",
     message: `Unexpected character "'" at offset ${start}`,
     span: some({ start, end }),
+    code: none(),
+    relatedSpans: [],
   });
   tokens.push({ kind: "error", span: { start, end }, text: "'" });
   return end;

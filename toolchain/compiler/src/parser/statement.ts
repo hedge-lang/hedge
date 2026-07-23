@@ -61,6 +61,8 @@ function findLoopBodyOpenBrace(
         severity: "error",
         message: "expected `{` to open loop body, found end of input",
         span: none(),
+        code: none(),
+        relatedSpans: [],
       });
     }
     if (condDepth === 0 && tok.kind === "lbrace") {
@@ -94,6 +96,8 @@ function skipUnsupportedLoopConstruct(
     severity: "error",
     message: unsupportedLoopMessage(match.token.text),
     span: some(match.token.span),
+    code: none(),
+    relatedSpans: [],
   };
 
   const openBraceResult = findLoopBodyOpenBrace(tokens, match.pos + 1);
@@ -263,6 +267,8 @@ export function parseBlock(
         severity: "error",
         message: "expected `}` to close block, found end of input",
         span: none(),
+        code: none(),
+        relatedSpans: [],
       });
     }
     if (tokens[cursor]?.kind === "rbrace") {
@@ -305,6 +311,8 @@ export function parseBlock(
           severity: "error",
           message: `unexpected item kind '${item.value.kind}' in block position`,
           span: token === undefined ? none() : some(token.span),
+          code: none(),
+          relatedSpans: [],
         });
       }
       statements.push(item.value);
@@ -377,6 +385,8 @@ export function parseBlock(
       severity: "error",
       message: `Expected '}' to close block`,
       span: closeTok !== undefined ? some(closeTok.span) : none(),
+      code: none(),
+      relatedSpans: [],
     });
   }
   return ok({ node: block, next: cursor + 1 });

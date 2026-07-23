@@ -1,17 +1,16 @@
-import { compile } from "@hedge-lang/compiler";
+import type { Diagnostic } from "@hedge-lang/compiler";
+import { compile, isSome } from "@hedge-lang/compiler";
 import { describe, expect, it } from "vitest";
 
 const DIAGNOSTIC_CODE_PATTERN = /^HEDGE-[A-Z][A-Z0-9-]*-\d{3,}$/u;
 
-function extractDiagnosticCode(diagnostic: unknown): string | null {
-  if (typeof diagnostic !== "object" || diagnostic === null) {
+function extractDiagnosticCode(
+  diagnostic: Diagnostic | undefined,
+): string | null {
+  if (diagnostic === undefined || !isSome(diagnostic.code)) {
     return null;
   }
-  if (!Object.hasOwn(diagnostic, "code")) {
-    return null;
-  }
-  const value = (diagnostic as Record<string, unknown>)["code"];
-  return typeof value === "string" ? value : null;
+  return diagnostic.code.value;
 }
 
 describe("diagnostic code ID conformance", (): void => {
@@ -58,4 +57,31 @@ describe("diagnostic code ID conformance", (): void => {
       }
     },
   );
+
+  it("every borrow and lifetime error category in the corpus carries a schema-valid, stable code", (): void => {
+    const corpus: Record<string, string> = {
+      "HEDGE-BORROW-CHECK-001":
+        'fn main() { let mut x = "a"; let r1 = &mut x; let r2 = &mut x; print(r1); print(r2); }',
+      "HEDGE-BORROW-CHECK-002":
+        'fn main() { let x = "a"; let r = &mut x; print(r); }',
+      "HEDGE-BORROW-CHECK-003": `struct Boxed { value: i32 }
+        fn main() { let x = Boxed { value: 1 }; let y = x; print(x.value); }`,
+      "HEDGE-LIFETIME-001": "fn longest(a: &str, b: &str) -> &str { a }",
+      "HEDGE-LIFETIME-002": "fn confusing(y: &i32) -> &i32 { let x = 5; &x }",
+    };
+    for (const [expectedCode, source] of Object.entries(corpus)) {
+      const result = compile(source);
+      const codes = result.diagnostics.map(extractDiagnosticCode);
+      expect(
+        codes,
+        `expected ${expectedCode} among diagnostics for: ${source}`,
+      ).toContain(expectedCode);
+      for (const code of codes) {
+        expect(code).not.toBeNull();
+        if (code !== null) {
+          expect(code).toMatch(DIAGNOSTIC_CODE_PATTERN);
+        }
+      }
+    }
+  });
 });

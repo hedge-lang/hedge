@@ -45,6 +45,8 @@ export function parsePathSegments(
       severity: "error",
       message: unsupportedPathKeywordMessage(firstKeyword.value.text),
       span: some(firstKeyword.value.span),
+      code: none(),
+      relatedSpans: [],
     });
   }
 
@@ -73,6 +75,8 @@ export function parsePathSegments(
           severity: "error",
           message: MUT_MESSAGE,
           span: some(nextToken.span),
+          code: none(),
+          relatedSpans: [],
         });
       }
       const keyword = pathKeywordAt(tokens, cursor);
@@ -81,6 +85,8 @@ export function parsePathSegments(
           severity: "error",
           message: unsupportedPathKeywordMessage(keyword.value.text),
           span: some(keyword.value.span),
+          code: none(),
+          relatedSpans: [],
         });
       }
       const foundDesc =
@@ -95,6 +101,8 @@ export function parsePathSegments(
         severity: "error",
         message: `Expected identifier after "::", found ${foundDesc}`,
         span,
+        code: none(),
+        relatedSpans: [],
       });
     }
     const segmentResult = parseIdentifier(tokens, cursor);

@@ -98,6 +98,8 @@ export function tokenizeRawIdent(
       severity: "error",
       message: "raw identifier prefix `r#` must be followed by an identifier",
       span: some({ start, end }),
+      code: none(),
+      relatedSpans: [],
     });
     tokens.push({ kind: "error", span: { start, end }, text: "r#" });
     return some(end);

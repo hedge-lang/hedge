@@ -71,12 +71,16 @@ export function parseType(
         severity: "error",
         message: "expected `)` to close type, found end of input",
         span: some(token.span),
+        code: none(),
+        relatedSpans: [],
       });
     }
     return err({
       severity: "error",
       message: "tuple types are not supported in Slice 1",
       span: some(token.span),
+      code: none(),
+      relatedSpans: [],
     });
   }
 
@@ -98,6 +102,8 @@ export function parseType(
         severity: "error",
         message,
         span: some(genericToken.span),
+        code: none(),
+        relatedSpans: [],
       });
     }
     const pathSepMatch = pathSepBeforeLt(tokens, pathResult.value.next);
@@ -109,6 +115,8 @@ export function parseType(
         severity: "error",
         message,
         span: some(pathSepMatch.value.span),
+        code: none(),
+        relatedSpans: [],
       });
     }
     const named: NamedType = {
@@ -124,6 +132,8 @@ export function parseType(
       severity: "error",
       message: unsupportedGenericsMessage("generic type arguments"),
       span: some(token.span),
+      code: none(),
+      relatedSpans: [],
     });
   }
 
@@ -171,6 +181,8 @@ export function parseType(
         severity: "error",
         message: "slice types ([T]) are not supported in Slice 1",
         span: some(token.span),
+        code: none(),
+        relatedSpans: [],
       });
     }
     if (afterElementToken?.kind !== "semi") {
@@ -181,6 +193,8 @@ export function parseType(
           afterElementToken !== undefined
             ? some(afterElementToken.span)
             : some(token.span),
+        code: none(),
+        relatedSpans: [],
       });
     }
     const lengthPos = afterElement + 1;
@@ -214,6 +228,8 @@ export function parseType(
       severity: "error",
       message: "the never type (!) is not supported in Slice 1",
       span: some(token.span),
+      code: none(),
+      relatedSpans: [],
     });
   }
 
@@ -222,6 +238,8 @@ export function parseType(
       severity: "error",
       message: unsupportedLifetimeMessage("lifetime annotations"),
       span: some(token.span),
+      code: none(),
+      relatedSpans: [],
     });
   }
 
@@ -229,5 +247,7 @@ export function parseType(
     severity: "error",
     message: `type syntax "${token.kind}" is not supported in Slice 1`,
     span: some(token.span),
+    code: none(),
+    relatedSpans: [],
   });
 }

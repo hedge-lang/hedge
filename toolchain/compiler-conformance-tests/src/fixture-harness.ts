@@ -128,5 +128,14 @@ export function discoverMustFailFixtures(): MustFailFixture[] {
  * locally to avoid a cross-package dependency on @hedge-lang/cli.
  */
 export function renderDiagnostics(diagnostics: readonly Diagnostic[]): string {
-  return `${diagnostics.map((d) => `${d.severity}: ${d.message}`).join("\n")}\n`;
+  return `${diagnostics.map(renderDiagnostic).join("\n")}\n`;
+}
+
+function renderDiagnostic(diagnostic: Diagnostic): string {
+  const code = isSome(diagnostic.code) ? `[${diagnostic.code.value}]` : "";
+  const lines = [`${diagnostic.severity}${code}: ${diagnostic.message}`];
+  for (const related of diagnostic.relatedSpans) {
+    lines.push(`  = note: ${related.label} at offset ${related.span.start}`);
+  }
+  return lines.join("\n");
 }

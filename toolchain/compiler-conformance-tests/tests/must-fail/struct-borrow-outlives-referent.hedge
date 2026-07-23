@@ -1,0 +1,14 @@
+struct Cursor<'a> {
+  source: &'a str,
+  pos: i32,
+}
+
+fn make() -> Cursor {
+  let s = "hello";
+  Cursor { source: &s, pos: 0 }
+}
+
+fn main() {
+  let c = make();
+  print(c);
+}

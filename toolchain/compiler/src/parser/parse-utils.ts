@@ -19,6 +19,8 @@ export function tokenAt(tokens: readonly Token[], pos: number): PR<Token> {
       severity: "error",
       message: `Unexpected end of input at token ${pos}`,
       span: none(),
+      code: none(),
+      relatedSpans: [],
     });
   }
   return ok(token);
@@ -62,6 +64,8 @@ export function expect(
       severity: "error",
       message: `Expected ${kind}, found "${token.kind}" at offset ${token.span.start}`,
       span: some(token.span),
+      code: none(),
+      relatedSpans: [],
     });
   }
   return ok(pos + 1);
@@ -88,6 +92,8 @@ export function expectKeyword(
       severity: "error",
       message: `Expected keyword "${text}", found "${found}" at offset ${token.span.start}`,
       span: some(token.span),
+      code: none(),
+      relatedSpans: [],
     });
   }
   return ok(pos + 1);
@@ -401,6 +407,8 @@ export function skipBalancedBraceBlock(
       severity: "error",
       message: `expected \`{\` to start block, found \`${openBraceToken?.kind ?? "MISSING"}\``,
       span: openBraceToken ? some(openBraceToken.span) : none(),
+      code: none(),
+      relatedSpans: [],
     });
   }
   let cursor = openBrace;
@@ -412,6 +420,8 @@ export function skipBalancedBraceBlock(
         severity: "error",
         message: "expected `}` to close block, found end of input",
         span: some(openBraceToken.span),
+        code: none(),
+        relatedSpans: [],
       });
     }
     if (tok.kind === "lbrace") {
@@ -561,6 +571,8 @@ export function skipUnsupportedTopLevelItem(
     severity: "error",
     message,
     span: some(keyword.span),
+    code: none(),
+    relatedSpans: [],
   };
 
   const bodyStart = findTopLevelItemBodyStart(tokens, pos);
@@ -569,6 +581,8 @@ export function skipUnsupportedTopLevelItem(
       severity: "error",
       message: `${message}; expected a body for \`${keyword.text}\`, found end of input`,
       span: some(keyword.span),
+      code: none(),
+      relatedSpans: [],
     });
   }
   if (bodyStart.kind === "semi") {
@@ -607,6 +621,8 @@ export function parseIdentifier(
     return err({
       severity: "error",
       span: some({ start: token.span.start, end: token.span.end }),
+      code: none(),
+      relatedSpans: [],
       message: MUT_MESSAGE,
     });
   }
@@ -618,6 +634,8 @@ export function parseIdentifier(
       severity: "error",
       message: `Expected an identifier, found ${found} at offset ${token.span.start}`,
       span: some(token.span),
+      code: none(),
+      relatedSpans: [],
     });
   }
   const ident: Identifier = {

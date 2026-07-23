@@ -24,7 +24,7 @@
  */
 
 import { assert, assertNever } from "../assert.js";
-import type { Diagnostic } from "../diagnostics.js";
+import type { Diagnostic, RelatedSpan } from "../diagnostics.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { hasCapability } from "../semantics/type-capabilities.js";
@@ -175,11 +175,21 @@ function diagnosticSpan(
   return token !== undefined ? some(token.span) : none();
 }
 
-function emitDiagnostic(ctx: Ctx, message: string, tokenId: number): void {
+function emitDiagnostic(
+  ctx: Ctx,
+  message: string,
+  tokenId: number,
+  extra?: {
+    readonly code?: string;
+    readonly relatedSpans?: readonly RelatedSpan[];
+  },
+): void {
   ctx.diagnostics.push({
     severity: "error",
     message,
     span: diagnosticSpan(ctx.tokens, tokenId),
+    code: extra?.code !== undefined ? some(extra.code) : none(),
+    relatedSpans: extra?.relatedSpans ?? [],
   });
 }
 
@@ -188,6 +198,8 @@ function emitWarning(ctx: Ctx, message: string, tokenId: number): void {
     severity: "warning",
     message,
     span: diagnosticSpan(ctx.tokens, tokenId),
+    code: none(),
+    relatedSpans: [],
   });
 }
 
@@ -308,7 +320,10 @@ function useOrMove(
       state.set(id, { kind: "Owned" });
       return;
     case "Unbound":
-      emitDiagnostic(ctx, `use of moved value \`${name}\``, pathExpr.tokenId);
+      emitDiagnostic(ctx, `use of moved value \`${name}\``, pathExpr.tokenId, {
+        code: "HEDGE-BORROW-CHECK-003",
+        relatedSpans: [{ span: current.moveSite, label: "moved here" }],
+      });
       state.set(id, { kind: "Owned" });
       return;
     case "ConditionallyMoved":

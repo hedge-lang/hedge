@@ -1,0 +1,7 @@
+fn main() {
+  let mut x = "a";
+  let r = &x;
+  let rw = &mut x;
+  print(r);
+  print(rw);
+}

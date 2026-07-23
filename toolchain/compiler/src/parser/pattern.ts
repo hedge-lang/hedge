@@ -1,5 +1,6 @@
 import { assert } from "../assert.js";
 import type { Token } from "../lexer/token.js";
+import { none } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import type { Pattern } from "./ast.js";
 import type { Parsed } from "./parse.js";
@@ -59,6 +60,8 @@ export function parsePattern(
         severity: "error",
         message: "`mut` cannot be applied to the wildcard pattern `_`",
         span: spanAt(tokens, pos),
+        code: none(),
+        relatedSpans: [],
       });
     }
     return ok({
@@ -72,6 +75,8 @@ export function parsePattern(
       severity: "error",
       message: unsupportedPatternMessage("struct patterns"),
       span: spanAt(tokens, ident.tokenId),
+      code: none(),
+      relatedSpans: [],
     });
   }
 

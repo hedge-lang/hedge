@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { assert } from "../assert.js";
 
 import { tokenize } from "../lexer/lexer.js";
-import { isSome, none } from "../option.js";
+import { isSome, none, some } from "../option.js";
 import { parse } from "../parser/parser.js";
 import type { AnalysisResult } from "./analyzer.js";
 import { analyze } from "./analyzer.js";
@@ -850,6 +850,142 @@ describe("semantic analysis", (): void => {
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
       expect(diagnostics[0].message).toContain("return type mismatch");
     });
+  });
+
+  describe("borrow outliving referent (HEDGE-LIFETIME-002)", () => {
+    it("rejects a bare returned reference to a let-local declared in the function body", (): void => {
+      const { diagnostics } = diagnose(
+        "fn confusing(y: &i32) -> &i32 { let x = 5; &x }",
+      );
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].message).toContain("x");
+    });
+
+    it("rejects a bare returned reference to a fresh borrow of a by-value parameter", (): void => {
+      const { diagnostics } = diagnose("fn f(x: i32) -> &i32 { &x }");
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+    });
+
+    it("rejects a struct literal field that borrows a let-local, when the struct instance is returned", (): void => {
+      const { diagnostics } = diagnose(`
+        struct Cursor<'a> { source: &'a str, pos: i32 }
+        fn make() -> Cursor {
+          let s = "hello";
+          Cursor { source: &s, pos: 0 }
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].message).toContain("s");
+    });
+
+    it("accepts a bare parameter of reference type passed straight through, since no fresh borrow is taken", (): void => {
+      const { diagnostics } = diagnose("fn first(s: &str) -> &str { s }");
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("accepts a reborrow through a dereference of a reference parameter", (): void => {
+      const { diagnostics } = diagnose("fn peek(x: &i32) -> &i32 { &*x }");
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("rejects a dangling reference returned from one branch of an if/else trailing expression", (): void => {
+      const { diagnostics } = diagnose(`
+        fn confusing(cond: bool, y: &i32) -> &i32 {
+          if cond {
+            let x = 5;
+            &x
+          } else {
+            y
+          }
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].message).toContain("x");
+    });
+
+    it("rejects a dangling reference in the final else of an if/else-if/else chain", (): void => {
+      const { diagnostics } = diagnose(`
+        fn confusing(a: bool, b: bool, y: &i32) -> &i32 {
+          if a {
+            y
+          } else if b {
+            y
+          } else {
+            let x = 5;
+            &x
+          }
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].message).toContain("x");
+    });
+
+    it("rejects a dangling reference returned through a nested block's own trailing expression", (): void => {
+      const { diagnostics } = diagnose(`
+        fn confusing() -> &i32 {
+          {
+            let x = 5;
+            &x
+          }
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].message).toContain("x");
+    });
+
+    it("accepts an if/else trailing expression when both branches pass a reference parameter through cleanly", (): void => {
+      const { diagnostics } = diagnose(`
+        fn safe(cond: bool, y: &i32) -> &i32 {
+          if cond {
+            y
+          } else {
+            y
+          }
+        }
+      `);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("does not cascade into a second diagnostic when the borrowed name is itself unresolved and the reconciled return type happens to match (no independent type-mismatch diagnostic to mask the check)", (): void => {
+      const { diagnostics } = diagnose("fn f() -> &() { &missing_name }");
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].message).toContain("missing_name");
+      expect(diagnostics[0].code).toEqual(none());
+    });
+
+    it("does not cascade into a third diagnostic when a struct field borrows an unresolved name, on top of the name-resolution and field-type-mismatch diagnostics", (): void => {
+      const { diagnostics } = diagnose(`
+        struct S { f: &i32 }
+        fn make() -> S { S { f: &missing_name } }
+      `);
+      expect(diagnostics).toHaveLength(2);
+      expect(diagnostics.some((d) => isSome(d.code))).toBe(false);
+    });
+
+    it.fails(
+      "rejects a returned reference to a let-local laundered through an intermediate alias binding, a known gap since the check is single-hop and does not trace through `let r = &x; r`",
+      (): void => {
+        const { diagnostics } = diagnose(
+          "fn confusing() -> &i32 { let x = 5; let r = &x; r }",
+        );
+        expect(diagnostics).toHaveLength(1);
+        assert(diagnostics[0] !== undefined, "Expected diagnostics");
+        expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      },
+    );
   });
 
   describe("struct field type", () => {

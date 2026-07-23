@@ -75,6 +75,8 @@ function parseVisibility(
           severity: "error",
           message: `pub(${scope}) is not supported in Slice 1`,
           span: some(scopeToken.span),
+          code: none(),
+          relatedSpans: [],
         });
       }
       return ok({
@@ -114,6 +116,8 @@ function parseParam(tokens: readonly Token[], pos: number): PR<Parsed<Param>> {
       severity: "error",
       message: `expected ':' after parameter name '${name}'`,
       span: spanAt(tokens, cursor),
+      code: none(),
+      relatedSpans: [],
     });
   }
   cursor += 1;
@@ -265,6 +269,8 @@ function parseDeclarationGenerics(
     severity: "error",
     message,
     span: some(token.span),
+    code: none(),
+    relatedSpans: [],
   });
   return { generics: [], next: skipBalancedAngleList(tokens, pos).next };
 }
@@ -289,6 +295,8 @@ function checkWhereClause(
     severity: "error",
     message: unsupportedGenericsMessage("`where` clauses"),
     span: some(whereToken.span),
+    code: none(),
+    relatedSpans: [],
   });
   return skip(tokens, pos);
 }
@@ -402,6 +410,8 @@ function parseNamedField(
       severity: "error",
       message: `expected ':' after field name '${fieldName.text}'`,
       span: token !== undefined ? some(token.span) : none(),
+      code: none(),
+      relatedSpans: [],
     });
   }
   cursor += 1;
@@ -646,6 +656,8 @@ function parseStruct(
       severity: "error",
       message: `expected struct body (\`{\`, \`(\`, or \`;\`), found "${bodyToken?.kind ?? "end of input"}"`,
       span: bodyToken !== undefined ? some(bodyToken.span) : none(),
+      code: none(),
+      relatedSpans: [],
     });
   }
 
@@ -837,6 +849,8 @@ export function parseItem(
         severity: "error",
         message: "visibility qualifiers are not allowed on let statements",
         span: visToken !== undefined ? some(visToken.span) : none(),
+        code: none(),
+        relatedSpans: [],
       });
     }
     const letResult = parseLetStatement(
@@ -875,6 +889,8 @@ export function parseItem(
       severity: "error",
       message: "visibility qualifiers are not allowed here",
       span: visToken !== undefined ? some(visToken.span) : none(),
+      code: none(),
+      relatedSpans: [],
     });
   }
   const exprResult = parseExpression(tokens, diagnostics, cursor);

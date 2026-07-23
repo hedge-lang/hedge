@@ -466,6 +466,14 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     ],
   },
   {
+    id: "DIAG-CODE-BORROW-LIFETIME",
+    description:
+      "Every borrow/lifetime error category has a stable, schema-valid diagnostic code",
+    testIds: [
+      "every borrow and lifetime error category in the corpus carries a schema-valid, stable code",
+    ],
+  },
+  {
     id: "DIAGNOSTICS-QUALITY",
     description:
       "Diagnostics quality contracts cover determinism, bounded cascade, and actionable parse errors",

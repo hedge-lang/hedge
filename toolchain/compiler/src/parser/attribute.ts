@@ -76,6 +76,8 @@ function parseAttributeArg(
     severity: "error",
     message: `Expected attribute argument, found "${token.kind}" at offset ${token.span.start}`,
     span: some(token.span),
+    code: none(),
+    relatedSpans: [],
   });
 }
 
@@ -116,6 +118,8 @@ function parseAttribute(
           severity: "error",
           message: "unterminated attribute argument list",
           span: lparenSpan !== undefined ? some(lparenSpan) : none(),
+          code: none(),
+          relatedSpans: [],
         });
       }
       const argResult = parseAttributeArg(tokens, cursor);

@@ -54,6 +54,20 @@ describe("lifetime elision - ambiguity rejection", (): void => {
     expect(diagnostics[0].message).toContain("missing lifetime specifier");
   });
 
+  it("tags an ambiguous-return-lifetime diagnostic with the HEDGE-LIFETIME-001 code", (): void => {
+    const { tokens } = tokenize("fn longest(a: &str, b: &str) -> &str { a }");
+    const { diagnostics } = parse(tokens);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-001"));
+  });
+
+  it("tags a no-elision-rule diagnostic (e.g. a let annotation) with the same HEDGE-LIFETIME-001 code as the ambiguous-return case", (): void => {
+    const { tokens } = tokenize("let mut x: &i32;");
+    const { diagnostics } = parse(tokens);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-001"));
+  });
+
   it("still produces a structurally complete program for an ambiguous signature (synthesized placeholder), forcing code:none() via the error diagnostic rather than a missing program", (): void => {
     const { tokens } = tokenize("fn longest(a: &str, b: &str) -> &str { a }");
     const { program, diagnostics } = parse(tokens);

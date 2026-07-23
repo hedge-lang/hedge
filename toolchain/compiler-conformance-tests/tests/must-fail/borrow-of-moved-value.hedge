@@ -1,0 +1,10 @@
+struct Boxed {
+  value: i32,
+}
+
+fn main() {
+  let x = Boxed { value: 1 };
+  let y = x;
+  print(x.value);
+  print(y.value);
+}

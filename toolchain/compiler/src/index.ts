@@ -7,7 +7,7 @@ export type * from "./parser/ast.js";
 
 export { analyze } from "./semantics/analyzer.js";
 export type { AnalysisResult } from "./semantics/analyzer.js";
-export type { Diagnostic } from "./diagnostics.js";
+export type { Diagnostic, RelatedSpan } from "./diagnostics.js";
 
 export { checkBorrows } from "./ownership/borrowck.js";
 

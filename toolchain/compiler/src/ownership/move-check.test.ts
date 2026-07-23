@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { assert } from "../assert.js";
-import { isSome } from "../option.js";
+import { isSome, some } from "../option.js";
 import { analyzeSource } from "../testing/analyze-source.js";
 import type { OwnershipCheckResult } from "./move-check.js";
 import { analyzeOwnership, conditionalDropFlagWarning } from "./move-check.js";
@@ -547,6 +547,25 @@ describe("move-check", (): void => {
     assert(f !== undefined);
     const allDrops = [...f.drops.values()].flat();
     expect(allDrops).toEqual([]);
+  });
+
+  it("tags a use-after-move diagnostic with the HEDGE-BORROW-CHECK-003 code and names the move site as a related span", (): void => {
+    const source = `${BOXED}
+      fn main() {
+        let x = Boxed { value: 1 };
+        let y = x; // moved here
+        print(x.value);
+      }`;
+    const { diagnostics } = check(source);
+    expect(diagnostics).toHaveLength(1);
+    const diagnostic = diagnostics[0];
+    assert(diagnostic !== undefined, "Expected a diagnostic");
+    expect(diagnostic.code).toEqual(some("HEDGE-BORROW-CHECK-003"));
+    expect(diagnostic.relatedSpans).toHaveLength(1);
+    const moveOffset = source.indexOf("x;", source.indexOf("let y ="));
+    const relatedSpan = diagnostic.relatedSpans[0];
+    assert(relatedSpan !== undefined, "Expected related span");
+    expect(relatedSpan.span.start).toBe(moveOffset);
   });
 
   it("does not cascade: one move followed by three reads reports exactly one diagnostic", (): void => {

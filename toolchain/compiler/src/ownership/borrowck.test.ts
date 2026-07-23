@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { assert } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
 import { tokenize } from "../lexer/lexer.js";
-import { isSome } from "../option.js";
+import { isSome, some } from "../option.js";
 import { parse } from "../parser/parser.js";
 import { analyze } from "../semantics/analyzer.js";
 import { checkBorrows } from "./borrowck.js";
@@ -53,6 +53,21 @@ describe("borrow checker", (): void => {
     expect(diagnostics[0]?.message).toContain("Conflicting borrows");
   });
 
+  it("tags a conflicting-borrows diagnostic with the HEDGE-BORROW-CHECK-001 code and names the first borrow's span as a related span", (): void => {
+    const source =
+      'fn main() { let mut x = "a"; let r1 = &mut x; let r2 = &mut x; print(r1); print(r2); }';
+    const diagnostics = check(source);
+    expect(diagnostics).toHaveLength(1);
+    const diagnostic = diagnostics[0];
+    assert(diagnostic !== undefined, "Expected diagnostic");
+    expect(diagnostic.code).toEqual(some("HEDGE-BORROW-CHECK-001"));
+    expect(diagnostic.relatedSpans).toHaveLength(1);
+    const firstBorrowOffset = source.indexOf("&mut x", source.indexOf("r1"));
+    const relatedSpan = diagnostic.relatedSpans[0];
+    assert(relatedSpan !== undefined, "Expected related span");
+    expect(relatedSpan.span.start).toBe(firstBorrowOffset);
+  });
+
   it("rejects an overlapping mutable and shared borrow of the same base", (): void => {
     const diagnostics = check(
       'fn main() { let mut x = "a"; let rw = &mut x; let r = &x; print(rw); print(r); }',
@@ -91,6 +106,14 @@ describe("borrow checker", (): void => {
     const diagnostics = check("fn f(x: string) { let r = &mut x; print(r); }");
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.message).toContain("not declared mut");
+  });
+
+  it("tags a &mut-without-mut-capability diagnostic with the HEDGE-BORROW-CHECK-002 code", (): void => {
+    const diagnostics = check(
+      'fn main() { let x = "a"; let r = &mut x; print(r); }',
+    );
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.code).toEqual(some("HEDGE-BORROW-CHECK-002"));
   });
 
   it("accepts &mut borrow of a mutable function parameter", (): void => {
@@ -442,6 +465,17 @@ describe("place-projection borrows", (): void => {
     expect(diagnostics[0]?.message).toContain("cannot borrow");
     expect(diagnostics[0]?.message).toContain("*r");
     expect(diagnostics[0]?.message).toContain("r");
+  });
+
+  it("tags a &mut-through-a-shared-reference diagnostic with the same HEDGE-BORROW-CHECK-002 code as the not-declared-mut case", (): void => {
+    const diagnostics = check(`
+      fn f(r: &i32) {
+        let a = &mut *r;
+        print(a);
+      }
+    `);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.code).toEqual(some("HEDGE-BORROW-CHECK-002"));
   });
 
   it("describes the blocking reference as shared, not as an active borrow, since no borrow bookkeeping is involved in this check", (): void => {
