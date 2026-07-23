@@ -1,0 +1,9 @@
+fn longest(a: &str, b: &str) -> &str {
+  a
+}
+
+fn main() {
+  let s1 = "hello";
+  let s2 = "hi";
+  print(longest(s1, s2));
+}

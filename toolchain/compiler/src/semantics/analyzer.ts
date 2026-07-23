@@ -161,12 +161,15 @@ function emitError(
   ctx: AnalysisContext,
   message: string,
   tokenId: number,
+  extra?: { readonly code?: string },
 ): void {
   const token = ctx.tokens[tokenId];
   ctx.diagnostics.push({
     severity: "error",
     message,
     span: token !== undefined ? some(token.span) : none(),
+    code: extra?.code !== undefined ? some(extra.code) : none(),
+    relatedSpans: [],
   });
 }
 
@@ -1185,6 +1188,99 @@ function fnSignatureType(fn: Parser.FunctionDecl): Semantics.FunctionType {
  * (its type is the `UnitType` error-recovery placeholder), no diagnostic is
  * emitted here — see {@link reconcileExpressionType}.
  */
+/**
+ * `operand` is a fresh borrow of a plain value that lives only in this
+ * function's own frame - a `let`-local or a by-value parameter - when it
+ * is a bare single-segment path whose own type is not already a
+ * reference. A reference-typed operand (an incoming `&T` parameter, or a
+ * dereference of one) means the borrow is grounded in something the
+ * caller owns, not this frame. This is Hedge-26's narrow, single-hop
+ * "borrow outliving referent" check - it does not trace through an
+ * intermediate alias binding, e.g. `let r = &x; r`, a known, deliberately
+ * deferred gap.
+ */
+function danglingReferenceOperandName(
+  operand: Semantics.Expression,
+): string | undefined {
+  if (
+    operand.kind !== "PathExpression" ||
+    operand.path.segments.length !== 1 ||
+    operand.type.kind === "ReferenceType"
+  ) {
+    return undefined;
+  }
+  // A PathExpression's UnitType is always the error-recovery placeholder for
+  // an unresolved name (see isAmbiguousUnitExpr's doc comment) - that
+  // failure already reported its own diagnostic, so this must not add a
+  // second one for the same root cause.
+  if (isAmbiguousUnitExpr(operand) && operand.type.kind === "UnitType") {
+    return undefined;
+  }
+  return operand.path.segments[0];
+}
+
+function checkEscapingReferenceExpression(
+  ctx: AnalysisContext,
+  expr: Semantics.ReferenceExpression,
+): void {
+  const name = danglingReferenceOperandName(expr.operand);
+  if (name === undefined) {
+    return;
+  }
+  emitError(
+    ctx,
+    `returns a reference to \`${name}\`, which does not live beyond this function`,
+    expr.tokenId,
+    { code: "HEDGE-LIFETIME-002" },
+  );
+}
+
+function checkEscapingStructExpression(
+  ctx: AnalysisContext,
+  expr: Semantics.StructExpression,
+): void {
+  for (const field of expr.fields) {
+    if (
+      !isSome(field.value) ||
+      field.value.value.kind !== "ReferenceExpression"
+    ) {
+      continue;
+    }
+    const fieldValue = field.value.value;
+    const name = danglingReferenceOperandName(fieldValue.operand);
+    if (name === undefined) {
+      continue;
+    }
+    emitError(
+      ctx,
+      `struct literal field \`${field.name.text}\` borrows \`${name}\`, which does not live beyond this function`,
+      fieldValue.tokenId,
+      { code: "HEDGE-LIFETIME-002" },
+    );
+  }
+}
+
+/**
+ * Hedge-26's narrow "borrow outliving referent" check: a function's
+ * trailing/return-position expression must not carry a fresh borrow of a
+ * value grounded in this function's own frame. Only the single-hop
+ * syntactic shapes named in the ticket are covered - a bare `&local`, and
+ * a struct literal field initialized with `&local` - not general
+ * escape/alias analysis (see `blockLetNames`'s doc comment).
+ */
+function checkEscapingReference(
+  ctx: AnalysisContext,
+  expr: Semantics.Expression,
+): void {
+  if (expr.kind === "ReferenceExpression") {
+    checkEscapingReferenceExpression(ctx, expr);
+    return;
+  }
+  if (expr.kind === "StructExpression") {
+    checkEscapingStructExpression(ctx, expr);
+  }
+}
+
 function checkFunctionReturnType(
   ctx: AnalysisContext,
   body: Semantics.Block,
@@ -1217,6 +1313,8 @@ function checkFunctionReturnType(
       `return type mismatch: expected \`${describeType(expectedReturnType)}\`, found \`${describeType(getType(expr))}\``,
       trailing.tokenId,
     );
+  } else {
+    checkEscapingReference(ctx, expr);
   }
 
   return expr === trailing

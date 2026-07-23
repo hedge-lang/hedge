@@ -515,6 +515,8 @@ function parseTupleOrGroup(
       severity: "error",
       message: `Expected ',' or ')' after expression in parentheses`,
       span: tok !== undefined ? some(tok.span) : none(),
+      code: none(),
+      relatedSpans: [],
     });
   }
 
@@ -604,6 +606,8 @@ function parseArrayLiteral(
       severity: "error",
       message: `Expected ',', ';', or ']' after expression in array literal`,
       span: tok !== undefined ? some(tok.span) : none(),
+      code: none(),
+      relatedSpans: [],
     });
   }
 
@@ -662,6 +666,8 @@ function parseIfExpression(
       severity: "error",
       message: `Expected '{' to start if body`,
       span: thenTok !== undefined ? some(thenTok.span) : none(),
+      code: none(),
+      relatedSpans: [],
     });
   }
   const thenResult = parseBlock(tokens, diagnostics, condResult.value.next);
@@ -689,6 +695,8 @@ function parseIfExpression(
         severity: "error",
         message: `Expected 'if' or '{' after 'else'`,
         span: afterElse !== undefined ? some(afterElse.span) : none(),
+        code: none(),
+        relatedSpans: [],
       });
     }
   }
@@ -741,6 +749,8 @@ function parseStructExpression(
         message:
           "struct update expression (`..base`) is not yet supported in semantic analysis",
         span: some(spreadTok.span),
+        code: none(),
+        relatedSpans: [],
       });
       if (tokens[cursor]?.kind === "comma") cursor += 1; // trailing comma after spread
       if (tokens[cursor]?.kind !== "rbrace") {
@@ -749,6 +759,8 @@ function parseStructExpression(
           severity: "error",
           message: `Expected '}' after struct update expression — spread must be last`,
           span: tok !== undefined ? some(tok.span) : none(),
+          code: none(),
+          relatedSpans: [],
         });
       }
       break;
@@ -795,6 +807,8 @@ function parseStructExpression(
       severity: "error",
       message: `Expected '}' to close struct expression`,
       span: closeTok !== undefined ? some(closeTok.span) : none(),
+      code: none(),
+      relatedSpans: [],
     });
   }
 
@@ -824,6 +838,8 @@ function checkTurbofish(tokens: readonly Token[], pos: number): PR<boolean> {
       severity: "error",
       message,
       span: some(pathSepMatch.value.span),
+      code: none(),
+      relatedSpans: [],
     });
   }
   return ok(true);
@@ -898,6 +914,8 @@ function parsePrimary(
       severity: "error",
       message: unsupportedLoopMessage(loopKeyword.value.token.text),
       span: some(loopKeyword.value.token.span),
+      code: none(),
+      relatedSpans: [],
     });
   }
 
@@ -907,6 +925,8 @@ function parsePrimary(
       severity: "error",
       message: unsupportedPatternMessage("`match` expressions"),
       span: some(token.span),
+      code: none(),
+      relatedSpans: [],
     });
   }
 
@@ -1021,6 +1041,8 @@ function parsePrimary(
     severity: "error",
     message: `Expected an expression, found "${token.kind}" at offset ${token.span.start}`,
     span: some(token.span),
+    code: none(),
+    relatedSpans: [],
   });
 }
 
@@ -1050,6 +1072,8 @@ function parseArguments(
         severity: "error",
         message: "Expected ')' to close argument list",
         span: none(),
+        code: none(),
+        relatedSpans: [],
       });
     }
     // Arguments are always in struct-ok position (they're inside parens)
@@ -1150,6 +1174,8 @@ function parseInfixIndex(
       severity: "error",
       message: `Expected an expression inside '[...]'`,
       span: tok !== undefined && tok.kind !== "eof" ? some(tok.span) : none(),
+      code: none(),
+      relatedSpans: [],
     });
   }
 
@@ -1214,6 +1240,8 @@ function parseInfixBinary(
           severity: "error",
           message: `cannot chain '${infix.sigil}' with '${nextInfix.sigil}'`,
           span: some(peek.span),
+          code: none(),
+          relatedSpans: [],
         });
       }
     }
@@ -1286,6 +1314,8 @@ function parseRangeTail(
           afterOp !== undefined && afterOp.kind !== "eof"
             ? some(afterOp.span)
             : none(),
+        code: none(),
+        relatedSpans: [],
       });
     }
     end = none();
@@ -1321,6 +1351,8 @@ function parseRangeTail(
         severity: "error",
         message: `cannot chain '${sigil}' with '${nextInfix.sigil}'`,
         span: some(peek.span),
+        code: none(),
+        relatedSpans: [],
       });
     }
   }

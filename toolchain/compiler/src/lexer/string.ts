@@ -1,5 +1,5 @@
 import type { Diagnostic } from "../diagnostics.js";
-import { some } from "../option.js";
+import { none, some } from "../option.js";
 import { scanEscapeSeq } from "./escape.js";
 import type { Token } from "./token.js";
 
@@ -29,6 +29,8 @@ export function scanStringLiteral(
             severity: "error",
             message: `Unterminated string literal starting at ${start}`,
             span: some({ start, end: source.length }),
+            code: none(),
+            relatedSpans: [],
           });
           tokens.push({
             kind: "error",
@@ -50,6 +52,8 @@ export function scanStringLiteral(
     severity: "error",
     message: `Unterminated string literal starting at ${start}`,
     span: some({ start, end: source.length }),
+    code: none(),
+    relatedSpans: [],
   });
   tokens.push({
     kind: "error",
@@ -91,6 +95,8 @@ export function scanRawString(
     severity: "error",
     message: `Unterminated raw string literal starting at ${start}`,
     span: some({ start, end: source.length }),
+    code: none(),
+    relatedSpans: [],
   });
   tokens.push({
     kind: "error",

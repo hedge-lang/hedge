@@ -1,0 +1,1 @@
+error[HEDGE-LIFETIME-001]: missing lifetime specifier: the return type borrows a reference, but the signature has 2 reference parameters, so the compiler cannot infer which one it borrows from; add explicit lifetime parameters (e.g. fn f<'a>(x: &'a T) -> &'a T)

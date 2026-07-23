@@ -170,9 +170,9 @@ describe("driver", (): void => {
         }
       `);
       expect(isNone(result.code)).toBe(true);
-      expect(
-        result.diagnostics.some((d) => d.message.includes("moved")),
-      ).toBe(true);
+      expect(result.diagnostics.some((d) => d.message.includes("moved"))).toBe(
+        true,
+      );
       expect(
         result.diagnostics.some((d) =>
           d.message.includes("Conflicting borrows"),

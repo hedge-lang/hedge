@@ -1,0 +1,2 @@
+error[HEDGE-BORROW-CHECK-003]: use of moved value `x`
+  = note: moved here at offset 84

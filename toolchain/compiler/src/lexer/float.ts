@@ -42,6 +42,8 @@ function scanExponent(
       severity: "error",
       message: `float exponent has no digits at offset ${pos}`,
       span: some({ start, end: i }),
+      code: none(),
+      relatedSpans: [],
     });
     tokens.push({
       kind: "error",
@@ -69,6 +71,8 @@ export function scanExponentFloat(
         severity: "error",
         message: `Unterminated float literal starting at ${start}`,
         span: some({ start, end: source.length }),
+        code: none(),
+        relatedSpans: [],
       });
       tokens.push({
         kind: "error",
@@ -110,6 +114,8 @@ export function scanDotFloat(
           severity: "error",
           message: `Unterminated float literal starting at ${start}`,
           span: some({ start, end: source.length }),
+          code: none(),
+          relatedSpans: [],
         });
         tokens.push({
           kind: "error",

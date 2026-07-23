@@ -58,7 +58,13 @@ function numError(
   end: number,
   message: string,
 ): number {
-  diagnostics.push({ severity: "error", message, span: some({ start, end }) });
+  diagnostics.push({
+    severity: "error",
+    message,
+    span: some({ start, end }),
+    code: none(),
+    relatedSpans: [],
+  });
   tokens.push({
     kind: "error",
     span: { start, end },

@@ -137,6 +137,8 @@ export function parse(tokens: readonly Token[]): ParseResult {
         severity: "warning",
         message: "immutable binding declared without a value can never be used",
         span: token !== undefined ? some(token.span) : none(),
+        code: none(),
+        relatedSpans: [],
       });
     }
   }

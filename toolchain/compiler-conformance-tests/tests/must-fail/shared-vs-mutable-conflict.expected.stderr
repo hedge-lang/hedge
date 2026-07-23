@@ -1,0 +1,2 @@
+error[HEDGE-BORROW-CHECK-001]: Conflicting borrows of "x": & at offset 41 and &mut at offset 56 are both live.
+  = note: & borrow here at offset 41

@@ -1,5 +1,5 @@
 import type { Diagnostic } from "../diagnostics.js";
-import { some } from "../option.js";
+import { none, some } from "../option.js";
 import { isHexDigit } from "./int.js";
 import type { Token } from "./token.js";
 
@@ -15,6 +15,8 @@ function escapeError(
     severity: "error",
     message,
     span: some({ start: tokenStart, end }),
+    code: none(),
+    relatedSpans: [],
   });
   tokens.push({
     kind: "error",

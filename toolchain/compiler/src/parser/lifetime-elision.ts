@@ -112,6 +112,8 @@ function resolveNestedReferenceTypes(
     severity: "error",
     message: NO_ELISION_RULE_MESSAGE,
     span: spanOf(tokens, type.tokenId),
+    code: some("HEDGE-LIFETIME-001"),
+    relatedSpans: [],
   });
   return { ...type, lifetime: some(synth(type.tokenId)), referent };
 }
@@ -318,6 +320,8 @@ function elideFunctionDecl(
         severity: "error",
         message: ambiguousReturnLifetimeMessage(referenceParamCount),
         span: spanOf(tokens, returnRef.tokenId),
+        code: some("HEDGE-LIFETIME-001"),
+        relatedSpans: [],
       });
       lifetime = synth(returnRef.tokenId);
     }

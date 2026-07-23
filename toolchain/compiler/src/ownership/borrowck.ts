@@ -883,6 +883,8 @@ function checkCapabilities(
           severity: "error",
           message: `cannot borrow \`${describePlace(borrow.place)}\` as mutable because \`${borrow.capability.through}\` is a shared reference.`,
           span: spanOf(tokens, borrow.tokenId),
+          code: some("HEDGE-BORROW-CHECK-002"),
+          relatedSpans: [],
         });
         continue;
       case "root-mut-required":
@@ -894,6 +896,8 @@ function checkCapabilities(
             severity: "error",
             message: `Cannot borrow "${borrow.place.baseName}" as &mut because it is not declared mut.`,
             span: spanOf(tokens, borrow.tokenId),
+            code: some("HEDGE-BORROW-CHECK-002"),
+            relatedSpans: [],
           });
         }
         continue;
@@ -936,12 +940,22 @@ function checkExclusivity(
       if (!borrowsOverlap(a, b, blockById, liveness, reachSets)) {
         continue; // the borrows are not simultaneously live
       }
+      const firstBorrowSpan = spanOf(tokens, a.tokenId);
       diagnostics.push({
         severity: "error",
         message:
           `Conflicting borrows of "${describePlace(a.place)}": ${describeBorrow(a)} at offset ${String(offsetOf(tokens, a.tokenId))} ` +
           `and ${describeBorrow(b)} at offset ${String(offsetOf(tokens, b.tokenId))} are both live.`,
         span: spanOf(tokens, b.tokenId),
+        code: some("HEDGE-BORROW-CHECK-001"),
+        relatedSpans: isSome(firstBorrowSpan)
+          ? [
+              {
+                span: firstBorrowSpan.value,
+                label: `${describeBorrow(a)} borrow here`,
+              },
+            ]
+          : [],
       });
     }
   }

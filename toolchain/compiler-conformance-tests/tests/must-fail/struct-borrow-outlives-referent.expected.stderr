@@ -1,0 +1,1 @@
+error[HEDGE-LIFETIME-002]: struct literal field `source` borrows `s`, which does not live beyond this function

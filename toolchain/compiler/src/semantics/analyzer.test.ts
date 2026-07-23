@@ -894,6 +894,23 @@ describe("semantic analysis", (): void => {
       expect(diagnostics).toEqual([]);
     });
 
+    it("does not cascade into a second diagnostic when the borrowed name is itself unresolved and the reconciled return type happens to match (no independent type-mismatch diagnostic to mask the check)", (): void => {
+      const { diagnostics } = diagnose("fn f() -> &() { &missing_name }");
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].message).toContain("missing_name");
+      expect(diagnostics[0].code).toEqual(none());
+    });
+
+    it("does not cascade into a third diagnostic when a struct field borrows an unresolved name, on top of the name-resolution and field-type-mismatch diagnostics", (): void => {
+      const { diagnostics } = diagnose(`
+        struct S { f: &i32 }
+        fn make() -> S { S { f: &missing_name } }
+      `);
+      expect(diagnostics).toHaveLength(2);
+      expect(diagnostics.some((d) => isSome(d.code))).toBe(false);
+    });
+
     it.fails(
       "rejects a returned reference to a let-local laundered through an intermediate alias binding, a known gap since the check is single-hop and does not trace through `let r = &x; r`",
       (): void => {

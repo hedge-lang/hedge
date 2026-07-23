@@ -1,0 +1,1 @@
+error[HEDGE-LIFETIME-002]: returns a reference to `x`, which does not live beyond this function

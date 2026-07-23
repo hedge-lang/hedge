@@ -1,5 +1,5 @@
 import { type Diagnostic } from "../diagnostics.js";
-import { some } from "../option.js";
+import { none, some } from "../option.js";
 import { type Token } from "./token.js";
 
 function peek(source: string, i: number, offset: number = 1): string {
@@ -311,6 +311,8 @@ export function tokenizeSymbol(
         severity: "error",
         message: `Unexpected character "${ch}" at offset ${start}`,
         span: some({ start, end }),
+        code: none(),
+        relatedSpans: [],
       });
       tokens.push({ kind: "error", span: { start, end }, text: ch ?? "" });
       return end;

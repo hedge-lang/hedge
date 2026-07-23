@@ -1,1 +1,2 @@
-error: Conflicting borrows of "arr[_]": &mut at offset 99 and &mut at offset 122 are both live.
+error[HEDGE-BORROW-CHECK-001]: Conflicting borrows of "arr[_]": &mut at offset 99 and &mut at offset 122 are both live.
+  = note: &mut borrow here at offset 99

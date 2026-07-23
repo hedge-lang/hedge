@@ -1,5 +1,5 @@
 import type { Diagnostic } from "../diagnostics.js";
-import { isSome, some } from "../option.js";
+import { isSome, none, some } from "../option.js";
 import type { Token } from "./token.js";
 import { tokenizeComment } from "./comments.js";
 import { tokenizeIdent, tokenizeRawIdent } from "./ident.js";
@@ -132,6 +132,8 @@ function tokenizeRString(
     severity: "error",
     message: `raw string prefix \`r${"#".repeat(hashCount || 1)}\` must be followed by '"'`,
     span: some({ start, end }),
+    code: none(),
+    relatedSpans: [],
   });
   tokens.push({
     kind: "error",

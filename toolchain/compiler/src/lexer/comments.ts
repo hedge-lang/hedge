@@ -93,6 +93,8 @@ export function isLineComment(
       severity: "error",
       message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
       span: none(),
+      code: none(),
+      relatedSpans: [],
     });
   }
   return ok(ch === "/" && source.at(index + 1) === "/");
@@ -145,6 +147,8 @@ export function isBlockComment(
       severity: "error",
       message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
       span: none(),
+      code: none(),
+      relatedSpans: [],
     });
   }
   return ok(
@@ -191,6 +195,8 @@ export function tokenizeBlockComment(
     severity: "error",
     message: "Unterminated block comment",
     span: some({ start, end: source.length }),
+    code: none(),
+    relatedSpans: [],
   });
   return some(source.length);
 }
@@ -215,6 +221,8 @@ function isBlockOuterDocComment(
       severity: "error",
       message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
       span: none(),
+      code: none(),
+      relatedSpans: [],
     });
   }
   return ok(
@@ -301,6 +309,8 @@ function tokenizeBlockOuterDocComment(
     severity: "error",
     message: "Unterminated block comment",
     span: some({ start, end: source.length }),
+    code: none(),
+    relatedSpans: [],
   });
   return some(source.length);
 }
@@ -325,6 +335,8 @@ function isBlockInnerDocComment(
       severity: "error",
       message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
       span: none(),
+      code: none(),
+      relatedSpans: [],
     });
   }
   return ok(
@@ -415,6 +427,8 @@ function tokenizeBlockInnerDocComment(
     severity: "error",
     message: "Unterminated block comment",
     span: some({ start, end: source.length }),
+    code: none(),
+    relatedSpans: [],
   });
   return some(source.length);
 }
@@ -439,6 +453,8 @@ function isOuterDocComment(
       severity: "error",
       message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
       span: none(),
+      code: none(),
+      relatedSpans: [],
     });
   }
   return ok(
@@ -574,6 +590,8 @@ function isInnerDocComment(
       severity: "error",
       message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
       span: none(),
+      code: none(),
+      relatedSpans: [],
     });
   }
   return ok(

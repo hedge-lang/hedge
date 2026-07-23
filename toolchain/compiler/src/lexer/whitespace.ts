@@ -23,6 +23,8 @@ export function isWhitespace(
       severity: "error",
       message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
       span: none(),
+      code: none(),
+      relatedSpans: [],
     });
   }
 

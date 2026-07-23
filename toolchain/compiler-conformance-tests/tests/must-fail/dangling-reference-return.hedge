@@ -1,0 +1,9 @@
+fn confusing(y: &i32) -> &i32 {
+  let x = 5;
+  &x
+}
+
+fn main() {
+  let y = 1;
+  print(confusing(&y));
+}

@@ -1,0 +1,1 @@
+error[HEDGE-BORROW-CHECK-002]: Cannot borrow "x" as &mut because it is not declared mut.
