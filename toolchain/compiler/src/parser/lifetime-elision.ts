@@ -5,17 +5,21 @@ import { isSome, none, some, type Option } from "../option.js";
 import type {
   Block,
   ConstDecl,
+  EnumDecl,
   FunctionDecl,
   Item,
   LetStatement,
   Lifetime,
+  NamedFieldsBody,
   Param,
   Program,
   StaticDecl,
   Statement,
   StructBody,
   StructDecl,
+  TupleFieldsBody,
   Type,
+  Variant,
 } from "./ast.js";
 
 const NO_ELISION_RULE_MESSAGE =
@@ -344,6 +348,77 @@ function elideFunctionDecl(
   };
 }
 
+/** Mirrors `elideStructBody`. */
+function elideVariantBody(
+  body: NamedFieldsBody | TupleFieldsBody,
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  synth: (anchorTokenId: number) => Lifetime,
+): NamedFieldsBody | TupleFieldsBody {
+  switch (body.kind) {
+    case "NamedFields":
+      return {
+        ...body,
+        fields: elideFieldTypes(body.fields, tokens, diagnostics, synth),
+      };
+    case "TupleFields":
+      return {
+        ...body,
+        fields: elideFieldTypes(body.fields, tokens, diagnostics, synth),
+      };
+    default:
+      return assertNever(
+        body,
+        `Unexpected variant body: ${JSON.stringify(body)}`,
+      );
+  }
+}
+
+function elideVariant(
+  variant: Variant,
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  synth: (anchorTokenId: number) => Lifetime,
+): Variant {
+  if (!isSome(variant.body)) {
+    return variant;
+  }
+  return {
+    ...variant,
+    body: some(
+      elideVariantBody(variant.body.value, tokens, diagnostics, synth),
+    ),
+  };
+}
+
+function enumVariantFieldTypes(variants: readonly Variant[]): readonly Type[] {
+  return variants.flatMap((variant) =>
+    isSome(variant.body)
+      ? variant.body.value.fields.map((field) => field.type)
+      : [],
+  );
+}
+
+/** Mirrors `elideStructDecl`: variant field types can hold a `ReferenceType`
+ * just like struct fields, seeded from the same lifetime-only generics. */
+function elideEnumDecl(
+  decl: EnumDecl,
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+): EnumDecl {
+  const names = new Set<string>(decl.generics.map((param) => param.name));
+  for (const type of enumVariantFieldTypes(decl.variants)) {
+    collectTypeLifetimeNames(type, names);
+  }
+  const synth = createSynthesizer(names);
+  return {
+    ...decl,
+    variants: decl.variants.map((variant) =>
+      elideVariant(variant, tokens, diagnostics, synth),
+    ),
+  };
+}
+
 /**
  * `Const`/`Static` items have their own, standalone `type` field (not
  * optional, unlike `LetStatement`'s) that can hold a `ReferenceType` just
@@ -391,6 +466,8 @@ function elideStatement(
       return elideFunctionDecl(stmt, tokens, diagnostics);
     case "Struct":
       return elideStructDecl(stmt, tokens, diagnostics);
+    case "Enum":
+      return elideEnumDecl(stmt, tokens, diagnostics);
     case "Const":
     case "Static":
       return elideConstOrStaticDecl(stmt, tokens, diagnostics);
@@ -400,28 +477,31 @@ function elideStatement(
 }
 
 /**
- * Only `FunctionDecl`/`StructDecl`/`LetStatement` carry `Type` fields that
- * can hold a `ReferenceType` - every other `Item` kind is a bare expression
- * or `ExpressionStatement`, neither of which does. Narrowing to this subset
- * up front (rather than giving `elideStatement` a `default: return item`
- * branch over the full `Item` union) keeps `elideStatement`'s own switch
- * genuinely exhaustive: `Item` includes every `Expression` variant, so a
- * catch-all default there would either need ~20 no-op cases or silently
- * accept kinds nobody's checked.
+ * Only `FunctionDecl`/`StructDecl`/`EnumDecl`/`LetStatement` carry `Type`
+ * fields that can hold a `ReferenceType` - every other `Item` kind is a bare
+ * expression or `ExpressionStatement`, neither of which does. Narrowing to
+ * this subset up front (rather than giving `elideStatement` a
+ * `default: return item` branch over the full `Item` union) keeps
+ * `elideStatement`'s own switch genuinely exhaustive: `Item` includes every
+ * `Expression` variant, so a catch-all default there would either need ~20
+ * no-op cases or silently accept kinds nobody's checked.
  *
  * This also means elision deliberately does not descend into arbitrary
  * expression subtrees (an `if`-expression's branches, a call argument, ...)
  * - only a `Block` used directly as a `let` initializer gets walked (via
  * `elideLetStatement`/`elideBlockStatements`). A locally-declared `fn`/
- * `struct` nested inside some other expression position is not reached; see
- * the plan's documented out-of-scope note for this narrower remaining gap.
+ * `struct`/`enum` nested inside some other expression position is not
+ * reached; see the plan's documented out-of-scope note for this narrower
+ * remaining gap.
  */
 function isTypeBearingItem(
   item: Item,
-): item is FunctionDecl | StructDecl | LetStatement | ConstDecl | StaticDecl {
+): item is
+  FunctionDecl | StructDecl | EnumDecl | LetStatement | ConstDecl | StaticDecl {
   return (
     item.kind === "Function" ||
     item.kind === "Struct" ||
+    item.kind === "Enum" ||
     item.kind === "LetStatement" ||
     item.kind === "Const" ||
     item.kind === "Static"

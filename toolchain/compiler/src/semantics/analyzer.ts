@@ -951,6 +951,32 @@ function analyzeConstStatement(
 const TOP_LEVEL_ITEM_RESTRICTION_MESSAGE =
   "only function, struct, const, and static declarations are allowed at the top level";
 
+// Not slice-numbered: enum parsing and enum semantic analysis are both
+// Slice 3 work, just sequenced separately - no later slice boundary to name.
+const ENUM_NOT_YET_SUPPORTED_MESSAGE =
+  "enum declarations are not yet supported by semantic analysis";
+
+/** `EnumDecl` has no `Semantics.EnumDecl` counterpart yet - a placeholder
+ * unit `ExpressionStatement` keeps this parser-only, per the same "parser
+ * accepts it, semantics doesn't yet" pattern as the restriction below. */
+function analyzeEnumPlaceholder(
+  ctx: AnalysisContext,
+  item: Parser.EnumDecl,
+): Semantics.ExpressionStatement {
+  emitError(ctx, ENUM_NOT_YET_SUPPORTED_MESSAGE, item.tokenId);
+  return {
+    kind: "ExpressionStatement",
+    tokenId: item.tokenId,
+    expression: {
+      kind: "TupleExpression",
+      tokenId: item.tokenId,
+      elements: [],
+      type: { kind: "UnitType", tokenId: item.tokenId },
+    },
+    type: { kind: "UnitType", tokenId: item.tokenId },
+  };
+}
+
 function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
   switch (item.kind) {
     case "Function":
@@ -961,6 +987,8 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
         ? cached
         : analyzeStruct(ctx, item);
     }
+    case "Enum":
+      return analyzeEnumPlaceholder(ctx, item);
     case "Const":
       return analyzeConstStatement(ctx, item);
     case "Static":
@@ -1489,6 +1517,8 @@ function analyzeStatement(
       ctx.typeScope.set(statement.name.text, analyzed);
       return analyzed;
     }
+    case "Enum":
+      return analyzeEnumPlaceholder(ctx, statement);
     case "Const":
       // Already registered and folded by `registerConstsAndStatics`, at the
       // start of this block, so every reference within the block - before

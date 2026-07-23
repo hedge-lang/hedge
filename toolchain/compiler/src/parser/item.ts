@@ -6,6 +6,7 @@ import {
   patternBindingName,
   type Attribute,
   type ConstDecl,
+  type EnumDecl,
   type FunctionDecl,
   type GenericParam,
   type Item,
@@ -18,6 +19,7 @@ import {
   type TupleField,
   type TupleFieldsBody,
   type Type,
+  type Variant,
   type Visibility,
 } from "./ast.js";
 import type { Parsed } from "./parse.js";
@@ -674,6 +676,176 @@ function parseStruct(
 }
 
 /**
+ * Parses a single enum variant.
+ *
+ * Grammar:
+ *
+ * ```text
+ * Variant ::= Attribute* Identifier (NamedFieldsBody | TupleFieldsBody)?
+ * ```
+ */
+function parseVariant(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<Variant>> {
+  const attrResult = collectOuterAttributes(tokens, pos);
+  if (isErr(attrResult)) {
+    return attrResult;
+  }
+  const attributes = attrResult.value.attributes;
+  const cursor = attrResult.value.next;
+
+  const variantStart = cursor;
+  const nameResult = parseIdentifier(tokens, cursor);
+  if (isErr(nameResult)) {
+    return nameResult;
+  }
+  const name = nameResult.value.node;
+  let next = nameResult.value.next;
+
+  let body: Option<NamedFieldsBody | TupleFieldsBody> = none();
+  const bodyToken = tokens[next];
+  if (bodyToken?.kind === "lbrace") {
+    const bodyResult = parseNamedFieldsBody(tokens, diagnostics, next);
+    if (isErr(bodyResult)) {
+      return bodyResult;
+    }
+    body = some(bodyResult.value.node);
+    next = bodyResult.value.next;
+  } else if (bodyToken?.kind === "lparen") {
+    const bodyResult = parseTupleFieldsBody(tokens, diagnostics, next);
+    if (isErr(bodyResult)) {
+      return bodyResult;
+    }
+    body = some(bodyResult.value.node);
+    next = bodyResult.value.next;
+  }
+
+  return ok({
+    node: { kind: "Variant", tokenId: variantStart, attributes, name, body },
+    next,
+  });
+}
+
+/**
+ * Parses the brace-delimited variant list of an enum.
+ *
+ * Grammar:
+ *
+ * ```text
+ * "{" (Variant ("," Variant)* ","?)? "}"
+ * ```
+ */
+// eslint-disable-next-line complexity -- List-recovery loop with a guardrail/EOF branch each; splitting would obscure the control flow.
+function parseVariantList(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<readonly Variant[]>> {
+  const afterLbrace = expect(tokens, pos, "lbrace");
+  if (isErr(afterLbrace)) {
+    return afterLbrace;
+  }
+  let cursor = afterLbrace.value;
+  const variants: Variant[] = [];
+
+  for (;;) {
+    // See parseParams' matching check: avoids a redundant second diagnostic
+    // when the list is truncated with nothing left to try parsing.
+    if (tokens[cursor]?.kind === "rbrace" || tokens[cursor]?.kind === "eof") {
+      break;
+    }
+
+    const variantStart = cursor;
+    const variantResult = parseVariant(tokens, diagnostics, cursor);
+
+    if (isErr(variantResult)) {
+      if (isGuardrailDiagnostic(variantResult.error)) {
+        return variantResult;
+      }
+      diagnostics.push(variantResult.error);
+      cursor = skipUntilKindBalanced(tokens, variantStart, "comma", "rbrace");
+      if (tokens[cursor]?.kind === "comma") {
+        cursor += 1;
+        continue;
+      }
+      break;
+    }
+
+    variants.push(variantResult.value.node);
+    cursor = variantResult.value.next;
+
+    if (tokens[cursor]?.kind === "comma") {
+      cursor += 1;
+    } else {
+      break;
+    }
+  }
+
+  const afterRbrace = expect(tokens, cursor, "rbrace");
+  if (isErr(afterRbrace)) {
+    return afterRbrace;
+  }
+  return ok({ node: variants, next: afterRbrace.value });
+}
+
+/**
+ * Parses an enum declaration.
+ *
+ * Grammar:
+ *
+ * ```text
+ * EnumDecl ::= Visibility? "enum" Identifier Generics? WhereClause?
+ *              "{" (Variant ("," Variant)* ","?)? "}"
+ * ```
+ */
+function parseEnum(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  attributes: readonly Attribute[] = [],
+  visibility: Option<Visibility> = none(),
+): PR<Parsed<EnumDecl>> {
+  const start = pos;
+  const afterEnum = expectKeyword(tokens, pos, "enum");
+  if (isErr(afterEnum)) {
+    return afterEnum;
+  }
+  const nameResult = parseIdentifier(tokens, afterEnum.value);
+  if (isErr(nameResult)) {
+    return nameResult;
+  }
+  const genericsResult = parseDeclarationGenerics(
+    tokens,
+    diagnostics,
+    nameResult.value.next,
+  );
+  const cursor = checkWhereClause(
+    tokens,
+    diagnostics,
+    genericsResult.next,
+    skipToStructBody,
+  );
+
+  const variantsResult = parseVariantList(tokens, diagnostics, cursor);
+  if (isErr(variantsResult)) {
+    return variantsResult;
+  }
+
+  const decl: EnumDecl = {
+    kind: "Enum",
+    tokenId: start,
+    visibility,
+    name: nameResult.value.node,
+    generics: genericsResult.generics,
+    variants: variantsResult.value.node,
+    attributes,
+  };
+  return ok({ node: decl, next: variantsResult.value.next });
+}
+
+/**
  * Parses a `const` or `static` declaration.
  *
  * Grammar:
@@ -741,7 +913,6 @@ function parseConstOrStatic(
 
 const UNSUPPORTED_TOP_LEVEL_KEYWORD_MESSAGES: ReadonlyMap<string, string> =
   new Map([
-    ["enum", "`enum` declarations are not supported in Slice 1"],
     ["export", "`export` declarations are not supported in Slice 1"],
     ["extern", "`extern` declarations are not supported in Slice 1"],
     ["impl", "`impl` declarations are not supported in Slice 1"],
@@ -820,6 +991,22 @@ export function parseItem(
     return ok({
       node: some(structResult.value.node),
       next: structResult.value.next,
+    });
+  }
+  if (token?.kind === "keyword" && token.text === "enum") {
+    const enumResult = parseEnum(
+      tokens,
+      diagnostics,
+      afterVis,
+      attributes,
+      vis.node,
+    );
+    if (isErr(enumResult)) {
+      return enumResult;
+    }
+    return ok({
+      node: some(enumResult.value.node),
+      next: enumResult.value.next,
     });
   }
   if (

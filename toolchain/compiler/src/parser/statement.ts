@@ -288,6 +288,7 @@ export function parseBlock(
       token?.kind === "keyword" &&
       (token.text === "fn" ||
         token.text === "struct" ||
+        token.text === "enum" ||
         token.text === "const" ||
         token.text === "static" ||
         token.text === "pub")
@@ -304,6 +305,7 @@ export function parseBlock(
       if (
         item.value.kind !== "Function" &&
         item.value.kind !== "Struct" &&
+        item.value.kind !== "Enum" &&
         item.value.kind !== "Const"
       ) {
         const token = tokens[item.value.tokenId];

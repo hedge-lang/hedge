@@ -981,6 +981,493 @@ describe("enum declarations", (): void => {
       ],
     });
   });
+
+  it("parses a tuple variant", (): void => {
+    const ast = parseProgram("enum Message { Move(i32, i32) }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Enum",
+          variants: [
+            {
+              kind: "Variant",
+              name: { kind: "Identifier", text: "Move" },
+              body: some({
+                kind: "TupleFields",
+                fields: [
+                  { type: { kind: "NamedType", path: { segments: ["i32"] } } },
+                  { type: { kind: "NamedType", path: { segments: ["i32"] } } },
+                ],
+              }),
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a zero-arg tuple variant distinctly from a bare unit variant", (): void => {
+    const ast = parseProgram("enum Message { Move() }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Enum",
+          variants: [
+            {
+              kind: "Variant",
+              name: { kind: "Identifier", text: "Move" },
+              body: some({ kind: "TupleFields", fields: [] }),
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a struct variant", (): void => {
+    const ast = parseProgram("enum Message { Write { text: str } }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Enum",
+          variants: [
+            {
+              kind: "Variant",
+              name: { kind: "Identifier", text: "Write" },
+              body: some({
+                kind: "NamedFields",
+                fields: [
+                  {
+                    name: { kind: "Identifier", text: "text" },
+                    type: { kind: "NamedType", path: { segments: ["str"] } },
+                  },
+                ],
+              }),
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses an empty struct variant distinctly from a bare unit variant", (): void => {
+    const ast = parseProgram("enum Message { Write {} }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Enum",
+          variants: [
+            {
+              kind: "Variant",
+              name: { kind: "Identifier", text: "Write" },
+              body: some({ kind: "NamedFields", fields: [] }),
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses all three variant shapes combined in one enum, with a trailing comma", (): void => {
+    const ast = parseProgram(
+      "enum Message { Quit, Move(i32, i32), Write { text: str }, }",
+    );
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Enum",
+          variants: [
+            { kind: "Variant", name: { text: "Quit" }, body: none() },
+            {
+              kind: "Variant",
+              name: { text: "Move" },
+              body: some({ kind: "TupleFields" }),
+            },
+            {
+              kind: "Variant",
+              name: { text: "Write" },
+              body: some({ kind: "NamedFields" }),
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses an empty enum with zero variants", (): void => {
+    const ast = parseProgram("enum Never {}");
+    expect(ast).toMatchObject({
+      items: [{ kind: "Enum", name: { text: "Never" }, variants: [] }],
+    });
+  });
+
+  it("parses a self-referential recursive enum with no indirection wrapper", (): void => {
+    const ast = parseProgram("enum List { Cons(i32, List), Nil }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Enum",
+          variants: [
+            {
+              name: { text: "Cons" },
+              body: some({
+                kind: "TupleFields",
+                fields: [
+                  { type: { kind: "NamedType", path: { segments: ["i32"] } } },
+                  {
+                    type: { kind: "NamedType", path: { segments: ["List"] } },
+                  },
+                ],
+              }),
+            },
+            { name: { text: "Nil" }, body: none() },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses #[non_exhaustive] on the enum itself", (): void => {
+    const ast = parseProgram("#[non_exhaustive] enum Message { Quit }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Enum",
+          attributes: [{ kind: "Attribute", name: { text: "non_exhaustive" } }],
+        },
+      ],
+    });
+  });
+
+  it("parses an attribute on an individual variant", (): void => {
+    const ast = parseProgram("enum Message { #[deprecated] Quit, Move(i32) }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Enum",
+          variants: [
+            {
+              kind: "Variant",
+              name: { text: "Quit" },
+              attributes: [{ kind: "Attribute", name: { text: "deprecated" } }],
+            },
+            { kind: "Variant", name: { text: "Move" }, attributes: [] },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a real lifetime-only generics list, resolving a reference field's explicit lifetime (enum Container<'a> { Ref(&'a i32) })", (): void => {
+    const { tokens } = tokenize("enum Container<'a> { Ref(&'a i32) }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Enum",
+        name: { text: "Container" },
+        generics: [{ kind: "Lifetime", name: "a" }],
+        variants: [
+          {
+            name: { text: "Ref" },
+            body: some({
+              kind: "TupleFields",
+              fields: [
+                {
+                  type: {
+                    kind: "ReferenceType",
+                    mutable: false,
+                    lifetime: some({ kind: "Lifetime", name: "a" }),
+                  },
+                },
+              ],
+            }),
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("parses multiple lifetime generics (enum Container<'a, 'b> { Ref(&'a i32, &'b i32) })", (): void => {
+    const { tokens } = tokenize(
+      "enum Container<'a, 'b> { Ref(&'a i32, &'b i32) }",
+    );
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Enum",
+        generics: [
+          { kind: "Lifetime", name: "a" },
+          { kind: "Lifetime", name: "b" },
+        ],
+        variants: [
+          {
+            body: some({
+              kind: "TupleFields",
+              fields: [
+                { type: { lifetime: some({ kind: "Lifetime", name: "a" }) } },
+                { type: { lifetime: some({ kind: "Lifetime", name: "b" }) } },
+              ],
+            }),
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("enum Foo<T> {} still hits the existing Slice-4 guardrail, unchanged from struct/fn (no enum-specific carve-out for identifier type params)", (): void => {
+    const { tokens } = tokenize("enum Foo<T> {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("Slice 4");
+    expect(diagnostics[0].message).not.toContain("lifetime");
+    expect(program.value.items).toMatchObject([
+      { kind: "Enum", name: { text: "Foo" }, generics: [] },
+    ]);
+  });
+
+  it("enum Foo<'a, T> {} hits the Slice-2/lifetime guardrail (lifetime listed first, followed by a non-lifetime member)", (): void => {
+    const { tokens } = tokenize("enum Foo<'a, T> {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("Slice 2");
+    expect(diagnostics[0].message).toContain("lifetime");
+    expect(program.value.items).toMatchObject([
+      { kind: "Enum", name: { text: "Foo" }, generics: [] },
+    ]);
+  });
+
+  it("enum Foo<T, 'a> {} falls back to the generic Slice-4 diagnostic (lifetime not listed first)", (): void => {
+    const { tokens } = tokenize("enum Foo<T, 'a> {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("Slice 4");
+    expect(diagnostics[0].message).not.toContain("lifetime");
+    expect(program.value.items).toMatchObject([
+      { kind: "Enum", name: { text: "Foo" }, generics: [] },
+    ]);
+  });
+
+  it("enum Foo where T: Draw { Quit } recovers with a single Slice-1 diagnostic naming the where clause", (): void => {
+    const { tokens } = tokenize("enum Foo where T: Draw { Quit }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("Slice 1");
+    expect(diagnostics[0]?.message).toContain("where");
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Enum",
+        name: { text: "Foo" },
+        variants: [{ name: { text: "Quit" } }],
+      },
+    ]);
+  });
+
+  it("parses a unit-variant construction path (Message::Quit) as a bare path expression", (): void => {
+    const ast = parseProgram("enum Message { Quit } fn f() { Message::Quit; }");
+    expect(ast).toMatchObject({
+      items: [
+        { kind: "Enum" },
+        {
+          kind: "Function",
+          body: {
+            statements: [
+              {
+                kind: "ExpressionStatement",
+                expression: {
+                  kind: "PathExpression",
+                  path: { segments: ["Message", "Quit"] },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses a tuple-variant construction path (Message::Move(1, 2)) as a call over a path expression", (): void => {
+    const ast = parseProgram(
+      "enum Message { Move(i32, i32) } fn f() { Message::Move(1, 2); }",
+    );
+    expect(ast).toMatchObject({
+      items: [
+        { kind: "Enum" },
+        {
+          kind: "Function",
+          body: {
+            statements: [
+              {
+                kind: "ExpressionStatement",
+                expression: {
+                  kind: "CallExpression",
+                  callee: {
+                    kind: "PathExpression",
+                    path: { segments: ["Message", "Move"] },
+                  },
+                  arguments: [
+                    { kind: "IntLiteral", value: "1" },
+                    { kind: "IntLiteral", value: "2" },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it('parses a struct-variant construction path (Message::Write { text: "hi" }) as a struct expression', (): void => {
+    const ast = parseProgram(
+      'enum Message { Write { text: str } } fn f() { Message::Write { text: "hi" }; }',
+    );
+    expect(ast).toMatchObject({
+      items: [
+        { kind: "Enum" },
+        {
+          kind: "Function",
+          body: {
+            statements: [
+              {
+                kind: "ExpressionStatement",
+                expression: {
+                  kind: "StructExpression",
+                  path: { segments: ["Message", "Write"] },
+                  fields: [
+                    {
+                      name: { text: "text" },
+                      value: some({ kind: "StringLiteral", value: "hi" }),
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("a missing closing brace at EOF fails fast with one clear diagnostic, without hanging", (): void => {
+    const { tokens } = tokenize("enum Foo { Quit");
+    const { program, diagnostics } = parse(tokens);
+    assert(isNone(program), "Expected no program to come back");
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("rbrace");
+  });
+
+  it("a malformed field inside a struct variant's body recovers at the field-list level, keeping the variant (with the bad field dropped) and its sibling, with exactly one diagnostic (no cascade)", (): void => {
+    const { tokens } = tokenize("enum Foo { Bad { x }, Ok }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("':'");
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Enum",
+        name: { text: "Foo" },
+        variants: [
+          {
+            name: { text: "Bad" },
+            body: some({ kind: "NamedFields", fields: [] }),
+          },
+          { name: { text: "Ok" }, body: none() },
+        ],
+      },
+    ]);
+  });
+
+  it("a malformed variant (not an identifier) recovers at the variant-list level: it is dropped entirely, and its sibling still parses, with exactly one diagnostic (no cascade)", (): void => {
+    const { tokens } = tokenize("enum Foo { 1, Ok }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("identifier");
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Enum",
+        name: { text: "Foo" },
+        variants: [{ name: { text: "Ok" } }],
+      },
+    ]);
+  });
+
+  it("a missing enum name fails fast (program: none()) - not covered by the fn/struct-only missing-name recovery", (): void => {
+    const { tokens } = tokenize("enum { Quit }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isNone(program), "Expected no program to come back");
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("identifier");
+  });
+
+  it("parses a local enum declaration inside a function body", (): void => {
+    const ast = parseProgram("fn f() { enum Local { A, B } }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: {
+            statements: [
+              {
+                kind: "Enum",
+                name: { text: "Local" },
+                variants: [{ name: { text: "A" } }, { name: { text: "B" } }],
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("constructs a locally-declared enum's variant within the same function body", (): void => {
+    const ast = parseProgram("fn f() { enum Local { A } let x = Local::A; }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: {
+            statements: [
+              { kind: "Enum", name: { text: "Local" } },
+              {
+                kind: "LetStatement",
+                initializer: some({
+                  kind: "PathExpression",
+                  path: { segments: ["Local", "A"] },
+                }),
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("a truncated tuple-variant body (missing its own closing paren, then the enum's own closing brace) fails fast with both diagnostics, no hang", (): void => {
+    const { tokens } = tokenize("enum Foo { Bad(i32");
+    const { program, diagnostics } = parse(tokens);
+    assert(isNone(program), "Expected no program to come back");
+    expect(diagnostics).toHaveLength(2);
+    expect(diagnostics[0]?.message).toContain("rparen");
+    expect(diagnostics[1]?.message).toContain("rbrace");
+  });
+
+  it("a guardrail-violating type inside a variant's tuple field (Vec<T>) bubbles straight out unrecovered, matching the same guardrail on a plain struct field", (): void => {
+    const { tokens } = tokenize("enum Foo { Bad(Vec<T>) }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isNone(program), "Expected no program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("Slice 1");
+    expect(diagnostics[0]?.message).toContain("generic");
+  });
 });
 
 describe("const declarations", (): void => {
@@ -2464,7 +2951,7 @@ describe("function parameters", (): void => {
 });
 
 describe("unsupported item keywords", (): void => {
-  it.each(["enum", "export", "extern", "impl", "trait"])(
+  it.each(["export", "extern", "impl", "trait"])(
     "rejects `%s` with a Slice 1 diagnostic",
     (keyword): void => {
       const { tokens } = tokenize(`${keyword} Foo {}`);
@@ -2485,7 +2972,7 @@ describe("unsupported item keywords", (): void => {
     expect(diagnostics[0].message).toContain("impl");
   });
 
-  it.each(["enum", "export", "extern", "impl", "trait"])(
+  it.each(["export", "extern", "impl", "trait"])(
     "recovers so a sibling function after a rejected `%s` declaration still parses",
     (keyword): void => {
       const { tokens } = tokenize(`${keyword} Foo {} fn bar() {}`);
@@ -2550,7 +3037,7 @@ describe("unsupported item keywords", (): void => {
     expect(diagnostics[0].message).not.toContain("Expected an expression");
   });
 
-  it.each(["enum", "export", "extern", "impl", "trait", "async", "use", "mod"])(
+  it.each(["export", "extern", "impl", "trait", "async", "use", "mod"])(
     "`%s` with no body at EOF fails fast without hanging",
     (keyword): void => {
       const { tokens } = tokenize(keyword);
@@ -2561,7 +3048,7 @@ describe("unsupported item keywords", (): void => {
     },
   );
 
-  it.each(["enum Foo {}", "trait Foo {}", "impl Foo {}"])(
+  it.each(["trait Foo {}", "impl Foo {}"])(
     "recovers past a redundant trailing semicolon after a rejected `%s`, without a secondary parsing error",
     (construct): void => {
       const { tokens } = tokenize(`${construct}; fn bar() {}`);

@@ -489,6 +489,9 @@ export function skipToFunctionBody(
  * clause on a struct. Unlike a function, a struct's body can start with
  * `{`, `(`, or `;` (a unit struct). Bails at an
  * {@link isWhereClauseBoundary} token.
+ *
+ * Also reused for `enum`: its body is always brace-delimited, one of the
+ * shapes already handled here.
  */
 export function skipToStructBody(
   tokens: readonly Token[],
