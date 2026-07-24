@@ -134,6 +134,70 @@ describe("semantic analysis", (): void => {
     });
   });
 
+  describe("match expressions (parsed, not yet semantically analyzed)", () => {
+    it("rejects a match expression with a clean 'not yet supported' diagnostic", () => {
+      const result = diagnose("fn main() { match 1 { x => x }; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(result.diagnostics[0]?.message).toContain(
+        "not yet supported by semantic analysis",
+      );
+    });
+
+    it("does not crash the analyzer for a zero-arm match", () => {
+      const result = diagnose("fn main() { match 1 {}; }");
+      expect(result.diagnostics).toHaveLength(1);
+    });
+
+    it("does not cascade a second diagnostic when a match is used as an if condition", () => {
+      // The placeholder resolves to UnitType, which is in the
+      // error-recovery bucket `analyzeIfExpression`'s bool-check already
+      // skips - proves no second "if condition must be bool" diagnostic.
+      const result = diagnose("fn main() { if match 1 { x => true } { } }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "not yet supported by semantic analysis",
+      );
+    });
+  });
+
+  describe("if let / while let (parsed, not yet semantically analyzed)", () => {
+    it("rejects an if-let with a clean 'not yet supported' diagnostic", () => {
+      const result = diagnose("fn main() { if let y = opt { } }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(result.diagnostics[0]?.message).toContain(
+        "not yet supported by semantic analysis",
+      );
+    });
+
+    it("rejects a while-let with a clean 'not yet supported' diagnostic", () => {
+      const result = diagnose("fn main() { while let y = opt { } }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(result.diagnostics[0]?.message).toContain(
+        "not yet supported by semantic analysis",
+      );
+    });
+
+    it("does not cascade a second 'condition must be bool' diagnostic for an if-let condition", () => {
+      // `LetExpression`'s placeholder resolves to `UnitType`, which
+      // `analyzeIfExpression`'s bool-check already treats as the
+      // error-recovery bucket and skips - see `isAmbiguousUnitExpr`.
+      const result = diagnose("fn main() { if let y = opt { } }");
+      expect(result.diagnostics).toHaveLength(1);
+    });
+
+    it("still analyzes the then-branch normally around an if-let condition placeholder", () => {
+      const result = diagnose("fn main() { if let y = opt { missing_name; } }");
+      expect(result.diagnostics).toHaveLength(2);
+      expect(result.diagnostics[0]?.message).toContain(
+        "not yet supported by semantic analysis",
+      );
+      expect(result.diagnostics[1]?.message).toContain("missing_name");
+    });
+  });
+
   describe("top-level item restriction", () => {
     it("bare expression at top level is an error", () => {
       const result = diagnose("x + y;");

@@ -15,6 +15,7 @@ import type { Parsed } from "./parse.js";
 import {
   expect,
   expectKeyword,
+  isWhileLetAt,
   loopKeywordAt,
   skipBalancedBraceBlock,
   unsupportedLoopMessage,
@@ -336,8 +337,13 @@ export function parseBlock(
     }
     // `loop`/`while`/`for` statements, optionally label-prefixed, are not
     // supported until Slice 6 — reject with a diagnostic and recover by
-    // skipping the whole construct so later statements still parse.
-    const loopKeyword = loopKeywordAt(tokens, cursor);
+    // skipping the whole construct so later statements still parse. The
+    // exact unlabeled `while` `let` sequence is the one exception: it falls
+    // through to the ordinary expression path below, which routes
+    // to a real `WhileExpression` via `parseExpression`/`parsePrimary`.
+    const loopKeyword: Option<LoopKeywordMatch> = isWhileLetAt(tokens, cursor)
+      ? none()
+      : loopKeywordAt(tokens, cursor);
     if (isSome(loopKeyword)) {
       const skipResult = skipUnsupportedLoopConstruct(
         tokens,
@@ -361,11 +367,14 @@ export function parseBlock(
       continue;
     }
     // ExpressionWithBlock does not require a semicolon in statement position.
-    // Block-like expressions (Block, IfExpression) used before the final position
-    // are statements without a trailing `;`
+    // Block-like expressions (Block, IfExpression, MatchExpression,
+    // WhileExpression) used before the final position are statements
+    // without a trailing `;`.
     if (
       (exprResult.value.node.kind === "Block" ||
-        exprResult.value.node.kind === "IfExpression") &&
+        exprResult.value.node.kind === "IfExpression" ||
+        exprResult.value.node.kind === "MatchExpression" ||
+        exprResult.value.node.kind === "WhileExpression") &&
       tokens[cursor]?.kind !== "rbrace"
     ) {
       statements.push(expressionStatement(exprResult.value.node));

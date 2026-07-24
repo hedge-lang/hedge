@@ -977,6 +977,38 @@ function analyzeEnumPlaceholder(
   };
 }
 
+const MATCH_NOT_YET_SUPPORTED_MESSAGE =
+  "`match` expressions are not yet supported by semantic analysis";
+
+const WHILE_NOT_YET_SUPPORTED_MESSAGE =
+  "`while` expressions are not yet supported by semantic analysis";
+
+// `LetExpression` only ever appears as (or within) an `if`/`while`
+// condition (see `parser/ast.ts`'s doc comment on the type) - this message
+// covers both the `if let` and `while let` surface forms.
+const LET_EXPRESSION_NOT_YET_SUPPORTED_MESSAGE =
+  "`if let`/`while let` are not yet supported by semantic analysis";
+
+/** Placeholder for an `Expression` variant with no `Semantics` counterpart
+ * yet - same "parser accepts it, semantics doesn't yet" pattern as
+ * {@link analyzeEnumPlaceholder}, at expression rather than item
+ * granularity. Reuses the zero-element `TupleExpression` shape, which is
+ * already in {@link AMBIGUOUS_UNIT_EXPR_KINDS}'s error-recovery bucket, so no
+ * new `Semantics.Expression` kind - and no new bucket entry - is needed. */
+function analyzeExpressionPlaceholder(
+  ctx: AnalysisContext,
+  tokenId: number,
+  message: string,
+): Semantics.Expression {
+  emitError(ctx, message, tokenId);
+  return {
+    kind: "TupleExpression",
+    tokenId,
+    elements: [],
+    type: { kind: "UnitType", tokenId },
+  };
+}
+
 function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
   switch (item.kind) {
     case "Function":
@@ -2135,6 +2167,24 @@ function analyzeExpression(
       return analyzeStructExpression(ctx, expression);
     case "IfExpression":
       return analyzeIfExpression(ctx, expression);
+    case "LetExpression":
+      return analyzeExpressionPlaceholder(
+        ctx,
+        expression.tokenId,
+        LET_EXPRESSION_NOT_YET_SUPPORTED_MESSAGE,
+      );
+    case "MatchExpression":
+      return analyzeExpressionPlaceholder(
+        ctx,
+        expression.tokenId,
+        MATCH_NOT_YET_SUPPORTED_MESSAGE,
+      );
+    case "WhileExpression":
+      return analyzeExpressionPlaceholder(
+        ctx,
+        expression.tokenId,
+        WHILE_NOT_YET_SUPPORTED_MESSAGE,
+      );
     case "Block":
       return analyzeBlock(ctx, expression);
     case "Identifier":

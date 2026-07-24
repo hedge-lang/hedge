@@ -1708,6 +1708,474 @@ describe("match expressions", (): void => {
       ],
     });
   });
+
+  it("accepts a trailing comma after a single arm (`match x { y => y, }`)", (): void => {
+    const ast = parseProgram("match x { y => y, }");
+    expect(ast).toMatchObject({
+      items: [{ kind: "MatchExpression", arms: [{ kind: "MatchArm" }] }],
+    });
+  });
+
+  it("accepts a trailing comma after the last of several arms (`match x { a => 1, b => 2, }`)", (): void => {
+    const ast = parseProgram("match x { a => 1, b => 2, }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [{ kind: "MatchArm" }, { kind: "MatchArm" }],
+        },
+      ],
+    });
+  });
+
+  it("rejects a missing comma between two expression-bodied arms with a parse error (`match x { a => 1 b => 2 }`)", (): void => {
+    const result = parse(tokenize("match x { a => 1 b => 2 }").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain(",");
+  });
+
+  it("treats the comma as optional after a block-bodied arm (`match x { a => { 1 } b => 2 }`)", (): void => {
+    const ast = parseProgram("match x { a => { 1 } b => 2 }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            { pattern: { name: { text: "a" } }, body: { kind: "Block" } },
+            {
+              pattern: { name: { text: "b" } },
+              body: { kind: "IntLiteral", value: "2" },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("treats the comma as optional after an if-bodied arm (`match x { a => if c { 1 } else { 2 } b => 3 }`)", (): void => {
+    const ast = parseProgram("match x { a => if c { 1 } else { 2 } b => 3 }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: { name: { text: "a" } },
+              body: { kind: "IfExpression" },
+            },
+            {
+              pattern: { name: { text: "b" } },
+              body: { kind: "IntLiteral", value: "3" },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("stores a guard on the arm when present and leaves it absent otherwise (`match x { y if cond => y, _ => 0 }`)", (): void => {
+    const ast = parseProgram("match x { y if cond => y, _ => 0 }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              kind: "MatchArm",
+              pattern: { kind: "BindingPattern", name: { text: "y" } },
+              guard: some({
+                kind: "PathExpression",
+                path: { segments: ["cond"] },
+              }),
+              body: { kind: "PathExpression", path: { segments: ["y"] } },
+            },
+            {
+              kind: "MatchArm",
+              pattern: { kind: "WildcardPattern" },
+              guard: none(),
+              body: { kind: "IntLiteral", value: "0" },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("accepts a compound boolean expression as a guard (`match x { y if y > 0 && y < 10 => y }`)", (): void => {
+    const ast = parseProgram("match x { y if y > 0 && y < 10 => y }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              guard: some({
+                kind: "BinaryExpression",
+                operator: "And",
+              }),
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("produces a clear parse error for a missing '=>' (`match x { y z }`)", (): void => {
+    const result = parse(tokenize("match x { y z }").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("=>");
+  });
+
+  it("produces a clear parse error for a missing '=>' on a later arm (`match x { a => 1, b c }`)", (): void => {
+    const result = parse(tokenize("match x { a => 1, b c }").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("=>");
+  });
+
+  it("produces a clear parse error for a second `if` where '=>' was expected (`match x { y if a if b => y }`)", (): void => {
+    const result = parse(tokenize("match x { y if a if b => y }").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("=>");
+  });
+
+  it("produces a parse error for a missing arm body (`match x { y => }`)", (): void => {
+    const result = parse(tokenize("match x { y => }").tokens);
+    expect(result.program).toEqual(none());
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+  });
+
+  it("produces a parse error for a missing scrutinee (`match { y => 1 }`)", (): void => {
+    const result = parse(tokenize("match { y => 1 }").tokens);
+    expect(result.program).toEqual(none());
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+  });
+
+  it("produces a parse error for a match with no closing brace (`match x { y => 1`)", (): void => {
+    const result = parse(tokenize("match x { y => 1").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("}");
+  });
+
+  it("does not require a semicolon for a match used as a mid-block statement (`fn f() { match x {} let done = true; }`)", (): void => {
+    const ast = parseProgram("fn f() { match x {} let done = true; }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: {
+            statements: [
+              {
+                kind: "ExpressionStatement",
+                expression: { kind: "MatchExpression" },
+              },
+              { kind: "LetStatement" },
+            ],
+          },
+        },
+      ],
+    });
+  });
+});
+
+describe("if let expressions", (): void => {
+  it("parses an if-let with no else into a LetExpression condition (`if let y = expr { }`)", (): void => {
+    const ast = parseProgram("if let y = expr { }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "IfExpression",
+          condition: {
+            kind: "LetExpression",
+            pattern: {
+              kind: "BindingPattern",
+              mutable: false,
+              name: { text: "y" },
+            },
+            scrutinee: { kind: "PathExpression", path: { segments: ["expr"] } },
+          },
+          thenBranch: { kind: "Block" },
+          elseBranch: none(),
+        },
+      ],
+    });
+  });
+
+  it("parses an if-let's else block when present (`if let y = expr { } else { }`)", (): void => {
+    const ast = parseProgram("if let y = expr { a } else { b }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "IfExpression",
+          condition: { kind: "LetExpression" },
+          elseBranch: some({ kind: "Block" }),
+        },
+      ],
+    });
+  });
+
+  it("accepts a wildcard pattern in an if-let (`if let _ = expr { }`)", (): void => {
+    const ast = parseProgram("if let _ = expr { }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "IfExpression",
+          condition: {
+            kind: "LetExpression",
+            pattern: { kind: "WildcardPattern" },
+          },
+        },
+      ],
+    });
+  });
+
+  it("accepts a mutable binding pattern in an if-let (`if let mut y = expr { }`)", (): void => {
+    const ast = parseProgram("if let mut y = expr { }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "IfExpression",
+          condition: {
+            kind: "LetExpression",
+            pattern: { kind: "BindingPattern", mutable: true },
+          },
+        },
+      ],
+    });
+  });
+
+  it("produces a parse error for an if-let with a missing block (`if let y = expr;`)", (): void => {
+    const result = parse(tokenize("if let y = expr;").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("{");
+  });
+
+  it("produces a parse error for an if-let with a missing '=' (`if let y expr { }`)", (): void => {
+    const result = parse(tokenize("if let y expr { }").tokens);
+    expect(result.program).toEqual(none());
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+  });
+
+  it("produces a parse error for an if-let with a missing pattern (`if let = expr { }`)", (): void => {
+    const result = parse(tokenize("if let = expr { }").tokens);
+    expect(result.program).toEqual(none());
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+  });
+});
+
+describe("if / if let chaining", (): void => {
+  it("chains if-let, else-if-let, else-if, and else into one nested structure (`if let a = e1 {} else if let b = e2 {} else if c {} else {}`)", (): void => {
+    const ast = parseProgram(
+      "if let a = e1 { } else if let b = e2 { } else if c { } else { }",
+    );
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "IfExpression",
+          condition: {
+            kind: "LetExpression",
+            pattern: { name: { text: "a" } },
+          },
+          elseBranch: some({
+            kind: "IfExpression",
+            condition: {
+              kind: "LetExpression",
+              pattern: { name: { text: "b" } },
+            },
+            elseBranch: some({
+              kind: "IfExpression",
+              condition: {
+                kind: "PathExpression",
+                path: { segments: ["c"] },
+              },
+              elseBranch: some({ kind: "Block" }),
+            }),
+          }),
+        },
+      ],
+    });
+  });
+
+  it("chains a plain if into an else-if-let (`if c { } else if let p = e { }`)", (): void => {
+    const ast = parseProgram("if c { } else if let p = e { }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "IfExpression",
+          condition: { kind: "PathExpression", path: { segments: ["c"] } },
+          elseBranch: some({
+            kind: "IfExpression",
+            condition: {
+              kind: "LetExpression",
+              pattern: { name: { text: "p" } },
+            },
+            elseBranch: none(),
+          }),
+        },
+      ],
+    });
+  });
+
+  it("ends an if-let/else-if-let chain with no final else in none() (`if let a = e {} else if let b = e {}`)", (): void => {
+    const ast = parseProgram("if let a = e { } else if let b = e { }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "IfExpression",
+          elseBranch: some({
+            kind: "IfExpression",
+            elseBranch: none(),
+          }),
+        },
+      ],
+    });
+  });
+});
+
+describe("while let expressions", (): void => {
+  it("parses a while-let's condition as a LetExpression and body as a Block (`while let y = expr { }`)", (): void => {
+    const ast = parseProgram("while let y = expr { }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "WhileExpression",
+          condition: {
+            kind: "LetExpression",
+            pattern: {
+              kind: "BindingPattern",
+              mutable: false,
+              name: { text: "y" },
+            },
+            scrutinee: { kind: "PathExpression", path: { segments: ["expr"] } },
+          },
+          body: { kind: "Block" },
+        },
+      ],
+    });
+  });
+
+  it("accepts a wildcard pattern in a while-let (`while let _ = expr { }`)", (): void => {
+    const ast = parseProgram("while let _ = expr { }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "WhileExpression",
+          condition: {
+            kind: "LetExpression",
+            pattern: { kind: "WildcardPattern" },
+          },
+        },
+      ],
+    });
+  });
+
+  it("accepts a mutable binding pattern in a while-let (`while let mut y = expr { }`)", (): void => {
+    const ast = parseProgram("while let mut y = expr { }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "WhileExpression",
+          condition: {
+            kind: "LetExpression",
+            pattern: { kind: "BindingPattern", mutable: true },
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses a while-let as a block's trailing expression (`fn f() { while let y = g() { h(y) } }`)", (): void => {
+    const ast = parseProgram("fn f() { while let y = g() { h(y) } }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: {
+            statements: [],
+            trailingExpression: some({ kind: "WhileExpression" }),
+          },
+        },
+      ],
+    });
+  });
+
+  it("does not require a semicolon for a while-let used as a mid-block statement (`fn f() { while let y = g() { h(y) } let done = true; }`)", (): void => {
+    const ast = parseProgram(
+      "fn f() { while let y = g() { h(y) } let done = true; }",
+    );
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: {
+            statements: [
+              {
+                kind: "ExpressionStatement",
+                expression: { kind: "WhileExpression" },
+              },
+              { kind: "LetStatement" },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("produces a parse error for a while-let with a missing block (`while let y = expr;`)", (): void => {
+    const result = parse(tokenize("while let y = expr;").tokens);
+    expect(result.program).toEqual(none());
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+  });
+
+  it("produces a parse error for a while-let with a missing '=' (`while let y expr { }`)", (): void => {
+    const result = parse(tokenize("while let y expr { }").tokens);
+    expect(result.program).toEqual(none());
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+  });
+
+  it("produces a parse error for a while-let with a missing pattern (`while let = expr { }`)", (): void => {
+    const result = parse(tokenize("while let = expr { }").tokens);
+    expect(result.program).toEqual(none());
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+  });
+});
+
+describe("bare `while`/`loop`/`for` regression after while-let support", (): void => {
+  it("still rejects a bare while with the unchanged Slice 6 guardrail (`fn f() { while true { } }`)", (): void => {
+    const { tokens } = tokenize("fn f() { while true { } } fn g() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics[0]?.message).toContain("Slice 1");
+    expect(diagnostics[0]?.message).toContain("while");
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "f" }, body: { statements: [] } },
+      { kind: "Function", name: { text: "g" } },
+    ]);
+  });
+
+  it("still rejects a label-prefixed while-let with the loop guardrail, since labels remain out of scope (`'outer: while let y = expr { }`)", (): void => {
+    const { tokens } = tokenize(
+      "fn f() { 'outer: while let y = expr { } } fn g() {}",
+    );
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics[0]?.message).toContain("Slice 1");
+    expect(diagnostics[0]?.message).toContain("while");
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "f" } },
+      { kind: "Function", name: { text: "g" } },
+    ]);
+  });
+
+  it("still fully rejects a bare loop, unchanged (`fn f() { loop { } }`)", (): void => {
+    const { tokens } = tokenize("fn f() { loop { } } fn g() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics[0]?.message).toContain("loop");
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "f" } },
+      { kind: "Function", name: { text: "g" } },
+    ]);
+  });
 });
 
 describe("block expressions", (): void => {
