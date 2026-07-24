@@ -682,10 +682,9 @@ function walkExpression(
       // Reached here only from a genuinely moving position (see this
       // function's own doc comment) - a non-`Copy` referent can't be moved
       // out through a reference, matching Rust's "cannot move out of a
-      // reference" rule (root CLAUDE.md's settled decision). `UnitType` (the
-      // error-recovery placeholder for a deref of a non-reference type) is
-      // always `copy`, so a prior diagnostic there never cascades into this
-      // one.
+      // reference" rule. `UnitType` (the error-recovery placeholder for a
+      // deref of a non-reference type) is always `copy`, so a prior diagnostic
+      // there never cascades into this one.
       if (!hasCapability(expression.type, "copy")) {
         emitDiagnostic(
           ctx,

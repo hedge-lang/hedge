@@ -938,8 +938,7 @@ function parseExpression(
       };
     case "ReferenceExpression":
       // A shared borrow is transparent in JS - emit the operand directly. A
-      // `&mut` borrow needs the getter/setter cell (see root CLAUDE.md's
-      // borrow/reference lowering decision).
+      // `&mut` borrow needs the getter/setter cell.
       return expression.mutable
         ? parseMutableReferenceExpression(ctx, expression)
         : parseExpression(ctx, expression.operand);
