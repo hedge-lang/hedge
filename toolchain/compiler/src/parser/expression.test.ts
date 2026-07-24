@@ -1630,6 +1630,86 @@ describe("if expressions", (): void => {
   });
 });
 
+describe("match expressions", (): void => {
+  it("parses `match x {}` as an empty arms array", (): void => {
+    const ast = parseProgram("match x {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          scrutinee: { kind: "PathExpression", path: { segments: ["x"] } },
+          arms: [],
+        },
+      ],
+    });
+  });
+
+  it("parses `match x { y => y }` to one arm with a binding pattern", (): void => {
+    const ast = parseProgram("match x { y => y }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              kind: "MatchArm",
+              pattern: {
+                kind: "BindingPattern",
+                mutable: false,
+                name: { text: "y" },
+              },
+              guard: none(),
+              body: { kind: "PathExpression", path: { segments: ["y"] } },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses `match x { _ => 1 }` as one arm with the wildcard pattern", (): void => {
+    const ast = parseProgram("match x { _ => 1 }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              kind: "MatchArm",
+              pattern: { kind: "WildcardPattern" },
+              guard: none(),
+              body: { kind: "IntLiteral", value: "1" },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses `match x { a => 1, b => 2 }` as multiple arms", (): void => {
+    const ast = parseProgram("match x { a => 1, b => 2 }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              kind: "MatchArm",
+              pattern: { kind: "BindingPattern", name: { text: "a" } },
+              body: { kind: "IntLiteral", value: "1" },
+            },
+            {
+              kind: "MatchArm",
+              pattern: { kind: "BindingPattern", name: { text: "b" } },
+              body: { kind: "IntLiteral", value: "2" },
+            },
+          ],
+        },
+      ],
+    });
+  });
+});
+
 describe("block expressions", (): void => {
   it("{ } — empty block yields unit (no trailing expression)", (): void => {
     const ast = parseProgram("{ }");
