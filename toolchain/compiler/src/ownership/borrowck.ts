@@ -264,17 +264,16 @@ function registerScopedName(
 }
 
 /**
- * Reference types are `Copy` (root CLAUDE.md's settled decision), so
- * `let s = r;` duplicates the pointer, not the referent - `s` and `r` are two
- * independently-named bindings that alias the exact same underlying place
- * once dereferenced. `aliases` maps a binding straight to the earliest
- * binding in its own copy-chain (never through the copied-from binding's own
- * *borrow*, only through further plain-copy `let`s), so `&mut *r` and
- * `&mut *s` resolve to the same base and can be compared for conflict -
- * without also making a borrow's own base (e.g. `x` in `let r = &mut x;`)
- * comparable against a reborrow taken through it, which would wrongly flag
- * `let r = &mut x; let a = &mut *r;` as self-conflicting at the exact
- * statement where `r`'s own extent ends and `a`'s begins.
+ * Reference types are `Copy`, so `let s = r;` duplicates the pointer, not
+ * the referent - `s` and `r` are two independently-named bindings that alias
+ * the exact same underlying place once dereferenced. `aliases` maps a binding
+ * straight to the earliest binding in its own copy-chain (never through the
+ * copied-from binding's own *borrow*, only through further plain-copy `let`s),
+ * so `&mut *r` and `&mut *s` resolve to the same base and can be compared for
+ * conflict (without also making a borrow's own base; e.g. `x` in
+ * `let r = &mut x;`) comparable against a reborrow taken through it, which
+ * would wrongly flag `let r = &mut x; let a = &mut *r;` as self-conflicting
+ * at the exact statement where `r`'s own extent ends and `a`'s begins.
  */
 function recordAlias(
   statement: Semantics.LetStatement,
