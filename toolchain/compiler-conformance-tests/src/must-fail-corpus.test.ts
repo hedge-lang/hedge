@@ -414,13 +414,6 @@ describe("must-fail corpus — rejection tests", (): void => {
       );
     });
 
-    it("rejects enum definitions (not in Slice 1)", (): void => {
-      assertRejectsWithMessage(
-        `enum Status { Ok, Err, } fn main() {}`,
-        "not supported in Slice 1",
-      );
-    });
-
     it("rejects non-primitive parameter type in function signature (Slice 1)", (): void => {
       assertRejectsWithMessage(
         `fn foo(x: MyStruct) {} fn main() {}`,

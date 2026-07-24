@@ -108,6 +108,32 @@ describe("semantic analysis", (): void => {
     expect(result.diagnostics).toEqual([]);
   });
 
+  describe("enum declarations (parsed, not yet semantically analyzed)", () => {
+    it("top-level enum declaration is rejected with a clean 'not yet supported' diagnostic", () => {
+      const result = diagnose("enum Message { Quit } fn main() {}");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(result.diagnostics[0]?.message).toContain(
+        "not yet supported by semantic analysis",
+      );
+    });
+
+    it("local (in-block) enum declaration gets the same 'not yet supported' diagnostic via analyzeStatement", () => {
+      const result = diagnose("fn main() { enum Local { A, B } }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "not yet supported by semantic analysis",
+      );
+    });
+
+    it("does not crash the analyzer for unit, tuple, or struct variant shapes", () => {
+      const result = diagnose(
+        `enum Message { Quit, Move(i32, i32), Write { text: str } } fn main() {}`,
+      );
+      expect(result.diagnostics).toHaveLength(1);
+    });
+  });
+
   describe("top-level item restriction", () => {
     it("bare expression at top level is an error", () => {
       const result = diagnose("x + y;");

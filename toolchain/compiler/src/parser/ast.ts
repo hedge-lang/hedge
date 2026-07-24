@@ -24,13 +24,20 @@ export interface Attribute {
 
 /** A top-level entry. Slice 1 is lenient and also accepts bare statements. */
 export type Item =
-  FunctionDecl | StructDecl | ConstDecl | StaticDecl | Statement | Expression;
+  | FunctionDecl
+  | StructDecl
+  | EnumDecl
+  | ConstDecl
+  | StaticDecl
+  | Statement
+  | Expression;
 
 export type Statement =
   | LetStatement
   | ExpressionStatement
   | FunctionDecl
   | StructDecl
+  | EnumDecl
   | ConstDecl
   | StaticDecl;
 
@@ -183,6 +190,31 @@ export interface TupleField extends AstNode {
   readonly attributes: readonly Attribute[];
   readonly visibility: Option<Visibility>;
   readonly type: Type;
+}
+
+export interface EnumDecl extends AstNode {
+  readonly kind: "Enum";
+  readonly visibility: Option<Visibility>;
+  readonly name: Identifier;
+  readonly generics: readonly GenericParam[];
+  readonly variants: readonly Variant[];
+  readonly attributes: readonly Attribute[];
+}
+
+/**
+ * `body` is `none()` for a bare/unit variant - no `UnitBody` member is needed,
+ * since the grammar's optionality already distinguishes a bare variant from an
+ * explicit empty body (`Write {}` / `Move()`), which parses to `some(...)`
+ * with zero fields.
+ *
+ * No `visibility` field: spec 0014 gives a variant no `pub` of its own - it
+ * always shares its enum's visibility.
+ */
+export interface Variant extends AstNode {
+  readonly kind: "Variant";
+  readonly attributes: readonly Attribute[];
+  readonly name: Identifier;
+  readonly body: Option<NamedFieldsBody | TupleFieldsBody>;
 }
 
 export interface Block extends AstNode {
