@@ -143,6 +143,12 @@ function bindPatternName(
 ): Semantics.Identifier {
   switch (pattern.kind) {
     case "BindingPattern":
+      // An `@` subpattern (`n @ 1..=5`) is itself a constraint - binding
+      // just `n` and dropping it would be exactly the silent no-op this
+      // guardrail exists to prevent for every other complex pattern kind.
+      if (isSome(pattern.subpattern)) {
+        return bindComplexPatternGuardrail(ctx, pattern, type);
+      }
       bind(ctx, pattern.name.text, { type, mutable });
       return { ...pattern.name, type };
     case "WildcardPattern":

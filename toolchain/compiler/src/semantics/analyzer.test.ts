@@ -280,6 +280,15 @@ describe("semantic analysis", (): void => {
         "destructuring patterns are not yet supported in `let`/parameter position",
       );
     });
+
+    it("rejects an @-binding with a subpattern in a let statement instead of silently dropping the constraint", () => {
+      const result = diagnose("fn main() { let n @ 1..=5 = 3; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(result.diagnostics[0]?.message).toContain(
+        "destructuring patterns are not yet supported in `let`/parameter position",
+      );
+    });
   });
 
   describe("top-level item restriction", () => {
