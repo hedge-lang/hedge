@@ -271,6 +271,15 @@ describe("semantic analysis", (): void => {
         "destructuring patterns are not yet supported in `let`/parameter position",
       );
     });
+
+    it("rejects a destructuring pattern in function-parameter position too, not just let", () => {
+      const result = diagnose("fn f(Point { x, y }: i32) {}");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(result.diagnostics[0]?.message).toContain(
+        "destructuring patterns are not yet supported in `let`/parameter position",
+      );
+    });
   });
 
   describe("top-level item restriction", () => {
