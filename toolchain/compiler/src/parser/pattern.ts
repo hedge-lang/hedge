@@ -2,7 +2,13 @@ import { assert } from "../assert.js";
 import type { Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
-import type { FieldPattern, Path, Pattern, RangePatternBound } from "./ast.js";
+import type {
+  FieldPattern,
+  Path,
+  Pattern,
+  RangePatternBound,
+  RestPattern,
+} from "./ast.js";
 import type { Parsed } from "./parse.js";
 import {
   expect,
@@ -133,6 +139,10 @@ function parsePatternNoAlt(
 ): PR<Parsed<Pattern>> {
   if (kindAt(tokens, pos) === "lparen") {
     return parseTuplePattern(tokens, pos);
+  }
+
+  if (kindAt(tokens, pos) === "lbracket") {
+    return parseSlicePattern(tokens, pos);
   }
 
   const startAttempt = tryParseRangePatternBound(tokens, pos);
@@ -461,6 +471,123 @@ function parseStructPattern(
   if (isErr(closeResult)) return closeResult;
   return ok({
     node: { kind: "StructPattern", tokenId: startPos, path, fields, hasRest },
+    next: closeResult.value,
+  });
+}
+
+/**
+ * Parses `".." ( "&" "mut"? Identifier | Identifier )?` at `pos` (the
+ * caller has already confirmed a `dot_dot` token there). Only the byRef
+ * alternative allows an optional `mut`; a bare (non-`&`) rest binding never
+ * does, per the grammar as written.
+ */
+function parseRestPattern(
+  tokens: readonly Token[],
+  pos: number,
+): PR<Parsed<RestPattern>> {
+  let cursor = pos + 1; // skip `..`
+
+  if (kindAt(tokens, cursor) === "amp") {
+    cursor += 1;
+    let mutable = false;
+    const maybeMutTok = tokens[cursor];
+    if (maybeMutTok?.kind === "keyword" && maybeMutTok.text === "mut") {
+      mutable = true;
+      cursor += 1;
+    }
+    const nameResult = parseIdentifier(tokens, cursor);
+    if (isErr(nameResult)) return nameResult;
+    return ok({
+      node: {
+        kind: "RestPattern",
+        tokenId: pos,
+        byRef: true,
+        mutable,
+        name: some(nameResult.value.node),
+      },
+      next: nameResult.value.next,
+    });
+  }
+
+  if (kindAt(tokens, cursor) === "ident") {
+    const nameResult = parseIdentifier(tokens, cursor);
+    if (isErr(nameResult)) return nameResult;
+    return ok({
+      node: {
+        kind: "RestPattern",
+        tokenId: pos,
+        byRef: false,
+        mutable: false,
+        name: some(nameResult.value.node),
+      },
+      next: nameResult.value.next,
+    });
+  }
+
+  return ok({
+    node: {
+      kind: "RestPattern",
+      tokenId: pos,
+      byRef: false,
+      mutable: false,
+      name: none(),
+    },
+    next: cursor,
+  });
+}
+
+/**
+ * Parses `"[" ( Pattern | RestPat ) ( "," ( Pattern | RestPat ) )* ","? "]"`.
+ * The formal grammar in `specification/0025-grammar.md` states `RestPat` as
+ * identifier-then-`..`, which contradicts both that spec chapter's own
+ * prose examples (`[head, ..tail]`) and this ticket's AC; the examples win
+ * (see the grill-me record for #45) and the spec's formal production was
+ * corrected to match `".." ( "&" "mut"? Identifier | Identifier )?`. At
+ * most one `RestPattern` element is semantically meaningful, but this
+ * parser does not enforce that arity - `[a, .., b, .., c]` parses without
+ * complaint; rejecting multiple rest patterns is deferred to semantic
+ * analysis, matching how binding-mode/or-pattern consistency is also out of
+ * this parser's scope.
+ */
+function parseSlicePattern(
+  tokens: readonly Token[],
+  pos: number,
+): PR<Parsed<Pattern>> {
+  let cursor = pos + 1; // skip `[`
+  const elements: (Pattern | RestPattern)[] = [];
+
+  if (kindAt(tokens, cursor) === "rbracket") {
+    return ok({
+      node: { kind: "SlicePattern", tokenId: pos, elements: [] },
+      next: cursor + 1,
+    });
+  }
+
+  for (;;) {
+    if (kindAt(tokens, cursor) === "dot_dot") {
+      const restResult = parseRestPattern(tokens, cursor);
+      if (isErr(restResult)) return restResult;
+      elements.push(restResult.value.node);
+      cursor = restResult.value.next;
+    } else {
+      const elementResult = parsePattern(tokens, cursor);
+      if (isErr(elementResult)) return elementResult;
+      elements.push(elementResult.value.node);
+      cursor = elementResult.value.next;
+    }
+
+    if (kindAt(tokens, cursor) === "comma") {
+      cursor += 1;
+      if (kindAt(tokens, cursor) === "rbracket") break; // trailing comma
+      continue;
+    }
+    break;
+  }
+
+  const closeResult = expect(tokens, cursor, "rbracket");
+  if (isErr(closeResult)) return closeResult;
+  return ok({
+    node: { kind: "SlicePattern", tokenId: pos, elements },
     next: closeResult.value,
   });
 }

@@ -244,7 +244,8 @@ export type Pattern =
   | TuplePattern
   | StructPattern
   | TupleStructPattern
-  | PathPattern;
+  | PathPattern
+  | SlicePattern;
 
 export interface BindingPattern extends AstNode {
   readonly kind: "BindingPattern";
@@ -363,6 +364,37 @@ export interface PathPattern extends AstNode {
   readonly path: Path;
 }
 
+/**
+ * `..`, `..tail`, `..&rest`, `..&mut rest` - a slice pattern's rest element.
+ * Not itself a member of `Pattern`: it is only ever valid as one element of
+ * a `SlicePattern`'s `elements` list, mirroring how `ArrayRepeatExpression`
+ * isn't a general `Expression` either. Grammar (spec 0025, with the `..`-
+ * before-binding order corrected - see `parser/pattern.ts`):
+ *
+ * ```text
+ * RestPat ::= ".." ( "&" "mut"? Identifier | Identifier )?
+ * ```
+ *
+ * Only the byRef alternative allows an optional `mut`; a bare (non-`&`)
+ * rest binding never does, per the grammar as written.
+ */
+export interface RestPattern extends AstNode {
+  readonly kind: "RestPattern";
+  readonly byRef: boolean;
+  readonly mutable: boolean;
+  readonly name: Option<Identifier>;
+}
+
+/**
+ * `[first, .., last]`, `[head, ..tail]`. At most one `RestPattern` element
+ * is meaningful, but the parser does not enforce that arity - see
+ * `parser/pattern.ts`'s `parseSlicePattern` doc comment.
+ */
+export interface SlicePattern extends AstNode {
+  readonly kind: "SlicePattern";
+  readonly elements: readonly (Pattern | RestPattern)[];
+}
+
 export function patternMutable(pattern: Pattern): boolean {
   switch (pattern.kind) {
     case "BindingPattern":
@@ -375,6 +407,7 @@ export function patternMutable(pattern: Pattern): boolean {
     case "StructPattern":
     case "TupleStructPattern":
     case "PathPattern":
+    case "SlicePattern":
       return false;
     default:
       return assertNever(
@@ -396,6 +429,7 @@ export function patternBindingName(pattern: Pattern): Option<string> {
     case "StructPattern":
     case "TupleStructPattern":
     case "PathPattern":
+    case "SlicePattern":
       return none();
     default:
       return assertNever(
