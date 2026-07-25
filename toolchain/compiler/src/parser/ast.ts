@@ -235,7 +235,11 @@ export interface LetStatement extends AstNode {
   readonly initializer: Option<Expression>;
 }
 
-export type Pattern = BindingPattern | WildcardPattern | LiteralPattern;
+export type Pattern =
+  | BindingPattern
+  | WildcardPattern
+  | LiteralPattern
+  | RangePattern;
 
 export interface BindingPattern extends AstNode {
   readonly kind: "BindingPattern";
@@ -265,12 +269,30 @@ export interface LiteralPattern extends AstNode {
     | BoolLiteral;
 }
 
+/** A pattern-literal bound of a `RangePattern` (`1..=5`, `-5..=-1`). */
+export interface RangePatternBound {
+  readonly negative: boolean;
+  readonly literal:
+    | StringLiteral
+    | IntLiteral
+    | FloatLiteral
+    | CharLiteral
+    | BoolLiteral;
+}
+
+export interface RangePattern extends AstNode {
+  readonly kind: "RangePattern";
+  readonly start: RangePatternBound;
+  readonly end: RangePatternBound;
+}
+
 export function patternMutable(pattern: Pattern): boolean {
   switch (pattern.kind) {
     case "BindingPattern":
       return pattern.mutable;
     case "WildcardPattern":
     case "LiteralPattern":
+    case "RangePattern":
       return false;
     default:
       return assertNever(
@@ -286,6 +308,7 @@ export function patternBindingName(pattern: Pattern): Option<string> {
       return some(pattern.name.text);
     case "WildcardPattern":
     case "LiteralPattern":
+    case "RangePattern":
       return none();
     default:
       return assertNever(

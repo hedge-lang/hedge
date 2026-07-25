@@ -1959,6 +1959,85 @@ describe("Slice 3 pattern kinds - literal patterns", (): void => {
   });
 });
 
+describe("Slice 3 pattern kinds - range patterns", (): void => {
+  it("parses an inclusive int range pattern (`match x { 1..=5 => a }`)", (): void => {
+    const ast = parseProgram("match x { 1..=5 => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "RangePattern",
+                start: {
+                  negative: false,
+                  literal: { kind: "IntLiteral", value: "1" },
+                },
+                end: {
+                  negative: false,
+                  literal: { kind: "IntLiteral", value: "5" },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses an inclusive char range pattern (`match x { 'a'..='z' => a }`)", (): void => {
+    const ast = parseProgram("match x { 'a'..='z' => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "RangePattern",
+                start: { negative: false, literal: { value: "a" } },
+                end: { negative: false, literal: { value: "z" } },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a range pattern with negative bounds (`match x { -5..=-1 => a }`)", (): void => {
+    const ast = parseProgram("match x { -5..=-1 => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "RangePattern",
+                start: {
+                  negative: true,
+                  literal: { kind: "IntLiteral", value: "5" },
+                },
+                end: {
+                  negative: true,
+                  literal: { kind: "IntLiteral", value: "1" },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("produces a parse error for a range pattern missing its end literal (`match x { 1..= => a }`)", (): void => {
+    const result = parse(tokenize("match x { 1..= => a }").tokens);
+    expect(result.program).toEqual(none());
+  });
+});
+
 describe("if let expressions", (): void => {
   it("parses an if-let with no else into a LetExpression condition (`if let y = expr { }`)", (): void => {
     const ast = parseProgram("if let y = expr { }");

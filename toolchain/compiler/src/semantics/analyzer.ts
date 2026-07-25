@@ -148,6 +148,7 @@ function bindPatternName(
     case "WildcardPattern":
       return { kind: "Identifier", tokenId: pattern.tokenId, text: "_", type };
     case "LiteralPattern":
+    case "RangePattern":
       return bindComplexPatternGuardrail(ctx, pattern, type);
     default:
       return assertNever(
