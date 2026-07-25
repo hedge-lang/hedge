@@ -1877,6 +1877,29 @@ describe("match expressions", (): void => {
   });
 });
 
+describe("Slice 3 pattern kinds - literal patterns", (): void => {
+  it("parses a bare int literal pattern in a match arm (`match x { 1 => a, _ => b }`)", (): void => {
+    const ast = parseProgram("match x { 1 => a, _ => b }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              kind: "MatchArm",
+              pattern: {
+                kind: "LiteralPattern",
+                literal: { kind: "IntLiteral", value: "1" },
+              },
+            },
+            { kind: "MatchArm", pattern: { kind: "WildcardPattern" } },
+          ],
+        },
+      ],
+    });
+  });
+});
+
 describe("if let expressions", (): void => {
   it("parses an if-let with no else into a LetExpression condition (`if let y = expr { }`)", (): void => {
     const ast = parseProgram("if let y = expr { }");
