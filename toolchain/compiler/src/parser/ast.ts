@@ -248,6 +248,8 @@ export interface BindingPattern extends AstNode {
   /** `true` for a leading `&`/`&mut` sigil (bind-by-borrow). */
   readonly byRef: boolean;
   readonly name: Identifier;
+  /** `some(...)` for `name @ subpattern` - `none()` for a plain binding. */
+  readonly subpattern: Option<Pattern>;
 }
 
 export interface WildcardPattern extends AstNode {

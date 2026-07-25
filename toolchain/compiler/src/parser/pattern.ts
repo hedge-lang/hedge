@@ -222,13 +222,32 @@ function parsePatternNoAlt(
     });
   }
 
+  const bindingTokenId = isMut || byRef ? pos : ident.tokenId;
+
+  if (kindAt(tokens, next) === "at") {
+    const subResult = parsePatternNoAlt(tokens, next + 1);
+    if (isErr(subResult)) return subResult;
+    return ok({
+      node: {
+        kind: "BindingPattern",
+        tokenId: bindingTokenId,
+        mutable: isMut,
+        byRef,
+        name: ident,
+        subpattern: some(subResult.value.node),
+      },
+      next: subResult.value.next,
+    });
+  }
+
   return ok({
     node: {
       kind: "BindingPattern",
-      tokenId: isMut || byRef ? pos : ident.tokenId,
+      tokenId: bindingTokenId,
       mutable: isMut,
       byRef,
       name: ident,
+      subpattern: none(),
     },
     next,
   });

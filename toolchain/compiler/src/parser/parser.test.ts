@@ -2328,6 +2328,100 @@ describe("core patterns", (): void => {
     expect(result.program).toEqual(none());
     expect(result.diagnostics[0]?.message).toContain("wildcard");
   });
+
+  it("parses `n @ 1..=5` storing both the binding name and the sub-pattern", (): void => {
+    const ast = parseProgram("match x { n @ 1..=5 => n }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "BindingPattern",
+                name: { text: "n" },
+                subpattern: some({
+                  kind: "RangePattern",
+                  start: { literal: { value: "1" } },
+                  end: { literal: { value: "5" } },
+                }),
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a sigil combined with an @-binding (`mut n @ 1..=5`)", (): void => {
+    const ast = parseProgram("match x { mut n @ 1..=5 => n }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "BindingPattern",
+                mutable: true,
+                name: { text: "n" },
+                subpattern: some({ kind: "RangePattern" }),
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("leaves subpattern as none() for a plain binding with no @", (): void => {
+    const ast = parseProgram("match x { n => n }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            { pattern: { kind: "BindingPattern", subpattern: none() } },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("binds `|` to the enclosing alternation, not the @-binding's own sub-pattern (`n @ 1 | 2`)", (): void => {
+    // The `@` sub-pattern is grammar's `PatternNoAlt`, not the full
+    // alternation-capable `Pattern`, so `n @ 1` is one complete alternative
+    // on its own; the trailing `| 2` is picked up by the *outer*
+    // alternation loop, producing `(n @ 1) | 2`, not `n @ (1 | 2)`.
+    // Whether the two alternatives bind consistent names is a semantic
+    // concern (spec 0016), not this parser's job.
+    const ast = parseProgram("match x { n @ 1 | 2 => n }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "OrPattern",
+                alternatives: [
+                  {
+                    kind: "BindingPattern",
+                    name: { text: "n" },
+                    subpattern: some({
+                      kind: "LiteralPattern",
+                      literal: { value: "1" },
+                    }),
+                  },
+                  { kind: "LiteralPattern", literal: { value: "2" } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
 });
 
 describe("trailing expression in block", (): void => {
