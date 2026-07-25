@@ -240,7 +240,8 @@ export type Pattern =
   | WildcardPattern
   | LiteralPattern
   | RangePattern
-  | OrPattern;
+  | OrPattern
+  | TuplePattern;
 
 export interface BindingPattern extends AstNode {
   readonly kind: "BindingPattern";
@@ -303,6 +304,17 @@ export interface OrPattern extends AstNode {
   readonly alternatives: readonly Pattern[];
 }
 
+/**
+ * `(a, b)` - zero elements is the unit pattern `()`, one element (with or
+ * without a trailing comma) is a genuine one-element tuple pattern - the
+ * grammar has no separate parenthesized-grouping production competing for
+ * that shape (see `parser/pattern.ts`'s `parseTuplePattern`).
+ */
+export interface TuplePattern extends AstNode {
+  readonly kind: "TuplePattern";
+  readonly elements: readonly Pattern[];
+}
+
 export function patternMutable(pattern: Pattern): boolean {
   switch (pattern.kind) {
     case "BindingPattern":
@@ -311,6 +323,7 @@ export function patternMutable(pattern: Pattern): boolean {
     case "LiteralPattern":
     case "RangePattern":
     case "OrPattern":
+    case "TuplePattern":
       return false;
     default:
       return assertNever(
@@ -328,6 +341,7 @@ export function patternBindingName(pattern: Pattern): Option<string> {
     case "LiteralPattern":
     case "RangePattern":
     case "OrPattern":
+    case "TuplePattern":
       return none();
     default:
       return assertNever(

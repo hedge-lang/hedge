@@ -150,6 +150,7 @@ function bindPatternName(
     case "LiteralPattern":
     case "RangePattern":
     case "OrPattern":
+    case "TuplePattern":
       return bindComplexPatternGuardrail(ctx, pattern, type);
     default:
       return assertNever(

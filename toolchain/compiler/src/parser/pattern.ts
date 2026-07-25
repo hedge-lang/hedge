@@ -5,6 +5,7 @@ import { err, isErr, ok } from "../result.js";
 import type { Pattern, RangePatternBound } from "./ast.js";
 import type { Parsed } from "./parse.js";
 import {
+  expect,
   kindAt,
   parseIdentifier,
   spanAt,
@@ -107,25 +108,30 @@ export function parsePattern(
  * Parses a single pattern alternative (no top-level `|`).
  *
  * Slice 1 supports binding patterns (`mut`? Identifier), the wildcard `_`,
- * and (Slice 3) bare literal patterns and inclusive range patterns
- * (`1..=5`), including a leading `-` on a numeric literal bound (`-1`,
- * `-5..=-1`) - the grammar's own `Literal` production has no unary minus,
- * so this is a deliberate pattern-only extension, not a general unary
- * expression: only `-` immediately followed by an `int`/`float` token is
- * accepted, never `-"str"` or `-x`. Struct/tuple/tuple-struct/slice
+ * and (Slice 3) bare literal patterns, inclusive range patterns (`1..=5`,
+ * including a leading `-` on a numeric literal bound), and tuple patterns
+ * (`(a, b)`) - the grammar's own `Literal` production has no unary minus,
+ * so a leading `-` is a deliberate pattern-only extension, not a general
+ * unary expression: only `-` immediately followed by an `int`/`float`
+ * token is accepted, never `-"str"` or `-x`. Struct/tuple-struct/slice
  * patterns are recognized by the grammar but not yet implemented here.
  *
  * Grammar:
  *
  * ```text
- * PatternNoAlt ::= "mut"? Identifier | "_" | RangePat | Literal
+ * PatternNoAlt ::= "mut"? Identifier | "_" | RangePat | Literal | TuplePat
  * RangePat ::= ("-"? Literal) "..=" ("-"? Literal)
+ * TuplePat ::= "(" ( Pattern ("," Pattern)* ","? )? ")"
  * ```
  */
 function parsePatternNoAlt(
   tokens: readonly Token[],
   pos: number,
 ): PR<Parsed<Pattern>> {
+  if (kindAt(tokens, pos) === "lparen") {
+    return parseTuplePattern(tokens, pos);
+  }
+
   const startAttempt = tryParseRangePatternBound(tokens, pos);
   if (isSome(startAttempt)) {
     if (isErr(startAttempt.value)) return startAttempt.value;
@@ -250,5 +256,50 @@ function parsePatternNoAlt(
       subpattern: none(),
     },
     next,
+  });
+}
+
+/**
+ * Parses `"(" ( Pattern ("," Pattern)* ","? )? ")"`. Zero elements is the
+ * unit pattern `()`; one element (with or without a trailing comma) is a
+ * genuine one-element tuple pattern - there is no separate parenthesized-
+ * grouping production in the grammar to disambiguate `(a)` from `(a,)`, so
+ * both parse to the same one-element `TuplePattern`. Elements are the full
+ * alternation-capable `Pattern` (via `parsePattern`, not `parsePatternNoAlt`),
+ * so an or-pattern nests cleanly inside a tuple element.
+ */
+function parseTuplePattern(
+  tokens: readonly Token[],
+  pos: number,
+): PR<Parsed<Pattern>> {
+  let cursor = pos + 1; // skip `(`
+
+  if (kindAt(tokens, cursor) === "rparen") {
+    return ok({
+      node: { kind: "TuplePattern", tokenId: pos, elements: [] },
+      next: cursor + 1,
+    });
+  }
+
+  const elements: Pattern[] = [];
+  for (;;) {
+    const elementResult = parsePattern(tokens, cursor);
+    if (isErr(elementResult)) return elementResult;
+    elements.push(elementResult.value.node);
+    cursor = elementResult.value.next;
+
+    if (kindAt(tokens, cursor) === "comma") {
+      cursor += 1;
+      if (kindAt(tokens, cursor) === "rparen") break; // trailing comma
+      continue;
+    }
+    break;
+  }
+
+  const closeResult = expect(tokens, cursor, "rparen");
+  if (isErr(closeResult)) return closeResult;
+  return ok({
+    node: { kind: "TuplePattern", tokenId: pos, elements },
+    next: closeResult.value,
   });
 }

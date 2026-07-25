@@ -2111,6 +2111,107 @@ describe("Slice 3 pattern kinds - or-patterns", (): void => {
   });
 });
 
+describe("Slice 3 pattern kinds - tuple patterns", (): void => {
+  it("parses `(a, b)` as a two-element tuple pattern", (): void => {
+    const ast = parseProgram("match x { (a, b) => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "TuplePattern",
+                elements: [
+                  { kind: "BindingPattern", name: { text: "a" } },
+                  { kind: "BindingPattern", name: { text: "b" } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses `()` as a zero-element (unit) tuple pattern", (): void => {
+    const ast = parseProgram("match x { () => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [{ pattern: { kind: "TuplePattern", elements: [] } }],
+        },
+      ],
+    });
+  });
+
+  it("parses `(a,)` as a one-element tuple pattern (trailing comma)", (): void => {
+    const ast = parseProgram("match x { (a,) => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "TuplePattern",
+                elements: [{ kind: "BindingPattern", name: { text: "a" } }],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses `(a)` (no trailing comma) as a one-element tuple pattern too", (): void => {
+    const ast = parseProgram("match x { (a) => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "TuplePattern",
+                elements: [{ kind: "BindingPattern", name: { text: "a" } }],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a tuple pattern with a nested or-pattern element (`(a, 1 | 2)`)", (): void => {
+    const ast = parseProgram("match x { (a, 1 | 2) => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "TuplePattern",
+                elements: [
+                  { kind: "BindingPattern", name: { text: "a" } },
+                  { kind: "OrPattern", alternatives: [{}, {}] },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("produces a parse error for an unclosed tuple pattern (`match x { (a, b => a }`)", (): void => {
+    const result = parse(tokenize("match x { (a, b => a }").tokens);
+    expect(result.program).toEqual(none());
+  });
+});
+
 describe("if let expressions", (): void => {
   it("parses an if-let with no else into a LetExpression condition (`if let y = expr { }`)", (): void => {
     const ast = parseProgram("if let y = expr { }");
