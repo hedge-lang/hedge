@@ -62,7 +62,49 @@ function tryParseRangePatternBound(
 }
 
 /**
- * Parses a pattern.
+ * Parses a pattern, including top-level `|` alternation.
+ *
+ * Grammar:
+ *
+ * ```text
+ * Pattern ::= PatternNoAlt ("|" PatternNoAlt)*
+ * ```
+ *
+ * A single alternative (no `|`) returns that alternative directly, never a
+ * one-element `OrPattern` - `OrPattern` only exists when there is a real
+ * alternation. The result is always a flat list, never right-nested: each
+ * `|`-separated alternative is appended to one `alternatives` array rather
+ * than becoming a nested `OrPattern` in the tail position.
+ */
+export function parsePattern(
+  tokens: readonly Token[],
+  pos: number,
+): PR<Parsed<Pattern>> {
+  const firstResult = parsePatternNoAlt(tokens, pos);
+  if (isErr(firstResult)) return firstResult;
+  const first = firstResult.value.node;
+  let cursor = firstResult.value.next;
+
+  const rest: Pattern[] = [];
+  while (kindAt(tokens, cursor) === "pipe") {
+    const afterPipe = cursor + 1;
+    const altResult = parsePatternNoAlt(tokens, afterPipe);
+    if (isErr(altResult)) return altResult;
+    rest.push(altResult.value.node);
+    cursor = altResult.value.next;
+  }
+
+  if (rest.length === 0) {
+    return ok({ node: first, next: cursor });
+  }
+  return ok({
+    node: { kind: "OrPattern", tokenId: pos, alternatives: [first, ...rest] },
+    next: cursor,
+  });
+}
+
+/**
+ * Parses a single pattern alternative (no top-level `|`).
  *
  * Slice 1 supports binding patterns (`mut`? Identifier), the wildcard `_`,
  * and (Slice 3) bare literal patterns and inclusive range patterns
@@ -76,11 +118,11 @@ function tryParseRangePatternBound(
  * Grammar:
  *
  * ```text
- * Pattern ::= "mut"? Identifier | "_" | RangePat | Literal
+ * PatternNoAlt ::= "mut"? Identifier | "_" | RangePat | Literal
  * RangePat ::= ("-"? Literal) "..=" ("-"? Literal)
  * ```
  */
-export function parsePattern(
+function parsePatternNoAlt(
   tokens: readonly Token[],
   pos: number,
 ): PR<Parsed<Pattern>> {

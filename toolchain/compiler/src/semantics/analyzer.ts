@@ -149,6 +149,7 @@ function bindPatternName(
       return { kind: "Identifier", tokenId: pattern.tokenId, text: "_", type };
     case "LiteralPattern":
     case "RangePattern":
+    case "OrPattern":
       return bindComplexPatternGuardrail(ctx, pattern, type);
     default:
       return assertNever(

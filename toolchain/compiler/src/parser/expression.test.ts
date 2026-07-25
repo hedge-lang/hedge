@@ -2038,6 +2038,79 @@ describe("Slice 3 pattern kinds - range patterns", (): void => {
   });
 });
 
+describe("Slice 3 pattern kinds - or-patterns", (): void => {
+  it("parses `1 | 2 | 3` as a flat OrPattern with three alternatives, not right-nested", (): void => {
+    const ast = parseProgram("match x { 1 | 2 | 3 => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "OrPattern",
+                alternatives: [
+                  {
+                    kind: "LiteralPattern",
+                    literal: { kind: "IntLiteral", value: "1" },
+                  },
+                  {
+                    kind: "LiteralPattern",
+                    literal: { kind: "IntLiteral", value: "2" },
+                  },
+                  {
+                    kind: "LiteralPattern",
+                    literal: { kind: "IntLiteral", value: "3" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses `a | b` as an OrPattern of two binding patterns", (): void => {
+    const ast = parseProgram("match x { a | b => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "OrPattern",
+                alternatives: [
+                  { kind: "BindingPattern", name: { text: "a" } },
+                  { kind: "BindingPattern", name: { text: "b" } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("does not wrap a single pattern (no `|`) in an OrPattern", (): void => {
+    const ast = parseProgram("match x { 1 => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [{ pattern: { kind: "LiteralPattern" } }],
+        },
+      ],
+    });
+  });
+
+  it("produces a parse error for a trailing `|` with nothing after it (`match x { 1 | => a }`)", (): void => {
+    const result = parse(tokenize("match x { 1 | => a }").tokens);
+    expect(result.program).toEqual(none());
+  });
+});
+
 describe("if let expressions", (): void => {
   it("parses an if-let with no else into a LetExpression condition (`if let y = expr { }`)", (): void => {
     const ast = parseProgram("if let y = expr { }");

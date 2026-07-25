@@ -239,7 +239,8 @@ export type Pattern =
   | BindingPattern
   | WildcardPattern
   | LiteralPattern
-  | RangePattern;
+  | RangePattern
+  | OrPattern;
 
 export interface BindingPattern extends AstNode {
   readonly kind: "BindingPattern";
@@ -286,6 +287,18 @@ export interface RangePattern extends AstNode {
   readonly end: RangePatternBound;
 }
 
+/**
+ * `1 | 2 | 3`, `Ok(x) | Recovered(x)` - a flat list of alternatives, never a
+ * right-nested tree of two-element `OrPattern`s (see `parser/pattern.ts`'s
+ * `parsePattern`). Every alternative must bind the same names with the same
+ * types and modes (spec 0016) - that consistency check is semantic
+ * analysis's job, not parsing's.
+ */
+export interface OrPattern extends AstNode {
+  readonly kind: "OrPattern";
+  readonly alternatives: readonly Pattern[];
+}
+
 export function patternMutable(pattern: Pattern): boolean {
   switch (pattern.kind) {
     case "BindingPattern":
@@ -293,6 +306,7 @@ export function patternMutable(pattern: Pattern): boolean {
     case "WildcardPattern":
     case "LiteralPattern":
     case "RangePattern":
+    case "OrPattern":
       return false;
     default:
       return assertNever(
@@ -309,6 +323,7 @@ export function patternBindingName(pattern: Pattern): Option<string> {
     case "WildcardPattern":
     case "LiteralPattern":
     case "RangePattern":
+    case "OrPattern":
       return none();
     default:
       return assertNever(
