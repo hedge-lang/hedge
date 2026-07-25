@@ -1,6 +1,6 @@
 import { assert } from "../assert.js";
 import type { Token } from "../lexer/token.js";
-import { none } from "../option.js";
+import { isSome, none } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import type { Pattern } from "./ast.js";
 import type { Parsed } from "./parse.js";
@@ -8,6 +8,7 @@ import {
   kindAt,
   parseIdentifier,
   spanAt,
+  tryParseLiteral,
   unsupportedPatternMessage,
   type PR,
 } from "./parse-utils.js";
@@ -15,20 +16,29 @@ import {
 /**
  * Parses a pattern.
  *
- * Slice 1 only supports binding patterns (`mut`? Identifier) and the
- * wildcard `_`. Struct/tuple/tuple-struct/slice/literal/range patterns are
- * recognized by the grammar but belong to Slice 3.
+ * Slice 1 supports binding patterns (`mut`? Identifier), the wildcard `_`,
+ * and (Slice 3) bare literal patterns. Struct/tuple/tuple-struct/slice/range
+ * patterns are recognized by the grammar but not yet implemented here.
  *
  * Grammar:
  *
  * ```text
- * Pattern ::= "mut"? Identifier | "_"
+ * Pattern ::= "mut"? Identifier | "_" | Literal
  * ```
  */
 export function parsePattern(
   tokens: readonly Token[],
   pos: number,
 ): PR<Parsed<Pattern>> {
+  const literalResult = tryParseLiteral(tokens, pos);
+  if (isSome(literalResult)) {
+    const { node: literal, next } = literalResult.value;
+    return ok({
+      node: { kind: "LiteralPattern", tokenId: pos, literal },
+      next,
+    });
+  }
+
   const maybeMut = tokens[pos];
   const isMut =
     maybeMut !== undefined &&

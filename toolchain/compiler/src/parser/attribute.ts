@@ -3,8 +3,13 @@ import { none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import type { Attribute, IntLiteral, Path, StringLiteral } from "./ast.js";
 import type { Parsed } from "./parse.js";
-import { expect, parseIdentifier, tokenAt, type PR } from "./parse-utils.js";
-import { parseIntLiteral } from "./expression.js";
+import {
+  expect,
+  parseIdentifier,
+  parseIntLiteral,
+  tokenAt,
+  type PR,
+} from "./parse-utils.js";
 import { parsePathSegments } from "./path.js";
 
 type AttributeArg = {

@@ -1772,7 +1772,16 @@ describe("identifiers", (): void => {
       },
     );
 
-    it.each(ALL_HARD_KEYWORDS)(
+    // `true`/`false` are excluded here: as of Slice 3, a bare literal is
+    // valid pattern syntax (`LiteralPattern`), so `let true = 1;` now parses
+    // successfully at the parser level - see the dedicated test below. Every
+    // other hard keyword still starts neither an identifier nor a pattern,
+    // so still fails to parse.
+    const NON_LITERAL_HARD_KEYWORDS = ALL_HARD_KEYWORDS.filter(
+      (kw) => kw !== "true" && kw !== "false",
+    );
+
+    it.each(NON_LITERAL_HARD_KEYWORDS)(
       "rejects hard keyword %s as a let binding name with a diagnostic naming the keyword",
       (kw) => {
         const result = parse(tokenize(`let ${kw} = 1;`).tokens);
@@ -1781,6 +1790,24 @@ describe("identifiers", (): void => {
           `expected parse("let ${kw} = 1;") to fail`,
         );
         expect(result.diagnostics[0]?.message).toContain(kw);
+      },
+    );
+
+    it.each(["true", "false"])(
+      "parses hard keyword %s in let position as a LiteralPattern, not a rejected binding name",
+      (kw) => {
+        const ast = parseProgram(`let ${kw} = 1;`);
+        expect(ast).toMatchObject({
+          items: [
+            {
+              kind: "LetStatement",
+              pattern: {
+                kind: "LiteralPattern",
+                literal: { kind: "BoolLiteral", value: kw === "true" },
+              },
+            },
+          ],
+        });
       },
     );
   });
@@ -2524,8 +2551,23 @@ describe("parse errors — missing tokens", (): void => {
     expect(result.program).toEqual(none());
   });
 
-  it("errors on a let statement with a non-identifier pattern", (): void => {
-    const result = parse(tokenize("let 42 = 1;").tokens);
+  it("parses a let statement with a bare int literal as a LiteralPattern, not a rejected non-identifier pattern", (): void => {
+    const ast = parseProgram("let 42 = 1;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "LetStatement",
+          pattern: {
+            kind: "LiteralPattern",
+            literal: { kind: "IntLiteral", value: "42" },
+          },
+        },
+      ],
+    });
+  });
+
+  it("errors on a let statement with a pattern-starting token that is neither an identifier nor a literal", (): void => {
+    const result = parse(tokenize("let + = 1;").tokens);
     expect(result.program).toEqual(none());
     expect(result.diagnostics[0]?.message).toContain("identifier");
   });

@@ -235,7 +235,7 @@ export interface LetStatement extends AstNode {
   readonly initializer: Option<Expression>;
 }
 
-export type Pattern = BindingPattern | WildcardPattern;
+export type Pattern = BindingPattern | WildcardPattern | LiteralPattern;
 
 export interface BindingPattern extends AstNode {
   readonly kind: "BindingPattern";
@@ -247,11 +247,28 @@ export interface WildcardPattern extends AstNode {
   readonly kind: "WildcardPattern";
 }
 
+/**
+ * A bare literal used as a pattern (`match x { 1 => ..., "hi" => ... }`).
+ * Reuses the same literal node types as expression position rather than a
+ * parallel pattern-only literal AST, since a pattern literal's shape is
+ * identical to an expression literal - only its position differs.
+ */
+export interface LiteralPattern extends AstNode {
+  readonly kind: "LiteralPattern";
+  readonly literal:
+    | StringLiteral
+    | IntLiteral
+    | FloatLiteral
+    | CharLiteral
+    | BoolLiteral;
+}
+
 export function patternMutable(pattern: Pattern): boolean {
   switch (pattern.kind) {
     case "BindingPattern":
       return pattern.mutable;
     case "WildcardPattern":
+    case "LiteralPattern":
       return false;
     default:
       return assertNever(
@@ -266,6 +283,7 @@ export function patternBindingName(pattern: Pattern): Option<string> {
     case "BindingPattern":
       return some(pattern.name.text);
     case "WildcardPattern":
+    case "LiteralPattern":
       return none();
     default:
       return assertNever(

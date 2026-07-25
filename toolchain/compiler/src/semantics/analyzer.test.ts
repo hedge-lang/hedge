@@ -199,6 +199,17 @@ describe("semantic analysis", (): void => {
     });
   });
 
+  describe("Slice 3 pattern kinds in let position (parser accepts, semantic analysis guardrails)", () => {
+    it("rejects a bare literal pattern in a let statement with a clear diagnostic", () => {
+      const result = diagnose("fn main() { let 1 = 5; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(result.diagnostics[0]?.message).toContain(
+        "destructuring patterns are not yet supported in `let`/parameter position",
+      );
+    });
+  });
+
   describe("top-level item restriction", () => {
     it("bare expression at top level is an error", () => {
       const result = diagnose("x + y;");
