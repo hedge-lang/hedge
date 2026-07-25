@@ -104,6 +104,29 @@ function bind(
 }
 
 /**
+ * A `let`/parameter pattern binds exactly one name today - `bindPatternName`
+ * has no mechanism to register more than one binding from a single pattern.
+ * A destructuring pattern kind (struct/tuple/slice/etc.) is real syntax as
+ * of Slice 3 (see `parser/pattern.ts`), but wiring up multi-binding
+ * registration here is deliberately out of scope for that parsing work; see
+ * `specification/0016-pattern-matching.md`. Until a follow-up implements
+ * real destructuring semantics, any such pattern in `let`/parameter
+ * position is a clear diagnostic here instead of a silent no-op.
+ */
+function bindComplexPatternGuardrail(
+  ctx: AnalysisContext,
+  pattern: Parser.Pattern,
+  type: Semantics.Type,
+): Semantics.Identifier {
+  emitError(
+    ctx,
+    "destructuring patterns are not yet supported in `let`/parameter position; only a plain binding or `_` is allowed here",
+    pattern.tokenId,
+  );
+  return { kind: "Identifier", tokenId: pattern.tokenId, text: "_", type };
+}
+
+/**
  * Binds a `let`/parameter pattern's name into scope and returns the
  * decorated {@link Semantics.Identifier} for the resulting AST node.
  *
@@ -120,10 +143,25 @@ function bindPatternName(
 ): Semantics.Identifier {
   switch (pattern.kind) {
     case "BindingPattern":
+      // An `@` subpattern (`n @ 1..=5`) is itself a constraint - binding
+      // just `n` and dropping it would be exactly the silent no-op this
+      // guardrail exists to prevent for every other complex pattern kind.
+      if (isSome(pattern.subpattern)) {
+        return bindComplexPatternGuardrail(ctx, pattern, type);
+      }
       bind(ctx, pattern.name.text, { type, mutable });
       return { ...pattern.name, type };
     case "WildcardPattern":
       return { kind: "Identifier", tokenId: pattern.tokenId, text: "_", type };
+    case "LiteralPattern":
+    case "RangePattern":
+    case "OrPattern":
+    case "TuplePattern":
+    case "StructPattern":
+    case "TupleStructPattern":
+    case "PathPattern":
+    case "SlicePattern":
+      return bindComplexPatternGuardrail(ctx, pattern, type);
     default:
       return assertNever(
         pattern,

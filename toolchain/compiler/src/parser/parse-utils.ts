@@ -1,8 +1,16 @@
 import type { Diagnostic } from "../diagnostics.js";
+import { resolveEscape } from "../lexer/escape.js";
 import type { Span, Token } from "../lexer/token.js";
-import { none, some, type Option } from "../option.js";
+import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok, type Result } from "../result.js";
-import type { Identifier } from "./ast.js";
+import type {
+  BoolLiteral,
+  CharLiteral,
+  FloatLiteral,
+  Identifier,
+  IntLiteral,
+  StringLiteral,
+} from "./ast.js";
 import type { Parsed } from "./parse.js";
 
 /** Internal shorthand for Result-threaded parser returns. */
@@ -99,12 +107,12 @@ export function expectKeyword(
   return ok(pos + 1);
 }
 
-export function stripPrefix(text: string, radix: 2 | 8 | 10 | 16): string {
+function stripPrefix(text: string, radix: 2 | 8 | 10 | 16): string {
   if (radix !== 10) return text.slice(2); // strip 0x / 0o / 0b
   return text;
 }
 
-export function stripUnderscores(text: string): string {
+function stripUnderscores(text: string): string {
   return text.replaceAll("_", "");
 }
 
@@ -207,10 +215,6 @@ export function pathKeywordAt(
 
 export function unsupportedGenericsMessage(construct: string): string {
   return `${construct} are not supported in Slice 1; generics are introduced in Slice 4`;
-}
-
-export function unsupportedPatternMessage(construct: string): string {
-  return `${construct} are not supported in Slice 1; pattern matching is introduced in Slice 3`;
 }
 
 export function unsupportedLifetimeMessage(construct: string): string {
@@ -670,4 +674,87 @@ export function parseIdentifier(
     text: token.text,
   };
   return ok({ node: ident, next: pos + 1 });
+}
+
+export function parseIntLiteral(
+  pos: number,
+  token: Extract<Token, { kind: "int" }>,
+): Parsed<IntLiteral> {
+  const rawDigits = stripPrefix(token.text, token.radix);
+  const digits = isSome(token.suffix)
+    ? rawDigits.slice(0, -token.suffix.value.length)
+    : rawDigits;
+  const value = stripUnderscores(digits);
+  return {
+    node: {
+      kind: "IntLiteral",
+      tokenId: pos,
+      value,
+      base: token.radix,
+      suffix: token.suffix,
+    },
+    next: pos + 1,
+  };
+}
+
+export function parseFloatLiteral(
+  pos: number,
+  token: Extract<Token, { kind: "float" }>,
+): Parsed<FloatLiteral> {
+  const floatText = isSome(token.suffix)
+    ? token.text.slice(0, -token.suffix.value.length)
+    : token.text;
+  const value = stripUnderscores(floatText);
+  return {
+    node: { kind: "FloatLiteral", tokenId: pos, value, suffix: token.suffix },
+    next: pos + 1,
+  };
+}
+
+export type LiteralToken =
+  StringLiteral | IntLiteral | FloatLiteral | CharLiteral | BoolLiteral;
+
+/**
+ * Recognizes a bare literal token (string/int/float/char/bool) at `pos`.
+ * Shared by expression primary parsing and pattern literal parsing so the
+ * two never drift on which token kinds count as a literal.
+ */
+export function tryParseLiteral(
+  tokens: readonly Token[],
+  pos: number,
+): Option<Parsed<LiteralToken>> {
+  const token = tokens[pos];
+  if (token === undefined) return none();
+  if (token.kind === "string") {
+    return some({
+      node: { kind: "StringLiteral", tokenId: pos, value: token.text },
+      next: pos + 1,
+    });
+  }
+  if (token.kind === "int") return some(parseIntLiteral(pos, token));
+  if (token.kind === "float") return some(parseFloatLiteral(pos, token));
+  if (token.kind === "char") {
+    return some({
+      node: {
+        kind: "CharLiteral",
+        tokenId: pos,
+        value: resolveEscape(token.text),
+      },
+      next: pos + 1,
+    });
+  }
+  if (
+    token.kind === "keyword" &&
+    (token.text === "true" || token.text === "false")
+  ) {
+    return some({
+      node: {
+        kind: "BoolLiteral",
+        tokenId: pos,
+        value: token.text === "true",
+      },
+      next: pos + 1,
+    });
+  }
+  return none();
 }

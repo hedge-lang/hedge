@@ -1772,7 +1772,16 @@ describe("identifiers", (): void => {
       },
     );
 
-    it.each(ALL_HARD_KEYWORDS)(
+    // `true`/`false` are excluded here: as of Slice 3, a bare literal is
+    // valid pattern syntax (`LiteralPattern`), so `let true = 1;` now parses
+    // successfully at the parser level - see the dedicated test below. Every
+    // other hard keyword still starts neither an identifier nor a pattern,
+    // so still fails to parse.
+    const NON_LITERAL_HARD_KEYWORDS = ALL_HARD_KEYWORDS.filter(
+      (kw) => kw !== "true" && kw !== "false",
+    );
+
+    it.each(NON_LITERAL_HARD_KEYWORDS)(
       "rejects hard keyword %s as a let binding name with a diagnostic naming the keyword",
       (kw) => {
         const result = parse(tokenize(`let ${kw} = 1;`).tokens);
@@ -1781,6 +1790,24 @@ describe("identifiers", (): void => {
           `expected parse("let ${kw} = 1;") to fail`,
         );
         expect(result.diagnostics[0]?.message).toContain(kw);
+      },
+    );
+
+    it.each(["true", "false"])(
+      "parses hard keyword %s in let position as a LiteralPattern, not a rejected binding name",
+      (kw) => {
+        const ast = parseProgram(`let ${kw} = 1;`);
+        expect(ast).toMatchObject({
+          items: [
+            {
+              kind: "LetStatement",
+              pattern: {
+                kind: "LiteralPattern",
+                literal: { kind: "BoolLiteral", value: kw === "true" },
+              },
+            },
+          ],
+        });
       },
     );
   });
@@ -2200,18 +2227,148 @@ describe("core patterns", (): void => {
     expect(result.diagnostics[0]?.span).toEqual(some(mutToken.span));
   });
 
-  it("produces a Slice 1 diagnostic for a struct pattern in let position", (): void => {
-    const result = parse(tokenize("let Point { x, y } = p;").tokens);
-    expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toContain("Slice 3");
+  it("parses a struct pattern in let position as a real StructPattern (semantic rejection is analyzer.ts's job now)", (): void => {
+    const ast = parseProgram("let Point { x, y } = p;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "LetStatement",
+          pattern: {
+            kind: "StructPattern",
+            path: { segments: ["Point"] },
+            fields: [
+              { kind: "FieldPattern", name: { text: "x" }, pattern: none() },
+              { kind: "FieldPattern", name: { text: "y" }, pattern: none() },
+            ],
+            hasRest: false,
+          },
+        },
+      ],
+    });
   });
 
-  it("produces a Slice 1 diagnostic for a struct pattern in param position", (): void => {
-    const result = parse(tokenize("fn f(Point { x, y }: Point) {}").tokens);
+  it("parses a struct pattern in param position as a real StructPattern (semantic rejection is analyzer.ts's job now)", (): void => {
+    const ast = parseProgram("fn f(Point { x, y }: Point) {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          params: [
+            {
+              kind: "Param",
+              pattern: { kind: "StructPattern", path: { segments: ["Point"] } },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a struct pattern field with an explicit renamed sub-pattern (`Point { x: a, y: b }`)", (): void => {
+    const ast = parseProgram("match p { Point { x: a, y: b } => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "StructPattern",
+                path: { segments: ["Point"] },
+                fields: [
+                  {
+                    name: { text: "x" },
+                    pattern: some({
+                      kind: "BindingPattern",
+                      name: { text: "a" },
+                    }),
+                  },
+                  {
+                    name: { text: "y" },
+                    pattern: some({
+                      kind: "BindingPattern",
+                      name: { text: "b" },
+                    }),
+                  },
+                ],
+                hasRest: false,
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a struct pattern with a `..` rest (`Point { x, .. }`)", (): void => {
+    const ast = parseProgram("match p { Point { x, .. } => x }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "StructPattern",
+                path: { segments: ["Point"] },
+                fields: [{ name: { text: "x" }, pattern: none() }],
+                hasRest: true,
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses an empty struct pattern (`Point {}`)", (): void => {
+    const ast = parseProgram("match p { Point {} => 1 }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "StructPattern",
+                path: { segments: ["Point"] },
+                fields: [],
+                hasRest: false,
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("produces a parse error for an unclosed struct pattern (`match p { Point { x, y => a }`)", (): void => {
+    const result = parse(tokenize("match p { Point { x, y => a }").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toContain("Slice 3");
+  });
+
+  it("parses a struct pattern with a multi-segment path (`Message::Move { x, y }`)", (): void => {
+    const ast = parseProgram("match m { Message::Move { x, y } => x }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "StructPattern",
+                path: { segments: ["Message", "Move"] },
+                fields: [
+                  { name: { text: "x" }, pattern: none() },
+                  { name: { text: "y" }, pattern: none() },
+                ],
+                hasRest: false,
+              },
+            },
+          ],
+        },
+      ],
+    });
   });
 
   it("gives the MUT_MESSAGE for fn f(mut: i32) {} (mut used as a param name)", (): void => {
@@ -2234,6 +2391,164 @@ describe("core patterns", (): void => {
       "The keyword `mut` is reserved",
     );
     expect(result.diagnostics[0]?.span).toEqual(some(mutToken.span));
+  });
+
+  it("parses `&y` as a shared-borrow binding pattern", (): void => {
+    const ast = parseProgram("match x { &y => y }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "BindingPattern",
+                byRef: true,
+                mutable: false,
+                name: { text: "y" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses `&mut y` as a mutable-borrow binding pattern", (): void => {
+    const ast = parseProgram("match x { &mut y => y }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "BindingPattern",
+                byRef: true,
+                mutable: true,
+                name: { text: "y" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("does not set byRef on a plain binding pattern", (): void => {
+    const ast = parseProgram("match x { y => y }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [{ pattern: { kind: "BindingPattern", byRef: false } }],
+        },
+      ],
+    });
+  });
+
+  it("rejects `&_`, since a byRef sigil cannot apply to the wildcard pattern", (): void => {
+    const result = parse(tokenize("match x { &_ => 1 }").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("wildcard");
+  });
+
+  it("rejects `&mut _`, since a byRef sigil cannot apply to the wildcard pattern", (): void => {
+    const result = parse(tokenize("match x { &mut _ => 1 }").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("wildcard");
+  });
+
+  it("parses `n @ 1..=5` storing both the binding name and the sub-pattern", (): void => {
+    const ast = parseProgram("match x { n @ 1..=5 => n }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "BindingPattern",
+                name: { text: "n" },
+                subpattern: some({
+                  kind: "RangePattern",
+                  start: { literal: { value: "1" } },
+                  end: { literal: { value: "5" } },
+                }),
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a sigil combined with an @-binding (`mut n @ 1..=5`)", (): void => {
+    const ast = parseProgram("match x { mut n @ 1..=5 => n }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "BindingPattern",
+                mutable: true,
+                name: { text: "n" },
+                subpattern: some({ kind: "RangePattern" }),
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("leaves subpattern as none() for a plain binding with no @", (): void => {
+    const ast = parseProgram("match x { n => n }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [{ pattern: { kind: "BindingPattern", subpattern: none() } }],
+        },
+      ],
+    });
+  });
+
+  it("binds `|` to the enclosing alternation, not the @-binding's own sub-pattern (`n @ 1 | 2`)", (): void => {
+    // The `@` sub-pattern is grammar's `PatternNoAlt`, not the full
+    // alternation-capable `Pattern`, so `n @ 1` is one complete alternative
+    // on its own; the trailing `| 2` is picked up by the *outer*
+    // alternation loop, producing `(n @ 1) | 2`, not `n @ (1 | 2)`.
+    // Whether the two alternatives bind consistent names is a semantic
+    // concern (spec 0016), not this parser's job.
+    const ast = parseProgram("match x { n @ 1 | 2 => n }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "OrPattern",
+                alternatives: [
+                  {
+                    kind: "BindingPattern",
+                    name: { text: "n" },
+                    subpattern: some({
+                      kind: "LiteralPattern",
+                      literal: { value: "1" },
+                    }),
+                  },
+                  { kind: "LiteralPattern", literal: { value: "2" } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
   });
 });
 
@@ -2524,8 +2839,23 @@ describe("parse errors — missing tokens", (): void => {
     expect(result.program).toEqual(none());
   });
 
-  it("errors on a let statement with a non-identifier pattern", (): void => {
-    const result = parse(tokenize("let 42 = 1;").tokens);
+  it("parses a let statement with a bare int literal as a LiteralPattern, not a rejected non-identifier pattern", (): void => {
+    const ast = parseProgram("let 42 = 1;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "LetStatement",
+          pattern: {
+            kind: "LiteralPattern",
+            literal: { kind: "IntLiteral", value: "42" },
+          },
+        },
+      ],
+    });
+  });
+
+  it("errors on a let statement with a pattern-starting token that is neither an identifier nor a literal", (): void => {
+    const result = parse(tokenize("let + = 1;").tokens);
     expect(result.program).toEqual(none());
     expect(result.diagnostics[0]?.message).toContain("identifier");
   });
@@ -4128,19 +4458,39 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     ]);
   });
 
-  it("fails on the unsupported tuple-struct pattern, not on the `while` itself (`while let Some(x) = opt {}`)", (): void => {
-    // `while let` itself is real syntax; `Some(x)` is a tuple-struct/
-    // enum-variant pattern, which the parser doesn't support yet - only
-    // binding and wildcard patterns are implemented. `Some` parses as a
-    // plain BindingPattern name, so the failure is the unexpected `(`
-    // where `=` was expected, not a `while`-guardrail diagnostic.
+  it("parses a tuple-struct pattern in a while-let condition (`while let Some(x) = opt {}`)", (): void => {
+    // `while let` is real syntax and, as of Slice 3, so is `Some(x)` as a
+    // tuple-struct/enum-variant pattern - this previously failed on the
+    // unexpected `(` since only binding/wildcard patterns existed yet.
     const { tokens } = tokenize(
       "fn f() { while let Some(x) = opt {} } fn g() {}",
     );
     const { program, diagnostics } = parse(tokens);
-    assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
-    expect(diagnostics[0].message).not.toContain("while");
-    expect(isSome(program)).toBe(false);
+    expect(diagnostics).toHaveLength(0);
+    assert(isSome(program), "Expected a program to come back");
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        body: {
+          statements: [],
+          // Nothing follows the while-let inside `fn f() { ... }`, so it
+          // lands as the block's trailing expression, not a statement -
+          // same convention as a mid-block match with nothing after it.
+          trailingExpression: some({
+            kind: "WhileExpression",
+            condition: {
+              kind: "LetExpression",
+              pattern: {
+                kind: "TupleStructPattern",
+                path: { segments: ["Some"] },
+                elements: [{ kind: "BindingPattern", name: { text: "x" } }],
+              },
+            },
+          }),
+        },
+      },
+      { kind: "Function", name: { text: "g" } },
+    ]);
   });
 
   it("rejects a loop in trailing (no-semicolon) block position the same as mid-block", (): void => {

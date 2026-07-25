@@ -298,7 +298,7 @@ FieldPat   ::= Identifier ( ":" Pattern )?
 TupleStructPat ::= Path "(" ( Pattern ( "," Pattern )* )? ")"
 TuplePat   ::= "(" ( Pattern ( "," Pattern )* ","? )? ")"
 SlicePat   ::= "[" ( Pattern | RestPat ) ( "," ( Pattern | RestPat ) )* ","? "]"
-RestPat    ::= ( "&" "mut"? Identifier | Identifier )? ".."
+RestPat    ::= ".." ( "&" "mut"? Identifier | Identifier )?
 ```
 
 Binding modes, refutability, and exhaustiveness are specified in

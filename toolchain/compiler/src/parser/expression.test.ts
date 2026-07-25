@@ -1877,6 +1877,712 @@ describe("match expressions", (): void => {
   });
 });
 
+describe("Slice 3 pattern kinds - literal patterns", (): void => {
+  it("parses a bare int literal pattern in a match arm (`match x { 1 => a, _ => b }`)", (): void => {
+    const ast = parseProgram("match x { 1 => a, _ => b }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              kind: "MatchArm",
+              pattern: {
+                kind: "LiteralPattern",
+                literal: { kind: "IntLiteral", value: "1" },
+              },
+            },
+            { kind: "MatchArm", pattern: { kind: "WildcardPattern" } },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a negative int literal pattern (`match x { -1 => a }`)", (): void => {
+    const ast = parseProgram("match x { -1 => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              kind: "MatchArm",
+              pattern: {
+                kind: "LiteralPattern",
+                negative: true,
+                literal: { kind: "IntLiteral", value: "1" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a negative float literal pattern (`match x { -1.5 => a }`)", (): void => {
+    const ast = parseProgram("match x { -1.5 => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              kind: "MatchArm",
+              pattern: {
+                kind: "LiteralPattern",
+                negative: true,
+                literal: { kind: "FloatLiteral", value: "1.5" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('rejects a leading `-` on a non-numeric literal pattern (`match x { -"hi" => a, _ => b }`)', (): void => {
+    const result = parse(tokenize('match x { -"hi" => a, _ => b }').tokens);
+    expect(result.program).toEqual(none());
+  });
+
+  it("does not treat a plain positive literal pattern as negative", (): void => {
+    const ast = parseProgram("match x { 1 => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [{ pattern: { kind: "LiteralPattern", negative: false } }],
+        },
+      ],
+    });
+  });
+});
+
+describe("Slice 3 pattern kinds - range patterns", (): void => {
+  it("parses an inclusive int range pattern (`match x { 1..=5 => a }`)", (): void => {
+    const ast = parseProgram("match x { 1..=5 => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "RangePattern",
+                start: {
+                  negative: false,
+                  literal: { kind: "IntLiteral", value: "1" },
+                },
+                end: {
+                  negative: false,
+                  literal: { kind: "IntLiteral", value: "5" },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses an inclusive char range pattern (`match x { 'a'..='z' => a }`)", (): void => {
+    const ast = parseProgram("match x { 'a'..='z' => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "RangePattern",
+                start: { negative: false, literal: { value: "a" } },
+                end: { negative: false, literal: { value: "z" } },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a range pattern with negative bounds (`match x { -5..=-1 => a }`)", (): void => {
+    const ast = parseProgram("match x { -5..=-1 => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "RangePattern",
+                start: {
+                  negative: true,
+                  literal: { kind: "IntLiteral", value: "5" },
+                },
+                end: {
+                  negative: true,
+                  literal: { kind: "IntLiteral", value: "1" },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("produces a parse error for a range pattern missing its end literal (`match x { 1..= => a }`)", (): void => {
+    const result = parse(tokenize("match x { 1..= => a }").tokens);
+    expect(result.program).toEqual(none());
+  });
+});
+
+describe("Slice 3 pattern kinds - or-patterns", (): void => {
+  it("parses `1 | 2 | 3` as a flat OrPattern with three alternatives, not right-nested", (): void => {
+    const ast = parseProgram("match x { 1 | 2 | 3 => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "OrPattern",
+                alternatives: [
+                  {
+                    kind: "LiteralPattern",
+                    literal: { kind: "IntLiteral", value: "1" },
+                  },
+                  {
+                    kind: "LiteralPattern",
+                    literal: { kind: "IntLiteral", value: "2" },
+                  },
+                  {
+                    kind: "LiteralPattern",
+                    literal: { kind: "IntLiteral", value: "3" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses `a | b` as an OrPattern of two binding patterns", (): void => {
+    const ast = parseProgram("match x { a | b => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "OrPattern",
+                alternatives: [
+                  { kind: "BindingPattern", name: { text: "a" } },
+                  { kind: "BindingPattern", name: { text: "b" } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("does not wrap a single pattern (no `|`) in an OrPattern", (): void => {
+    const ast = parseProgram("match x { 1 => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [{ pattern: { kind: "LiteralPattern" } }],
+        },
+      ],
+    });
+  });
+
+  it("produces a parse error for a trailing `|` with nothing after it (`match x { 1 | => a }`)", (): void => {
+    const result = parse(tokenize("match x { 1 | => a }").tokens);
+    expect(result.program).toEqual(none());
+  });
+});
+
+describe("Slice 3 pattern kinds - tuple patterns", (): void => {
+  it("parses `(a, b)` as a two-element tuple pattern", (): void => {
+    const ast = parseProgram("match x { (a, b) => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "TuplePattern",
+                elements: [
+                  { kind: "BindingPattern", name: { text: "a" } },
+                  { kind: "BindingPattern", name: { text: "b" } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses `()` as a zero-element (unit) tuple pattern", (): void => {
+    const ast = parseProgram("match x { () => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [{ pattern: { kind: "TuplePattern", elements: [] } }],
+        },
+      ],
+    });
+  });
+
+  it("parses `(a,)` as a one-element tuple pattern (trailing comma)", (): void => {
+    const ast = parseProgram("match x { (a,) => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "TuplePattern",
+                elements: [{ kind: "BindingPattern", name: { text: "a" } }],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses `(a)` (no trailing comma) as a one-element tuple pattern too", (): void => {
+    const ast = parseProgram("match x { (a) => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "TuplePattern",
+                elements: [{ kind: "BindingPattern", name: { text: "a" } }],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a tuple pattern with a nested or-pattern element (`(a, 1 | 2)`)", (): void => {
+    const ast = parseProgram("match x { (a, 1 | 2) => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "TuplePattern",
+                elements: [
+                  { kind: "BindingPattern", name: { text: "a" } },
+                  { kind: "OrPattern", alternatives: [{}, {}] },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("produces a parse error for an unclosed tuple pattern (`match x { (a, b => a }`)", (): void => {
+    const result = parse(tokenize("match x { (a, b => a }").tokens);
+    expect(result.program).toEqual(none());
+  });
+});
+
+describe("Slice 3 pattern kinds - tuple-struct and path patterns", (): void => {
+  it("parses `Some(x)` as a single-segment tuple-struct pattern", (): void => {
+    const ast = parseProgram("match x { Some(x) => x }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "TupleStructPattern",
+                path: { segments: ["Some"] },
+                elements: [{ kind: "BindingPattern", name: { text: "x" } }],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses `Message::Move(a, b)` as a multi-segment tuple-struct pattern", (): void => {
+    const ast = parseProgram("match x { Message::Move(a, b) => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "TupleStructPattern",
+                path: { segments: ["Message", "Move"] },
+                elements: [
+                  { kind: "BindingPattern", name: { text: "a" } },
+                  { kind: "BindingPattern", name: { text: "b" } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a nested tuple-struct pattern (`Some(Some(x))`)", (): void => {
+    const ast = parseProgram("match x { Some(Some(x)) => x }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "TupleStructPattern",
+                path: { segments: ["Some"] },
+                elements: [
+                  {
+                    kind: "TupleStructPattern",
+                    path: { segments: ["Some"] },
+                    elements: [{ kind: "BindingPattern", name: { text: "x" } }],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses `Message::Quit` (no call/braces) as a bare PathPattern", (): void => {
+    const ast = parseProgram("match x { Message::Quit => 1 }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "PathPattern",
+                path: { segments: ["Message", "Quit"] },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("does not promote a bare single-segment identifier to a PathPattern even if it looks like a constant (`MY_CONST`)", (): void => {
+    // Hedge has no name resolution at parse time, so a bare single-segment
+    // identifier always parses as a fresh BindingPattern - matching or
+    // shadowing a same-named constant is a semantic-analysis concern, not
+    // this parser's job (see spec 0016 and the grill-me record for #45).
+    const ast = parseProgram("match x { MY_CONST => 1 }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: { kind: "BindingPattern", name: { text: "MY_CONST" } },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("rejects a byRef sigil applied to a tuple-struct pattern (`&Some(x)`)", (): void => {
+    const result = parse(tokenize("match x { &Some(x) => x }").tokens);
+    expect(result.program).toEqual(none());
+  });
+
+  it("rejects a mut sigil applied to a tuple-struct pattern (`mut Some(x)`)", (): void => {
+    const result = parse(tokenize("match x { mut Some(x) => x }").tokens);
+    expect(result.program).toEqual(none());
+  });
+
+  it("produces a parse error for an unclosed tuple-struct pattern (`match x { Some(x => x }`)", (): void => {
+    const result = parse(tokenize("match x { Some(x => x }").tokens);
+    expect(result.program).toEqual(none());
+  });
+});
+
+describe("Slice 3 pattern kinds - slice patterns", (): void => {
+  it("parses `[first, .., last]` with an unnamed rest", (): void => {
+    const ast = parseProgram("match x { [first, .., last] => first }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "SlicePattern",
+                elements: [
+                  { kind: "BindingPattern", name: { text: "first" } },
+                  {
+                    kind: "RestPattern",
+                    byRef: false,
+                    mutable: false,
+                    name: none(),
+                  },
+                  { kind: "BindingPattern", name: { text: "last" } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses `[head, ..tail]` with a named rest", (): void => {
+    const ast = parseProgram("match x { [head, ..tail] => head }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "SlicePattern",
+                elements: [
+                  { kind: "BindingPattern", name: { text: "head" } },
+                  {
+                    kind: "RestPattern",
+                    byRef: false,
+                    mutable: false,
+                    name: some({ text: "tail" }),
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses `[a, b, c]` with no rest", (): void => {
+    const ast = parseProgram("match x { [a, b, c] => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "SlicePattern",
+                elements: [
+                  { kind: "BindingPattern", name: { text: "a" } },
+                  { kind: "BindingPattern", name: { text: "b" } },
+                  { kind: "BindingPattern", name: { text: "c" } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses `[]` as an empty slice pattern", (): void => {
+    const ast = parseProgram("match x { [] => 1 }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [{ pattern: { kind: "SlicePattern", elements: [] } }],
+        },
+      ],
+    });
+  });
+
+  it("parses a byRef rest binding (`[a, ..&rest]`)", (): void => {
+    const ast = parseProgram("match x { [a, ..&rest] => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "SlicePattern",
+                elements: [
+                  { kind: "BindingPattern", name: { text: "a" } },
+                  {
+                    kind: "RestPattern",
+                    byRef: true,
+                    mutable: false,
+                    name: some({ text: "rest" }),
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a byRef-mut rest binding (`[a, ..&mut rest]`)", (): void => {
+    const ast = parseProgram("match x { [a, ..&mut rest] => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "SlicePattern",
+                elements: [
+                  { kind: "BindingPattern", name: { text: "a" } },
+                  {
+                    kind: "RestPattern",
+                    byRef: true,
+                    mutable: true,
+                    name: some({ text: "rest" }),
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a slice pattern with a nested range-pattern element (`[1..=5, ..]`)", (): void => {
+    const ast = parseProgram("match x { [1..=5, ..] => 1 }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "SlicePattern",
+                elements: [
+                  { kind: "RangePattern" },
+                  { kind: "RestPattern", name: none() },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("produces a parse error for an unclosed slice pattern (`match x { [a, b => a }`)", (): void => {
+    const result = parse(tokenize("match x { [a, b => a }").tokens);
+    expect(result.program).toEqual(none());
+  });
+});
+
+describe("Slice 3 pattern kinds - feature interactions", (): void => {
+  it("parses a guard combined with a tuple-struct pattern (`Some(x) if x > 0 => x`)", (): void => {
+    const ast = parseProgram("match x { Some(x) if x > 0 => x }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "TupleStructPattern",
+                path: { segments: ["Some"] },
+              },
+              guard: some({ kind: "BinaryExpression", operator: "Gt" }),
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a struct pattern in an if-let condition (`if let Point { x, y } = p { }`)", (): void => {
+    const ast = parseProgram("if let Point { x, y } = p { }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "IfExpression",
+          condition: {
+            kind: "LetExpression",
+            pattern: {
+              kind: "StructPattern",
+              path: { segments: ["Point"] },
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses a slice pattern in an if-let condition (`if let [first, ..] = xs { }`)", (): void => {
+    const ast = parseProgram("if let [first, ..] = xs { }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "IfExpression",
+          condition: {
+            kind: "LetExpression",
+            pattern: {
+              kind: "SlicePattern",
+              elements: [
+                { kind: "BindingPattern", name: { text: "first" } },
+                { kind: "RestPattern", name: none() },
+              ],
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("produces exactly one diagnostic for an unclosed struct pattern, not a cascade (`match p { Point { x, y => a }`)", (): void => {
+    const result = parse(tokenize("match p { Point { x, y => a }").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("produces exactly one diagnostic for an unclosed slice pattern, not a cascade (`match x { [a, b, .. => a }`)", (): void => {
+    const result = parse(tokenize("match x { [a, b, .. => a }").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics).toHaveLength(1);
+  });
+});
+
 describe("if let expressions", (): void => {
   it("parses an if-let with no else into a LetExpression condition (`if let y = expr { }`)", (): void => {
     const ast = parseProgram("if let y = expr { }");

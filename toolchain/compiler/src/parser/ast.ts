@@ -235,16 +235,159 @@ export interface LetStatement extends AstNode {
   readonly initializer: Option<Expression>;
 }
 
-export type Pattern = BindingPattern | WildcardPattern;
+export type Pattern =
+  | BindingPattern
+  | WildcardPattern
+  | LiteralPattern
+  | RangePattern
+  | OrPattern
+  | TuplePattern
+  | StructPattern
+  | TupleStructPattern
+  | PathPattern
+  | SlicePattern;
 
 export interface BindingPattern extends AstNode {
   readonly kind: "BindingPattern";
   readonly mutable: boolean;
+  /** `true` for a leading `&`/`&mut` sigil (bind-by-borrow). */
+  readonly byRef: boolean;
   readonly name: Identifier;
+  /** `some(...)` for `name @ subpattern` - `none()` for a plain binding. */
+  readonly subpattern: Option<Pattern>;
 }
 
 export interface WildcardPattern extends AstNode {
   readonly kind: "WildcardPattern";
+}
+
+/**
+ * A bare literal used as a pattern (`match x { 1 => ..., "hi" => ... }`).
+ * Reuses the same literal node types as expression position rather than a
+ * parallel pattern-only literal AST, since a pattern literal's shape is
+ * identical to an expression literal - only its position differs.
+ */
+export interface LiteralPattern extends AstNode {
+  readonly kind: "LiteralPattern";
+  /** `true` for a leading `-` (numeric literals only - see `parsePattern`). */
+  readonly negative: boolean;
+  readonly literal:
+    StringLiteral | IntLiteral | FloatLiteral | CharLiteral | BoolLiteral;
+}
+
+/** A pattern-literal bound of a `RangePattern` (`1..=5`, `-5..=-1`). */
+export interface RangePatternBound {
+  readonly negative: boolean;
+  readonly literal:
+    StringLiteral | IntLiteral | FloatLiteral | CharLiteral | BoolLiteral;
+}
+
+export interface RangePattern extends AstNode {
+  readonly kind: "RangePattern";
+  readonly start: RangePatternBound;
+  readonly end: RangePatternBound;
+}
+
+/**
+ * `1 | 2 | 3`, `Ok(x) | Recovered(x)` - a flat list of alternatives, never a
+ * right-nested tree of two-element `OrPattern`s (see `parser/pattern.ts`'s
+ * `parsePattern`). Every alternative must bind the same names with the same
+ * types and modes (spec 0016) - that consistency check is semantic
+ * analysis's job, not parsing's.
+ */
+export interface OrPattern extends AstNode {
+  readonly kind: "OrPattern";
+  readonly alternatives: readonly Pattern[];
+}
+
+/**
+ * `(a, b)` - zero elements is the unit pattern `()`, one element (with or
+ * without a trailing comma) is a genuine one-element tuple pattern - the
+ * grammar has no separate parenthesized-grouping production competing for
+ * that shape (see `parser/pattern.ts`'s `parseTuplePattern`).
+ */
+export interface TuplePattern extends AstNode {
+  readonly kind: "TuplePattern";
+  readonly elements: readonly Pattern[];
+}
+
+/** `x` (shorthand, binds a new `x`) or `x: pattern` (explicit sub-pattern). */
+export interface FieldPattern extends AstNode {
+  readonly kind: "FieldPattern";
+  readonly name: Identifier;
+  readonly pattern: Option<Pattern>;
+}
+
+/**
+ * `Point { x, y }`, `Point { x: a, .. }`. `path` can be multi-segment
+ * (`Message::Move { x, y }`) since the parser routes any path immediately
+ * followed by `{` here regardless of segment count - not just single-segment
+ * struct names - even though there's no real module resolution yet
+ * (Slice 7) to make a qualified path meaningfully different from an
+ * unqualified one.
+ */
+export interface StructPattern extends AstNode {
+  readonly kind: "StructPattern";
+  readonly path: Path;
+  readonly fields: readonly FieldPattern[];
+  /** `true` for a trailing `..` (ignore any unlisted fields). */
+  readonly hasRest: boolean;
+}
+
+/**
+ * `Point(a, b)`, `Message::Move(a, b)` - `path` is single-segment for a
+ * plain tuple struct or multi-segment for an enum variant.
+ */
+export interface TupleStructPattern extends AstNode {
+  readonly kind: "TupleStructPattern";
+  readonly path: Path;
+  readonly elements: readonly Pattern[];
+}
+
+/**
+ * A bare constructor path used as a pattern with no call/brace suffix -
+ * e.g. a unit enum variant (`Message::Quit`). Only reachable for a
+ * genuinely unambiguous path: multi-segment, or immediately followed by
+ * `(`/`{` (which route to `TupleStructPattern`/`StructPattern` instead). A
+ * bare single-segment identifier always parses as `BindingPattern` -
+ * Hedge has no name resolution at parse time to tell a fresh binding
+ * apart from a reference to a same-named constant or unit variant (see
+ * spec 0016).
+ */
+export interface PathPattern extends AstNode {
+  readonly kind: "PathPattern";
+  readonly path: Path;
+}
+
+/**
+ * `..`, `..tail`, `..&rest`, `..&mut rest` - a slice pattern's rest element.
+ * Not itself a member of `Pattern`: it is only ever valid as one element of
+ * a `SlicePattern`'s `elements` list, mirroring how `ArrayRepeatExpression`
+ * isn't a general `Expression` either. Grammar (spec 0025, with the `..`-
+ * before-binding order corrected - see `parser/pattern.ts`):
+ *
+ * ```text
+ * RestPat ::= ".." ( "&" "mut"? Identifier | Identifier )?
+ * ```
+ *
+ * Only the byRef alternative allows an optional `mut`; a bare (non-`&`)
+ * rest binding never does, per the grammar as written.
+ */
+export interface RestPattern extends AstNode {
+  readonly kind: "RestPattern";
+  readonly byRef: boolean;
+  readonly mutable: boolean;
+  readonly name: Option<Identifier>;
+}
+
+/**
+ * `[first, .., last]`, `[head, ..tail]`. At most one `RestPattern` element
+ * is meaningful, but the parser does not enforce that arity - see
+ * `parser/pattern.ts`'s `parseSlicePattern` doc comment.
+ */
+export interface SlicePattern extends AstNode {
+  readonly kind: "SlicePattern";
+  readonly elements: readonly (Pattern | RestPattern)[];
 }
 
 export function patternMutable(pattern: Pattern): boolean {
@@ -252,6 +395,14 @@ export function patternMutable(pattern: Pattern): boolean {
     case "BindingPattern":
       return pattern.mutable;
     case "WildcardPattern":
+    case "LiteralPattern":
+    case "RangePattern":
+    case "OrPattern":
+    case "TuplePattern":
+    case "StructPattern":
+    case "TupleStructPattern":
+    case "PathPattern":
+    case "SlicePattern":
       return false;
     default:
       return assertNever(
@@ -266,6 +417,14 @@ export function patternBindingName(pattern: Pattern): Option<string> {
     case "BindingPattern":
       return some(pattern.name.text);
     case "WildcardPattern":
+    case "LiteralPattern":
+    case "RangePattern":
+    case "OrPattern":
+    case "TuplePattern":
+    case "StructPattern":
+    case "TupleStructPattern":
+    case "PathPattern":
+    case "SlicePattern":
       return none();
     default:
       return assertNever(

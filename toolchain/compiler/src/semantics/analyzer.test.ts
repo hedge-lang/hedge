@@ -199,6 +199,98 @@ describe("semantic analysis", (): void => {
     });
   });
 
+  describe("Slice 3 pattern kinds in let position (parser accepts, semantic analysis guardrails)", () => {
+    it("rejects a bare literal pattern in a let statement with a clear diagnostic", () => {
+      const result = diagnose("fn main() { let 1 = 5; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(result.diagnostics[0]?.message).toContain(
+        "destructuring patterns are not yet supported in `let`/parameter position",
+      );
+    });
+
+    it("rejects a range pattern in a let statement with a clear diagnostic", () => {
+      const result = diagnose("fn main() { let 1..=5 = 3; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(result.diagnostics[0]?.message).toContain(
+        "destructuring patterns are not yet supported in `let`/parameter position",
+      );
+    });
+
+    it("rejects an or-pattern in a let statement with a clear diagnostic", () => {
+      const result = diagnose("fn main() { let 1 | 2 = 1; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(result.diagnostics[0]?.message).toContain(
+        "destructuring patterns are not yet supported in `let`/parameter position",
+      );
+    });
+
+    it("rejects a tuple pattern in a let statement with a clear diagnostic", () => {
+      const result = diagnose("fn main() { let (a, b) = (1, 2); }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(result.diagnostics[0]?.message).toContain(
+        "destructuring patterns are not yet supported in `let`/parameter position",
+      );
+    });
+
+    it("rejects a struct pattern in a let statement with a clear diagnostic", () => {
+      const result = diagnose("fn main() { let Point { x, y } = 1; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(result.diagnostics[0]?.message).toContain(
+        "destructuring patterns are not yet supported in `let`/parameter position",
+      );
+    });
+
+    it("rejects a tuple-struct pattern in a let statement with a clear diagnostic", () => {
+      const result = diagnose("fn main() { let Some(x) = 1; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(result.diagnostics[0]?.message).toContain(
+        "destructuring patterns are not yet supported in `let`/parameter position",
+      );
+    });
+
+    it("rejects a bare path pattern in a let statement with a clear diagnostic", () => {
+      const result = diagnose("fn main() { let Message::Quit = 1; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(result.diagnostics[0]?.message).toContain(
+        "destructuring patterns are not yet supported in `let`/parameter position",
+      );
+    });
+
+    it("rejects a slice pattern in a let statement with a clear diagnostic", () => {
+      const result = diagnose("fn main() { let [a, ..tail] = 1; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(result.diagnostics[0]?.message).toContain(
+        "destructuring patterns are not yet supported in `let`/parameter position",
+      );
+    });
+
+    it("rejects a destructuring pattern in function-parameter position too, not just let", () => {
+      const result = diagnose("fn f(Point { x, y }: i32) {}");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(result.diagnostics[0]?.message).toContain(
+        "destructuring patterns are not yet supported in `let`/parameter position",
+      );
+    });
+
+    it("rejects an @-binding with a subpattern in a let statement instead of silently dropping the constraint", () => {
+      const result = diagnose("fn main() { let n @ 1..=5 = 3; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(result.diagnostics[0]?.message).toContain(
+        "destructuring patterns are not yet supported in `let`/parameter position",
+      );
+    });
+  });
+
   describe("top-level item restriction", () => {
     it("bare expression at top level is an error", () => {
       const result = diagnose("x + y;");

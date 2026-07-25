@@ -13,10 +13,8 @@ import type {
   DereferenceExpression,
   Expression,
   FieldInit,
-  FloatLiteral,
   IfExpression,
   IndexExpression,
-  IntLiteral,
   LetExpression,
   MatchArm,
   MatchExpression,
@@ -35,11 +33,11 @@ import {
   isLifetimeGenericsStart,
   isWhileLetAt,
   loopKeywordAt,
+  parseFloatLiteral,
   parseIdentifier,
+  parseIntLiteral,
   pathKeywordAt,
   pathSepBeforeLt,
-  stripPrefix,
-  stripUnderscores,
   tokenAt,
   unsupportedGenericsMessage,
   unsupportedLifetimeMessage,
@@ -49,41 +47,6 @@ import {
 import { parsePath } from "./path.js";
 import { parsePattern } from "./pattern.js";
 import { parseBlock } from "./statement.js";
-
-export function parseIntLiteral(
-  pos: number,
-  token: Extract<Token, { kind: "int" }>,
-): Parsed<IntLiteral> {
-  const rawDigits = stripPrefix(token.text, token.radix);
-  const digits = isSome(token.suffix)
-    ? rawDigits.slice(0, -token.suffix.value.length)
-    : rawDigits;
-  const value = stripUnderscores(digits);
-  return {
-    node: {
-      kind: "IntLiteral",
-      tokenId: pos,
-      value,
-      base: token.radix,
-      suffix: token.suffix,
-    },
-    next: pos + 1,
-  };
-}
-
-function parseFloatLiteral(
-  pos: number,
-  token: Extract<Token, { kind: "float" }>,
-): Parsed<FloatLiteral> {
-  const floatText = isSome(token.suffix)
-    ? token.text.slice(0, -token.suffix.value.length)
-    : token.text;
-  const value = stripUnderscores(floatText);
-  return {
-    node: { kind: "FloatLiteral", tokenId: pos, value, suffix: token.suffix },
-    next: pos + 1,
-  };
-}
 
 type InfixEntry =
   | {
