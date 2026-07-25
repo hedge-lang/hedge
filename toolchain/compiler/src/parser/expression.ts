@@ -17,6 +17,9 @@ import type {
   IfExpression,
   IndexExpression,
   IntLiteral,
+  LetExpression,
+  MatchArm,
+  MatchExpression,
   MethodCallExpression,
   PathExpression,
   RangeExpression,
@@ -24,11 +27,13 @@ import type {
   StructExpression,
   TupleExpression,
   UnaryExpression,
+  WhileExpression,
 } from "./ast.js";
 import type { Parsed } from "./parse.js";
 import {
   expect,
   isLifetimeGenericsStart,
+  isWhileLetAt,
   loopKeywordAt,
   parseIdentifier,
   pathKeywordAt,
@@ -39,10 +44,10 @@ import {
   unsupportedGenericsMessage,
   unsupportedLifetimeMessage,
   unsupportedLoopMessage,
-  unsupportedPatternMessage,
   type PR,
 } from "./parse-utils.js";
 import { parsePath } from "./path.js";
+import { parsePattern } from "./pattern.js";
 import { parseBlock } from "./statement.js";
 
 export function parseIntLiteral(
@@ -639,6 +644,46 @@ function parseArrayLiteral(
   return ok({ node: array, next: closeResult.value });
 }
 
+/**
+ * Parses an `if`/`while` condition: either `"let" Pattern "=" Expression`
+ * (a `LetExpression`) or an ordinary `ExpressionNoStruct`: `{` always
+ * starts the following block, never a struct literal, so struct literals
+ * are disallowed here exactly as in general condition position today.
+ */
+function parseCondition(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<Expression>> {
+  const token = tokens[pos];
+  if (token?.kind === "keyword" && token.text === "let") {
+    const letStart = pos;
+    const patternResult = parsePattern(tokens, pos + 1);
+    if (isErr(patternResult)) return patternResult;
+
+    const eqResult = expect(tokens, patternResult.value.next, "eq");
+    if (isErr(eqResult)) return eqResult;
+
+    const scrutineeResult = parseExpressionWithBindingPower(
+      tokens,
+      diagnostics,
+      eqResult.value,
+      0,
+      false,
+    );
+    if (isErr(scrutineeResult)) return scrutineeResult;
+
+    const node: LetExpression = {
+      kind: "LetExpression",
+      tokenId: letStart,
+      pattern: patternResult.value.node,
+      scrutinee: scrutineeResult.value.node,
+    };
+    return ok({ node, next: scrutineeResult.value.next });
+  }
+  return parseExpressionWithBindingPower(tokens, diagnostics, pos, 0, false);
+}
+
 /** Parses `if cond { then } (else (if ... | { else }))?`. */
 // eslint-disable-next-line complexity -- This is mostly a routing function
 function parseIfExpression(
@@ -650,14 +695,7 @@ function parseIfExpression(
   // Token at pos is the `if` keyword — advance past it
   const afterIf = pos + 1;
 
-  // Condition is ExpressionNoStruct — `{` always starts the then-block, never a struct literal
-  const condResult = parseExpressionWithBindingPower(
-    tokens,
-    diagnostics,
-    afterIf,
-    0,
-    false,
-  );
+  const condResult = parseCondition(tokens, diagnostics, afterIf);
   if (isErr(condResult)) return condResult;
 
   const thenTok = tokens[condResult.value.next];
@@ -709,6 +747,197 @@ function parseIfExpression(
     elseBranch,
   };
   return ok({ node, next: cursor });
+}
+
+/**
+ * True for an expression that ends in its own closing `}` (a block, or a
+ * construct whose body is one): a comma is optional after such an arm's
+ * body, mirroring `statement.ts`'s "ExpressionWithBlock doesn't need a
+ * semicolon" rule for the same reason: no risk of the following token being
+ * absorbed as a continuation.
+ */
+function isBlockLikeExpression(expr: Expression): boolean {
+  return (
+    expr.kind === "Block" ||
+    expr.kind === "IfExpression" ||
+    expr.kind === "MatchExpression" ||
+    expr.kind === "WhileExpression"
+  );
+}
+
+/**
+ * Parses `"while" "let" Pattern "=" Expression Block`: the only supported
+ * `while` form.
+ */
+function parseWhileExpression(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<WhileExpression>> {
+  const start = pos;
+  const afterWhile = pos + 1;
+
+  const condResult = parseCondition(tokens, diagnostics, afterWhile);
+  if (isErr(condResult)) return condResult;
+
+  const bodyTok = tokens[condResult.value.next];
+  if (bodyTok === undefined || bodyTok.kind !== "lbrace") {
+    return err({
+      severity: "error",
+      message: `Expected '{' to start while body`,
+      span: bodyTok !== undefined ? some(bodyTok.span) : none(),
+      code: none(),
+      relatedSpans: [],
+    });
+  }
+  const bodyResult = parseBlock(tokens, diagnostics, condResult.value.next);
+  if (isErr(bodyResult)) return bodyResult;
+
+  const node: WhileExpression = {
+    kind: "WhileExpression",
+    tokenId: start,
+    condition: condResult.value.node,
+    body: bodyResult.value.node,
+  };
+  return ok({ node, next: bodyResult.value.next });
+}
+
+/** Parses one `Pattern ("if" Expression)? "=>" Expression` match arm. */
+function parseMatchArm(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<MatchArm>> {
+  const start = pos;
+  const patternResult = parsePattern(tokens, pos);
+  if (isErr(patternResult)) return patternResult;
+  let cursor = patternResult.value.next;
+
+  let guard: MatchArm["guard"] = none();
+  const guardTok = tokens[cursor];
+  if (guardTok?.kind === "keyword" && guardTok.text === "if") {
+    const guardResult = parseExpressionWithBindingPower(
+      tokens,
+      diagnostics,
+      cursor + 1,
+      0,
+      true,
+    );
+    if (isErr(guardResult)) return guardResult;
+    guard = some(guardResult.value.node);
+    cursor = guardResult.value.next;
+  }
+
+  const arrowTok = tokens[cursor];
+  if (arrowTok === undefined || arrowTok.kind !== "fat_arrow") {
+    return err({
+      severity: "error",
+      message: `Expected '=>' in match arm`,
+      span: arrowTok !== undefined ? some(arrowTok.span) : none(),
+      code: none(),
+      relatedSpans: [],
+    });
+  }
+  cursor += 1;
+
+  const bodyResult = parseExpressionWithBindingPower(
+    tokens,
+    diagnostics,
+    cursor,
+    0,
+    true,
+  );
+  if (isErr(bodyResult)) return bodyResult;
+
+  const arm: MatchArm = {
+    kind: "MatchArm",
+    tokenId: start,
+    pattern: patternResult.value.node,
+    guard,
+    body: bodyResult.value.node,
+  };
+  return ok({ node: arm, next: bodyResult.value.next });
+}
+
+/** Parses `"match" Expression "{" ( MatchArm ","? )* "}"`. */
+// eslint-disable-next-line complexity -- Arm-list loop with the block-like-body comma exemption; splitting would obscure the grammar rule.
+function parseMatchExpression(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<MatchExpression>> {
+  const start = pos;
+  const afterMatch = pos + 1;
+
+  // Scrutinee is ExpressionNoStruct, for the same reason as an if/while
+  // condition: `{` always starts the arm list, never a struct literal.
+  const scrutineeResult = parseExpressionWithBindingPower(
+    tokens,
+    diagnostics,
+    afterMatch,
+    0,
+    false,
+  );
+  if (isErr(scrutineeResult)) return scrutineeResult;
+
+  const openBrace = expect(tokens, scrutineeResult.value.next, "lbrace");
+  if (isErr(openBrace)) return openBrace;
+  let cursor = openBrace.value;
+
+  const arms: MatchArm[] = [];
+  while (tokens[cursor]?.kind !== "rbrace") {
+    const tok = tokens[cursor];
+    if (tok === undefined || tok.kind === "eof") {
+      return err({
+        severity: "error",
+        message: "Expected '}' to close match expression, found end of input",
+        span: none(),
+        code: none(),
+        relatedSpans: [],
+      });
+    }
+
+    const armResult = parseMatchArm(tokens, diagnostics, cursor);
+    if (isErr(armResult)) return armResult;
+    arms.push(armResult.value.node);
+    cursor = armResult.value.next;
+
+    if (tokens[cursor]?.kind === "comma") {
+      cursor += 1;
+      continue;
+    }
+    if (tokens[cursor]?.kind === "rbrace") {
+      break;
+    }
+    if (isBlockLikeExpression(armResult.value.node.body)) {
+      continue;
+    }
+    const nextTok = tokens[cursor];
+    if (nextTok === undefined || nextTok.kind === "eof") {
+      return err({
+        severity: "error",
+        message: "Expected '}' to close match expression, found end of input",
+        span: none(),
+        code: none(),
+        relatedSpans: [],
+      });
+    }
+    return err({
+      severity: "error",
+      message: `Expected ',' between match arms`,
+      span: some(nextTok.span),
+      code: none(),
+      relatedSpans: [],
+    });
+  }
+
+  const node: MatchExpression = {
+    kind: "MatchExpression",
+    tokenId: start,
+    scrutinee: scrutineeResult.value.node,
+    arms,
+  };
+  return ok({ node, next: cursor + 1 });
 }
 
 /** Parses `Path "{" FieldInits? (".." Expression)? "}"`. */
@@ -908,6 +1137,12 @@ function parsePrimary(
     return parseIfExpression(tokens, diagnostics, pos);
   }
 
+  // `while let` expression: the only supported `while` form; a bare
+  // (non-`let`) or label-prefixed `while` falls through to the guardrail below.
+  if (isWhileLetAt(tokens, pos)) {
+    return parseWhileExpression(tokens, diagnostics, pos);
+  }
+
   const loopKeyword = loopKeywordAt(tokens, pos);
   if (isSome(loopKeyword)) {
     return err({
@@ -919,15 +1154,9 @@ function parsePrimary(
     });
   }
 
-  // Guardrail: `match` expressions are not yet supported.
+  // `match` expression
   if (token.kind === "keyword" && token.text === "match") {
-    return err({
-      severity: "error",
-      message: unsupportedPatternMessage("`match` expressions"),
-      span: some(token.span),
-      code: none(),
-      relatedSpans: [],
-    });
+    return parseMatchExpression(tokens, diagnostics, pos);
   }
 
   // Block expression

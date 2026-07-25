@@ -96,6 +96,9 @@ export type Expression =
   | StructExpression
   | RangeExpression
   | IfExpression
+  | LetExpression
+  | MatchExpression
+  | WhileExpression
   | Block
   | Identifier;
 
@@ -479,4 +482,47 @@ export interface IfExpression extends AstNode {
   readonly condition: Expression;
   readonly thenBranch: Block;
   readonly elseBranch: Option<IfExpression | Block>;
+}
+
+/**
+ * `let Pattern = Expression`: only legal as (or as a conjunct of) an `if`/
+ * `while` condition, never in general expression position. This is enforced
+ * structurally, not by an AST flag: the parser only ever constructs a
+ * `LetExpression` from the dedicated if/while-condition parsing routine
+ * (`parseCondition`), never from `parsePrimary`'s general dispatch, so a
+ * stray `let` elsewhere in expression position falls through to the
+ * ordinary "expected an expression" error, unchanged. Mirrors rustc's own
+ * `ExprKind::Let`.
+ */
+export interface LetExpression extends AstNode {
+  readonly kind: "LetExpression";
+  readonly pattern: Pattern;
+  readonly scrutinee: Expression;
+}
+
+/**
+ * `while` `condition` `body`: currently only reachable via the `while let`
+ * form (`condition` a `LetExpression`); a bare boolean `while cond {}` is
+ * still a guardrail rejection (see `expression.ts`'s `parsePrimary` and
+ * `statement.ts`'s block-statement dispatch, both of which only route to
+ * `parseWhileExpression` for the exact unlabeled `while` `let` token
+ * sequence). `loop`/`for` remain fully unimplemented.
+ */
+export interface WhileExpression extends AstNode {
+  readonly kind: "WhileExpression";
+  readonly condition: Expression;
+  readonly body: Block;
+}
+
+export interface MatchArm extends AstNode {
+  readonly kind: "MatchArm";
+  readonly pattern: Pattern;
+  readonly guard: Option<Expression>;
+  readonly body: Expression;
+}
+
+export interface MatchExpression extends AstNode {
+  readonly kind: "MatchExpression";
+  readonly scrutinee: Expression;
+  readonly arms: readonly MatchArm[];
 }

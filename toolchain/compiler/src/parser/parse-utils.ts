@@ -165,6 +165,26 @@ export function loopKeywordAt(
   return none();
 }
 
+/**
+ * True at the exact unlabeled `while` `let` token sequence: the only
+ * `while` form the parser currently supports. Checked against the raw
+ * token position (never `loopKeywordAt`'s label-resolved position), so a
+ * label-prefixed `'outer: while let ...` deliberately still falls through
+ * to the ordinary loop guardrail unchanged; labels aren't supported yet.
+ * Shared by `expression.ts`'s `parsePrimary` (nested-expression position)
+ * and `statement.ts`'s block-statement dispatch, so both carve-outs agree.
+ */
+export function isWhileLetAt(tokens: readonly Token[], pos: number): boolean {
+  const whileTok = tokens[pos];
+  const letTok = tokens[pos + 1];
+  return (
+    whileTok?.kind === "keyword" &&
+    whileTok.text === "while" &&
+    letTok?.kind === "keyword" &&
+    letTok.text === "let"
+  );
+}
+
 export function unsupportedPathKeywordMessage(keyword: string): string {
   return `\`${keyword}\` is not supported in Slice 1; module resolution is introduced in Slice 7`;
 }

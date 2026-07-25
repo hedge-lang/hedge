@@ -357,8 +357,9 @@ IndexExpr   ::= Expression "[" Expression "]"
 TryExpr     ::= Expression "?"
 RangeExpr   ::= Expression? ( ".." | "..=" ) Expression?
 
-IfExpr      ::= "if" Expression Block ( "else" ( IfExpr | Block ) )?
-             | "if" "let" Pattern "=" Expression Block ( "else" Block )?
+IfExpr      ::= "if" Condition Block ( "else" ( IfExpr | Block ) )?
+Condition   ::= Expression
+             | "let" Pattern "=" Expression                   (* LetExpr *)
 MatchExpr   ::= "match" Expression "{" ( MatchArm ","? )* "}"
 MatchArm    ::= Pattern ( "if" Expression )? "=>" Expression
 
@@ -371,7 +372,7 @@ ClosureParam::= Pattern ( ":" Type )?
 
 ```txt
 LoopExpr    ::= Label? "loop" Block
-WhileExpr   ::= Label? ( "while" Expression | "while" "let" Pattern "=" Expression ) Block
+WhileExpr   ::= Label? "while" Condition Block
 ForExpr     ::= Label? "for" Pattern "in" Expression Block
 BreakExpr   ::= "break" LabelRef? Expression?
 ContinueExpr::= "continue" LabelRef?

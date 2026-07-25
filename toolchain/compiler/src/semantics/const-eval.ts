@@ -395,6 +395,9 @@ export function foldConstExpression(
     case "StructExpression":
     case "RangeExpression":
     case "IfExpression":
+    case "LetExpression":
+    case "MatchExpression":
+    case "WhileExpression":
     case "Block":
     case "Identifier":
       return { kind: "NotFoldable", tokenId: expr.tokenId };

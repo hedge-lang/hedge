@@ -407,13 +407,6 @@ describe("must-fail corpus — rejection tests", (): void => {
       );
     });
 
-    it("rejects match expressions (not in Slice 1)", (): void => {
-      assertRejectsWithMessage(
-        `fn main() { match 5 { 1 => print("one"), _ => print("other"), } }`,
-        "not supported in Slice 1",
-      );
-    });
-
     it("rejects non-primitive parameter type in function signature (Slice 1)", (): void => {
       assertRejectsWithMessage(
         `fn foo(x: MyStruct) {} fn main() {}`,

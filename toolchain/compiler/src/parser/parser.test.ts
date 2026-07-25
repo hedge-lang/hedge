@@ -3034,23 +3034,16 @@ describe("unsupported item keywords", (): void => {
     },
   );
 
-  it("rejects a bare top-level `match` expression with a clear Slice 1/Slice 3 diagnostic", (): void => {
-    const { tokens } = tokenize("match x { }");
-    const { program, diagnostics } = parse(tokens);
-    assert(isNone(program), "Expected no program to come back");
-    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("Slice 1");
-    expect(diagnostics[0].message).toContain("Slice 3");
-    expect(diagnostics[0].message).not.toContain("Expected an expression");
-  });
-
-  it("`let y = match x {};` produces the Slice-1 diagnostic, not a generic 'expected expression' error", (): void => {
+  it("parses a match used as a let initializer (`let y = match x {};`)", (): void => {
     const { tokens } = tokenize("let y = match x {};");
     const { program, diagnostics } = parse(tokens);
-    assert(isNone(program), "Expected no program to come back");
-    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("Slice 1");
-    expect(diagnostics[0].message).not.toContain("Expected an expression");
+    assert(isSome(program), diagnostics[0]?.message ?? "Expected a program");
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "LetStatement",
+        initializer: some({ kind: "MatchExpression", arms: [] }),
+      },
+    ]);
   });
 
   it.each(["export", "extern", "impl", "trait", "async", "use", "mod"])(
@@ -4135,18 +4128,19 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     ]);
   });
 
-  it("rejects `while let` the same as a plain `while` condition", (): void => {
+  it("fails on the unsupported tuple-struct pattern, not on the `while` itself (`while let Some(x) = opt {}`)", (): void => {
+    // `while let` itself is real syntax; `Some(x)` is a tuple-struct/
+    // enum-variant pattern, which the parser doesn't support yet - only
+    // binding and wildcard patterns are implemented. `Some` parses as a
+    // plain BindingPattern name, so the failure is the unexpected `(`
+    // where `=` was expected, not a `while`-guardrail diagnostic.
     const { tokens } = tokenize(
       "fn f() { while let Some(x) = opt {} } fn g() {}",
     );
     const { program, diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
-    expect(diagnostics[0].message).toContain("while");
-    assert(isSome(program), "Expected a program to come back");
-    expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "f" } },
-      { kind: "Function", name: { text: "g" } },
-    ]);
+    expect(diagnostics[0].message).not.toContain("while");
+    expect(isSome(program)).toBe(false);
   });
 
   it("rejects a loop in trailing (no-semicolon) block position the same as mid-block", (): void => {
