@@ -2,7 +2,7 @@ import { assert } from "../assert.js";
 import type { Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
-import type { Pattern, RangePatternBound } from "./ast.js";
+import type { FieldPattern, Path, Pattern, RangePatternBound } from "./ast.js";
 import type { Parsed } from "./parse.js";
 import {
   expect,
@@ -10,7 +10,6 @@ import {
   parseIdentifier,
   spanAt,
   tryParseLiteral,
-  unsupportedPatternMessage,
   type PR,
 } from "./parse-utils.js";
 
@@ -219,13 +218,21 @@ function parsePatternNoAlt(
   }
 
   if (kindAt(tokens, next) === "lbrace") {
-    return err({
-      severity: "error",
-      message: unsupportedPatternMessage("struct patterns"),
-      span: spanAt(tokens, ident.tokenId),
-      code: none(),
-      relatedSpans: [],
-    });
+    if (isMut || byRef) {
+      return err({
+        severity: "error",
+        message: "`mut`/`&`/`&mut` sigils cannot be applied to a struct pattern",
+        span: spanAt(tokens, pos),
+        code: none(),
+        relatedSpans: [],
+      });
+    }
+    return parseStructPattern(
+      tokens,
+      pos,
+      { absolute: false, segments: [ident.text] },
+      next,
+    );
   }
 
   const bindingTokenId = isMut || byRef ? pos : ident.tokenId;
@@ -300,6 +307,66 @@ function parseTuplePattern(
   if (isErr(closeResult)) return closeResult;
   return ok({
     node: { kind: "TuplePattern", tokenId: pos, elements },
+    next: closeResult.value,
+  });
+}
+
+/**
+ * Parses `"{" ( FieldPat ("," FieldPat)* )? ( ","? ".." )? "}"`, given the
+ * caller has already parsed `path` and confirmed the `{` at `bracePos`.
+ * `FieldPat ::= Identifier (":" Pattern)?` - shorthand (`x`, binds a new
+ * `x`) or an explicit sub-pattern (`x: pattern`). A trailing `..` must be
+ * the last thing before `}`; it is not itself a `FieldPat`.
+ */
+function parseStructPattern(
+  tokens: readonly Token[],
+  startPos: number,
+  path: Path,
+  bracePos: number,
+): PR<Parsed<Pattern>> {
+  let cursor = bracePos + 1; // skip `{`
+  const fields: FieldPattern[] = [];
+  let hasRest = false;
+
+  while (kindAt(tokens, cursor) !== "rbrace") {
+    if (kindAt(tokens, cursor) === "dot_dot") {
+      hasRest = true;
+      cursor += 1;
+      break;
+    }
+
+    const nameResult = parseIdentifier(tokens, cursor);
+    if (isErr(nameResult)) return nameResult;
+    const { node: name, next: afterName } = nameResult.value;
+
+    let fieldPattern: Option<Pattern> = none();
+    let afterField = afterName;
+    if (kindAt(tokens, afterName) === "colon") {
+      const patResult = parsePattern(tokens, afterName + 1);
+      if (isErr(patResult)) return patResult;
+      fieldPattern = some(patResult.value.node);
+      afterField = patResult.value.next;
+    }
+
+    fields.push({
+      kind: "FieldPattern",
+      tokenId: name.tokenId,
+      name,
+      pattern: fieldPattern,
+    });
+    cursor = afterField;
+
+    if (kindAt(tokens, cursor) === "comma") {
+      cursor += 1;
+      continue;
+    }
+    break;
+  }
+
+  const closeResult = expect(tokens, cursor, "rbrace");
+  if (isErr(closeResult)) return closeResult;
+  return ok({
+    node: { kind: "StructPattern", tokenId: startPos, path, fields, hasRest },
     next: closeResult.value,
   });
 }

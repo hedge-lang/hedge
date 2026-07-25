@@ -2227,18 +2227,124 @@ describe("core patterns", (): void => {
     expect(result.diagnostics[0]?.span).toEqual(some(mutToken.span));
   });
 
-  it("produces a Slice 1 diagnostic for a struct pattern in let position", (): void => {
-    const result = parse(tokenize("let Point { x, y } = p;").tokens);
-    expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toContain("Slice 3");
+  it("parses a struct pattern in let position as a real StructPattern (semantic rejection is analyzer.ts's job now)", (): void => {
+    const ast = parseProgram("let Point { x, y } = p;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "LetStatement",
+          pattern: {
+            kind: "StructPattern",
+            path: { segments: ["Point"] },
+            fields: [
+              { kind: "FieldPattern", name: { text: "x" }, pattern: none() },
+              { kind: "FieldPattern", name: { text: "y" }, pattern: none() },
+            ],
+            hasRest: false,
+          },
+        },
+      ],
+    });
   });
 
-  it("produces a Slice 1 diagnostic for a struct pattern in param position", (): void => {
-    const result = parse(tokenize("fn f(Point { x, y }: Point) {}").tokens);
+  it("parses a struct pattern in param position as a real StructPattern (semantic rejection is analyzer.ts's job now)", (): void => {
+    const ast = parseProgram("fn f(Point { x, y }: Point) {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          params: [
+            {
+              kind: "Param",
+              pattern: { kind: "StructPattern", path: { segments: ["Point"] } },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a struct pattern field with an explicit renamed sub-pattern (`Point { x: a, y: b }`)", (): void => {
+    const ast = parseProgram("match p { Point { x: a, y: b } => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "StructPattern",
+                path: { segments: ["Point"] },
+                fields: [
+                  {
+                    name: { text: "x" },
+                    pattern: some({
+                      kind: "BindingPattern",
+                      name: { text: "a" },
+                    }),
+                  },
+                  {
+                    name: { text: "y" },
+                    pattern: some({
+                      kind: "BindingPattern",
+                      name: { text: "b" },
+                    }),
+                  },
+                ],
+                hasRest: false,
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a struct pattern with a `..` rest (`Point { x, .. }`)", (): void => {
+    const ast = parseProgram("match p { Point { x, .. } => x }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "StructPattern",
+                path: { segments: ["Point"] },
+                fields: [{ name: { text: "x" }, pattern: none() }],
+                hasRest: true,
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses an empty struct pattern (`Point {}`)", (): void => {
+    const ast = parseProgram("match p { Point {} => 1 }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "StructPattern",
+                path: { segments: ["Point"] },
+                fields: [],
+                hasRest: false,
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("produces a parse error for an unclosed struct pattern (`match p { Point { x, y => a }`)", (): void => {
+    const result = parse(tokenize("match p { Point { x, y => a }").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toContain("Slice 3");
   });
 
   it("gives the MUT_MESSAGE for fn f(mut: i32) {} (mut used as a param name)", (): void => {

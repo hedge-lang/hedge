@@ -241,7 +241,8 @@ export type Pattern =
   | LiteralPattern
   | RangePattern
   | OrPattern
-  | TuplePattern;
+  | TuplePattern
+  | StructPattern;
 
 export interface BindingPattern extends AstNode {
   readonly kind: "BindingPattern";
@@ -315,6 +316,26 @@ export interface TuplePattern extends AstNode {
   readonly elements: readonly Pattern[];
 }
 
+/** `x` (shorthand, binds a new `x`) or `x: pattern` (explicit sub-pattern). */
+export interface FieldPattern extends AstNode {
+  readonly kind: "FieldPattern";
+  readonly name: Identifier;
+  readonly pattern: Option<Pattern>;
+}
+
+/**
+ * `Point { x, y }`, `Point { x: a, .. }`. `path` is always a single-segment
+ * `Path` today (no module resolution exists yet - Slice 7) but the field is
+ * a full `Path` for forward compatibility with a later qualified form.
+ */
+export interface StructPattern extends AstNode {
+  readonly kind: "StructPattern";
+  readonly path: Path;
+  readonly fields: readonly FieldPattern[];
+  /** `true` for a trailing `..` (ignore any unlisted fields). */
+  readonly hasRest: boolean;
+}
+
 export function patternMutable(pattern: Pattern): boolean {
   switch (pattern.kind) {
     case "BindingPattern":
@@ -324,6 +345,7 @@ export function patternMutable(pattern: Pattern): boolean {
     case "RangePattern":
     case "OrPattern":
     case "TuplePattern":
+    case "StructPattern":
       return false;
     default:
       return assertNever(
@@ -342,6 +364,7 @@ export function patternBindingName(pattern: Pattern): Option<string> {
     case "RangePattern":
     case "OrPattern":
     case "TuplePattern":
+    case "StructPattern":
       return none();
     default:
       return assertNever(
