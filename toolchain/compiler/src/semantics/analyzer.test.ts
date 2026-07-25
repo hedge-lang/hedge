@@ -150,9 +150,10 @@ describe("semantic analysis", (): void => {
     });
 
     it("does not cascade a second diagnostic when a match is used as an if condition", () => {
-      // The placeholder resolves to UnitType, which is in the
-      // error-recovery bucket `analyzeIfExpression`'s bool-check already
-      // skips - proves no second "if condition must be bool" diagnostic.
+      // The placeholder resolves to UnitType; analyzeIfExpression's
+      // bool-check skips any UnitType condition outright (a plain kind
+      // check, not a call to isAmbiguousUnitExpr), so there's no second
+      // "if condition must be bool" diagnostic.
       const result = diagnose("fn main() { if match 1 { x => true } { } }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toContain(
@@ -181,9 +182,9 @@ describe("semantic analysis", (): void => {
     });
 
     it("does not cascade a second 'condition must be bool' diagnostic for an if-let condition", () => {
-      // `LetExpression`'s placeholder resolves to `UnitType`, which
-      // `analyzeIfExpression`'s bool-check already treats as the
-      // error-recovery bucket and skips - see `isAmbiguousUnitExpr`.
+      // `LetExpression`'s placeholder resolves to `UnitType`, and
+      // `analyzeIfExpression`'s bool-check skips any `UnitType` condition
+      // outright (a plain kind check, not a call to `isAmbiguousUnitExpr`).
       const result = diagnose("fn main() { if let y = opt { } }");
       expect(result.diagnostics).toHaveLength(1);
     });
