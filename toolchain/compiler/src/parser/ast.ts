@@ -255,6 +255,8 @@ export interface WildcardPattern extends AstNode {
  */
 export interface LiteralPattern extends AstNode {
   readonly kind: "LiteralPattern";
+  /** `true` for a leading `-` (numeric literals only - see `parsePattern`). */
+  readonly negative: boolean;
   readonly literal:
     | StringLiteral
     | IntLiteral

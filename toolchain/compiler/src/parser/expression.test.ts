@@ -1898,6 +1898,65 @@ describe("Slice 3 pattern kinds - literal patterns", (): void => {
       ],
     });
   });
+
+  it("parses a negative int literal pattern (`match x { -1 => a }`)", (): void => {
+    const ast = parseProgram("match x { -1 => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              kind: "MatchArm",
+              pattern: {
+                kind: "LiteralPattern",
+                negative: true,
+                literal: { kind: "IntLiteral", value: "1" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a negative float literal pattern (`match x { -1.5 => a }`)", (): void => {
+    const ast = parseProgram("match x { -1.5 => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              kind: "MatchArm",
+              pattern: {
+                kind: "LiteralPattern",
+                negative: true,
+                literal: { kind: "FloatLiteral", value: "1.5" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("rejects a leading `-` on a non-numeric literal pattern (`match x { -\"hi\" => a, _ => b }`)", (): void => {
+    const result = parse(tokenize('match x { -"hi" => a, _ => b }').tokens);
+    expect(result.program).toEqual(none());
+  });
+
+  it("does not treat a plain positive literal pattern as negative", (): void => {
+    const ast = parseProgram("match x { 1 => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [{ pattern: { kind: "LiteralPattern", negative: false } }],
+        },
+      ],
+    });
+  });
 });
 
 describe("if let expressions", (): void => {
