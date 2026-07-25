@@ -116,19 +116,22 @@ export function parsePattern(
 /**
  * Parses a single pattern alternative (no top-level `|`).
  *
- * Slice 1 supports binding patterns (`mut`? Identifier), the wildcard `_`,
- * and (Slice 3) bare literal patterns, inclusive range patterns (`1..=5`,
- * including a leading `-` on a numeric literal bound), and tuple patterns
- * (`(a, b)`) - the grammar's own `Literal` production has no unary minus,
- * so a leading `-` is a deliberate pattern-only extension, not a general
- * unary expression: only `-` immediately followed by an `int`/`float`
- * token is accepted, never `-"str"` or `-x`. Struct/tuple-struct/slice
- * patterns are recognized by the grammar but not yet implemented here.
+ * Covers every `PatternNoAlt` kind in spec 0025: binding patterns (`mut`?
+ * `&`? Identifier, with an optional `@` subpattern), the wildcard `_`,
+ * literal and inclusive range patterns (`1..=5`, including a leading `-`
+ * on a numeric literal bound - the grammar's own `Literal` production has
+ * no unary minus, so this is a deliberate pattern-only extension, not a
+ * general unary expression: only `-` immediately followed by an
+ * `int`/`float` token is accepted, never `-"str"` or `-x`), tuple patterns
+ * (`(a, b)`), slice patterns (`[a, ..rest]`), and - via
+ * `parseIdentifierRootedPattern`'s path-rooted dispatch - struct,
+ * tuple-struct, and bare unit-variant path patterns.
  *
  * Grammar:
  *
  * ```text
- * PatternNoAlt ::= "mut"? Identifier | "_" | RangePat | Literal | TuplePat
+ * PatternNoAlt ::= BindingPat | "_" | RangePat | Literal | TuplePat
+ *                | SlicePat | StructPat | TupleStructPat | Path
  * RangePat ::= ("-"? Literal) "..=" ("-"? Literal)
  * TuplePat ::= "(" ( Pattern ("," Pattern)* ","? )? ")"
  * ```
