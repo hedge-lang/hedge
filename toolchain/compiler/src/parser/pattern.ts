@@ -184,6 +184,28 @@ function parsePatternNoAlt(
     });
   }
 
+  return parseIdentifierRootedPattern(tokens, pos);
+}
+
+/**
+ * Parses every `PatternNoAlt` alternative that starts with an optional
+ * `&`/`&mut`/`mut` sigil followed by an identifier: a plain binding, the
+ * wildcard `_`, an `@`-subpattern, or (when the sigil is absent and the
+ * identifier turns out to be a `Path` - single- or multi-segment) a
+ * struct/tuple-struct/bare-unit-variant pattern. Split out of
+ * `parsePatternNoAlt` to keep that function's own dispatch (tuple/slice/
+ * range/literal vs. this identifier-rooted case) below the complexity
+ * limit - this one function covers a lot of `PatternNoAlt` grammar on its
+ * own precisely because a leading identifier is so ambiguous between all
+ * of these forms until enough lookahead resolves it (see grill-me Q3 in
+ * the ticket record for why a bare single-segment identifier always wins
+ * as a plain binding).
+ */
+// eslint-disable-next-line complexity -- Identifier-rooted dispatch covering BindingPat/wildcard/@-subpattern/Path-rooted forms; see doc comment above.
+function parseIdentifierRootedPattern(
+  tokens: readonly Token[],
+  pos: number,
+): PR<Parsed<Pattern>> {
   const byRef = tokens[pos]?.kind === "amp";
   const afterAmp = byRef ? pos + 1 : pos;
 

@@ -2486,9 +2486,7 @@ describe("core patterns", (): void => {
       items: [
         {
           kind: "MatchExpression",
-          arms: [
-            { pattern: { kind: "BindingPattern", subpattern: none() } },
-          ],
+          arms: [{ pattern: { kind: "BindingPattern", subpattern: none() } }],
         },
       ],
     });

@@ -1941,7 +1941,7 @@ describe("Slice 3 pattern kinds - literal patterns", (): void => {
     });
   });
 
-  it("rejects a leading `-` on a non-numeric literal pattern (`match x { -\"hi\" => a, _ => b }`)", (): void => {
+  it('rejects a leading `-` on a non-numeric literal pattern (`match x { -"hi" => a, _ => b }`)', (): void => {
     const result = parse(tokenize('match x { -"hi" => a, _ => b }').tokens);
     expect(result.program).toEqual(none());
   });

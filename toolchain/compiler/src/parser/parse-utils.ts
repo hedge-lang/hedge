@@ -107,12 +107,12 @@ export function expectKeyword(
   return ok(pos + 1);
 }
 
-export function stripPrefix(text: string, radix: 2 | 8 | 10 | 16): string {
+function stripPrefix(text: string, radix: 2 | 8 | 10 | 16): string {
   if (radix !== 10) return text.slice(2); // strip 0x / 0o / 0b
   return text;
 }
 
-export function stripUnderscores(text: string): string {
+function stripUnderscores(text: string): string {
   return text.replaceAll("_", "");
 }
 
@@ -215,10 +215,6 @@ export function pathKeywordAt(
 
 export function unsupportedGenericsMessage(construct: string): string {
   return `${construct} are not supported in Slice 1; generics are introduced in Slice 4`;
-}
-
-export function unsupportedPatternMessage(construct: string): string {
-  return `${construct} are not supported in Slice 1; pattern matching is introduced in Slice 3`;
 }
 
 export function unsupportedLifetimeMessage(construct: string): string {
@@ -716,11 +712,7 @@ export function parseFloatLiteral(
 }
 
 export type LiteralToken =
-  | StringLiteral
-  | IntLiteral
-  | FloatLiteral
-  | CharLiteral
-  | BoolLiteral;
+  StringLiteral | IntLiteral | FloatLiteral | CharLiteral | BoolLiteral;
 
 /**
  * Recognizes a bare literal token (string/int/float/char/bool) at `pos`.

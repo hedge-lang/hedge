@@ -272,22 +272,14 @@ export interface LiteralPattern extends AstNode {
   /** `true` for a leading `-` (numeric literals only - see `parsePattern`). */
   readonly negative: boolean;
   readonly literal:
-    | StringLiteral
-    | IntLiteral
-    | FloatLiteral
-    | CharLiteral
-    | BoolLiteral;
+    StringLiteral | IntLiteral | FloatLiteral | CharLiteral | BoolLiteral;
 }
 
 /** A pattern-literal bound of a `RangePattern` (`1..=5`, `-5..=-1`). */
 export interface RangePatternBound {
   readonly negative: boolean;
   readonly literal:
-    | StringLiteral
-    | IntLiteral
-    | FloatLiteral
-    | CharLiteral
-    | BoolLiteral;
+    StringLiteral | IntLiteral | FloatLiteral | CharLiteral | BoolLiteral;
 }
 
 export interface RangePattern extends AstNode {
