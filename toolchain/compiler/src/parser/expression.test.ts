@@ -2510,6 +2510,79 @@ describe("Slice 3 pattern kinds - slice patterns", (): void => {
   });
 });
 
+describe("Slice 3 pattern kinds - feature interactions", (): void => {
+  it("parses a guard combined with a tuple-struct pattern (`Some(x) if x > 0 => x`)", (): void => {
+    const ast = parseProgram("match x { Some(x) if x > 0 => x }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "TupleStructPattern",
+                path: { segments: ["Some"] },
+              },
+              guard: some({ kind: "BinaryExpression", operator: "Gt" }),
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a struct pattern in an if-let condition (`if let Point { x, y } = p { }`)", (): void => {
+    const ast = parseProgram("if let Point { x, y } = p { }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "IfExpression",
+          condition: {
+            kind: "LetExpression",
+            pattern: {
+              kind: "StructPattern",
+              path: { segments: ["Point"] },
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses a slice pattern in an if-let condition (`if let [first, ..] = xs { }`)", (): void => {
+    const ast = parseProgram("if let [first, ..] = xs { }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "IfExpression",
+          condition: {
+            kind: "LetExpression",
+            pattern: {
+              kind: "SlicePattern",
+              elements: [
+                { kind: "BindingPattern", name: { text: "first" } },
+                { kind: "RestPattern", name: none() },
+              ],
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("produces exactly one diagnostic for an unclosed struct pattern, not a cascade (`match p { Point { x, y => a }`)", (): void => {
+    const result = parse(tokenize("match p { Point { x, y => a }").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("produces exactly one diagnostic for an unclosed slice pattern, not a cascade (`match x { [a, b, .. => a }`)", (): void => {
+    const result = parse(tokenize("match x { [a, b, .. => a }").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics).toHaveLength(1);
+  });
+});
+
 describe("if let expressions", (): void => {
   it("parses an if-let with no else into a LetExpression condition (`if let y = expr { }`)", (): void => {
     const ast = parseProgram("if let y = expr { }");
