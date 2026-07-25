@@ -2347,6 +2347,30 @@ describe("core patterns", (): void => {
     expect(result.program).toEqual(none());
   });
 
+  it("parses a struct pattern with a multi-segment path (`Message::Move { x, y }`)", (): void => {
+    const ast = parseProgram("match m { Message::Move { x, y } => x }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "StructPattern",
+                path: { segments: ["Message", "Move"] },
+                fields: [
+                  { name: { text: "x" }, pattern: none() },
+                  { name: { text: "y" }, pattern: none() },
+                ],
+                hasRest: false,
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("gives the MUT_MESSAGE for fn f(mut: i32) {} (mut used as a param name)", (): void => {
     const result = parse(tokenize("fn f(mut: i32) {}").tokens);
     expect(result.program).toEqual(none());

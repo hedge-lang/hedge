@@ -319,9 +319,12 @@ export interface FieldPattern extends AstNode {
 }
 
 /**
- * `Point { x, y }`, `Point { x: a, .. }`. `path` is always a single-segment
- * `Path` today (no module resolution exists yet - Slice 7) but the field is
- * a full `Path` for forward compatibility with a later qualified form.
+ * `Point { x, y }`, `Point { x: a, .. }`. `path` can be multi-segment
+ * (`Message::Move { x, y }`) since the parser routes any path immediately
+ * followed by `{` here regardless of segment count - not just single-segment
+ * struct names - even though there's no real module resolution yet
+ * (Slice 7) to make a qualified path meaningfully different from an
+ * unqualified one.
  */
 export interface StructPattern extends AstNode {
   readonly kind: "StructPattern";
