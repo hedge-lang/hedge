@@ -2262,6 +2262,72 @@ describe("core patterns", (): void => {
     );
     expect(result.diagnostics[0]?.span).toEqual(some(mutToken.span));
   });
+
+  it("parses `&y` as a shared-borrow binding pattern", (): void => {
+    const ast = parseProgram("match x { &y => y }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "BindingPattern",
+                byRef: true,
+                mutable: false,
+                name: { text: "y" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses `&mut y` as a mutable-borrow binding pattern", (): void => {
+    const ast = parseProgram("match x { &mut y => y }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "BindingPattern",
+                byRef: true,
+                mutable: true,
+                name: { text: "y" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("does not set byRef on a plain binding pattern", (): void => {
+    const ast = parseProgram("match x { y => y }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [{ pattern: { kind: "BindingPattern", byRef: false } }],
+        },
+      ],
+    });
+  });
+
+  it("rejects `&_`, since a byRef sigil cannot apply to the wildcard pattern", (): void => {
+    const result = parse(tokenize("match x { &_ => 1 }").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("wildcard");
+  });
+
+  it("rejects `&mut _`, since a byRef sigil cannot apply to the wildcard pattern", (): void => {
+    const result = parse(tokenize("match x { &mut _ => 1 }").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toContain("wildcard");
+  });
 });
 
 describe("trailing expression in block", (): void => {

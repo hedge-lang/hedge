@@ -165,21 +165,25 @@ function parsePatternNoAlt(
     });
   }
 
-  const maybeMut = tokens[pos];
+  const byRef = tokens[pos]?.kind === "amp";
+  const afterAmp = byRef ? pos + 1 : pos;
+
+  const maybeMut = tokens[afterAmp];
   const isMut =
     maybeMut !== undefined &&
     maybeMut.kind === "keyword" &&
     maybeMut.text === "mut";
-  const afterMut = isMut ? pos + 1 : pos;
+  const afterMut = isMut ? afterAmp + 1 : afterAmp;
 
   const identResult = parseIdentifier(tokens, afterMut);
   if (isErr(identResult)) {
     if (isMut) {
-      // Re-anchor at `mut` itself so `let mut = 1;` still gets
-      // parseIdentifier's friendly MUT_MESSAGE (it only special-cases `mut`
-      // when `pos` points directly at that token) rather than a generic
-      // "expected identifier" error pointing past it.
-      const retry = parseIdentifier(tokens, pos);
+      // Re-anchor at `mut` itself (afterAmp, since `&mut` may precede it) so
+      // `let mut = 1;`/`let &mut = 1;` still get parseIdentifier's friendly
+      // MUT_MESSAGE (it only special-cases `mut` when `pos` points directly
+      // at that token) rather than a generic "expected identifier" error
+      // pointing past it.
+      const retry = parseIdentifier(tokens, afterAmp);
       assert(
         isErr(retry),
         "parseIdentifier failed on a token that was already parsed successfully",
@@ -191,10 +195,12 @@ function parsePatternNoAlt(
   const { node: ident, next } = identResult.value;
 
   if (ident.text === "_") {
-    if (isMut) {
+    if (isMut || byRef) {
       return err({
         severity: "error",
-        message: "`mut` cannot be applied to the wildcard pattern `_`",
+        message: byRef
+          ? "`&`/`&mut` cannot be applied to the wildcard pattern `_`"
+          : "`mut` cannot be applied to the wildcard pattern `_`",
         span: spanAt(tokens, pos),
         code: none(),
         relatedSpans: [],
@@ -219,8 +225,9 @@ function parsePatternNoAlt(
   return ok({
     node: {
       kind: "BindingPattern",
-      tokenId: isMut ? pos : ident.tokenId,
+      tokenId: isMut || byRef ? pos : ident.tokenId,
       mutable: isMut,
+      byRef,
       name: ident,
     },
     next,

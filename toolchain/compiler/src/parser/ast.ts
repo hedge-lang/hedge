@@ -245,6 +245,8 @@ export type Pattern =
 export interface BindingPattern extends AstNode {
   readonly kind: "BindingPattern";
   readonly mutable: boolean;
+  /** `true` for a leading `&`/`&mut` sigil (bind-by-borrow). */
+  readonly byRef: boolean;
   readonly name: Identifier;
 }
 
