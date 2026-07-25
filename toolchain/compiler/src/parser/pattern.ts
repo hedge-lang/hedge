@@ -12,6 +12,10 @@ import {
   tryParseLiteral,
   type PR,
 } from "./parse-utils.js";
+import { parsePathSegments } from "./path.js";
+
+const sigilOnPathMessage =
+  "`mut`/`&`/`&mut` sigils cannot be applied to a struct, tuple-struct, or path pattern";
 
 /**
  * Tries to parse a pattern-literal bound (an optional leading `-` on a
@@ -199,6 +203,25 @@ function parsePatternNoAlt(
   }
   const { node: ident, next } = identResult.value;
 
+  // A multi-segment path (`A::B`) is only reachable without a byRef/mut
+  // sigil - `&A::B`/`mut A::B` isn't valid pattern grammar, since a sigil
+  // applies only to a bare BindingPat identifier, never a Path.
+  if (kindAt(tokens, next) === "path_sep") {
+    if (isMut || byRef) {
+      return err({
+        severity: "error",
+        message: sigilOnPathMessage,
+        span: spanAt(tokens, pos),
+        code: none(),
+        relatedSpans: [],
+      });
+    }
+    const pathResult = parsePathSegments(tokens, afterMut);
+    if (isErr(pathResult)) return pathResult;
+    const { node: path, next: afterPath } = pathResult.value;
+    return parsePathRootedPatternTail(tokens, pos, path, afterPath);
+  }
+
   if (ident.text === "_") {
     if (isMut || byRef) {
       return err({
@@ -217,17 +240,17 @@ function parsePatternNoAlt(
     });
   }
 
-  if (kindAt(tokens, next) === "lbrace") {
+  if (kindAt(tokens, next) === "lbrace" || kindAt(tokens, next) === "lparen") {
     if (isMut || byRef) {
       return err({
         severity: "error",
-        message: "`mut`/`&`/`&mut` sigils cannot be applied to a struct pattern",
+        message: sigilOnPathMessage,
         span: spanAt(tokens, pos),
         code: none(),
         relatedSpans: [],
       });
     }
-    return parseStructPattern(
+    return parsePathRootedPatternTail(
       tokens,
       pos,
       { absolute: false, segments: [ident.text] },
@@ -266,26 +289,28 @@ function parsePatternNoAlt(
   });
 }
 
+interface ParsedPatternList {
+  readonly elements: readonly Pattern[];
+  readonly next: number;
+}
+
 /**
- * Parses `"(" ( Pattern ("," Pattern)* ","? )? ")"`. Zero elements is the
- * unit pattern `()`; one element (with or without a trailing comma) is a
- * genuine one-element tuple pattern - there is no separate parenthesized-
- * grouping production in the grammar to disambiguate `(a)` from `(a,)`, so
- * both parse to the same one-element `TuplePattern`. Elements are the full
- * alternation-capable `Pattern` (via `parsePattern`, not `parsePatternNoAlt`),
- * so an or-pattern nests cleanly inside a tuple element.
+ * Parses `"(" ( Pattern ("," Pattern)* ","? )? ")"`, given `afterParen`
+ * points just past the already-confirmed `(`. Shared by `TuplePattern` and
+ * `TupleStructPattern`, whose element-list grammar is identical - they
+ * differ only in whether a `Path` precedes the `(` and in the resulting
+ * node's `kind`. Elements are the full alternation-capable `Pattern` (via
+ * `parsePattern`, not `parsePatternNoAlt`), so an or-pattern nests cleanly
+ * inside an element.
  */
-function parseTuplePattern(
+function parseParenthesizedPatternList(
   tokens: readonly Token[],
-  pos: number,
-): PR<Parsed<Pattern>> {
-  let cursor = pos + 1; // skip `(`
+  afterParen: number,
+): PR<ParsedPatternList> {
+  let cursor = afterParen;
 
   if (kindAt(tokens, cursor) === "rparen") {
-    return ok({
-      node: { kind: "TuplePattern", tokenId: pos, elements: [] },
-      next: cursor + 1,
-    });
+    return ok({ elements: [], next: cursor + 1 });
   }
 
   const elements: Pattern[] = [];
@@ -305,9 +330,78 @@ function parseTuplePattern(
 
   const closeResult = expect(tokens, cursor, "rparen");
   if (isErr(closeResult)) return closeResult;
+  return ok({ elements, next: closeResult.value });
+}
+
+/**
+ * Parses `"(" ( Pattern ("," Pattern)* ","? )? ")"` as a `TuplePattern`.
+ * Zero elements is the unit pattern `()`; one element (with or without a
+ * trailing comma) is a genuine one-element tuple pattern - there is no
+ * separate parenthesized-grouping production in the grammar to
+ * disambiguate `(a)` from `(a,)`, so both parse to the same one-element
+ * `TuplePattern`.
+ */
+function parseTuplePattern(
+  tokens: readonly Token[],
+  pos: number,
+): PR<Parsed<Pattern>> {
+  const listResult = parseParenthesizedPatternList(tokens, pos + 1);
+  if (isErr(listResult)) return listResult;
   return ok({
-    node: { kind: "TuplePattern", tokenId: pos, elements },
-    next: closeResult.value,
+    node: {
+      kind: "TuplePattern",
+      tokenId: pos,
+      elements: listResult.value.elements,
+    },
+    next: listResult.value.next,
+  });
+}
+
+/**
+ * Parses `Path "(" ( Pattern ("," Pattern)* ","? )? ")"` as a
+ * `TupleStructPattern`, given the caller has already parsed `path` and
+ * confirmed the `(` at `parenPos`.
+ */
+function parseTupleStructPattern(
+  tokens: readonly Token[],
+  startPos: number,
+  path: Path,
+  parenPos: number,
+): PR<Parsed<Pattern>> {
+  const listResult = parseParenthesizedPatternList(tokens, parenPos + 1);
+  if (isErr(listResult)) return listResult;
+  return ok({
+    node: {
+      kind: "TupleStructPattern",
+      tokenId: startPos,
+      path,
+      elements: listResult.value.elements,
+    },
+    next: listResult.value.next,
+  });
+}
+
+/**
+ * Given an already-parsed `Path` at `afterPath`, dispatches to
+ * `StructPattern` (`{` follows), `TupleStructPattern` (`(` follows), or a
+ * bare `PathPattern` (neither follows - a unit enum variant like
+ * `Message::Quit`).
+ */
+function parsePathRootedPatternTail(
+  tokens: readonly Token[],
+  startPos: number,
+  path: Path,
+  afterPath: number,
+): PR<Parsed<Pattern>> {
+  if (kindAt(tokens, afterPath) === "lbrace") {
+    return parseStructPattern(tokens, startPos, path, afterPath);
+  }
+  if (kindAt(tokens, afterPath) === "lparen") {
+    return parseTupleStructPattern(tokens, startPos, path, afterPath);
+  }
+  return ok({
+    node: { kind: "PathPattern", tokenId: startPos, path },
+    next: afterPath,
   });
 }
 

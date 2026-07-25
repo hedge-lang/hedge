@@ -242,7 +242,9 @@ export type Pattern =
   | RangePattern
   | OrPattern
   | TuplePattern
-  | StructPattern;
+  | StructPattern
+  | TupleStructPattern
+  | PathPattern;
 
 export interface BindingPattern extends AstNode {
   readonly kind: "BindingPattern";
@@ -336,6 +338,31 @@ export interface StructPattern extends AstNode {
   readonly hasRest: boolean;
 }
 
+/**
+ * `Point(a, b)`, `Message::Move(a, b)` - `path` is single-segment for a
+ * plain tuple struct or multi-segment for an enum variant.
+ */
+export interface TupleStructPattern extends AstNode {
+  readonly kind: "TupleStructPattern";
+  readonly path: Path;
+  readonly elements: readonly Pattern[];
+}
+
+/**
+ * A bare constructor path used as a pattern with no call/brace suffix -
+ * e.g. a unit enum variant (`Message::Quit`). Only reachable for a
+ * genuinely unambiguous path: multi-segment, or immediately followed by
+ * `(`/`{` (which route to `TupleStructPattern`/`StructPattern` instead). A
+ * bare single-segment identifier always parses as `BindingPattern` -
+ * Hedge has no name resolution at parse time to tell a fresh binding
+ * apart from a reference to a same-named constant or unit variant (see
+ * spec 0016).
+ */
+export interface PathPattern extends AstNode {
+  readonly kind: "PathPattern";
+  readonly path: Path;
+}
+
 export function patternMutable(pattern: Pattern): boolean {
   switch (pattern.kind) {
     case "BindingPattern":
@@ -346,6 +373,8 @@ export function patternMutable(pattern: Pattern): boolean {
     case "OrPattern":
     case "TuplePattern":
     case "StructPattern":
+    case "TupleStructPattern":
+    case "PathPattern":
       return false;
     default:
       return assertNever(
@@ -365,6 +394,8 @@ export function patternBindingName(pattern: Pattern): Option<string> {
     case "OrPattern":
     case "TuplePattern":
     case "StructPattern":
+    case "TupleStructPattern":
+    case "PathPattern":
       return none();
     default:
       return assertNever(

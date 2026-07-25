@@ -4436,19 +4436,39 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     ]);
   });
 
-  it("fails on the unsupported tuple-struct pattern, not on the `while` itself (`while let Some(x) = opt {}`)", (): void => {
-    // `while let` itself is real syntax; `Some(x)` is a tuple-struct/
-    // enum-variant pattern, which the parser doesn't support yet - only
-    // binding and wildcard patterns are implemented. `Some` parses as a
-    // plain BindingPattern name, so the failure is the unexpected `(`
-    // where `=` was expected, not a `while`-guardrail diagnostic.
+  it("parses a tuple-struct pattern in a while-let condition (`while let Some(x) = opt {}`)", (): void => {
+    // `while let` is real syntax and, as of Slice 3, so is `Some(x)` as a
+    // tuple-struct/enum-variant pattern - this previously failed on the
+    // unexpected `(` since only binding/wildcard patterns existed yet.
     const { tokens } = tokenize(
       "fn f() { while let Some(x) = opt {} } fn g() {}",
     );
     const { program, diagnostics } = parse(tokens);
-    assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
-    expect(diagnostics[0].message).not.toContain("while");
-    expect(isSome(program)).toBe(false);
+    expect(diagnostics).toHaveLength(0);
+    assert(isSome(program), "Expected a program to come back");
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        body: {
+          statements: [],
+          // Nothing follows the while-let inside `fn f() { ... }`, so it
+          // lands as the block's trailing expression, not a statement -
+          // same convention as a mid-block match with nothing after it.
+          trailingExpression: some({
+            kind: "WhileExpression",
+            condition: {
+              kind: "LetExpression",
+              pattern: {
+                kind: "TupleStructPattern",
+                path: { segments: ["Some"] },
+                elements: [{ kind: "BindingPattern", name: { text: "x" } }],
+              },
+            },
+          }),
+        },
+      },
+      { kind: "Function", name: { text: "g" } },
+    ]);
   });
 
   it("rejects a loop in trailing (no-semicolon) block position the same as mid-block", (): void => {

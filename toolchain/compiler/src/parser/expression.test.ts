@@ -2212,6 +2212,131 @@ describe("Slice 3 pattern kinds - tuple patterns", (): void => {
   });
 });
 
+describe("Slice 3 pattern kinds - tuple-struct and path patterns", (): void => {
+  it("parses `Some(x)` as a single-segment tuple-struct pattern", (): void => {
+    const ast = parseProgram("match x { Some(x) => x }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "TupleStructPattern",
+                path: { segments: ["Some"] },
+                elements: [{ kind: "BindingPattern", name: { text: "x" } }],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses `Message::Move(a, b)` as a multi-segment tuple-struct pattern", (): void => {
+    const ast = parseProgram("match x { Message::Move(a, b) => a }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "TupleStructPattern",
+                path: { segments: ["Message", "Move"] },
+                elements: [
+                  { kind: "BindingPattern", name: { text: "a" } },
+                  { kind: "BindingPattern", name: { text: "b" } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a nested tuple-struct pattern (`Some(Some(x))`)", (): void => {
+    const ast = parseProgram("match x { Some(Some(x)) => x }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "TupleStructPattern",
+                path: { segments: ["Some"] },
+                elements: [
+                  {
+                    kind: "TupleStructPattern",
+                    path: { segments: ["Some"] },
+                    elements: [{ kind: "BindingPattern", name: { text: "x" } }],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses `Message::Quit` (no call/braces) as a bare PathPattern", (): void => {
+    const ast = parseProgram("match x { Message::Quit => 1 }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "PathPattern",
+                path: { segments: ["Message", "Quit"] },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("does not promote a bare single-segment identifier to a PathPattern even if it looks like a constant (`MY_CONST`)", (): void => {
+    // Hedge has no name resolution at parse time, so a bare single-segment
+    // identifier always parses as a fresh BindingPattern - matching or
+    // shadowing a same-named constant is a semantic-analysis concern, not
+    // this parser's job (see spec 0016 and the grill-me record for #45).
+    const ast = parseProgram("match x { MY_CONST => 1 }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: { kind: "BindingPattern", name: { text: "MY_CONST" } },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("rejects a byRef sigil applied to a tuple-struct pattern (`&Some(x)`)", (): void => {
+    const result = parse(tokenize("match x { &Some(x) => x }").tokens);
+    expect(result.program).toEqual(none());
+  });
+
+  it("rejects a mut sigil applied to a tuple-struct pattern (`mut Some(x)`)", (): void => {
+    const result = parse(tokenize("match x { mut Some(x) => x }").tokens);
+    expect(result.program).toEqual(none());
+  });
+
+  it("produces a parse error for an unclosed tuple-struct pattern (`match x { Some(x => x }`)", (): void => {
+    const result = parse(tokenize("match x { Some(x => x }").tokens);
+    expect(result.program).toEqual(none());
+  });
+});
+
 describe("if let expressions", (): void => {
   it("parses an if-let with no else into a LetExpression condition (`if let y = expr { }`)", (): void => {
     const ast = parseProgram("if let y = expr { }");
