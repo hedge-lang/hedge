@@ -134,6 +134,13 @@ describe("semantic analysis", (): void => {
     });
   });
 
+  describe("enum declarations (semantically analyzed)", () => {
+    it("analyzes a unit-variant enum declaration cleanly", () => {
+      const result = diagnose("enum Message { Quit } fn main() {}");
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
   describe("match expressions (parsed, not yet semantically analyzed)", () => {
     it("rejects a match expression with a clean 'not yet supported' diagnostic", () => {
       const result = diagnose("fn main() { match 1 { x => x }; }");
