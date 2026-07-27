@@ -108,35 +108,66 @@ describe("semantic analysis", (): void => {
     expect(result.diagnostics).toEqual([]);
   });
 
-  describe("enum declarations (parsed, not yet semantically analyzed)", () => {
-    it("top-level enum declaration is rejected with a clean 'not yet supported' diagnostic", () => {
-      const result = diagnose("enum Message { Quit } fn main() {}");
-      expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain(
-        "not yet supported by semantic analysis",
-      );
-    });
-
-    it("local (in-block) enum declaration gets the same 'not yet supported' diagnostic via analyzeStatement", () => {
-      const result = diagnose("fn main() { enum Local { A, B } }");
-      expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
-        "not yet supported by semantic analysis",
-      );
-    });
-
-    it("does not crash the analyzer for unit, tuple, or struct variant shapes", () => {
-      const result = diagnose(
-        `enum Message { Quit, Move(i32, i32), Write { text: str } } fn main() {}`,
-      );
-      expect(result.diagnostics).toHaveLength(1);
-    });
-  });
-
   describe("enum declarations (semantically analyzed)", () => {
     it("analyzes a unit-variant enum declaration cleanly", () => {
       const result = diagnose("enum Message { Quit } fn main() {}");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("analyzes a local (in-block) unit-variant enum declaration cleanly via analyzeStatement", () => {
+      const result = diagnose("fn main() { enum Local { A, B } }");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("analyzes a tuple-variant enum declaration cleanly", () => {
+      const result = diagnose("enum Message { Move(i32, i32) } fn main() {}");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("analyzes an enum mixing unit, tuple, and struct variants cleanly", () => {
+      const result = diagnose(
+        `enum Message { Quit, Move(i32, i32), Write { text: str } } fn main() {}`,
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects an unsupported field type inside a tuple variant", () => {
+      const result = diagnose(
+        "enum Message { Move(i32, UnknownType) } fn main() {}",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("Slice 1");
+    });
+
+    it("rejects an unsupported field type inside a struct variant", () => {
+      const result = diagnose(
+        "enum Message { Write { text: UnknownType } } fn main() {}",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("Slice 1");
+    });
+
+    it("accepts an enum type as a function parameter type", () => {
+      const result = diagnose(`
+        enum Message { Quit }
+        fn take(m: Message) {}
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("accepts an enum type as a function return type", () => {
+      const result = diagnose(`
+        enum Message { Quit }
+        fn identity(m: Message) -> Message { m }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a function parameter typed as an enum declared later in the file", () => {
+      const result = diagnose(`
+        fn take(m: Message) {}
+        enum Message { Quit }
+      `);
       expect(result.diagnostics).toEqual([]);
     });
   });
