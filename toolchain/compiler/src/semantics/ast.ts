@@ -30,7 +30,13 @@ export interface Attribute {
 
 /** A top-level entry. Slice 1 is lenient and also accepts bare statements. */
 export type Item =
-  FunctionDecl | StructDecl | ConstDecl | StaticDecl | Statement | Expression;
+  | FunctionDecl
+  | StructDecl
+  | EnumDecl
+  | ConstDecl
+  | StaticDecl
+  | Statement
+  | Expression;
 
 /**
  * A `const`'s fully compile-time-evaluated value. Unlike `Expression`, this
@@ -50,6 +56,7 @@ export type Statement =
   | ExpressionStatement
   | FunctionDecl
   | StructDecl
+  | EnumDecl
   | ConstDecl
   | StaticDecl;
 
@@ -108,6 +115,7 @@ export type Expression =
   | RangeExpression
   | StructExpression
   | IfExpression
+  | MatchExpression
   | Block;
 
 interface Visibility {
@@ -143,6 +151,28 @@ export interface StructDecl extends DecoratedAstNode {
   readonly attributes: readonly Attribute[];
 }
 
+export interface EnumDecl extends DecoratedAstNode {
+  readonly kind: "Enum";
+  readonly visibility: Option<Visibility>;
+  readonly name: Identifier;
+  readonly generics: readonly never[];
+  readonly variants: readonly Variant[];
+  readonly attributes: readonly Attribute[];
+}
+
+/**
+ * `body` is `none()` for a bare/unit variant, mirroring `Parser.Variant`'s own
+ * doc comment - no `UnitBody` member is needed, since the grammar's
+ * optionality already distinguishes a bare variant from an explicit empty
+ * body. No `visibility` field: a variant always shares its enum's visibility.
+ */
+export interface Variant extends DecoratedAstNode {
+  readonly kind: "Variant";
+  readonly attributes: readonly Attribute[];
+  readonly name: Identifier;
+  readonly body: Option<NamedFieldsBody | TupleFieldsBody>;
+}
+
 /**
  * `const NAME: Type = <folded value>;`. Only ever produced for a top-level
  * declaration - see `parser/ast.ts`'s `ConstDecl` doc comment.
@@ -175,7 +205,7 @@ export interface NamedFieldsBody {
   readonly fields: readonly StructField[];
 }
 
-interface TupleFieldsBody {
+export interface TupleFieldsBody {
   readonly kind: "TupleFields";
   readonly fields: readonly TupleField[];
 }
@@ -217,6 +247,127 @@ export interface LetStatement extends DecoratedAstNode {
 export interface BindingPattern {
   readonly kind: "BindingPattern";
   readonly name: Identifier;
+}
+
+export interface MatchExpression extends DecoratedAstNode {
+  readonly kind: "MatchExpression";
+  readonly scrutinee: Expression;
+  readonly arms: readonly MatchArm[];
+}
+
+export interface MatchArm extends AstNode {
+  readonly kind: "MatchArm";
+  readonly pattern: Pattern;
+  readonly guard: Option<Expression>;
+  readonly body: Expression;
+}
+
+/**
+ * A match arm's own pattern - distinct from the `let`/`Param`-only
+ * {@link BindingPattern} above, which stays reduced to just its bound name
+ * since only trivial patterns are supported in that position (see
+ * `analyzer.ts`'s `bindComplexPatternGuardrail`). Mirrors `Parser.Pattern`
+ * structurally; the one member that would collide with the existing
+ * `BindingPattern` above is named {@link MatchBindingPattern} instead, with
+ * its `kind` literal left as `"BindingPattern"` so it still lines up with
+ * `Parser.BindingPattern` for the usual `{ ...pattern, type }` spread.
+ */
+export type Pattern =
+  | MatchBindingPattern
+  | WildcardPattern
+  | LiteralPattern
+  | RangePattern
+  | OrPattern
+  | TuplePattern
+  | StructPattern
+  | TupleStructPattern
+  | PathPattern
+  | SlicePattern;
+
+export interface MatchBindingPattern extends DecoratedAstNode {
+  readonly kind: "BindingPattern";
+  readonly mutable: boolean;
+  readonly byRef: boolean;
+  readonly name: Identifier;
+  readonly subpattern: Option<Pattern>;
+}
+
+export interface WildcardPattern extends DecoratedAstNode {
+  readonly kind: "WildcardPattern";
+}
+
+export interface LiteralPattern extends DecoratedAstNode {
+  readonly kind: "LiteralPattern";
+  readonly negative: boolean;
+  readonly literal:
+    StringLiteral | IntLiteral | FloatLiteral | CharLiteral | BoolLiteral;
+}
+
+export interface RangePatternBound {
+  readonly negative: boolean;
+  readonly literal:
+    StringLiteral | IntLiteral | FloatLiteral | CharLiteral | BoolLiteral;
+}
+
+export interface RangePattern extends DecoratedAstNode {
+  readonly kind: "RangePattern";
+  readonly start: RangePatternBound;
+  readonly end: RangePatternBound;
+}
+
+export interface OrPattern extends DecoratedAstNode {
+  readonly kind: "OrPattern";
+  readonly alternatives: readonly Pattern[];
+}
+
+/** Not exported: `Pattern` never actually constructs this kind today - a
+ * `TuplePattern` in match position always falls through `analyzer.ts`'s
+ * `analyzePatternGuardrail` (mirrors `let`/`Param`'s own scope boundary).
+ * TODO (Hedge-47): add the `export` back once this is promoted to real
+ * match-position semantics. */
+interface TuplePattern extends DecoratedAstNode {
+  readonly kind: "TuplePattern";
+  readonly elements: readonly Pattern[];
+}
+
+export interface FieldPattern extends AstNode {
+  readonly kind: "FieldPattern";
+  readonly name: Identifier;
+  readonly pattern: Option<Pattern>;
+}
+
+export interface StructPattern extends DecoratedAstNode {
+  readonly kind: "StructPattern";
+  readonly path: Path;
+  readonly fields: readonly FieldPattern[];
+  readonly hasRest: boolean;
+}
+
+export interface TupleStructPattern extends DecoratedAstNode {
+  readonly kind: "TupleStructPattern";
+  readonly path: Path;
+  readonly elements: readonly Pattern[];
+}
+
+export interface PathPattern extends DecoratedAstNode {
+  readonly kind: "PathPattern";
+  readonly path: Path;
+}
+
+/** Not exported: same reasoning as `TuplePattern` above (TODO (Hedge-47)) -
+ * never actually constructed, since `SlicePattern` (the only place this
+ * appears) is itself never constructed either. */
+interface RestPattern extends AstNode {
+  readonly kind: "RestPattern";
+  readonly byRef: boolean;
+  readonly mutable: boolean;
+  readonly name: Option<Identifier>;
+}
+
+/** Not exported: same reasoning as `TuplePattern` above (TODO (Hedge-47)). */
+interface SlicePattern extends DecoratedAstNode {
+  readonly kind: "SlicePattern";
+  readonly elements: readonly (Pattern | RestPattern)[];
 }
 
 export interface ExpressionStatement extends DecoratedAstNode {
@@ -270,6 +421,7 @@ export type Type =
   | UnitType
   | PrimitiveType
   | StructType
+  | EnumType
   | FunctionType
   | ReferenceType
   | ArrayType;
@@ -389,6 +541,11 @@ interface PrimitiveStringType {
 
 interface StructType {
   readonly kind: "StructType";
+  readonly name: string;
+}
+
+interface EnumType {
+  readonly kind: "EnumType";
   readonly name: string;
 }
 

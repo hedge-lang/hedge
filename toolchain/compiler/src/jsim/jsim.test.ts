@@ -561,6 +561,14 @@ describe("toJsim", () => {
     });
   });
 
+  describe("match expression lowering", () => {
+    it("throws lowering a semantically clean match expression, since codegen is a following ticket", () => {
+      expect(() =>
+        jsimSource("fn f(x: i32) -> i32 { match x { _ => 0 } }"),
+      ).toThrow("JSIM codegen for match expressions is not yet implemented");
+    });
+  });
+
   describe("function trailing-expression lowering (tail-position return)", () => {
     it("plain-expression trailing return lowers to a single ReturnStatement, no IIFE", () => {
       const program = jsimSource("fn f(x: i32) -> i32 { x * 2 }");

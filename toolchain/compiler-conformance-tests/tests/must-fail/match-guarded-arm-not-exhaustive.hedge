@@ -1,0 +1,11 @@
+enum Message {
+  Quit,
+  Move,
+}
+
+fn describe(m: Message, cond: bool) -> i32 {
+  match m {
+    Message::Quit => 0,
+    Message::Move if cond => 1,
+  }
+}

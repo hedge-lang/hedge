@@ -89,6 +89,26 @@ describe("move-check", (): void => {
     expect(diagnostics).toEqual([]);
   });
 
+  it("a move inside a match arm's body invalidates a later use of the moved value, naming it", (): void => {
+    const { diagnostics } = check(
+      `${BOXED}
+      fn main() {
+        let x = Boxed { value: 1 };
+        match true {
+          _ => {
+            let y = x; // value is moved here
+            print(y.value);
+          }
+        }
+        print(x.value); // using moved value here is an error
+      }`,
+    );
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("moved");
+    expect(diagnostics[0].message).toContain("x");
+  });
+
   it("move in one branch invalidates use after merge, naming the move", (): void => {
     const { diagnostics } = check(
       `${BOXED}

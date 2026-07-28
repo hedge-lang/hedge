@@ -579,6 +579,9 @@ function parseItem(
   if (item.kind === "LetStatement" || item.kind === "ExpressionStatement")
     return parseStatement(ctx, item);
   if (item.kind === "Struct") return parseStruct(item);
+  // TODO (Hedge-48): enum -> tagged-object lowering isn't implemented yet -
+  // a bare declaration erases to nothing, same as a non-pub const.
+  if (item.kind === "Enum") return [];
   // Every reference to a const already lowered to a literal at analysis
   // time (see `analyzer.ts`'s `analyzeConstReference`), so a non-pub
   // const's own declaration has no external consumer and erases entirely
@@ -840,6 +843,10 @@ function parseStatement(
     case "Struct":
       // Struct declarations are type-only — no JS runtime representation.
       return { kind: "BlockStatement", body: [] };
+    case "Enum":
+      // TODO (Hedge-48): same erasure as Struct above - enum-to-tagged-object
+      // codegen isn't implemented yet.
+      return { kind: "BlockStatement", body: [] };
     case "Const":
       // Same erasure as a top-level const (see `parseItem`) - every
       // reference already lowered to a literal at analysis time.
@@ -975,6 +982,14 @@ function parseExpression(
       return jsimStructExpression(ctx, expression);
     case "IfExpression":
       return jsimIfExpression(ctx, expression);
+    case "MatchExpression":
+      // TODO (Hedge-48): real match->switch codegen isn't implemented yet -
+      // a match that passes semantic analysis cleanly still can't be
+      // lowered, so this throws rather than silently erasing the arm
+      // values it would otherwise discard.
+      throw new Error(
+        "JSIM codegen for match expressions is not yet implemented",
+      );
     case "Block":
       return jsimBlockExpression(ctx, expression);
 

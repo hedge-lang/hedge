@@ -739,6 +739,9 @@ function walkExpression(
     case "IfExpression":
       walkIf(ctx, expression, state, scopeStack);
       return;
+    case "MatchExpression":
+      walkMatchExpression(ctx, expression, state, scopeStack);
+      return;
     case "Block":
       walkScope(ctx, expression, state, scopeStack, true);
       return;
@@ -753,6 +756,112 @@ function walkExpression(
         expression,
         `Unexpected expression: ${JSON.stringify(expression)}`,
       );
+  }
+}
+
+interface PatternDeclaration {
+  readonly identifier: Semantics.Identifier;
+  readonly mutable: boolean;
+}
+
+/**
+ * Every name a match-arm pattern binds, deepest-first, mirroring
+ * `control-flow-graph.ts`'s own `declarationOf` but generalized to the
+ * richer `Semantics.Pattern` union (a `let`/`Param`'s `BindingPattern` binds
+ * at most one name, so that helper only ever needs one).
+ * TODO (Hedge-47): `TuplePattern`/`SlicePattern` are never constructed by
+ * `analyzer.ts`'s `analyzePattern` (always substituted as a
+ * `WildcardPattern` - see `analyzePatternGuardrail`), so those two cases
+ * are unreached today.
+ */
+// eslint-disable-next-line complexity -- Routing function over the full Pattern union
+function collectPatternDeclarations(
+  pattern: Semantics.Pattern,
+): PatternDeclaration[] {
+  switch (pattern.kind) {
+    case "WildcardPattern":
+    case "LiteralPattern":
+    case "RangePattern":
+    case "PathPattern":
+      return [];
+    case "BindingPattern": {
+      if (pattern.name.text === "_") return [];
+      const nested = isSome(pattern.subpattern)
+        ? collectPatternDeclarations(pattern.subpattern.value)
+        : [];
+      return [
+        { identifier: pattern.name, mutable: pattern.mutable },
+        ...nested,
+      ];
+    }
+    case "OrPattern":
+      return pattern.alternatives.flatMap((alt) =>
+        collectPatternDeclarations(alt),
+      );
+    case "TuplePattern":
+    case "TupleStructPattern":
+      return pattern.elements.flatMap((el) => collectPatternDeclarations(el));
+    case "StructPattern":
+      return pattern.fields.flatMap((field) =>
+        isSome(field.pattern)
+          ? collectPatternDeclarations(field.pattern.value)
+          : [{ identifier: field.name, mutable: false }],
+      );
+    case "SlicePattern":
+      return pattern.elements.flatMap((el) =>
+        el.kind === "RestPattern"
+          ? isSome(el.name)
+            ? [{ identifier: el.name.value, mutable: el.mutable }]
+            : []
+          : collectPatternDeclarations(el),
+      );
+    default:
+      return assertNever(
+        pattern,
+        `Unexpected pattern: ${JSON.stringify(pattern)}`,
+      );
+  }
+}
+
+/**
+ * Every binding a match arm's pattern introduces is seeded `Owned` (never
+ * `Uninitialized`), mirroring `walkFunction`'s own parameter seeding - a
+ * pattern only ever binds a name once its scrutinee has already been
+ * matched against it.
+ * TODO (Hedge-47): move-vs-borrow binding mode (per the scrutinee's own
+ * `match x`/`match &x`/`match &mut x` form, spec 0016) isn't tracked here -
+ * every binding is treated as an ordinary by-value read.
+ */
+function walkMatchExpression(
+  ctx: Ctx,
+  expression: Semantics.MatchExpression,
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  walkExpression(ctx, expression.scrutinee, state, scopeStack);
+  for (const arm of expression.arms) {
+    scopeStack.push(new Map());
+    const declarations: Declaration[] = [];
+    for (const { identifier, mutable } of collectPatternDeclarations(
+      arm.pattern,
+    )) {
+      registerBinding(state, scopeStack, identifier, true);
+      const declaration: Declaration = {
+        id: identifier.tokenId,
+        name: identifier.text,
+        type: identifier.type,
+        tokenId: identifier.tokenId,
+        mutable,
+      };
+      declarations.push(declaration);
+      ctx.declarationsById.set(declaration.id, declaration);
+    }
+    if (isSome(arm.guard)) {
+      walkExpression(ctx, arm.guard.value, state, scopeStack);
+    }
+    walkExpression(ctx, arm.body, state, scopeStack);
+    recordDrops(ctx, arm.tokenId, declarations, state);
+    scopeStack.pop();
   }
 }
 
@@ -910,6 +1019,7 @@ function walkStatement(
     }
     case "Function":
     case "Struct":
+    case "Enum":
     case "Const":
     case "Static":
       // Local item declarations don't use outer bindings in Slice 1 (mirrors
