@@ -1585,7 +1585,11 @@ function analyzePattern(
   }
 }
 
-function isIrrefutablePattern(pattern: Semantics.Pattern): boolean {
+// eslint-disable-next-line complexity -- Routing function over the full Pattern union
+function isIrrefutablePattern(
+  ctx: AnalysisContext,
+  pattern: Semantics.Pattern,
+): boolean {
   switch (pattern.kind) {
     case "WildcardPattern":
       return true;
@@ -1594,16 +1598,27 @@ function isIrrefutablePattern(pattern: Semantics.Pattern): boolean {
     case "LiteralPattern":
     case "RangePattern":
     case "TuplePattern":
-    case "StructPattern":
-    case "TupleStructPattern":
-    case "PathPattern":
     case "SlicePattern":
       return false;
+    case "StructPattern":
+    case "TupleStructPattern":
+    case "PathPattern": {
+      // A plain (non-enum) struct has exactly one shape, so any pattern
+      // that resolved against one is unconditionally irrefutable - there's
+      // no other variant for it to fail to match. An enum-variant pattern
+      // is irrefutable only when its enum has exactly one variant (that
+      // variant is the only possible value, mirroring Rust's own treatment
+      // of a single-variant enum); a multi-variant enum's pattern only ever
+      // names one variant, leaving the others uncovered.
+      const enumDecl = resolveEnumDecl(ctx, pattern.type);
+      if (isSome(enumDecl)) return enumDecl.value.variants.length === 1;
+      return isSome(resolveStructDecl(ctx, pattern.type));
+    }
     case "OrPattern":
       // Matching tries each alternative in turn and succeeds at the first
       // one that matches, so a single irrefutable alternative (e.g. `_` in
       // `_ | Message::Quit`) makes the whole or-pattern always match.
-      return pattern.alternatives.some((alt) => isIrrefutablePattern(alt));
+      return pattern.alternatives.some((alt) => isIrrefutablePattern(ctx, alt));
     default:
       return assertNever(
         pattern,
@@ -1725,7 +1740,7 @@ function checkUnreachableArms(
     }
 
     if (isNone(arm.guard)) {
-      if (isIrrefutablePattern(arm.pattern)) {
+      if (isIrrefutablePattern(ctx, arm.pattern)) {
         hasCatchAll = true;
       } else if (isSome(enumDecl)) {
         collectCoveredVariantNames(arm.pattern, coveredVariants);
@@ -1743,7 +1758,7 @@ function checkMatchExhaustiveness(
   scrutineeType: Semantics.Type,
 ): void {
   const hasCatchAll = arms.some(
-    (arm) => isNone(arm.guard) && isIrrefutablePattern(arm.pattern),
+    (arm) => isNone(arm.guard) && isIrrefutablePattern(ctx, arm.pattern),
   );
   if (hasCatchAll) return;
 
