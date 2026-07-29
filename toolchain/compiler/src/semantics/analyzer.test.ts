@@ -708,31 +708,31 @@ describe("semantic analysis", (): void => {
     });
   });
 
-  describe("Slice 3 pattern kinds in let position (parser accepts, semantic analysis guardrails)", () => {
-    it("rejects a bare literal pattern in a let statement with a clear diagnostic", () => {
+  describe("Slice 3 pattern kinds in let position (parser accepts, semantic analysis rejects)", () => {
+    it("rejects a bare literal pattern in a let statement as refutable", () => {
       const result = diagnose("fn main() { let 1 = 5; }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+      expect(result.diagnostics[0]?.message).toBe(
+        "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match",
       );
     });
 
-    it("rejects a range pattern in a let statement with a clear diagnostic", () => {
+    it("rejects a range pattern in a let statement as refutable", () => {
       const result = diagnose("fn main() { let 1..=5 = 3; }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+      expect(result.diagnostics[0]?.message).toBe(
+        "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match",
       );
     });
 
-    it("rejects an or-pattern in a let statement with a clear diagnostic", () => {
+    it("rejects an or-pattern of two refutable literals in a let statement as refutable", () => {
       const result = diagnose("fn main() { let 1 | 2 = 1; }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+      expect(result.diagnostics[0]?.message).toBe(
+        "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match",
       );
     });
 
@@ -796,6 +796,89 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics[0]?.severity).toBe("error");
       expect(result.diagnostics[0]?.message).toContain(
         "destructuring patterns are not yet supported in `let`/parameter position",
+      );
+    });
+  });
+
+  describe("irrefutable destructuring in let/parameter position", () => {
+    it("destructures a struct pattern in a let statement, binding every field", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(p: Point) -> i32 { let Point { x, y } = p; x + y }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("destructures a struct pattern in function-parameter position, binding every field", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(Point { x, y }: Point) -> i32 { x + y }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("destructures a tuple-struct pattern in a let statement", () => {
+      const result = diagnose(`
+        struct Pair(i32, i32);
+        fn f(pair: Pair) -> i32 { let Pair(a, b) = pair; a + b }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("destructures a nested struct pattern in a let statement, binding names at every depth", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        struct Line { start: Point, end: Point }
+        fn f(l: Line) -> i32 {
+          let Line { start: Point { x, y }, end } = l;
+          x + y
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("binds only the named fields when a let-position struct pattern has a trailing `..`", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(p: Point) -> i32 { let Point { x, .. } = p; x + y }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("y");
+    });
+
+    it("destructures a single-variant enum's tuple pattern in a let statement", () => {
+      const result = diagnose(`
+        enum Wrapper { Only(i32) }
+        fn f(w: Wrapper) -> i32 { let Wrapper::Only(x) = w; x }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("honors a per-field `mut` sigil in a let-position struct pattern, allowing that field alone to be reassigned", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(p: Point) -> i32 { let Point { x: mut x, y } = p; x = 5; x + y }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still rejects reassigning a let-position struct pattern field with no `mut` sigil", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(p: Point) -> i32 { let Point { x, y } = p; y = 5; x + y }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("y");
+    });
+
+    it("rejects a refutable multi-variant enum-variant pattern in a let statement, naming `if let`", () => {
+      const result = diagnose(`
+        enum MyOption { MySome(i32), MyNone }
+        fn f(opt: MyOption) { let MyOption::MySome(v) = opt; }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match",
       );
     });
   });
