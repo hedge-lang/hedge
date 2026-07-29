@@ -399,14 +399,9 @@ function recordConfinedStatement(
       if (isSome(statement.initializer)) {
         recordExpressionUses(target, scopeStack, statement.initializer.value);
       }
-      const declaration = declarationOf(statement.pattern, statement.mutable);
-      if (declaration.kind === "Some") {
-        recordDef(target, declaration.value.id);
-        registerScopeName(
-          scopeStack,
-          declaration.value.name,
-          declaration.value.id,
-        );
+      for (const declaration of declarationsOf(statement.pattern)) {
+        recordDef(target, declaration.id);
+        registerScopeName(scopeStack, declaration.name, declaration.id);
       }
       return;
     }
@@ -473,23 +468,93 @@ function pushBlock(blocks: MutableBlock[]): number {
 }
 
 /**
- * `none()` for a wildcard `_` pattern because it binds no name, so
- * it is never move-tracked or drop-annotated.
+ * Every name a `let`/`Param` pattern binds, each with its own place-level
+ * `Declaration` — move/drop tracking needs one per binding, not one for the
+ * whole pattern. Generalizes the old single-binding `declarationOf` to the
+ * same `Semantics.Pattern` union `registerPatternBindings` above already
+ * walks for match arms; a `_` name (wildcard or an explicit `_`-named
+ * binding/field) contributes no declaration, since it is never move-tracked
+ * or drop-annotated. Each `BindingPattern`'s own `mutable` flag is
+ * authoritative for that one binding — there's no single pattern-wide
+ * `mutable` anymore (Hedge-47), since a destructuring pattern can mix
+ * mutable and immutable bindings in one `let`/parameter
+ * (`Point { x: mut x, y }`). A struct pattern's shorthand field binding
+ * (`Point { x }`, no explicit sub-pattern) is always immutable — the
+ * grammar has no sigil position for shorthand fields, only the explicit
+ * `x: mut x` form can carry one (see `parser/pattern.ts`).
+ * TODO (Hedge-47): `TuplePattern`/`SlicePattern` are never constructed by
+ * `analyzer.ts`'s `analyzePattern` (always substituted as a
+ * `WildcardPattern` — see `analyzePatternGuardrail`), so those two cases
+ * are unreached today, mirroring `registerPatternBindings`'s own note.
  */
-export function declarationOf(
-  pattern: Semantics.BindingPattern,
-  mutable: boolean,
-): Option<Declaration> {
-  if (pattern.name.text === "_") {
-    return none();
+// eslint-disable-next-line complexity -- Routing function over the full Pattern union
+export function declarationsOf(
+  pattern: Semantics.Pattern,
+): readonly Declaration[] {
+  switch (pattern.kind) {
+    case "WildcardPattern":
+    case "LiteralPattern":
+    case "RangePattern":
+    case "PathPattern":
+      return [];
+    case "BindingPattern": {
+      const own: Declaration[] =
+        pattern.name.text === "_"
+          ? []
+          : [
+              {
+                id: pattern.name.tokenId,
+                name: pattern.name.text,
+                type: pattern.name.type,
+                tokenId: pattern.name.tokenId,
+                mutable: pattern.mutable,
+              },
+            ];
+      return isSome(pattern.subpattern)
+        ? [...own, ...declarationsOf(pattern.subpattern.value)]
+        : own;
+    }
+    case "OrPattern":
+      return pattern.alternatives.flatMap((alt) => declarationsOf(alt));
+    case "TuplePattern":
+    case "TupleStructPattern":
+      return pattern.elements.flatMap((element) => declarationsOf(element));
+    case "StructPattern":
+      return pattern.fields.flatMap((field): readonly Declaration[] => {
+        if (isSome(field.pattern)) return declarationsOf(field.pattern.value);
+        if (field.name.text === "_") return [];
+        return [
+          {
+            id: field.name.tokenId,
+            name: field.name.text,
+            type: field.name.type,
+            tokenId: field.name.tokenId,
+            mutable: false,
+          },
+        ];
+      });
+    case "SlicePattern":
+      return pattern.elements.flatMap((element): readonly Declaration[] => {
+        if (element.kind === "RestPattern") {
+          if (!isSome(element.name)) return [];
+          return [
+            {
+              id: element.name.value.tokenId,
+              name: element.name.value.text,
+              type: element.name.value.type,
+              tokenId: element.name.value.tokenId,
+              mutable: element.mutable,
+            },
+          ];
+        }
+        return declarationsOf(element);
+      });
+    default:
+      return assertNever(
+        pattern,
+        `Unexpected pattern: ${JSON.stringify(pattern)}`,
+      );
   }
-  return some({
-    id: pattern.name.tokenId,
-    name: pattern.name.text,
-    type: pattern.name.type,
-    tokenId: pattern.name.tokenId,
-    mutable,
-  });
 }
 
 /**
@@ -498,14 +563,7 @@ export function declarationOf(
  * body's own locals then drop before them, matching real drop order.
  */
 function paramDeclarations(params: readonly Semantics.Param[]): Declaration[] {
-  const declarations: Declaration[] = [];
-  for (const param of params) {
-    const declaration = declarationOf(param.pattern, param.mutable);
-    if (declaration.kind === "Some") {
-      declarations.push(declaration.value);
-    }
-  }
-  return declarations;
+  return params.flatMap((param) => declarationsOf(param.pattern));
 }
 
 /**
@@ -525,12 +583,11 @@ function lowerLet(
   if (isSome(statement.initializer)) {
     recordExpressionUses(current, scopeStack, statement.initializer.value);
   }
-  const declaration = declarationOf(statement.pattern, statement.mutable);
-  if (declaration.kind === "Some") {
-    current.declarations.push(declaration.value);
-    declarations.push(declaration.value);
-    recordDef(current, declaration.value.id);
-    registerScopeName(scopeStack, declaration.value.name, declaration.value.id);
+  for (const declaration of declarationsOf(statement.pattern)) {
+    current.declarations.push(declaration);
+    declarations.push(declaration);
+    recordDef(current, declaration.id);
+    registerScopeName(scopeStack, declaration.name, declaration.id);
   }
 }
 

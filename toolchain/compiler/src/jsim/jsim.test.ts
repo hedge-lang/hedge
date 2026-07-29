@@ -5,7 +5,7 @@ import { isSome, none, some } from "../option.js";
 import { tokenize } from "../lexer/lexer.js";
 import {
   buildControlFlowGraph,
-  declarationOf,
+  declarationsOf,
 } from "../ownership/control-flow-graph.js";
 import { analyzeOwnership } from "../ownership/move-check.js";
 import type {
@@ -1019,11 +1019,11 @@ describe("conditional-drop-flag codegen (synthetic ownership)", () => {
     assert(letX?.kind === "LetStatement", "Expected `let x = ...;` first");
     assert(letY?.kind === "LetStatement", "Expected `let y = x;` second");
 
-    const xDeclOption = declarationOf(letX.pattern, letX.mutable);
-    assert(xDeclOption.kind === "Some", "Expected a real declaration for x");
+    const xDecl = declarationsOf(letX.pattern)[0];
+    assert(xDecl !== undefined, "Expected a real declaration for x");
 
     const conditionalDrop: ConditionalDrop = {
-      declaration: xDeclOption.value,
+      declaration: xDecl,
       moveStatementTokenId: letY.tokenId,
     };
     const ownership: ReadonlyMap<string, FunctionOwnership> = new Map([

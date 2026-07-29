@@ -10,7 +10,6 @@ import {
   type Option,
   unwrapSomeOr,
 } from "../option.js";
-import { patternMutable } from "../parser/ast.js";
 import type * as Parser from "../parser/ast.js";
 import type * as Semantics from "./ast.js";
 import {
@@ -105,71 +104,35 @@ function bind(
   }
 }
 
-/**
- * A `let`/parameter pattern binds exactly one name today - `bindPatternName`
- * has no mechanism to register more than one binding from a single pattern.
- * A destructuring pattern kind (struct/tuple/slice/etc.) is real syntax as
- * of Slice 3 (see `parser/pattern.ts`), but wiring up multi-binding
- * registration here is deliberately out of scope for that parsing work; see
- * `specification/0016-pattern-matching.md`. Until a follow-up implements
- * real destructuring semantics, any such pattern in `let`/parameter
- * position is a clear diagnostic here instead of a silent no-op.
- */
-function bindComplexPatternGuardrail(
-  ctx: AnalysisContext,
-  pattern: Parser.Pattern,
-  type: Semantics.Type,
-): Semantics.Identifier {
-  emitError(
-    ctx,
-    "destructuring patterns are not yet supported in `let`/parameter position; only a plain binding or `_` is allowed here",
-    pattern.tokenId,
-  );
-  return { kind: "Identifier", tokenId: pattern.tokenId, text: "_", type };
-}
+const REFUTABLE_LET_OR_PARAM_PATTERN_MESSAGE =
+  "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match";
 
 /**
- * Binds a `let`/parameter pattern's name into scope and returns the
- * decorated {@link Semantics.Identifier} for the resulting AST node.
- *
- * A `BindingPattern` is bound under its own name. A `WildcardPattern` binds
- * nothing — a later reference to bare `_` must fail to resolve — but still
- * yields a synthetic `"_"` identifier so codegen has a JS binding slot to
- * emit.
+ * Analyzes a `let`/parameter pattern exactly like a match arm's own pattern
+ * (via `analyzePattern`, which binds every name the pattern structurally
+ * contains - a destructuring pattern kind (struct/tuple-struct/slice/etc.)
+ * is real syntax as of Slice 3, see `parser/pattern.ts`), then rejects it if
+ * it's refutable - a `let`/parameter position has no "didn't match" branch
+ * to fall back to, unlike `match`/`if let`/`while let` (spec 0016). The
+ * rejection is layered on top of, not instead of, the real analysis: every
+ * name the pattern binds is still in scope afterward, so a reference to one
+ * of them doesn't cascade into a second, unrelated "cannot find name"
+ * diagnostic on top of this one. `analyzePattern` itself still guardrails
+ * `TuplePattern` and a dynamic-length `SlicePattern` (no real tuple/slice
+ * value type exists yet) and an `@`-subpattern binding - those keep hitting
+ * `analyzePatternGuardrail`'s own "not yet supported" diagnostic instead of
+ * this one, unchanged from before Hedge-47.
  */
-function bindPatternName(
+function analyzeLetOrParamPattern(
   ctx: AnalysisContext,
   pattern: Parser.Pattern,
   type: Semantics.Type,
-  mutable: boolean,
-): Semantics.Identifier {
-  switch (pattern.kind) {
-    case "BindingPattern":
-      // An `@` subpattern (`n @ 1..=5`) is itself a constraint - binding
-      // just `n` and dropping it would be exactly the silent no-op this
-      // guardrail exists to prevent for every other complex pattern kind.
-      if (isSome(pattern.subpattern)) {
-        return bindComplexPatternGuardrail(ctx, pattern, type);
-      }
-      bind(ctx, pattern.name.text, { type, mutable });
-      return { ...pattern.name, type };
-    case "WildcardPattern":
-      return { kind: "Identifier", tokenId: pattern.tokenId, text: "_", type };
-    case "LiteralPattern":
-    case "RangePattern":
-    case "OrPattern":
-    case "TuplePattern":
-    case "StructPattern":
-    case "TupleStructPattern":
-    case "PathPattern":
-    case "SlicePattern":
-      return bindComplexPatternGuardrail(ctx, pattern, type);
-    default:
-      return assertNever(
-        pattern,
-        `Unexpected pattern: ${JSON.stringify(pattern)}`,
-      );
+): Semantics.Pattern {
+  const result = analyzePattern(ctx, pattern, type);
+  if (!isIrrefutablePattern(ctx, result)) {
+    emitError(ctx, REFUTABLE_LET_OR_PARAM_PATTERN_MESSAGE, pattern.tokenId);
   }
+  return result;
 }
 
 /**
@@ -1144,11 +1107,14 @@ function analyzeLiteralValue(
   }
 }
 
-// TODO (Hedge-47): TuplePattern/SlicePattern/a `@`-subpattern binding stay
-// out of scope entirely in match position (mirrors `let`/`Param`'s own
-// `bindComplexPatternGuardrail` boundary).
+// TuplePattern/SlicePattern (dynamic-length)/an `@`-subpattern binding stay
+// out of scope entirely, in match, `let`, and parameter position alike
+// (Hedge-47 promoted struct/tuple-struct/fixed-length-slice patterns, but
+// not these). The message deliberately doesn't name a specific position -
+// `analyzePattern` is shared by all three, so a position-specific wording
+// would be wrong two-thirds of the time.
 const PATTERN_KIND_NOT_YET_SUPPORTED_MESSAGE =
-  "this pattern kind is not yet supported in match position";
+  "this pattern kind is not yet supported";
 
 /** Substitutes a placeholder `WildcardPattern` rather than propagating the
  * original (unsupported) kind - deliberately, so a guardrail-rejected arm
@@ -1425,7 +1391,7 @@ function analyzePattern(
         type: scrutineeType,
         mutable: pattern.mutable,
       });
-      const result: Semantics.MatchBindingPattern = {
+      const result: Semantics.BindingPattern = {
         ...pattern,
         name: { ...pattern.name, type: scrutineeType },
         subpattern: none(),
@@ -2288,14 +2254,8 @@ function analyzeFunctionDecl(
   const analyzedParams = decl.params.map(
     (param: Parser.Param): Semantics.Param => {
       const paramType = validateSlice1Type(ctx, param.type, param.type.tokenId);
-      const mutable = patternMutable(param.pattern);
-      const name = bindPatternName(ctx, param.pattern, paramType, mutable);
-      return {
-        ...param,
-        mutable,
-        type: paramType,
-        pattern: { kind: "BindingPattern", name },
-      };
+      const pattern = analyzeLetOrParamPattern(ctx, param.pattern, paramType);
+      return { ...param, type: paramType, pattern };
     },
   );
   const returnType: Option<Semantics.Type> = mapSome(
@@ -2497,13 +2457,11 @@ function analyzeLetStatement(
     checkPosLiteralRange(ctx, coercedInitializer.value, bindingType);
   }
 
-  const mutable = patternMutable(statement.pattern);
-  const name = bindPatternName(ctx, statement.pattern, bindingType, mutable);
+  const pattern = analyzeLetOrParamPattern(ctx, statement.pattern, bindingType);
 
   return {
     ...statement,
-    mutable,
-    pattern: { kind: "BindingPattern", name },
+    pattern,
     attributes: statement.attributes.map((attr) => analyzeAttribute(ctx, attr)),
     initializer: coercedInitializer,
     type: { kind: "UnitType", tokenId: statement.tokenId },

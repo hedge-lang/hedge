@@ -30,7 +30,7 @@ import type {
 import {
   buildControlFlowGraph,
   collectDeclarations,
-  declarationOf,
+  declarationsOf,
 } from "./control-flow-graph.js";
 import { computeLiveness, type Liveness } from "./liveness.js";
 
@@ -331,14 +331,9 @@ function walkStatementForBorrowBases(
   switch (statement.kind) {
     case "LetStatement": {
       recordBorrowBase(statement, scopeStack, resolved, aliases);
-      const declaration = declarationOf(statement.pattern, statement.mutable);
-      if (isSome(declaration)) {
-        recordAlias(statement, scopeStack, declaration.value.id, aliases);
-        registerScopedName(
-          scopeStack,
-          declaration.value.name,
-          declaration.value.id,
-        );
+      for (const declaration of declarationsOf(statement.pattern)) {
+        recordAlias(statement, scopeStack, declaration.id, aliases);
+        registerScopedName(scopeStack, declaration.name, declaration.id);
       }
       return;
     }
@@ -432,13 +427,8 @@ function resolveBorrowBases(
   const aliases = new Map<BindingId, BindingId>();
   const scopeStack: ScopeStack = [new Map<string, BindingId>()];
   for (const param of fn.params) {
-    const declaration = declarationOf(param.pattern, param.mutable);
-    if (isSome(declaration)) {
-      registerScopedName(
-        scopeStack,
-        declaration.value.name,
-        declaration.value.id,
-      );
+    for (const declaration of declarationsOf(param.pattern)) {
+      registerScopedName(scopeStack, declaration.name, declaration.id);
     }
   }
   for (const statement of fn.body.statements) {
@@ -817,8 +807,18 @@ function collectBorrowsFromGraph(
       if (statement === undefined || statement.kind !== "LetStatement") {
         continue;
       }
-      const declaration = declarationOf(statement.pattern, statement.mutable);
-      if (!isSome(declaration)) {
+      // A bare `&`/`&mut` borrow initializer only ever makes sense against a
+      // pattern binding exactly one name - a destructuring pattern combined
+      // with a `&expr` initializer (e.g. matching-by-reference through a
+      // struct pattern) is real syntax (Hedge-47's binding-mode work) but a
+      // distinct concern from this single-binding borrow list, so it's
+      // conservatively skipped here rather than guessed at.
+      const declarations = declarationsOf(statement.pattern);
+      if (declarations.length !== 1) {
+        continue;
+      }
+      const declaration = declarations[0];
+      if (declaration === undefined) {
         continue;
       }
       const { initializer } = statement;
@@ -834,8 +834,8 @@ function collectBorrowsFromGraph(
         continue;
       }
       borrows.push({
-        name: declaration.value.name,
-        bindingId: declaration.value.id,
+        name: declaration.name,
+        bindingId: declaration.id,
         place: { ...path, baseId: baseIds.get(statement) },
         capability: capabilityDecision(init.operand, true),
         mutable: init.mutable,

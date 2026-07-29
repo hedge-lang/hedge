@@ -140,6 +140,39 @@ function staticInitFlagName(ctx: JsimContext, name: string): string {
 }
 
 /**
+ * The single name+token a `let`/parameter pattern binds, for the only two
+ * pattern kinds JSIM codegen can lower today: a plain `BindingPattern`, or
+ * `WildcardPattern` (emitted as a real `_`-named JS binding - matching the
+ * pre-Hedge-47 behavior, where the semantic layer synthesized this same
+ * shape for a wildcard rather than a genuine `WildcardPattern` node). Any
+ * other kind is a real destructuring pattern - semantic analysis (Hedge-47)
+ * accepts it when irrefutable, but real destructuring codegen isn't
+ * implemented yet (Hedge-48's job, mirroring `MatchExpression`'s own throw
+ * below), so this throws rather than reading off a name that doesn't exist
+ * for that pattern shape.
+ */
+function simpleBindingIdentity(pattern: Semantics.Pattern): {
+  readonly text: string;
+  readonly tokenId: number;
+} {
+  if (pattern.kind === "BindingPattern") {
+    return { text: pattern.name.text, tokenId: pattern.name.tokenId };
+  }
+  if (pattern.kind === "WildcardPattern") {
+    return { text: "_", tokenId: pattern.tokenId };
+  }
+  throw new Error(
+    "JSIM codegen for destructuring let/parameter patterns is not yet implemented",
+  );
+}
+
+/** A `WildcardPattern` binding is never mutable - mirrors the pre-Hedge-47
+ * behavior, where a wildcard `let`/param was never given `mut`. */
+function simpleBindingMutable(pattern: Semantics.Pattern): boolean {
+  return pattern.kind === "BindingPattern" && pattern.mutable;
+}
+
+/**
  * Declarations that need scope-end drop in the block owning
  * `blockTokenId`, for the function currently being lowered.
  */
@@ -291,7 +324,8 @@ function lowerStatementWithDropFlags(
 
   if (statement.kind === "LetStatement" && lowered.kind === "LetStatement") {
     const conditional = allConditionalDrops(ctx).find(
-      (c) => c.declaration.id === statement.pattern.name.tokenId,
+      (c) =>
+        c.declaration.id === simpleBindingIdentity(statement.pattern).tokenId,
     );
     if (conditional !== undefined) {
       result.push(
@@ -646,8 +680,9 @@ function parseFunction(
     // whatever the rename context assigns (defensive: currently always identity
     // since params are the first things bound in a fresh function scope).
     const emittedParams = fn.params.map((p) => {
-      const emittedName = bindLocalName(ctx, p.pattern.name.text);
-      recordEmittedName(ctx, p.pattern.name.tokenId, emittedName);
+      const identity = simpleBindingIdentity(p.pattern);
+      const emittedName = bindLocalName(ctx, identity.text);
+      recordEmittedName(ctx, identity.tokenId, emittedName);
       return { param: p, emittedName };
     });
     return parseFunctionBody(ctx, fn, emittedParams);
@@ -676,23 +711,18 @@ function dropParamShadows(
 ): JSIM.LetStatement[] {
   const shadows: JSIM.LetStatement[] = [];
   for (const { param, emittedName } of emittedParams) {
-    if (param.mutable) continue;
-    const needsDrop = rootDrops.some(
-      (d) => d.id === param.pattern.name.tokenId,
-    );
+    if (simpleBindingMutable(param.pattern)) continue;
+    const identity = simpleBindingIdentity(param.pattern);
+    const needsDrop = rootDrops.some((d) => d.id === identity.tokenId);
     if (!needsDrop) continue;
-    const shadowName = bindLocalName(ctx, param.pattern.name.text);
+    const shadowName = bindLocalName(ctx, identity.text);
     shadows.push({
       kind: "LetStatement",
       name: shadowName,
       mutable: false,
       value: some({ kind: "Identifier", value: emittedName, type: none() }),
       docComment: none(),
-      span: resolveSpan(
-        ctx.tokens,
-        param.pattern.name.tokenId,
-        param.pattern.name.tokenId,
-      ),
+      span: resolveSpan(ctx.tokens, identity.tokenId, identity.tokenId),
       dispose: true,
     });
   }
@@ -805,15 +835,16 @@ function parseStatement(
       const value = mapSome(statement.initializer, (expr) =>
         parseExpression(ctx, expr),
       );
-      const name = bindLocalName(ctx, statement.pattern.name.text);
-      recordEmittedName(ctx, statement.pattern.name.tokenId, name);
+      const identity = simpleBindingIdentity(statement.pattern);
+      const mutable = simpleBindingMutable(statement.pattern);
+      const name = bindLocalName(ctx, identity.text);
+      recordEmittedName(ctx, identity.tokenId, name);
       const dispose =
-        !statement.mutable &&
-        scopeDrops.some((d) => d.id === statement.pattern.name.tokenId);
+        !mutable && scopeDrops.some((d) => d.id === identity.tokenId);
       return {
         kind: "LetStatement",
         name,
-        mutable: statement.mutable,
+        mutable,
         value,
         docComment: toDocComment(statement.attributes),
         span: resolveSpan(

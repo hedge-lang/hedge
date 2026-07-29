@@ -34,7 +34,7 @@ import type {
   ControlFlowGraph,
   Declaration,
 } from "./control-flow-graph.js";
-import { buildControlFlowGraph, declarationOf } from "./control-flow-graph.js";
+import { buildControlFlowGraph } from "./control-flow-graph.js";
 
 /**
  * A binding's move state within one function body. This vocabulary is
@@ -765,10 +765,10 @@ interface PatternDeclaration {
 }
 
 /**
- * Every name a match-arm pattern binds, deepest-first, mirroring
- * `control-flow-graph.ts`'s own `declarationOf` but generalized to the
- * richer `Semantics.Pattern` union (a `let`/`Param`'s `BindingPattern` binds
- * at most one name, so that helper only ever needs one).
+ * Every name a pattern binds, deepest-first - shared by match arms and, as
+ * of Hedge-47, `let`/`Param` too (mirroring `control-flow-graph.ts`'s own
+ * `declarationsOf`, which returns the CFG's `Declaration` shape instead of
+ * this file's own `PatternDeclaration`).
  * TODO (Hedge-47): `TuplePattern`/`SlicePattern` are never constructed by
  * `analyzer.ts`'s `analyzePattern` (always substituted as a
  * `WildcardPattern` - see `analyzePatternGuardrail`), so those two cases
@@ -1015,12 +1015,24 @@ function walkStatement(
       if (isSome(statement.initializer)) {
         walkExpression(ctx, statement.initializer.value, state, scopeStack);
       }
-      const { name } = statement.pattern;
-      registerBinding(state, scopeStack, name, isSome(statement.initializer));
-      const declaration = declarationOf(statement.pattern, statement.mutable);
-      if (declaration.kind === "Some") {
-        declarations.push(declaration.value);
-        ctx.declarationsById.set(declaration.value.id, declaration.value);
+      for (const { identifier, mutable } of collectPatternDeclarations(
+        statement.pattern,
+      )) {
+        registerBinding(
+          state,
+          scopeStack,
+          identifier,
+          isSome(statement.initializer),
+        );
+        const declaration: Declaration = {
+          id: identifier.tokenId,
+          name: identifier.text,
+          type: identifier.type,
+          tokenId: identifier.tokenId,
+          mutable,
+        };
+        declarations.push(declaration);
+        ctx.declarationsById.set(declaration.id, declaration);
       }
       return;
     }
@@ -1228,11 +1240,19 @@ function walkFunction(ctx: Ctx, fn: Semantics.FunctionDecl): void {
   const scopeStack: ScopeStack = [new Map<string, BindingId>()];
   const paramDeclarations: Declaration[] = [];
   for (const param of fn.params) {
-    registerBinding(state, scopeStack, param.pattern.name, true);
-    const declaration = declarationOf(param.pattern, param.mutable);
-    if (declaration.kind === "Some") {
-      paramDeclarations.push(declaration.value);
-      ctx.declarationsById.set(declaration.value.id, declaration.value);
+    for (const { identifier, mutable } of collectPatternDeclarations(
+      param.pattern,
+    )) {
+      registerBinding(state, scopeStack, identifier, true);
+      const declaration: Declaration = {
+        id: identifier.tokenId,
+        name: identifier.text,
+        type: identifier.type,
+        tokenId: identifier.tokenId,
+        mutable,
+      };
+      paramDeclarations.push(declaration);
+      ctx.declarationsById.set(declaration.id, declaration);
     }
   }
   walkScope(ctx, fn.body, state, scopeStack, false, paramDeclarations);
