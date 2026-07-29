@@ -993,7 +993,7 @@ function analyzeConstStatement(
 }
 
 const TOP_LEVEL_ITEM_RESTRICTION_MESSAGE =
-  "only function, struct, const, and static declarations are allowed at the top level";
+  "only function, struct, enum, const, and static declarations are allowed at the top level";
 
 function analyzeEnum(
   ctx: AnalysisContext,

@@ -652,7 +652,7 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
       expect(result.diagnostics[0]?.message).toContain(
-        "only function, struct, const, and static declarations are allowed at the top level",
+        "only function, struct, enum, const, and static declarations are allowed at the top level",
       );
     });
 
@@ -660,7 +660,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("let x = 1;");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toContain(
-        "only function, struct, const, and static declarations are allowed at the top level",
+        "only function, struct, enum, const, and static declarations are allowed at the top level",
       );
     });
 
@@ -668,7 +668,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("{ 1; }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toContain(
-        "only function, struct, const, and static declarations are allowed at the top level",
+        "only function, struct, enum, const, and static declarations are allowed at the top level",
       );
     });
 
@@ -680,6 +680,12 @@ describe("semantic analysis", (): void => {
     it("struct declaration at top level is accepted", () => {
       const result = diagnose("struct Foo;");
       expect(result.diagnostics).toEqual([]);
+    });
+
+    it("names enum among the allowed top-level declarations in the restriction message", () => {
+      const result = diagnose("x + y;");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("enum");
     });
 
     it("const declaration at top level is accepted", () => {
@@ -1634,7 +1640,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose(`${stmt}; fn main() {}`);
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toContain(
-        "only function, struct, const, and static declarations are allowed at the top level",
+        "only function, struct, enum, const, and static declarations are allowed at the top level",
       );
     },
   );
