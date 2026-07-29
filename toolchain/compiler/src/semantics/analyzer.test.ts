@@ -367,7 +367,7 @@ describe("semantic analysis", (): void => {
     it("rejects a tuple-struct pattern used against a struct declared with named fields", () => {
       const result = diagnose(`
         struct Point { x: i32, y: i32 }
-        fn f(p: Point) -> i32 { match p { Point(a, b) => a } }
+        fn f(p: Point) { match p { Point(a, b) => a }; }
       `);
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toBe(
@@ -378,7 +378,7 @@ describe("semantic analysis", (): void => {
     it("rejects a struct pattern used against a struct declared with tuple fields", () => {
       const result = diagnose(`
         struct Pair(i32, i32);
-        fn f(p: Pair) -> i32 { match p { Pair { a } => a } }
+        fn f(p: Pair) { match p { Pair { a } => a }; }
       `);
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toBe(
@@ -390,7 +390,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose(`
         struct Point { x: i32, y: i32 }
         struct Other { x: i32, y: i32 }
-        fn f(p: Point) -> i32 { match p { Other { x, y } => x + y } }
+        fn f(p: Point) { match p { Other { x, y } => x + y }; }
       `);
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toBe(
@@ -402,7 +402,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose(`
         struct Pair(i32, i32);
         struct Duo(i32, i32);
-        fn f(p: Pair) -> i32 { match p { Duo(a, b) => a } }
+        fn f(p: Pair) { match p { Duo(a, b) => a }; }
       `);
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toBe(
