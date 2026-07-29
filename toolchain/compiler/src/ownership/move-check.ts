@@ -839,13 +839,23 @@ function walkMatchExpression(
   scopeStack: ScopeStack,
 ): void {
   walkExpression(ctx, expression.scrutinee, state, scopeStack);
+
+  // Arms are mutually exclusive alternatives, not a sequence -- mirroring
+  // `walkIf`, each arm is walked against its own clone of the pre-match
+  // state, and the resulting per-arm states are merged back together
+  // afterward. Walking every arm against one shared `state` (as this used
+  // to do) would let a move in one arm leak into the next arm's analysis
+  // and into the post-match state, when at runtime at most one arm ever
+  // actually executes.
+  let merged: StateMap | undefined;
   for (const arm of expression.arms) {
+    const armState = cloneState(state);
     scopeStack.push(new Map());
     const declarations: Declaration[] = [];
     for (const { identifier, mutable } of collectPatternDeclarations(
       arm.pattern,
     )) {
-      registerBinding(state, scopeStack, identifier, true);
+      registerBinding(armState, scopeStack, identifier, true);
       const declaration: Declaration = {
         id: identifier.tokenId,
         name: identifier.text,
@@ -857,11 +867,19 @@ function walkMatchExpression(
       ctx.declarationsById.set(declaration.id, declaration);
     }
     if (isSome(arm.guard)) {
-      walkExpression(ctx, arm.guard.value, state, scopeStack);
+      walkExpression(ctx, arm.guard.value, armState, scopeStack);
     }
-    walkExpression(ctx, arm.body, state, scopeStack);
-    recordDrops(ctx, arm.tokenId, declarations, state);
+    walkExpression(ctx, arm.body, armState, scopeStack);
+    recordDrops(ctx, arm.tokenId, declarations, armState);
     scopeStack.pop();
+    merged = merged === undefined ? armState : mergeStates(merged, armState);
+  }
+
+  if (merged !== undefined) {
+    state.clear();
+    for (const [id, moveState] of merged) {
+      state.set(id, moveState);
+    }
   }
 }
 

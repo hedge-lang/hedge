@@ -109,6 +109,50 @@ describe("move-check", (): void => {
     expect(diagnostics[0].message).toContain("x");
   });
 
+  it("a move in one match arm does not invalidate an independent use of the same value in another arm", (): void => {
+    const { diagnostics } = check(
+      `${BOXED}
+      fn main() {
+        let mut cond = 1;
+        let x = Boxed { value: 1 };
+        match cond {
+          1 => {
+            let y = x; // value is moved here, on this arm only
+            print(y.value);
+          }
+          _ => {
+            print(x.value); // a different, mutually exclusive arm - not moved here
+          }
+        }
+      }`,
+    );
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("move in one match arm invalidates use after merge, naming the move", (): void => {
+    const { diagnostics } = check(
+      `${BOXED}
+      fn main() {
+        let mut cond = 1;
+        let x = Boxed { value: 1 };
+        match cond {
+          1 => {
+            let y = x; // value is moved here
+            print(y.value);
+          }
+          _ => {
+            print(0);
+          }
+        }
+        print(x.value); // using moved value here is an error
+      }`,
+    );
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("moved");
+    expect(diagnostics[0].message).toContain("x");
+  });
+
   it("move in one branch invalidates use after merge, naming the move", (): void => {
     const { diagnostics } = check(
       `${BOXED}
