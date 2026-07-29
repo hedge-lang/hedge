@@ -109,7 +109,7 @@ describe("move-check", (): void => {
     expect(diagnostics[0].message).toContain("x");
   });
 
-  it("a move in one match arm does not invalidate an independent use of the same value in another arm", (): void => {
+  it("move in one match arm does not invalidate an independent use of the same value in another arm", (): void => {
     const { diagnostics } = check(
       `${BOXED}
       fn main() {
