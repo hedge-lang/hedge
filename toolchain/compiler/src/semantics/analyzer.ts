@@ -1192,6 +1192,24 @@ function lastPathSegment(path: Parser.Path): string | undefined {
   return path.segments.at(-1);
 }
 
+/** `none()` if `scrutineeType` isn't a plain (non-enum) `StructType`, or names
+ * a struct this context never registered - callers treat both the same way,
+ * falling back to enum resolution or the generic pattern-kind guardrail.
+ * Mirrors `resolveEnumDecl` structurally, but a struct pattern has no variant
+ * layer to delegate its own name-check to, so `resolveTupleStructForPattern`/
+ * `resolveStructForPattern` (below) must separately verify the pattern's own
+ * path names this exact struct, not just any struct sharing its field
+ * shape. */
+function resolveStructDecl(
+  ctx: AnalysisContext,
+  scrutineeType: Semantics.Type,
+): Option<Semantics.StructDecl> {
+  if (scrutineeType.kind !== "StructType") return none();
+  const name = scrutineeType.name.split("::").pop() ?? scrutineeType.name;
+  const decl = ctx.typeScope.get(name);
+  return decl === undefined ? none() : some(decl);
+}
+
 interface ResolvedTupleVariant {
   readonly fields: readonly Semantics.TupleField[];
 }
@@ -1261,6 +1279,128 @@ function resolveStructVariantForPattern(
     return none();
   }
   return some({ fields: variant.body.value.fields });
+}
+
+interface ResolvedPatternFields<F> {
+  readonly fields: readonly F[];
+  /** Diagnostic-facing descriptor - `` variant `Move` `` or `` struct `Point` ``
+   * - so the arity/field-name errors below read naturally for either
+   * source. */
+  readonly label: string;
+  /** `true` when the resolver already emitted its own diagnostic (wrong
+   * struct name, wrong shape) - `fields` is an empty error-recovery
+   * placeholder in this case, not a genuine zero-field struct, so the
+   * caller must skip its own arity/field-name diagnostics (they'd just be
+   * redundant noise on top of the one already emitted) while still binding
+   * every name the pattern mentions against the placeholder, so a
+   * reference to one of those names in the arm body doesn't cascade into a
+   * further "cannot find name" error. */
+  readonly alreadyErrored: boolean;
+}
+
+/** Plain-struct counterpart to `resolveTupleVariantForPattern` - only
+ * reachable when `scrutineeType` isn't an enum (the enum resolver already
+ * ran first and returned `none()`). Unlike an enum variant, a struct has no
+ * name-disambiguating layer of its own, so the pattern's path must be
+ * checked directly against the struct named by `scrutineeType` itself
+ * (never trusting the pattern's own path as a lookup key) - otherwise a
+ * pattern naming an unrelated, differently-typed struct that merely shares
+ * a field shape would silently "resolve". */
+function resolveTupleStructForPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.TupleStructPattern,
+  scrutineeType: Semantics.Type,
+): Option<ResolvedPatternFields<Semantics.TupleField>> {
+  const structDecl = resolveStructDecl(ctx, scrutineeType);
+  if (!isSome(structDecl)) return none();
+  const patternName = lastPathSegment(pattern.path);
+  const label = `struct \`${patternName}\``;
+  if (patternName !== structDecl.value.name.text) {
+    emitError(
+      ctx,
+      `expected struct \`${structDecl.value.name.text}\`, found \`${patternName}\``,
+      pattern.tokenId,
+    );
+    return some({ fields: [], label, alreadyErrored: true });
+  }
+  if (structDecl.value.body.kind !== "TupleFields") {
+    emitError(
+      ctx,
+      `struct \`${patternName}\` is not a tuple struct`,
+      pattern.tokenId,
+    );
+    return some({ fields: [], label, alreadyErrored: true });
+  }
+  return some({ fields: structDecl.value.body.fields, label, alreadyErrored: false });
+}
+
+/** Plain-struct counterpart to `resolveStructVariantForPattern` - see
+ * `resolveTupleStructForPattern`'s doc comment for why the pattern's own
+ * path must be checked against the scrutinee-derived struct name. */
+function resolveStructForPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.StructPattern,
+  scrutineeType: Semantics.Type,
+): Option<ResolvedPatternFields<Semantics.StructField>> {
+  const structDecl = resolveStructDecl(ctx, scrutineeType);
+  if (!isSome(structDecl)) return none();
+  const patternName = lastPathSegment(pattern.path);
+  const label = `struct \`${patternName}\``;
+  if (patternName !== structDecl.value.name.text) {
+    emitError(
+      ctx,
+      `expected struct \`${structDecl.value.name.text}\`, found \`${patternName}\``,
+      pattern.tokenId,
+    );
+    return some({ fields: [], label, alreadyErrored: true });
+  }
+  if (structDecl.value.body.kind !== "NamedFields") {
+    emitError(
+      ctx,
+      `struct \`${patternName}\` does not have named fields`,
+      pattern.tokenId,
+    );
+    return some({ fields: [], label, alreadyErrored: true });
+  }
+  return some({ fields: structDecl.value.body.fields, label, alreadyErrored: false });
+}
+
+/** Tries enum-variant resolution first, then plain-struct resolution -
+ * mutually exclusive since a scrutinee type is never both `EnumType` and
+ * `StructType`, so trying both never risks a duplicate diagnostic. */
+function resolveTupleFieldsForPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.TupleStructPattern,
+  scrutineeType: Semantics.Type,
+): Option<ResolvedPatternFields<Semantics.TupleField>> {
+  const patternName = lastPathSegment(pattern.path);
+  const enumVariant = resolveTupleVariantForPattern(ctx, pattern, scrutineeType);
+  if (isSome(enumVariant)) {
+    return some({
+      fields: enumVariant.value.fields,
+      label: `variant \`${patternName}\``,
+      alreadyErrored: false,
+    });
+  }
+  return resolveTupleStructForPattern(ctx, pattern, scrutineeType);
+}
+
+/** Struct-pattern counterpart to `resolveTupleFieldsForPattern` above. */
+function resolveNamedFieldsForPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.StructPattern,
+  scrutineeType: Semantics.Type,
+): Option<ResolvedPatternFields<Semantics.StructField>> {
+  const patternName = lastPathSegment(pattern.path);
+  const enumVariant = resolveStructVariantForPattern(ctx, pattern, scrutineeType);
+  if (isSome(enumVariant)) {
+    return some({
+      fields: enumVariant.value.fields,
+      label: `variant \`${patternName}\``,
+      alreadyErrored: false,
+    });
+  }
+  return resolveStructForPattern(ctx, pattern, scrutineeType);
 }
 
 // eslint-disable-next-line complexity -- Routing function over the full Pattern union
@@ -1365,20 +1505,19 @@ function analyzePattern(
       return result;
     }
     case "TupleStructPattern": {
-      const variant = resolveTupleVariantForPattern(
+      const resolved = resolveTupleFieldsForPattern(
         ctx,
         pattern,
         scrutineeType,
       );
-      if (!isSome(variant)) {
+      if (!isSome(resolved)) {
         return analyzePatternGuardrail(ctx, pattern, scrutineeType);
       }
-      const { fields } = variant.value;
-      const variantName = lastPathSegment(pattern.path);
-      if (fields.length !== pattern.elements.length) {
+      const { fields, label, alreadyErrored } = resolved.value;
+      if (!alreadyErrored && fields.length !== pattern.elements.length) {
         emitError(
           ctx,
-          `variant \`${variantName}\` has ${fields.length} field(s), but the pattern has ${pattern.elements.length}`,
+          `${label} has ${fields.length} field(s), but the pattern has ${pattern.elements.length}`,
           pattern.tokenId,
         );
       }
@@ -1393,25 +1532,24 @@ function analyzePattern(
       return result;
     }
     case "StructPattern": {
-      const variant = resolveStructVariantForPattern(
+      const resolved = resolveNamedFieldsForPattern(
         ctx,
         pattern,
         scrutineeType,
       );
-      if (!isSome(variant)) {
+      if (!isSome(resolved)) {
         return analyzePatternGuardrail(ctx, pattern, scrutineeType);
       }
-      const declaredFields = variant.value.fields;
-      const variantName = lastPathSegment(pattern.path);
+      const { fields: declaredFields, label, alreadyErrored } = resolved.value;
       const fields = pattern.fields.map((field): Semantics.FieldPattern => {
         const declared = declaredFields.find(
           (f) => f.name.text === field.name.text,
         );
         const fieldType = declared?.type ?? UNIT;
-        if (declared === undefined) {
+        if (declared === undefined && !alreadyErrored) {
           emitError(
             ctx,
-            `no field \`${field.name.text}\` on variant \`${variantName}\``,
+            `no field \`${field.name.text}\` on ${label}`,
             field.name.tokenId,
           );
         }
