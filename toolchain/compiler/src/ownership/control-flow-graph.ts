@@ -282,6 +282,18 @@ function recordExpressionUses(
         }
       }
       return;
+    case "MatchExpression":
+      recordExpressionUses(target, scopeStack, expression.scrutinee);
+      for (const arm of expression.arms) {
+        scopeStack.push(new Map());
+        registerPatternBindings(scopeStack, arm.pattern);
+        if (isSome(arm.guard)) {
+          recordExpressionUses(target, scopeStack, arm.guard.value);
+        }
+        recordExpressionUses(target, scopeStack, arm.body);
+        scopeStack.pop();
+      }
+      return;
     case "Block":
       recordConfinedScope(target, scopeStack, expression);
       return;
@@ -296,6 +308,78 @@ function recordExpressionUses(
         expression,
         `Unexpected expression: ${JSON.stringify(expression)}`,
       );
+  }
+}
+
+/**
+ * Registers every name a match-arm pattern binds into the current
+ * (innermost) `scopeStack` frame, so a guard/body reference to a
+ * pattern-bound name resolves to that fresh binding rather than falling
+ * through to an outer binding of the same name (see `resolvePathExpression`).
+ * Mirrors `declarationOf` below, generalized to the richer
+ * `Semantics.Pattern` union - a `let`/`Param`'s `BindingPattern` binds at
+ * most one name, so that helper only ever needs one.
+ * TODO (Hedge-47): `TuplePattern`/`SlicePattern` are never constructed by
+ * `analyzer.ts`'s `analyzePattern` (always substituted as a
+ * `WildcardPattern` - see `analyzePatternGuardrail`), so those two cases
+ * are unreached today.
+ */
+// eslint-disable-next-line complexity -- Routing function over the full Pattern union
+function registerPatternBindings(
+  scopeStack: ScopeStack,
+  pattern: Semantics.Pattern,
+): void {
+  switch (pattern.kind) {
+    case "WildcardPattern":
+    case "LiteralPattern":
+    case "RangePattern":
+    case "PathPattern":
+      return;
+    case "BindingPattern":
+      if (pattern.name.text !== "_") {
+        registerScopeName(scopeStack, pattern.name.text, pattern.name.tokenId);
+      }
+      if (isSome(pattern.subpattern)) {
+        registerPatternBindings(scopeStack, pattern.subpattern.value);
+      }
+      return;
+    case "OrPattern":
+      for (const alt of pattern.alternatives) {
+        registerPatternBindings(scopeStack, alt);
+      }
+      return;
+    case "TuplePattern":
+    case "TupleStructPattern":
+      for (const element of pattern.elements) {
+        registerPatternBindings(scopeStack, element);
+      }
+      return;
+    case "StructPattern":
+      for (const field of pattern.fields) {
+        if (isSome(field.pattern)) {
+          registerPatternBindings(scopeStack, field.pattern.value);
+        } else {
+          registerScopeName(scopeStack, field.name.text, field.name.tokenId);
+        }
+      }
+      return;
+    case "SlicePattern":
+      for (const element of pattern.elements) {
+        if (element.kind === "RestPattern") {
+          if (isSome(element.name)) {
+            registerScopeName(
+              scopeStack,
+              element.name.value.text,
+              element.name.value.tokenId,
+            );
+          }
+        } else {
+          registerPatternBindings(scopeStack, element);
+        }
+      }
+      return;
+    default:
+      assertNever(pattern, `Unexpected pattern: ${JSON.stringify(pattern)}`);
   }
 }
 
@@ -331,6 +415,7 @@ function recordConfinedStatement(
       return;
     case "Function":
     case "Struct":
+    case "Enum":
     case "Const":
     case "Static":
       // Local item declarations have no CFG effect in Slice 1 (see the
@@ -526,6 +611,7 @@ function lowerStatements(
         break;
       case "Function":
       case "Struct":
+      case "Enum":
       case "Const":
       case "Static":
         // Local item declarations have no CFG effect in Slice 1 (they don't

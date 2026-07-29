@@ -53,6 +53,14 @@ describe("borrow checker", (): void => {
     expect(diagnostics[0]?.message).toContain("Conflicting borrows");
   });
 
+  it("still detects a conflicting borrow when one borrow's only use is inside a match arm", (): void => {
+    const diagnostics = check(
+      'fn main() { let mut x = "a"; let r1 = &mut x; let r2 = &mut x; match true { _ => print(r1) }; print(r2); }',
+    );
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+  });
+
   it("tags a conflicting-borrows diagnostic with the HEDGE-BORROW-CHECK-001 code and names the first borrow's span as a related span", (): void => {
     const source =
       'fn main() { let mut x = "a"; let r1 = &mut x; let r2 = &mut x; print(r1); print(r2); }';

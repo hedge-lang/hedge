@@ -1,0 +1,5 @@
+fn describe(flag: bool) -> i32 {
+  match flag {
+    true => 1,
+  }
+}

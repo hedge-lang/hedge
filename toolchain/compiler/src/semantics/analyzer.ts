@@ -2,6 +2,7 @@ import { assert, assertNever } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
 import type { IntSuffix, Token } from "../lexer/token.js";
 import {
+  isNone,
   isSome,
   mapSome,
   none,
@@ -32,6 +33,7 @@ export interface AnalysisResult {
 interface AnalysisContext {
   readonly scopes: Map<string, ScopedVariable>[];
   readonly typeScope: Map<string, Semantics.StructDecl>;
+  readonly enumScope: Map<string, Semantics.EnumDecl>;
   readonly diagnostics: Diagnostic[];
   readonly tokens: readonly Token[];
   /**
@@ -373,6 +375,10 @@ function validateSlice1Type(
         const structDecl = ctx.typeScope.get(name);
         if (structDecl !== undefined) {
           return structDecl.type;
+        }
+        const enumDecl = ctx.enumScope.get(name);
+        if (enumDecl !== undefined) {
+          return enumDecl.type;
         }
       }
       break;
@@ -987,36 +993,94 @@ function analyzeConstStatement(
 }
 
 const TOP_LEVEL_ITEM_RESTRICTION_MESSAGE =
-  "only function, struct, const, and static declarations are allowed at the top level";
+  "only function, struct, enum, const, and static declarations are allowed at the top level";
 
-// Not slice-numbered: enum parsing and enum semantic analysis are both
-// Slice 3 work, just sequenced separately - no later slice boundary to name.
-const ENUM_NOT_YET_SUPPORTED_MESSAGE =
-  "enum declarations are not yet supported by semantic analysis";
-
-/** `EnumDecl` has no `Semantics.EnumDecl` counterpart yet - a placeholder
- * unit `ExpressionStatement` keeps this parser-only, per the same "parser
- * accepts it, semantics doesn't yet" pattern as the restriction below. */
-function analyzeEnumPlaceholder(
+function analyzeEnum(
   ctx: AnalysisContext,
   item: Parser.EnumDecl,
-): Semantics.ExpressionStatement {
-  emitError(ctx, ENUM_NOT_YET_SUPPORTED_MESSAGE, item.tokenId);
+): Semantics.EnumDecl {
+  const scopedName = `scoped(${ctx.scopes.length})::${item.name.text}`;
+  const enumType: Semantics.Type = { kind: "EnumType", name: scopedName };
+  const seenVariantNames = new Set<string>();
+  for (const variant of item.variants) {
+    if (seenVariantNames.has(variant.name.text)) {
+      emitError(
+        ctx,
+        `variant \`${variant.name.text}\` is defined more than once`,
+        variant.name.tokenId,
+      );
+    }
+    seenVariantNames.add(variant.name.text);
+  }
   return {
-    kind: "ExpressionStatement",
-    tokenId: item.tokenId,
-    expression: {
-      kind: "TupleExpression",
-      tokenId: item.tokenId,
-      elements: [],
-      type: { kind: "UnitType", tokenId: item.tokenId },
-    },
-    type: { kind: "UnitType", tokenId: item.tokenId },
+    ...item,
+    name: { ...item.name, type: enumType },
+    generics: [],
+    attributes: item.attributes.map((attr) => analyzeAttribute(ctx, attr)),
+    variants: item.variants.map((variant) =>
+      analyzeVariant(ctx, variant, enumType),
+    ),
+    type: enumType,
   };
 }
 
-const MATCH_NOT_YET_SUPPORTED_MESSAGE =
-  "`match` expressions are not yet supported by semantic analysis";
+function analyzeVariant(
+  ctx: AnalysisContext,
+  variant: Parser.Variant,
+  enumType: Semantics.Type,
+): Semantics.Variant {
+  return {
+    ...variant,
+    name: { ...variant.name, type: enumType },
+    attributes: variant.attributes.map((attr) => analyzeAttribute(ctx, attr)),
+    body: mapSome(variant.body, (body) => analyzeVariantBody(ctx, body)),
+    type: enumType,
+  };
+}
+
+function analyzeVariantBody(
+  ctx: AnalysisContext,
+  body: Parser.NamedFieldsBody | Parser.TupleFieldsBody,
+): Semantics.NamedFieldsBody | Semantics.TupleFieldsBody {
+  switch (body.kind) {
+    case "NamedFields":
+      return {
+        ...body,
+        fields: body.fields.map(
+          (field: Parser.StructField): Semantics.StructField => {
+            const fieldType = validateSlice1Type(
+              ctx,
+              field.type,
+              field.type.tokenId,
+            );
+            return {
+              ...field,
+              name: analyzeIdentifier(ctx, field.name, fieldType),
+              attributes: field.attributes.map((attr) =>
+                analyzeAttribute(ctx, attr),
+              ),
+              type: fieldType,
+            };
+          },
+        ),
+      };
+    case "TupleFields":
+      return {
+        ...body,
+        fields: body.fields.map(
+          (field: Parser.TupleField): Semantics.TupleField => ({
+            ...field,
+            attributes: field.attributes.map((attr) =>
+              analyzeAttribute(ctx, attr),
+            ),
+            type: validateSlice1Type(ctx, field.type, field.type.tokenId),
+          }),
+        ),
+      };
+    default:
+      assertNever(body, `Unexpected AST node: ${JSON.stringify(body)}`);
+  }
+}
 
 const WHILE_NOT_YET_SUPPORTED_MESSAGE =
   "`while` expressions are not yet supported by semantic analysis";
@@ -1047,6 +1111,601 @@ function analyzeExpressionPlaceholder(
   };
 }
 
+function analyzeLiteralValue(
+  ctx: AnalysisContext,
+  literal:
+    | Parser.StringLiteral
+    | Parser.IntLiteral
+    | Parser.FloatLiteral
+    | Parser.CharLiteral
+    | Parser.BoolLiteral,
+):
+  | Semantics.StringLiteral
+  | Semantics.IntLiteral
+  | Semantics.FloatLiteral
+  | Semantics.CharLiteral
+  | Semantics.BoolLiteral {
+  switch (literal.kind) {
+    case "StringLiteral":
+      return analyzeStringLiteral(ctx, literal);
+    case "IntLiteral":
+      return analyzeIntLiteral(ctx, literal);
+    case "FloatLiteral":
+      return analyzeFloatLiteral(ctx, literal);
+    case "CharLiteral":
+      return analyzeCharLiteral(ctx, literal);
+    case "BoolLiteral":
+      return analyzeBoolLiteral(ctx, literal);
+    default:
+      return assertNever(
+        literal,
+        `Unexpected literal: ${JSON.stringify(literal)}`,
+      );
+  }
+}
+
+// TODO (Hedge-47): TuplePattern/SlicePattern/a `@`-subpattern binding stay
+// out of scope entirely in match position (mirrors `let`/`Param`'s own
+// `bindComplexPatternGuardrail` boundary).
+const PATTERN_KIND_NOT_YET_SUPPORTED_MESSAGE =
+  "this pattern kind is not yet supported in match position";
+
+/** Substitutes a placeholder `WildcardPattern` rather than propagating the
+ * original (unsupported) kind - deliberately, so a guardrail-rejected arm
+ * still counts as an exhaustiveness catch-all instead of also tripping a
+ * separate, redundant "non-exhaustive" diagnostic on top of the guardrail
+ * one (the same cascade-avoidance shape as `analyzeExpressionPlaceholder`
+ * elsewhere in this file). */
+function analyzePatternGuardrail(
+  ctx: AnalysisContext,
+  pattern: Parser.Pattern,
+  scrutineeType: Semantics.Type,
+): Semantics.WildcardPattern {
+  emitError(ctx, PATTERN_KIND_NOT_YET_SUPPORTED_MESSAGE, pattern.tokenId);
+  return {
+    kind: "WildcardPattern",
+    tokenId: pattern.tokenId,
+    type: scrutineeType,
+  };
+}
+
+/** `none()` if `scrutineeType` isn't an enum, or names an enum this context
+ * never registered (an unresolved/erroneous scrutinee type) - callers treat
+ * both the same way, falling back to the generic pattern-kind guardrail.
+ * Only unwraps a bare `EnumType`, not a reference to one - `match &m`/
+ * `match &mut m` scrutinees fall through to that same guardrail/coarse
+ * exhaustiveness fallback rather than resolving the enum through the
+ * reference.
+ * TODO (Hedge-47): binding-mode-aware matching (`match x`/`match &x`/
+ * `match &mut x` per spec 0016) is not yet in scope here. */
+function resolveEnumDecl(
+  ctx: AnalysisContext,
+  scrutineeType: Semantics.Type,
+): Option<Semantics.EnumDecl> {
+  if (scrutineeType.kind !== "EnumType") return none();
+  const name = scrutineeType.name.split("::").pop() ?? scrutineeType.name;
+  const decl = ctx.enumScope.get(name);
+  return decl === undefined ? none() : some(decl);
+}
+
+function lastPathSegment(path: Parser.Path): string | undefined {
+  return path.segments.at(-1);
+}
+
+interface ResolvedTupleVariant {
+  readonly fields: readonly Semantics.TupleField[];
+}
+
+interface ResolvedStructVariant {
+  readonly fields: readonly Semantics.StructField[];
+}
+
+// A qualified path in enum-scrutinee position is genuinely supported syntax
+// now, so a wrong variant name/shape here gets its own real diagnostic
+// rather than falling back to `analyzePatternGuardrail`'s generic one.
+function resolveTupleVariantForPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.TupleStructPattern,
+  scrutineeType: Semantics.Type,
+): Option<ResolvedTupleVariant> {
+  const enumDecl = resolveEnumDecl(ctx, scrutineeType);
+  if (!isSome(enumDecl)) return none();
+  const variantName = lastPathSegment(pattern.path);
+  const variant = enumDecl.value.variants.find(
+    (v) => v.name.text === variantName,
+  );
+  if (variant === undefined) {
+    emitError(
+      ctx,
+      `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
+      pattern.tokenId,
+    );
+    return none();
+  }
+  if (!isSome(variant.body) || variant.body.value.kind !== "TupleFields") {
+    emitError(
+      ctx,
+      `variant \`${variantName}\` is not a tuple variant`,
+      pattern.tokenId,
+    );
+    return none();
+  }
+  return some({ fields: variant.body.value.fields });
+}
+
+function resolveStructVariantForPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.StructPattern,
+  scrutineeType: Semantics.Type,
+): Option<ResolvedStructVariant> {
+  const enumDecl = resolveEnumDecl(ctx, scrutineeType);
+  if (!isSome(enumDecl)) return none();
+  const variantName = lastPathSegment(pattern.path);
+  const variant = enumDecl.value.variants.find(
+    (v) => v.name.text === variantName,
+  );
+  if (variant === undefined) {
+    emitError(
+      ctx,
+      `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
+      pattern.tokenId,
+    );
+    return none();
+  }
+  if (!isSome(variant.body) || variant.body.value.kind !== "NamedFields") {
+    emitError(
+      ctx,
+      `variant \`${variantName}\` is not a struct variant`,
+      pattern.tokenId,
+    );
+    return none();
+  }
+  return some({ fields: variant.body.value.fields });
+}
+
+// eslint-disable-next-line complexity -- Routing function over the full Pattern union
+function analyzePattern(
+  ctx: AnalysisContext,
+  pattern: Parser.Pattern,
+  scrutineeType: Semantics.Type,
+): Semantics.Pattern {
+  switch (pattern.kind) {
+    case "WildcardPattern": {
+      const result: Semantics.WildcardPattern = {
+        ...pattern,
+        type: scrutineeType,
+      };
+      return result;
+    }
+    case "BindingPattern": {
+      if (isSome(pattern.subpattern)) {
+        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
+      }
+      bind(ctx, pattern.name.text, {
+        type: scrutineeType,
+        mutable: pattern.mutable,
+      });
+      const result: Semantics.MatchBindingPattern = {
+        ...pattern,
+        name: { ...pattern.name, type: scrutineeType },
+        subpattern: none(),
+        type: scrutineeType,
+      };
+      return result;
+    }
+    case "LiteralPattern": {
+      const literal = analyzeLiteralValue(ctx, pattern.literal);
+      const result: Semantics.LiteralPattern = {
+        ...pattern,
+        literal,
+        type: literal.type,
+      };
+      return result;
+    }
+    case "RangePattern": {
+      const start = analyzeLiteralValue(ctx, pattern.start.literal);
+      const end = analyzeLiteralValue(ctx, pattern.end.literal);
+      const startBound: Semantics.RangePatternBound = {
+        ...pattern.start,
+        literal: start,
+      };
+      const endBound: Semantics.RangePatternBound = {
+        ...pattern.end,
+        literal: end,
+      };
+      const result: Semantics.RangePattern = {
+        ...pattern,
+        start: startBound,
+        end: endBound,
+        type: start.type,
+      };
+      return result;
+    }
+    case "OrPattern": {
+      // Each alternative is analyzed independently, so `Foo(a) | Bar(b)`
+      // binds both `a` and `b` into the arm's scope regardless of which
+      // alternative actually matches at runtime.
+      // TODO (Hedge-47): spec 0016 requires every alternative to bind the
+      // same names/types/modes - not enforced yet.
+      const result: Semantics.OrPattern = {
+        ...pattern,
+        alternatives: pattern.alternatives.map((alt) =>
+          analyzePattern(ctx, alt, scrutineeType),
+        ),
+        type: scrutineeType,
+      };
+      return result;
+    }
+    case "PathPattern": {
+      const enumDecl = resolveEnumDecl(ctx, scrutineeType);
+      if (!isSome(enumDecl)) {
+        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
+      }
+      const variantName = lastPathSegment(pattern.path);
+      const variant = enumDecl.value.variants.find(
+        (v) => v.name.text === variantName,
+      );
+      if (variant === undefined) {
+        emitError(
+          ctx,
+          `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
+          pattern.tokenId,
+        );
+        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
+      }
+      if (isSome(variant.body)) {
+        emitError(
+          ctx,
+          `variant \`${variantName}\` has fields; use \`${variantName}(...)\` or \`${variantName} { ... }\``,
+          pattern.tokenId,
+        );
+        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
+      }
+      const result: Semantics.PathPattern = { ...pattern, type: scrutineeType };
+      return result;
+    }
+    case "TupleStructPattern": {
+      const variant = resolveTupleVariantForPattern(
+        ctx,
+        pattern,
+        scrutineeType,
+      );
+      if (!isSome(variant)) {
+        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
+      }
+      const { fields } = variant.value;
+      const variantName = lastPathSegment(pattern.path);
+      if (fields.length !== pattern.elements.length) {
+        emitError(
+          ctx,
+          `variant \`${variantName}\` has ${fields.length} field(s), but the pattern has ${pattern.elements.length}`,
+          pattern.tokenId,
+        );
+      }
+      const elements = pattern.elements.map((el, i) =>
+        analyzePattern(ctx, el, fields[i]?.type ?? UNIT),
+      );
+      const result: Semantics.TupleStructPattern = {
+        ...pattern,
+        elements,
+        type: scrutineeType,
+      };
+      return result;
+    }
+    case "StructPattern": {
+      const variant = resolveStructVariantForPattern(
+        ctx,
+        pattern,
+        scrutineeType,
+      );
+      if (!isSome(variant)) {
+        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
+      }
+      const declaredFields = variant.value.fields;
+      const variantName = lastPathSegment(pattern.path);
+      const fields = pattern.fields.map((field): Semantics.FieldPattern => {
+        const declared = declaredFields.find(
+          (f) => f.name.text === field.name.text,
+        );
+        const fieldType = declared?.type ?? UNIT;
+        if (declared === undefined) {
+          emitError(
+            ctx,
+            `no field \`${field.name.text}\` on variant \`${variantName}\``,
+            field.name.tokenId,
+          );
+        }
+        if (isSome(field.pattern)) {
+          return {
+            ...field,
+            name: { ...field.name, type: fieldType },
+            pattern: some(analyzePattern(ctx, field.pattern.value, fieldType)),
+          };
+        }
+        bind(ctx, field.name.text, { type: fieldType, mutable: false });
+        return {
+          ...field,
+          name: { ...field.name, type: fieldType },
+          pattern: none<Semantics.Pattern>(),
+        };
+      });
+      const result: Semantics.StructPattern = {
+        ...pattern,
+        fields,
+        type: scrutineeType,
+      };
+      return result;
+    }
+    case "TuplePattern":
+    case "SlicePattern":
+      return analyzePatternGuardrail(ctx, pattern, scrutineeType);
+    default:
+      return assertNever(
+        pattern,
+        `Unexpected pattern: ${JSON.stringify(pattern)}`,
+      );
+  }
+}
+
+function isIrrefutablePattern(pattern: Semantics.Pattern): boolean {
+  switch (pattern.kind) {
+    case "WildcardPattern":
+      return true;
+    case "BindingPattern":
+      return isNone(pattern.subpattern);
+    case "LiteralPattern":
+    case "RangePattern":
+    case "TuplePattern":
+    case "StructPattern":
+    case "TupleStructPattern":
+    case "PathPattern":
+    case "SlicePattern":
+      return false;
+    case "OrPattern":
+      // Matching tries each alternative in turn and succeeds at the first
+      // one that matches, so a single irrefutable alternative (e.g. `_` in
+      // `_ | Message::Quit`) makes the whole or-pattern always match.
+      return pattern.alternatives.some((alt) => isIrrefutablePattern(alt));
+    default:
+      return assertNever(
+        pattern,
+        `Unexpected pattern: ${JSON.stringify(pattern)}`,
+      );
+  }
+}
+
+/** Every enum-variant name a pattern covers, recursing through `OrPattern`
+ * alternatives - every other pattern kind contributes nothing (a wildcard/
+ * binding catch-all is handled separately by `checkMatchExhaustiveness`'s
+ * own base rule, and every other kind either doesn't apply to an enum
+ * scrutinee or (once `analyzePattern` resolves it) can only ever name a
+ * real variant of it). */
+// eslint-disable-next-line complexity -- Routing function over the full Pattern union
+function collectCoveredVariantNames(
+  pattern: Semantics.Pattern,
+  out: Set<string>,
+): void {
+  switch (pattern.kind) {
+    case "PathPattern":
+    case "TupleStructPattern":
+    case "StructPattern": {
+      const name = lastPathSegment(pattern.path);
+      if (name !== undefined) out.add(name);
+      return;
+    }
+    case "OrPattern":
+      for (const alt of pattern.alternatives) {
+        collectCoveredVariantNames(alt, out);
+      }
+      return;
+    case "WildcardPattern":
+    case "BindingPattern":
+    case "LiteralPattern":
+    case "RangePattern":
+    case "TuplePattern":
+    case "SlicePattern":
+      return;
+    default:
+      assertNever(pattern, `Unexpected pattern: ${JSON.stringify(pattern)}`);
+  }
+}
+
+/** Every bool value a pattern covers, recursing through `OrPattern`
+ * alternatives - mirrors `collectCoveredVariantNames` for the bool
+ * scrutinee case. */
+// eslint-disable-next-line complexity -- Routing function over the full Pattern union
+function collectCoveredBoolValues(
+  pattern: Semantics.Pattern,
+  out: Set<boolean>,
+): void {
+  switch (pattern.kind) {
+    case "LiteralPattern":
+      if (pattern.literal.kind === "BoolLiteral")
+        out.add(pattern.literal.value);
+      return;
+    case "OrPattern":
+      for (const alt of pattern.alternatives) {
+        collectCoveredBoolValues(alt, out);
+      }
+      return;
+    case "WildcardPattern":
+    case "BindingPattern":
+    case "RangePattern":
+    case "TuplePattern":
+    case "StructPattern":
+    case "TupleStructPattern":
+    case "PathPattern":
+    case "SlicePattern":
+      return;
+    default:
+      assertNever(pattern, `Unexpected pattern: ${JSON.stringify(pattern)}`);
+  }
+}
+
+/**
+ * Reports an arm as unreachable when it is fully subsumed by the arms
+ * before it, in source order. A guarded arm's own coverage is never added
+ * to `coveredVariants`/`coveredBools` - a guard means "maybe matches", so
+ * it can't unconditionally cover anything for arms after it. Only
+ * enum-variant and bool coverage get real subsumption tracking (mirrors
+ * `checkMatchExhaustiveness`'s own scope); every other scrutinee type only
+ * ever hits the irrefutable-catch-all rule below.
+ */
+// eslint-disable-next-line complexity -- Enum/bool/general-catch-all branches, each a simple check
+function checkUnreachableArms(
+  ctx: AnalysisContext,
+  arms: readonly Semantics.MatchArm[],
+  scrutineeType: Semantics.Type,
+): void {
+  const enumDecl = resolveEnumDecl(ctx, scrutineeType);
+  const isBool = scrutineeType.kind === "PrimitiveBooleanType";
+  const coveredVariants = new Set<string>();
+  const coveredBools = new Set<boolean>();
+  let hasCatchAll = false;
+
+  for (const arm of arms) {
+    if (hasCatchAll) {
+      emitError(ctx, "unreachable pattern", arm.tokenId);
+    } else if (isSome(enumDecl)) {
+      const thisArmVariants = new Set<string>();
+      collectCoveredVariantNames(arm.pattern, thisArmVariants);
+      if (
+        thisArmVariants.size > 0 &&
+        [...thisArmVariants].every((name) => coveredVariants.has(name))
+      ) {
+        emitError(ctx, "unreachable pattern", arm.tokenId);
+      }
+    } else if (isBool) {
+      const thisArmBools = new Set<boolean>();
+      collectCoveredBoolValues(arm.pattern, thisArmBools);
+      if (
+        thisArmBools.size > 0 &&
+        [...thisArmBools].every((v) => coveredBools.has(v))
+      ) {
+        emitError(ctx, "unreachable pattern", arm.tokenId);
+      }
+    }
+
+    if (isNone(arm.guard)) {
+      if (isIrrefutablePattern(arm.pattern)) {
+        hasCatchAll = true;
+      } else if (isSome(enumDecl)) {
+        collectCoveredVariantNames(arm.pattern, coveredVariants);
+      } else if (isBool) {
+        collectCoveredBoolValues(arm.pattern, coveredBools);
+      }
+    }
+  }
+}
+
+function checkMatchExhaustiveness(
+  ctx: AnalysisContext,
+  matchExpr: Parser.MatchExpression,
+  arms: readonly Semantics.MatchArm[],
+  scrutineeType: Semantics.Type,
+): void {
+  const hasCatchAll = arms.some(
+    (arm) => isNone(arm.guard) && isIrrefutablePattern(arm.pattern),
+  );
+  if (hasCatchAll) return;
+
+  const enumDecl = resolveEnumDecl(ctx, scrutineeType);
+  if (isSome(enumDecl)) {
+    const covered = new Set<string>();
+    for (const arm of arms) {
+      if (isNone(arm.guard)) collectCoveredVariantNames(arm.pattern, covered);
+    }
+    const missing = enumDecl.value.variants
+      .map((v) => v.name.text)
+      .filter((name) => !covered.has(name));
+    if (missing.length > 0) {
+      emitError(
+        ctx,
+        `non-exhaustive patterns: \`${missing.join("`, `")}\` not covered`,
+        matchExpr.tokenId,
+      );
+    }
+    return;
+  }
+
+  if (scrutineeType.kind === "PrimitiveBooleanType") {
+    const covered = new Set<boolean>();
+    for (const arm of arms) {
+      if (isNone(arm.guard)) collectCoveredBoolValues(arm.pattern, covered);
+    }
+    const missing: string[] = [];
+    if (!covered.has(true)) missing.push("true");
+    if (!covered.has(false)) missing.push("false");
+    if (missing.length > 0) {
+      emitError(
+        ctx,
+        `non-exhaustive patterns: \`${missing.join("`, `")}\` not covered`,
+        matchExpr.tokenId,
+      );
+    }
+    return;
+  }
+
+  emitError(ctx, "non-exhaustive patterns: `_` not covered", matchExpr.tokenId);
+}
+
+function analyzeMatchArm(
+  ctx: AnalysisContext,
+  arm: Parser.MatchArm,
+  scrutineeType: Semantics.Type,
+): Semantics.MatchArm {
+  ctx.scopes.push(new Map());
+  try {
+    const pattern = analyzePattern(ctx, arm.pattern, scrutineeType);
+    const guard = mapSome(arm.guard, (g) => analyzeExpression(ctx, g));
+    const body = analyzeExpression(ctx, arm.body);
+    return { ...arm, pattern, guard, body };
+  } finally {
+    ctx.scopes.pop();
+  }
+}
+
+function analyzeMatchExpression(
+  ctx: AnalysisContext,
+  matchExpr: Parser.MatchExpression,
+): Semantics.MatchExpression {
+  const scrutinee = analyzeExpression(ctx, matchExpr.scrutinee);
+  const scrutineeType = getType(scrutinee);
+  const arms = matchExpr.arms.map((arm) =>
+    analyzeMatchArm(ctx, arm, scrutineeType),
+  );
+
+  // A `UnitType` scrutinee is ambiguous (see `isAmbiguousUnitExpr`'s doc
+  // comment): it's either a genuine unit value or the error-recovery
+  // placeholder for an already-diagnosed failure (an unresolved name, a
+  // failed arithmetic operand, ...). Skipping both checks in the
+  // placeholder case avoids piling a second, spurious "non-exhaustive"
+  // diagnostic on top of whatever already failed to resolve the scrutinee.
+  if (!(scrutineeType.kind === "UnitType" && isAmbiguousUnitExpr(scrutinee))) {
+    checkUnreachableArms(ctx, arms, scrutineeType);
+    checkMatchExhaustiveness(ctx, matchExpr, arms, scrutineeType);
+  }
+
+  let resultType: Semantics.Type = {
+    kind: "UnitType",
+    tokenId: matchExpr.tokenId,
+  };
+  for (const arm of arms) {
+    const armType = getType(arm.body);
+    if (armType.kind === "UnitType") continue;
+    if (resultType.kind === "UnitType") {
+      resultType = armType;
+      continue;
+    }
+    if (!typesEqual(resultType, armType)) {
+      emitError(ctx, "match arms have incompatible types", matchExpr.tokenId);
+      break;
+    }
+  }
+
+  return { ...matchExpr, scrutinee, arms, type: resultType };
+}
+
 function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
   switch (item.kind) {
     case "Function":
@@ -1057,8 +1716,12 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
         ? cached
         : analyzeStruct(ctx, item);
     }
-    case "Enum":
-      return analyzeEnumPlaceholder(ctx, item);
+    case "Enum": {
+      const cached = ctx.enumScope.get(item.name.text);
+      return cached !== undefined && cached.tokenId === item.tokenId
+        ? cached
+        : analyzeEnum(ctx, item);
+    }
     case "Const":
       return analyzeConstStatement(ctx, item);
     case "Static":
@@ -1524,6 +2187,7 @@ function analyzeBlock(
   ctx.constValueScopes.push(new Map());
   ctx.staticTypeScopes.push(new Map());
   const typeScopeBefore = new Set(ctx.typeScope.keys());
+  const enumScopeBefore = new Set(ctx.enumScope.keys());
   registerConstsAndStatics(ctx, block.statements);
   const analyzedStatements = block.statements.map((statement) =>
     analyzeStatement(ctx, statement),
@@ -1549,6 +2213,9 @@ function analyzeBlock(
   ctx.staticTypeScopes.pop();
   for (const key of ctx.typeScope.keys()) {
     if (!typeScopeBefore.has(key)) ctx.typeScope.delete(key);
+  }
+  for (const key of ctx.enumScope.keys()) {
+    if (!enumScopeBefore.has(key)) ctx.enumScope.delete(key);
   }
   return result;
 }
@@ -1587,8 +2254,18 @@ function analyzeStatement(
       ctx.typeScope.set(statement.name.text, analyzed);
       return analyzed;
     }
-    case "Enum":
-      return analyzeEnumPlaceholder(ctx, statement);
+    case "Enum": {
+      if (ctx.enumScope.has(statement.name.text)) {
+        emitError(
+          ctx,
+          `enum \`${statement.name.text}\` is defined more than once`,
+          statement.name.tokenId,
+        );
+      }
+      const analyzed = analyzeEnum(ctx, statement);
+      ctx.enumScope.set(statement.name.text, analyzed);
+      return analyzed;
+    }
     case "Const":
       // Already registered and folded by `registerConstsAndStatics`, at the
       // start of this block, so every reference within the block - before
@@ -1727,6 +2404,7 @@ function describeType(type: Semantics.Type): string {
     case "PrimitiveCharType":
       return "char";
     case "StructType":
+    case "EnumType":
       return type.name.split("::").pop() ?? type.name;
     case "UnitType":
       return "()";
@@ -1838,6 +2516,7 @@ function typesEqual(a: Semantics.Type, b: Semantics.Type): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === "StructType" && b.kind === "StructType")
     return a.name === b.name;
+  if (a.kind === "EnumType" && b.kind === "EnumType") return a.name === b.name;
   if (a.kind === "ReferenceType" && b.kind === "ReferenceType")
     return a.mutable === b.mutable && typesEqual(a.referent, b.referent);
   if (a.kind === "ArrayType" && b.kind === "ArrayType")
@@ -2212,11 +2891,7 @@ function analyzeExpression(
         LET_EXPRESSION_NOT_YET_SUPPORTED_MESSAGE,
       );
     case "MatchExpression":
-      return analyzeExpressionPlaceholder(
-        ctx,
-        expression.tokenId,
-        MATCH_NOT_YET_SUPPORTED_MESSAGE,
-      );
+      return analyzeMatchExpression(ctx, expression);
     case "WhileExpression":
       return analyzeExpressionPlaceholder(
         ctx,
@@ -2924,6 +3599,7 @@ export function analyze(
   const ctx: AnalysisContext = {
     scopes: [new Map(BUILTIN_SCOPE)],
     typeScope: new Map(),
+    enumScope: new Map(),
     diagnostics: [],
     tokens,
     constDeclScopes: [new Map<string, Parser.ConstDecl>()],
@@ -2942,6 +3618,16 @@ export function analyze(
         );
       } else {
         ctx.typeScope.set(item.name.text, analyzeStruct(ctx, item));
+      }
+    } else if (item.kind === "Enum") {
+      if (ctx.enumScope.has(item.name.text)) {
+        emitError(
+          ctx,
+          `enum \`${item.name.text}\` is defined more than once`,
+          item.name.tokenId,
+        );
+      } else {
+        ctx.enumScope.set(item.name.text, analyzeEnum(ctx, item));
       }
     } else if (item.kind === "Function") {
       if (topLevelFunctionNames.has(item.name.text)) {

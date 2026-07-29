@@ -108,56 +108,432 @@ describe("semantic analysis", (): void => {
     expect(result.diagnostics).toEqual([]);
   });
 
-  describe("enum declarations (parsed, not yet semantically analyzed)", () => {
-    it("top-level enum declaration is rejected with a clean 'not yet supported' diagnostic", () => {
+  describe("enum declarations (semantically analyzed)", () => {
+    it("analyzes a unit-variant enum declaration cleanly", () => {
       const result = diagnose("enum Message { Quit } fn main() {}");
-      expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain(
-        "not yet supported by semantic analysis",
-      );
+      expect(result.diagnostics).toEqual([]);
     });
 
-    it("local (in-block) enum declaration gets the same 'not yet supported' diagnostic via analyzeStatement", () => {
+    it("analyzes a local (in-block) unit-variant enum declaration cleanly via analyzeStatement", () => {
       const result = diagnose("fn main() { enum Local { A, B } }");
-      expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
-        "not yet supported by semantic analysis",
-      );
+      expect(result.diagnostics).toEqual([]);
     });
 
-    it("does not crash the analyzer for unit, tuple, or struct variant shapes", () => {
+    it("analyzes a tuple-variant enum declaration cleanly", () => {
+      const result = diagnose("enum Message { Move(i32, i32) } fn main() {}");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("analyzes an enum mixing unit, tuple, and struct variants cleanly", () => {
       const result = diagnose(
         `enum Message { Quit, Move(i32, i32), Write { text: str } } fn main() {}`,
       );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects an unsupported field type inside a tuple variant", () => {
+      const result = diagnose(
+        "enum Message { Move(i32, UnknownType) } fn main() {}",
+      );
       expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("Slice 1");
+    });
+
+    it("rejects an unsupported field type inside a struct variant", () => {
+      const result = diagnose(
+        "enum Message { Write { text: UnknownType } } fn main() {}",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("Slice 1");
+    });
+
+    it("accepts an enum type as a function parameter type", () => {
+      const result = diagnose(`
+        enum Message { Quit }
+        fn take(m: Message) {}
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("accepts an enum type as a function return type", () => {
+      const result = diagnose(`
+        enum Message { Quit }
+        fn identity(m: Message) -> Message { m }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a function parameter typed as an enum declared later in the file", () => {
+      const result = diagnose(`
+        fn take(m: Message) {}
+        enum Message { Quit }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects an enum with two variants sharing the same name", () => {
+      const result = diagnose("enum Message { Quit, Quit } fn main() {}");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "variant `Quit` is defined more than once",
+      );
     });
   });
 
-  describe("match expressions (parsed, not yet semantically analyzed)", () => {
-    it("rejects a match expression with a clean 'not yet supported' diagnostic", () => {
+  describe("match expressions (semantically analyzed)", () => {
+    it("analyzes a match with a single plain-binding arm cleanly", () => {
       const result = diagnose("fn main() { match 1 { x => x }; }");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a zero-arm match as non-exhaustive", () => {
+      const result = diagnose("fn main() { match 1 {}; }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.severity).toBe("error");
       expect(result.diagnostics[0]?.message).toContain(
-        "not yet supported by semantic analysis",
+        "non-exhaustive patterns",
       );
     });
 
-    it("does not crash the analyzer for a zero-arm match", () => {
-      const result = diagnose("fn main() { match 1 {}; }");
-      expect(result.diagnostics).toHaveLength(1);
+    it("analyzes a match used as an if-condition cleanly, since its own type comes from the arm bodies", () => {
+      const result = diagnose("fn main() { if match 1 { x => true } { } }");
+      expect(result.diagnostics).toEqual([]);
     });
 
-    it("does not cascade a second diagnostic when a match is used as an if condition", () => {
-      // The placeholder resolves to UnitType; analyzeIfExpression's
-      // bool-check skips any UnitType condition outright (a plain kind
-      // check, not a call to isAmbiguousUnitExpr), so there's no second
-      // "if condition must be bool" diagnostic.
-      const result = diagnose("fn main() { if match 1 { x => true } { } }");
+    it("analyzes a match with a single wildcard arm cleanly as a function's return value", () => {
+      const result = diagnose("fn f(x: i32) -> i32 { match x { _ => 0 } }");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("analyzes a match used as a let initializer cleanly", () => {
+      const result = diagnose(
+        "fn f(x: i32) -> i32 { let y = match x { _ => 1 }; y }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a match whose only arm is a bare literal pattern as non-exhaustive", () => {
+      const result = diagnose("fn f(x: i32) -> i32 { match x { 1 => 0 } }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toContain(
-        "not yet supported by semantic analysis",
+        "non-exhaustive patterns",
+      );
+    });
+  });
+
+  describe("match expressions over enum scrutinees (exhaustiveness)", () => {
+    it("rejects a two-variant enum match covering only one variant, naming the missing one", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move }
+        fn f(m: Message) -> i32 { match m { Message::Quit => 0 } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("non-exhaustive");
+      expect(result.diagnostics[0]?.message).toContain("Move");
+    });
+
+    it("rejects a three-variant enum match missing two variants, naming both", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move, Stop }
+        fn f(m: Message) -> i32 { match m { Message::Quit => 0 } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("Move");
+      expect(result.diagnostics[0]?.message).toContain("Stop");
+    });
+
+    it("analyzes a match covering both variants of a two-variant unit enum cleanly", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move }
+        fn f(m: Message) -> i32 {
+          match m { Message::Quit => 0, Message::Move => 1 }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("accepts a wildcard arm as satisfying enum exhaustiveness regardless of missing variants", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move, Stop }
+        fn f(m: Message) -> i32 {
+          match m { Message::Quit => 0, _ => 1 }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("binds a tuple variant's fields with their declared types, usable in the arm body", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move(i32, i32) }
+        fn f(m: Message) -> i32 {
+          match m { Message::Quit => 0, Message::Move(a, b) => a + b }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("shorthand-binds a struct variant's field with its declared type, usable in the arm body", () => {
+      const result = diagnose(`
+        enum Message { Quit, Write { text: str } }
+        fn f(m: Message) -> str {
+          match m { Message::Quit => "", Message::Write { text } => text }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("analyzes an exhaustive match mixing unit, tuple, and struct variants cleanly", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move(i32, i32), Write { text: str } }
+        fn f(m: Message) -> i32 {
+          match m {
+            Message::Quit => 0,
+            Message::Move(a, b) => a + b,
+            Message::Write { text } => 0,
+          }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("does not let an unrelated sibling enum's variants satisfy the scrutinee enum's own exhaustiveness", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move }
+        enum Other { A, B }
+        fn f(m: Message) -> i32 { match m { Message::Quit => 0 } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("Move");
+    });
+  });
+
+  describe("match expressions over bool scrutinees (exhaustiveness)", () => {
+    it("rejects a bool match covering only true", () => {
+      const result = diagnose("fn f(x: bool) -> i32 { match x { true => 0 } }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("non-exhaustive");
+      expect(result.diagnostics[0]?.message).toContain("false");
+    });
+
+    it("rejects a bool match covering only false", () => {
+      const result = diagnose(
+        "fn f(x: bool) -> i32 { match x { false => 0 } }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("non-exhaustive");
+      expect(result.diagnostics[0]?.message).toContain("true");
+    });
+
+    it("analyzes a bool match covering both true and false cleanly", () => {
+      const result = diagnose(
+        "fn f(x: bool) -> i32 { match x { true => 0, false => 1 } }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("analyzes a bool match with one literal arm plus a wildcard cleanly", () => {
+      const result = diagnose(
+        "fn f(x: bool) -> i32 { match x { true => 0, _ => 1 } }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
+  describe("match expressions: unreachable-arm detection", () => {
+    it("rejects a duplicate bool literal arm as unreachable", () => {
+      const result = diagnose(
+        "fn f(x: bool) -> i32 { match x { true => 0, true => 1, false => 2 } }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("unreachable pattern");
+    });
+
+    it("rejects a duplicate enum-variant arm as unreachable", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move }
+        fn f(m: Message) -> i32 {
+          match m {
+            Message::Quit => 0,
+            Message::Quit => 1,
+            Message::Move => 2,
+          }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("unreachable pattern");
+    });
+
+    it("rejects an arm following an unconditional wildcard as unreachable", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move }
+        fn f(m: Message) -> i32 {
+          match m { _ => 0, Message::Quit => 1 }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("unreachable pattern");
+    });
+
+    it("rejects an arm fully subsumed by an earlier or-pattern as unreachable", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move }
+        fn f(m: Message) -> i32 {
+          match m {
+            Message::Quit | Message::Move => 0,
+            Message::Quit => 1,
+          }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("unreachable pattern");
+    });
+
+    it("treats an or-pattern with a wildcard alternative as irrefutable, satisfying exhaustiveness alone", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move }
+        fn f(m: Message) -> i32 {
+          match m { _ | Message::Quit => 0 }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects an arm following an irrefutable or-pattern as unreachable", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move }
+        fn f(m: Message) -> i32 {
+          match m { _ | Message::Quit => 0, Message::Move => 1 }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("unreachable pattern");
+    });
+
+    it("points each unreachable-arm diagnostic at its own arm, not always the last one", () => {
+      const source = `
+        enum Message { A, B, C }
+        fn f(m: Message) -> i32 {
+          match m { _ => 0, Message::A => 1, Message::B => 2 }
+        }
+      `;
+      const { result } = analyzeWithTokens(source);
+      expect(result.diagnostics).toHaveLength(2);
+      const [first, second] = result.diagnostics;
+      assert(first !== undefined, "Expected first diagnostic");
+      assert(second !== undefined, "Expected second diagnostic");
+      assert(isSome(first.span), "Expected first span");
+      assert(isSome(second.span), "Expected second span");
+      expect(first.span.value.start).toBe(source.indexOf("Message::A"));
+      expect(second.span.value.start).toBe(source.indexOf("Message::B"));
+    });
+  });
+
+  describe("match expressions: guards and exhaustiveness", () => {
+    it("does not let a guarded arm covering the only gap satisfy exhaustiveness", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move }
+        fn f(m: Message, cond: bool) -> i32 {
+          match m {
+            Message::Quit => 0,
+            Message::Move if cond => 1,
+          }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("non-exhaustive");
+      expect(result.diagnostics[0]?.message).toContain("Move");
+    });
+
+    it("does not let a guarded arm make a later identical unguarded arm unreachable", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move }
+        fn f(m: Message, cond: bool) -> i32 {
+          match m {
+            Message::Quit if cond => 0,
+            Message::Quit => 1,
+            Message::Move => 2,
+          }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("does not flag a bare wildcard as unreachable when only a guarded wildcard precedes it", () => {
+      const result = diagnose(`
+        fn f(x: i32, cond: bool) -> i32 {
+          match x { _ if cond => 0, _ => 1 }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
+  describe("match expressions over a #[non_exhaustive] enum", () => {
+    it("analyzes an exhaustive match with no wildcard cleanly within the enum's own defining scope", () => {
+      // TODO (Hedge-222): cross-package enforcement (a foreign match
+      // needing `_`) has no referent yet - there's no module/package
+      // system (ROADMAP Slice 7). Every match the compiler can analyze
+      // today is "within the defining package", so #[non_exhaustive] is a
+      // real no-op pre-Slice-7, not an oversight.
+      const result = diagnose(`
+        #[non_exhaustive]
+        enum Message { Quit, Move }
+        fn f(m: Message) -> i32 {
+          match m { Message::Quit => 0, Message::Move => 1 }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
+  describe("match expressions over other scrutinee types (general coverage rule)", () => {
+    it("rejects an i32 match covering only literal arms, with no wildcard or binding", () => {
+      const result = diagnose(
+        "fn f(x: i32) -> i32 { match x { 1 => 0, 2 => 1 } }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("non-exhaustive");
+    });
+
+    it("accepts an i32 match with a final bare-binding arm (not `_`) as exhaustive", () => {
+      const result = diagnose(
+        "fn f(x: i32) -> i32 { match x { 1 => 0, n => n } }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a str match covering only literal arms, with no wildcard or binding", () => {
+      const result = diagnose(
+        `fn f(x: str) -> i32 { match x { "a" => 0, "b" => 1 } }`,
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("non-exhaustive");
+    });
+
+    it("rejects a char match covering only literal arms, with no wildcard or binding", () => {
+      const result = diagnose(
+        "fn f(x: char) -> i32 { match x { 'a' => 0, 'b' => 1 } }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("non-exhaustive");
+    });
+  });
+
+  describe("match expressions: cascade hygiene", () => {
+    it("does not cascade a non-exhaustive diagnostic when the scrutinee name is unresolved", () => {
+      const result = diagnose(
+        "fn f() -> i32 { match undefined_var { 1 => 0 } }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("Cannot find name");
+    });
+
+    it("does not cascade a non-exhaustive diagnostic when the scrutinee's own type is already erroneous", () => {
+      const result = diagnose(
+        "fn f(x: i32) -> i32 { match x.nonexistent { 1 => 0 } }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "field access on non-struct type",
       );
     });
   });
@@ -297,7 +673,7 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
       expect(result.diagnostics[0]?.message).toContain(
-        "only function, struct, const, and static declarations are allowed at the top level",
+        "only function, struct, enum, const, and static declarations are allowed at the top level",
       );
     });
 
@@ -305,7 +681,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("let x = 1;");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toContain(
-        "only function, struct, const, and static declarations are allowed at the top level",
+        "only function, struct, enum, const, and static declarations are allowed at the top level",
       );
     });
 
@@ -313,7 +689,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("{ 1; }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toContain(
-        "only function, struct, const, and static declarations are allowed at the top level",
+        "only function, struct, enum, const, and static declarations are allowed at the top level",
       );
     });
 
@@ -325,6 +701,12 @@ describe("semantic analysis", (): void => {
     it("struct declaration at top level is accepted", () => {
       const result = diagnose("struct Foo;");
       expect(result.diagnostics).toEqual([]);
+    });
+
+    it("names enum among the allowed top-level declarations in the restriction message", () => {
+      const result = diagnose("x + y;");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("enum");
     });
 
     it("const declaration at top level is accepted", () => {
@@ -1279,7 +1661,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose(`${stmt}; fn main() {}`);
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toContain(
-        "only function, struct, const, and static declarations are allowed at the top level",
+        "only function, struct, enum, const, and static declarations are allowed at the top level",
       );
     },
   );

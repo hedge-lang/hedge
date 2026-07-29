@@ -352,6 +352,7 @@ function walkStatementForBorrowBases(
       return;
     case "Function":
     case "Struct":
+    case "Enum":
     case "Const":
     case "Static":
       return;
@@ -530,6 +531,18 @@ function collectUses(expression: Semantics.Expression, out: Set<string>): void {
       if (isSome(expression.elseBranch))
         collectUses(expression.elseBranch.value, out);
       return;
+    case "MatchExpression":
+      // Same unscoped, name-only over-approximation this file already
+      // applies to a Block's own `let`-bound names (see `statementUses`'s
+      // `LetStatement` case) - a pattern-bound name referenced in a guard
+      // or body is collected the same as any other name, with no attempt
+      // to distinguish it from an outer binding of the same name.
+      collectUses(expression.scrutinee, out);
+      for (const arm of expression.arms) {
+        if (isSome(arm.guard)) collectUses(arm.guard.value, out);
+        collectUses(arm.body, out);
+      }
+      return;
     case "Block":
       for (const stmt of expression.statements) statementUses(stmt, out);
       if (isSome(expression.trailingExpression)) {
@@ -563,6 +576,7 @@ function statementUses(statement: Semantics.Statement, out: Set<string>): void {
       return;
     case "Function":
     case "Struct":
+    case "Enum":
     case "Const":
     case "Static":
       // Local item declarations do not directly use outer bindings in Slice 1/2.
