@@ -310,7 +310,7 @@ describe("semantic analysis", (): void => {
     it("analyzes a struct pattern over a plain struct scrutinee cleanly, binding fields with their declared types", () => {
       const result = diagnose(`
         struct Point { x: i32, y: i32 }
-        fn f(p: Point) -> i32 { match p { Point { x, y } => x + y, _ => 0 } }
+        fn f(p: Point) -> i32 { match p { Point { x, y } => x + y } }
       `);
       expect(result.diagnostics).toEqual([]);
     });
@@ -318,7 +318,7 @@ describe("semantic analysis", (): void => {
     it("analyzes a tuple-struct pattern over a plain tuple-struct scrutinee cleanly", () => {
       const result = diagnose(`
         struct Pair(i32, i32);
-        fn f(p: Pair) -> i32 { match p { Pair(a, b) => a + b, _ => 0 } }
+        fn f(p: Pair) -> i32 { match p { Pair(a, b) => a + b } }
       `);
       expect(result.diagnostics).toEqual([]);
     });
@@ -326,7 +326,7 @@ describe("semantic analysis", (): void => {
     it("still resolves a struct pattern's fields when a trailing `..` omits the rest", () => {
       const result = diagnose(`
         struct Point { x: i32, y: i32 }
-        fn f(p: Point) -> i32 { match p { Point { x, .. } => x, _ => 0 } }
+        fn f(p: Point) -> i32 { match p { Point { x, .. } => x } }
       `);
       expect(result.diagnostics).toEqual([]);
     });
@@ -334,7 +334,7 @@ describe("semantic analysis", (): void => {
     it("rejects an unknown field name in a plain struct pattern, naming the struct", () => {
       const result = diagnose(`
         struct Point { x: i32, y: i32 }
-        fn f(p: Point) -> i32 { match p { Point { x, z } => x, _ => 0 } }
+        fn f(p: Point) -> i32 { match p { Point { x, z } => x } }
       `);
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toBe(
@@ -345,7 +345,7 @@ describe("semantic analysis", (): void => {
     it("rejects a tuple-struct pattern whose element count does not match the struct's own field count", () => {
       const result = diagnose(`
         struct Pair(i32, i32);
-        fn f(p: Pair) -> i32 { match p { Pair(a) => a, _ => 0 } }
+        fn f(p: Pair) -> i32 { match p { Pair(a) => a } }
       `);
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toBe(
@@ -358,7 +358,7 @@ describe("semantic analysis", (): void => {
         struct Point { x: i32, y: i32 }
         struct Line { start: Point, end: Point }
         fn f(l: Line) -> i32 {
-          match l { Line { start: Point { x, y }, end } => x + y, _ => 0 }
+          match l { Line { start: Point { x, y }, end } => x + y }
         }
       `);
       expect(result.diagnostics).toEqual([]);
@@ -367,7 +367,7 @@ describe("semantic analysis", (): void => {
     it("rejects a tuple-struct pattern used against a struct declared with named fields", () => {
       const result = diagnose(`
         struct Point { x: i32, y: i32 }
-        fn f(p: Point) -> i32 { match p { Point(a, b) => a, _ => 0 } }
+        fn f(p: Point) -> i32 { match p { Point(a, b) => a } }
       `);
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toBe(
@@ -378,12 +378,64 @@ describe("semantic analysis", (): void => {
     it("rejects a struct pattern used against a struct declared with tuple fields", () => {
       const result = diagnose(`
         struct Pair(i32, i32);
-        fn f(p: Pair) -> i32 { match p { Pair { a } => a, _ => 0 } }
+        fn f(p: Pair) -> i32 { match p { Pair { a } => a } }
       `);
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toBe(
         "struct `Pair` does not have named fields",
       );
+    });
+
+    it("rejects a struct pattern naming a different struct than the scrutinee's own type", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        struct Other { x: i32, y: i32 }
+        fn f(p: Point) -> i32 { match p { Other { x, y } => x + y } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "expected struct `Point`, found `Other`",
+      );
+    });
+
+    it("rejects a tuple-struct pattern naming a different struct than the scrutinee's own type", () => {
+      const result = diagnose(`
+        struct Pair(i32, i32);
+        struct Duo(i32, i32);
+        fn f(p: Pair) -> i32 { match p { Duo(a, b) => a } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "expected struct `Pair`, found `Duo`",
+      );
+    });
+  });
+
+  describe("match expressions: struct/enum-variant pattern irrefutability", () => {
+    it("treats a single struct-pattern arm over a plain struct as exhaustive with no other arms", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(p: Point) -> i32 { match p { Point { x, y } => x + y } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("treats a single tuple-struct-pattern arm over a single-variant enum as exhaustive with no other arms", () => {
+      const result = diagnose(`
+        enum Wrapper { Only(i32) }
+        fn f(w: Wrapper) -> i32 { match w { Wrapper::Only(x) => x } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still rejects a single tuple-struct-pattern arm over a multi-variant enum as non-exhaustive", () => {
+      const result = diagnose(`
+        enum Wrapper { Only(i32), Empty }
+        fn f(w: Wrapper) -> i32 { match w { Wrapper::Only(x) => x } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("non-exhaustive");
+      expect(result.diagnostics[0]?.message).toContain("Empty");
     });
   });
 
