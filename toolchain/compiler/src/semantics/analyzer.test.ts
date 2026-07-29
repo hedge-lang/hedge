@@ -306,6 +306,65 @@ describe("semantic analysis", (): void => {
     });
   });
 
+  describe("match expressions over plain (non-enum) struct scrutinees", () => {
+    it("analyzes a struct pattern over a plain struct scrutinee cleanly, binding fields with their declared types", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(p: Point) -> i32 { match p { Point { x, y } => x + y, _ => 0 } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("analyzes a tuple-struct pattern over a plain tuple-struct scrutinee cleanly", () => {
+      const result = diagnose(`
+        struct Pair(i32, i32);
+        fn f(p: Pair) -> i32 { match p { Pair(a, b) => a + b, _ => 0 } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still resolves a struct pattern's fields when a trailing `..` omits the rest", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(p: Point) -> i32 { match p { Point { x, .. } => x, _ => 0 } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects an unknown field name in a plain struct pattern, naming the struct", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(p: Point) -> i32 { match p { Point { x, z } => x, _ => 0 } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "no field `z` on struct `Point`",
+      );
+    });
+
+    it("rejects a tuple-struct pattern whose element count does not match the struct's own field count", () => {
+      const result = diagnose(`
+        struct Pair(i32, i32);
+        fn f(p: Pair) -> i32 { match p { Pair(a) => a, _ => 0 } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "struct `Pair` has 2 field(s), but the pattern has 1",
+      );
+    });
+
+    it("resolves a nested struct pattern reached through an outer struct field", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        struct Line { start: Point, end: Point }
+        fn f(l: Line) -> i32 {
+          match l { Line { start: Point { x, y }, end } => x + y, _ => 0 }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
   describe("match expressions over bool scrutinees (exhaustiveness)", () => {
     it("rejects a bool match covering only true", () => {
       const result = diagnose("fn f(x: bool) -> i32 { match x { true => 0 } }");
