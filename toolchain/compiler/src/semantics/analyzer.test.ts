@@ -2087,6 +2087,73 @@ describe("reference types", (): void => {
   });
 });
 
+describe("match binding modes over a reference scrutinee", () => {
+  it("binds a plain name as a shared reference when the scrutinee is &x", () => {
+    const result = diagnose("fn f(x: i32) -> i32 { match &x { name => *name } }");
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("still binds a plain name by value (not a reference) when the scrutinee is owned", () => {
+    const result = diagnose("fn f(x: i32) { match x { name => *name }; }");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "cannot dereference a non-reference type",
+    );
+  });
+
+  it("binds a plain name as a mutable reference when the scrutinee is &mut x", () => {
+    const result = diagnose(
+      "fn f(mut x: i32) -> i32 { match &mut x { name => *name } }",
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("keeps a &name override binding as a shared reference when it merely matches the scrutinee's own default", () => {
+    const result = diagnose(
+      "fn f(x: i32) -> i32 { match &x { &name => *name } }",
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("honors a &name override binding as a shared reference even when the scrutinee is owned", () => {
+    const result = diagnose("fn f(x: i32) -> i32 { match x { &name => *name } }");
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("inherits the scrutinee's shared-reference default for every field of a destructured struct pattern", () => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      fn f(p: Point) -> i32 { match &p { Point { x, y } => *x + *y } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("lets one struct field override to a borrow while another inherits the owned scrutinee's move default", () => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      fn f(p: Point) -> i32 { match p { Point { x: &bx, y } => *bx + y } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("treats `mut name` as a reassignable local binding without turning it into a reference", () => {
+    const result = diagnose(
+      "fn f(x: i32) -> i32 { match x { mut name => { name = name + 1; name } } }",
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("still rejects reassigning a plain (non-mut) match binding", () => {
+    const result = diagnose(
+      "fn f(x: i32) -> i32 { match x { name => { name = name + 1; name } } }",
+    );
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "cannot assign to immutable binding",
+    );
+  });
+});
+
 describe("array types", (): void => {
   it("type-checks a [i32; 3] annotation against a matching array literal", (): void => {
     const result = diagnose(`
