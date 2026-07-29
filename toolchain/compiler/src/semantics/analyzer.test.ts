@@ -387,6 +387,27 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics[0]?.message).toContain("unreachable pattern");
     });
 
+    it("treats an or-pattern with a wildcard alternative as irrefutable, satisfying exhaustiveness alone", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move }
+        fn f(m: Message) -> i32 {
+          match m { _ | Message::Quit => 0 }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects an arm following an irrefutable or-pattern as unreachable", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move }
+        fn f(m: Message) -> i32 {
+          match m { _ | Message::Quit => 0, Message::Move => 1 }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("unreachable pattern");
+    });
+
     it("points each unreachable-arm diagnostic at its own arm, not always the last one", () => {
       const source = `
         enum Message { A, B, C }

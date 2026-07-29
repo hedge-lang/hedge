@@ -1462,7 +1462,10 @@ function isIrrefutablePattern(pattern: Semantics.Pattern): boolean {
     case "SlicePattern":
       return false;
     case "OrPattern":
-      return pattern.alternatives.every((alt) => isIrrefutablePattern(alt));
+      // Matching tries each alternative in turn and succeeds at the first
+      // one that matches, so a single irrefutable alternative (e.g. `_` in
+      // `_ | Message::Quit`) makes the whole or-pattern always match.
+      return pattern.alternatives.some((alt) => isIrrefutablePattern(alt));
     default:
       return assertNever(
         pattern,
