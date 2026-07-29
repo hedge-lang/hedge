@@ -741,7 +741,7 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
       expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+        "this pattern kind is not yet supported",
       );
     });
 
@@ -750,7 +750,7 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
       expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+        "this pattern kind is not yet supported",
       );
     });
 
@@ -759,7 +759,7 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
       expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+        "this pattern kind is not yet supported",
       );
     });
 
@@ -768,7 +768,7 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
       expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+        "this pattern kind is not yet supported",
       );
     });
 
@@ -777,7 +777,7 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
       expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+        "this pattern kind is not yet supported",
       );
     });
 
@@ -786,7 +786,7 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
       expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+        "this pattern kind is not yet supported",
       );
     });
 
@@ -795,7 +795,7 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
       expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+        "this pattern kind is not yet supported",
       );
     });
   });
@@ -868,7 +868,9 @@ describe("semantic analysis", (): void => {
         fn f(p: Point) -> i32 { let Point { x, y } = p; y = 5; x + y }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("y");
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot assign to immutable binding",
+      );
     });
 
     it("rejects a refutable multi-variant enum-variant pattern in a let statement, naming `if let`", () => {
