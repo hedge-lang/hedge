@@ -363,6 +363,28 @@ describe("semantic analysis", (): void => {
       `);
       expect(result.diagnostics).toEqual([]);
     });
+
+    it("rejects a tuple-struct pattern used against a struct declared with named fields", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(p: Point) -> i32 { match p { Point(a, b) => a, _ => 0 } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "struct `Point` is not a tuple struct",
+      );
+    });
+
+    it("rejects a struct pattern used against a struct declared with tuple fields", () => {
+      const result = diagnose(`
+        struct Pair(i32, i32);
+        fn f(p: Pair) -> i32 { match p { Pair { a } => a, _ => 0 } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "struct `Pair` does not have named fields",
+      );
+    });
   });
 
   describe("match expressions over bool scrutinees (exhaustiveness)", () => {
