@@ -140,7 +140,12 @@ function analyzeLetOrParamPattern(
     : false;
   const result = analyzePattern(ctx, pattern, effectiveType, mode, rootMutable);
   if (!isIrrefutablePattern(ctx, result)) {
-    emitError(ctx, REFUTABLE_LET_OR_PARAM_PATTERN_MESSAGE, pattern.tokenId, none());
+    emitError(
+      ctx,
+      REFUTABLE_LET_OR_PARAM_PATTERN_MESSAGE,
+      pattern.tokenId,
+      none(),
+    );
   }
   return result;
 }
@@ -904,7 +909,12 @@ function registerConstsAndStatics(
           );
         }
         if (isSome(item.visibility)) {
-          emitError(ctx, "static items cannot be pub yet", item.tokenId, none());
+          emitError(
+            ctx,
+            "static items cannot be pub yet",
+            item.tokenId,
+            none(),
+          );
         }
         const declaredType = validateSlice1Type(
           ctx,
@@ -1156,7 +1166,12 @@ function analyzePatternGuardrail(
   pattern: Parser.Pattern,
   scrutineeType: Semantics.Type,
 ): Semantics.WildcardPattern {
-  emitError(ctx, PATTERN_KIND_NOT_YET_SUPPORTED_MESSAGE, pattern.tokenId, none());
+  emitError(
+    ctx,
+    PATTERN_KIND_NOT_YET_SUPPORTED_MESSAGE,
+    pattern.tokenId,
+    none(),
+  );
   return {
     kind: "WildcardPattern",
     tokenId: pattern.tokenId,
@@ -1994,7 +2009,8 @@ function checkOrPatternConsistency(
     // `effectiveBindingType`) and derived local mutability, not the raw
     // sigils: under a shared-reference scrutinee, `name` and `&name` both
     // bind an immutable `&T` - different syntax, same result.
-    const localMutable = (b: OrPatternBinding): boolean => !b.byRef && b.mutable;
+    const localMutable = (b: OrPatternBinding): boolean =>
+      !b.byRef && b.mutable;
     const consistent = rest.every(
       (occ) =>
         typesEqual(first.type, occ.type) &&
@@ -2248,7 +2264,12 @@ function checkMatchExhaustiveness(
     return;
   }
 
-  emitError(ctx, "non-exhaustive patterns: `_` not covered", matchExpr.tokenId, none());
+  emitError(
+    ctx,
+    "non-exhaustive patterns: `_` not covered",
+    matchExpr.tokenId,
+    none(),
+  );
 }
 
 function analyzeMatchArm(
@@ -2320,7 +2341,12 @@ function analyzeMatchExpression(
       continue;
     }
     if (!typesEqual(resultType, armType)) {
-      emitError(ctx, "match arms have incompatible types", matchExpr.tokenId, none());
+      emitError(
+        ctx,
+        "match arms have incompatible types",
+        matchExpr.tokenId,
+        none(),
+      );
       break;
     }
   }
@@ -3300,13 +3326,23 @@ function inferBinaryType(
       const leftEq = !isLeftTypeValid || hasCapability(leftType, "equality");
       const rightEq = !isRightTypeValid || hasCapability(rightType, "equality");
       if (!leftEq || !rightEq) {
-        emitError(ctx, "type does not support equality comparison", tokenId, none());
+        emitError(
+          ctx,
+          "type does not support equality comparison",
+          tokenId,
+          none(),
+        );
       } else if (
         isLeftTypeValid &&
         isRightTypeValid &&
         !typesEqual(leftType, rightType)
       ) {
-        emitError(ctx, "comparison operands must have the same type", tokenId, none());
+        emitError(
+          ctx,
+          "comparison operands must have the same type",
+          tokenId,
+          none(),
+        );
       }
       return bool;
     }
@@ -3319,13 +3355,23 @@ function inferBinaryType(
       const rightOrd =
         !isRightTypeValid || hasCapability(rightType, "ordering");
       if (!leftOrd || !rightOrd) {
-        emitError(ctx, "type does not support ordering comparison", tokenId, none());
+        emitError(
+          ctx,
+          "type does not support ordering comparison",
+          tokenId,
+          none(),
+        );
       } else if (
         isLeftTypeValid &&
         isRightTypeValid &&
         !typesEqual(leftType, rightType)
       ) {
-        emitError(ctx, "comparison operands must have the same type", tokenId, none());
+        emitError(
+          ctx,
+          "comparison operands must have the same type",
+          tokenId,
+          none(),
+        );
       }
       return bool;
     }
@@ -3333,10 +3379,20 @@ function inferBinaryType(
     case "And":
     case "Or": {
       if (isLeftTypeValid && !hasCapability(leftType, "logical")) {
-        emitError(ctx, "logical operator operands must be `bool`", tokenId, none());
+        emitError(
+          ctx,
+          "logical operator operands must be `bool`",
+          tokenId,
+          none(),
+        );
       }
       if (isRightTypeValid && !hasCapability(rightType, "logical")) {
-        emitError(ctx, "logical operator operands must be `bool`", tokenId, none());
+        emitError(
+          ctx,
+          "logical operator operands must be `bool`",
+          tokenId,
+          none(),
+        );
       }
       return bool;
     }
@@ -3367,7 +3423,12 @@ function inferBinaryType(
         isRightTypeValid &&
         !typesEqual(leftType, rightType)
       ) {
-        emitError(ctx, "arithmetic operands must have the same type", tokenId, none());
+        emitError(
+          ctx,
+          "arithmetic operands must have the same type",
+          tokenId,
+          none(),
+        );
       }
       return isLeftTypeValid ? leftType : rightType;
     }
@@ -3378,17 +3439,32 @@ function inferBinaryType(
     case "BitXor":
     case "BitOr": {
       if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
-        emitError(ctx, "bitwise operations require integer operands", tokenId, none());
+        emitError(
+          ctx,
+          "bitwise operations require integer operands",
+          tokenId,
+          none(),
+        );
       }
       if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
-        emitError(ctx, "bitwise operations require integer operands", tokenId, none());
+        emitError(
+          ctx,
+          "bitwise operations require integer operands",
+          tokenId,
+          none(),
+        );
       }
       if (
         isLeftTypeValid &&
         isRightTypeValid &&
         !typesEqual(leftType, rightType)
       ) {
-        emitError(ctx, "bitwise operands must have the same type", tokenId, none());
+        emitError(
+          ctx,
+          "bitwise operands must have the same type",
+          tokenId,
+          none(),
+        );
       }
       return isLeftTypeValid ? leftType : rightType;
     }
@@ -3807,7 +3883,12 @@ function analyzeFieldAccessExpression(
     objectType.kind === "ReferenceType" ? objectType.referent : objectType;
 
   if (structType.kind !== "StructType") {
-    emitError(ctx, "field access on non-struct type", expression.field.tokenId, none());
+    emitError(
+      ctx,
+      "field access on non-struct type",
+      expression.field.tokenId,
+      none(),
+    );
     return unresolved();
   }
 
@@ -3926,7 +4007,12 @@ function checkLhsMutability(
         emitError(ctx, "cannot assign to immutable binding", tokenId, none());
         break;
       case "shared-reference":
-        emitError(ctx, "cannot assign through a shared reference", tokenId, none());
+        emitError(
+          ctx,
+          "cannot assign through a shared reference",
+          tokenId,
+          none(),
+        );
         break;
       default:
         assertNever(
@@ -4230,7 +4316,12 @@ function analyzePath(
   if (isSome(resolvedType)) {
     return { ...path, type: resolvedType.value.type };
   }
-  emitError(ctx, `Cannot find name "${name}" in this scope.`, path.tokenId, none());
+  emitError(
+    ctx,
+    `Cannot find name "${name}" in this scope.`,
+    path.tokenId,
+    none(),
+  );
   return { ...path, type: { kind: "UnitType", tokenId: path.tokenId } };
 }
 

@@ -2275,10 +2275,7 @@ describe("slice patterns over fixed-length arrays", () => {
     assert(fn !== undefined, "Expected a function declaration");
     const letStmt = fn.body.statements[0];
     assert(letStmt?.kind === "LetStatement", "Expected a let statement");
-    assert(
-      letStmt.pattern.kind === "SlicePattern",
-      "Expected a slice pattern",
-    );
+    assert(letStmt.pattern.kind === "SlicePattern", "Expected a slice pattern");
     const restElement = letStmt.pattern.elements.at(-1);
     assert(
       restElement?.kind === "RestPattern",
