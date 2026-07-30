@@ -147,7 +147,7 @@ function staticInitFlagName(ctx: JsimContext, name: string): string {
  * shape for a wildcard rather than a genuine `WildcardPattern` node). Any
  * other kind is a real destructuring pattern - semantic analysis (Hedge-47)
  * accepts it when irrefutable, but real destructuring codegen isn't
- * implemented yet (Hedge-48's job, mirroring `MatchExpression`'s own throw
+ * implemented yet (Hedge-230's job, mirroring `MatchExpression`'s own throw
  * below), so this throws rather than reading off a name that doesn't exist
  * for that pattern shape.
  */
