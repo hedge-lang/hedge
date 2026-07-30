@@ -2351,6 +2351,14 @@ describe("or-pattern binding consistency", () => {
     expect(result.diagnostics).toEqual([]);
   });
 
+  it("accepts differing byRef sigils across alternatives when they produce the same resulting type and local mutability", () => {
+    const result = diagnose(`
+      enum Res { Ok(i32), Err(i32) }
+      fn f(r: Res) { match &r { Res::Ok(name) | Res::Err(&name) => print(*name) } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
   it("rejects an or-pattern whose alternatives bind different names", () => {
     const result = diagnose(`
       enum Res { Ok(i32), Err(i32) }

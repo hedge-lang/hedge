@@ -1995,11 +1995,20 @@ function checkOrPatternConsistency(
       .filter((b) => b !== undefined);
     const [first, ...rest] = occurrences;
     if (first === undefined) continue;
+    // Compare the *resulting* bound type (already mode-aware - a `&`/`&mut`
+    // override bakes its mode into `type` as a `ReferenceType`, see
+    // `effectiveBindingType`) and local rebindability (`!byRef && mutable` -
+    // a `byRef` binding's own local slot is never separately reassignable,
+    // same reasoning as `effectiveBindingType`'s `localMutable`), not the
+    // raw `byRef`/`mutable` sigils themselves: under a shared-reference
+    // scrutinee, a bare `name` and an explicit `&name` both bind `&T` with
+    // an immutable local slot - different syntax, identical observable
+    // binding - and shouldn't be flagged as inconsistent.
+    const localMutable = (b: OrPatternBinding) => !b.byRef && b.mutable;
     const consistent = rest.every(
       (occ) =>
         typesEqual(first.type, occ.type) &&
-        first.byRef === occ.byRef &&
-        first.mutable === occ.mutable,
+        localMutable(first) === localMutable(occ),
     );
     if (!consistent) {
       emitError(
