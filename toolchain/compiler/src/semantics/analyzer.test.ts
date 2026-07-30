@@ -2224,6 +2224,93 @@ describe("binding-mode &mut-override legality", () => {
   });
 });
 
+describe("slice patterns over fixed-length arrays", () => {
+  it("destructures a slice pattern whose element count exactly matches a fixed-length array", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 3]) -> i32 { let [a, b, c] = arr; a + b + c }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a slice pattern with no rest whose element count does not match the array's length", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 3]) { let [a, b] = arr; }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "array has 3 element(s), but the pattern requires exactly 2",
+    );
+  });
+
+  it("rejects a slice pattern with a rest whose required minimum exceeds the array's length", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 2]) { let [a, b, c, ..rest] = arr; }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "array has 2 element(s), but the pattern requires at least 3",
+    );
+  });
+
+  it("destructures a slice pattern with a rest binding, computing its fixed-length array type", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 5]) {
+        let [first, ..rest] = arr;
+        let check: [i32; 4] = rest;
+        print(first);
+        print(check);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a slice pattern with more than one `..` rest", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 5]) { let [a, .., b, .., c] = arr; }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "a slice pattern can have at most one `..` rest, but this one has 2",
+    );
+  });
+
+  it("treats a single slice-pattern match arm alone as exhaustive when its length matches the array", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 3]) -> i32 { match arr { [a, b, c] => a + b + c } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("does not cascade a non-exhaustive diagnostic on top of an arity-mismatched slice-pattern arm", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 3]) { match arr { [a, b] => { print(a); print(b); } }; }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "array has 3 element(s), but the pattern requires exactly 2",
+    );
+  });
+
+  it("binds a `&rest` sigil as a shared reference to the computed rest sub-array", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 3]) { let [first, ..&rest] = arr; print(*rest); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a `&mut rest` override through a shared-reference scrutinee", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 3]) {
+        match &arr { [first, ..&mut rest] => { print(*rest); } };
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "cannot bind `rest` as `&mut` through a shared reference",
+    );
+  });
+});
+
 describe("array types", (): void => {
   it("type-checks a [i32; 3] annotation against a matching array literal", (): void => {
     const result = diagnose(`
