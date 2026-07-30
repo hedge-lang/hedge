@@ -2311,6 +2311,75 @@ describe("slice patterns over fixed-length arrays", () => {
   });
 });
 
+describe("or-pattern binding consistency", () => {
+  it("analyzes an or-pattern whose alternatives bind the same name with the same type cleanly", () => {
+    const result = diagnose(`
+      enum Res { Ok(i32), Err(i32) }
+      fn f(r: Res) -> i32 { match r { Res::Ok(x) | Res::Err(x) => x } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects an or-pattern whose alternatives bind different names", () => {
+    const result = diagnose(`
+      enum Res { Ok(i32), Err(i32) }
+      fn f(r: Res) { match r { Res::Ok(a) | Res::Err(b) => { print(a); print(b); } }; }
+    `);
+    expect(result.diagnostics.length).toBeGreaterThan(0);
+    expect(
+      result.diagnostics.some((d) =>
+        d.message.startsWith(
+          "or-pattern alternatives must bind the same names",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects an or-pattern whose alternatives bind the same name with different types", () => {
+    const result = diagnose(`
+      enum Res { Ok(i32), Err(str) }
+      fn f(r: Res) { match r { Res::Ok(x) | Res::Err(x) => { print(x); } }; }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "or-pattern alternatives must bind `x` with the same type and mode in every alternative",
+    );
+  });
+
+  it("rejects an or-pattern whose alternatives bind the same name with different modes", () => {
+    const result = diagnose(`
+      enum Res { Ok(i32), Err(i32) }
+      fn f(r: Res) { match r { Res::Ok(x) | Res::Err(mut x) => { print(x); } }; }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "or-pattern alternatives must bind `x` with the same type and mode in every alternative",
+    );
+  });
+
+  it("still analyzes an or-pattern where every alternative binds no names at all cleanly", () => {
+    const result = diagnose(`
+      enum Message { Quit, Move }
+      fn f(m: Message) -> i32 { match m { _ | Message::Quit => 0 } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects an or-pattern mixing a wildcard alternative with a binding alternative", () => {
+    const result = diagnose(`
+      enum Res { Ok(i32), Err(i32) }
+      fn f(r: Res) { match r { _ | Res::Ok(x) => { print(x); } }; }
+    `);
+    expect(
+      result.diagnostics.some((d) =>
+        d.message.startsWith(
+          "or-pattern alternatives must bind the same names",
+        ),
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("array types", (): void => {
   it("type-checks a [i32; 3] annotation against a matching array literal", (): void => {
     const result = diagnose(`
