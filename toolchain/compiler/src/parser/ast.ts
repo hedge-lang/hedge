@@ -329,6 +329,12 @@ export interface FieldPattern extends AstNode {
 export interface StructPattern extends AstNode {
   readonly kind: "StructPattern";
   readonly path: Path;
+  /** `true` for a leading `mut` sigil (Hedge-47) - treats the whole
+   * destructured value as mutable for binding-mode legality purposes (e.g.
+   * a field's own `&mut` override), since the pattern itself binds no name
+   * of its own to carry that mutability the way a plain `BindingPattern`
+   * would. */
+  readonly mutable: boolean;
   readonly fields: readonly FieldPattern[];
   /** `true` for a trailing `..` (ignore any unlisted fields). */
   readonly hasRest: boolean;
@@ -341,6 +347,8 @@ export interface StructPattern extends AstNode {
 export interface TupleStructPattern extends AstNode {
   readonly kind: "TupleStructPattern";
   readonly path: Path;
+  /** See `StructPattern.mutable`'s doc comment. */
+  readonly mutable: boolean;
   readonly elements: readonly Pattern[];
 }
 

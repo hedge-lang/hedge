@@ -34,7 +34,7 @@ import type {
   ControlFlowGraph,
   Declaration,
 } from "./control-flow-graph.js";
-import { buildControlFlowGraph, declarationOf } from "./control-flow-graph.js";
+import { buildControlFlowGraph } from "./control-flow-graph.js";
 
 /**
  * A binding's move state within one function body. This vocabulary is
@@ -765,14 +765,15 @@ interface PatternDeclaration {
 }
 
 /**
- * Every name a match-arm pattern binds, deepest-first, mirroring
- * `control-flow-graph.ts`'s own `declarationOf` but generalized to the
- * richer `Semantics.Pattern` union (a `let`/`Param`'s `BindingPattern` binds
- * at most one name, so that helper only ever needs one).
- * TODO (Hedge-47): `TuplePattern`/`SlicePattern` are never constructed by
- * `analyzer.ts`'s `analyzePattern` (always substituted as a
- * `WildcardPattern` - see `analyzePatternGuardrail`), so those two cases
- * are unreached today.
+ * Every name a pattern binds, deepest-first - shared by match arms and, as
+ * of Hedge-47, `let`/`Param` too (mirroring `control-flow-graph.ts`'s own
+ * `declarationsOf`, which returns the CFG's `Declaration` shape instead of
+ * this file's own `PatternDeclaration`).
+ * `SlicePattern` is real as of Hedge-47 (against a fixed-length array
+ * scrutinee); `TuplePattern` still isn't (no real tuple value type exists
+ * yet) - `analyzer.ts`'s `analyzePattern` always substitutes a
+ * `WildcardPattern` for it (see `analyzePatternGuardrail`), so that one case
+ * alone stays unreached.
  */
 // eslint-disable-next-line complexity -- Routing function over the full Pattern union
 function collectPatternDeclarations(
@@ -789,8 +790,15 @@ function collectPatternDeclarations(
       const nested = isSome(pattern.subpattern)
         ? collectPatternDeclarations(pattern.subpattern.value)
         : [];
+      // A `byRef` binding's own `mutable` sigil (`&mut name`) means "this is
+      // a mutable *borrow*", not "this local slot is reassignable" - see
+      // `analyzer.ts`'s `effectiveBindingType`, the single source of truth
+      // this mirrors (`localMutable: byRef ? false : mutable`).
       return [
-        { identifier: pattern.name, mutable: pattern.mutable },
+        {
+          identifier: pattern.name,
+          mutable: !pattern.byRef && pattern.mutable,
+        },
         ...nested,
       ];
     }
@@ -811,7 +819,12 @@ function collectPatternDeclarations(
       return pattern.elements.flatMap((el) =>
         el.kind === "RestPattern"
           ? isSome(el.name)
-            ? [{ identifier: el.name.value, mutable: el.mutable }]
+            ? [
+                {
+                  identifier: el.name.value,
+                  mutable: !el.byRef && el.mutable,
+                },
+              ]
             : []
           : collectPatternDeclarations(el),
       );
@@ -1015,12 +1028,24 @@ function walkStatement(
       if (isSome(statement.initializer)) {
         walkExpression(ctx, statement.initializer.value, state, scopeStack);
       }
-      const { name } = statement.pattern;
-      registerBinding(state, scopeStack, name, isSome(statement.initializer));
-      const declaration = declarationOf(statement.pattern, statement.mutable);
-      if (declaration.kind === "Some") {
-        declarations.push(declaration.value);
-        ctx.declarationsById.set(declaration.value.id, declaration.value);
+      for (const { identifier, mutable } of collectPatternDeclarations(
+        statement.pattern,
+      )) {
+        registerBinding(
+          state,
+          scopeStack,
+          identifier,
+          isSome(statement.initializer),
+        );
+        const declaration: Declaration = {
+          id: identifier.tokenId,
+          name: identifier.text,
+          type: identifier.type,
+          tokenId: identifier.tokenId,
+          mutable,
+        };
+        declarations.push(declaration);
+        ctx.declarationsById.set(declaration.id, declaration);
       }
       return;
     }
@@ -1228,11 +1253,19 @@ function walkFunction(ctx: Ctx, fn: Semantics.FunctionDecl): void {
   const scopeStack: ScopeStack = [new Map<string, BindingId>()];
   const paramDeclarations: Declaration[] = [];
   for (const param of fn.params) {
-    registerBinding(state, scopeStack, param.pattern.name, true);
-    const declaration = declarationOf(param.pattern, param.mutable);
-    if (declaration.kind === "Some") {
-      paramDeclarations.push(declaration.value);
-      ctx.declarationsById.set(declaration.value.id, declaration.value);
+    for (const { identifier, mutable } of collectPatternDeclarations(
+      param.pattern,
+    )) {
+      registerBinding(state, scopeStack, identifier, true);
+      const declaration: Declaration = {
+        id: identifier.tokenId,
+        name: identifier.text,
+        type: identifier.type,
+        tokenId: identifier.tokenId,
+        mutable,
+      };
+      paramDeclarations.push(declaration);
+      ctx.declarationsById.set(declaration.id, declaration);
     }
   }
   walkScope(ctx, fn.body, state, scopeStack, false, paramDeclarations);

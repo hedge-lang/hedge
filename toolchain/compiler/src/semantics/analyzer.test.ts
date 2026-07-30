@@ -306,6 +306,139 @@ describe("semantic analysis", (): void => {
     });
   });
 
+  describe("match expressions over plain (non-enum) struct scrutinees", () => {
+    it("analyzes a struct pattern over a plain struct scrutinee cleanly, binding fields with their declared types", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(p: Point) -> i32 { match p { Point { x, y } => x + y } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("analyzes a tuple-struct pattern over a plain tuple-struct scrutinee cleanly", () => {
+      const result = diagnose(`
+        struct Pair(i32, i32);
+        fn f(p: Pair) -> i32 { match p { Pair(a, b) => a + b } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still resolves a struct pattern's fields when a trailing `..` omits the rest", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(p: Point) -> i32 { match p { Point { x, .. } => x } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects an unknown field name in a plain struct pattern, naming the struct", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(p: Point) -> i32 { match p { Point { x, z } => x } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "no field `z` on struct `Point`",
+      );
+    });
+
+    it("rejects a tuple-struct pattern whose element count does not match the struct's own field count", () => {
+      const result = diagnose(`
+        struct Pair(i32, i32);
+        fn f(p: Pair) -> i32 { match p { Pair(a) => a } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "struct `Pair` has 2 field(s), but the pattern has 1",
+      );
+    });
+
+    it("resolves a nested struct pattern reached through an outer struct field", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        struct Line { start: Point, end: Point }
+        fn f(l: Line) -> i32 {
+          match l { Line { start: Point { x, y }, end } => x + y }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a tuple-struct pattern used against a struct declared with named fields", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(p: Point) { match p { Point(a, b) => a }; }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "struct `Point` is not a tuple struct",
+      );
+    });
+
+    it("rejects a struct pattern used against a struct declared with tuple fields", () => {
+      const result = diagnose(`
+        struct Pair(i32, i32);
+        fn f(p: Pair) { match p { Pair { a } => a }; }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "struct `Pair` does not have named fields",
+      );
+    });
+
+    it("rejects a struct pattern naming a different struct than the scrutinee's own type", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        struct Other { x: i32, y: i32 }
+        fn f(p: Point) { match p { Other { x, y } => x + y }; }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "expected struct `Point`, found `Other`",
+      );
+    });
+
+    it("rejects a tuple-struct pattern naming a different struct than the scrutinee's own type", () => {
+      const result = diagnose(`
+        struct Pair(i32, i32);
+        struct Duo(i32, i32);
+        fn f(p: Pair) { match p { Duo(a, b) => a }; }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "expected struct `Pair`, found `Duo`",
+      );
+    });
+  });
+
+  describe("match expressions: struct/enum-variant pattern irrefutability", () => {
+    it("treats a single struct-pattern arm over a plain struct as exhaustive with no other arms", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(p: Point) -> i32 { match p { Point { x, y } => x + y } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("treats a single tuple-struct-pattern arm over a single-variant enum as exhaustive with no other arms", () => {
+      const result = diagnose(`
+        enum Wrapper { Only(i32) }
+        fn f(w: Wrapper) -> i32 { match w { Wrapper::Only(x) => x } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still rejects a single tuple-struct-pattern arm over a multi-variant enum as non-exhaustive", () => {
+      const result = diagnose(`
+        enum Wrapper { Only(i32), Empty }
+        fn f(w: Wrapper) -> i32 { match w { Wrapper::Only(x) => x } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("non-exhaustive");
+      expect(result.diagnostics[0]?.message).toContain("Empty");
+    });
+  });
+
   describe("match expressions over bool scrutinees (exhaustiveness)", () => {
     it("rejects a bool match covering only true", () => {
       const result = diagnose("fn f(x: bool) -> i32 { match x { true => 0 } }");
@@ -575,31 +708,31 @@ describe("semantic analysis", (): void => {
     });
   });
 
-  describe("Slice 3 pattern kinds in let position (parser accepts, semantic analysis guardrails)", () => {
-    it("rejects a bare literal pattern in a let statement with a clear diagnostic", () => {
+  describe("Slice 3 pattern kinds in let position (parser accepts, semantic analysis rejects)", () => {
+    it("rejects a bare literal pattern in a let statement as refutable", () => {
       const result = diagnose("fn main() { let 1 = 5; }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+      expect(result.diagnostics[0]?.message).toBe(
+        "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match",
       );
     });
 
-    it("rejects a range pattern in a let statement with a clear diagnostic", () => {
+    it("rejects a range pattern in a let statement as refutable", () => {
       const result = diagnose("fn main() { let 1..=5 = 3; }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+      expect(result.diagnostics[0]?.message).toBe(
+        "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match",
       );
     });
 
-    it("rejects an or-pattern in a let statement with a clear diagnostic", () => {
+    it("rejects an or-pattern of two refutable literals in a let statement as refutable", () => {
       const result = diagnose("fn main() { let 1 | 2 = 1; }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+      expect(result.diagnostics[0]?.message).toBe(
+        "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match",
       );
     });
 
@@ -608,7 +741,7 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
       expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+        "this pattern kind is not yet supported",
       );
     });
 
@@ -617,7 +750,7 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
       expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+        "this pattern kind is not yet supported",
       );
     });
 
@@ -626,7 +759,7 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
       expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+        "this pattern kind is not yet supported",
       );
     });
 
@@ -635,7 +768,7 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
       expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+        "this pattern kind is not yet supported",
       );
     });
 
@@ -644,7 +777,7 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
       expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+        "this pattern kind is not yet supported",
       );
     });
 
@@ -653,7 +786,7 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
       expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+        "this pattern kind is not yet supported",
       );
     });
 
@@ -662,7 +795,92 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
       expect(result.diagnostics[0]?.message).toContain(
-        "destructuring patterns are not yet supported in `let`/parameter position",
+        "this pattern kind is not yet supported",
+      );
+    });
+  });
+
+  describe("irrefutable destructuring in let/parameter position", () => {
+    it("destructures a struct pattern in a let statement, binding every field", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(p: Point) -> i32 { let Point { x, y } = p; x + y }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("destructures a struct pattern in function-parameter position, binding every field", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(Point { x, y }: Point) -> i32 { x + y }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("destructures a tuple-struct pattern in a let statement", () => {
+      const result = diagnose(`
+        struct Pair(i32, i32);
+        fn f(pair: Pair) -> i32 { let Pair(a, b) = pair; a + b }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("destructures a nested struct pattern in a let statement, binding names at every depth", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        struct Line { start: Point, end: Point }
+        fn f(l: Line) -> i32 {
+          let Line { start: Point { x, y }, end } = l;
+          x + y
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("binds only the named fields when a let-position struct pattern has a trailing `..`", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(p: Point) -> i32 { let Point { x, .. } = p; x + y }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("y");
+    });
+
+    it("destructures a single-variant enum's tuple pattern in a let statement", () => {
+      const result = diagnose(`
+        enum Wrapper { Only(i32) }
+        fn f(w: Wrapper) -> i32 { let Wrapper::Only(x) = w; x }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("honors a per-field `mut` sigil in a let-position struct pattern, allowing that field alone to be reassigned", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(p: Point) -> i32 { let Point { x: mut x, y } = p; x = 5; x + y }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still rejects reassigning a let-position struct pattern field with no `mut` sigil", () => {
+      const result = diagnose(`
+        struct Point { x: i32, y: i32 }
+        fn f(p: Point) -> i32 { let Point { x, y } = p; y = 5; x + y }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot assign to immutable binding",
+      );
+    });
+
+    it("rejects a refutable multi-variant enum-variant pattern in a let statement, naming `if let`", () => {
+      const result = diagnose(`
+        enum MyOption { MySome(i32), MyNone }
+        fn f(opt: MyOption) { let MyOption::MySome(v) = opt; }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match",
       );
     });
   });
@@ -1866,6 +2084,362 @@ describe("reference types", (): void => {
     expect(result.diagnostics[0].message).toContain(
       "cannot assign through a shared reference",
     );
+  });
+});
+
+describe("match binding modes over a reference scrutinee", () => {
+  it("binds a plain name as a shared reference when the scrutinee is &x", () => {
+    const result = diagnose(
+      "fn f(x: i32) -> i32 { match &x { name => *name } }",
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("still binds a plain name by value (not a reference) when the scrutinee is owned", () => {
+    const result = diagnose("fn f(x: i32) { match x { name => *name }; }");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "cannot dereference a non-reference type",
+    );
+  });
+
+  it("binds a plain name as a mutable reference when the scrutinee is &mut x", () => {
+    const result = diagnose(
+      "fn f(mut x: i32) -> i32 { match &mut x { name => *name } }",
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("keeps a &name override binding as a shared reference when it merely matches the scrutinee's own default", () => {
+    const result = diagnose(
+      "fn f(x: i32) -> i32 { match &x { &name => *name } }",
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("honors a &name override binding as a shared reference even when the scrutinee is owned", () => {
+    const result = diagnose(
+      "fn f(x: i32) -> i32 { match x { &name => *name } }",
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("inherits the scrutinee's shared-reference default for every field of a destructured struct pattern", () => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      fn f(p: Point) -> i32 { match &p { Point { x, y } => *x + *y } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("lets one struct field override to a borrow while another inherits the owned scrutinee's move default", () => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      fn f(p: Point) -> i32 { match p { Point { x: &bx, y } => *bx + y } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("treats `mut name` as a reassignable local binding without turning it into a reference", () => {
+    const result = diagnose(
+      "fn f(x: i32) -> i32 { match x { mut name => { name = name + 1; name } } }",
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("still rejects reassigning a plain (non-mut) match binding", () => {
+    const result = diagnose(
+      "fn f(x: i32) -> i32 { match x { name => { name = name + 1; name } } }",
+    );
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "cannot assign to immutable binding",
+    );
+  });
+});
+
+describe("binding-mode &mut-override legality", () => {
+  it("rejects a &mut field override under a shared-reference (&x) scrutinee", () => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      fn f(p: Point) { match &p { Point { x: &mut bx, y } => { *bx; y } }; }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "cannot bind `bx` as `&mut` through a shared reference",
+    );
+  });
+
+  it("accepts a &mut field override under a mutable-reference (&mut x) scrutinee", () => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      fn f(mut p: Point) { match &mut p { Point { x: &mut bx, y } => { *bx; y } }; }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a &mut field override under an owned scrutinee whose root place is not mut", () => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      fn f(p: Point) { match p { Point { x: &mut bx, y } => { *bx; y } }; }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "cannot bind `bx` as `&mut` because the underlying place is not mutable",
+    );
+  });
+
+  it("accepts a &mut field override in a let-position destructuring pattern whose initializer's root place is mut", () => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      fn f(mut p: Point) -> i32 { let Point { x: &mut bx, y } = p; *bx + y }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a &mut field override on a destructured parameter with no mut marker", () => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      fn f(Point { x: &mut bx, y }: Point) -> i32 { *bx + y }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "cannot bind `bx` as `&mut` because the underlying place is not mutable",
+    );
+  });
+
+  it("accepts a &mut field override on a destructured parameter marked mut", () => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      fn f(mut Point { x: &mut bx, y }: Point) -> i32 { *bx + y }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts a &mut field override reached only through a nested mut-marked struct pattern, regardless of the outer scrutinee's own mutability", () => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      struct Line { start: Point, end: Point }
+      fn f(l: Line) -> i32 {
+        match l { Line { start: mut Point { x: &mut bx, y }, end } => *bx + y + end.x }
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+});
+
+describe("slice patterns over fixed-length arrays", () => {
+  it("destructures a slice pattern whose element count exactly matches a fixed-length array", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 3]) -> i32 { let [a, b, c] = arr; a + b + c }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a slice pattern with no rest whose element count does not match the array's length, also naming it refutable", () => {
+    // An arity-mismatched slice pattern is refutable in the strongest sense
+    // (it never matches), so it's correctly rejected in let position for
+    // that reason too, alongside the specific arity diagnostic - the same
+    // two-independently-true-facts shape as the match/exhaustiveness case
+    // above, and matches rustc's own behavior of reporting both.
+    const result = diagnose(`
+      fn f(arr: [i32; 3]) { let [a, b] = arr; }
+    `);
+    expect(result.diagnostics).toHaveLength(2);
+    expect(result.diagnostics[0]?.message).toBe(
+      "array has 3 element(s), but the pattern requires exactly 2",
+    );
+    expect(result.diagnostics[1]?.message).toBe(
+      "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match",
+    );
+  });
+
+  it("rejects a slice pattern with a rest whose required minimum exceeds the array's length, also naming it refutable", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 2]) { let [a, b, c, ..rest] = arr; }
+    `);
+    expect(result.diagnostics).toHaveLength(2);
+    expect(result.diagnostics[0]?.message).toBe(
+      "array has 2 element(s), but the pattern requires at least 3",
+    );
+    expect(result.diagnostics[1]?.message).toBe(
+      "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match",
+    );
+  });
+
+  it("clamps the rest binding's array length to zero, not negative, when the pattern's non-rest elements already exceed the array's length", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 2]) { let [a, b, c, ..rest] = arr; }
+    `);
+    const fn = result.program.items.find((item) => item.kind === "Function");
+    assert(fn !== undefined, "Expected a function declaration");
+    const letStmt = fn.body.statements[0];
+    assert(letStmt?.kind === "LetStatement", "Expected a let statement");
+    assert(letStmt.pattern.kind === "SlicePattern", "Expected a slice pattern");
+    const restElement = letStmt.pattern.elements.at(-1);
+    assert(
+      restElement?.kind === "RestPattern",
+      "Expected the last element to be a rest pattern",
+    );
+    assert(
+      isSome(restElement.name),
+      "Expected the rest binding to have a name",
+    );
+    expect(restElement.name.value.type).toMatchObject({
+      kind: "ArrayType",
+      length: 0,
+    });
+  });
+
+  it("destructures a slice pattern with a rest binding, computing its fixed-length array type", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 5]) {
+        let [first, ..rest] = arr;
+        let check: [i32; 4] = rest;
+        print(first);
+        print(check);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a slice pattern with more than one `..` rest", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 5]) { let [a, .., b, .., c] = arr; }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "a slice pattern can have at most one `..` rest, but this one has 2",
+    );
+  });
+
+  it("treats a single slice-pattern match arm alone as exhaustive when its length matches the array", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 3]) -> i32 { match arr { [a, b, c] => a + b + c } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("also reports non-exhaustive when an arity-mismatched slice pattern is the only arm, since it can never match anything", () => {
+    // An arity mismatch isn't "assume best case, treat as covering
+    // everything" the way a malformed struct pattern is - this pattern
+    // genuinely can never match, so the match genuinely doesn't cover
+    // `arr` either. Both diagnostics are independently true, not a
+    // cascade to suppress.
+    const result = diagnose(`
+      fn f(arr: [i32; 3]) { match arr { [a, b] => { print(a); print(b); } }; }
+    `);
+    expect(result.diagnostics).toHaveLength(2);
+    expect(result.diagnostics[0]?.message).toBe(
+      "array has 3 element(s), but the pattern requires exactly 2",
+    );
+    expect(result.diagnostics[1]?.message).toContain("non-exhaustive");
+  });
+
+  it("does not treat an arity-mismatched slice-pattern arm as a catch-all that suppresses a later, correctly-shaped arm", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 3]) -> i32 { match arr { [a, b] => 1, [c, d, e] => 2 } }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "array has 3 element(s), but the pattern requires exactly 2",
+    );
+  });
+
+  it("binds a `&rest` sigil as a shared reference to the computed rest sub-array", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 3]) { let [first, ..&rest] = arr; print(*rest); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a `&mut rest` override through a shared-reference scrutinee", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 3]) {
+        match &arr { [first, ..&mut rest] => { print(*rest); } };
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "cannot bind `rest` as `&mut` through a shared reference",
+    );
+  });
+});
+
+describe("or-pattern binding consistency", () => {
+  it("analyzes an or-pattern whose alternatives bind the same name with the same type cleanly", () => {
+    const result = diagnose(`
+      enum Res { Ok(i32), Err(i32) }
+      fn f(r: Res) -> i32 { match r { Res::Ok(x) | Res::Err(x) => x } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts differing byRef sigils across alternatives when they produce the same resulting type and local mutability", () => {
+    const result = diagnose(`
+      enum Res { Ok(i32), Err(i32) }
+      fn f(r: Res) { match &r { Res::Ok(name) | Res::Err(&name) => print(*name) } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects an or-pattern whose alternatives bind different names", () => {
+    const result = diagnose(`
+      enum Res { Ok(i32), Err(i32) }
+      fn f(r: Res) { match r { Res::Ok(a) | Res::Err(b) => { print(a); print(b); } }; }
+    `);
+    expect(result.diagnostics.length).toBeGreaterThan(0);
+    expect(
+      result.diagnostics.some((d) =>
+        d.message.startsWith(
+          "or-pattern alternatives must bind the same names",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects an or-pattern whose alternatives bind the same name with different types", () => {
+    const result = diagnose(`
+      enum Res { Ok(i32), Err(str) }
+      fn f(r: Res) { match r { Res::Ok(x) | Res::Err(x) => { print(x); } }; }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "or-pattern alternatives must bind `x` with the same type and mode in every alternative",
+    );
+  });
+
+  it("rejects an or-pattern whose alternatives bind the same name with different modes", () => {
+    const result = diagnose(`
+      enum Res { Ok(i32), Err(i32) }
+      fn f(r: Res) { match r { Res::Ok(x) | Res::Err(mut x) => { print(x); } }; }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "or-pattern alternatives must bind `x` with the same type and mode in every alternative",
+    );
+  });
+
+  it("still analyzes an or-pattern where every alternative binds no names at all cleanly", () => {
+    const result = diagnose(`
+      enum Message { Quit, Move }
+      fn f(m: Message) -> i32 { match m { _ | Message::Quit => 0 } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects an or-pattern mixing a wildcard alternative with a binding alternative", () => {
+    const result = diagnose(`
+      enum Res { Ok(i32), Err(i32) }
+      fn f(r: Res) { match r { _ | Res::Ok(x) => { print(x); } }; }
+    `);
+    expect(
+      result.diagnostics.some((d) =>
+        d.message.startsWith(
+          "or-pattern alternatives must bind the same names",
+        ),
+      ),
+    ).toBe(true);
   });
 });
 

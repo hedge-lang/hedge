@@ -5,7 +5,7 @@ import { isSome, none, some } from "../option.js";
 import { tokenize } from "../lexer/lexer.js";
 import {
   buildControlFlowGraph,
-  declarationOf,
+  declarationsOf,
 } from "../ownership/control-flow-graph.js";
 import { analyzeOwnership } from "../ownership/move-check.js";
 import type {
@@ -800,6 +800,36 @@ describe("toJsim", () => {
       });
     });
   });
+
+  describe("let-position binding-mode sigils (Hedge-47)", () => {
+    it("lowers a `&mut name` override to an immutable JS binding, since the local slot is never separately reassignable", () => {
+      const program = jsimSource("fn f(mut x: i32) { let &mut bx = x; }");
+      const functionDecl = program.items.find(
+        (item) => item.kind === "FunctionDecl",
+      );
+      assert(
+        functionDecl !== undefined,
+        "Expected to find a function declaration block",
+      );
+      expect(functionDecl.body).toMatchObject([
+        { kind: "LetStatement", name: "bx", mutable: false },
+      ]);
+    });
+
+    it("still lowers a plain `mut name` binding to a mutable JS binding", () => {
+      const program = jsimSource("fn f() { let mut x = 5; }");
+      const functionDecl = program.items.find(
+        (item) => item.kind === "FunctionDecl",
+      );
+      assert(
+        functionDecl !== undefined,
+        "Expected to find a function declaration block",
+      );
+      expect(functionDecl.body).toMatchObject([
+        { kind: "LetStatement", name: "x", mutable: true },
+      ]);
+    });
+  });
 });
 
 describe("const and static lowering", () => {
@@ -1019,11 +1049,11 @@ describe("conditional-drop-flag codegen (synthetic ownership)", () => {
     assert(letX?.kind === "LetStatement", "Expected `let x = ...;` first");
     assert(letY?.kind === "LetStatement", "Expected `let y = x;` second");
 
-    const xDeclOption = declarationOf(letX.pattern, letX.mutable);
-    assert(xDeclOption.kind === "Some", "Expected a real declaration for x");
+    const xDecl = declarationsOf(letX.pattern)[0];
+    assert(xDecl !== undefined, "Expected a real declaration for x");
 
     const conditionalDrop: ConditionalDrop = {
-      declaration: xDeclOption.value,
+      declaration: xDecl,
       moveStatementTokenId: letY.tokenId,
     };
     const ownership: ReadonlyMap<string, FunctionOwnership> = new Map([

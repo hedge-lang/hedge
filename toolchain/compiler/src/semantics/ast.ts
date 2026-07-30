@@ -126,8 +126,7 @@ interface Visibility {
 
 export interface Param extends DecoratedAstNode {
   readonly kind: "Param";
-  readonly mutable: boolean;
-  readonly pattern: BindingPattern;
+  readonly pattern: Pattern;
   readonly type: Type;
 }
 
@@ -239,14 +238,8 @@ export interface Block extends DecoratedAstNode {
 export interface LetStatement extends DecoratedAstNode {
   readonly kind: "LetStatement";
   readonly attributes: readonly Attribute[];
-  readonly mutable: boolean;
-  readonly pattern: BindingPattern;
+  readonly pattern: Pattern;
   readonly initializer: Option<Expression>;
-}
-
-export interface BindingPattern {
-  readonly kind: "BindingPattern";
-  readonly name: Identifier;
 }
 
 export interface MatchExpression extends DecoratedAstNode {
@@ -263,17 +256,15 @@ export interface MatchArm extends AstNode {
 }
 
 /**
- * A match arm's own pattern - distinct from the `let`/`Param`-only
- * {@link BindingPattern} above, which stays reduced to just its bound name
- * since only trivial patterns are supported in that position (see
- * `analyzer.ts`'s `bindComplexPatternGuardrail`). Mirrors `Parser.Pattern`
- * structurally; the one member that would collide with the existing
- * `BindingPattern` above is named {@link MatchBindingPattern} instead, with
- * its `kind` literal left as `"BindingPattern"` so it still lines up with
- * `Parser.BindingPattern` for the usual `{ ...pattern, type }` spread.
+ * A single `Pattern` union shared by match arms, `let` statements, and
+ * function parameters (Hedge-47) - mirrors `Parser.Pattern` structurally.
+ * `let`/`Param` only ever bind an irrefutable pattern (enforced by semantic
+ * analysis, not the type system - see `analyzer.ts`'s refutability check),
+ * but there's no separate reduced pattern shape for that position anymore:
+ * a `let`/`Param` pattern is a real `Pattern`, exactly like a match arm's.
  */
 export type Pattern =
-  | MatchBindingPattern
+  | BindingPattern
   | WildcardPattern
   | LiteralPattern
   | RangePattern
@@ -284,7 +275,7 @@ export type Pattern =
   | PathPattern
   | SlicePattern;
 
-export interface MatchBindingPattern extends DecoratedAstNode {
+export interface BindingPattern extends DecoratedAstNode {
   readonly kind: "BindingPattern";
   readonly mutable: boolean;
   readonly byRef: boolean;
@@ -339,6 +330,8 @@ export interface FieldPattern extends AstNode {
 export interface StructPattern extends DecoratedAstNode {
   readonly kind: "StructPattern";
   readonly path: Path;
+  /** See `Parser.StructPattern.mutable`'s doc comment. */
+  readonly mutable: boolean;
   readonly fields: readonly FieldPattern[];
   readonly hasRest: boolean;
 }
@@ -346,6 +339,8 @@ export interface StructPattern extends DecoratedAstNode {
 export interface TupleStructPattern extends DecoratedAstNode {
   readonly kind: "TupleStructPattern";
   readonly path: Path;
+  /** See `Parser.StructPattern.mutable`'s doc comment. */
+  readonly mutable: boolean;
   readonly elements: readonly Pattern[];
 }
 
@@ -354,18 +349,21 @@ export interface PathPattern extends DecoratedAstNode {
   readonly path: Path;
 }
 
-/** Not exported: same reasoning as `TuplePattern` above (TODO (Hedge-47)) -
- * never actually constructed, since `SlicePattern` (the only place this
- * appears) is itself never constructed either. */
-interface RestPattern extends AstNode {
+/** A slice pattern's own rest element (`..`, `..tail`, `..&rest`,
+ * `..&mut rest`) - real as of Hedge-47, only ever constructed against a
+ * fixed-length `ArrayType` scrutinee (see `analyzer.ts`'s `analyzePattern`
+ * `SlicePattern` case; a dynamic-length scrutinee still has no real type to
+ * destructure against, so it stays guardrailed). */
+export interface RestPattern extends AstNode {
   readonly kind: "RestPattern";
   readonly byRef: boolean;
   readonly mutable: boolean;
   readonly name: Option<Identifier>;
 }
 
-/** Not exported: same reasoning as `TuplePattern` above (TODO (Hedge-47)). */
-interface SlicePattern extends DecoratedAstNode {
+/** Real as of Hedge-47 against a fixed-length `ArrayType` scrutinee only -
+ * see `RestPattern`'s own doc comment. */
+export interface SlicePattern extends DecoratedAstNode {
   readonly kind: "SlicePattern";
   readonly elements: readonly (Pattern | RestPattern)[];
 }

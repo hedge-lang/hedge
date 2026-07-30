@@ -2326,9 +2326,24 @@ describe("Slice 3 pattern kinds - tuple-struct and path patterns", (): void => {
     expect(result.program).toEqual(none());
   });
 
-  it("rejects a mut sigil applied to a tuple-struct pattern (`mut Some(x)`)", (): void => {
-    const result = parse(tokenize("match x { mut Some(x) => x }").tokens);
-    expect(result.program).toEqual(none());
+  it("parses a mut sigil applied to a tuple-struct pattern as a real, mutable TupleStructPattern (Hedge-47)", (): void => {
+    const ast = parseProgram("match x { mut Some(x) => x }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "MatchExpression",
+          arms: [
+            {
+              pattern: {
+                kind: "TupleStructPattern",
+                mutable: true,
+                path: { segments: ["Some"] },
+              },
+            },
+          ],
+        },
+      ],
+    });
   });
 
   it("produces a parse error for an unclosed tuple-struct pattern (`match x { Some(x => x }`)", (): void => {

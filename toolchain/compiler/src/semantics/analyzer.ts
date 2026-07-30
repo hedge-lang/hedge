@@ -10,7 +10,6 @@ import {
   type Option,
   unwrapSomeOr,
 } from "../option.js";
-import { patternMutable } from "../parser/ast.js";
 import type * as Parser from "../parser/ast.js";
 import type * as Semantics from "./ast.js";
 import {
@@ -105,71 +104,50 @@ function bind(
   }
 }
 
-/**
- * A `let`/parameter pattern binds exactly one name today - `bindPatternName`
- * has no mechanism to register more than one binding from a single pattern.
- * A destructuring pattern kind (struct/tuple/slice/etc.) is real syntax as
- * of Slice 3 (see `parser/pattern.ts`), but wiring up multi-binding
- * registration here is deliberately out of scope for that parsing work; see
- * `specification/0016-pattern-matching.md`. Until a follow-up implements
- * real destructuring semantics, any such pattern in `let`/parameter
- * position is a clear diagnostic here instead of a silent no-op.
- */
-function bindComplexPatternGuardrail(
-  ctx: AnalysisContext,
-  pattern: Parser.Pattern,
-  type: Semantics.Type,
-): Semantics.Identifier {
-  emitError(
-    ctx,
-    "destructuring patterns are not yet supported in `let`/parameter position; only a plain binding or `_` is allowed here",
-    pattern.tokenId,
-  );
-  return { kind: "Identifier", tokenId: pattern.tokenId, text: "_", type };
-}
+const REFUTABLE_LET_OR_PARAM_PATTERN_MESSAGE =
+  "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match";
 
 /**
- * Binds a `let`/parameter pattern's name into scope and returns the
- * decorated {@link Semantics.Identifier} for the resulting AST node.
- *
- * A `BindingPattern` is bound under its own name. A `WildcardPattern` binds
- * nothing — a later reference to bare `_` must fail to resolve — but still
- * yields a synthetic `"_"` identifier so codegen has a JS binding slot to
- * emit.
+ * Analyzes a `let`/parameter pattern exactly like a match arm's own pattern
+ * (via `analyzePattern`, which binds every name the pattern structurally
+ * contains - a destructuring pattern kind (struct/tuple-struct/slice/etc.)
+ * is real syntax as of Slice 3, see `parser/pattern.ts`), then rejects it if
+ * it's refutable - a `let`/parameter position has no "didn't match" branch
+ * to fall back to, unlike `match`/`if let`/`while let` (spec 0016). The
+ * rejection is layered on top of, not instead of, the real analysis: every
+ * name the pattern binds is still in scope afterward, so a reference to one
+ * of them doesn't cascade into a second, unrelated "cannot find name"
+ * diagnostic on top of this one. `analyzePattern` itself still guardrails
+ * `TuplePattern` and a dynamic-length `SlicePattern` (no real tuple/slice
+ * value type exists yet) and an `@`-subpattern binding - those keep hitting
+ * `analyzePatternGuardrail`'s own "not yet supported" diagnostic instead of
+ * this one, unchanged from before Hedge-47.
  */
-function bindPatternName(
+function analyzeLetOrParamPattern(
   ctx: AnalysisContext,
   pattern: Parser.Pattern,
   type: Semantics.Type,
-  mutable: boolean,
-): Semantics.Identifier {
-  switch (pattern.kind) {
-    case "BindingPattern":
-      // An `@` subpattern (`n @ 1..=5`) is itself a constraint - binding
-      // just `n` and dropping it would be exactly the silent no-op this
-      // guardrail exists to prevent for every other complex pattern kind.
-      if (isSome(pattern.subpattern)) {
-        return bindComplexPatternGuardrail(ctx, pattern, type);
-      }
-      bind(ctx, pattern.name.text, { type, mutable });
-      return { ...pattern.name, type };
-    case "WildcardPattern":
-      return { kind: "Identifier", tokenId: pattern.tokenId, text: "_", type };
-    case "LiteralPattern":
-    case "RangePattern":
-    case "OrPattern":
-    case "TuplePattern":
-    case "StructPattern":
-    case "TupleStructPattern":
-    case "PathPattern":
-    case "SlicePattern":
-      return bindComplexPatternGuardrail(ctx, pattern, type);
-    default:
-      return assertNever(
-        pattern,
-        `Unexpected pattern: ${JSON.stringify(pattern)}`,
-      );
+  rootExpression: Option<Semantics.Expression>,
+): Semantics.Pattern {
+  const { mode, effectiveType } = defaultBindingModeForScrutinee(type);
+  // A parameter has no initializer expression to check root place
+  // mutability against at all (`rootExpression` is `none()`) - the only way
+  // to make a &mut field override legal there is the pattern's own `mut`
+  // marker (Hedge-47), applied by `analyzePattern` itself once it reaches a
+  // `mutable: true` struct/tuple-struct pattern node.
+  const rootMutable = isSome(rootExpression)
+    ? !isSome(placeMutabilityViolation(ctx, rootExpression.value, true))
+    : false;
+  const result = analyzePattern(ctx, pattern, effectiveType, mode, rootMutable);
+  if (!isIrrefutablePattern(ctx, result)) {
+    emitError(
+      ctx,
+      REFUTABLE_LET_OR_PARAM_PATTERN_MESSAGE,
+      pattern.tokenId,
+      none(),
+    );
   }
+  return result;
 }
 
 /**
@@ -196,19 +174,20 @@ function resolve(ctx: AnalysisContext, name: string): Option<ScopedVariable> {
  * @param ctx - The analysis context where the error will be recorded.
  * @param message - The error message to emit.
  * @param tokenId - The identifier of the token associated with the error.
+ * @param extra - Additional information to attach to the error.
  */
 function emitError(
   ctx: AnalysisContext,
   message: string,
   tokenId: number,
-  extra?: { readonly code?: string },
+  extra: Option<{ readonly code: string }>,
 ): void {
   const token = ctx.tokens[tokenId];
   ctx.diagnostics.push({
     severity: "error",
     message,
     span: token !== undefined ? some(token.span) : none(),
-    code: extra?.code !== undefined ? some(extra.code) : none(),
+    code: mapSome(extra, (e) => e.code),
     relatedSpans: [],
   });
 }
@@ -306,6 +285,7 @@ function foldArrayLength(
         ctx,
         "array length must be a compile-time constant expression",
         outcome.tokenId,
+        none(),
       );
       return none();
     case "Undeclared":
@@ -313,6 +293,7 @@ function foldArrayLength(
         ctx,
         `Cannot find name "${outcome.name}" in this scope.`,
         outcome.tokenId,
+        none(),
       );
       return none();
     case "DivideByZero":
@@ -320,6 +301,7 @@ function foldArrayLength(
         ctx,
         "attempt to divide by zero in a constant expression",
         outcome.tokenId,
+        none(),
       );
       return none();
     case "InvalidShift":
@@ -327,6 +309,7 @@ function foldArrayLength(
         ctx,
         "shift amount must be between 0 and 63 in a constant expression",
         outcome.tokenId,
+        none(),
       );
       return none();
     case "AlreadyDiagnosed":
@@ -340,11 +323,11 @@ function foldArrayLength(
       );
   }
   if (outcome.value.kind !== "Int") {
-    emitError(ctx, "array length must be an integer", length.tokenId);
+    emitError(ctx, "array length must be an integer", length.tokenId, none());
     return none();
   }
   if (outcome.value.value < 0n) {
-    emitError(ctx, "array length cannot be negative", length.tokenId);
+    emitError(ctx, "array length cannot be negative", length.tokenId, none());
     return none();
   }
   if (outcome.value.value > BigInt(Number.MAX_SAFE_INTEGER)) {
@@ -352,6 +335,7 @@ function foldArrayLength(
       ctx,
       `array length ${outcome.value.value} is too large to represent`,
       length.tokenId,
+      none(),
     );
     return none();
   }
@@ -406,7 +390,7 @@ function validateSlice1Type(
     default:
       assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
-  emitError(ctx, "type is not supported in Slice 1", tokenId);
+  emitError(ctx, "type is not supported in Slice 1", tokenId, none());
   return { kind: "UnitType", tokenId };
 }
 
@@ -603,6 +587,7 @@ function resolveConstRef(
       ctx,
       `const \`${name}\` cannot be defined in terms of itself`,
       tokenId,
+      none(),
     );
     return { kind: "AlreadyDiagnosed", tokenId };
   }
@@ -674,6 +659,7 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
           ctx,
           `const \`${name}\`'s initializer does not match its declared type ${describeType(declaredType)}`,
           decl.value.tokenId,
+          none(),
         );
       }
       break;
@@ -682,6 +668,7 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
         ctx,
         `const \`${name}\`'s initializer must be a compile-time constant expression`,
         outcome.tokenId,
+        none(),
       );
       break;
     case "DivideByZero":
@@ -689,6 +676,7 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
         ctx,
         "attempt to divide by zero in a constant expression",
         outcome.tokenId,
+        none(),
       );
       break;
     case "InvalidShift":
@@ -696,6 +684,7 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
         ctx,
         "shift amount must be between 0 and 63 in a constant expression",
         outcome.tokenId,
+        none(),
       );
       break;
     case "Undeclared":
@@ -703,6 +692,7 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
         ctx,
         `Cannot find name "${outcome.name}" in this scope.`,
         outcome.tokenId,
+        none(),
       );
       break;
     case "AlreadyDiagnosed":
@@ -857,6 +847,7 @@ function registerConstsAndStatics(
           ctx,
           `const \`${item.name.text}\` is defined more than once`,
           item.name.tokenId,
+          none(),
         );
       } else {
         // A same-frame static collision is reported once, from the static
@@ -879,6 +870,7 @@ function registerConstsAndStatics(
             ctx,
             `const \`${item.name.text}\` collides with an existing function name`,
             item.name.tokenId,
+            none(),
           );
         }
         constFrame.set(item.name.text, item);
@@ -889,6 +881,7 @@ function registerConstsAndStatics(
           ctx,
           `static \`${item.name.text}\` is defined more than once`,
           item.name.tokenId,
+          none(),
         );
       } else {
         if (constNamesInFrame.has(item.name.text)) {
@@ -900,6 +893,7 @@ function registerConstsAndStatics(
             ctx,
             `static \`${item.name.text}\` collides with a const of the same name`,
             item.name.tokenId,
+            none(),
           );
         } else if (currentScope?.has(item.name.text)) {
           // A static lowers to a real top-level accessor function of its
@@ -911,10 +905,16 @@ function registerConstsAndStatics(
             ctx,
             `static \`${item.name.text}\` collides with an existing function name`,
             item.name.tokenId,
+            none(),
           );
         }
         if (isSome(item.visibility)) {
-          emitError(ctx, "static items cannot be pub yet", item.tokenId);
+          emitError(
+            ctx,
+            "static items cannot be pub yet",
+            item.tokenId,
+            none(),
+          );
         }
         const declaredType = validateSlice1Type(
           ctx,
@@ -953,6 +953,7 @@ function analyzeStaticDecl(
       ctx,
       "type mismatch: static's declared type does not match its initializer",
       item.value.tokenId,
+      none(),
     );
   }
   if (value.kind === "IntLiteral") {
@@ -1008,6 +1009,7 @@ function analyzeEnum(
         ctx,
         `variant \`${variant.name.text}\` is defined more than once`,
         variant.name.tokenId,
+        none(),
       );
     }
     seenVariantNames.add(variant.name.text);
@@ -1093,7 +1095,7 @@ const LET_EXPRESSION_NOT_YET_SUPPORTED_MESSAGE =
 
 /** Placeholder for an `Expression` variant with no `Semantics` counterpart
  * yet - same "parser accepts it, semantics doesn't yet" pattern as
- * {@link analyzeEnumPlaceholder}, at expression rather than item
+ * `analyzeEnumPlaceholder`, at expression rather than item
  * granularity. Reuses the zero-element `TupleExpression` shape, which is
  * already in {@link AMBIGUOUS_UNIT_EXPR_KINDS}'s error-recovery bucket, so no
  * new `Semantics.Expression` kind - and no new bucket entry - is needed. */
@@ -1102,7 +1104,7 @@ function analyzeExpressionPlaceholder(
   tokenId: number,
   message: string,
 ): Semantics.Expression {
-  emitError(ctx, message, tokenId);
+  emitError(ctx, message, tokenId, none());
   return {
     kind: "TupleExpression",
     tokenId,
@@ -1144,11 +1146,14 @@ function analyzeLiteralValue(
   }
 }
 
-// TODO (Hedge-47): TuplePattern/SlicePattern/a `@`-subpattern binding stay
-// out of scope entirely in match position (mirrors `let`/`Param`'s own
-// `bindComplexPatternGuardrail` boundary).
+// TuplePattern/SlicePattern (dynamic-length)/an `@`-subpattern binding stay
+// out of scope entirely, in match, `let`, and parameter position alike
+// (Hedge-47 promoted struct/tuple-struct/fixed-length-slice patterns, but
+// not these). The message deliberately doesn't name a specific position -
+// `analyzePattern` is shared by all three, so a position-specific wording
+// would be wrong two-thirds of the time.
 const PATTERN_KIND_NOT_YET_SUPPORTED_MESSAGE =
-  "this pattern kind is not yet supported in match position";
+  "this pattern kind is not yet supported";
 
 /** Substitutes a placeholder `WildcardPattern` rather than propagating the
  * original (unsupported) kind - deliberately, so a guardrail-rejected arm
@@ -1161,7 +1166,12 @@ function analyzePatternGuardrail(
   pattern: Parser.Pattern,
   scrutineeType: Semantics.Type,
 ): Semantics.WildcardPattern {
-  emitError(ctx, PATTERN_KIND_NOT_YET_SUPPORTED_MESSAGE, pattern.tokenId);
+  emitError(
+    ctx,
+    PATTERN_KIND_NOT_YET_SUPPORTED_MESSAGE,
+    pattern.tokenId,
+    none(),
+  );
   return {
     kind: "WildcardPattern",
     tokenId: pattern.tokenId,
@@ -1169,15 +1179,116 @@ function analyzePatternGuardrail(
   };
 }
 
+type PatternBindingMode = "owned" | "shared" | "mut";
+
+/** Derives the default binding mode + the "effective" (already-dereferenced)
+ * type every pattern position should see, from a scrutinee's own resolved
+ * type (spec 0016): `match x` binds by value/move, `match &x` binds by
+ * shared reference, `match &mut x` binds by mutable reference - and that
+ * default applies uniformly to every binding the pattern contains (not just
+ * a top-level one), overridable per-binding by an explicit `&`/`&mut` sigil
+ * (see `effectiveBindingType`). Called once per match/`let`/parameter at the
+ * pattern-analysis entry point (`analyzeMatchExpression`,
+ * `analyzeLetOrParamPattern`); `analyzePattern` and everything it resolves
+ * against (`resolveEnumDecl`, `resolveStructDecl`, ...) only ever sees the
+ * already-unwrapped `effectiveType` from here on, so those never need their
+ * own reference-unwrapping logic. Only one layer of `ReferenceType` is
+ * peeled off - a reference to a reference isn't real syntax yet (no nested
+ * reference types anywhere in the type system), so this doesn't loop. */
+function defaultBindingModeForScrutinee(scrutineeType: Semantics.Type): {
+  readonly mode: PatternBindingMode;
+  readonly effectiveType: Semantics.Type;
+} {
+  if (scrutineeType.kind === "ReferenceType") {
+    return {
+      mode: scrutineeType.mutable ? "mut" : "shared",
+      effectiveType: scrutineeType.referent,
+    };
+  }
+  return { mode: "owned", effectiveType: scrutineeType };
+}
+
+/** The type + local-mutability a single `BindingPattern`/shorthand-field
+ * binding gets, combining `defaultMode` (inherited from the scrutinee
+ * unless overridden) with the binding's own sigils. An explicit `byRef`
+ * (`&`/`&mut`) always overrides the mode outright, ignoring `defaultMode`
+ * entirely - the spec's own "borrowing one field of an owned scrutinee
+ * while moving another" example. Without `byRef`, `mutable` never changes
+ * mode - a plain `mut name` still inherits whatever the scrutinee's default
+ * says, only marking the resulting local slot as reassignable - mirroring
+ * how `mut` and `ref`/`ref mut` are independent modifiers in Rust's own
+ * match ergonomics (there's no fifth sigil combination for "mutably
+ * rebindable `&mut` borrow" - `&mut name`'s own `mutable` bit is entirely
+ * consumed by "this is a mutable borrow", not a separate local-slot
+ * concern). */
+function effectiveBindingType(
+  fieldType: Semantics.Type,
+  defaultMode: PatternBindingMode,
+  byRef: boolean,
+  mutable: boolean,
+  tokenId: number,
+): { readonly type: Semantics.Type; readonly localMutable: boolean } {
+  const mode: PatternBindingMode = byRef
+    ? mutable
+      ? "mut"
+      : "shared"
+    : defaultMode;
+  const type: Semantics.Type =
+    mode === "owned"
+      ? fieldType
+      : {
+          kind: "ReferenceType",
+          tokenId,
+          mutable: mode === "mut",
+          referent: fieldType,
+        };
+  return { type, localMutable: byRef ? false : mutable };
+}
+
+/**
+ * Whether a `&mut` binding-mode override (`x: &mut bx`, or a bare `&mut
+ * name`) is legal at this point in a pattern. `defaultMode === "shared"`
+ * rejects it unconditionally - capability comes from the reference already
+ * being crossed (Hedge-25's rule for `&mut` through a `Deref` of a shared
+ * reference), regardless of `rootMutable`. `defaultMode === "mut"` always
+ * allows it (an `&mut` scrutinee's own chain permits further `&mut`
+ * sub-borrows). `defaultMode === "owned"` defers to `rootMutable` - whether
+ * the scrutinee/initializer's own root place is mutable (from
+ * `placeMutabilityViolation`), or a `mut`-marked ancestor struct/tuple-struct
+ * pattern (Hedge-47) stood in for it.
+ */
+function checkMutOverrideLegality(
+  ctx: AnalysisContext,
+  name: string,
+  defaultMode: PatternBindingMode,
+  rootMutable: boolean,
+  tokenId: number,
+): void {
+  if (defaultMode === "shared") {
+    emitError(
+      ctx,
+      `cannot bind \`${name}\` as \`&mut\` through a shared reference`,
+      tokenId,
+      none(),
+    );
+    return;
+  }
+  if (defaultMode === "owned" && !rootMutable) {
+    emitError(
+      ctx,
+      `cannot bind \`${name}\` as \`&mut\` because the underlying place is not mutable`,
+      tokenId,
+      none(),
+    );
+  }
+}
+
 /** `none()` if `scrutineeType` isn't an enum, or names an enum this context
  * never registered (an unresolved/erroneous scrutinee type) - callers treat
  * both the same way, falling back to the generic pattern-kind guardrail.
- * Only unwraps a bare `EnumType`, not a reference to one - `match &m`/
- * `match &mut m` scrutinees fall through to that same guardrail/coarse
- * exhaustiveness fallback rather than resolving the enum through the
- * reference.
- * TODO (Hedge-47): binding-mode-aware matching (`match x`/`match &x`/
- * `match &mut x` per spec 0016) is not yet in scope here. */
+ * Only ever called with an already-dereferenced `effectiveType`
+ * (`defaultBindingModeForScrutinee`) - never needs its own reference
+ * unwrapping. */
 function resolveEnumDecl(
   ctx: AnalysisContext,
   scrutineeType: Semantics.Type,
@@ -1190,6 +1301,24 @@ function resolveEnumDecl(
 
 function lastPathSegment(path: Parser.Path): string | undefined {
   return path.segments.at(-1);
+}
+
+/** `none()` if `scrutineeType` isn't a plain (non-enum) `StructType`, or names
+ * a struct this context never registered - callers treat both the same way,
+ * falling back to enum resolution or the generic pattern-kind guardrail.
+ * Mirrors `resolveEnumDecl` structurally, but a struct pattern has no variant
+ * layer to delegate its own name-check to, so `resolveTupleStructForPattern`/
+ * `resolveStructForPattern` (below) must separately verify the pattern's own
+ * path names this exact struct, not just any struct sharing its field
+ * shape. */
+function resolveStructDecl(
+  ctx: AnalysisContext,
+  scrutineeType: Semantics.Type,
+): Option<Semantics.StructDecl> {
+  if (scrutineeType.kind !== "StructType") return none();
+  const name = scrutineeType.name.split("::").pop() ?? scrutineeType.name;
+  const decl = ctx.typeScope.get(name);
+  return decl === undefined ? none() : some(decl);
 }
 
 interface ResolvedTupleVariant {
@@ -1219,6 +1348,7 @@ function resolveTupleVariantForPattern(
       ctx,
       `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
       pattern.tokenId,
+      none(),
     );
     return none();
   }
@@ -1227,6 +1357,7 @@ function resolveTupleVariantForPattern(
       ctx,
       `variant \`${variantName}\` is not a tuple variant`,
       pattern.tokenId,
+      none(),
     );
     return none();
   }
@@ -1249,6 +1380,7 @@ function resolveStructVariantForPattern(
       ctx,
       `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
       pattern.tokenId,
+      none(),
     );
     return none();
   }
@@ -1257,10 +1389,153 @@ function resolveStructVariantForPattern(
       ctx,
       `variant \`${variantName}\` is not a struct variant`,
       pattern.tokenId,
+      none(),
     );
     return none();
   }
   return some({ fields: variant.body.value.fields });
+}
+
+interface ResolvedPatternFields<F> {
+  readonly fields: readonly F[];
+  /** Diagnostic-facing descriptor - `` variant `Move` `` or `` struct `Point` ``
+   * - so the arity/field-name errors below read naturally for either
+   * source. */
+  readonly label: string;
+  /** `true` when the resolver already emitted its own diagnostic (wrong
+   * struct name, wrong shape) - `fields` is an empty error-recovery
+   * placeholder in this case, not a genuine zero-field struct, so the
+   * caller must skip its own arity/field-name diagnostics (they'd just be
+   * redundant noise on top of the one already emitted) while still binding
+   * every name the pattern mentions against the placeholder, so a
+   * reference to one of those names in the arm body doesn't cascade into a
+   * further "cannot find name" error. */
+  readonly alreadyErrored: boolean;
+}
+
+/** Plain-struct counterpart to `resolveTupleVariantForPattern` - only
+ * reachable when `scrutineeType` isn't an enum (the enum resolver already
+ * ran first and returned `none()`). Unlike an enum variant, a struct has no
+ * name-disambiguating layer of its own, so the pattern's path must be
+ * checked directly against the struct named by `scrutineeType` itself
+ * (never trusting the pattern's own path as a lookup key) - otherwise a
+ * pattern naming an unrelated, differently-typed struct that merely shares
+ * a field shape would silently "resolve". */
+function resolveTupleStructForPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.TupleStructPattern,
+  scrutineeType: Semantics.Type,
+): Option<ResolvedPatternFields<Semantics.TupleField>> {
+  const structDecl = resolveStructDecl(ctx, scrutineeType);
+  if (!isSome(structDecl)) return none();
+  const patternName = lastPathSegment(pattern.path);
+  const label = `struct \`${patternName}\``;
+  if (patternName !== structDecl.value.name.text) {
+    emitError(
+      ctx,
+      `expected struct \`${structDecl.value.name.text}\`, found \`${patternName}\``,
+      pattern.tokenId,
+      none(),
+    );
+    return some({ fields: [], label, alreadyErrored: true });
+  }
+  if (structDecl.value.body.kind !== "TupleFields") {
+    emitError(
+      ctx,
+      `struct \`${patternName}\` is not a tuple struct`,
+      pattern.tokenId,
+      none(),
+    );
+    return some({ fields: [], label, alreadyErrored: true });
+  }
+  return some({
+    fields: structDecl.value.body.fields,
+    label,
+    alreadyErrored: false,
+  });
+}
+
+/** Plain-struct counterpart to `resolveStructVariantForPattern` - see
+ * `resolveTupleStructForPattern`'s doc comment for why the pattern's own
+ * path must be checked against the scrutinee-derived struct name. */
+function resolveStructForPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.StructPattern,
+  scrutineeType: Semantics.Type,
+): Option<ResolvedPatternFields<Semantics.StructField>> {
+  const structDecl = resolveStructDecl(ctx, scrutineeType);
+  if (!isSome(structDecl)) return none();
+  const patternName = lastPathSegment(pattern.path);
+  const label = `struct \`${patternName}\``;
+  if (patternName !== structDecl.value.name.text) {
+    emitError(
+      ctx,
+      `expected struct \`${structDecl.value.name.text}\`, found \`${patternName}\``,
+      pattern.tokenId,
+      none(),
+    );
+    return some({ fields: [], label, alreadyErrored: true });
+  }
+  if (structDecl.value.body.kind !== "NamedFields") {
+    emitError(
+      ctx,
+      `struct \`${patternName}\` does not have named fields`,
+      pattern.tokenId,
+      none(),
+    );
+    return some({ fields: [], label, alreadyErrored: true });
+  }
+  return some({
+    fields: structDecl.value.body.fields,
+    label,
+    alreadyErrored: false,
+  });
+}
+
+/** Tries enum-variant resolution first, then plain-struct resolution -
+ * mutually exclusive since a scrutinee type is never both `EnumType` and
+ * `StructType`, so trying both never risks a duplicate diagnostic. */
+function resolveTupleFieldsForPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.TupleStructPattern,
+  scrutineeType: Semantics.Type,
+): Option<ResolvedPatternFields<Semantics.TupleField>> {
+  const patternName = lastPathSegment(pattern.path);
+  const enumVariant = resolveTupleVariantForPattern(
+    ctx,
+    pattern,
+    scrutineeType,
+  );
+  if (isSome(enumVariant)) {
+    return some({
+      fields: enumVariant.value.fields,
+      label: `variant \`${patternName}\``,
+      alreadyErrored: false,
+    });
+  }
+  return resolveTupleStructForPattern(ctx, pattern, scrutineeType);
+}
+
+/** Struct-pattern counterpart to `resolveTupleFieldsForPattern` above. */
+function resolveNamedFieldsForPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.StructPattern,
+  scrutineeType: Semantics.Type,
+): Option<ResolvedPatternFields<Semantics.StructField>> {
+  const patternName = lastPathSegment(pattern.path);
+  const enumVariant = resolveStructVariantForPattern(
+    ctx,
+    pattern,
+    scrutineeType,
+  );
+  if (isSome(enumVariant)) {
+    return some({
+      fields: enumVariant.value.fields,
+      label: `variant \`${patternName}\``,
+      alreadyErrored: false,
+    });
+  }
+  return resolveStructForPattern(ctx, pattern, scrutineeType);
 }
 
 // eslint-disable-next-line complexity -- Routing function over the full Pattern union
@@ -1268,6 +1543,8 @@ function analyzePattern(
   ctx: AnalysisContext,
   pattern: Parser.Pattern,
   scrutineeType: Semantics.Type,
+  defaultMode: PatternBindingMode,
+  rootMutable: boolean,
 ): Semantics.Pattern {
   switch (pattern.kind) {
     case "WildcardPattern": {
@@ -1281,15 +1558,28 @@ function analyzePattern(
       if (isSome(pattern.subpattern)) {
         return analyzePatternGuardrail(ctx, pattern, scrutineeType);
       }
-      bind(ctx, pattern.name.text, {
-        type: scrutineeType,
-        mutable: pattern.mutable,
-      });
-      const result: Semantics.MatchBindingPattern = {
+      if (pattern.byRef && pattern.mutable) {
+        checkMutOverrideLegality(
+          ctx,
+          pattern.name.text,
+          defaultMode,
+          rootMutable,
+          pattern.tokenId,
+        );
+      }
+      const { type: boundType, localMutable } = effectiveBindingType(
+        scrutineeType,
+        defaultMode,
+        pattern.byRef,
+        pattern.mutable,
+        pattern.tokenId,
+      );
+      bind(ctx, pattern.name.text, { type: boundType, mutable: localMutable });
+      const result: Semantics.BindingPattern = {
         ...pattern,
-        name: { ...pattern.name, type: scrutineeType },
+        name: { ...pattern.name, type: boundType },
         subpattern: none(),
-        type: scrutineeType,
+        type: boundType,
       };
       return result;
     }
@@ -1324,16 +1614,19 @@ function analyzePattern(
     case "OrPattern": {
       // Each alternative is analyzed independently, so `Foo(a) | Bar(b)`
       // binds both `a` and `b` into the arm's scope regardless of which
-      // alternative actually matches at runtime.
-      // TODO (Hedge-47): spec 0016 requires every alternative to bind the
-      // same names/types/modes - not enforced yet.
+      // alternative actually matches at runtime - `checkOrPatternConsistency`
+      // (below) is what actually enforces spec 0016's requirement that every
+      // alternative bind the same names/types/modes, rather than this
+      // analysis step silently accepting the mismatch.
+      const alternatives = pattern.alternatives.map((alt) =>
+        analyzePattern(ctx, alt, scrutineeType, defaultMode, rootMutable),
+      );
       const result: Semantics.OrPattern = {
         ...pattern,
-        alternatives: pattern.alternatives.map((alt) =>
-          analyzePattern(ctx, alt, scrutineeType),
-        ),
+        alternatives,
         type: scrutineeType,
       };
+      checkOrPatternConsistency(ctx, result);
       return result;
     }
     case "PathPattern": {
@@ -1350,6 +1643,7 @@ function analyzePattern(
           ctx,
           `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
           pattern.tokenId,
+          none(),
         );
         return analyzePatternGuardrail(ctx, pattern, scrutineeType);
       }
@@ -1358,6 +1652,7 @@ function analyzePattern(
           ctx,
           `variant \`${variantName}\` has fields; use \`${variantName}(...)\` or \`${variantName} { ... }\``,
           pattern.tokenId,
+          none(),
         );
         return analyzePatternGuardrail(ctx, pattern, scrutineeType);
       }
@@ -1365,25 +1660,37 @@ function analyzePattern(
       return result;
     }
     case "TupleStructPattern": {
-      const variant = resolveTupleVariantForPattern(
+      const resolved = resolveTupleFieldsForPattern(
         ctx,
         pattern,
         scrutineeType,
       );
-      if (!isSome(variant)) {
+      if (!isSome(resolved)) {
         return analyzePatternGuardrail(ctx, pattern, scrutineeType);
       }
-      const { fields } = variant.value;
-      const variantName = lastPathSegment(pattern.path);
-      if (fields.length !== pattern.elements.length) {
+      const { fields, label, alreadyErrored } = resolved.value;
+      if (!alreadyErrored && fields.length !== pattern.elements.length) {
         emitError(
           ctx,
-          `variant \`${variantName}\` has ${fields.length} field(s), but the pattern has ${pattern.elements.length}`,
+          `${label} has ${fields.length} field(s), but the pattern has ${pattern.elements.length}`,
           pattern.tokenId,
+          none(),
         );
       }
+      // A `mut` sigil on this whole tuple-struct pattern (Hedge-47) treats
+      // the destructured value as mutable for every field reached through
+      // it, regardless of the ambient `rootMutable` - it never demotes an
+      // already-mutable ambient context back to immutable, only ever adds
+      // mutability.
+      const effectiveRootMutable = pattern.mutable || rootMutable;
       const elements = pattern.elements.map((el, i) =>
-        analyzePattern(ctx, el, fields[i]?.type ?? UNIT),
+        analyzePattern(
+          ctx,
+          el,
+          fields[i]?.type ?? UNIT,
+          defaultMode,
+          effectiveRootMutable,
+        ),
       );
       const result: Semantics.TupleStructPattern = {
         ...pattern,
@@ -1393,39 +1700,60 @@ function analyzePattern(
       return result;
     }
     case "StructPattern": {
-      const variant = resolveStructVariantForPattern(
+      const resolved = resolveNamedFieldsForPattern(
         ctx,
         pattern,
         scrutineeType,
       );
-      if (!isSome(variant)) {
+      if (!isSome(resolved)) {
         return analyzePatternGuardrail(ctx, pattern, scrutineeType);
       }
-      const declaredFields = variant.value.fields;
-      const variantName = lastPathSegment(pattern.path);
+      const { fields: declaredFields, label, alreadyErrored } = resolved.value;
+      // See the identical note in the `TupleStructPattern` case above.
+      const effectiveRootMutable = pattern.mutable || rootMutable;
       const fields = pattern.fields.map((field): Semantics.FieldPattern => {
         const declared = declaredFields.find(
           (f) => f.name.text === field.name.text,
         );
         const fieldType = declared?.type ?? UNIT;
-        if (declared === undefined) {
+        if (declared === undefined && !alreadyErrored) {
           emitError(
             ctx,
-            `no field \`${field.name.text}\` on variant \`${variantName}\``,
+            `no field \`${field.name.text}\` on ${label}`,
             field.name.tokenId,
+            none(),
           );
         }
         if (isSome(field.pattern)) {
           return {
             ...field,
             name: { ...field.name, type: fieldType },
-            pattern: some(analyzePattern(ctx, field.pattern.value, fieldType)),
+            pattern: some(
+              analyzePattern(
+                ctx,
+                field.pattern.value,
+                fieldType,
+                defaultMode,
+                effectiveRootMutable,
+              ),
+            ),
           };
         }
-        bind(ctx, field.name.text, { type: fieldType, mutable: false });
+        // Shorthand (`Point { x }`) has no sigil position of its own - it
+        // always inherits `defaultMode` unconditionally (byRef=false,
+        // mutable=false), matching a bare `name` binding pattern with no
+        // sigil at all.
+        const { type: boundType, localMutable } = effectiveBindingType(
+          fieldType,
+          defaultMode,
+          false,
+          false,
+          field.name.tokenId,
+        );
+        bind(ctx, field.name.text, { type: boundType, mutable: localMutable });
         return {
           ...field,
-          name: { ...field.name, type: fieldType },
+          name: { ...field.name, type: boundType },
           pattern: none<Semantics.Pattern>(),
         };
       });
@@ -1436,8 +1764,101 @@ function analyzePattern(
       };
       return result;
     }
+    case "SlicePattern": {
+      // A dynamic-length scrutinee has no real type to destructure against
+      // yet (no `Vec`/slice type exists - Slice 5), so only a fixed-length
+      // `ArrayType` is promoted to real semantics here; anything else still
+      // falls to the generic guardrail, unchanged from before Hedge-47.
+      if (scrutineeType.kind !== "ArrayType") {
+        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
+      }
+      const { elementType, length } = scrutineeType;
+      const restCount = pattern.elements.filter(
+        (el) => el.kind === "RestPattern",
+      ).length;
+      const nonRestCount = pattern.elements.length - restCount;
+      const alreadyErrored = restCount > 1;
+      if (alreadyErrored) {
+        emitError(
+          ctx,
+          `a slice pattern can have at most one \`..\` rest, but this one has ${restCount}`,
+          pattern.tokenId,
+          none(),
+        );
+      } else {
+        const hasRest = restCount === 1;
+        const arityOk = hasRest
+          ? nonRestCount <= length
+          : nonRestCount === length;
+        if (!arityOk) {
+          emitError(
+            ctx,
+            hasRest
+              ? `array has ${length} element(s), but the pattern requires at least ${nonRestCount}`
+              : `array has ${length} element(s), but the pattern requires exactly ${nonRestCount}`,
+            pattern.tokenId,
+            none(),
+          );
+        }
+      }
+      // Only used when a rest is present; harmless otherwise. Clamped to 0
+      // since an array length is a `usize` (never negative) - it only goes
+      // negative when `!arityOk` above already diagnosed the mismatch.
+      const restLength = Math.max(0, length - nonRestCount);
+      const elements = pattern.elements.map(
+        (el): Semantics.Pattern | Semantics.RestPattern => {
+          if (el.kind !== "RestPattern") {
+            return analyzePattern(
+              ctx,
+              el,
+              elementType,
+              defaultMode,
+              rootMutable,
+            );
+          }
+          if (!isSome(el.name)) {
+            return { ...el, name: none() };
+          }
+          if (el.byRef && el.mutable) {
+            checkMutOverrideLegality(
+              ctx,
+              el.name.value.text,
+              defaultMode,
+              rootMutable,
+              el.tokenId,
+            );
+          }
+          const restArrayType: Semantics.Type = {
+            kind: "ArrayType",
+            elementType,
+            length: restLength,
+          };
+          const { type: boundType, localMutable } = effectiveBindingType(
+            restArrayType,
+            defaultMode,
+            el.byRef,
+            el.mutable,
+            el.tokenId,
+          );
+          bind(ctx, el.name.value.text, {
+            type: boundType,
+            mutable: localMutable,
+          });
+          const result: Semantics.RestPattern = {
+            ...el,
+            name: some({ ...el.name.value, type: boundType }),
+          };
+          return result;
+        },
+      );
+      const result: Semantics.SlicePattern = {
+        ...pattern,
+        elements,
+        type: scrutineeType,
+      };
+      return result;
+    }
     case "TuplePattern":
-    case "SlicePattern":
       return analyzePatternGuardrail(ctx, pattern, scrutineeType);
     default:
       return assertNever(
@@ -1447,7 +1868,190 @@ function analyzePattern(
   }
 }
 
-function isIrrefutablePattern(pattern: Semantics.Pattern): boolean {
+interface OrPatternBinding {
+  readonly name: string;
+  readonly type: Semantics.Type;
+  readonly byRef: boolean;
+  readonly mutable: boolean;
+}
+
+/**
+ * Every name one or-pattern alternative binds, with enough per-binding info
+ * (`type`, `byRef`, `mutable`) for `checkOrPatternConsistency` to compare
+ * alternatives against each other - mirrors `ownership/control-flow-graph.ts`'s
+ * `declarationsOf`/`ownership/move-check.ts`'s `collectPatternDeclarations`
+ * structurally, but adds `byRef` (neither of those needs it) since a
+ * `&name`/`&mut name` override changes a binding's mode independently of its
+ * `type` and local `mutable` flag. A struct pattern's shorthand field
+ * (`Point { x }`) synthesizes `byRef: false, mutable: false` - the grammar
+ * has no sigil position for shorthand, so it's always equivalent to a plain
+ * `name` binding pattern with no sigil at all.
+ */
+// eslint-disable-next-line complexity -- Routing function over the full Pattern union
+function collectOrPatternBindings(
+  pattern: Semantics.Pattern,
+): readonly OrPatternBinding[] {
+  switch (pattern.kind) {
+    case "WildcardPattern":
+    case "LiteralPattern":
+    case "RangePattern":
+    case "PathPattern":
+      return [];
+    case "BindingPattern": {
+      const own: OrPatternBinding[] =
+        pattern.name.text === "_"
+          ? []
+          : [
+              {
+                name: pattern.name.text,
+                type: pattern.type,
+                byRef: pattern.byRef,
+                mutable: pattern.mutable,
+              },
+            ];
+      return isSome(pattern.subpattern)
+        ? [...own, ...collectOrPatternBindings(pattern.subpattern.value)]
+        : own;
+    }
+    case "OrPattern":
+      // Not reachable in practice - the grammar flattens `|` to one level,
+      // so an alternative is never itself an `OrPattern` - but handled
+      // consistently (recursing through its own alternatives) rather than
+      // asserted against, in case that ever changes.
+      return pattern.alternatives.flatMap((alt) =>
+        collectOrPatternBindings(alt),
+      );
+    case "TuplePattern":
+    case "TupleStructPattern":
+      return pattern.elements.flatMap((el) => collectOrPatternBindings(el));
+    case "StructPattern":
+      return pattern.fields.flatMap((field): readonly OrPatternBinding[] => {
+        if (isSome(field.pattern)) {
+          return collectOrPatternBindings(field.pattern.value);
+        }
+        if (field.name.text === "_") return [];
+        return [
+          {
+            name: field.name.text,
+            type: field.name.type,
+            byRef: false,
+            mutable: false,
+          },
+        ];
+      });
+    case "SlicePattern":
+      return pattern.elements.flatMap((el): readonly OrPatternBinding[] => {
+        if (el.kind === "RestPattern") {
+          if (!isSome(el.name)) return [];
+          return [
+            {
+              name: el.name.value.text,
+              type: el.name.value.type,
+              byRef: el.byRef,
+              mutable: el.mutable,
+            },
+          ];
+        }
+        return collectOrPatternBindings(el);
+      });
+    default:
+      return assertNever(
+        pattern,
+        `Unexpected pattern: ${JSON.stringify(pattern)}`,
+      );
+  }
+}
+
+/**
+ * Spec 0016: every or-pattern alternative must bind the same names, with
+ * the same type and mode, since only one alternative's bindings actually
+ * exist at runtime but the arm body can't know which. Emits at most one
+ * "different names" diagnostic (naming every name that isn't universal,
+ * not one diagnostic per name) and at most one "different type/mode"
+ * diagnostic per name that every alternative does bind but not
+ * identically.
+ */
+function checkOrPatternConsistency(
+  ctx: AnalysisContext,
+  pattern: Semantics.OrPattern,
+): void {
+  const perAlternative = pattern.alternatives.map((alt) =>
+    collectOrPatternBindings(alt),
+  );
+  const nameSets = perAlternative.map(
+    (bindings) => new Set(bindings.map((b) => b.name)),
+  );
+  const allNames = new Set(nameSets.flatMap((s) => [...s]));
+
+  const inconsistentNames = [...allNames].filter(
+    (name) => !nameSets.every((set) => set.has(name)),
+  );
+  if (inconsistentNames.length > 0) {
+    emitError(
+      ctx,
+      `or-pattern alternatives must bind the same names; \`${inconsistentNames.join("`, `")}\` ${inconsistentNames.length === 1 ? "is" : "are"} not bound by every alternative`,
+      pattern.tokenId,
+      none(),
+    );
+  }
+
+  for (const name of allNames) {
+    if (inconsistentNames.includes(name)) continue;
+    // Every alternative's own bindings are guaranteed to include `name` at
+    // this point (it isn't in `inconsistentNames`), so `undefined` entries
+    // are filtered out defensively rather than expected.
+    const occurrences = perAlternative
+      .map((bindings) => bindings.find((b) => b.name === name))
+      .filter((b) => b !== undefined);
+    const [first, ...rest] = occurrences;
+    if (first === undefined) continue;
+    // Compare the resulting type (mode-aware already, see
+    // `effectiveBindingType`) and derived local mutability, not the raw
+    // sigils: under a shared-reference scrutinee, `name` and `&name` both
+    // bind an immutable `&T` - different syntax, same result.
+    const localMutable = (b: OrPatternBinding): boolean =>
+      !b.byRef && b.mutable;
+    const consistent = rest.every(
+      (occ) =>
+        typesEqual(first.type, occ.type) &&
+        localMutable(first) === localMutable(occ),
+    );
+    if (!consistent) {
+      emitError(
+        ctx,
+        `or-pattern alternatives must bind \`${name}\` with the same type and mode in every alternative`,
+        pattern.tokenId,
+        none(),
+      );
+    }
+  }
+}
+
+/** A slice pattern's own arity check, re-derived from `analyzePattern`
+ * rather than stored as a redundant flag. Array length is statically
+ * known, so an arity mismatch is a precise "never matches" - not
+ * assume-best-case like the struct/enum cases below - so it must not
+ * count as a catch-all or subsume a later arm. Multiple rests (`[a, ..,
+ * b, .., c]`) are ill-formed regardless of arity - already diagnosed
+ * separately - so that case stays assume-best-case (`true`), unlike the
+ * real check below it. */
+function isSliceArityIrrefutable(
+  elements: Semantics.SlicePattern["elements"],
+  type: Semantics.Type,
+): boolean {
+  if (type.kind !== "ArrayType") return false;
+  const restCount = elements.filter((el) => el.kind === "RestPattern").length;
+  if (restCount > 1) return true;
+  const nonRestCount = elements.length - restCount;
+  return restCount === 1
+    ? nonRestCount <= type.length
+    : nonRestCount === type.length;
+}
+
+function isIrrefutablePattern(
+  ctx: AnalysisContext,
+  pattern: Semantics.Pattern,
+): boolean {
   switch (pattern.kind) {
     case "WildcardPattern":
       return true;
@@ -1456,16 +2060,28 @@ function isIrrefutablePattern(pattern: Semantics.Pattern): boolean {
     case "LiteralPattern":
     case "RangePattern":
     case "TuplePattern":
+      return false;
+    case "SlicePattern":
+      return isSliceArityIrrefutable(pattern.elements, pattern.type);
     case "StructPattern":
     case "TupleStructPattern":
-    case "PathPattern":
-    case "SlicePattern":
-      return false;
+    case "PathPattern": {
+      // A plain (non-enum) struct has exactly one shape, so any pattern
+      // that resolved against one is unconditionally irrefutable - there's
+      // no other variant for it to fail to match. An enum-variant pattern
+      // is irrefutable only when its enum has exactly one variant (that
+      // variant is the only possible value, mirroring Rust's own treatment
+      // of a single-variant enum); a multi-variant enum's pattern only ever
+      // names one variant, leaving the others uncovered.
+      const enumDecl = resolveEnumDecl(ctx, pattern.type);
+      if (isSome(enumDecl)) return enumDecl.value.variants.length === 1;
+      return isSome(resolveStructDecl(ctx, pattern.type));
+    }
     case "OrPattern":
       // Matching tries each alternative in turn and succeeds at the first
       // one that matches, so a single irrefutable alternative (e.g. `_` in
       // `_ | Message::Quit`) makes the whole or-pattern always match.
-      return pattern.alternatives.some((alt) => isIrrefutablePattern(alt));
+      return pattern.alternatives.some((alt) => isIrrefutablePattern(ctx, alt));
     default:
       return assertNever(
         pattern,
@@ -1565,7 +2181,7 @@ function checkUnreachableArms(
 
   for (const arm of arms) {
     if (hasCatchAll) {
-      emitError(ctx, "unreachable pattern", arm.tokenId);
+      emitError(ctx, "unreachable pattern", arm.tokenId, none());
     } else if (isSome(enumDecl)) {
       const thisArmVariants = new Set<string>();
       collectCoveredVariantNames(arm.pattern, thisArmVariants);
@@ -1573,7 +2189,7 @@ function checkUnreachableArms(
         thisArmVariants.size > 0 &&
         [...thisArmVariants].every((name) => coveredVariants.has(name))
       ) {
-        emitError(ctx, "unreachable pattern", arm.tokenId);
+        emitError(ctx, "unreachable pattern", arm.tokenId, none());
       }
     } else if (isBool) {
       const thisArmBools = new Set<boolean>();
@@ -1582,12 +2198,12 @@ function checkUnreachableArms(
         thisArmBools.size > 0 &&
         [...thisArmBools].every((v) => coveredBools.has(v))
       ) {
-        emitError(ctx, "unreachable pattern", arm.tokenId);
+        emitError(ctx, "unreachable pattern", arm.tokenId, none());
       }
     }
 
     if (isNone(arm.guard)) {
-      if (isIrrefutablePattern(arm.pattern)) {
+      if (isIrrefutablePattern(ctx, arm.pattern)) {
         hasCatchAll = true;
       } else if (isSome(enumDecl)) {
         collectCoveredVariantNames(arm.pattern, coveredVariants);
@@ -1605,7 +2221,7 @@ function checkMatchExhaustiveness(
   scrutineeType: Semantics.Type,
 ): void {
   const hasCatchAll = arms.some(
-    (arm) => isNone(arm.guard) && isIrrefutablePattern(arm.pattern),
+    (arm) => isNone(arm.guard) && isIrrefutablePattern(ctx, arm.pattern),
   );
   if (hasCatchAll) return;
 
@@ -1623,6 +2239,7 @@ function checkMatchExhaustiveness(
         ctx,
         `non-exhaustive patterns: \`${missing.join("`, `")}\` not covered`,
         matchExpr.tokenId,
+        none(),
       );
     }
     return;
@@ -1641,22 +2258,36 @@ function checkMatchExhaustiveness(
         ctx,
         `non-exhaustive patterns: \`${missing.join("`, `")}\` not covered`,
         matchExpr.tokenId,
+        none(),
       );
     }
     return;
   }
 
-  emitError(ctx, "non-exhaustive patterns: `_` not covered", matchExpr.tokenId);
+  emitError(
+    ctx,
+    "non-exhaustive patterns: `_` not covered",
+    matchExpr.tokenId,
+    none(),
+  );
 }
 
 function analyzeMatchArm(
   ctx: AnalysisContext,
   arm: Parser.MatchArm,
-  scrutineeType: Semantics.Type,
+  effectiveScrutineeType: Semantics.Type,
+  defaultMode: PatternBindingMode,
+  rootMutable: boolean,
 ): Semantics.MatchArm {
   ctx.scopes.push(new Map());
   try {
-    const pattern = analyzePattern(ctx, arm.pattern, scrutineeType);
+    const pattern = analyzePattern(
+      ctx,
+      arm.pattern,
+      effectiveScrutineeType,
+      defaultMode,
+      rootMutable,
+    );
     const guard = mapSome(arm.guard, (g) => analyzeExpression(ctx, g));
     const body = analyzeExpression(ctx, arm.body);
     return { ...arm, pattern, guard, body };
@@ -1671,8 +2302,16 @@ function analyzeMatchExpression(
 ): Semantics.MatchExpression {
   const scrutinee = analyzeExpression(ctx, matchExpr.scrutinee);
   const scrutineeType = getType(scrutinee);
+  const { mode: defaultMode, effectiveType } =
+    defaultBindingModeForScrutinee(scrutineeType);
+  // Only ever consulted when `defaultMode === "owned"` (see
+  // `checkMutOverrideLegality`) - a &mut-override's legality under a
+  // reference-typed scrutinee never depends on the scrutinee expression's
+  // own place mutability, only on the reference's own mutability
+  // (`defaultMode` itself already captures that).
+  const rootMutable = !isSome(placeMutabilityViolation(ctx, scrutinee, true));
   const arms = matchExpr.arms.map((arm) =>
-    analyzeMatchArm(ctx, arm, scrutineeType),
+    analyzeMatchArm(ctx, arm, effectiveType, defaultMode, rootMutable),
   );
 
   // A `UnitType` scrutinee is ambiguous (see `isAmbiguousUnitExpr`'s doc
@@ -1681,9 +2320,13 @@ function analyzeMatchExpression(
   // failed arithmetic operand, ...). Skipping both checks in the
   // placeholder case avoids piling a second, spurious "non-exhaustive"
   // diagnostic on top of whatever already failed to resolve the scrutinee.
+  // Checked against the raw `scrutineeType`, not `effectiveType` - a
+  // reference-wrapped scrutinee is never itself the `UnitType` placeholder
+  // (it would be a `ReferenceType`), so unwrapping first couldn't change
+  // this check's outcome, only its own doesn't-apply-here type.
   if (!(scrutineeType.kind === "UnitType" && isAmbiguousUnitExpr(scrutinee))) {
-    checkUnreachableArms(ctx, arms, scrutineeType);
-    checkMatchExhaustiveness(ctx, matchExpr, arms, scrutineeType);
+    checkUnreachableArms(ctx, arms, effectiveType);
+    checkMatchExhaustiveness(ctx, matchExpr, arms, effectiveType);
   }
 
   let resultType: Semantics.Type = {
@@ -1698,7 +2341,12 @@ function analyzeMatchExpression(
       continue;
     }
     if (!typesEqual(resultType, armType)) {
-      emitError(ctx, "match arms have incompatible types", matchExpr.tokenId);
+      emitError(
+        ctx,
+        "match arms have incompatible types",
+        matchExpr.tokenId,
+        none(),
+      );
       break;
     }
   }
@@ -1728,14 +2376,14 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
       return analyzeStaticDecl(ctx, item);
     case "LetStatement":
     case "ExpressionStatement": {
-      emitError(ctx, TOP_LEVEL_ITEM_RESTRICTION_MESSAGE, item.tokenId);
+      emitError(ctx, TOP_LEVEL_ITEM_RESTRICTION_MESSAGE, item.tokenId, none());
       const prevLen = ctx.diagnostics.length;
       const analyzed = analyzeStatement(ctx, item);
       ctx.diagnostics.splice(prevLen); // suppress cascading errors — the restriction error is good enough
       return analyzed;
     }
     default:
-      emitError(ctx, TOP_LEVEL_ITEM_RESTRICTION_MESSAGE, item.tokenId);
+      emitError(ctx, TOP_LEVEL_ITEM_RESTRICTION_MESSAGE, item.tokenId, none());
       return analyzeExpression(ctx, item);
   }
 }
@@ -1992,7 +2640,7 @@ function checkEscapingReferenceExpression(
     ctx,
     `returns a reference to \`${name}\`, which does not live beyond this function`,
     expr.tokenId,
-    { code: "HEDGE-LIFETIME-002" },
+    some({ code: "HEDGE-LIFETIME-002" }),
   );
 }
 
@@ -2016,7 +2664,7 @@ function checkEscapingStructExpression(
       ctx,
       `struct literal field \`${field.name.text}\` borrows \`${name}\`, which does not live beyond this function`,
       fieldValue.tokenId,
-      { code: "HEDGE-LIFETIME-002" },
+      some({ code: "HEDGE-LIFETIME-002" }),
     );
   }
 }
@@ -2088,6 +2736,7 @@ function checkFunctionReturnType(
         ctx,
         `missing return value: expected \`${describeType(expectedReturnType)}\``,
         body.tokenId,
+        none(),
       );
     }
     return body;
@@ -2108,6 +2757,7 @@ function checkFunctionReturnType(
       ctx,
       `return type mismatch: expected \`${describeType(expectedReturnType)}\`, found \`${describeType(getType(expr))}\``,
       trailing.tokenId,
+      none(),
     );
   } else {
     checkEscapingReference(ctx, expr);
@@ -2135,14 +2785,13 @@ function analyzeFunctionDecl(
   const analyzedParams = decl.params.map(
     (param: Parser.Param): Semantics.Param => {
       const paramType = validateSlice1Type(ctx, param.type, param.type.tokenId);
-      const mutable = patternMutable(param.pattern);
-      const name = bindPatternName(ctx, param.pattern, paramType, mutable);
-      return {
-        ...param,
-        mutable,
-        type: paramType,
-        pattern: { kind: "BindingPattern", name },
-      };
+      const pattern = analyzeLetOrParamPattern(
+        ctx,
+        param.pattern,
+        paramType,
+        none(),
+      );
+      return { ...param, type: paramType, pattern };
     },
   );
   const returnType: Option<Semantics.Type> = mapSome(
@@ -2248,6 +2897,7 @@ function analyzeStatement(
           ctx,
           `struct \`${statement.name.text}\` is defined more than once`,
           statement.name.tokenId,
+          none(),
         );
       }
       const analyzed = analyzeStruct(ctx, statement);
@@ -2260,6 +2910,7 @@ function analyzeStatement(
           ctx,
           `enum \`${statement.name.text}\` is defined more than once`,
           statement.name.tokenId,
+          none(),
         );
       }
       const analyzed = analyzeEnum(ctx, statement);
@@ -2314,6 +2965,7 @@ function analyzeLetStatement(
           ctx,
           "type mismatch: explicit annotation does not match initializer type",
           statement.tokenId,
+          none(),
         );
       }
       bindingType = annotationType;
@@ -2325,6 +2977,7 @@ function analyzeLetStatement(
         ctx,
         "cannot infer element type of an empty array literal without an explicit type annotation",
         statement.tokenId,
+        none(),
       );
     }
   } else if (isSome(statement.type)) {
@@ -2344,13 +2997,16 @@ function analyzeLetStatement(
     checkPosLiteralRange(ctx, coercedInitializer.value, bindingType);
   }
 
-  const mutable = patternMutable(statement.pattern);
-  const name = bindPatternName(ctx, statement.pattern, bindingType, mutable);
+  const pattern = analyzeLetOrParamPattern(
+    ctx,
+    statement.pattern,
+    bindingType,
+    coercedInitializer,
+  );
 
   return {
     ...statement,
-    mutable,
-    pattern: { kind: "BindingPattern", name },
+    pattern,
     attributes: statement.attributes.map((attr) => analyzeAttribute(ctx, attr)),
     initializer: coercedInitializer,
     type: { kind: "UnitType", tokenId: statement.tokenId },
@@ -2457,7 +3113,7 @@ function checkPosLiteralRange(
   const [, max] = bounds;
   if (val > max) {
     const name = NUMERIC_TYPE_NAME[type.kind] ?? type.kind;
-    emitError(ctx, `out of range for ${name}`, literal.tokenId);
+    emitError(ctx, `out of range for ${name}`, literal.tokenId, none());
   }
 }
 
@@ -2507,7 +3163,7 @@ function checkCoercedLiteralRange(
   ) {
     const rangeError = checkNegLiteralRange(expr.operand, expr.type);
     if (isSome(rangeError)) {
-      emitError(ctx, rangeError.value, expr.operand.tokenId);
+      emitError(ctx, rangeError.value, expr.operand.tokenId, none());
     }
   }
 }
@@ -2628,7 +3284,7 @@ function reconcileExpressionType(
   ) {
     const rangeError = checkNegLiteralRange(result.operand, expectedType);
     if (isSome(rangeError)) {
-      emitError(ctx, rangeError.value, tokenId);
+      emitError(ctx, rangeError.value, tokenId, none());
       suppressed = true;
     }
   }
@@ -2670,13 +3326,23 @@ function inferBinaryType(
       const leftEq = !isLeftTypeValid || hasCapability(leftType, "equality");
       const rightEq = !isRightTypeValid || hasCapability(rightType, "equality");
       if (!leftEq || !rightEq) {
-        emitError(ctx, "type does not support equality comparison", tokenId);
+        emitError(
+          ctx,
+          "type does not support equality comparison",
+          tokenId,
+          none(),
+        );
       } else if (
         isLeftTypeValid &&
         isRightTypeValid &&
         !typesEqual(leftType, rightType)
       ) {
-        emitError(ctx, "comparison operands must have the same type", tokenId);
+        emitError(
+          ctx,
+          "comparison operands must have the same type",
+          tokenId,
+          none(),
+        );
       }
       return bool;
     }
@@ -2689,13 +3355,23 @@ function inferBinaryType(
       const rightOrd =
         !isRightTypeValid || hasCapability(rightType, "ordering");
       if (!leftOrd || !rightOrd) {
-        emitError(ctx, "type does not support ordering comparison", tokenId);
+        emitError(
+          ctx,
+          "type does not support ordering comparison",
+          tokenId,
+          none(),
+        );
       } else if (
         isLeftTypeValid &&
         isRightTypeValid &&
         !typesEqual(leftType, rightType)
       ) {
-        emitError(ctx, "comparison operands must have the same type", tokenId);
+        emitError(
+          ctx,
+          "comparison operands must have the same type",
+          tokenId,
+          none(),
+        );
       }
       return bool;
     }
@@ -2703,10 +3379,20 @@ function inferBinaryType(
     case "And":
     case "Or": {
       if (isLeftTypeValid && !hasCapability(leftType, "logical")) {
-        emitError(ctx, "logical operator operands must be `bool`", tokenId);
+        emitError(
+          ctx,
+          "logical operator operands must be `bool`",
+          tokenId,
+          none(),
+        );
       }
       if (isRightTypeValid && !hasCapability(rightType, "logical")) {
-        emitError(ctx, "logical operator operands must be `bool`", tokenId);
+        emitError(
+          ctx,
+          "logical operator operands must be `bool`",
+          tokenId,
+          none(),
+        );
       }
       return bool;
     }
@@ -2721,6 +3407,7 @@ function inferBinaryType(
           ctx,
           `arithmetic operands must be numeric; left-operand is type \`${describeType(leftType)}\``,
           tokenId,
+          none(),
         );
       }
       if (isRightTypeValid && !hasCapability(rightType, "arithmetic")) {
@@ -2728,6 +3415,7 @@ function inferBinaryType(
           ctx,
           `arithmetic operands must be numeric; right-operand is type \`${describeType(rightType)}\``,
           tokenId,
+          none(),
         );
       }
       if (
@@ -2735,7 +3423,12 @@ function inferBinaryType(
         isRightTypeValid &&
         !typesEqual(leftType, rightType)
       ) {
-        emitError(ctx, "arithmetic operands must have the same type", tokenId);
+        emitError(
+          ctx,
+          "arithmetic operands must have the same type",
+          tokenId,
+          none(),
+        );
       }
       return isLeftTypeValid ? leftType : rightType;
     }
@@ -2746,17 +3439,32 @@ function inferBinaryType(
     case "BitXor":
     case "BitOr": {
       if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
-        emitError(ctx, "bitwise operations require integer operands", tokenId);
+        emitError(
+          ctx,
+          "bitwise operations require integer operands",
+          tokenId,
+          none(),
+        );
       }
       if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
-        emitError(ctx, "bitwise operations require integer operands", tokenId);
+        emitError(
+          ctx,
+          "bitwise operations require integer operands",
+          tokenId,
+          none(),
+        );
       }
       if (
         isLeftTypeValid &&
         isRightTypeValid &&
         !typesEqual(leftType, rightType)
       ) {
-        emitError(ctx, "bitwise operands must have the same type", tokenId);
+        emitError(
+          ctx,
+          "bitwise operands must have the same type",
+          tokenId,
+          none(),
+        );
       }
       return isLeftTypeValid ? leftType : rightType;
     }
@@ -2832,7 +3540,7 @@ function analyzeExpression(
       ) {
         const rangeError = checkNegLiteralRange(operand, type);
         if (isSome(rangeError))
-          emitError(ctx, rangeError.value, operand.tokenId);
+          emitError(ctx, rangeError.value, operand.tokenId, none());
       }
       return { ...expression, operand, type };
     }
@@ -2953,6 +3661,7 @@ function analyzeReferenceExpression(
       ctx,
       "only a local binding, a parameter, or a field, index, or dereference of one can be borrowed directly",
       expression.tokenId,
+      none(),
     );
     return {
       ...expression,
@@ -2990,6 +3699,7 @@ function analyzeDereferenceExpression(
         ctx,
         "cannot dereference a non-reference type",
         expression.tokenId,
+        none(),
       );
     }
     return {
@@ -3041,6 +3751,7 @@ function analyzeArrayExpression(
         ctx,
         `array elements must all have the same type; expected \`${describeType(elementType)}\`, found \`${describeType(elemType)}\``,
         elem.tokenId,
+        none(),
       );
       break;
     }
@@ -3073,6 +3784,7 @@ function analyzeArrayRepeatExpression(
       ctx,
       `repeat-form array element type must be Copy, found \`${describeType(valueType)}\``,
       expression.value.tokenId,
+      none(),
     );
     return { ...expression, value, count: 0, type: UNIT };
   }
@@ -3120,6 +3832,7 @@ function analyzeIndexExpression(
       ctx,
       `cannot index into non-array type \`${describeType(objectType)}\``,
       expression.tokenId,
+      none(),
     );
     return { ...expression, object, index, type: UNIT };
   }
@@ -3129,6 +3842,7 @@ function analyzeIndexExpression(
       ctx,
       `array index must be \`usize\`, found \`${describeType(getType(index))}\``,
       expression.index.tokenId,
+      none(),
     );
     return { ...expression, object, index, type: arrayType.elementType };
   }
@@ -3140,6 +3854,7 @@ function analyzeIndexExpression(
         ctx,
         `index ${String(literalIndex)} out of bounds for array of length ${String(arrayType.length)}`,
         expression.index.tokenId,
+        none(),
       );
     }
   }
@@ -3168,7 +3883,12 @@ function analyzeFieldAccessExpression(
     objectType.kind === "ReferenceType" ? objectType.referent : objectType;
 
   if (structType.kind !== "StructType") {
-    emitError(ctx, "field access on non-struct type", expression.field.tokenId);
+    emitError(
+      ctx,
+      "field access on non-struct type",
+      expression.field.tokenId,
+      none(),
+    );
     return unresolved();
   }
 
@@ -3184,6 +3904,7 @@ function analyzeFieldAccessExpression(
       ctx,
       `no field \`${fieldName}\` on struct \`${structName}\``,
       expression.field.tokenId,
+      none(),
     );
     return unresolved();
   }
@@ -3196,6 +3917,7 @@ function analyzeFieldAccessExpression(
       ctx,
       `no field \`${fieldName}\` on struct \`${structName}\``,
       expression.field.tokenId,
+      none(),
     );
     return unresolved();
   }
@@ -3282,10 +4004,15 @@ function checkLhsMutability(
   if (isSome(violation)) {
     switch (violation.value) {
       case "immutable-binding":
-        emitError(ctx, "cannot assign to immutable binding", tokenId);
+        emitError(ctx, "cannot assign to immutable binding", tokenId, none());
         break;
       case "shared-reference":
-        emitError(ctx, "cannot assign through a shared reference", tokenId);
+        emitError(
+          ctx,
+          "cannot assign through a shared reference",
+          tokenId,
+          none(),
+        );
         break;
       default:
         assertNever(
@@ -3370,6 +4097,7 @@ function analyzeStructExpression(
       ctx,
       `cannot find struct \`${structName}\` in this scope`,
       structExpression.tokenId,
+      none(),
     );
     return {
       ...structExpression,
@@ -3398,6 +4126,7 @@ function analyzeStructExpression(
         ctx,
         `field \`${field.name.text}\` provided for unit struct \`${structName}\``,
         field.name.tokenId,
+        none(),
       );
     }
   }
@@ -3440,6 +4169,7 @@ function analyzeStructNamedFields(
         ctx,
         `field \`${field.name.text}\` specified more than once in struct literal`,
         field.name.tokenId,
+        none(),
       );
     }
     seenFields.add(field.name.text);
@@ -3450,6 +4180,7 @@ function analyzeStructNamedFields(
         ctx,
         `unknown field \`${field.name.text}\` for struct \`${structName}\``,
         field.name.tokenId,
+        none(),
       );
       return field;
     }
@@ -3473,6 +4204,7 @@ function analyzeStructNamedFields(
         ctx,
         `field \`${field.name.text}\` type mismatch: expected \`${describeType(declaredField.type)}\`, found \`${describeType(getType(expr))}\``,
         value.tokenId,
+        none(),
       );
     }
     return expr === value
@@ -3487,6 +4219,7 @@ function analyzeStructNamedFields(
           ctx,
           `missing required field \`${fieldName}\` in struct literal of type \`${structName}\``,
           structTokenId,
+          none(),
         );
       }
     }
@@ -3512,7 +4245,7 @@ function analyzeIfExpression(
     condType.kind !== "UnitType" &&
     condType.kind !== "PrimitiveBooleanType"
   ) {
-    emitError(ctx, "if condition must be `bool`", ifExpression.tokenId);
+    emitError(ctx, "if condition must be `bool`", ifExpression.tokenId, none());
   }
 
   if (isSome(elseBranch)) {
@@ -3527,6 +4260,7 @@ function analyzeIfExpression(
         ctx,
         "if expression branches have incompatible types",
         ifExpression.tokenId,
+        none(),
       );
     }
   }
@@ -3582,7 +4316,12 @@ function analyzePath(
   if (isSome(resolvedType)) {
     return { ...path, type: resolvedType.value.type };
   }
-  emitError(ctx, `Cannot find name "${name}" in this scope.`, path.tokenId);
+  emitError(
+    ctx,
+    `Cannot find name "${name}" in this scope.`,
+    path.tokenId,
+    none(),
+  );
   return { ...path, type: { kind: "UnitType", tokenId: path.tokenId } };
 }
 
@@ -3615,6 +4354,7 @@ export function analyze(
           ctx,
           `struct \`${item.name.text}\` is defined more than once`,
           item.name.tokenId,
+          none(),
         );
       } else {
         ctx.typeScope.set(item.name.text, analyzeStruct(ctx, item));
@@ -3625,6 +4365,7 @@ export function analyze(
           ctx,
           `enum \`${item.name.text}\` is defined more than once`,
           item.name.tokenId,
+          none(),
         );
       } else {
         ctx.enumScope.set(item.name.text, analyzeEnum(ctx, item));
@@ -3635,6 +4376,7 @@ export function analyze(
           ctx,
           `function \`${item.name.text}\` is defined more than once`,
           item.name.tokenId,
+          none(),
         );
       } else {
         topLevelFunctionNames.add(item.name.text);
