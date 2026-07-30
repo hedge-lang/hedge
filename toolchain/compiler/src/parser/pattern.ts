@@ -238,11 +238,14 @@ function parseIdentifierRootedPattern(
   }
   const { node: ident, next } = identResult.value;
 
-  // A multi-segment path (`A::B`) is only reachable without a byRef/mut
-  // sigil - `&A::B`/`mut A::B` isn't valid pattern grammar, since a sigil
-  // applies only to a bare BindingPat identifier, never a Path.
+  // A multi-segment path (`A::B`) is only reachable without a `byRef` sigil
+  // - `&A::B` isn't valid pattern grammar, since `&`/`&mut` apply only to a
+  // bare BindingPat identifier, never a Path. `mut A::B` is allowed through
+  // to `parsePathRootedPatternTail`, which rejects it itself if the path
+  // turns out to be a fieldless bare-unit-variant `PathPattern` rather than
+  // a struct/tuple-struct variant.
   if (kindAt(tokens, next) === "path_sep") {
-    if (isMut || byRef) {
+    if (byRef) {
       return err({
         severity: "error",
         message: sigilOnPathMessage,
@@ -254,7 +257,7 @@ function parseIdentifierRootedPattern(
     const pathResult = parsePathSegments(tokens, afterMut);
     if (isErr(pathResult)) return pathResult;
     const { node: path, next: afterPath } = pathResult.value;
-    return parsePathRootedPatternTail(tokens, pos, path, afterPath);
+    return parsePathRootedPatternTail(tokens, pos, path, afterPath, isMut);
   }
 
   if (ident.text === "_") {
@@ -276,7 +279,7 @@ function parseIdentifierRootedPattern(
   }
 
   if (kindAt(tokens, next) === "lbrace" || kindAt(tokens, next) === "lparen") {
-    if (isMut || byRef) {
+    if (byRef) {
       return err({
         severity: "error",
         message: sigilOnPathMessage,
@@ -290,6 +293,7 @@ function parseIdentifierRootedPattern(
       pos,
       { absolute: false, segments: [ident.text] },
       next,
+      isMut,
     );
   }
 
@@ -402,6 +406,7 @@ function parseTupleStructPattern(
   startPos: number,
   path: Path,
   parenPos: number,
+  mutable: boolean,
 ): PR<Parsed<Pattern>> {
   const listResult = parseParenthesizedPatternList(tokens, parenPos + 1);
   if (isErr(listResult)) return listResult;
@@ -410,6 +415,7 @@ function parseTupleStructPattern(
       kind: "TupleStructPattern",
       tokenId: startPos,
       path,
+      mutable,
       elements: listResult.value.elements,
     },
     next: listResult.value.next,
@@ -420,19 +426,36 @@ function parseTupleStructPattern(
  * Given an already-parsed `Path` at `afterPath`, dispatches to
  * `StructPattern` (`{` follows), `TupleStructPattern` (`(` follows), or a
  * bare `PathPattern` (neither follows - a unit enum variant like
- * `Message::Quit`).
+ * `Message::Quit`). `mutable` (a leading `mut` sigil - see
+ * `parseIdentifierRootedPattern`) is only meaningful for the first two: a
+ * struct/tuple-struct pattern has fields whose binding-mode legality
+ * (Hedge-47) can depend on treating the whole destructured value as
+ * mutable, but a bare unit-variant `PathPattern` binds nothing at all, so
+ * `mut` there has no place to apply to and is rejected instead of silently
+ * dropped.
  */
 function parsePathRootedPatternTail(
   tokens: readonly Token[],
   startPos: number,
   path: Path,
   afterPath: number,
+  mutable: boolean,
 ): PR<Parsed<Pattern>> {
   if (kindAt(tokens, afterPath) === "lbrace") {
-    return parseStructPattern(tokens, startPos, path, afterPath);
+    return parseStructPattern(tokens, startPos, path, afterPath, mutable);
   }
   if (kindAt(tokens, afterPath) === "lparen") {
-    return parseTupleStructPattern(tokens, startPos, path, afterPath);
+    return parseTupleStructPattern(tokens, startPos, path, afterPath, mutable);
+  }
+  if (mutable) {
+    return err({
+      severity: "error",
+      message:
+        "`mut` cannot be applied to a fieldless pattern like a bare unit variant",
+      span: spanAt(tokens, startPos),
+      code: none(),
+      relatedSpans: [],
+    });
   }
   return ok({
     node: { kind: "PathPattern", tokenId: startPos, path },
@@ -452,6 +475,7 @@ function parseStructPattern(
   startPos: number,
   path: Path,
   bracePos: number,
+  mutable: boolean,
 ): PR<Parsed<Pattern>> {
   let cursor = bracePos + 1; // skip `{`
   const fields: FieldPattern[] = [];
@@ -495,7 +519,14 @@ function parseStructPattern(
   const closeResult = expect(tokens, cursor, "rbrace");
   if (isErr(closeResult)) return closeResult;
   return ok({
-    node: { kind: "StructPattern", tokenId: startPos, path, fields, hasRest },
+    node: {
+      kind: "StructPattern",
+      tokenId: startPos,
+      path,
+      mutable,
+      fields,
+      hasRest,
+    },
     next: closeResult.value,
   });
 }

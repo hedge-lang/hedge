@@ -330,6 +330,8 @@ export interface FieldPattern extends AstNode {
 export interface StructPattern extends DecoratedAstNode {
   readonly kind: "StructPattern";
   readonly path: Path;
+  /** See `Parser.StructPattern.mutable`'s doc comment. */
+  readonly mutable: boolean;
   readonly fields: readonly FieldPattern[];
   readonly hasRest: boolean;
 }
@@ -337,6 +339,8 @@ export interface StructPattern extends DecoratedAstNode {
 export interface TupleStructPattern extends DecoratedAstNode {
   readonly kind: "TupleStructPattern";
   readonly path: Path;
+  /** See `Parser.StructPattern.mutable`'s doc comment. */
+  readonly mutable: boolean;
   readonly elements: readonly Pattern[];
 }
 
