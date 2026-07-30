@@ -2264,6 +2264,73 @@ describe("core patterns", (): void => {
     });
   });
 
+  it("parses a `mut` sigil on a struct pattern as a real, mutable StructPattern", (): void => {
+    const ast = parseProgram("fn f(mut Point { x, y }: Point) {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          params: [
+            {
+              kind: "Param",
+              pattern: {
+                kind: "StructPattern",
+                mutable: true,
+                path: { segments: ["Point"] },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a `mut` sigil on a tuple-struct pattern as a real, mutable TupleStructPattern", (): void => {
+    const ast = parseProgram("let mut Pair(a, b) = pair;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "LetStatement",
+          pattern: {
+            kind: "TupleStructPattern",
+            mutable: true,
+            path: { segments: ["Pair"] },
+          },
+        },
+      ],
+    });
+  });
+
+  it("still rejects a `&` sigil on a struct pattern", (): void => {
+    const { program, diagnostics } = parse(
+      tokenize("fn f(&Point { x, y }: Point) {}").tokens,
+    );
+    expect(program).toEqual(none());
+    expect(diagnostics[0]?.message).toContain(
+      "cannot be applied to a struct, tuple-struct, or path pattern",
+    );
+  });
+
+  it("still rejects a `&mut` sigil on a tuple-struct pattern", (): void => {
+    const { program, diagnostics } = parse(
+      tokenize("let &mut Pair(a, b) = pair;").tokens,
+    );
+    expect(program).toEqual(none());
+    expect(diagnostics[0]?.message).toContain(
+      "cannot be applied to a struct, tuple-struct, or path pattern",
+    );
+  });
+
+  it("still rejects a `mut` sigil on a bare (fieldless) path pattern", (): void => {
+    const { program, diagnostics } = parse(
+      tokenize("fn f() { match m { mut Message::Quit => 0 } }").tokens,
+    );
+    expect(program).toEqual(none());
+    expect(diagnostics[0]?.message).toContain(
+      "`mut` cannot be applied to a fieldless pattern",
+    );
+  });
+
   it("parses a struct pattern field with an explicit renamed sub-pattern (`Point { x: a, y: b }`)", (): void => {
     const ast = parseProgram("match p { Point { x: a, y: b } => a }");
     expect(ast).toMatchObject({
