@@ -1560,16 +1560,19 @@ function analyzePattern(
     case "OrPattern": {
       // Each alternative is analyzed independently, so `Foo(a) | Bar(b)`
       // binds both `a` and `b` into the arm's scope regardless of which
-      // alternative actually matches at runtime.
-      // TODO (Hedge-47): spec 0016 requires every alternative to bind the
-      // same names/types/modes - not enforced yet.
+      // alternative actually matches at runtime - `checkOrPatternConsistency`
+      // (below) is what actually enforces spec 0016's requirement that every
+      // alternative bind the same names/types/modes, rather than this
+      // analysis step silently accepting the mismatch.
+      const alternatives = pattern.alternatives.map((alt) =>
+        analyzePattern(ctx, alt, scrutineeType, defaultMode, rootMutable),
+      );
       const result: Semantics.OrPattern = {
         ...pattern,
-        alternatives: pattern.alternatives.map((alt) =>
-          analyzePattern(ctx, alt, scrutineeType, defaultMode, rootMutable),
-        ),
+        alternatives,
         type: scrutineeType,
       };
+      checkOrPatternConsistency(ctx, result);
       return result;
     }
     case "PathPattern": {
@@ -1802,6 +1805,158 @@ function analyzePattern(
         pattern,
         `Unexpected pattern: ${JSON.stringify(pattern)}`,
       );
+  }
+}
+
+interface OrPatternBinding {
+  readonly name: string;
+  readonly type: Semantics.Type;
+  readonly byRef: boolean;
+  readonly mutable: boolean;
+}
+
+/**
+ * Every name one or-pattern alternative binds, with enough per-binding info
+ * (`type`, `byRef`, `mutable`) for `checkOrPatternConsistency` to compare
+ * alternatives against each other - mirrors `ownership/control-flow-graph.ts`'s
+ * `declarationsOf`/`ownership/move-check.ts`'s `collectPatternDeclarations`
+ * structurally, but adds `byRef` (neither of those needs it) since a
+ * `&name`/`&mut name` override changes a binding's mode independently of its
+ * `type` and local `mutable` flag. A struct pattern's shorthand field
+ * (`Point { x }`) synthesizes `byRef: false, mutable: false` - the grammar
+ * has no sigil position for shorthand, so it's always equivalent to a plain
+ * `name` binding pattern with no sigil at all.
+ */
+// eslint-disable-next-line complexity -- Routing function over the full Pattern union
+function collectOrPatternBindings(
+  pattern: Semantics.Pattern,
+): readonly OrPatternBinding[] {
+  switch (pattern.kind) {
+    case "WildcardPattern":
+    case "LiteralPattern":
+    case "RangePattern":
+    case "PathPattern":
+      return [];
+    case "BindingPattern": {
+      const own: OrPatternBinding[] =
+        pattern.name.text === "_"
+          ? []
+          : [
+              {
+                name: pattern.name.text,
+                type: pattern.type,
+                byRef: pattern.byRef,
+                mutable: pattern.mutable,
+              },
+            ];
+      return isSome(pattern.subpattern)
+        ? [...own, ...collectOrPatternBindings(pattern.subpattern.value)]
+        : own;
+    }
+    case "OrPattern":
+      // Not reachable in practice - the grammar flattens `|` to one level,
+      // so an alternative is never itself an `OrPattern` - but handled
+      // consistently (recursing through its own alternatives) rather than
+      // asserted against, in case that ever changes.
+      return pattern.alternatives.flatMap((alt) =>
+        collectOrPatternBindings(alt),
+      );
+    case "TuplePattern":
+    case "TupleStructPattern":
+      return pattern.elements.flatMap((el) => collectOrPatternBindings(el));
+    case "StructPattern":
+      return pattern.fields.flatMap((field): readonly OrPatternBinding[] => {
+        if (isSome(field.pattern)) {
+          return collectOrPatternBindings(field.pattern.value);
+        }
+        if (field.name.text === "_") return [];
+        return [
+          {
+            name: field.name.text,
+            type: field.name.type,
+            byRef: false,
+            mutable: false,
+          },
+        ];
+      });
+    case "SlicePattern":
+      return pattern.elements.flatMap((el): readonly OrPatternBinding[] => {
+        if (el.kind === "RestPattern") {
+          if (!isSome(el.name)) return [];
+          return [
+            {
+              name: el.name.value.text,
+              type: el.name.value.type,
+              byRef: el.byRef,
+              mutable: el.mutable,
+            },
+          ];
+        }
+        return collectOrPatternBindings(el);
+      });
+    default:
+      return assertNever(
+        pattern,
+        `Unexpected pattern: ${JSON.stringify(pattern)}`,
+      );
+  }
+}
+
+/**
+ * Spec 0016: every or-pattern alternative must bind the same names, with
+ * the same type and mode, since only one alternative's bindings actually
+ * exist at runtime but the arm body can't know which. Emits at most one
+ * "different names" diagnostic (naming every name that isn't universal,
+ * not one diagnostic per name) and at most one "different type/mode"
+ * diagnostic per name that every alternative does bind but not
+ * identically.
+ */
+function checkOrPatternConsistency(
+  ctx: AnalysisContext,
+  pattern: Semantics.OrPattern,
+): void {
+  const perAlternative = pattern.alternatives.map((alt) =>
+    collectOrPatternBindings(alt),
+  );
+  const nameSets = perAlternative.map(
+    (bindings) => new Set(bindings.map((b) => b.name)),
+  );
+  const allNames = new Set(nameSets.flatMap((s) => [...s]));
+
+  const inconsistentNames = [...allNames].filter(
+    (name) => !nameSets.every((set) => set.has(name)),
+  );
+  if (inconsistentNames.length > 0) {
+    emitError(
+      ctx,
+      `or-pattern alternatives must bind the same names; \`${inconsistentNames.join("`, `")}\` ${inconsistentNames.length === 1 ? "is" : "are"} not bound by every alternative`,
+      pattern.tokenId,
+    );
+  }
+
+  for (const name of allNames) {
+    if (inconsistentNames.includes(name)) continue;
+    // Every alternative's own bindings are guaranteed to include `name` at
+    // this point (it isn't in `inconsistentNames`), so `undefined` entries
+    // are filtered out defensively rather than expected.
+    const occurrences = perAlternative
+      .map((bindings) => bindings.find((b) => b.name === name))
+      .filter((b) => b !== undefined);
+    const [first, ...rest] = occurrences;
+    if (first === undefined) continue;
+    const consistent = rest.every(
+      (occ) =>
+        typesEqual(first.type, occ.type) &&
+        first.byRef === occ.byRef &&
+        first.mutable === occ.mutable,
+    );
+    if (!consistent) {
+      emitError(
+        ctx,
+        `or-pattern alternatives must bind \`${name}\` with the same type and mode in every alternative`,
+        pattern.tokenId,
+      );
+    }
   }
 }
 
