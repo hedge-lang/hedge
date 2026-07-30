@@ -2256,6 +2256,33 @@ describe("slice patterns over fixed-length arrays", () => {
     );
   });
 
+  it("clamps the rest binding's array length to zero, not negative, when the pattern's non-rest elements already exceed the array's length", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 2]) { let [a, b, c, ..rest] = arr; }
+    `);
+    const fn = result.program.items.find((item) => item.kind === "Function");
+    assert(fn !== undefined, "Expected a function declaration");
+    const letStmt = fn.body.statements[0];
+    assert(letStmt?.kind === "LetStatement", "Expected a let statement");
+    assert(
+      letStmt.pattern.kind === "SlicePattern",
+      "Expected a slice pattern",
+    );
+    const restElement = letStmt.pattern.elements.at(-1);
+    assert(
+      restElement?.kind === "RestPattern",
+      "Expected the last element to be a rest pattern",
+    );
+    assert(
+      isSome(restElement.name),
+      "Expected the rest binding to have a name",
+    );
+    expect(restElement.name.value.type).toMatchObject({
+      kind: "ArrayType",
+      length: 0,
+    });
+  });
+
   it("destructures a slice pattern with a rest binding, computing its fixed-length array type", () => {
     const result = diagnose(`
       fn f(arr: [i32; 5]) {

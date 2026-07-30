@@ -1788,8 +1788,13 @@ function analyzePattern(
       }
       // Only meaningful when a single rest is present (`hasRest` above) -
       // harmless to compute unconditionally otherwise, since nothing reads
-      // it without a `RestPattern` element to apply it to.
-      const restLength = length - nonRestCount;
+      // it without a `RestPattern` element to apply it to. An array's own
+      // length is a `usize` - never negative - so clamping at 0 here is a
+      // safe recovery value, not a silently-swallowed error: `length -
+      // nonRestCount` only goes negative when the pattern requires more
+      // elements than the array has, which is exactly the `!arityOk` case
+      // above that already emitted its own diagnostic.
+      const restLength = Math.max(0, length - nonRestCount);
       const elements = pattern.elements.map(
         (el): Semantics.Pattern | Semantics.RestPattern => {
           if (el.kind !== "RestPattern") {
