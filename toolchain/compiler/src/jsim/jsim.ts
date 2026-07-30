@@ -167,9 +167,17 @@ function simpleBindingIdentity(pattern: Semantics.Pattern): {
 }
 
 /** A `WildcardPattern` binding is never mutable - mirrors the pre-Hedge-47
- * behavior, where a wildcard `let`/param was never given `mut`. */
+ * behavior, where a wildcard `let`/param was never given `mut`. A `byRef`
+ * binding's own `mutable` sigil (`&mut name`) means "this is a mutable
+ * *borrow*", not "this local slot is reassignable" - there's no sigil
+ * combination that makes a `&`/`&mut` binding's own local slot separately
+ * rebindable (see `analyzer.ts`'s `effectiveBindingType`, the single source
+ * of truth this mirrors: `localMutable: byRef ? false : mutable`). Only a
+ * plain `mut name` (no `byRef`) actually makes the local slot mutable. */
 function simpleBindingMutable(pattern: Semantics.Pattern): boolean {
-  return pattern.kind === "BindingPattern" && pattern.mutable;
+  return (
+    pattern.kind === "BindingPattern" && !pattern.byRef && pattern.mutable
+  );
 }
 
 /**

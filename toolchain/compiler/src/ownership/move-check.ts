@@ -790,8 +790,12 @@ function collectPatternDeclarations(
       const nested = isSome(pattern.subpattern)
         ? collectPatternDeclarations(pattern.subpattern.value)
         : [];
+      // A `byRef` binding's own `mutable` sigil (`&mut name`) means "this is
+      // a mutable *borrow*", not "this local slot is reassignable" - see
+      // `analyzer.ts`'s `effectiveBindingType`, the single source of truth
+      // this mirrors (`localMutable: byRef ? false : mutable`).
       return [
-        { identifier: pattern.name, mutable: pattern.mutable },
+        { identifier: pattern.name, mutable: !pattern.byRef && pattern.mutable },
         ...nested,
       ];
     }
@@ -812,7 +816,12 @@ function collectPatternDeclarations(
       return pattern.elements.flatMap((el) =>
         el.kind === "RestPattern"
           ? isSome(el.name)
-            ? [{ identifier: el.name.value, mutable: el.mutable }]
+            ? [
+                {
+                  identifier: el.name.value,
+                  mutable: !el.byRef && el.mutable,
+                },
+              ]
             : []
           : collectPatternDeclarations(el),
       );

@@ -500,6 +500,10 @@ export function declarationsOf(
     case "PathPattern":
       return [];
     case "BindingPattern": {
+      // A `byRef` binding's own `mutable` sigil (`&mut name`) means "this is
+      // a mutable *borrow*", not "this local slot is reassignable" - see
+      // `analyzer.ts`'s `effectiveBindingType`, the single source of truth
+      // this mirrors (`localMutable: byRef ? false : mutable`).
       const own: Declaration[] =
         pattern.name.text === "_"
           ? []
@@ -509,7 +513,7 @@ export function declarationsOf(
                 name: pattern.name.text,
                 type: pattern.name.type,
                 tokenId: pattern.name.tokenId,
-                mutable: pattern.mutable,
+                mutable: !pattern.byRef && pattern.mutable,
               },
             ];
       return isSome(pattern.subpattern)
@@ -545,7 +549,7 @@ export function declarationsOf(
               name: element.name.value.text,
               type: element.name.value.type,
               tokenId: element.name.value.tokenId,
-              mutable: element.mutable,
+              mutable: !element.byRef && element.mutable,
             },
           ];
         }
