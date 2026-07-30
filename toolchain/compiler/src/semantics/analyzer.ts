@@ -1703,8 +1703,99 @@ function analyzePattern(
       };
       return result;
     }
+    case "SlicePattern": {
+      // A dynamic-length scrutinee has no real type to destructure against
+      // yet (no `Vec`/slice type exists - Slice 5), so only a fixed-length
+      // `ArrayType` is promoted to real semantics here; anything else still
+      // falls to the generic guardrail, unchanged from before Hedge-47.
+      if (scrutineeType.kind !== "ArrayType") {
+        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
+      }
+      const { elementType, length } = scrutineeType;
+      const restCount = pattern.elements.filter(
+        (el) => el.kind === "RestPattern",
+      ).length;
+      const nonRestCount = pattern.elements.length - restCount;
+      const alreadyErrored = restCount > 1;
+      if (alreadyErrored) {
+        emitError(
+          ctx,
+          `a slice pattern can have at most one \`..\` rest, but this one has ${restCount}`,
+          pattern.tokenId,
+        );
+      } else {
+        const hasRest = restCount === 1;
+        const arityOk = hasRest
+          ? nonRestCount <= length
+          : nonRestCount === length;
+        if (!arityOk) {
+          emitError(
+            ctx,
+            hasRest
+              ? `array has ${length} element(s), but the pattern requires at least ${nonRestCount}`
+              : `array has ${length} element(s), but the pattern requires exactly ${nonRestCount}`,
+            pattern.tokenId,
+          );
+        }
+      }
+      // Only meaningful when a single rest is present (`hasRest` above) -
+      // harmless to compute unconditionally otherwise, since nothing reads
+      // it without a `RestPattern` element to apply it to.
+      const restLength = length - nonRestCount;
+      const elements = pattern.elements.map(
+        (el): Semantics.Pattern | Semantics.RestPattern => {
+          if (el.kind !== "RestPattern") {
+            return analyzePattern(
+              ctx,
+              el,
+              elementType,
+              defaultMode,
+              rootMutable,
+            );
+          }
+          if (!isSome(el.name)) {
+            return { ...el, name: none() };
+          }
+          if (el.byRef && el.mutable) {
+            checkMutOverrideLegality(
+              ctx,
+              el.name.value.text,
+              defaultMode,
+              rootMutable,
+              el.tokenId,
+            );
+          }
+          const restArrayType: Semantics.Type = {
+            kind: "ArrayType",
+            elementType,
+            length: restLength,
+          };
+          const { type: boundType, localMutable } = effectiveBindingType(
+            restArrayType,
+            defaultMode,
+            el.byRef,
+            el.mutable,
+            el.tokenId,
+          );
+          bind(ctx, el.name.value.text, {
+            type: boundType,
+            mutable: localMutable,
+          });
+          const result: Semantics.RestPattern = {
+            ...el,
+            name: some({ ...el.name.value, type: boundType }),
+          };
+          return result;
+        },
+      );
+      const result: Semantics.SlicePattern = {
+        ...pattern,
+        elements,
+        type: scrutineeType,
+      };
+      return result;
+    }
     case "TuplePattern":
-    case "SlicePattern":
       return analyzePatternGuardrail(ctx, pattern, scrutineeType);
     default:
       return assertNever(
@@ -1727,8 +1818,18 @@ function isIrrefutablePattern(
     case "LiteralPattern":
     case "RangePattern":
     case "TuplePattern":
-    case "SlicePattern":
       return false;
+    case "SlicePattern":
+      // A genuine `Semantics.SlicePattern` is only ever constructed against
+      // a fixed-length `ArrayType` scrutinee (`analyzePattern`'s own
+      // guardrail substitutes a `WildcardPattern` for anything else) - the
+      // array's length is statically known, so the pattern either always
+      // matches or never does (an arity mismatch, its own separate
+      // diagnostic already emitted at that point) - never "maybe matches
+      // at runtime" the way a literal/range truly is. Treating it as
+      // irrefutable either way avoids a redundant non-exhaustive diagnostic
+      // stacking on top of the arity-mismatch one.
+      return true;
     case "StructPattern":
     case "TupleStructPattern":
     case "PathPattern": {

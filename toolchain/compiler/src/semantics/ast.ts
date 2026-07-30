@@ -349,18 +349,21 @@ export interface PathPattern extends DecoratedAstNode {
   readonly path: Path;
 }
 
-/** Not exported: same reasoning as `TuplePattern` above (TODO (Hedge-47)) -
- * never actually constructed, since `SlicePattern` (the only place this
- * appears) is itself never constructed either. */
-interface RestPattern extends AstNode {
+/** A slice pattern's own rest element (`..`, `..tail`, `..&rest`,
+ * `..&mut rest`) - real as of Hedge-47, only ever constructed against a
+ * fixed-length `ArrayType` scrutinee (see `analyzer.ts`'s `analyzePattern`
+ * `SlicePattern` case; a dynamic-length scrutinee still has no real type to
+ * destructure against, so it stays guardrailed). */
+export interface RestPattern extends AstNode {
   readonly kind: "RestPattern";
   readonly byRef: boolean;
   readonly mutable: boolean;
   readonly name: Option<Identifier>;
 }
 
-/** Not exported: same reasoning as `TuplePattern` above (TODO (Hedge-47)). */
-interface SlicePattern extends DecoratedAstNode {
+/** Real as of Hedge-47 against a fixed-length `ArrayType` scrutinee only -
+ * see `RestPattern`'s own doc comment. */
+export interface SlicePattern extends DecoratedAstNode {
   readonly kind: "SlicePattern";
   readonly elements: readonly (Pattern | RestPattern)[];
 }

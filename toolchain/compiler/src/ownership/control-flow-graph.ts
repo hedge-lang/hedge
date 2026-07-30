@@ -319,10 +319,11 @@ function recordExpressionUses(
  * Mirrors `declarationOf` below, generalized to the richer
  * `Semantics.Pattern` union - a `let`/`Param`'s `BindingPattern` binds at
  * most one name, so that helper only ever needs one.
- * TODO (Hedge-47): `TuplePattern`/`SlicePattern` are never constructed by
- * `analyzer.ts`'s `analyzePattern` (always substituted as a
- * `WildcardPattern` - see `analyzePatternGuardrail`), so those two cases
- * are unreached today.
+ * `SlicePattern` is real as of Hedge-47 (against a fixed-length array
+ * scrutinee); `TuplePattern` still isn't (no real tuple value type exists
+ * yet) - `analyzer.ts`'s `analyzePattern` always substitutes a
+ * `WildcardPattern` for it (see `analyzePatternGuardrail`), so that one case
+ * alone stays unreached.
  */
 // eslint-disable-next-line complexity -- Routing function over the full Pattern union
 function registerPatternBindings(
@@ -482,10 +483,11 @@ function pushBlock(blocks: MutableBlock[]): number {
  * (`Point { x }`, no explicit sub-pattern) is always immutable — the
  * grammar has no sigil position for shorthand fields, only the explicit
  * `x: mut x` form can carry one (see `parser/pattern.ts`).
- * TODO (Hedge-47): `TuplePattern`/`SlicePattern` are never constructed by
- * `analyzer.ts`'s `analyzePattern` (always substituted as a
- * `WildcardPattern` — see `analyzePatternGuardrail`), so those two cases
- * are unreached today, mirroring `registerPatternBindings`'s own note.
+ * `SlicePattern` is real as of Hedge-47 (against a fixed-length array
+ * scrutinee); `TuplePattern` still isn't (no real tuple value type exists
+ * yet) — `analyzer.ts`'s `analyzePattern` always substitutes a
+ * `WildcardPattern` for it (see `analyzePatternGuardrail`), so that one case
+ * alone stays unreached, mirroring `registerPatternBindings`'s own note.
  */
 // eslint-disable-next-line complexity -- Routing function over the full Pattern union
 export function declarationsOf(
