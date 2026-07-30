@@ -3854,15 +3854,40 @@ describe("item error recovery", (): void => {
 });
 
 describe("generics guardrail — declaration-name position", (): void => {
-  it("fn foo<T>() {} recovers with a Slice-1 diagnostic and empty generics", (): void => {
+  it("fn foo<T>() {} parses a single generic type parameter with zero diagnostics", (): void => {
     const { tokens } = tokenize("fn foo<T>() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    expect(diagnostics[0]?.severity).toBe("error");
-    expect(diagnostics[0]?.message).toContain("Slice 1");
-    expect(diagnostics[0]?.message).toContain("generic");
+    expect(diagnostics).toHaveLength(0);
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "foo" }, generics: [], params: [] },
+      {
+        kind: "Function",
+        name: { text: "foo" },
+        generics: [{ kind: "TypeParam", name: { text: "T" }, bounds: [] }],
+        params: [],
+      },
+    ]);
+  });
+
+  it("fn first<T>(x: T) -> T parses with one generic parameter T used in params and return type", (): void => {
+    const { tokens } = tokenize("fn first<T>(x: T) -> T { x }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        name: { text: "first" },
+        generics: [{ kind: "TypeParam", name: { text: "T" }, bounds: [] }],
+        params: [
+          {
+            kind: "Param",
+            pattern: { name: { text: "x" } },
+            type: { kind: "NamedType", path: { segments: ["T"] } },
+          },
+        ],
+        returnType: some({ kind: "NamedType", path: { segments: ["T"] } }),
+      },
     ]);
   });
 
