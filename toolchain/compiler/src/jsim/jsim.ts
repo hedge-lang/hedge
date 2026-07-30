@@ -175,9 +175,7 @@ function simpleBindingIdentity(pattern: Semantics.Pattern): {
  * of truth this mirrors: `localMutable: byRef ? false : mutable`). Only a
  * plain `mut name` (no `byRef`) actually makes the local slot mutable. */
 function simpleBindingMutable(pattern: Semantics.Pattern): boolean {
-  return (
-    pattern.kind === "BindingPattern" && !pattern.byRef && pattern.mutable
-  );
+  return pattern.kind === "BindingPattern" && !pattern.byRef && pattern.mutable;
 }
 
 /**
@@ -1473,7 +1471,7 @@ function throughMutableReferenceCell(
  * projection chain grounded in one - by the time a program reaches
  * JSIM lowering. Lowering the operand the same way an ordinary read of that
  * place would ({@link parseExpression}, already `.v`-hop-aware via
- * {@link parseFieldAccessExpression}/{@link parseDereferenceExpression})
+ * {@link parseFieldAccessExpression}/`parseDereferenceExpression`)
  * gives the cell's own get/set body: closing over a bare local's
  * {@link Identifier} is the degenerate one-node case of the same mechanism.
  */

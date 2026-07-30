@@ -795,7 +795,10 @@ function collectPatternDeclarations(
       // `analyzer.ts`'s `effectiveBindingType`, the single source of truth
       // this mirrors (`localMutable: byRef ? false : mutable`).
       return [
-        { identifier: pattern.name, mutable: !pattern.byRef && pattern.mutable },
+        {
+          identifier: pattern.name,
+          mutable: !pattern.byRef && pattern.mutable,
+        },
         ...nested,
       ];
     }

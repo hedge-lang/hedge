@@ -2089,7 +2089,9 @@ describe("reference types", (): void => {
 
 describe("match binding modes over a reference scrutinee", () => {
   it("binds a plain name as a shared reference when the scrutinee is &x", () => {
-    const result = diagnose("fn f(x: i32) -> i32 { match &x { name => *name } }");
+    const result = diagnose(
+      "fn f(x: i32) -> i32 { match &x { name => *name } }",
+    );
     expect(result.diagnostics).toEqual([]);
   });
 
@@ -2116,7 +2118,9 @@ describe("match binding modes over a reference scrutinee", () => {
   });
 
   it("honors a &name override binding as a shared reference even when the scrutinee is owned", () => {
-    const result = diagnose("fn f(x: i32) -> i32 { match x { &name => *name } }");
+    const result = diagnose(
+      "fn f(x: i32) -> i32 { match x { &name => *name } }",
+    );
     expect(result.diagnostics).toEqual([]);
   });
 

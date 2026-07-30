@@ -138,15 +138,9 @@ function analyzeLetOrParamPattern(
   const rootMutable = isSome(rootExpression)
     ? !isSome(placeMutabilityViolation(ctx, rootExpression.value, true))
     : false;
-  const result = analyzePattern(
-    ctx,
-    pattern,
-    effectiveType,
-    mode,
-    rootMutable,
-  );
+  const result = analyzePattern(ctx, pattern, effectiveType, mode, rootMutable);
   if (!isIrrefutablePattern(ctx, result)) {
-    emitError(ctx, REFUTABLE_LET_OR_PARAM_PATTERN_MESSAGE, pattern.tokenId);
+    emitError(ctx, REFUTABLE_LET_OR_PARAM_PATTERN_MESSAGE, pattern.tokenId, none());
   }
   return result;
 }
@@ -175,19 +169,20 @@ function resolve(ctx: AnalysisContext, name: string): Option<ScopedVariable> {
  * @param ctx - The analysis context where the error will be recorded.
  * @param message - The error message to emit.
  * @param tokenId - The identifier of the token associated with the error.
+ * @param extra - Additional information to attach to the error.
  */
 function emitError(
   ctx: AnalysisContext,
   message: string,
   tokenId: number,
-  extra?: { readonly code?: string },
+  extra: Option<{ readonly code: string }>,
 ): void {
   const token = ctx.tokens[tokenId];
   ctx.diagnostics.push({
     severity: "error",
     message,
     span: token !== undefined ? some(token.span) : none(),
-    code: extra?.code !== undefined ? some(extra.code) : none(),
+    code: mapSome(extra, (e) => e.code),
     relatedSpans: [],
   });
 }
@@ -285,6 +280,7 @@ function foldArrayLength(
         ctx,
         "array length must be a compile-time constant expression",
         outcome.tokenId,
+        none(),
       );
       return none();
     case "Undeclared":
@@ -292,6 +288,7 @@ function foldArrayLength(
         ctx,
         `Cannot find name "${outcome.name}" in this scope.`,
         outcome.tokenId,
+        none(),
       );
       return none();
     case "DivideByZero":
@@ -299,6 +296,7 @@ function foldArrayLength(
         ctx,
         "attempt to divide by zero in a constant expression",
         outcome.tokenId,
+        none(),
       );
       return none();
     case "InvalidShift":
@@ -306,6 +304,7 @@ function foldArrayLength(
         ctx,
         "shift amount must be between 0 and 63 in a constant expression",
         outcome.tokenId,
+        none(),
       );
       return none();
     case "AlreadyDiagnosed":
@@ -319,11 +318,11 @@ function foldArrayLength(
       );
   }
   if (outcome.value.kind !== "Int") {
-    emitError(ctx, "array length must be an integer", length.tokenId);
+    emitError(ctx, "array length must be an integer", length.tokenId, none());
     return none();
   }
   if (outcome.value.value < 0n) {
-    emitError(ctx, "array length cannot be negative", length.tokenId);
+    emitError(ctx, "array length cannot be negative", length.tokenId, none());
     return none();
   }
   if (outcome.value.value > BigInt(Number.MAX_SAFE_INTEGER)) {
@@ -331,6 +330,7 @@ function foldArrayLength(
       ctx,
       `array length ${outcome.value.value} is too large to represent`,
       length.tokenId,
+      none(),
     );
     return none();
   }
@@ -385,7 +385,7 @@ function validateSlice1Type(
     default:
       assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
-  emitError(ctx, "type is not supported in Slice 1", tokenId);
+  emitError(ctx, "type is not supported in Slice 1", tokenId, none());
   return { kind: "UnitType", tokenId };
 }
 
@@ -582,6 +582,7 @@ function resolveConstRef(
       ctx,
       `const \`${name}\` cannot be defined in terms of itself`,
       tokenId,
+      none(),
     );
     return { kind: "AlreadyDiagnosed", tokenId };
   }
@@ -653,6 +654,7 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
           ctx,
           `const \`${name}\`'s initializer does not match its declared type ${describeType(declaredType)}`,
           decl.value.tokenId,
+          none(),
         );
       }
       break;
@@ -661,6 +663,7 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
         ctx,
         `const \`${name}\`'s initializer must be a compile-time constant expression`,
         outcome.tokenId,
+        none(),
       );
       break;
     case "DivideByZero":
@@ -668,6 +671,7 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
         ctx,
         "attempt to divide by zero in a constant expression",
         outcome.tokenId,
+        none(),
       );
       break;
     case "InvalidShift":
@@ -675,6 +679,7 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
         ctx,
         "shift amount must be between 0 and 63 in a constant expression",
         outcome.tokenId,
+        none(),
       );
       break;
     case "Undeclared":
@@ -682,6 +687,7 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
         ctx,
         `Cannot find name "${outcome.name}" in this scope.`,
         outcome.tokenId,
+        none(),
       );
       break;
     case "AlreadyDiagnosed":
@@ -836,6 +842,7 @@ function registerConstsAndStatics(
           ctx,
           `const \`${item.name.text}\` is defined more than once`,
           item.name.tokenId,
+          none(),
         );
       } else {
         // A same-frame static collision is reported once, from the static
@@ -858,6 +865,7 @@ function registerConstsAndStatics(
             ctx,
             `const \`${item.name.text}\` collides with an existing function name`,
             item.name.tokenId,
+            none(),
           );
         }
         constFrame.set(item.name.text, item);
@@ -868,6 +876,7 @@ function registerConstsAndStatics(
           ctx,
           `static \`${item.name.text}\` is defined more than once`,
           item.name.tokenId,
+          none(),
         );
       } else {
         if (constNamesInFrame.has(item.name.text)) {
@@ -879,6 +888,7 @@ function registerConstsAndStatics(
             ctx,
             `static \`${item.name.text}\` collides with a const of the same name`,
             item.name.tokenId,
+            none(),
           );
         } else if (currentScope?.has(item.name.text)) {
           // A static lowers to a real top-level accessor function of its
@@ -890,10 +900,11 @@ function registerConstsAndStatics(
             ctx,
             `static \`${item.name.text}\` collides with an existing function name`,
             item.name.tokenId,
+            none(),
           );
         }
         if (isSome(item.visibility)) {
-          emitError(ctx, "static items cannot be pub yet", item.tokenId);
+          emitError(ctx, "static items cannot be pub yet", item.tokenId, none());
         }
         const declaredType = validateSlice1Type(
           ctx,
@@ -932,6 +943,7 @@ function analyzeStaticDecl(
       ctx,
       "type mismatch: static's declared type does not match its initializer",
       item.value.tokenId,
+      none(),
     );
   }
   if (value.kind === "IntLiteral") {
@@ -987,6 +999,7 @@ function analyzeEnum(
         ctx,
         `variant \`${variant.name.text}\` is defined more than once`,
         variant.name.tokenId,
+        none(),
       );
     }
     seenVariantNames.add(variant.name.text);
@@ -1072,7 +1085,7 @@ const LET_EXPRESSION_NOT_YET_SUPPORTED_MESSAGE =
 
 /** Placeholder for an `Expression` variant with no `Semantics` counterpart
  * yet - same "parser accepts it, semantics doesn't yet" pattern as
- * {@link analyzeEnumPlaceholder}, at expression rather than item
+ * `analyzeEnumPlaceholder`, at expression rather than item
  * granularity. Reuses the zero-element `TupleExpression` shape, which is
  * already in {@link AMBIGUOUS_UNIT_EXPR_KINDS}'s error-recovery bucket, so no
  * new `Semantics.Expression` kind - and no new bucket entry - is needed. */
@@ -1081,7 +1094,7 @@ function analyzeExpressionPlaceholder(
   tokenId: number,
   message: string,
 ): Semantics.Expression {
-  emitError(ctx, message, tokenId);
+  emitError(ctx, message, tokenId, none());
   return {
     kind: "TupleExpression",
     tokenId,
@@ -1143,7 +1156,7 @@ function analyzePatternGuardrail(
   pattern: Parser.Pattern,
   scrutineeType: Semantics.Type,
 ): Semantics.WildcardPattern {
-  emitError(ctx, PATTERN_KIND_NOT_YET_SUPPORTED_MESSAGE, pattern.tokenId);
+  emitError(ctx, PATTERN_KIND_NOT_YET_SUPPORTED_MESSAGE, pattern.tokenId, none());
   return {
     kind: "WildcardPattern",
     tokenId: pattern.tokenId,
@@ -1241,6 +1254,7 @@ function checkMutOverrideLegality(
       ctx,
       `cannot bind \`${name}\` as \`&mut\` through a shared reference`,
       tokenId,
+      none(),
     );
     return;
   }
@@ -1249,6 +1263,7 @@ function checkMutOverrideLegality(
       ctx,
       `cannot bind \`${name}\` as \`&mut\` because the underlying place is not mutable`,
       tokenId,
+      none(),
     );
   }
 }
@@ -1318,6 +1333,7 @@ function resolveTupleVariantForPattern(
       ctx,
       `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
       pattern.tokenId,
+      none(),
     );
     return none();
   }
@@ -1326,6 +1342,7 @@ function resolveTupleVariantForPattern(
       ctx,
       `variant \`${variantName}\` is not a tuple variant`,
       pattern.tokenId,
+      none(),
     );
     return none();
   }
@@ -1348,6 +1365,7 @@ function resolveStructVariantForPattern(
       ctx,
       `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
       pattern.tokenId,
+      none(),
     );
     return none();
   }
@@ -1356,6 +1374,7 @@ function resolveStructVariantForPattern(
       ctx,
       `variant \`${variantName}\` is not a struct variant`,
       pattern.tokenId,
+      none(),
     );
     return none();
   }
@@ -1401,6 +1420,7 @@ function resolveTupleStructForPattern(
       ctx,
       `expected struct \`${structDecl.value.name.text}\`, found \`${patternName}\``,
       pattern.tokenId,
+      none(),
     );
     return some({ fields: [], label, alreadyErrored: true });
   }
@@ -1409,10 +1429,15 @@ function resolveTupleStructForPattern(
       ctx,
       `struct \`${patternName}\` is not a tuple struct`,
       pattern.tokenId,
+      none(),
     );
     return some({ fields: [], label, alreadyErrored: true });
   }
-  return some({ fields: structDecl.value.body.fields, label, alreadyErrored: false });
+  return some({
+    fields: structDecl.value.body.fields,
+    label,
+    alreadyErrored: false,
+  });
 }
 
 /** Plain-struct counterpart to `resolveStructVariantForPattern` - see
@@ -1432,6 +1457,7 @@ function resolveStructForPattern(
       ctx,
       `expected struct \`${structDecl.value.name.text}\`, found \`${patternName}\``,
       pattern.tokenId,
+      none(),
     );
     return some({ fields: [], label, alreadyErrored: true });
   }
@@ -1440,10 +1466,15 @@ function resolveStructForPattern(
       ctx,
       `struct \`${patternName}\` does not have named fields`,
       pattern.tokenId,
+      none(),
     );
     return some({ fields: [], label, alreadyErrored: true });
   }
-  return some({ fields: structDecl.value.body.fields, label, alreadyErrored: false });
+  return some({
+    fields: structDecl.value.body.fields,
+    label,
+    alreadyErrored: false,
+  });
 }
 
 /** Tries enum-variant resolution first, then plain-struct resolution -
@@ -1455,7 +1486,11 @@ function resolveTupleFieldsForPattern(
   scrutineeType: Semantics.Type,
 ): Option<ResolvedPatternFields<Semantics.TupleField>> {
   const patternName = lastPathSegment(pattern.path);
-  const enumVariant = resolveTupleVariantForPattern(ctx, pattern, scrutineeType);
+  const enumVariant = resolveTupleVariantForPattern(
+    ctx,
+    pattern,
+    scrutineeType,
+  );
   if (isSome(enumVariant)) {
     return some({
       fields: enumVariant.value.fields,
@@ -1473,7 +1508,11 @@ function resolveNamedFieldsForPattern(
   scrutineeType: Semantics.Type,
 ): Option<ResolvedPatternFields<Semantics.StructField>> {
   const patternName = lastPathSegment(pattern.path);
-  const enumVariant = resolveStructVariantForPattern(ctx, pattern, scrutineeType);
+  const enumVariant = resolveStructVariantForPattern(
+    ctx,
+    pattern,
+    scrutineeType,
+  );
   if (isSome(enumVariant)) {
     return some({
       fields: enumVariant.value.fields,
@@ -1589,6 +1628,7 @@ function analyzePattern(
           ctx,
           `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
           pattern.tokenId,
+          none(),
         );
         return analyzePatternGuardrail(ctx, pattern, scrutineeType);
       }
@@ -1597,6 +1637,7 @@ function analyzePattern(
           ctx,
           `variant \`${variantName}\` has fields; use \`${variantName}(...)\` or \`${variantName} { ... }\``,
           pattern.tokenId,
+          none(),
         );
         return analyzePatternGuardrail(ctx, pattern, scrutineeType);
       }
@@ -1618,6 +1659,7 @@ function analyzePattern(
           ctx,
           `${label} has ${fields.length} field(s), but the pattern has ${pattern.elements.length}`,
           pattern.tokenId,
+          none(),
         );
       }
       // A `mut` sigil on this whole tuple-struct pattern (Hedge-47) treats
@@ -1664,6 +1706,7 @@ function analyzePattern(
             ctx,
             `no field \`${field.name.text}\` on ${label}`,
             field.name.tokenId,
+            none(),
           );
         }
         if (isSome(field.pattern)) {
@@ -1725,6 +1768,7 @@ function analyzePattern(
           ctx,
           `a slice pattern can have at most one \`..\` rest, but this one has ${restCount}`,
           pattern.tokenId,
+          none(),
         );
       } else {
         const hasRest = restCount === 1;
@@ -1738,6 +1782,7 @@ function analyzePattern(
               ? `array has ${length} element(s), but the pattern requires at least ${nonRestCount}`
               : `array has ${length} element(s), but the pattern requires exactly ${nonRestCount}`,
             pattern.tokenId,
+            none(),
           );
         }
       }
@@ -1931,6 +1976,7 @@ function checkOrPatternConsistency(
       ctx,
       `or-pattern alternatives must bind the same names; \`${inconsistentNames.join("`, `")}\` ${inconsistentNames.length === 1 ? "is" : "are"} not bound by every alternative`,
       pattern.tokenId,
+      none(),
     );
   }
 
@@ -1955,12 +2001,12 @@ function checkOrPatternConsistency(
         ctx,
         `or-pattern alternatives must bind \`${name}\` with the same type and mode in every alternative`,
         pattern.tokenId,
+        none(),
       );
     }
   }
 }
 
-// eslint-disable-next-line complexity -- Routing function over the full Pattern union
 function isIrrefutablePattern(
   ctx: AnalysisContext,
   pattern: Semantics.Pattern,
@@ -2103,7 +2149,7 @@ function checkUnreachableArms(
 
   for (const arm of arms) {
     if (hasCatchAll) {
-      emitError(ctx, "unreachable pattern", arm.tokenId);
+      emitError(ctx, "unreachable pattern", arm.tokenId, none());
     } else if (isSome(enumDecl)) {
       const thisArmVariants = new Set<string>();
       collectCoveredVariantNames(arm.pattern, thisArmVariants);
@@ -2111,7 +2157,7 @@ function checkUnreachableArms(
         thisArmVariants.size > 0 &&
         [...thisArmVariants].every((name) => coveredVariants.has(name))
       ) {
-        emitError(ctx, "unreachable pattern", arm.tokenId);
+        emitError(ctx, "unreachable pattern", arm.tokenId, none());
       }
     } else if (isBool) {
       const thisArmBools = new Set<boolean>();
@@ -2120,7 +2166,7 @@ function checkUnreachableArms(
         thisArmBools.size > 0 &&
         [...thisArmBools].every((v) => coveredBools.has(v))
       ) {
-        emitError(ctx, "unreachable pattern", arm.tokenId);
+        emitError(ctx, "unreachable pattern", arm.tokenId, none());
       }
     }
 
@@ -2161,6 +2207,7 @@ function checkMatchExhaustiveness(
         ctx,
         `non-exhaustive patterns: \`${missing.join("`, `")}\` not covered`,
         matchExpr.tokenId,
+        none(),
       );
     }
     return;
@@ -2179,12 +2226,13 @@ function checkMatchExhaustiveness(
         ctx,
         `non-exhaustive patterns: \`${missing.join("`, `")}\` not covered`,
         matchExpr.tokenId,
+        none(),
       );
     }
     return;
   }
 
-  emitError(ctx, "non-exhaustive patterns: `_` not covered", matchExpr.tokenId);
+  emitError(ctx, "non-exhaustive patterns: `_` not covered", matchExpr.tokenId, none());
 }
 
 function analyzeMatchArm(
@@ -2256,7 +2304,7 @@ function analyzeMatchExpression(
       continue;
     }
     if (!typesEqual(resultType, armType)) {
-      emitError(ctx, "match arms have incompatible types", matchExpr.tokenId);
+      emitError(ctx, "match arms have incompatible types", matchExpr.tokenId, none());
       break;
     }
   }
@@ -2286,14 +2334,14 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
       return analyzeStaticDecl(ctx, item);
     case "LetStatement":
     case "ExpressionStatement": {
-      emitError(ctx, TOP_LEVEL_ITEM_RESTRICTION_MESSAGE, item.tokenId);
+      emitError(ctx, TOP_LEVEL_ITEM_RESTRICTION_MESSAGE, item.tokenId, none());
       const prevLen = ctx.diagnostics.length;
       const analyzed = analyzeStatement(ctx, item);
       ctx.diagnostics.splice(prevLen); // suppress cascading errors — the restriction error is good enough
       return analyzed;
     }
     default:
-      emitError(ctx, TOP_LEVEL_ITEM_RESTRICTION_MESSAGE, item.tokenId);
+      emitError(ctx, TOP_LEVEL_ITEM_RESTRICTION_MESSAGE, item.tokenId, none());
       return analyzeExpression(ctx, item);
   }
 }
@@ -2550,7 +2598,7 @@ function checkEscapingReferenceExpression(
     ctx,
     `returns a reference to \`${name}\`, which does not live beyond this function`,
     expr.tokenId,
-    { code: "HEDGE-LIFETIME-002" },
+    some({ code: "HEDGE-LIFETIME-002" }),
   );
 }
 
@@ -2574,7 +2622,7 @@ function checkEscapingStructExpression(
       ctx,
       `struct literal field \`${field.name.text}\` borrows \`${name}\`, which does not live beyond this function`,
       fieldValue.tokenId,
-      { code: "HEDGE-LIFETIME-002" },
+      some({ code: "HEDGE-LIFETIME-002" }),
     );
   }
 }
@@ -2646,6 +2694,7 @@ function checkFunctionReturnType(
         ctx,
         `missing return value: expected \`${describeType(expectedReturnType)}\``,
         body.tokenId,
+        none(),
       );
     }
     return body;
@@ -2666,6 +2715,7 @@ function checkFunctionReturnType(
       ctx,
       `return type mismatch: expected \`${describeType(expectedReturnType)}\`, found \`${describeType(getType(expr))}\``,
       trailing.tokenId,
+      none(),
     );
   } else {
     checkEscapingReference(ctx, expr);
@@ -2805,6 +2855,7 @@ function analyzeStatement(
           ctx,
           `struct \`${statement.name.text}\` is defined more than once`,
           statement.name.tokenId,
+          none(),
         );
       }
       const analyzed = analyzeStruct(ctx, statement);
@@ -2817,6 +2868,7 @@ function analyzeStatement(
           ctx,
           `enum \`${statement.name.text}\` is defined more than once`,
           statement.name.tokenId,
+          none(),
         );
       }
       const analyzed = analyzeEnum(ctx, statement);
@@ -2871,6 +2923,7 @@ function analyzeLetStatement(
           ctx,
           "type mismatch: explicit annotation does not match initializer type",
           statement.tokenId,
+          none(),
         );
       }
       bindingType = annotationType;
@@ -2882,6 +2935,7 @@ function analyzeLetStatement(
         ctx,
         "cannot infer element type of an empty array literal without an explicit type annotation",
         statement.tokenId,
+        none(),
       );
     }
   } else if (isSome(statement.type)) {
@@ -3017,7 +3071,7 @@ function checkPosLiteralRange(
   const [, max] = bounds;
   if (val > max) {
     const name = NUMERIC_TYPE_NAME[type.kind] ?? type.kind;
-    emitError(ctx, `out of range for ${name}`, literal.tokenId);
+    emitError(ctx, `out of range for ${name}`, literal.tokenId, none());
   }
 }
 
@@ -3067,7 +3121,7 @@ function checkCoercedLiteralRange(
   ) {
     const rangeError = checkNegLiteralRange(expr.operand, expr.type);
     if (isSome(rangeError)) {
-      emitError(ctx, rangeError.value, expr.operand.tokenId);
+      emitError(ctx, rangeError.value, expr.operand.tokenId, none());
     }
   }
 }
@@ -3188,7 +3242,7 @@ function reconcileExpressionType(
   ) {
     const rangeError = checkNegLiteralRange(result.operand, expectedType);
     if (isSome(rangeError)) {
-      emitError(ctx, rangeError.value, tokenId);
+      emitError(ctx, rangeError.value, tokenId, none());
       suppressed = true;
     }
   }
@@ -3230,13 +3284,13 @@ function inferBinaryType(
       const leftEq = !isLeftTypeValid || hasCapability(leftType, "equality");
       const rightEq = !isRightTypeValid || hasCapability(rightType, "equality");
       if (!leftEq || !rightEq) {
-        emitError(ctx, "type does not support equality comparison", tokenId);
+        emitError(ctx, "type does not support equality comparison", tokenId, none());
       } else if (
         isLeftTypeValid &&
         isRightTypeValid &&
         !typesEqual(leftType, rightType)
       ) {
-        emitError(ctx, "comparison operands must have the same type", tokenId);
+        emitError(ctx, "comparison operands must have the same type", tokenId, none());
       }
       return bool;
     }
@@ -3249,13 +3303,13 @@ function inferBinaryType(
       const rightOrd =
         !isRightTypeValid || hasCapability(rightType, "ordering");
       if (!leftOrd || !rightOrd) {
-        emitError(ctx, "type does not support ordering comparison", tokenId);
+        emitError(ctx, "type does not support ordering comparison", tokenId, none());
       } else if (
         isLeftTypeValid &&
         isRightTypeValid &&
         !typesEqual(leftType, rightType)
       ) {
-        emitError(ctx, "comparison operands must have the same type", tokenId);
+        emitError(ctx, "comparison operands must have the same type", tokenId, none());
       }
       return bool;
     }
@@ -3263,10 +3317,10 @@ function inferBinaryType(
     case "And":
     case "Or": {
       if (isLeftTypeValid && !hasCapability(leftType, "logical")) {
-        emitError(ctx, "logical operator operands must be `bool`", tokenId);
+        emitError(ctx, "logical operator operands must be `bool`", tokenId, none());
       }
       if (isRightTypeValid && !hasCapability(rightType, "logical")) {
-        emitError(ctx, "logical operator operands must be `bool`", tokenId);
+        emitError(ctx, "logical operator operands must be `bool`", tokenId, none());
       }
       return bool;
     }
@@ -3281,6 +3335,7 @@ function inferBinaryType(
           ctx,
           `arithmetic operands must be numeric; left-operand is type \`${describeType(leftType)}\``,
           tokenId,
+          none(),
         );
       }
       if (isRightTypeValid && !hasCapability(rightType, "arithmetic")) {
@@ -3288,6 +3343,7 @@ function inferBinaryType(
           ctx,
           `arithmetic operands must be numeric; right-operand is type \`${describeType(rightType)}\``,
           tokenId,
+          none(),
         );
       }
       if (
@@ -3295,7 +3351,7 @@ function inferBinaryType(
         isRightTypeValid &&
         !typesEqual(leftType, rightType)
       ) {
-        emitError(ctx, "arithmetic operands must have the same type", tokenId);
+        emitError(ctx, "arithmetic operands must have the same type", tokenId, none());
       }
       return isLeftTypeValid ? leftType : rightType;
     }
@@ -3306,17 +3362,17 @@ function inferBinaryType(
     case "BitXor":
     case "BitOr": {
       if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
-        emitError(ctx, "bitwise operations require integer operands", tokenId);
+        emitError(ctx, "bitwise operations require integer operands", tokenId, none());
       }
       if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
-        emitError(ctx, "bitwise operations require integer operands", tokenId);
+        emitError(ctx, "bitwise operations require integer operands", tokenId, none());
       }
       if (
         isLeftTypeValid &&
         isRightTypeValid &&
         !typesEqual(leftType, rightType)
       ) {
-        emitError(ctx, "bitwise operands must have the same type", tokenId);
+        emitError(ctx, "bitwise operands must have the same type", tokenId, none());
       }
       return isLeftTypeValid ? leftType : rightType;
     }
@@ -3392,7 +3448,7 @@ function analyzeExpression(
       ) {
         const rangeError = checkNegLiteralRange(operand, type);
         if (isSome(rangeError))
-          emitError(ctx, rangeError.value, operand.tokenId);
+          emitError(ctx, rangeError.value, operand.tokenId, none());
       }
       return { ...expression, operand, type };
     }
@@ -3513,6 +3569,7 @@ function analyzeReferenceExpression(
       ctx,
       "only a local binding, a parameter, or a field, index, or dereference of one can be borrowed directly",
       expression.tokenId,
+      none(),
     );
     return {
       ...expression,
@@ -3550,6 +3607,7 @@ function analyzeDereferenceExpression(
         ctx,
         "cannot dereference a non-reference type",
         expression.tokenId,
+        none(),
       );
     }
     return {
@@ -3601,6 +3659,7 @@ function analyzeArrayExpression(
         ctx,
         `array elements must all have the same type; expected \`${describeType(elementType)}\`, found \`${describeType(elemType)}\``,
         elem.tokenId,
+        none(),
       );
       break;
     }
@@ -3633,6 +3692,7 @@ function analyzeArrayRepeatExpression(
       ctx,
       `repeat-form array element type must be Copy, found \`${describeType(valueType)}\``,
       expression.value.tokenId,
+      none(),
     );
     return { ...expression, value, count: 0, type: UNIT };
   }
@@ -3680,6 +3740,7 @@ function analyzeIndexExpression(
       ctx,
       `cannot index into non-array type \`${describeType(objectType)}\``,
       expression.tokenId,
+      none(),
     );
     return { ...expression, object, index, type: UNIT };
   }
@@ -3689,6 +3750,7 @@ function analyzeIndexExpression(
       ctx,
       `array index must be \`usize\`, found \`${describeType(getType(index))}\``,
       expression.index.tokenId,
+      none(),
     );
     return { ...expression, object, index, type: arrayType.elementType };
   }
@@ -3700,6 +3762,7 @@ function analyzeIndexExpression(
         ctx,
         `index ${String(literalIndex)} out of bounds for array of length ${String(arrayType.length)}`,
         expression.index.tokenId,
+        none(),
       );
     }
   }
@@ -3728,7 +3791,7 @@ function analyzeFieldAccessExpression(
     objectType.kind === "ReferenceType" ? objectType.referent : objectType;
 
   if (structType.kind !== "StructType") {
-    emitError(ctx, "field access on non-struct type", expression.field.tokenId);
+    emitError(ctx, "field access on non-struct type", expression.field.tokenId, none());
     return unresolved();
   }
 
@@ -3744,6 +3807,7 @@ function analyzeFieldAccessExpression(
       ctx,
       `no field \`${fieldName}\` on struct \`${structName}\``,
       expression.field.tokenId,
+      none(),
     );
     return unresolved();
   }
@@ -3756,6 +3820,7 @@ function analyzeFieldAccessExpression(
       ctx,
       `no field \`${fieldName}\` on struct \`${structName}\``,
       expression.field.tokenId,
+      none(),
     );
     return unresolved();
   }
@@ -3842,10 +3907,10 @@ function checkLhsMutability(
   if (isSome(violation)) {
     switch (violation.value) {
       case "immutable-binding":
-        emitError(ctx, "cannot assign to immutable binding", tokenId);
+        emitError(ctx, "cannot assign to immutable binding", tokenId, none());
         break;
       case "shared-reference":
-        emitError(ctx, "cannot assign through a shared reference", tokenId);
+        emitError(ctx, "cannot assign through a shared reference", tokenId, none());
         break;
       default:
         assertNever(
@@ -3930,6 +3995,7 @@ function analyzeStructExpression(
       ctx,
       `cannot find struct \`${structName}\` in this scope`,
       structExpression.tokenId,
+      none(),
     );
     return {
       ...structExpression,
@@ -3958,6 +4024,7 @@ function analyzeStructExpression(
         ctx,
         `field \`${field.name.text}\` provided for unit struct \`${structName}\``,
         field.name.tokenId,
+        none(),
       );
     }
   }
@@ -4000,6 +4067,7 @@ function analyzeStructNamedFields(
         ctx,
         `field \`${field.name.text}\` specified more than once in struct literal`,
         field.name.tokenId,
+        none(),
       );
     }
     seenFields.add(field.name.text);
@@ -4010,6 +4078,7 @@ function analyzeStructNamedFields(
         ctx,
         `unknown field \`${field.name.text}\` for struct \`${structName}\``,
         field.name.tokenId,
+        none(),
       );
       return field;
     }
@@ -4033,6 +4102,7 @@ function analyzeStructNamedFields(
         ctx,
         `field \`${field.name.text}\` type mismatch: expected \`${describeType(declaredField.type)}\`, found \`${describeType(getType(expr))}\``,
         value.tokenId,
+        none(),
       );
     }
     return expr === value
@@ -4047,6 +4117,7 @@ function analyzeStructNamedFields(
           ctx,
           `missing required field \`${fieldName}\` in struct literal of type \`${structName}\``,
           structTokenId,
+          none(),
         );
       }
     }
@@ -4072,7 +4143,7 @@ function analyzeIfExpression(
     condType.kind !== "UnitType" &&
     condType.kind !== "PrimitiveBooleanType"
   ) {
-    emitError(ctx, "if condition must be `bool`", ifExpression.tokenId);
+    emitError(ctx, "if condition must be `bool`", ifExpression.tokenId, none());
   }
 
   if (isSome(elseBranch)) {
@@ -4087,6 +4158,7 @@ function analyzeIfExpression(
         ctx,
         "if expression branches have incompatible types",
         ifExpression.tokenId,
+        none(),
       );
     }
   }
@@ -4142,7 +4214,7 @@ function analyzePath(
   if (isSome(resolvedType)) {
     return { ...path, type: resolvedType.value.type };
   }
-  emitError(ctx, `Cannot find name "${name}" in this scope.`, path.tokenId);
+  emitError(ctx, `Cannot find name "${name}" in this scope.`, path.tokenId, none());
   return { ...path, type: { kind: "UnitType", tokenId: path.tokenId } };
 }
 
@@ -4175,6 +4247,7 @@ export function analyze(
           ctx,
           `struct \`${item.name.text}\` is defined more than once`,
           item.name.tokenId,
+          none(),
         );
       } else {
         ctx.typeScope.set(item.name.text, analyzeStruct(ctx, item));
@@ -4185,6 +4258,7 @@ export function analyze(
           ctx,
           `enum \`${item.name.text}\` is defined more than once`,
           item.name.tokenId,
+          none(),
         );
       } else {
         ctx.enumScope.set(item.name.text, analyzeEnum(ctx, item));
@@ -4195,6 +4269,7 @@ export function analyze(
           ctx,
           `function \`${item.name.text}\` is defined more than once`,
           item.name.tokenId,
+          none(),
         );
       } else {
         topLevelFunctionNames.add(item.name.text);
