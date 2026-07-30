@@ -1994,7 +1994,7 @@ function checkOrPatternConsistency(
     // `effectiveBindingType`) and derived local mutability, not the raw
     // sigils: under a shared-reference scrutinee, `name` and `&name` both
     // bind an immutable `&T` - different syntax, same result.
-    const localMutable = (b: OrPatternBinding) => !b.byRef && b.mutable;
+    const localMutable = (b: OrPatternBinding): boolean => !b.byRef && b.mutable;
     const consistent = rest.every(
       (occ) =>
         typesEqual(first.type, occ.type) &&
@@ -2011,6 +2011,27 @@ function checkOrPatternConsistency(
   }
 }
 
+/** A slice pattern's own arity check, re-derived from `analyzePattern`
+ * rather than stored as a redundant flag. Array length is statically
+ * known, so an arity mismatch is a precise "never matches" - not
+ * assume-best-case like the struct/enum cases below - so it must not
+ * count as a catch-all or subsume a later arm. Multiple rests (`[a, ..,
+ * b, .., c]`) are ill-formed regardless of arity - already diagnosed
+ * separately - so that case stays assume-best-case (`true`), unlike the
+ * real check below it. */
+function isSliceArityIrrefutable(
+  elements: Semantics.SlicePattern["elements"],
+  type: Semantics.Type,
+): boolean {
+  if (type.kind !== "ArrayType") return false;
+  const restCount = elements.filter((el) => el.kind === "RestPattern").length;
+  if (restCount > 1) return true;
+  const nonRestCount = elements.length - restCount;
+  return restCount === 1
+    ? nonRestCount <= type.length
+    : nonRestCount === type.length;
+}
+
 function isIrrefutablePattern(
   ctx: AnalysisContext,
   pattern: Semantics.Pattern,
@@ -2024,25 +2045,8 @@ function isIrrefutablePattern(
     case "RangePattern":
     case "TuplePattern":
       return false;
-    case "SlicePattern": {
-      // Array length is statically known, so an arity mismatch is a
-      // precise "never matches" - not assume-best-case like the struct/
-      // enum cases above - so it must not count as a catch-all or subsume
-      // a later arm. Re-derives `analyzePattern`'s own arity check instead
-      // of storing a redundant flag.
-      if (pattern.type.kind !== "ArrayType") return false;
-      const restCount = pattern.elements.filter(
-        (el) => el.kind === "RestPattern",
-      ).length;
-      // Multiple rests (`[a, .., b, .., c]`) are ill-formed regardless of
-      // arity - no element count to compute, already diagnosed separately -
-      // so this stays assume-best-case, unlike the real arity check below.
-      if (restCount > 1) return true;
-      const nonRestCount = pattern.elements.length - restCount;
-      return restCount === 1
-        ? nonRestCount <= pattern.type.length
-        : nonRestCount === pattern.type.length;
-    }
+    case "SlicePattern":
+      return isSliceArityIrrefutable(pattern.elements, pattern.type);
     case "StructPattern":
     case "TupleStructPattern":
     case "PathPattern": {
