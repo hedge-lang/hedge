@@ -128,7 +128,8 @@ function analyzeLetOrParamPattern(
   pattern: Parser.Pattern,
   type: Semantics.Type,
 ): Semantics.Pattern {
-  const result = analyzePattern(ctx, pattern, type);
+  const { mode, effectiveType } = defaultBindingModeForScrutinee(type);
+  const result = analyzePattern(ctx, pattern, effectiveType, mode);
   if (!isIrrefutablePattern(ctx, result)) {
     emitError(ctx, REFUTABLE_LET_OR_PARAM_PATTERN_MESSAGE, pattern.tokenId);
   }
@@ -1135,15 +1136,78 @@ function analyzePatternGuardrail(
   };
 }
 
+type PatternBindingMode = "owned" | "shared" | "mut";
+
+/** Derives the default binding mode + the "effective" (already-dereferenced)
+ * type every pattern position should see, from a scrutinee's own resolved
+ * type (spec 0016): `match x` binds by value/move, `match &x` binds by
+ * shared reference, `match &mut x` binds by mutable reference - and that
+ * default applies uniformly to every binding the pattern contains (not just
+ * a top-level one), overridable per-binding by an explicit `&`/`&mut` sigil
+ * (see `effectiveBindingType`). Called once per match/`let`/parameter at the
+ * pattern-analysis entry point (`analyzeMatchExpression`,
+ * `analyzeLetOrParamPattern`); `analyzePattern` and everything it resolves
+ * against (`resolveEnumDecl`, `resolveStructDecl`, ...) only ever sees the
+ * already-unwrapped `effectiveType` from here on, so those never need their
+ * own reference-unwrapping logic. Only one layer of `ReferenceType` is
+ * peeled off - a reference to a reference isn't real syntax yet (no nested
+ * reference types anywhere in the type system), so this doesn't loop. */
+function defaultBindingModeForScrutinee(scrutineeType: Semantics.Type): {
+  readonly mode: PatternBindingMode;
+  readonly effectiveType: Semantics.Type;
+} {
+  if (scrutineeType.kind === "ReferenceType") {
+    return {
+      mode: scrutineeType.mutable ? "mut" : "shared",
+      effectiveType: scrutineeType.referent,
+    };
+  }
+  return { mode: "owned", effectiveType: scrutineeType };
+}
+
+/** The type + local-mutability a single `BindingPattern`/shorthand-field
+ * binding gets, combining `defaultMode` (inherited from the scrutinee
+ * unless overridden) with the binding's own sigils. An explicit `byRef`
+ * (`&`/`&mut`) always overrides the mode outright, ignoring `defaultMode`
+ * entirely - the spec's own "borrowing one field of an owned scrutinee
+ * while moving another" example. Without `byRef`, `mutable` never changes
+ * mode - a plain `mut name` still inherits whatever the scrutinee's default
+ * says, only marking the resulting local slot as reassignable - mirroring
+ * how `mut` and `ref`/`ref mut` are independent modifiers in Rust's own
+ * match ergonomics (there's no fifth sigil combination for "mutably
+ * rebindable `&mut` borrow" - `&mut name`'s own `mutable` bit is entirely
+ * consumed by "this is a mutable borrow", not a separate local-slot
+ * concern). */
+function effectiveBindingType(
+  fieldType: Semantics.Type,
+  defaultMode: PatternBindingMode,
+  byRef: boolean,
+  mutable: boolean,
+  tokenId: number,
+): { readonly type: Semantics.Type; readonly localMutable: boolean } {
+  const mode: PatternBindingMode = byRef
+    ? mutable
+      ? "mut"
+      : "shared"
+    : defaultMode;
+  const type: Semantics.Type =
+    mode === "owned"
+      ? fieldType
+      : {
+          kind: "ReferenceType",
+          tokenId,
+          mutable: mode === "mut",
+          referent: fieldType,
+        };
+  return { type, localMutable: byRef ? false : mutable };
+}
+
 /** `none()` if `scrutineeType` isn't an enum, or names an enum this context
  * never registered (an unresolved/erroneous scrutinee type) - callers treat
  * both the same way, falling back to the generic pattern-kind guardrail.
- * Only unwraps a bare `EnumType`, not a reference to one - `match &m`/
- * `match &mut m` scrutinees fall through to that same guardrail/coarse
- * exhaustiveness fallback rather than resolving the enum through the
- * reference.
- * TODO (Hedge-47): binding-mode-aware matching (`match x`/`match &x`/
- * `match &mut x` per spec 0016) is not yet in scope here. */
+ * Only ever called with an already-dereferenced `effectiveType`
+ * (`defaultBindingModeForScrutinee`) - never needs its own reference
+ * unwrapping. */
 function resolveEnumDecl(
   ctx: AnalysisContext,
   scrutineeType: Semantics.Type,
@@ -1374,6 +1438,7 @@ function analyzePattern(
   ctx: AnalysisContext,
   pattern: Parser.Pattern,
   scrutineeType: Semantics.Type,
+  defaultMode: PatternBindingMode,
 ): Semantics.Pattern {
   switch (pattern.kind) {
     case "WildcardPattern": {
@@ -1387,15 +1452,19 @@ function analyzePattern(
       if (isSome(pattern.subpattern)) {
         return analyzePatternGuardrail(ctx, pattern, scrutineeType);
       }
-      bind(ctx, pattern.name.text, {
-        type: scrutineeType,
-        mutable: pattern.mutable,
-      });
+      const { type: boundType, localMutable } = effectiveBindingType(
+        scrutineeType,
+        defaultMode,
+        pattern.byRef,
+        pattern.mutable,
+        pattern.tokenId,
+      );
+      bind(ctx, pattern.name.text, { type: boundType, mutable: localMutable });
       const result: Semantics.BindingPattern = {
         ...pattern,
-        name: { ...pattern.name, type: scrutineeType },
+        name: { ...pattern.name, type: boundType },
         subpattern: none(),
-        type: scrutineeType,
+        type: boundType,
       };
       return result;
     }
@@ -1436,7 +1505,7 @@ function analyzePattern(
       const result: Semantics.OrPattern = {
         ...pattern,
         alternatives: pattern.alternatives.map((alt) =>
-          analyzePattern(ctx, alt, scrutineeType),
+          analyzePattern(ctx, alt, scrutineeType, defaultMode),
         ),
         type: scrutineeType,
       };
@@ -1488,7 +1557,7 @@ function analyzePattern(
         );
       }
       const elements = pattern.elements.map((el, i) =>
-        analyzePattern(ctx, el, fields[i]?.type ?? UNIT),
+        analyzePattern(ctx, el, fields[i]?.type ?? UNIT, defaultMode),
       );
       const result: Semantics.TupleStructPattern = {
         ...pattern,
@@ -1523,13 +1592,26 @@ function analyzePattern(
           return {
             ...field,
             name: { ...field.name, type: fieldType },
-            pattern: some(analyzePattern(ctx, field.pattern.value, fieldType)),
+            pattern: some(
+              analyzePattern(ctx, field.pattern.value, fieldType, defaultMode),
+            ),
           };
         }
-        bind(ctx, field.name.text, { type: fieldType, mutable: false });
+        // Shorthand (`Point { x }`) has no sigil position of its own - it
+        // always inherits `defaultMode` unconditionally (byRef=false,
+        // mutable=false), matching a bare `name` binding pattern with no
+        // sigil at all.
+        const { type: boundType, localMutable } = effectiveBindingType(
+          fieldType,
+          defaultMode,
+          false,
+          false,
+          field.name.tokenId,
+        );
+        bind(ctx, field.name.text, { type: boundType, mutable: localMutable });
         return {
           ...field,
-          name: { ...field.name, type: fieldType },
+          name: { ...field.name, type: boundType },
           pattern: none<Semantics.Pattern>(),
         };
       });
@@ -1771,11 +1853,17 @@ function checkMatchExhaustiveness(
 function analyzeMatchArm(
   ctx: AnalysisContext,
   arm: Parser.MatchArm,
-  scrutineeType: Semantics.Type,
+  effectiveScrutineeType: Semantics.Type,
+  defaultMode: PatternBindingMode,
 ): Semantics.MatchArm {
   ctx.scopes.push(new Map());
   try {
-    const pattern = analyzePattern(ctx, arm.pattern, scrutineeType);
+    const pattern = analyzePattern(
+      ctx,
+      arm.pattern,
+      effectiveScrutineeType,
+      defaultMode,
+    );
     const guard = mapSome(arm.guard, (g) => analyzeExpression(ctx, g));
     const body = analyzeExpression(ctx, arm.body);
     return { ...arm, pattern, guard, body };
@@ -1790,8 +1878,10 @@ function analyzeMatchExpression(
 ): Semantics.MatchExpression {
   const scrutinee = analyzeExpression(ctx, matchExpr.scrutinee);
   const scrutineeType = getType(scrutinee);
+  const { mode: defaultMode, effectiveType } =
+    defaultBindingModeForScrutinee(scrutineeType);
   const arms = matchExpr.arms.map((arm) =>
-    analyzeMatchArm(ctx, arm, scrutineeType),
+    analyzeMatchArm(ctx, arm, effectiveType, defaultMode),
   );
 
   // A `UnitType` scrutinee is ambiguous (see `isAmbiguousUnitExpr`'s doc
@@ -1800,9 +1890,13 @@ function analyzeMatchExpression(
   // failed arithmetic operand, ...). Skipping both checks in the
   // placeholder case avoids piling a second, spurious "non-exhaustive"
   // diagnostic on top of whatever already failed to resolve the scrutinee.
+  // Checked against the raw `scrutineeType`, not `effectiveType` - a
+  // reference-wrapped scrutinee is never itself the `UnitType` placeholder
+  // (it would be a `ReferenceType`), so unwrapping first couldn't change
+  // this check's outcome, only its own doesn't-apply-here type.
   if (!(scrutineeType.kind === "UnitType" && isAmbiguousUnitExpr(scrutinee))) {
-    checkUnreachableArms(ctx, arms, scrutineeType);
-    checkMatchExhaustiveness(ctx, matchExpr, arms, scrutineeType);
+    checkUnreachableArms(ctx, arms, effectiveType);
+    checkMatchExhaustiveness(ctx, matchExpr, arms, effectiveType);
   }
 
   let resultType: Semantics.Type = {
