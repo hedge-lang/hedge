@@ -2302,10 +2302,14 @@ describe("core patterns", (): void => {
   });
 
   it("still rejects a `&` sigil on a struct pattern", (): void => {
+    // A malformed parameter recovers via the existing per-element comma-list
+    // recovery (see `toolchain/compiler/CLAUDE.md`'s parser conventions) -
+    // `sigilOnPathMessage` isn't a registered fail-fast guardrail, so the
+    // program still comes back `Some`, just with the diagnostic attached.
     const { program, diagnostics } = parse(
       tokenize("fn f(&Point { x, y }: Point) {}").tokens,
     );
-    expect(program).toEqual(none());
+    expect(isSome(program)).toBe(true);
     expect(diagnostics[0]?.message).toContain(
       "cannot be applied to a struct, tuple-struct, or path pattern",
     );
