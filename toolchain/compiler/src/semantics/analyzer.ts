@@ -1786,14 +1786,9 @@ function analyzePattern(
           );
         }
       }
-      // Only meaningful when a single rest is present (`hasRest` above) -
-      // harmless to compute unconditionally otherwise, since nothing reads
-      // it without a `RestPattern` element to apply it to. An array's own
-      // length is a `usize` - never negative - so clamping at 0 here is a
-      // safe recovery value, not a silently-swallowed error: `length -
-      // nonRestCount` only goes negative when the pattern requires more
-      // elements than the array has, which is exactly the `!arityOk` case
-      // above that already emitted its own diagnostic.
+      // Only used when a rest is present; harmless otherwise. Clamped to 0
+      // since an array length is a `usize` (never negative) - it only goes
+      // negative when `!arityOk` above already diagnosed the mismatch.
       const restLength = Math.max(0, length - nonRestCount);
       const elements = pattern.elements.map(
         (el): Semantics.Pattern | Semantics.RestPattern => {
@@ -1995,15 +1990,10 @@ function checkOrPatternConsistency(
       .filter((b) => b !== undefined);
     const [first, ...rest] = occurrences;
     if (first === undefined) continue;
-    // Compare the *resulting* bound type (already mode-aware - a `&`/`&mut`
-    // override bakes its mode into `type` as a `ReferenceType`, see
-    // `effectiveBindingType`) and local rebindability (`!byRef && mutable` -
-    // a `byRef` binding's own local slot is never separately reassignable,
-    // same reasoning as `effectiveBindingType`'s `localMutable`), not the
-    // raw `byRef`/`mutable` sigils themselves: under a shared-reference
-    // scrutinee, a bare `name` and an explicit `&name` both bind `&T` with
-    // an immutable local slot - different syntax, identical observable
-    // binding - and shouldn't be flagged as inconsistent.
+    // Compare the resulting type (mode-aware already, see
+    // `effectiveBindingType`) and derived local mutability, not the raw
+    // sigils: under a shared-reference scrutinee, `name` and `&name` both
+    // bind an immutable `&T` - different syntax, same result.
     const localMutable = (b: OrPatternBinding) => !b.byRef && b.mutable;
     const consistent = rest.every(
       (occ) =>
@@ -2034,17 +2024,25 @@ function isIrrefutablePattern(
     case "RangePattern":
     case "TuplePattern":
       return false;
-    case "SlicePattern":
-      // A genuine `Semantics.SlicePattern` is only ever constructed against
-      // a fixed-length `ArrayType` scrutinee (`analyzePattern`'s own
-      // guardrail substitutes a `WildcardPattern` for anything else) - the
-      // array's length is statically known, so the pattern either always
-      // matches or never does (an arity mismatch, its own separate
-      // diagnostic already emitted at that point) - never "maybe matches
-      // at runtime" the way a literal/range truly is. Treating it as
-      // irrefutable either way avoids a redundant non-exhaustive diagnostic
-      // stacking on top of the arity-mismatch one.
-      return true;
+    case "SlicePattern": {
+      // Array length is statically known, so an arity mismatch is a
+      // precise "never matches" - not assume-best-case like the struct/
+      // enum cases above - so it must not count as a catch-all or subsume
+      // a later arm. Re-derives `analyzePattern`'s own arity check instead
+      // of storing a redundant flag.
+      if (pattern.type.kind !== "ArrayType") return false;
+      const restCount = pattern.elements.filter(
+        (el) => el.kind === "RestPattern",
+      ).length;
+      // Multiple rests (`[a, .., b, .., c]`) are ill-formed regardless of
+      // arity - no element count to compute, already diagnosed separately -
+      // so this stays assume-best-case, unlike the real arity check below.
+      if (restCount > 1) return true;
+      const nonRestCount = pattern.elements.length - restCount;
+      return restCount === 1
+        ? nonRestCount <= pattern.type.length
+        : nonRestCount === pattern.type.length;
+    }
     case "StructPattern":
     case "TupleStructPattern":
     case "PathPattern": {

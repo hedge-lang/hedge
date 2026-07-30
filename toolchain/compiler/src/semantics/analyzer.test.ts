@@ -2236,23 +2236,34 @@ describe("slice patterns over fixed-length arrays", () => {
     expect(result.diagnostics).toEqual([]);
   });
 
-  it("rejects a slice pattern with no rest whose element count does not match the array's length", () => {
+  it("rejects a slice pattern with no rest whose element count does not match the array's length, also naming it refutable", () => {
+    // An arity-mismatched slice pattern is refutable in the strongest sense
+    // (it never matches), so it's correctly rejected in let position for
+    // that reason too, alongside the specific arity diagnostic - the same
+    // two-independently-true-facts shape as the match/exhaustiveness case
+    // above, and matches rustc's own behavior of reporting both.
     const result = diagnose(`
       fn f(arr: [i32; 3]) { let [a, b] = arr; }
     `);
-    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics).toHaveLength(2);
     expect(result.diagnostics[0]?.message).toBe(
       "array has 3 element(s), but the pattern requires exactly 2",
     );
+    expect(result.diagnostics[1]?.message).toBe(
+      "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match",
+    );
   });
 
-  it("rejects a slice pattern with a rest whose required minimum exceeds the array's length", () => {
+  it("rejects a slice pattern with a rest whose required minimum exceeds the array's length, also naming it refutable", () => {
     const result = diagnose(`
       fn f(arr: [i32; 2]) { let [a, b, c, ..rest] = arr; }
     `);
-    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics).toHaveLength(2);
     expect(result.diagnostics[0]?.message).toBe(
       "array has 2 element(s), but the pattern requires at least 3",
+    );
+    expect(result.diagnostics[1]?.message).toBe(
+      "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match",
     );
   });
 
@@ -2312,9 +2323,25 @@ describe("slice patterns over fixed-length arrays", () => {
     expect(result.diagnostics).toEqual([]);
   });
 
-  it("does not cascade a non-exhaustive diagnostic on top of an arity-mismatched slice-pattern arm", () => {
+  it("also reports non-exhaustive when an arity-mismatched slice pattern is the only arm, since it can never match anything", () => {
+    // An arity mismatch isn't "assume best case, treat as covering
+    // everything" the way a malformed struct pattern is - this pattern
+    // genuinely can never match, so the match genuinely doesn't cover
+    // `arr` either. Both diagnostics are independently true, not a
+    // cascade to suppress.
     const result = diagnose(`
       fn f(arr: [i32; 3]) { match arr { [a, b] => { print(a); print(b); } }; }
+    `);
+    expect(result.diagnostics).toHaveLength(2);
+    expect(result.diagnostics[0]?.message).toBe(
+      "array has 3 element(s), but the pattern requires exactly 2",
+    );
+    expect(result.diagnostics[1]?.message).toContain("non-exhaustive");
+  });
+
+  it("does not treat an arity-mismatched slice-pattern arm as a catch-all that suppresses a later, correctly-shaped arm", () => {
+    const result = diagnose(`
+      fn f(arr: [i32; 3]) -> i32 { match arr { [a, b] => 1, [c, d, e] => 2 } }
     `);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.message).toBe(
