@@ -127,9 +127,24 @@ function analyzeLetOrParamPattern(
   ctx: AnalysisContext,
   pattern: Parser.Pattern,
   type: Semantics.Type,
+  rootExpression: Option<Semantics.Expression>,
 ): Semantics.Pattern {
   const { mode, effectiveType } = defaultBindingModeForScrutinee(type);
-  const result = analyzePattern(ctx, pattern, effectiveType, mode);
+  // A parameter has no initializer expression to check root place
+  // mutability against at all (`rootExpression` is `none()`) - the only way
+  // to make a &mut field override legal there is the pattern's own `mut`
+  // marker (Hedge-47), applied by `analyzePattern` itself once it reaches a
+  // `mutable: true` struct/tuple-struct pattern node.
+  const rootMutable = isSome(rootExpression)
+    ? !isSome(placeMutabilityViolation(ctx, rootExpression.value, true))
+    : false;
+  const result = analyzePattern(
+    ctx,
+    pattern,
+    effectiveType,
+    mode,
+    rootMutable,
+  );
   if (!isIrrefutablePattern(ctx, result)) {
     emitError(ctx, REFUTABLE_LET_OR_PARAM_PATTERN_MESSAGE, pattern.tokenId);
   }
@@ -1202,6 +1217,42 @@ function effectiveBindingType(
   return { type, localMutable: byRef ? false : mutable };
 }
 
+/**
+ * Whether a `&mut` binding-mode override (`x: &mut bx`, or a bare `&mut
+ * name`) is legal at this point in a pattern. `defaultMode === "shared"`
+ * rejects it unconditionally - capability comes from the reference already
+ * being crossed (Hedge-25's rule for `&mut` through a `Deref` of a shared
+ * reference), regardless of `rootMutable`. `defaultMode === "mut"` always
+ * allows it (an `&mut` scrutinee's own chain permits further `&mut`
+ * sub-borrows). `defaultMode === "owned"` defers to `rootMutable` - whether
+ * the scrutinee/initializer's own root place is mutable (from
+ * `placeMutabilityViolation`), or a `mut`-marked ancestor struct/tuple-struct
+ * pattern (Hedge-47) stood in for it.
+ */
+function checkMutOverrideLegality(
+  ctx: AnalysisContext,
+  name: string,
+  defaultMode: PatternBindingMode,
+  rootMutable: boolean,
+  tokenId: number,
+): void {
+  if (defaultMode === "shared") {
+    emitError(
+      ctx,
+      `cannot bind \`${name}\` as \`&mut\` through a shared reference`,
+      tokenId,
+    );
+    return;
+  }
+  if (defaultMode === "owned" && !rootMutable) {
+    emitError(
+      ctx,
+      `cannot bind \`${name}\` as \`&mut\` because the underlying place is not mutable`,
+      tokenId,
+    );
+  }
+}
+
 /** `none()` if `scrutineeType` isn't an enum, or names an enum this context
  * never registered (an unresolved/erroneous scrutinee type) - callers treat
  * both the same way, falling back to the generic pattern-kind guardrail.
@@ -1439,6 +1490,7 @@ function analyzePattern(
   pattern: Parser.Pattern,
   scrutineeType: Semantics.Type,
   defaultMode: PatternBindingMode,
+  rootMutable: boolean,
 ): Semantics.Pattern {
   switch (pattern.kind) {
     case "WildcardPattern": {
@@ -1451,6 +1503,15 @@ function analyzePattern(
     case "BindingPattern": {
       if (isSome(pattern.subpattern)) {
         return analyzePatternGuardrail(ctx, pattern, scrutineeType);
+      }
+      if (pattern.byRef && pattern.mutable) {
+        checkMutOverrideLegality(
+          ctx,
+          pattern.name.text,
+          defaultMode,
+          rootMutable,
+          pattern.tokenId,
+        );
       }
       const { type: boundType, localMutable } = effectiveBindingType(
         scrutineeType,
@@ -1505,7 +1566,7 @@ function analyzePattern(
       const result: Semantics.OrPattern = {
         ...pattern,
         alternatives: pattern.alternatives.map((alt) =>
-          analyzePattern(ctx, alt, scrutineeType, defaultMode),
+          analyzePattern(ctx, alt, scrutineeType, defaultMode, rootMutable),
         ),
         type: scrutineeType,
       };
@@ -1556,8 +1617,20 @@ function analyzePattern(
           pattern.tokenId,
         );
       }
+      // A `mut` sigil on this whole tuple-struct pattern (Hedge-47) treats
+      // the destructured value as mutable for every field reached through
+      // it, regardless of the ambient `rootMutable` - it never demotes an
+      // already-mutable ambient context back to immutable, only ever adds
+      // mutability.
+      const effectiveRootMutable = pattern.mutable || rootMutable;
       const elements = pattern.elements.map((el, i) =>
-        analyzePattern(ctx, el, fields[i]?.type ?? UNIT, defaultMode),
+        analyzePattern(
+          ctx,
+          el,
+          fields[i]?.type ?? UNIT,
+          defaultMode,
+          effectiveRootMutable,
+        ),
       );
       const result: Semantics.TupleStructPattern = {
         ...pattern,
@@ -1576,6 +1649,8 @@ function analyzePattern(
         return analyzePatternGuardrail(ctx, pattern, scrutineeType);
       }
       const { fields: declaredFields, label, alreadyErrored } = resolved.value;
+      // See the identical note in the `TupleStructPattern` case above.
+      const effectiveRootMutable = pattern.mutable || rootMutable;
       const fields = pattern.fields.map((field): Semantics.FieldPattern => {
         const declared = declaredFields.find(
           (f) => f.name.text === field.name.text,
@@ -1593,7 +1668,13 @@ function analyzePattern(
             ...field,
             name: { ...field.name, type: fieldType },
             pattern: some(
-              analyzePattern(ctx, field.pattern.value, fieldType, defaultMode),
+              analyzePattern(
+                ctx,
+                field.pattern.value,
+                fieldType,
+                defaultMode,
+                effectiveRootMutable,
+              ),
             ),
           };
         }
@@ -1855,6 +1936,7 @@ function analyzeMatchArm(
   arm: Parser.MatchArm,
   effectiveScrutineeType: Semantics.Type,
   defaultMode: PatternBindingMode,
+  rootMutable: boolean,
 ): Semantics.MatchArm {
   ctx.scopes.push(new Map());
   try {
@@ -1863,6 +1945,7 @@ function analyzeMatchArm(
       arm.pattern,
       effectiveScrutineeType,
       defaultMode,
+      rootMutable,
     );
     const guard = mapSome(arm.guard, (g) => analyzeExpression(ctx, g));
     const body = analyzeExpression(ctx, arm.body);
@@ -1880,8 +1963,14 @@ function analyzeMatchExpression(
   const scrutineeType = getType(scrutinee);
   const { mode: defaultMode, effectiveType } =
     defaultBindingModeForScrutinee(scrutineeType);
+  // Only ever consulted when `defaultMode === "owned"` (see
+  // `checkMutOverrideLegality`) - a &mut-override's legality under a
+  // reference-typed scrutinee never depends on the scrutinee expression's
+  // own place mutability, only on the reference's own mutability
+  // (`defaultMode` itself already captures that).
+  const rootMutable = !isSome(placeMutabilityViolation(ctx, scrutinee, true));
   const arms = matchExpr.arms.map((arm) =>
-    analyzeMatchArm(ctx, arm, effectiveType, defaultMode),
+    analyzeMatchArm(ctx, arm, effectiveType, defaultMode, rootMutable),
   );
 
   // A `UnitType` scrutinee is ambiguous (see `isAmbiguousUnitExpr`'s doc
@@ -2348,7 +2437,12 @@ function analyzeFunctionDecl(
   const analyzedParams = decl.params.map(
     (param: Parser.Param): Semantics.Param => {
       const paramType = validateSlice1Type(ctx, param.type, param.type.tokenId);
-      const pattern = analyzeLetOrParamPattern(ctx, param.pattern, paramType);
+      const pattern = analyzeLetOrParamPattern(
+        ctx,
+        param.pattern,
+        paramType,
+        none(),
+      );
       return { ...param, type: paramType, pattern };
     },
   );
@@ -2551,7 +2645,12 @@ function analyzeLetStatement(
     checkPosLiteralRange(ctx, coercedInitializer.value, bindingType);
   }
 
-  const pattern = analyzeLetOrParamPattern(ctx, statement.pattern, bindingType);
+  const pattern = analyzeLetOrParamPattern(
+    ctx,
+    statement.pattern,
+    bindingType,
+    coercedInitializer,
+  );
 
   return {
     ...statement,
