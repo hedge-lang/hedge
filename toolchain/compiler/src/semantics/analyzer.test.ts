@@ -2154,6 +2154,76 @@ describe("match binding modes over a reference scrutinee", () => {
   });
 });
 
+describe("binding-mode &mut-override legality", () => {
+  it("rejects a &mut field override under a shared-reference (&x) scrutinee", () => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      fn f(p: Point) { match &p { Point { x: &mut bx, y } => { *bx; y } }; }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "cannot bind `bx` as `&mut` through a shared reference",
+    );
+  });
+
+  it("accepts a &mut field override under a mutable-reference (&mut x) scrutinee", () => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      fn f(mut p: Point) { match &mut p { Point { x: &mut bx, y } => { *bx; y } }; }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a &mut field override under an owned scrutinee whose root place is not mut", () => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      fn f(p: Point) { match p { Point { x: &mut bx, y } => { *bx; y } }; }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "cannot bind `bx` as `&mut` because the underlying place is not mutable",
+    );
+  });
+
+  it("accepts a &mut field override in a let-position destructuring pattern whose initializer's root place is mut", () => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      fn f(mut p: Point) -> i32 { let Point { x: &mut bx, y } = p; *bx + y }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a &mut field override on a destructured parameter with no mut marker", () => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      fn f(Point { x: &mut bx, y }: Point) -> i32 { *bx + y }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "cannot bind `bx` as `&mut` because the underlying place is not mutable",
+    );
+  });
+
+  it("accepts a &mut field override on a destructured parameter marked mut", () => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      fn f(mut Point { x: &mut bx, y }: Point) -> i32 { *bx + y }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts a &mut field override reached only through a nested mut-marked struct pattern, regardless of the outer scrutinee's own mutability", () => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      struct Line { start: Point, end: Point }
+      fn f(l: Line) -> i32 {
+        match l { Line { start: mut Point { x: &mut bx, y }, end } => *bx + y + end.x }
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+});
+
 describe("array types", (): void => {
   it("type-checks a [i32; 3] annotation against a matching array literal", (): void => {
     const result = diagnose(`
