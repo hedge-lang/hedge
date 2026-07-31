@@ -585,9 +585,22 @@ function parseWherePredicate(
   if (isErr(boundsResult)) {
     return boundsResult;
   }
-  // A where-clause bound has no enclosing `<...>`, so an extra `>` here
-  // (`where T: Foo<Bar>>`) has nothing to hand a half-spent `gt_gt` off to -
-  // it fails downstream at the body-start expectation instead.
+  // A where-clause bound has no enclosing `<...>`, so `pendingCloseHalf`
+  // here is always a genuine stray extra `>` (`where T: Foo<Bar>>`) - never
+  // a level owed to an enclosing list, unlike `parseDeclarationGenerics`.
+  // Diagnose and consume it, matching that function's own precedent.
+  let next = boundsResult.value.cursor.next;
+  if (boundsResult.value.cursor.pendingCloseHalf) {
+    const strayToken = tokens[next];
+    diagnostics.push({
+      severity: "error",
+      message: "unexpected extra '>' after trait bound",
+      span: strayToken !== undefined ? some(strayToken.span) : none(),
+      code: none(),
+      relatedSpans: [],
+    });
+    next += 1;
+  }
   return ok({
     predicate: {
       kind: "WherePredicate",
@@ -595,7 +608,7 @@ function parseWherePredicate(
       type: typeResult.value.node,
       bounds: boundsResult.value.bounds,
     },
-    next: boundsResult.value.cursor.next,
+    next,
   });
 }
 

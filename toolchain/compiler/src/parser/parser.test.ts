@@ -4694,6 +4694,37 @@ describe("where clauses: function declarations", (): void => {
     ]);
   });
 
+  it("recovers past a stray extra > on a where-clause bound's own closing >> (fn f() where T: Foo<Bar>> {})", (): void => {
+    const { tokens } = tokenize("fn f() where T: Foo<Bar>> {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("extra");
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        whereClause: some({
+          kind: "WhereClause",
+          predicates: [
+            {
+              type: { path: { segments: ["T"] } },
+              bounds: [
+                {
+                  kind: "PathTraitBound",
+                  path: { segments: ["Foo"] },
+                  typeArguments: [
+                    { kind: "NamedType", path: { segments: ["Bar"] } },
+                  ],
+                },
+              ],
+            },
+          ],
+        }),
+      },
+    ]);
+  });
+
   it("fn f() where T: Draw (missing body) fails fast without hanging", (): void => {
     const { tokens } = tokenize("fn f() where T: Draw");
     const { program, diagnostics } = parse(tokens);
