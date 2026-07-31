@@ -7,6 +7,7 @@ import type {
   ConstDecl,
   EnumDecl,
   FunctionDecl,
+  GenericParam,
   Item,
   LetStatement,
   Lifetime,
@@ -70,6 +71,17 @@ function createSynthesizer(
     counter += 1;
     return { kind: "Lifetime", tokenId: anchorTokenId, name };
   };
+}
+
+/** Collects declared lifetime names from a generics list - a `TypeParam`
+ * contributes nothing, since only lifetime collisions matter here. */
+function declaredLifetimeNames(generics: readonly GenericParam[]): string[] {
+  return generics
+    .filter(
+      (param): param is Extract<GenericParam, { kind: "LifetimeParam" }> =>
+        param.kind === "LifetimeParam",
+    )
+    .map((param) => param.lifetime.name);
 }
 
 /** Collects every explicit lifetime name reachable from `type`, recursing
@@ -249,7 +261,7 @@ function elideStructDecl(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
 ): StructDecl {
-  const names = new Set<string>(decl.generics.map((param) => param.name));
+  const names = new Set<string>(declaredLifetimeNames(decl.generics));
   for (const type of structBodyFieldTypes(decl.body)) {
     collectTypeLifetimeNames(type, names);
   }
@@ -265,7 +277,7 @@ function elideFunctionDecl(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
 ): FunctionDecl {
-  const names = new Set<string>(decl.generics.map((param) => param.name));
+  const names = new Set<string>(declaredLifetimeNames(decl.generics));
   for (const param of decl.params) {
     collectTypeLifetimeNames(param.type, names);
   }
@@ -406,7 +418,7 @@ function elideEnumDecl(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
 ): EnumDecl {
-  const names = new Set<string>(decl.generics.map((param) => param.name));
+  const names = new Set<string>(declaredLifetimeNames(decl.generics));
   for (const type of enumVariantFieldTypes(decl.variants)) {
     collectTypeLifetimeNames(type, names);
   }

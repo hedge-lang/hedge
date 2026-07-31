@@ -2816,6 +2816,7 @@ function analyzeFunctionDecl(
     },
     attributes: decl.attributes.map((attr) => analyzeAttribute(ctx, attr)),
     generics: [],
+    whereClause: none(),
     params: analyzedParams,
     returnType,
     body,
@@ -3613,6 +3614,7 @@ function analyzeExpression(
         ...expression,
         kind: "PathExpression",
         path: { absolute: false, segments: [expression.text] },
+        typeArguments: [],
       });
     default:
       assertNever(

@@ -24,13 +24,13 @@ import type {
   ReferenceExpression,
   StructExpression,
   TupleExpression,
+  Type,
   UnaryExpression,
   WhileExpression,
 } from "./ast.js";
 import type { Parsed } from "./parse.js";
 import {
   expect,
-  isLifetimeGenericsStart,
   isWhileLetAt,
   loopKeywordAt,
   parseFloatLiteral,
@@ -39,14 +39,13 @@ import {
   pathKeywordAt,
   pathSepBeforeLt,
   tokenAt,
-  unsupportedGenericsMessage,
-  unsupportedLifetimeMessage,
   unsupportedLoopMessage,
   type PR,
 } from "./parse-utils.js";
 import { parsePath } from "./path.js";
 import { parsePattern } from "./pattern.js";
 import { parseBlock } from "./statement.js";
+import { parseTypeArgumentList } from "./type.js";
 
 type InfixEntry =
   | {
@@ -1015,26 +1014,38 @@ function parseStructExpression(
 }
 
 /**
- * If `tokens[pos]` is `::` immediately followed by `<`, it's a turbofish
- * (`::<...>`). Rejects it with the generics guardrail diagnostic. Otherwise
- * a no-op success, so callers thread it through the same `isErr` check they
- * use for every other parse step.
+ * Parses turbofish type arguments (`::<Type, Type, ...>`) if `tokens[pos]`
+ * is `::` followed by `<`. Empty list, `next` unchanged, otherwise - a bare
+ * `<` in expression position is always the comparison operator, never a
+ * generic-argument list.
+ *
+ * Delegates the actual `<...>` body to `parseTypeArgumentList`, shared with
+ * a trait bound's own arguments - discarding its `pendingCloseHalf`, since
+ * a generic turbofish argument (`first::<Vec<i32>>`) hits the Type-position
+ * guardrail before any closing `>>` could matter here.
+ *
+ * Grammar:
+ *
+ * ```text
+ * GenericArgs ::= "::" "<" (Type ("," Type)* ","?)? ">"
+ * ```
  */
-function checkTurbofish(tokens: readonly Token[], pos: number): PR<boolean> {
+function parseTurbofishTypeArguments(
+  tokens: readonly Token[],
+  pos: number,
+): PR<Parsed<readonly Type[]>> {
   const pathSepMatch = pathSepBeforeLt(tokens, pos);
-  if (isSome(pathSepMatch)) {
-    const message = isLifetimeGenericsStart(tokens, pos + 1)
-      ? unsupportedLifetimeMessage("lifetime arguments (`::<...>`)")
-      : unsupportedGenericsMessage("turbofish generic arguments (`::<...>`)");
-    return err({
-      severity: "error",
-      message,
-      span: some(pathSepMatch.value.span),
-      code: none(),
-      relatedSpans: [],
-    });
+  if (!isSome(pathSepMatch)) {
+    return ok({ node: [], next: pos });
   }
-  return ok(true);
+  const argsResult = parseTypeArgumentList(tokens, pos + 1);
+  if (isErr(argsResult)) {
+    return argsResult;
+  }
+  return ok({
+    node: argsResult.value.typeArguments,
+    next: argsResult.value.cursor.next,
+  });
 }
 
 /**
@@ -1136,19 +1147,24 @@ function parsePrimary(
     const pathResult = parsePath(tokens, pos);
     if (isErr(pathResult)) return pathResult;
     const afterPath = pathResult.value.next;
-    const turbofishResult = checkTurbofish(tokens, afterPath);
+    const turbofishResult = parseTurbofishTypeArguments(tokens, afterPath);
     if (isErr(turbofishResult)) {
       return turbofishResult;
     }
-    if (allowStruct && tokens[pathResult.value.next]?.kind === "lbrace") {
+    const pathNode: PathExpression = {
+      ...pathResult.value.node,
+      typeArguments: turbofishResult.value.node,
+    };
+    const afterTurbofish = turbofishResult.value.next;
+    if (allowStruct && tokens[afterTurbofish]?.kind === "lbrace") {
       return parseStructExpression(
         tokens,
         diagnostics,
-        pathResult.value.next,
-        pathResult.value.node,
+        afterTurbofish,
+        pathNode,
       );
     }
-    return ok(pathResult.value);
+    return ok({ node: pathNode, next: afterTurbofish });
   }
 
   if (token.kind === "amp")
@@ -1323,22 +1339,40 @@ function parseInfixField(
   if (isErr(fieldResult)) return fieldResult;
   const afterIdent = fieldResult.value.next;
 
-  const turbofishResult = checkTurbofish(tokens, afterIdent);
+  const turbofishResult = parseTurbofishTypeArguments(tokens, afterIdent);
   if (isErr(turbofishResult)) {
     return turbofishResult;
   }
+  const typeArguments = turbofishResult.value.node;
+  const afterTurbofish = turbofishResult.value.next;
+  const hadTurbofish = afterTurbofish !== afterIdent;
 
-  if (tokens[afterIdent]?.kind === "lparen") {
-    const argsResult = parseArguments(tokens, diagnostics, afterIdent);
+  if (tokens[afterTurbofish]?.kind === "lparen") {
+    const argsResult = parseArguments(tokens, diagnostics, afterTurbofish);
     if (isErr(argsResult)) return argsResult;
     const node: MethodCallExpression = {
       kind: "MethodCallExpression",
       tokenId: lhs.node.tokenId,
       receiver: lhs.node,
       method: fieldResult.value.node,
+      typeArguments,
       arguments: argsResult.value.node,
     };
     return ok({ node, next: argsResult.value.next });
+  }
+
+  // GenericArgs only appears within MethodCall, always followed by parens -
+  // FieldAccess has no GenericArgs slot, so a turbofish with no call isn't
+  // valid anywhere.
+  if (hadTurbofish) {
+    const badToken = tokens[afterTurbofish];
+    return err({
+      severity: "error",
+      message: `expected '(' after generic arguments in method position, found "${badToken?.kind ?? "end of input"}"`,
+      span: badToken !== undefined ? some(badToken.span) : none(),
+      code: none(),
+      relatedSpans: [],
+    });
   }
 
   return ok({

@@ -121,7 +121,7 @@ export interface FunctionDecl extends AstNode {
   readonly generics: readonly GenericParam[];
   readonly params: readonly Param[];
   readonly returnType: Option<Type>;
-  readonly whereClause: Option<never>;
+  readonly whereClause: Option<WhereClause>;
   readonly attributes: readonly Attribute[];
   readonly body: Block;
 }
@@ -131,6 +131,7 @@ export interface StructDecl extends AstNode {
   readonly visibility: Option<Visibility>;
   readonly name: Identifier;
   readonly generics: readonly GenericParam[];
+  readonly whereClause: Option<WhereClause>;
   readonly body: StructBody;
   readonly attributes: readonly Attribute[];
 }
@@ -200,6 +201,7 @@ export interface EnumDecl extends AstNode {
   readonly visibility: Option<Visibility>;
   readonly name: Identifier;
   readonly generics: readonly GenericParam[];
+  readonly whereClause: Option<WhereClause>;
   readonly variants: readonly Variant[];
   readonly attributes: readonly Attribute[];
 }
@@ -531,13 +533,53 @@ export interface Lifetime extends AstNode {
   readonly name: string;
 }
 
-/** Only lifetime params are parsed in Slice 2; a `<...>` list containing a
- * non-lifetime member still falls through to the Slice-4 generics guardrail. */
-export type GenericParam = Lifetime;
+export type GenericParam = LifetimeParam | TypeParam;
+
+export interface LifetimeParam extends AstNode {
+  readonly kind: "LifetimeParam";
+  readonly lifetime: Lifetime;
+}
+
+export interface TypeParam extends AstNode {
+  readonly kind: "TypeParam";
+  readonly name: Identifier;
+  readonly bounds: readonly TraitBound[];
+}
+
+export type TraitBound = PathTraitBound | LifetimeTraitBound;
+
+/** `Draw`, `From<U>` - a trait name with optional type arguments (same
+ * category as a turbofish's, see `parseTraitBoundTypeArguments`). A
+ * compound argument (`Foo<Bar<Baz>>`) still hits the Type-position
+ * generics guardrail one level down. */
+export interface PathTraitBound extends AstNode {
+  readonly kind: "PathTraitBound";
+  readonly path: Path;
+  readonly typeArguments: readonly Type[];
+}
+
+/** `'a` used as a bound (`T: 'a`). */
+export interface LifetimeTraitBound extends AstNode {
+  readonly kind: "LifetimeTraitBound";
+  readonly lifetime: Lifetime;
+}
+
+export interface WhereClause {
+  readonly kind: "WhereClause";
+  readonly predicates: readonly WherePredicate[];
+}
+
+export interface WherePredicate extends AstNode {
+  readonly kind: "WherePredicate";
+  readonly type: Type;
+  readonly bounds: readonly TraitBound[];
+}
 
 export interface PathExpression extends AstNode {
   readonly kind: "PathExpression";
   readonly path: Path;
+  /** Explicit turbofish arguments (`first::<i32>`); empty for no turbofish. */
+  readonly typeArguments: readonly Type[];
 }
 
 export interface CallExpression extends AstNode {
@@ -594,6 +636,8 @@ export interface MethodCallExpression extends AstNode {
   readonly kind: "MethodCallExpression";
   readonly receiver: Expression;
   readonly method: Identifier;
+  /** Explicit turbofish arguments (`x.method::<i32>()`); empty for none. */
+  readonly typeArguments: readonly Type[];
   readonly arguments: Expression[];
 }
 

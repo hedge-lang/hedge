@@ -136,7 +136,12 @@ export function parsePath(
   }
   const path = pathResult.value;
   return ok({
-    node: { kind: "PathExpression", tokenId: pos, path: path.node },
+    node: {
+      kind: "PathExpression",
+      tokenId: pos,
+      path: path.node,
+      typeArguments: [],
+    },
     next: path.next,
   });
 }
