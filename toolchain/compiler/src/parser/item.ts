@@ -316,7 +316,6 @@ interface GenericParamResult {
  */
 function parseGenericParam(
   tokens: readonly Token[],
-  diagnostics: Diagnostic[],
   pos: number,
 ): PR<GenericParamResult> {
   const token = tokens[pos];
@@ -376,13 +375,12 @@ interface GenericParamListResult {
  */
 function parseGenericParamList(
   tokens: readonly Token[],
-  diagnostics: Diagnostic[],
   ltPos: number,
 ): PR<GenericParamListResult> {
   let cursor = ltPos + 1;
   const generics: GenericParam[] = [];
   for (;;) {
-    const paramResult = parseGenericParam(tokens, diagnostics, cursor);
+    const paramResult = parseGenericParam(tokens, cursor);
     if (isErr(paramResult)) {
       return paramResult;
     }
@@ -434,7 +432,7 @@ function parseDeclarationGenerics(
   if (token?.kind !== "lt") {
     return { generics: [], next: pos };
   }
-  const listResult = parseGenericParamList(tokens, diagnostics, pos);
+  const listResult = parseGenericParamList(tokens, pos);
   if (isErr(listResult)) {
     diagnostics.push(listResult.error);
     return { generics: [], next: skipBalancedAngleList(tokens, pos).next };
