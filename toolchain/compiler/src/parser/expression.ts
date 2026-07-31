@@ -45,7 +45,7 @@ import {
 import { parsePath } from "./path.js";
 import { parsePattern } from "./pattern.js";
 import { parseBlock } from "./statement.js";
-import { parseType } from "./type.js";
+import { parseTypeArgumentList } from "./type.js";
 
 type InfixEntry =
   | {
@@ -1019,9 +1019,10 @@ function parseStructExpression(
  * `<` in expression position is always the comparison operator, never a
  * generic-argument list.
  *
- * No `>>`-splitting needed: a generic turbofish argument (`first::<Vec<i32>>`)
- * hits the Type-position guardrail before any closing `>>` is reached, so
- * this only ever closes on a single, un-nested `>`.
+ * Delegates the actual `<...>` body to `parseTypeArgumentList`, shared with
+ * a trait bound's own arguments - discarding its `pendingCloseHalf`, since
+ * a generic turbofish argument (`first::<Vec<i32>>`) hits the Type-position
+ * guardrail before any closing `>>` could matter here.
  *
  * Grammar:
  *
@@ -1037,32 +1038,14 @@ function parseTurbofishTypeArguments(
   if (!isSome(pathSepMatch)) {
     return ok({ node: [], next: pos });
   }
-  let cursor = pos + 2; // skip `::` and `<`
-  if (tokens[cursor]?.kind === "gt") {
-    return ok({ node: [], next: cursor + 1 });
+  const argsResult = parseTypeArgumentList(tokens, pos + 1);
+  if (isErr(argsResult)) {
+    return argsResult;
   }
-  const typeArguments: Type[] = [];
-  for (;;) {
-    const typeResult = parseType(tokens, cursor);
-    if (isErr(typeResult)) {
-      return typeResult;
-    }
-    typeArguments.push(typeResult.value.node);
-    cursor = typeResult.value.next;
-    if (tokens[cursor]?.kind === "comma") {
-      cursor += 1;
-      if (tokens[cursor]?.kind === "gt") {
-        return ok({ node: typeArguments, next: cursor + 1 });
-      }
-      continue;
-    }
-    break;
-  }
-  const closeResult = expect(tokens, cursor, "gt");
-  if (isErr(closeResult)) {
-    return closeResult;
-  }
-  return ok({ node: typeArguments, next: closeResult.value });
+  return ok({
+    node: argsResult.value.typeArguments,
+    next: argsResult.value.cursor.next,
+  });
 }
 
 /**

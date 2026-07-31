@@ -299,6 +299,48 @@ export function skipBalancedAngleList(
   }
 }
 
+/** A parse position paired with whether it sits on a `gt_gt` token whose
+ * first `>` was already spent closing a nested list (see
+ * `tryCloseAngleList`). Threaded through any family of nested `<...>` list
+ * parsers so a triply-nested close (`Foo<Bar<Baz>>>`) splits its `>>>` one
+ * `>` at a time, without splitting a token. Always `false` once the
+ * outermost list's own parse returns. */
+export interface GenericsCursor {
+  readonly next: number;
+  readonly pendingCloseHalf: boolean;
+}
+
+export interface GenericsCloseResult {
+  readonly closed: boolean;
+  readonly cursor: GenericsCursor;
+}
+
+/**
+ * Checks whether a `<...>` list closes at `pos`. A `gt` token closes it
+ * outright. A `gt_gt` token (one token under maximal munch - see
+ * lexer/symbol.ts) closes using only its first `>` when `pendingCloseHalf`
+ * is false, without advancing - its second `>` is still owed to whichever
+ * enclosing list closes next at this position. When `pendingCloseHalf` is
+ * true, that owed `>` closes for real, advancing past the token.
+ */
+export function tryCloseAngleList(
+  tokens: readonly Token[],
+  pos: number,
+  pendingCloseHalf: boolean,
+): GenericsCloseResult {
+  if (pendingCloseHalf) {
+    return { closed: true, cursor: { next: pos + 1, pendingCloseHalf: false } };
+  }
+  const tok = tokens[pos];
+  if (tok?.kind === "gt") {
+    return { closed: true, cursor: { next: pos + 1, pendingCloseHalf: false } };
+  }
+  if (tok?.kind === "gt_gt") {
+    return { closed: true, cursor: { next: pos, pendingCloseHalf: true } };
+  }
+  return { closed: false, cursor: { next: pos, pendingCloseHalf: false } };
+}
+
 /**
  * Scans forward from `pos` to the first token matching `predicate`, or to
  * `eof` if none matches. The `eof` check is unconditional (independent of

@@ -4127,6 +4127,31 @@ describe("generic parameters: declaration position", (): void => {
     ]);
   });
 
+  it("splits the trailing >> between an empty bound argument list's own close and the outer list's close (fn foo<T: Foo<>>() {})", (): void => {
+    const { tokens } = tokenize("fn foo<T: Foo<>>() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        generics: [
+          {
+            kind: "TypeParam",
+            name: { text: "T" },
+            bounds: [
+              {
+                kind: "PathTraitBound",
+                path: { segments: ["Foo"] },
+                typeArguments: [],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
   it("parses a real lifetime-only generics list with zero diagnostics (fn foo<'a>() {})", (): void => {
     const { tokens } = tokenize("fn foo<'a>() {}");
     const { program, diagnostics } = parse(tokens);

@@ -39,8 +39,10 @@ import {
   skipUnsupportedTopLevelItem,
   skipUntilKindBalanced,
   spanAt,
+  tryCloseAngleList,
   unsupportedAsyncMessage,
   unsupportedPathKeywordMessage,
+  type GenericsCursor,
   type PR,
 } from "./parse-utils.js";
 import { collectOuterAttributes } from "./attribute.js";
@@ -52,7 +54,7 @@ import {
   parseBlock,
   parseLetStatement,
 } from "./statement.js";
-import { parseType } from "./type.js";
+import { parseType, parseTypeArgumentList } from "./type.js";
 
 /** Parses an optional `pub` or `pub(scope)` visibility prefix. */
 // eslint-disable-next-line complexity -- This is too difficult to split up
@@ -204,98 +206,6 @@ interface DeclarationGenericsResult {
   readonly next: number;
 }
 
-/** A parse position paired with whether it sits on a `gt_gt` token whose
- * first `>` was already spent closing a nested list (see
- * `tryCloseAngleList`). Threaded through the GenericParam/TraitBound family
- * so a triply-nested close (`Foo<Bar<Baz>>>`) splits its `>>>` one `>` at a
- * time, without splitting a token. Always `false` once the outermost
- * `parseDeclarationGenerics` call returns. */
-interface GenericsCursor {
-  readonly next: number;
-  readonly pendingCloseHalf: boolean;
-}
-
-interface GenericsCloseResult {
-  readonly closed: boolean;
-  readonly cursor: GenericsCursor;
-}
-
-/**
- * Checks whether a generics list closes at `pos`. A `gt` token closes it
- * outright. A `gt_gt` token (one token under maximal munch - see
- * lexer/symbol.ts) closes using only its first `>` when `pendingCloseHalf`
- * is false, without advancing - its second `>` is still owed to whichever
- * enclosing list closes next at this position. When `pendingCloseHalf` is
- * true, that owed `>` closes for real, advancing past the token.
- */
-function tryCloseAngleList(
-  tokens: readonly Token[],
-  pos: number,
-  pendingCloseHalf: boolean,
-): GenericsCloseResult {
-  if (pendingCloseHalf) {
-    return { closed: true, cursor: { next: pos + 1, pendingCloseHalf: false } };
-  }
-  const tok = tokens[pos];
-  if (tok?.kind === "gt") {
-    return { closed: true, cursor: { next: pos + 1, pendingCloseHalf: false } };
-  }
-  if (tok?.kind === "gt_gt") {
-    return { closed: true, cursor: { next: pos, pendingCloseHalf: true } };
-  }
-  return { closed: false, cursor: { next: pos, pendingCloseHalf: false } };
-}
-
-interface TypeArgumentListResult {
-  readonly typeArguments: readonly Type[];
-  readonly cursor: GenericsCursor;
-}
-
-/**
- * Parses a `<...>` type-argument list on a trait bound's own path
- * (`Foo<Bar>`, `From<U>`), `ltPos` at the opening `<`. An argument is a
- * full `Type`, not a fresh `GenericParam` declaration - a bound's brackets
- * name an existing type, never introduce a new one. Shares the
- * `>>`-splitting cursor with the enclosing declaration-generics list
- * (`fn foo<T: Foo<Bar>>()` splits its trailing `>>` between the two).
- */
-function parseTraitBoundTypeArguments(
-  tokens: readonly Token[],
-  ltPos: number,
-): PR<TypeArgumentListResult> {
-  let cursor = ltPos + 1;
-  const typeArguments: Type[] = [];
-  for (;;) {
-    const typeResult = parseType(tokens, cursor);
-    if (isErr(typeResult)) {
-      return typeResult;
-    }
-    typeArguments.push(typeResult.value.node);
-    cursor = typeResult.value.next;
-    if (tokens[cursor]?.kind === "comma") {
-      cursor += 1;
-      const closeAfterComma = tryCloseAngleList(tokens, cursor, false);
-      if (closeAfterComma.closed) {
-        return ok({ typeArguments, cursor: closeAfterComma.cursor });
-      }
-      continue;
-    }
-    break;
-  }
-  const closeResult = tryCloseAngleList(tokens, cursor, false);
-  if (closeResult.closed) {
-    return ok({ typeArguments, cursor: closeResult.cursor });
-  }
-  const badToken = tokens[cursor];
-  return err({
-    severity: "error",
-    message: `expected ',' or '>' in type argument list, found "${badToken?.kind ?? "end of input"}"`,
-    span: badToken !== undefined ? some(badToken.span) : none(),
-    code: none(),
-    relatedSpans: [],
-  });
-}
-
 interface TraitBoundResult {
   readonly bound: TraitBound;
   readonly cursor: GenericsCursor;
@@ -337,7 +247,7 @@ function parseTraitBound(
   };
   let typeArguments: readonly Type[] = [];
   if (tokens[cursor.next]?.kind === "lt") {
-    const argsResult = parseTraitBoundTypeArguments(tokens, cursor.next);
+    const argsResult = parseTypeArgumentList(tokens, cursor.next);
     if (isErr(argsResult)) {
       return argsResult;
     }

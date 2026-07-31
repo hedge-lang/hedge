@@ -17,8 +17,10 @@ import {
   pathKeywordAt,
   pathSepBeforeLt,
   tokenAt,
+  tryCloseAngleList,
   unsupportedGenericsMessage,
   unsupportedLifetimeMessage,
+  type GenericsCursor,
   type PR,
 } from "./parse-utils.js";
 import { parsePathSegments } from "./path.js";
@@ -247,6 +249,66 @@ export function parseType(
     severity: "error",
     message: `type syntax "${token.kind}" is not supported in Slice 1`,
     span: some(token.span),
+    code: none(),
+    relatedSpans: [],
+  });
+}
+
+export interface TypeArgumentListResult {
+  readonly typeArguments: readonly Type[];
+  readonly cursor: GenericsCursor;
+}
+
+/**
+ * Parses a `<...>` type-argument list, `ltPos` at the opening `<` (the
+ * caller has already confirmed it's there). Shared by a turbofish
+ * (`first::<i32>`) and a trait bound's own arguments (`Foo<Bar>`) - both are
+ * a plain comma-separated `Type` list closed by `>`, differing only in how
+ * the caller detects the opening `<` and whether it needs the returned
+ * `pendingCloseHalf` (a turbofish argument that's itself generic hits the
+ * Type-position guardrail before any `>>`-splitting could matter, so a
+ * turbofish caller can safely discard it).
+ */
+export function parseTypeArgumentList(
+  tokens: readonly Token[],
+  ltPos: number,
+): PR<TypeArgumentListResult> {
+  let cursor = ltPos + 1;
+  // An empty list (`<>`) still needs the `>>`-aware close check, not a bare
+  // `kind === "gt"` peek - `Foo<>>` closes the empty list and an enclosing
+  // one off the same `gt_gt` token, exactly like a non-empty list's own
+  // close below.
+  const immediateClose = tryCloseAngleList(tokens, cursor, false);
+  if (immediateClose.closed) {
+    return ok({ typeArguments: [], cursor: immediateClose.cursor });
+  }
+  const typeArguments: Type[] = [];
+  for (;;) {
+    const typeResult = parseType(tokens, cursor);
+    if (isErr(typeResult)) {
+      return typeResult;
+    }
+    typeArguments.push(typeResult.value.node);
+    cursor = typeResult.value.next;
+    if (tokens[cursor]?.kind === "comma") {
+      cursor += 1;
+      const closeAfterComma = tryCloseAngleList(tokens, cursor, false);
+      if (closeAfterComma.closed) {
+        return ok({ typeArguments, cursor: closeAfterComma.cursor });
+      }
+      continue;
+    }
+    break;
+  }
+  const closeResult = tryCloseAngleList(tokens, cursor, false);
+  if (closeResult.closed) {
+    return ok({ typeArguments, cursor: closeResult.cursor });
+  }
+  const badToken = tokens[cursor];
+  return err({
+    severity: "error",
+    message: `expected ',' or '>' in type argument list, found "${badToken?.kind ?? "end of input"}"`,
+    span: badToken !== undefined ? some(badToken.span) : none(),
     code: none(),
     relatedSpans: [],
   });
