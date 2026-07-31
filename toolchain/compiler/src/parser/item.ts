@@ -223,7 +223,6 @@ interface TraitBoundResult {
  */
 function parseTraitBound(
   tokens: readonly Token[],
-  diagnostics: Diagnostic[],
   pos: number,
 ): PR<TraitBoundResult> {
   const token = tokens[pos];
@@ -284,14 +283,14 @@ function parseTraitBounds(
   diagnostics: Diagnostic[],
   pos: number,
 ): PR<TraitBoundsResult> {
-  const first = parseTraitBound(tokens, diagnostics, pos);
+  const first = parseTraitBound(tokens, pos);
   if (isErr(first)) {
     return first;
   }
   const bounds: TraitBound[] = [first.value.bound];
   let cursor = first.value.cursor;
   while (tokens[cursor.next]?.kind === "plus") {
-    const next = parseTraitBound(tokens, diagnostics, cursor.next + 1);
+    const next = parseTraitBound(tokens, cursor.next + 1);
     if (isErr(next)) {
       return next;
     }
