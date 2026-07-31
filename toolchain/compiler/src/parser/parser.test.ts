@@ -4383,7 +4383,9 @@ describe("generic parameters: declaration position", (): void => {
     assert(diagnostics[0] !== undefined, "Expected a diagnostic to come back");
   });
 
+  // biome-ignore lint/security/noSecrets: false positive - generic syntax test string, not a secret
   it("still hits the type-position guardrail past a compound bound argument (fn foo<T: Foo<Bar<Baz>>>() {})", (): void => {
+    // biome-ignore lint/security/noSecrets: false positive - generic syntax test string, not a secret
     const { tokens } = tokenize("fn foo<T: Foo<Bar<Baz>>>() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
