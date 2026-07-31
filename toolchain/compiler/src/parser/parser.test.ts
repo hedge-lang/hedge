@@ -598,6 +598,17 @@ describe("generics guardrail — type position", (): void => {
     expect(diagnostics[0].message).toContain("generic");
     expect(diagnostics[0].span).toEqual(some(lt.span));
   });
+
+  it("still rejects a user-declared generic struct used (nested) as a type, even though the struct's own generic parameter declares cleanly", (): void => {
+    const { tokens } = tokenize(
+      "struct Foo<T>(T); fn foo<T>(t: Foo<Foo<T>>) {}",
+    );
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics[0].message).toContain("generic");
+  });
 });
 
 describe("lifetime guardrail — generic type argument position", (): void => {
@@ -1167,7 +1178,9 @@ describe("enum declarations", (): void => {
       {
         kind: "Enum",
         name: { text: "Container" },
-        generics: [{ kind: "Lifetime", name: "a" }],
+        generics: [
+          { kind: "LifetimeParam", lifetime: { kind: "Lifetime", name: "a" } },
+        ],
         variants: [
           {
             name: { text: "Ref" },
@@ -1200,8 +1213,8 @@ describe("enum declarations", (): void => {
       {
         kind: "Enum",
         generics: [
-          { kind: "Lifetime", name: "a" },
-          { kind: "Lifetime", name: "b" },
+          { kind: "LifetimeParam", lifetime: { kind: "Lifetime", name: "a" } },
+          { kind: "LifetimeParam", lifetime: { kind: "Lifetime", name: "b" } },
         ],
         variants: [
           {
@@ -1218,53 +1231,104 @@ describe("enum declarations", (): void => {
     ]);
   });
 
-  it("enum Foo<T> {} still hits the existing Slice-4 guardrail, unchanged from struct/fn (no enum-specific carve-out for identifier type params)", (): void => {
+  it("parses a single generic type parameter with zero diagnostics (enum Foo<T> {})", (): void => {
     const { tokens } = tokenize("enum Foo<T> {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("Slice 4");
-    expect(diagnostics[0].message).not.toContain("lifetime");
-    expect(program.value.items).toMatchObject([
-      { kind: "Enum", name: { text: "Foo" }, generics: [] },
-    ]);
-  });
-
-  it("enum Foo<'a, T> {} hits the Slice-2/lifetime guardrail (lifetime listed first, followed by a non-lifetime member)", (): void => {
-    const { tokens } = tokenize("enum Foo<'a, T> {}");
-    const { program, diagnostics } = parse(tokens);
-    assert(isSome(program), "Expected a program to come back");
-    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("Slice 2");
-    expect(diagnostics[0].message).toContain("lifetime");
-    expect(program.value.items).toMatchObject([
-      { kind: "Enum", name: { text: "Foo" }, generics: [] },
-    ]);
-  });
-
-  it("enum Foo<T, 'a> {} falls back to the generic Slice-4 diagnostic (lifetime not listed first)", (): void => {
-    const { tokens } = tokenize("enum Foo<T, 'a> {}");
-    const { program, diagnostics } = parse(tokens);
-    assert(isSome(program), "Expected a program to come back");
-    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("Slice 4");
-    expect(diagnostics[0].message).not.toContain("lifetime");
-    expect(program.value.items).toMatchObject([
-      { kind: "Enum", name: { text: "Foo" }, generics: [] },
-    ]);
-  });
-
-  it("enum Foo where T: Draw { Quit } recovers with a single Slice-1 diagnostic naming the where clause", (): void => {
-    const { tokens } = tokenize("enum Foo where T: Draw { Quit }");
-    const { program, diagnostics } = parse(tokens);
-    assert(isSome(program), "Expected a program to come back");
-    expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Slice 1");
-    expect(diagnostics[0]?.message).toContain("where");
+    expect(diagnostics).toHaveLength(0);
     expect(program.value.items).toMatchObject([
       {
         kind: "Enum",
         name: { text: "Foo" },
+        generics: [{ kind: "TypeParam", name: { text: "T" }, bounds: [] }],
+      },
+    ]);
+  });
+
+  it("parses an inline trait bound on an enum's own generic parameter (enum Container<T: Draw> { Item(T) })", (): void => {
+    const { tokens } = tokenize("enum Container<T: Draw> { Item(T) }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Enum",
+        name: { text: "Container" },
+        generics: [
+          {
+            kind: "TypeParam",
+            name: { text: "T" },
+            bounds: [
+              {
+                kind: "PathTraitBound",
+                path: { segments: ["Draw"] },
+                typeArguments: [],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("parses a lifetime param followed by a type param, in that order (enum Foo<'a, T> {})", (): void => {
+    const { tokens } = tokenize("enum Foo<'a, T> {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Enum",
+        name: { text: "Foo" },
+        generics: [
+          { kind: "LifetimeParam", lifetime: { kind: "Lifetime", name: "a" } },
+          { kind: "TypeParam", name: { text: "T" }, bounds: [] },
+        ],
+      },
+    ]);
+  });
+
+  it("parses a type param followed by a lifetime param, the reverse order (enum Foo<T, 'a> {})", (): void => {
+    const { tokens } = tokenize("enum Foo<T, 'a> {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Enum",
+        name: { text: "Foo" },
+        generics: [
+          { kind: "TypeParam", name: { text: "T" }, bounds: [] },
+          { kind: "LifetimeParam", lifetime: { kind: "Lifetime", name: "a" } },
+        ],
+      },
+    ]);
+  });
+
+  it("parses a where clause with zero diagnostics (enum Foo where T: Draw { Quit })", (): void => {
+    const { tokens } = tokenize("enum Foo where T: Draw { Quit }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Enum",
+        name: { text: "Foo" },
+        whereClause: some({
+          kind: "WhereClause",
+          predicates: [
+            {
+              type: { kind: "NamedType", path: { segments: ["T"] } },
+              bounds: [
+                {
+                  kind: "PathTraitBound",
+                  path: { segments: ["Draw"] },
+                  typeArguments: [],
+                },
+              ],
+            },
+          ],
+        }),
         variants: [{ name: { text: "Quit" } }],
       },
     ]);
@@ -2303,9 +2367,9 @@ describe("core patterns", (): void => {
 
   it("still rejects a `&` sigil on a struct pattern", (): void => {
     // A malformed parameter recovers via the existing per-element comma-list
-    // recovery (see `toolchain/compiler/CLAUDE.md`'s parser conventions) -
-    // `sigilOnPathMessage` isn't a registered fail-fast guardrail, so the
-    // program still comes back `Some`, just with the diagnostic attached.
+    // recovery - `sigilOnPathMessage` isn't a registered fail-fast guardrail,
+    // so the program still comes back `Some`, just with the
+    // diagnostic attached.
     const { program, diagnostics } = parse(
       tokenize("fn f(&Point { x, y }: Point) {}").tokens,
     );
@@ -3853,8 +3917,8 @@ describe("item error recovery", (): void => {
   });
 });
 
-describe("generics guardrail — declaration-name position", (): void => {
-  it("fn foo<T>() {} parses a single generic type parameter with zero diagnostics", (): void => {
+describe("generic parameters: declaration position", (): void => {
+  it("parses a single generic type parameter with zero diagnostics (fn foo<T>() {})", (): void => {
     const { tokens } = tokenize("fn foo<T>() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
@@ -3869,7 +3933,7 @@ describe("generics guardrail — declaration-name position", (): void => {
     ]);
   });
 
-  it("fn first<T>(x: T) -> T parses with one generic parameter T used in params and return type", (): void => {
+  it("parses with one generic parameter T used in params and return type (fn first<T>(x: T) -> T)", (): void => {
     const { tokens } = tokenize("fn first<T>(x: T) -> T { x }");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
@@ -3891,15 +3955,18 @@ describe("generics guardrail — declaration-name position", (): void => {
     ]);
   });
 
-  it("fn foo<T, U>(x: T) {} recovers and still parses the parameter list", (): void => {
+  it("parses multiple generic type parameters (fn foo<T, U>(x: T) {})", (): void => {
     const { tokens } = tokenize("fn foo<T, U>(x: T) {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    expect(diagnostics[0]?.message).toContain("Slice 1");
+    expect(diagnostics).toHaveLength(0);
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        generics: [],
+        generics: [
+          { kind: "TypeParam", name: { text: "T" }, bounds: [] },
+          { kind: "TypeParam", name: { text: "U" }, bounds: [] },
+        ],
         params: [
           {
             kind: "Param",
@@ -3911,25 +3978,152 @@ describe("generics guardrail — declaration-name position", (): void => {
     ]);
   });
 
-  it("fn foo<T: Bound>() {} recovers past an inline trait bound", (): void => {
-    const { tokens } = tokenize("fn foo<T: Bound>() {}");
+  it("parses an inline trait bound (fn draw_all<T: Draw>(x: T) {})", (): void => {
+    const { tokens } = tokenize("fn draw_all<T: Draw>(x: T) {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics).toHaveLength(0);
     expect(program.value.items).toMatchObject([
-      { kind: "Function", generics: [], params: [] },
+      {
+        kind: "Function",
+        name: { text: "draw_all" },
+        generics: [
+          {
+            kind: "TypeParam",
+            name: { text: "T" },
+            bounds: [
+              {
+                kind: "PathTraitBound",
+                path: { segments: ["Draw"] },
+                typeArguments: [],
+              },
+            ],
+          },
+        ],
+      },
     ]);
   });
 
-  it("fn foo<T: Foo<Bar>>() {} recovers past a nested generic bound (>> token)", (): void => {
+  it("parses multiple bounds joined by + (fn foo<T: A + B>() {})", (): void => {
+    const { tokens } = tokenize("fn foo<T: A + B>() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        generics: [
+          {
+            kind: "TypeParam",
+            name: { text: "T" },
+            bounds: [
+              { kind: "PathTraitBound", path: { segments: ["A"] } },
+              { kind: "PathTraitBound", path: { segments: ["B"] } },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("parses three bounds joined by + (fn foo<T: A + B + C>() {})", (): void => {
+    const { tokens } = tokenize("fn foo<T: A + B + C>() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        generics: [
+          {
+            kind: "TypeParam",
+            name: { text: "T" },
+            bounds: [
+              { kind: "PathTraitBound", path: { segments: ["A"] } },
+              { kind: "PathTraitBound", path: { segments: ["B"] } },
+              { kind: "PathTraitBound", path: { segments: ["C"] } },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("parses a lifetime as a bound (fn foo<T: 'a>() {})", (): void => {
+    const { tokens } = tokenize("fn foo<T: 'a>() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        generics: [
+          {
+            kind: "TypeParam",
+            name: { text: "T" },
+            bounds: [
+              {
+                kind: "LifetimeTraitBound",
+                lifetime: { kind: "Lifetime", name: "a" },
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("parses a bound with its own type argument (fn foo<T: From<U>>() {})", (): void => {
+    const { tokens } = tokenize("fn foo<T: From<U>>() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        generics: [
+          {
+            kind: "TypeParam",
+            name: { text: "T" },
+            bounds: [
+              {
+                kind: "PathTraitBound",
+                path: { segments: ["From"] },
+                typeArguments: [
+                  { kind: "NamedType", path: { segments: ["U"] } },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("splits the trailing >> between a bound's own close and the outer list's close (fn foo<T: Foo<Bar>>() {})", (): void => {
     const { tokens } = tokenize("fn foo<T: Foo<Bar>>() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics).toHaveLength(0);
     expect(program.value.items).toMatchObject([
-      { kind: "Function", generics: [], params: [] },
+      {
+        kind: "Function",
+        generics: [
+          {
+            kind: "TypeParam",
+            name: { text: "T" },
+            bounds: [
+              {
+                kind: "PathTraitBound",
+                path: { segments: ["Foo"] },
+                typeArguments: [
+                  { kind: "NamedType", path: { segments: ["Bar"] } },
+                ],
+              },
+            ],
+          },
+        ],
+      },
     ]);
   });
 
@@ -3939,7 +4133,12 @@ describe("generics guardrail — declaration-name position", (): void => {
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(0);
     expect(program.value.items).toMatchObject([
-      { kind: "Function", generics: [{ kind: "Lifetime", name: "a" }] },
+      {
+        kind: "Function",
+        generics: [
+          { kind: "LifetimeParam", lifetime: { kind: "Lifetime", name: "a" } },
+        ],
+      },
     ]);
   });
 
@@ -3952,8 +4151,8 @@ describe("generics guardrail — declaration-name position", (): void => {
       {
         kind: "Function",
         generics: [
-          { kind: "Lifetime", name: "a" },
-          { kind: "Lifetime", name: "b" },
+          { kind: "LifetimeParam", lifetime: { kind: "Lifetime", name: "a" } },
+          { kind: "LifetimeParam", lifetime: { kind: "Lifetime", name: "b" } },
         ],
       },
     ]);
@@ -3965,21 +4164,27 @@ describe("generics guardrail — declaration-name position", (): void => {
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(0);
     expect(program.value.items).toMatchObject([
-      { kind: "Function", generics: [{ kind: "Lifetime", name: "a" }] },
+      {
+        kind: "Function",
+        generics: [
+          { kind: "LifetimeParam", lifetime: { kind: "Lifetime", name: "a" } },
+        ],
+      },
     ]);
   });
 
-  it("fn foo<'a, T>(x: T) {} recovers and still parses the parameter list", (): void => {
+  it("parses a lifetime param followed by a type param (fn foo<'a, T>(x: T) {})", (): void => {
     const { tokens } = tokenize("fn foo<'a, T>(x: T) {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 2");
-    expect(diagnostics[0].message).toContain("lifetime");
+    expect(diagnostics).toHaveLength(0);
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        generics: [],
+        generics: [
+          { kind: "LifetimeParam", lifetime: { kind: "Lifetime", name: "a" } },
+          { kind: "TypeParam", name: { text: "T" }, bounds: [] },
+        ],
         params: [
           {
             kind: "Param",
@@ -3991,15 +4196,19 @@ describe("generics guardrail — declaration-name position", (): void => {
     ]);
   });
 
-  it("fn foo<T, 'a>() {} falls back to the generic Slice-4 diagnostic (lifetime not listed first)", (): void => {
+  it("parses a type param followed by a lifetime param, the reverse order (fn foo<T, 'a>() {})", (): void => {
     const { tokens } = tokenize("fn foo<T, 'a>() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 4");
-    expect(diagnostics[0].message).not.toContain("lifetime");
+    expect(diagnostics).toHaveLength(0);
     expect(program.value.items).toMatchObject([
-      { kind: "Function", generics: [] },
+      {
+        kind: "Function",
+        generics: [
+          { kind: "TypeParam", name: { text: "T" }, bounds: [] },
+          { kind: "LifetimeParam", lifetime: { kind: "Lifetime", name: "a" } },
+        ],
+      },
     ]);
   });
 
@@ -4012,7 +4221,9 @@ describe("generics guardrail — declaration-name position", (): void => {
       {
         kind: "Struct",
         name: { text: "Cursor" },
-        generics: [{ kind: "Lifetime", name: "a" }],
+        generics: [
+          { kind: "LifetimeParam", lifetime: { kind: "Lifetime", name: "a" } },
+        ],
         body: {
           kind: "NamedFields",
           fields: [
@@ -4038,16 +4249,45 @@ describe("generics guardrail — declaration-name position", (): void => {
     ]);
   });
 
-  it("struct Pair<A, B> { ... } recovers and still parses named fields", (): void => {
+  it("parses an inline trait bound on a struct's own generic parameter (struct Wrapper<T: Clone> { x: T })", (): void => {
+    const { tokens } = tokenize("struct Wrapper<T: Clone> { x: T }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Struct",
+        name: { text: "Wrapper" },
+        generics: [
+          {
+            kind: "TypeParam",
+            name: { text: "T" },
+            bounds: [
+              {
+                kind: "PathTraitBound",
+                path: { segments: ["Clone"] },
+                typeArguments: [],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("parses multiple generic type parameters (struct Pair<A, B> { a: A, b: B })", (): void => {
     const { tokens } = tokenize("struct Pair<A, B> { a: A, b: B }");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics).toHaveLength(0);
     expect(program.value.items).toMatchObject([
       {
         kind: "Struct",
         name: { text: "Pair" },
+        generics: [
+          { kind: "TypeParam", name: { text: "A" }, bounds: [] },
+          { kind: "TypeParam", name: { text: "B" }, bounds: [] },
+        ],
         body: {
           kind: "NamedFields",
           fields: [
@@ -4059,30 +4299,44 @@ describe("generics guardrail — declaration-name position", (): void => {
     ]);
   });
 
-  it("struct Pair<A, B>(A, B); recovers as a tuple struct", (): void => {
+  it("parses as a generic tuple struct (struct Pair<A, B>(A, B);)", (): void => {
     const { tokens } = tokenize("struct Pair<A, B>(A, B);");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics).toHaveLength(0);
     expect(program.value.items).toMatchObject([
-      { kind: "Struct", name: { text: "Pair" }, body: { kind: "TupleFields" } },
+      {
+        kind: "Struct",
+        name: { text: "Pair" },
+        generics: [
+          { kind: "TypeParam", name: { text: "A" }, bounds: [] },
+          { kind: "TypeParam", name: { text: "B" }, bounds: [] },
+        ],
+        body: { kind: "TupleFields" },
+      },
     ]);
   });
 
-  it("struct Pair<A, B>; recovers as a unit struct", (): void => {
+  it("parses as a generic unit struct (struct Pair<A, B>;)", (): void => {
     const { tokens } = tokenize("struct Pair<A, B>;");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics).toHaveLength(0);
     expect(program.value.items).toMatchObject([
-      { kind: "Struct", name: { text: "Pair" }, body: { kind: "Unit" } },
+      {
+        kind: "Struct",
+        name: { text: "Pair" },
+        generics: [
+          { kind: "TypeParam", name: { text: "A" }, bounds: [] },
+          { kind: "TypeParam", name: { text: "B" }, bounds: [] },
+        ],
+        body: { kind: "Unit" },
+      },
     ]);
   });
 
-  it("recovers so a sibling function after a rejected generic fn still parses", (): void => {
-    const { tokens } = tokenize("fn broken<T>() {} fn ok() {}");
+  it("recovers so a sibling function after a malformed generic fn still parses", (): void => {
+    const { tokens } = tokenize("fn broken<T: >() {} fn ok() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
@@ -4092,9 +4346,9 @@ describe("generics guardrail — declaration-name position", (): void => {
     ]);
   });
 
-  it("recovers so a sibling struct after a rejected generic struct still parses", (): void => {
+  it("recovers so a sibling struct after a malformed generic struct still parses", (): void => {
     const { tokens } = tokenize(
-      "struct Broken<T> { x: T } struct Ok { y: i32 }",
+      "struct Broken<T: > { x: T } struct Ok { y: i32 }",
     );
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
@@ -4105,12 +4359,13 @@ describe("generics guardrail — declaration-name position", (): void => {
     ]);
   });
 
-  it("declaration-name generics diagnostic span covers exactly the < token", (): void => {
-    const { tokens } = tokenize("fn foo<T>() {}");
-    const lt = tokens.find((t) => t.kind === "lt");
-    assert(lt !== undefined, "Expected to find a lt token");
+  it("reports the > token as the diagnostic span for an empty generic parameter list (fn foo<>() {})", (): void => {
+    const { tokens } = tokenize("fn foo<>() {}");
+    const gt = tokens.find((t) => t.kind === "gt");
+    assert(gt !== undefined, "Expected to find a gt token");
     const { diagnostics } = parse(tokens);
-    expect(diagnostics[0]?.span).toEqual(some(lt.span));
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].span).toEqual(some(gt.span));
   });
 
   it("fn foo<T() {} bails out at the ( and still recovers without crashing", (): void => {
@@ -4118,7 +4373,7 @@ describe("generics guardrail — declaration-name position", (): void => {
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics[0].message).toContain("generic parameter list");
   });
 
   it("fn foo<T (unterminated to EOF) fails fast without hanging", (): void => {
@@ -4128,43 +4383,39 @@ describe("generics guardrail — declaration-name position", (): void => {
     assert(diagnostics[0] !== undefined, "Expected a diagnostic to come back");
   });
 
-  // biome-ignore lint/security/noSecrets: false positive — generic syntax test string, not a secret
-  it("fn foo<T: Foo<Bar<Baz>>>() {} recovers past triple-nested generics", (): void => {
-    // biome-ignore lint/security/noSecrets: false positive — generic syntax test string, not a secret
+  it("still hits the type-position guardrail past a compound bound argument (fn foo<T: Foo<Bar<Baz>>>() {})", (): void => {
     const { tokens } = tokenize("fn foo<T: Foo<Bar<Baz>>>() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics[0].message).toContain("Slice 4");
     expect(program.value.items).toMatchObject([
       { kind: "Function", generics: [], params: [] },
     ]);
   });
 
-  it("documents imprecise-but-safe recovery when a stray extra > merges into a >> token", (): void => {
-    // "T>>" lexes the trailing two characters as a single `gt_gt` token
-    // (maximal munch), even though only one `>` was semantically needed to
-    // close `<T`. `skipBalancedAngleList` can't split a token in half, so it
-    // consumes the whole `gt_gt` once depth reaches 0 — silently absorbing
-    // the stray `>` rather than reporting it separately. This mirrors the
-    // loop-recovery precedent (only the outermost construct gets a
-    // diagnostic); it's still safe because the next real token (`(`) is
-    // exactly where recovery lands, so nothing desyncs.
+  it("recovers past a stray extra > merged into the closing >> token (fn foo<T>>() {})", (): void => {
     const { tokens } = tokenize("fn foo<T>>() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("extra");
     expect(program.value.items).toMatchObject([
-      { kind: "Function", generics: [], params: [] },
+      {
+        kind: "Function",
+        generics: [{ kind: "TypeParam", name: { text: "T" }, bounds: [] }],
+        params: [],
+      },
     ]);
   });
 
-  it("fn foo<>() {} recovers past an empty generic parameter list", (): void => {
+  it("rejects an empty generic parameter list as a parse error (fn foo<>() {})", (): void => {
     const { tokens } = tokenize("fn foo<>() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 1");
+    expect(diagnostics[0].message).toContain("identifier");
     expect(program.value.items).toMatchObject([
       { kind: "Function", generics: [], params: [] },
     ]);
@@ -4181,7 +4432,12 @@ describe("lifetime + reference type interactions", (): void => {
         items: [
           {
             kind: "Function",
-            generics: [{ kind: "Lifetime", name: "a" }],
+            generics: [
+              {
+                kind: "LifetimeParam",
+                lifetime: { kind: "Lifetime", name: "a" },
+              },
+            ],
             params: [
               {
                 type: {
@@ -4207,7 +4463,12 @@ describe("lifetime + reference type interactions", (): void => {
         items: [
           {
             kind: "Struct",
-            generics: [{ kind: "Lifetime", name: "a" }],
+            generics: [
+              {
+                kind: "LifetimeParam",
+                lifetime: { kind: "Lifetime", name: "a" },
+              },
+            ],
             body: {
               kind: "TupleFields",
               fields: [
@@ -4252,55 +4513,183 @@ describe("lifetime guardrail — nested and reversed-order generics", (): void =
   });
 });
 
-describe("generics guardrail — where clause", (): void => {
-  it("fn f() where T: Draw {} recovers with a Slice-1 diagnostic", (): void => {
+describe("where clauses: function declarations", (): void => {
+  it("parses a where clause with zero diagnostics (fn f() where T: Draw {})", (): void => {
     const { tokens } = tokenize("fn f() where T: Draw {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    expect(diagnostics[0]?.message).toContain("Slice 1");
-    expect(diagnostics[0]?.message).toContain("where");
+    expect(diagnostics).toHaveLength(0);
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "f" }, body: { statements: [] } },
+      {
+        kind: "Function",
+        name: { text: "f" },
+        whereClause: some({
+          kind: "WhereClause",
+          predicates: [
+            {
+              type: { kind: "NamedType", path: { segments: ["T"] } },
+              bounds: [
+                {
+                  kind: "PathTraitBound",
+                  path: { segments: ["Draw"] },
+                  typeArguments: [],
+                },
+              ],
+            },
+          ],
+        }),
+        body: { statements: [] },
+      },
     ]);
   });
 
-  it("fn f<T>() where T: Draw {} emits two diagnostics and still recovers", (): void => {
+  it("parses both the declared generic and the where clause with zero diagnostics (fn f<T>() where T: Draw {})", (): void => {
     const { tokens } = tokenize("fn f<T>() where T: Draw {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    expect(diagnostics).toHaveLength(2);
-    expect(diagnostics[0]?.message).toContain("Slice 1");
-    expect(diagnostics[1]?.message).toContain("Slice 1");
-  });
-
-  it("fn f() where T: Draw, U: Clone {} recovers past multiple bounds", (): void => {
-    const { tokens } = tokenize("fn f() where T: Draw, U: Clone {}");
-    const { program, diagnostics } = parse(tokens);
-    assert(isSome(program), "Expected a program to come back");
-    expect(diagnostics).toHaveLength(1);
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toMatch("Slice 1");
-    expect(diagnostics[0].message).toMatch("where");
+    expect(diagnostics).toHaveLength(0);
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "f" }, body: { statements: [] } },
+      {
+        kind: "Function",
+        generics: [{ kind: "TypeParam", name: { text: "T" }, bounds: [] }],
+        whereClause: some({
+          kind: "WhereClause",
+          predicates: [{ type: { path: { segments: ["T"] } } }],
+        }),
+      },
     ]);
   });
 
-  it("fn f() where T: Foo<Bar> {} recovers even when a bound itself contains <>", (): void => {
+  it("parses multiple where-clause predicates (fn f() where T: Draw, U: Clone {})", (): void => {
+    const { tokens } = tokenize("fn f() where T: Draw, U: Clone {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        whereClause: some({
+          kind: "WhereClause",
+          predicates: [
+            {
+              type: { path: { segments: ["T"] } },
+              bounds: [{ path: { segments: ["Draw"] } }],
+            },
+            {
+              type: { path: { segments: ["U"] } },
+              bounds: [{ path: { segments: ["Clone"] } }],
+            },
+          ],
+        }),
+      },
+    ]);
+  });
+
+  it("parses a single where-predicate with multiple bounds joined by + (fn f() where T: A + B {})", (): void => {
+    const { tokens } = tokenize("fn f() where T: A + B {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        whereClause: some({
+          kind: "WhereClause",
+          predicates: [
+            {
+              type: { path: { segments: ["T"] } },
+              bounds: [
+                { kind: "PathTraitBound", path: { segments: ["A"] } },
+                { kind: "PathTraitBound", path: { segments: ["B"] } },
+              ],
+            },
+          ],
+        }),
+      },
+    ]);
+  });
+
+  it("parses a where clause with a trailing comma before the body (fn f() where T: Draw, {})", (): void => {
+    const { tokens } = tokenize("fn f() where T: Draw, {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        whereClause: some({
+          kind: "WhereClause",
+          predicates: [{ type: { path: { segments: ["T"] } } }],
+        }),
+      },
+    ]);
+  });
+
+  it("parses a lifetime as a where-clause bound (fn f() where T: 'a {})", (): void => {
+    const { tokens } = tokenize("fn f() where T: 'a {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        whereClause: some({
+          kind: "WhereClause",
+          predicates: [
+            {
+              type: { path: { segments: ["T"] } },
+              bounds: [
+                {
+                  kind: "LifetimeTraitBound",
+                  lifetime: { kind: "Lifetime", name: "a" },
+                },
+              ],
+            },
+          ],
+        }),
+      },
+    ]);
+  });
+
+  it("parses a where-clause bound with its own type argument (fn f() where T: Foo<Bar> {})", (): void => {
     const { tokens } = tokenize("fn f() where T: Foo<Bar> {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("where");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        whereClause: some({
+          kind: "WhereClause",
+          predicates: [
+            {
+              type: { path: { segments: ["T"] } },
+              bounds: [
+                {
+                  kind: "PathTraitBound",
+                  path: { segments: ["Foo"] },
+                  typeArguments: [
+                    { kind: "NamedType", path: { segments: ["Bar"] } },
+                  ],
+                },
+              ],
+            },
+          ],
+        }),
+      },
+    ]);
   });
 
-  it("fn f() where 'a: 'b {} recovers past a lifetime bound (skipToFunctionBody isn't confused by lifetime tokens)", (): void => {
+  it("rejects a bare lifetime as a where-predicate subject (fn f() where 'a: 'b {})", (): void => {
     const { tokens } = tokenize("fn f() where 'a: 'b {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("where");
+    expect(diagnostics[0].message).toContain("lifetime");
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", name: { text: "f" }, whereClause: none() },
+    ]);
   });
 
   it("fn f() where T: Draw (missing body) fails fast without hanging", (): void => {
@@ -4310,42 +4699,50 @@ describe("generics guardrail — where clause", (): void => {
     assert(diagnostics[0] !== undefined, "Expected a diagnostic to come back");
   });
 
-  it("recovers so a sibling function after a rejected where clause still parses", (): void => {
-    const { tokens } = tokenize("fn f() where T: Draw {} fn g() {}");
+  it("recovers so a sibling function after a malformed where clause still parses", (): void => {
+    const { tokens } = tokenize("fn f() where T: {} fn g() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(program.value.items).toMatchObject([
       { kind: "Function", name: { text: "f" } },
       { kind: "Function", name: { text: "g" } },
     ]);
   });
 
-  it("does not steal a sibling function's body when the where clause has no body", (): void => {
+  it("does not steal a sibling function's body when the malformed where clause has no body", (): void => {
     // Regression: without a stop condition on the item's own boundary, the
     // where-clause skip used to scan straight past `fn g()` looking for the
     // first `{` and land on g's body, silently discarding `g` and giving `f`
     // an empty body that was never really there. Missing a body is malformed
     // input either way, so failing fast (not hanging, not corrupting the
     // AST into a single bogus item) is the correct outcome.
-    const { tokens } = tokenize("fn f() where T: Draw fn g() {}");
+    const { tokens } = tokenize("fn f() where T: fn g() {}");
     const { program } = parse(tokens);
     assert(isNone(program), "Expected no program to come back");
   });
 });
 
-describe("generics guardrail — where clause on struct", (): void => {
-  it("struct Pair<T> where T: Bound { x: T } recovers with a Slice-1 diagnostic", (): void => {
+describe("where clauses: struct declarations", (): void => {
+  it("parses a where clause with zero diagnostics (struct Pair<T> where T: Bound { x: T })", (): void => {
     const { tokens } = tokenize("struct Pair<T> where T: Bound { x: T }");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    expect(diagnostics).toHaveLength(2);
-    expect(diagnostics[0]?.message).toContain("Slice 1");
-    expect(diagnostics[1]?.message).toContain("where");
+    expect(diagnostics).toHaveLength(0);
     expect(program.value.items).toMatchObject([
       {
         kind: "Struct",
         name: { text: "Pair" },
+        generics: [{ kind: "TypeParam", name: { text: "T" }, bounds: [] }],
+        whereClause: some({
+          kind: "WhereClause",
+          predicates: [
+            {
+              type: { path: { segments: ["T"] } },
+              bounds: [{ path: { segments: ["Bound"] } }],
+            },
+          ],
+        }),
         body: {
           kind: "NamedFields",
           fields: [{ kind: "StructField", name: { text: "x" } }],
@@ -4354,46 +4751,54 @@ describe("generics guardrail — where clause on struct", (): void => {
     ]);
   });
 
-  it("struct Pair<T> where T: Bound; recovers as a unit struct", (): void => {
+  it("parses as a unit struct with a where clause (struct Pair<T> where T: Bound;)", (): void => {
     // The `;` here is the CORRECT unit-struct terminator, not a malformed-
-    // input signal — the struct-specific skip helper must treat `;` as
+    // input signal - the struct-specific skip helper must treat `;` as
     // "found the body," unlike the fn-specific one (fn bodies are never `;`).
     const { tokens } = tokenize("struct Pair<T> where T: Bound;");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    expect(diagnostics[1]?.message).toContain("where");
+    expect(diagnostics).toHaveLength(0);
     expect(program.value.items).toMatchObject([
-      { kind: "Struct", name: { text: "Pair" }, body: { kind: "Unit" } },
+      {
+        kind: "Struct",
+        name: { text: "Pair" },
+        whereClause: some({ kind: "WhereClause" }),
+        body: { kind: "Unit" },
+      },
     ]);
   });
 
-  it("struct Pair<T> where T: Bound(T); recovers as a tuple struct", (): void => {
+  it("parses as a tuple struct with a where clause (struct Pair<T> where T: Bound(T);)", (): void => {
     const { tokens } = tokenize("struct Pair<T> where T: Bound(T);");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    expect(diagnostics[1]?.message).toContain("where");
+    expect(diagnostics).toHaveLength(0);
     expect(program.value.items).toMatchObject([
-      { kind: "Struct", name: { text: "Pair" }, body: { kind: "TupleFields" } },
+      {
+        kind: "Struct",
+        name: { text: "Pair" },
+        whereClause: some({ kind: "WhereClause" }),
+        body: { kind: "TupleFields" },
+      },
     ]);
   });
 
-  it("recovers so a sibling struct after a rejected where clause still parses", (): void => {
+  it("recovers so a sibling struct after a malformed where clause still parses", (): void => {
     const { tokens } = tokenize(
-      "struct Pair<T> where T: Bound { x: T } struct Ok { y: i32 }",
+      "struct Pair<T> where T: { x: T } struct Ok { y: i32 }",
     );
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    expect(diagnostics).toHaveLength(2);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(program.value.items).toMatchObject([
       { kind: "Struct", name: { text: "Pair" } },
       { kind: "Struct", name: { text: "Ok" } },
     ]);
   });
 
-  it("does not steal a sibling struct's body when the where clause has no body", (): void => {
-    const { tokens } = tokenize(
-      "struct Pair<T> where T: Bound struct Ok { y: i32 }",
-    );
+  it("does not steal a sibling struct's body when the malformed where clause has no body", (): void => {
+    const { tokens } = tokenize("struct Pair<T> where T: struct Ok { y: i32 }");
     const { program } = parse(tokens);
     assert(isNone(program), "Expected no program to come back");
   });

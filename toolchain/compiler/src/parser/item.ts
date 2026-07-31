@@ -16,11 +16,14 @@ import {
   type StructBody,
   type StructDecl,
   type StructField,
+  type TraitBound,
   type TupleField,
   type TupleFieldsBody,
   type Type,
   type Variant,
   type Visibility,
+  type WhereClause,
+  type WherePredicate,
 } from "./ast.js";
 import type { Parsed } from "./parse.js";
 import {
@@ -28,7 +31,6 @@ import {
   expectKeyword,
   isGuardrailDiagnostic,
   isItemStartKeyword,
-  isLifetimeGenericsStart,
   kindAt,
   parseIdentifier,
   skipBalancedAngleList,
@@ -38,13 +40,12 @@ import {
   skipUntilKindBalanced,
   spanAt,
   unsupportedAsyncMessage,
-  unsupportedGenericsMessage,
-  unsupportedLifetimeMessage,
   unsupportedPathKeywordMessage,
   type PR,
 } from "./parse-utils.js";
 import { collectOuterAttributes } from "./attribute.js";
 import { parseExpression } from "./expression.js";
+import { parsePathSegments } from "./path.js";
 import { parsePattern } from "./pattern.js";
 import {
   expressionStatement,
@@ -203,54 +204,318 @@ interface DeclarationGenericsResult {
   readonly next: number;
 }
 
+/** A parse position paired with whether it sits on a `gt_gt` token whose
+ * first `>` was already spent closing a nested list (see
+ * `tryCloseAngleList`). Threaded through the GenericParam/TraitBound family
+ * so a triply-nested close (`Foo<Bar<Baz>>>`) splits its `>>>` one `>` at a
+ * time, without splitting a token. Always `false` once the outermost
+ * `parseDeclarationGenerics` call returns. */
+interface GenericsCursor {
+  readonly next: number;
+  readonly pendingCloseHalf: boolean;
+}
+
+interface GenericsCloseResult {
+  readonly closed: boolean;
+  readonly cursor: GenericsCursor;
+}
+
 /**
- * Tentatively parses `<'a, 'b, ...>` - a generics list containing only
- * lifetime parameters (with an optional trailing comma). Returns `none()`
- * for anything else (an empty list, a non-lifetime member anywhere, or an
- * unclosed list), so the caller can fall through to the pre-existing
- * Slice-4/lifetime guardrail unchanged - Slice-4 identifier type params
- * (with or without bounds) aren't parsed here.
+ * Checks whether a generics list closes at `pos`. A `gt` token closes it
+ * outright. A `gt_gt` token (one token under maximal munch - see
+ * lexer/symbol.ts) closes using only its first `>` when `pendingCloseHalf`
+ * is false, without advancing - its second `>` is still owed to whichever
+ * enclosing list closes next at this position. When `pendingCloseHalf` is
+ * true, that owed `>` closes for real, advancing past the token.
  */
-function tryParseLifetimeOnlyGenerics(
+function tryCloseAngleList(
+  tokens: readonly Token[],
+  pos: number,
+  pendingCloseHalf: boolean,
+): GenericsCloseResult {
+  if (pendingCloseHalf) {
+    return { closed: true, cursor: { next: pos + 1, pendingCloseHalf: false } };
+  }
+  const tok = tokens[pos];
+  if (tok?.kind === "gt") {
+    return { closed: true, cursor: { next: pos + 1, pendingCloseHalf: false } };
+  }
+  if (tok?.kind === "gt_gt") {
+    return { closed: true, cursor: { next: pos, pendingCloseHalf: true } };
+  }
+  return { closed: false, cursor: { next: pos, pendingCloseHalf: false } };
+}
+
+interface TypeArgumentListResult {
+  readonly typeArguments: readonly Type[];
+  readonly cursor: GenericsCursor;
+}
+
+/**
+ * Parses a `<...>` type-argument list on a trait bound's own path
+ * (`Foo<Bar>`, `From<U>`), `ltPos` at the opening `<`. An argument is a
+ * full `Type`, not a fresh `GenericParam` declaration - a bound's brackets
+ * name an existing type, never introduce a new one. Shares the
+ * `>>`-splitting cursor with the enclosing declaration-generics list
+ * (`fn foo<T: Foo<Bar>>()` splits its trailing `>>` between the two).
+ */
+function parseTraitBoundTypeArguments(
   tokens: readonly Token[],
   ltPos: number,
-): Option<DeclarationGenericsResult> {
-  const first = tokens[ltPos + 1];
-  if (first?.kind !== "lifetime") {
-    return none();
-  }
-  const generics: GenericParam[] = [
-    { kind: "Lifetime", tokenId: ltPos + 1, name: first.text },
-  ];
-  let cursor = ltPos + 2;
+): PR<TypeArgumentListResult> {
+  let cursor = ltPos + 1;
+  const typeArguments: Type[] = [];
   for (;;) {
-    const token = tokens[cursor];
-    if (token?.kind === "gt") {
-      return some({ generics, next: cursor + 1 });
+    const typeResult = parseType(tokens, cursor);
+    if (isErr(typeResult)) {
+      return typeResult;
     }
-    if (token?.kind !== "comma") {
-      return none();
+    typeArguments.push(typeResult.value.node);
+    cursor = typeResult.value.next;
+    if (tokens[cursor]?.kind === "comma") {
+      cursor += 1;
+      const closeAfterComma = tryCloseAngleList(tokens, cursor, false);
+      if (closeAfterComma.closed) {
+        return ok({ typeArguments, cursor: closeAfterComma.cursor });
+      }
+      continue;
     }
-    cursor += 1;
-    const member = tokens[cursor];
-    if (member?.kind === "gt") {
-      return some({ generics, next: cursor + 1 });
+    break;
+  }
+  const closeResult = tryCloseAngleList(tokens, cursor, false);
+  if (closeResult.closed) {
+    return ok({ typeArguments, cursor: closeResult.cursor });
+  }
+  const badToken = tokens[cursor];
+  return err({
+    severity: "error",
+    message: `expected ',' or '>' in type argument list, found "${badToken?.kind ?? "end of input"}"`,
+    span: badToken !== undefined ? some(badToken.span) : none(),
+    code: none(),
+    relatedSpans: [],
+  });
+}
+
+interface TraitBoundResult {
+  readonly bound: TraitBound;
+  readonly cursor: GenericsCursor;
+}
+
+/**
+ * Parses one trait bound: `Path Generics?` (`Draw`, `From<U>`) or a bare
+ * lifetime (`'a`, e.g. `T: 'a`).
+ *
+ * Grammar:
+ *
+ * ```text
+ * TraitBound ::= Path Generics? | Lifetime
+ * ```
+ */
+function parseTraitBound(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<TraitBoundResult> {
+  const token = tokens[pos];
+  if (token?.kind === "lifetime") {
+    return ok({
+      bound: {
+        kind: "LifetimeTraitBound",
+        tokenId: pos,
+        lifetime: { kind: "Lifetime", tokenId: pos, name: token.text },
+      },
+      cursor: { next: pos + 1, pendingCloseHalf: false },
+    });
+  }
+  const pathResult = parsePathSegments(tokens, pos);
+  if (isErr(pathResult)) {
+    return pathResult;
+  }
+  let cursor: GenericsCursor = {
+    next: pathResult.value.next,
+    pendingCloseHalf: false,
+  };
+  let typeArguments: readonly Type[] = [];
+  if (tokens[cursor.next]?.kind === "lt") {
+    const argsResult = parseTraitBoundTypeArguments(tokens, cursor.next);
+    if (isErr(argsResult)) {
+      return argsResult;
     }
-    if (member?.kind !== "lifetime") {
-      return none();
+    typeArguments = argsResult.value.typeArguments;
+    cursor = argsResult.value.cursor;
+  }
+  return ok({
+    bound: {
+      kind: "PathTraitBound",
+      tokenId: pos,
+      path: pathResult.value.node,
+      typeArguments,
+    },
+    cursor,
+  });
+}
+
+interface TraitBoundsResult {
+  readonly bounds: readonly TraitBound[];
+  readonly cursor: GenericsCursor;
+}
+
+/**
+ * Parses a `+`-separated trait bound list (`Draw`, `A + B`).
+ *
+ * Grammar:
+ *
+ * ```text
+ * TraitBounds ::= TraitBound ("+" TraitBound)*
+ * ```
+ */
+function parseTraitBounds(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<TraitBoundsResult> {
+  const first = parseTraitBound(tokens, diagnostics, pos);
+  if (isErr(first)) {
+    return first;
+  }
+  const bounds: TraitBound[] = [first.value.bound];
+  let cursor = first.value.cursor;
+  while (tokens[cursor.next]?.kind === "plus") {
+    const next = parseTraitBound(tokens, diagnostics, cursor.next + 1);
+    if (isErr(next)) {
+      return next;
     }
-    generics.push({ kind: "Lifetime", tokenId: cursor, name: member.text });
-    cursor += 1;
+    bounds.push(next.value.bound);
+    cursor = next.value.cursor;
+  }
+  return ok({ bounds, cursor });
+}
+
+interface GenericParamResult {
+  readonly param: GenericParam;
+  readonly cursor: GenericsCursor;
+}
+
+/**
+ * Parses one generic parameter: a lifetime, or an identifier with an
+ * optional inline bound list.
+ *
+ * Grammar:
+ *
+ * ```text
+ * GenericParam ::= Lifetime | Identifier (":" TraitBounds)?
+ * ```
+ */
+function parseGenericParam(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<GenericParamResult> {
+  const token = tokens[pos];
+  if (token?.kind === "lifetime") {
+    return ok({
+      param: {
+        kind: "LifetimeParam",
+        tokenId: pos,
+        lifetime: { kind: "Lifetime", tokenId: pos, name: token.text },
+      },
+      cursor: { next: pos + 1, pendingCloseHalf: false },
+    });
+  }
+  const nameResult = parseIdentifier(tokens, pos);
+  if (isErr(nameResult)) {
+    return nameResult;
+  }
+  let cursor: GenericsCursor = {
+    next: nameResult.value.next,
+    pendingCloseHalf: false,
+  };
+  let bounds: readonly TraitBound[] = [];
+  if (tokens[cursor.next]?.kind === "colon") {
+    const boundsResult = parseTraitBounds(tokens, diagnostics, cursor.next + 1);
+    if (isErr(boundsResult)) {
+      return boundsResult;
+    }
+    bounds = boundsResult.value.bounds;
+    cursor = boundsResult.value.cursor;
+  }
+  return ok({
+    param: {
+      kind: "TypeParam",
+      tokenId: pos,
+      name: nameResult.value.node,
+      bounds,
+    },
+    cursor,
+  });
+}
+
+interface GenericParamListResult {
+  readonly generics: readonly GenericParam[];
+  readonly cursor: GenericsCursor;
+}
+
+/**
+ * Parses a full `<...>` generic parameter list, `ltPos` pointing at the
+ * opening `<`. At least one parameter is required (no `?` on the first
+ * `GenericParam`) - an empty list is a genuine parse error.
+ *
+ * Grammar:
+ *
+ * ```text
+ * Generics ::= "<" GenericParam ("," GenericParam)* ","? ">"
+ * ```
+ */
+function parseGenericParamList(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  ltPos: number,
+): PR<GenericParamListResult> {
+  let cursor = ltPos + 1;
+  const generics: GenericParam[] = [];
+  for (;;) {
+    const paramResult = parseGenericParam(tokens, diagnostics, cursor);
+    if (isErr(paramResult)) {
+      return paramResult;
+    }
+    generics.push(paramResult.value.param);
+    const afterParam = paramResult.value.cursor;
+
+    if (
+      !afterParam.pendingCloseHalf &&
+      tokens[afterParam.next]?.kind === "comma"
+    ) {
+      cursor = afterParam.next + 1;
+      const closeAfterComma = tryCloseAngleList(tokens, cursor, false);
+      if (closeAfterComma.closed) {
+        return ok({ generics, cursor: closeAfterComma.cursor });
+      }
+      continue;
+    }
+
+    const closeResult = tryCloseAngleList(
+      tokens,
+      afterParam.next,
+      afterParam.pendingCloseHalf,
+    );
+    if (closeResult.closed) {
+      return ok({ generics, cursor: closeResult.cursor });
+    }
+    const badToken = tokens[afterParam.next];
+    return err({
+      severity: "error",
+      message: `expected ',' or '>' in generic parameter list, found "${badToken?.kind ?? "end of input"}"`,
+      span: badToken !== undefined ? some(badToken.span) : none(),
+      code: none(),
+      relatedSpans: [],
+    });
   }
 }
 
 /**
- * Parses the generic parameter list (`<...>`) starting at `pos`, if any.
- * A lifetime-only list (`<'a>`, `<'a, 'b>`, with an optional trailing comma)
- * is parsed for real. Anything else - no `<`, an empty list, a Slice-4
- * identifier type parameter anywhere in the list, or an unclosed list -
- * pushes the existing Slice-1/Slice-4/lifetime guardrail diagnostic and
- * skips the list, exactly as before.
+ * Parses the generic parameter list (`<...>`) at `pos`, if any. A malformed
+ * list pushes the parse-error diagnostic and skips via
+ * `skipBalancedAngleList`, recovering with an empty generics array.
  */
 function parseDeclarationGenerics(
   tokens: readonly Token[],
@@ -261,47 +526,165 @@ function parseDeclarationGenerics(
   if (token?.kind !== "lt") {
     return { generics: [], next: pos };
   }
-  const lifetimeOnly = tryParseLifetimeOnlyGenerics(tokens, pos);
-  if (isSome(lifetimeOnly)) {
-    return lifetimeOnly.value;
+  const listResult = parseGenericParamList(tokens, diagnostics, pos);
+  if (isErr(listResult)) {
+    diagnostics.push(listResult.error);
+    return { generics: [], next: skipBalancedAngleList(tokens, pos).next };
   }
-  const message = isLifetimeGenericsStart(tokens, pos)
-    ? unsupportedLifetimeMessage("lifetime parameters")
-    : unsupportedGenericsMessage("generic parameter lists");
-  diagnostics.push({
-    severity: "error",
-    message,
-    span: some(token.span),
-    code: none(),
-    relatedSpans: [],
-  });
-  return { generics: [], next: skipBalancedAngleList(tokens, pos).next };
+  // At the outermost level there's no enclosing list to hand a half-spent
+  // `gt_gt` off to - a stray extra `>` (`fn foo<T>>()`) is malformed input,
+  // diagnosed and recovered past, not silently accepted.
+  if (listResult.value.cursor.pendingCloseHalf) {
+    const strayToken = tokens[listResult.value.cursor.next];
+    diagnostics.push({
+      severity: "error",
+      message: "unexpected extra '>' after generic parameter list",
+      span: strayToken !== undefined ? some(strayToken.span) : none(),
+      code: none(),
+      relatedSpans: [],
+    });
+    return {
+      generics: listResult.value.generics,
+      next: listResult.value.cursor.next + 1,
+    };
+  }
+  return {
+    generics: listResult.value.generics,
+    next: listResult.value.cursor.next,
+  };
+}
+
+interface WherePredicateResult {
+  readonly predicate: WherePredicate;
+  readonly next: number;
 }
 
 /**
- * If a `where` clause starts at `pos`, pushes a Slice-1 diagnostic and skips
- * it via `skip` (which knows the declaration kind's own body-start shape -
- * a function's body is always `{`, a struct's can be `{`/`(`/`;`). Otherwise
- * returns `pos` unchanged.
+ * Parses one where-clause predicate.
+ *
+ * Grammar:
+ *
+ * ```text
+ * WherePredicate ::= Type ":" TraitBounds
+ * ```
+ */
+function parseWherePredicate(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<WherePredicateResult> {
+  const typeResult = parseType(tokens, pos);
+  if (isErr(typeResult)) {
+    return typeResult;
+  }
+  const colonResult = expect(tokens, typeResult.value.next, "colon");
+  if (isErr(colonResult)) {
+    return colonResult;
+  }
+  const boundsResult = parseTraitBounds(tokens, diagnostics, colonResult.value);
+  if (isErr(boundsResult)) {
+    return boundsResult;
+  }
+  // A where-clause bound has no enclosing `<...>`, so an extra `>` here
+  // (`where T: Foo<Bar>>`) has nothing to hand a half-spent `gt_gt` off to -
+  // it fails downstream at the body-start expectation instead.
+  return ok({
+    predicate: {
+      kind: "WherePredicate",
+      tokenId: pos,
+      type: typeResult.value.node,
+      bounds: boundsResult.value.bounds,
+    },
+    next: boundsResult.value.cursor.next,
+  });
+}
+
+interface WhereClauseParseResult {
+  readonly clause: WhereClause;
+  readonly next: number;
+}
+
+/**
+ * Parses the predicate list of a `where` clause, `pos` just past the
+ * `where` keyword. Terminates at the first non-comma token, or after a
+ * trailing comma before the body start.
+ *
+ * Grammar:
+ *
+ * ```text
+ * WhereClause ::= "where" WherePredicate ("," WherePredicate)* ","?
+ * ```
+ */
+function parseWhereClauseBody(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<WhereClauseParseResult> {
+  const first = parseWherePredicate(tokens, diagnostics, pos);
+  if (isErr(first)) {
+    return first;
+  }
+  const predicates: WherePredicate[] = [first.value.predicate];
+  let cursor = first.value.next;
+  for (;;) {
+    if (tokens[cursor]?.kind !== "comma") {
+      break;
+    }
+    const afterComma = cursor + 1;
+    const next = tokens[afterComma];
+    if (
+      next === undefined ||
+      next.kind === "eof" ||
+      next.kind === "lbrace" ||
+      next.kind === "lparen" ||
+      next.kind === "semi"
+    ) {
+      cursor = afterComma;
+      break;
+    }
+    const predicateResult = parseWherePredicate(
+      tokens,
+      diagnostics,
+      afterComma,
+    );
+    if (isErr(predicateResult)) {
+      return predicateResult;
+    }
+    predicates.push(predicateResult.value.predicate);
+    cursor = predicateResult.value.next;
+  }
+  return ok({ clause: { kind: "WhereClause", predicates }, next: cursor });
+}
+
+interface WhereClauseResult {
+  readonly whereClause: Option<WhereClause>;
+  readonly next: number;
+}
+
+/**
+ * If a `where` clause starts at `pos`, attempts a real parse: `some(...)`
+ * and the position past the clause on success. On a genuine parse failure,
+ * pushes the diagnostic and falls back to `skip` (which knows the
+ * declaration's own body-start shape - `{` for a function, `{`/`(`/`;` for
+ * a struct), recovering with `none()`. Returns `none()`/`pos` unchanged
+ * when no `where` keyword is present.
  */
 function checkWhereClause(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
   pos: number,
   skip: (tokens: readonly Token[], pos: number) => number,
-): number {
+): WhereClauseResult {
   const whereToken = tokens[pos];
   if (whereToken?.kind !== "keyword" || whereToken.text !== "where") {
-    return pos;
+    return { whereClause: none(), next: pos };
   }
-  diagnostics.push({
-    severity: "error",
-    message: unsupportedGenericsMessage("`where` clauses"),
-    span: some(whereToken.span),
-    code: none(),
-    relatedSpans: [],
-  });
-  return skip(tokens, pos);
+  const result = parseWhereClauseBody(tokens, diagnostics, pos + 1);
+  if (isErr(result)) {
+    diagnostics.push(result.error);
+    return { whereClause: none(), next: skip(tokens, pos) };
+  }
+  return { whereClause: some(result.value.clause), next: result.value.next };
 }
 
 /**
@@ -350,8 +733,13 @@ function parseFunction(
     returnType = some(typeResult.value.node);
     cursor = typeResult.value.next;
   }
-  cursor = checkWhereClause(tokens, diagnostics, cursor, skipToFunctionBody);
-  const bodyResult = parseBlock(tokens, diagnostics, cursor);
+  const whereResult = checkWhereClause(
+    tokens,
+    diagnostics,
+    cursor,
+    skipToFunctionBody,
+  );
+  const bodyResult = parseBlock(tokens, diagnostics, whereResult.next);
   if (isErr(bodyResult)) {
     return bodyResult;
   }
@@ -364,7 +752,7 @@ function parseFunction(
     generics: genericsResult.generics,
     params: paramsResult.value.node,
     returnType,
-    whereClause: none(),
+    whereClause: whereResult.whereClause,
     attributes,
     body: body.node,
   };
@@ -622,12 +1010,13 @@ function parseStruct(
     diagnostics,
     nameResult.value.next,
   );
-  let cursor = checkWhereClause(
+  const whereResult = checkWhereClause(
     tokens,
     diagnostics,
     genericsResult.next,
     skipToStructBody,
   );
+  let cursor = whereResult.next;
 
   let body: StructBody;
   const bodyToken = tokens[cursor];
@@ -670,6 +1059,7 @@ function parseStruct(
     visibility,
     name: nameResult.value.node,
     generics: genericsResult.generics,
+    whereClause: whereResult.whereClause,
     body,
     attributes,
   };
@@ -830,14 +1220,18 @@ function parseEnum(
     diagnostics,
     nameResult.value.next,
   );
-  const cursor = checkWhereClause(
+  const whereResult = checkWhereClause(
     tokens,
     diagnostics,
     genericsResult.next,
     skipToStructBody,
   );
 
-  const variantsResult = parseVariantList(tokens, diagnostics, cursor);
+  const variantsResult = parseVariantList(
+    tokens,
+    diagnostics,
+    whereResult.next,
+  );
   if (isErr(variantsResult)) {
     return variantsResult;
   }
@@ -848,6 +1242,7 @@ function parseEnum(
     visibility,
     name: nameResult.value.node,
     generics: genericsResult.generics,
+    whereClause: whereResult.whereClause,
     variants: variantsResult.value.node,
     attributes,
   };

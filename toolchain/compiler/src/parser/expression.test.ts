@@ -3449,79 +3449,152 @@ describe("method call expressions", (): void => {
   });
 });
 
-describe("turbofish guardrail", (): void => {
-  it("first::<i32>(xs) produces a Slice-1 diagnostic, not an ambiguous parse", (): void => {
-    const { program, diagnostics } = parse(
-      tokenize("first::<i32>(xs);").tokens,
-    );
+describe("turbofish", (): void => {
+  it("parses the turbofish type argument onto the callee's PathExpression (first::<i32>(xs))", (): void => {
+    const ast = parseProgram("first::<i32>(xs);");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "CallExpression",
+            callee: {
+              kind: "PathExpression",
+              path: { segments: ["first"] },
+              typeArguments: [
+                { kind: "NamedType", path: { segments: ["i32"] } },
+              ],
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses the turbofish type argument on a method call (x.foo::<T>())", (): void => {
+    const ast = parseProgram("x.foo::<T>();");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "MethodCallExpression",
+            method: { text: "foo" },
+            typeArguments: [{ kind: "NamedType", path: { segments: ["T"] } }],
+            arguments: [],
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses an empty turbofish type-argument list (first::<>())", (): void => {
+    const ast = parseProgram("first::<>();");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          expression: {
+            callee: { kind: "PathExpression", typeArguments: [] },
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses turbofish after a multi-segment path (a::b::<T>())", (): void => {
+    const ast = parseProgram("a::b::<T>();");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          expression: {
+            callee: {
+              kind: "PathExpression",
+              path: { segments: ["a", "b"] },
+              typeArguments: [{ kind: "NamedType", path: { segments: ["T"] } }],
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses multiple turbofish type arguments (first::<T, U>(x))", (): void => {
+    const ast = parseProgram("first::<T, U>(x);");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          expression: {
+            callee: {
+              typeArguments: [
+                { kind: "NamedType", path: { segments: ["T"] } },
+                { kind: "NamedType", path: { segments: ["U"] } },
+              ],
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses a turbofish type-argument list with a trailing comma (first::<T,>(x))", (): void => {
+    const ast = parseProgram("first::<T,>(x);");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          expression: {
+            callee: {
+              typeArguments: [{ kind: "NamedType", path: { segments: ["T"] } }],
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses turbofish on a bare path with no call following (first::<i32>;)", (): void => {
+    const ast = parseProgram("first::<i32>;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "PathExpression",
+            path: { segments: ["first"] },
+            typeArguments: [{ kind: "NamedType", path: { segments: ["i32"] } }],
+          },
+        },
+      ],
+    });
+  });
+
+  it("fails fast without hanging on an unterminated turbofish (first::<T)", (): void => {
+    const { program, diagnostics } = parse(tokenize("first::<T").tokens);
     expect(program).toEqual(none());
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].severity).toBe("error");
-    expect(diagnostics[0].message).toContain("Slice 1");
-    expect(diagnostics[0].message).toContain("turbofish");
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
   });
 
-  it("x.foo::<T>() produces a Slice-1 diagnostic on a method call", (): void => {
-    const { program, diagnostics } = parse(tokenize("x.foo::<T>();").tokens);
-    expect(program).toEqual(none());
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 1");
-    expect(diagnostics[0].message).toContain("turbofish");
-  });
-
-  it("first::<>() — empty turbofish is still rejected", (): void => {
-    const { program, diagnostics } = parse(tokenize("first::<>();").tokens);
-    expect(program).toEqual(none());
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 1");
-    expect(diagnostics[0].message).toContain("turbofish");
-  });
-
-  it("a::b::<T>() — turbofish after a multi-segment path is rejected", (): void => {
-    const { program, diagnostics } = parse(tokenize("a::b::<T>();").tokens);
-    expect(program).toEqual(none());
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 1");
-    expect(diagnostics[0].message).toContain("turbofish");
-  });
-
-  it("turbofish diagnostic span covers the :: token", (): void => {
-    const { tokens } = tokenize("first::<i32>(xs);");
-    const pathSep = tokens.find((t) => t.kind === "path_sep");
-    assert(pathSep !== undefined, "Expected to find a path_sep token");
-    const { diagnostics } = parse(tokens);
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].span).toEqual(some(pathSep.span));
-  });
-
-  it("first::<'a>() produces a lifetime-specific diagnostic", (): void => {
-    const { tokens } = tokenize("first::<'a>();");
-    const pathSep = tokens.find((t) => t.kind === "path_sep");
-    assert(pathSep !== undefined, "Expected to find a path_sep token");
-    const { program, diagnostics } = parse(tokens);
+  it("rejects a bare lifetime as a turbofish argument (first::<'a>())", (): void => {
+    const { program, diagnostics } = parse(tokenize("first::<'a>();").tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
     expect(diagnostics[0].message).toContain("Slice 2");
     expect(diagnostics[0].message).toContain("lifetime");
-    expect(diagnostics[0].span).toEqual(some(pathSep.span));
   });
 
-  it("first::<T>() still produces the generic-Slice-4 diagnostic (regression)", (): void => {
-    const { program, diagnostics } = parse(tokenize("first::<T>();").tokens);
-    expect(program).toEqual(none());
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 4");
-    expect(diagnostics[0].message).not.toContain("lifetime");
-  });
-
-  it("first::<T, 'a>() falls back to the generic-Slice-4 diagnostic (lifetime not listed first)", (): void => {
+  it("rejects a lifetime as a later turbofish argument (first::<T, 'a>())", (): void => {
     const { program, diagnostics } = parse(
       tokenize("first::<T, 'a>();").tokens,
     );
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 4");
-    expect(diagnostics[0].message).not.toContain("lifetime");
+    expect(diagnostics[0].message).toContain("lifetime");
+  });
+
+  it("rejects a.field::<T> with no call following as a parse error rather than silently discarding the turbofish", (): void => {
+    const { program, diagnostics } = parse(tokenize("a.field::<T>;").tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("generic arguments");
   });
 });
 

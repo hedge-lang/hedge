@@ -278,7 +278,9 @@ describe("lifetime elision - no rule outside a function signature", (): void => 
     expect(program.value.items).toMatchObject([
       {
         kind: "Struct",
-        generics: [{ kind: "Lifetime", name: "a" }],
+        generics: [
+          { kind: "LifetimeParam", lifetime: { kind: "Lifetime", name: "a" } },
+        ],
         body: {
           fields: [
             {
