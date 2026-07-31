@@ -280,7 +280,6 @@ interface TraitBoundsResult {
  */
 function parseTraitBounds(
   tokens: readonly Token[],
-  diagnostics: Diagnostic[],
   pos: number,
 ): PR<TraitBoundsResult> {
   const first = parseTraitBound(tokens, pos);
@@ -341,7 +340,7 @@ function parseGenericParam(
   };
   let bounds: readonly TraitBound[] = [];
   if (tokens[cursor.next]?.kind === "colon") {
-    const boundsResult = parseTraitBounds(tokens, diagnostics, cursor.next + 1);
+    const boundsResult = parseTraitBounds(tokens, cursor.next + 1);
     if (isErr(boundsResult)) {
       return boundsResult;
     }
@@ -490,7 +489,7 @@ function parseWherePredicate(
   if (isErr(colonResult)) {
     return colonResult;
   }
-  const boundsResult = parseTraitBounds(tokens, diagnostics, colonResult.value);
+  const boundsResult = parseTraitBounds(tokens, colonResult.value);
   if (isErr(boundsResult)) {
     return boundsResult;
   }
