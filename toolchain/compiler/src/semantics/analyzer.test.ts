@@ -180,6 +180,120 @@ describe("semantic analysis", (): void => {
     });
   });
 
+  describe("enum variant construction (semantically analyzed)", () => {
+    it("accepts a unit variant assigned to a let bound to its own enum type", () => {
+      const result = diagnose(`
+        enum Message { Quit }
+        fn main() { let m: Message = Message::Quit; }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a unit variant construction to its enum's real type, not an ambiguous placeholder", () => {
+      const result = diagnose(`
+        enum Message { Quit }
+        fn main() { let m: i32 = Message::Quit; }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "type mismatch: explicit annotation does not match initializer type",
+      );
+    });
+
+    it("rejects passing arguments to a unit variant", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move(i32, i32) }
+        fn main() { let m = Message::Quit(1); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "variant `Quit` takes no arguments",
+      );
+    });
+
+    it("accepts a tuple variant called with the correct arity and types", () => {
+      const result = diagnose(`
+        enum Message { Move(i32, i32) }
+        fn main() { let m: Message = Message::Move(1, 2); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a tuple variant called with too few arguments", () => {
+      const result = diagnose(`
+        enum Message { Move(i32, i32) }
+        fn main() { let m = Message::Move(1); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "variant `Move` takes 2 argument(s)",
+      );
+    });
+
+    it("rejects a tuple variant called with a mismatched argument type", () => {
+      const result = diagnose(`
+        enum Message { Move(i32, i32) }
+        fn main() { let m = Message::Move(1, true); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "argument 1 to variant `Move` type mismatch: expected `i32`, found `bool`",
+      );
+    });
+
+    it("rejects calling a struct variant with parens instead of braces", () => {
+      const result = diagnose(`
+        enum Message { Write { text: str } }
+        fn main() { let m = Message::Write(1); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "variant `Write` has named fields; use `Write { ... }`",
+      );
+    });
+
+    it("accepts a struct variant constructed with braces and the correct fields", () => {
+      const result = diagnose(`
+        enum Message { Write { text: str } }
+        fn main() { let m: Message = Message::Write { text: "hi" }; }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a struct variant construction to its enum's real type, not an ambiguous placeholder", () => {
+      const result = diagnose(`
+        enum Message { Write { text: str } }
+        fn main() { let m: i32 = Message::Write { text: "hi" }; }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "type mismatch: explicit annotation does not match initializer type",
+      );
+    });
+
+    it("rejects a struct variant construction missing a required field", () => {
+      const result = diagnose(`
+        enum Message { Write { text: str, urgent: bool } }
+        fn main() { let m = Message::Write { text: "hi" }; }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "missing required field `urgent` in struct literal of type `Write`",
+      );
+    });
+
+    it("rejects a struct variant construction with an unknown field", () => {
+      const result = diagnose(`
+        enum Message { Write { text: str } }
+        fn main() { let m = Message::Write { text: "hi", bogus: 1 }; }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "unknown field `bogus` for struct `Write`",
+      );
+    });
+  });
+
   describe("match expressions (semantically analyzed)", () => {
     it("analyzes a match with a single plain-binding arm cleanly", () => {
       const result = diagnose("fn main() { match 1 { x => x }; }");

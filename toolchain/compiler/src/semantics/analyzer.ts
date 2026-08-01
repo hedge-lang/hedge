@@ -4053,6 +4053,73 @@ function analyzeCompoundAssignmentExpression(
   };
 }
 
+/**
+ * `Message::Write { text: "hi" }`-shaped construction struct-literals.
+ * `none()` whenever `structExpression.path` isn't a two-segment path naming
+ * a known enum + variant - the caller falls back to ordinary
+ * `StructExpression` analysis (a real plain-struct multi-segment path is
+ * out of scope regardless; see the pre-existing `UnitType` fallback just
+ * below this function's only call site). Reuses `analyzeStructNamedFields`
+ * directly, since `Semantics.Variant.body`'s `NamedFieldsBody` is the exact
+ * same node shape a plain struct's own body already is - the field
+ * validation (duplicate/unknown/missing name, per-field type mismatch) has
+ * no enum-specific difference, only the diagnostic wording says "struct"
+ * generically rather than "variant" (an accepted minor imprecision, not a
+ * functional gap).
+ */
+function analyzeEnumVariantStructConstruction(
+  ctx: AnalysisContext,
+  structExpression: Parser.StructExpression,
+  fields: readonly Semantics.FieldInit[],
+  hasBase: boolean,
+): Option<{
+  readonly type: Semantics.Type;
+  readonly fields: Semantics.FieldInit[];
+}> {
+  const { segments } = structExpression.path;
+  const [enumName, variantName] = segments;
+  if (enumName === undefined || variantName === undefined) return none();
+  const enumDecl = ctx.enumScope.get(enumName);
+  if (enumDecl === undefined) return none();
+  const variant = enumDecl.variants.find((v) => v.name.text === variantName);
+  // Unknown variant name is already diagnosed by whichever path-resolution
+  // route reaches `analyzePath` for this same path (none does today for a
+  // struct-literal path, since `parseStructExpression` never routes through
+  // `analyzePath` - so an unknown variant here falls through to the
+  // pre-existing generic `UnitType` placeholder with no diagnostic, a known
+  // gap symmetrical with plain structs' own pre-existing "cannot find
+  // struct" check, which this mirrors below instead of silently deferring).
+  if (variant === undefined) {
+    emitError(
+      ctx,
+      `no variant \`${variantName}\` on enum \`${enumName}\``,
+      structExpression.tokenId,
+      none(),
+    );
+    return some({ type: enumDecl.type, fields: [...fields] });
+  }
+  if (!isSome(variant.body) || variant.body.value.kind !== "NamedFields") {
+    emitError(
+      ctx,
+      isSome(variant.body)
+        ? `variant \`${variantName}\` is a tuple variant; use \`${variantName}(...)\``
+        : `variant \`${variantName}\` is a unit variant; use \`${variantName}\` with no braces`,
+      structExpression.tokenId,
+      none(),
+    );
+    return some({ type: enumDecl.type, fields: [...fields] });
+  }
+  const checkedFields = analyzeStructNamedFields(
+    ctx,
+    variantName,
+    fields,
+    hasBase,
+    structExpression.tokenId,
+    variant.body.value,
+  );
+  return some({ type: enumDecl.type, fields: checkedFields });
+}
+
 function analyzeStructExpression(
   ctx: AnalysisContext,
   structExpression: Parser.StructExpression,
@@ -4074,6 +4141,23 @@ function analyzeStructExpression(
   const analyzedBase = mapSome(structExpression.base, (base) =>
     analyzeExpression(ctx, base),
   );
+
+  if (structExpression.path.segments.length === 2) {
+    const construction = analyzeEnumVariantStructConstruction(
+      ctx,
+      structExpression,
+      analyzedFields,
+      isSome(analyzedBase),
+    );
+    if (isSome(construction)) {
+      return {
+        ...structExpression,
+        fields: construction.value.fields,
+        base: analyzedBase,
+        type: construction.value.type,
+      };
+    }
+  }
 
   if (structExpression.path.segments.length !== 1) {
     return {
@@ -4293,6 +4377,19 @@ function analyzeCall(
 ): Semantics.CallExpression {
   const callee = analyzeExpression(ctx, call.callee);
   const args = call.arguments.map((arg) => analyzeExpression(ctx, arg));
+  const enumConstruction = analyzeEnumVariantCallConstruction(
+    ctx,
+    call,
+    args,
+  );
+  if (isSome(enumConstruction)) {
+    return {
+      ...call,
+      callee,
+      arguments: enumConstruction.value.args,
+      type: enumConstruction.value.type,
+    };
+  }
   const calleeType = getType(callee);
   const returnType: Semantics.Type =
     calleeType.kind === "FunctionType"
@@ -4301,11 +4398,148 @@ function analyzeCall(
   return { ...call, callee, arguments: args, type: returnType };
 }
 
+/**
+ * `Message::Move(1, 2)`-shaped construction calls. `none()` whenever
+ * `call.callee` isn't a two-segment path naming a known enum + variant -
+ * the caller falls back to ordinary call analysis (a real function call, or
+ * the pre-existing unresolved-callee placeholder), same as
+ * `analyzeEnumVariantPathConstruction`'s own fallback shape. Unlike that
+ * function, this one resolves regardless of the variant's body shape
+ * (unit/tuple/struct) - only a call site has enough context to validate
+ * arity, so a unit variant called with args, or a struct variant called
+ * with parens instead of braces, are both diagnosed here rather than
+ * silently deferred.
+ */
+function analyzeEnumVariantCallConstruction(
+  ctx: AnalysisContext,
+  call: Parser.CallExpression,
+  args: readonly Semantics.Expression[],
+): Option<{ readonly type: Semantics.Type; readonly args: Semantics.Expression[] }> {
+  if (call.callee.kind !== "PathExpression") return none();
+  const { segments } = call.callee.path;
+  if (segments.length !== 2) return none();
+  const [enumName, variantName] = segments;
+  if (enumName === undefined || variantName === undefined) return none();
+  const enumDecl = ctx.enumScope.get(enumName);
+  if (enumDecl === undefined) return none();
+  const variant = enumDecl.variants.find((v) => v.name.text === variantName);
+  // Unknown variant name is already diagnosed by `analyzePath`'s own
+  // analysis of `call.callee` above (in `analyzeCall`) - not re-diagnosed
+  // here, to avoid a duplicate "no variant" cascade.
+  if (variant === undefined) return none();
+
+  if (!isSome(variant.body)) {
+    if (args.length > 0) {
+      emitError(
+        ctx,
+        `variant \`${variantName}\` takes no arguments, but ${args.length} ${args.length === 1 ? "was" : "were"} supplied`,
+        call.tokenId,
+        none(),
+      );
+    }
+    return some({ type: enumDecl.type, args: [...args] });
+  }
+  if (variant.body.value.kind !== "TupleFields") {
+    emitError(
+      ctx,
+      `variant \`${variantName}\` has named fields; use \`${variantName} { ... }\``,
+      call.tokenId,
+      none(),
+    );
+    return some({ type: enumDecl.type, args: [...args] });
+  }
+  const fields = variant.body.value.fields;
+  if (fields.length !== args.length) {
+    emitError(
+      ctx,
+      `variant \`${variantName}\` takes ${fields.length} argument(s), but ${args.length} ${args.length === 1 ? "was" : "were"} supplied`,
+      call.tokenId,
+      none(),
+    );
+    return some({ type: enumDecl.type, args: [...args] });
+  }
+  const checkedArgs = args.map((arg, i) => {
+    const field = fields[i];
+    if (field === undefined) return arg;
+    const { expr, mismatch } = reconcileExpressionType(
+      ctx,
+      arg,
+      field.type,
+      arg.tokenId,
+    );
+    if (expr.kind === "IntLiteral") {
+      checkPosLiteralRange(ctx, expr, field.type);
+    }
+    if (mismatch) {
+      emitError(
+        ctx,
+        `argument ${i} to variant \`${variantName}\` type mismatch: expected \`${describeType(field.type)}\`, found \`${describeType(getType(expr))}\``,
+        arg.tokenId,
+        none(),
+      );
+    }
+    return expr;
+  });
+  return some({ type: enumDecl.type, args: checkedArgs });
+}
+
+/**
+ * `Enum::Variant`-shaped construction paths - the construction-side
+ * counterpart to `resolveEnumDecl`/pattern-position variant resolution
+ * above, but name-driven off the path's own two segments rather than
+ * type-driven off a scrutinee. `none()` when `segments[0]` doesn't name a
+ * known enum, so the caller falls through to the pre-existing generic
+ * multi-segment-path placeholder unchanged (a real "associated
+ * item"/module-path construct, once one of those exists, would also land
+ * here for now).
+ *
+ * Only resolves a *bare* reference to a unit variant (`Message::Quit`) -
+ * `analyzeCall`/`analyzeStructExpression` handle `Message::Move(1, 2)`/
+ * `Message::Write { .. }` themselves, since only they know whether the path
+ * is actually being invoked as a call or struct literal. A bare reference
+ * to a tuple/struct variant with no call/struct-literal following it
+ * (`let x = Message::Move;`, a Rust-style implicit constructor-function
+ * value) still falls through to `none()` here - unsupported, same
+ * unresolved-`UnitType` placeholder as before this function existed, not a
+ * new diagnostic, since real function-value semantics for a tuple/struct
+ * variant's implicit constructor is out of scope.
+ */
+function analyzeEnumVariantPathConstruction(
+  ctx: AnalysisContext,
+  path: Parser.PathExpression,
+  segments: readonly string[],
+): Option<Semantics.PathExpression> {
+  const [enumName, variantName] = segments;
+  if (enumName === undefined || variantName === undefined) return none();
+  const enumDecl = ctx.enumScope.get(enumName);
+  if (enumDecl === undefined) return none();
+  const variant = enumDecl.variants.find((v) => v.name.text === variantName);
+  if (variant === undefined) {
+    emitError(
+      ctx,
+      `no variant \`${variantName}\` on enum \`${enumName}\``,
+      path.tokenId,
+      none(),
+    );
+    return some({ ...path, type: enumDecl.type });
+  }
+  if (isSome(variant.body)) return none();
+  return some({ ...path, type: enumDecl.type });
+}
+
 function analyzePath(
   ctx: AnalysisContext,
   path: Parser.PathExpression,
 ): Semantics.PathExpression {
   const { segments } = path.path;
+  if (segments.length === 2) {
+    const construction = analyzeEnumVariantPathConstruction(
+      ctx,
+      path,
+      segments,
+    );
+    if (isSome(construction)) return construction.value;
+  }
   // Multi-segment paths (modules, associated items) are a later slice.
   if (segments.length !== 1) {
     return { ...path, type: { kind: "UnitType", tokenId: path.tokenId } };
