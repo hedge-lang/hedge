@@ -1,0 +1,9 @@
+enum Message {
+  Quit,
+  Move(i32, i32),
+}
+
+fn main() {
+  let m = Message::Bogus;
+  print(m);
+}
