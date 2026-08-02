@@ -1,0 +1,11 @@
+enum Wrapper {
+  Only(i32, i32),
+}
+
+fn sum(Wrapper::Only(a, b): Wrapper) -> i32 {
+  a + b
+}
+
+fn main() {
+  print(sum(Wrapper::Only(3, 4)));
+}

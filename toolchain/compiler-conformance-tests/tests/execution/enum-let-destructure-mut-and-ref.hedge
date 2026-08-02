@@ -1,0 +1,11 @@
+enum Wrapper {
+  Only(i32),
+}
+
+fn main() {
+  let mut w = Wrapper::Only(1);
+  let Wrapper::Only(&mut r) = w;
+  *r = 99;
+  let Wrapper::Only(y) = w;
+  print(y);
+}

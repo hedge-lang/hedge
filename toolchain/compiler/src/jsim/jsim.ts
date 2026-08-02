@@ -139,17 +139,17 @@ function staticInitFlagName(ctx: JsimContext, name: string): string {
   return reserveTopLevelName(ctx, `__hedgeStaticInit_${name}`);
 }
 
+function isSimpleBindingPattern(pattern: Semantics.Pattern): boolean {
+  return (
+    pattern.kind === "BindingPattern" || pattern.kind === "WildcardPattern"
+  );
+}
+
 /**
- * The single name+token a `let`/parameter pattern binds, for the only two
- * pattern kinds JSIM codegen can lower today: a plain `BindingPattern`, or
- * `WildcardPattern` (emitted as a real `_`-named JS binding - matching the
- * pre-Hedge-47 behavior, where the semantic layer synthesized this same
- * shape for a wildcard rather than a genuine `WildcardPattern` node). Any
- * other kind is a real destructuring pattern - semantic analysis (Hedge-47)
- * accepts it when irrefutable, but real destructuring codegen isn't
- * implemented yet (Hedge-230's job, mirroring `MatchExpression`'s own throw
- * below), so this throws rather than reading off a name that doesn't exist
- * for that pattern shape.
+ * The single name+token a plain (non-destructuring) `let`/parameter
+ * pattern binds: a `BindingPattern`, or `WildcardPattern` (emitted as a
+ * real `_`-named JS binding). Callers check `isSimpleBindingPattern` first
+ * and route anything else to real destructuring lowering instead.
  */
 function simpleBindingIdentity(pattern: Semantics.Pattern): {
   readonly text: string;
@@ -176,6 +176,91 @@ function simpleBindingIdentity(pattern: Semantics.Pattern): {
  * plain `mut name` (no `byRef`) actually makes the local slot mutable. */
 function simpleBindingMutable(pattern: Semantics.Pattern): boolean {
   return pattern.kind === "BindingPattern" && !pattern.byRef && pattern.mutable;
+}
+
+/**
+ * `let Wrapper::Only(x) = w;` - evaluates the initializer once into a
+ * synthesized temp, then reuses `compilePatternInto` (built for match) to
+ * destructure it, with an empty `rest` (nothing needs to happen "after" a
+ * `let`). `isIrrefutablePattern` (the semantics check that accepted this
+ * pattern) only checks its top-level shape, not nested sub-patterns, so a
+ * real conditional can still occur here - see `withRefutablePatternThrow`.
+ */
+function lowerDestructuringLetStatement(
+  ctx: JsimContext,
+  statement: Semantics.LetStatement,
+): JSIM.Statement[] {
+  const value = mapSome(statement.initializer, (expr) =>
+    parseExpression(ctx, expr),
+  );
+  assert(isSome(value), "A destructuring let must have an initializer");
+  const tempName = bindLocalName(ctx, "letDestructure");
+  const tempDecl: JSIM.LetStatement = {
+    kind: "LetStatement",
+    name: tempName,
+    mutable: false,
+    value,
+    docComment: none(),
+    span: resolveSpan(
+      ctx.tokens,
+      statement.tokenId,
+      findStatementEndTokenId(ctx.tokens, statement.tokenId),
+    ),
+    dispose: false,
+  };
+  const tempIdent: JSIM.Expression = {
+    kind: "Identifier",
+    value: tempName,
+    type: none(),
+  };
+  // Assign-mode (see `compilePatternInto`'s own doc comment): a bound
+  // name's `let` predeclares outside any conditional structure, so it's
+  // still in scope for code after this statement even when
+  // `withRefutablePatternThrow` below nests the actual assignment inside a
+  // defensive `if`.
+  const predecls: JSIM.LetStatement[] = [];
+  const continuation = compilePatternInto(
+    ctx,
+    statement.pattern,
+    tempIdent,
+    false,
+    false,
+    predecls,
+  );
+  return [
+    tempDecl,
+    ...predecls,
+    ...withRefutablePatternThrow(continuation([])),
+  ];
+}
+
+/**
+ * `compilePatternInto` may produce a real conditional even for a pattern
+ * `let` treats as irrefutable (see `lowerDestructuringLetStatement`). A
+ * `guardedBy`-produced `if` with no `else` is match's fallthrough shape,
+ * meaningless for `let` - a false condition would silently skip the
+ * bindings, leaving referenced names undefined. This recursively fills in
+ * a throw wherever an `else` is missing. The common (genuinely
+ * irrefutable) case has no conditionals at all, so this is a no-op walk.
+ */
+function withRefutablePatternThrow(
+  stmts: readonly JSIM.Statement[],
+): JSIM.Statement[] {
+  return stmts.map((stmt): JSIM.Statement => {
+    if (stmt.kind === "IfStatement" && !isSome(stmt.elseBranch)) {
+      return {
+        ...stmt,
+        thenBranch: withRefutablePatternThrow(stmt.thenBranch),
+        elseBranch: some([
+          {
+            kind: "ThrowStatement",
+            message: "refutable pattern did not match",
+          },
+        ]),
+      };
+    }
+    return stmt;
+  });
 }
 
 /**
@@ -326,16 +411,31 @@ function lowerStatementWithDropFlags(
   scopeDropsForBlock: readonly Declaration[],
 ): JSIM.Statement[] {
   const lowered = parseStatement(ctx, statement, scopeDropsForBlock);
-  const result: JSIM.Statement[] = [lowered];
+  if (
+    statement.kind === "LetStatement" &&
+    !isSimpleBindingPattern(statement.pattern)
+  ) {
+    // A destructuring `let` - conditional-drop/drop-flag integration for
+    // individual destructured bindings is a known gap (see
+    // `lowerDestructuringLetStatement`), so there's nothing to layer on
+    // top of the statements it already produced.
+    return lowered;
+  }
+  const result: JSIM.Statement[] = [...lowered];
+  const first = lowered[0];
 
-  if (statement.kind === "LetStatement" && lowered.kind === "LetStatement") {
+  if (
+    statement.kind === "LetStatement" &&
+    first !== undefined &&
+    first.kind === "LetStatement"
+  ) {
     const conditional = allConditionalDrops(ctx).find(
       (c) =>
         c.declaration.id === simpleBindingIdentity(statement.pattern).tokenId,
     );
     if (conditional !== undefined) {
       result.push(
-        dropFlagDeclareStatement(ctx, conditional.declaration, lowered.span),
+        dropFlagDeclareStatement(ctx, conditional.declaration, first.span),
       );
     }
   }
@@ -722,8 +822,16 @@ function parseFunction(
     // Pre-bind params so inner `let` with the same name gets a unique suffix.
     // Capture the emitted name so the function declaration stays in sync with
     // whatever the rename context assigns (defensive: currently always identity
-    // since params are the first things bound in a fresh function scope).
+    // since params are the first things bound in a fresh function scope). A
+    // destructuring param gets a synthesized plain JS name;
+    // `destructureFunctionParams` unpacks it into its own bound names.
     const emittedParams = fn.params.map((p) => {
+      if (!isSimpleBindingPattern(p.pattern)) {
+        return {
+          param: p,
+          emittedName: bindLocalName(ctx, "paramDestructure"),
+        };
+      }
       const identity = simpleBindingIdentity(p.pattern);
       const emittedName = bindLocalName(ctx, identity.text);
       recordEmittedName(ctx, identity.tokenId, emittedName);
@@ -755,6 +863,7 @@ function dropParamShadows(
 ): JSIM.LetStatement[] {
   const shadows: JSIM.LetStatement[] = [];
   for (const { param, emittedName } of emittedParams) {
+    if (!isSimpleBindingPattern(param.pattern)) continue;
     if (simpleBindingMutable(param.pattern)) continue;
     const identity = simpleBindingIdentity(param.pattern);
     const needsDrop = rootDrops.some((d) => d.id === identity.tokenId);
@@ -771,6 +880,37 @@ function dropParamShadows(
     });
   }
   return shadows;
+}
+
+/** A destructuring parameter's real JS parameter is a synthesized plain
+ * name (see `parseFunction`); builds the statements that destructure it,
+ * mirroring `lowerDestructuringLetStatement`. A simple param contributes
+ * nothing here. */
+function destructureFunctionParams(
+  ctx: JsimContext,
+  emittedParams: ReadonlyArray<{
+    param: Semantics.FunctionDecl["params"][number];
+    emittedName: string;
+  }>,
+): JSIM.Statement[] {
+  return emittedParams.flatMap(({ param, emittedName }) => {
+    if (isSimpleBindingPattern(param.pattern)) return [];
+    const paramIdent: JSIM.Expression = {
+      kind: "Identifier",
+      value: emittedName,
+      type: none(),
+    };
+    const predecls: JSIM.LetStatement[] = [];
+    const continuation = compilePatternInto(
+      ctx,
+      param.pattern,
+      paramIdent,
+      false,
+      false,
+      predecls,
+    );
+    return [...predecls, ...withRefutablePatternThrow(continuation([]))];
+  });
 }
 
 function parseFunctionBody(
@@ -799,8 +939,10 @@ function parseFunctionBody(
   // applied) before the body is lowered, so `lookupLocalName` inside the
   // body resolves references to the shadow, not the original parameter.
   const rootDrops = scopeDrops(ctx, fn.body.tokenId);
+  const paramDestructures = destructureFunctionParams(ctx, emittedParams);
   const paramShadows = dropParamShadows(ctx, emittedParams, rootDrops);
   const statements: JSIM.Statement[] = [
+    ...paramDestructures,
     ...paramShadows,
     ...lowerStatementsWithDropFlags(ctx, fn.body.statements, rootDrops),
   ];
@@ -871,9 +1013,12 @@ function parseStatement(
   ctx: JsimContext,
   statement: Semantics.Statement,
   scopeDrops: readonly Declaration[] = [],
-): JSIM.Statement {
+): JSIM.Statement[] {
   switch (statement.kind) {
     case "LetStatement": {
+      if (!isSimpleBindingPattern(statement.pattern)) {
+        return lowerDestructuringLetStatement(ctx, statement);
+      }
       // Evaluate the initializer BEFORE binding the name so that
       // `let x = x + 1` resolves the RHS `x` to the *outer* binding.
       const value = mapSome(statement.initializer, (expr) =>
@@ -885,39 +1030,41 @@ function parseStatement(
       recordEmittedName(ctx, identity.tokenId, name);
       const dispose =
         !mutable && scopeDrops.some((d) => d.id === identity.tokenId);
-      return {
-        kind: "LetStatement",
-        name,
-        mutable,
-        value,
-        docComment: toDocComment(statement.attributes),
-        span: resolveSpan(
-          ctx.tokens,
-          statement.tokenId,
-          findStatementEndTokenId(ctx.tokens, statement.tokenId),
-        ),
-        dispose,
-      };
+      return [
+        {
+          kind: "LetStatement",
+          name,
+          mutable,
+          value,
+          docComment: toDocComment(statement.attributes),
+          span: resolveSpan(
+            ctx.tokens,
+            statement.tokenId,
+            findStatementEndTokenId(ctx.tokens, statement.tokenId),
+          ),
+          dispose,
+        },
+      ];
     }
     case "ExpressionStatement":
       if (statement.expression.kind === "Block") {
-        return jsimBlockStatement(ctx, statement.expression);
+        return [jsimBlockStatement(ctx, statement.expression)];
       }
       if (statement.expression.kind === "IfExpression") {
-        return jsimIfExpressionAsStatement(ctx, statement.expression);
+        return [jsimIfExpressionAsStatement(ctx, statement.expression)];
       }
       if (
         statement.expression.kind === "AssignExpression" ||
         statement.expression.kind === "CompoundAssignExpression"
       ) {
-        return parseAssignStatement(ctx, statement.expression);
+        return [parseAssignStatement(ctx, statement.expression)];
       }
-      return parseExpression(ctx, statement.expression);
+      return [parseExpression(ctx, statement.expression)];
     case "Function":
-      return parseFunction(ctx, statement);
+      return [parseFunction(ctx, statement)];
     case "Struct":
-      // Struct declarations are type-only — no JS runtime representation.
-      return { kind: "BlockStatement", body: [] };
+      // Struct declarations are type-only - no JS runtime representation.
+      return [{ kind: "BlockStatement", body: [] }];
     case "Enum":
       // A local enum's own declaration is still type-only, same as a
       // struct's - `.d.ts` generation only ever walks top-level
@@ -925,11 +1072,11 @@ function parseStatement(
       // consequence regardless. Construction (`Local::Variant`) and match
       // against it both lower independently of this declaration, driven
       // entirely by the Semantics AST's own type info.
-      return { kind: "BlockStatement", body: [] };
+      return [{ kind: "BlockStatement", body: [] }];
     case "Const":
       // Same erasure as a top-level const (see `parseItem`) - every
       // reference already lowered to a literal at analysis time.
-      return { kind: "BlockStatement", body: [] };
+      return [{ kind: "BlockStatement", body: [] }];
     case "Static":
       // The parser rejects `static` in block position (see
       // `parser/statement.ts`'s local item dispatch) - a local static's
@@ -1729,6 +1876,13 @@ function compilePatternInto(
   // `false` only for a match arm's top-level pattern - the switch case
   // already guarantees the tag. Every recursive call leaves this at `true`.
   includeOwnTag: boolean = true,
+  // `undefined` (match's usage): each binding declares its own `const`/`let`
+  // inline, scoped to wherever it's nested - fine, since an arm's bindings
+  // are only used within that arm. An array (let's usage): each binding
+  // instead pre-declares an uninitialized `let` into it and assigns in
+  // place, since a destructured name must stay visible after the whole
+  // statement even when nested inside a defensive `if`.
+  predecls?: JSIM.LetStatement[],
 ): PatternContinuation {
   switch (pattern.kind) {
     case "WildcardPattern":
@@ -1739,6 +1893,8 @@ function compilePatternInto(
         pattern.name,
         valueExpr,
         pattern.mutable || ambientMutable,
+        pattern.byRef,
+        predecls,
       );
       return (rest) => [binding, ...rest];
     }
@@ -1807,6 +1963,8 @@ function compilePatternInto(
               isArrayIndex: false,
             },
             effectiveMutable,
+            true,
+            predecls,
           ),
         ),
       );
@@ -1834,6 +1992,8 @@ function compilePatternInto(
               field.pattern.value,
               fieldValueExpr,
               effectiveMutable,
+              true,
+              predecls,
             );
           }
           const binding = bindPatternName(
@@ -1841,6 +2001,8 @@ function compilePatternInto(
             field.name,
             fieldValueExpr,
             effectiveMutable,
+            false,
+            predecls,
           );
           return (rest) => [binding, ...rest];
         }),
@@ -1971,22 +2133,56 @@ function patternCondition(
   }
 }
 
+/**
+ * `byRef && mutable` (`&mut name`) gets the same getter/setter accessor
+ * cell a top-level `&mut` expression does; `byRef && !mutable` (`&name`)
+ * reads transparently. A declared `byRef` binding's JS binding is never
+ * `let` - its local slot is never reassignable, only the place behind it
+ * is. `predecls` modes: see `compilePatternInto`. In assign mode, the
+ * pre-declared `let` (vs `const`) is a mechanical necessity, not a change
+ * in the binding's own Hedge-level mutability.
+ */
 function bindPatternName(
   ctx: JsimContext,
   name: Semantics.Identifier,
   valueExpr: JSIM.Expression,
   mutable: boolean,
-): JSIM.LetStatement {
+  byRef: boolean,
+  predecls: JSIM.LetStatement[] | undefined,
+): JSIM.Statement {
   const emittedName = bindLocalName(ctx, name.text);
   recordEmittedName(ctx, name.tokenId, emittedName);
-  return {
+  const boundValue: JSIM.Expression =
+    byRef && mutable
+      ? { kind: "RefCellExpression", place: valueExpr }
+      : valueExpr;
+  const span = resolveSpan(ctx.tokens, name.tokenId, name.tokenId);
+  if (predecls === undefined) {
+    return {
+      kind: "LetStatement",
+      name: emittedName,
+      mutable: !byRef && mutable,
+      value: some(boundValue),
+      docComment: none(),
+      span,
+      dispose: false,
+    };
+  }
+  predecls.push({
     kind: "LetStatement",
     name: emittedName,
-    mutable,
-    value: some(valueExpr),
+    mutable: true,
+    value: none(),
     docComment: none(),
-    span: resolveSpan(ctx.tokens, name.tokenId, name.tokenId),
+    span,
     dispose: false,
+  });
+  return {
+    kind: "AssignExpression",
+    operator: "Assign",
+    lhs: { kind: "Identifier", value: emittedName, type: none() },
+    rhs: boundValue,
+    span: none(),
   };
 }
 

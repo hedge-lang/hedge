@@ -1,0 +1,11 @@
+enum Wrapper {
+  Only(i32, i32),
+}
+
+fn main() {
+  let w = Wrapper::Only(3, 4);
+  let Wrapper::Only(x, y) = w;
+  print(x);
+  print(",");
+  print(y);
+}

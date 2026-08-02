@@ -1,0 +1,9 @@
+enum Wrapper {
+  Only { text: str },
+}
+
+fn main() {
+  let w = Wrapper::Only { text: "hi" };
+  let Wrapper::Only { text } = w;
+  print(text);
+}

@@ -765,6 +765,21 @@ interface PatternDeclaration {
 }
 
 /**
+ * `true` when binding `pattern` needs ownership of its scrutinee - `false`
+ * only when it binds at least one name and every bound name is `Copy` (a
+ * `byRef` sub-binding, or a plain `Copy` field like `Point { x, y }`'s
+ * `i32`s). A pattern with no bindings (`_`) still counts as moving,
+ * preserving prior behavior.
+ */
+function patternRequiresScrutineeMove(pattern: Semantics.Pattern): boolean {
+  const declarations = collectPatternDeclarations(pattern);
+  if (declarations.length === 0) return true;
+  return declarations.some(
+    ({ identifier }) => !hasCapability(identifier.type, "copy"),
+  );
+}
+
+/**
  * Every name a pattern binds, deepest-first - shared by match arms and, as
  * of Hedge-47, `let`/`Param` too (mirroring `control-flow-graph.ts`'s own
  * `declarationsOf`, which returns the CFG's `Declaration` shape instead of
@@ -851,7 +866,20 @@ function walkMatchExpression(
   state: StateMap,
   scopeStack: ScopeStack,
 ): void {
-  walkExpression(ctx, expression.scrutinee, state, scopeStack);
+  // Special-cased like LetStatement (see walkLetInitializer) - moves only
+  // if some arm binds a non-Copy name, checked across all arms up front
+  // since this runs once before the fork.
+  if (expression.scrutinee.kind === "PathExpression") {
+    useOrMove(
+      ctx,
+      expression.scrutinee,
+      state,
+      scopeStack,
+      expression.arms.some((arm) => patternRequiresScrutineeMove(arm.pattern)),
+    );
+  } else {
+    walkExpression(ctx, expression.scrutinee, state, scopeStack);
+  }
 
   // Arms are mutually exclusive alternatives, not a sequence -- mirroring
   // `walkIf`, each arm is walked against its own clone of the pre-match
@@ -1010,6 +1038,32 @@ function walkIf(
   }
 }
 
+/**
+ * A bare-identifier initializer is special-cased so an all-Copy
+ * destructuring pattern doesn't move the scrutinee - `walkExpression`'s
+ * own `PathExpression` case always moves, with no visibility into the
+ * pattern being bound against.
+ */
+function walkLetInitializer(
+  ctx: Ctx,
+  statement: Semantics.LetStatement,
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  if (!isSome(statement.initializer)) return;
+  if (statement.initializer.value.kind !== "PathExpression") {
+    walkExpression(ctx, statement.initializer.value, state, scopeStack);
+    return;
+  }
+  useOrMove(
+    ctx,
+    statement.initializer.value,
+    state,
+    scopeStack,
+    patternRequiresScrutineeMove(statement.pattern),
+  );
+}
+
 function walkStatement(
   ctx: Ctx,
   statement: Semantics.Statement,
@@ -1020,14 +1074,11 @@ function walkStatement(
   ctx.currentStatementTokenId = statement.tokenId;
   switch (statement.kind) {
     case "LetStatement": {
-      // The initializer is walked *before* registerBinding, so `let x = x;`
-      // resolves the rhs `x` against whatever `x` was already in scope
-      // (shadowing an outer binding, if any) rather than the new one being
-      // declared — the new binding doesn't exist yet as far as `resolve` is
-      // concerned.
-      if (isSome(statement.initializer)) {
-        walkExpression(ctx, statement.initializer.value, state, scopeStack);
-      }
+      // Walked *before* registerBinding, so `let x = x;` resolves the rhs
+      // `x` against whatever `x` was already in scope (shadowing an outer
+      // binding, if any) rather than the new one being declared - the new
+      // binding doesn't exist yet as far as `resolve` is concerned.
+      walkLetInitializer(ctx, statement, state, scopeStack);
       for (const { identifier, mutable } of collectPatternDeclarations(
         statement.pattern,
       )) {

@@ -1,0 +1,13 @@
+enum Inner {
+  Only(i32),
+}
+
+enum Outer {
+  Only(Inner),
+}
+
+fn main() {
+  let o = Outer::Only(Inner::Only(7));
+  let Outer::Only(Inner::Only(x)) = o;
+  print(x);
+}
