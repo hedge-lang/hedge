@@ -1,0 +1,8 @@
+enum Message {
+  Write { text: str },
+}
+
+fn main() {
+  let m = Message::Write { text: "hi" };
+  print("constructed");
+}

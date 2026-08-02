@@ -964,6 +964,9 @@ function parseExpression(
     case "CharLiteral":
       return { kind: "StringLiteral", value: expression.value };
     case "PathExpression":
+      if (expression.path.segments.length === 2 && expression.type.kind === "EnumType") {
+        return jsimEnumUnitVariantConstruction(expression.path.segments);
+      }
       if (expression.path.segments.length === 1 && !expression.path.absolute) {
         const value = expression.path.segments[0];
         assert(value !== undefined, "Unexpected undefined segment");
@@ -975,6 +978,17 @@ function parseExpression(
       }
       return { kind: "PathExpression", path: expression.path.segments };
     case "CallExpression":
+      if (
+        expression.type.kind === "EnumType" &&
+        expression.callee.kind === "PathExpression" &&
+        expression.callee.path.segments.length === 2
+      ) {
+        return jsimEnumTupleVariantConstruction(
+          ctx,
+          expression.callee.path.segments,
+          expression.arguments,
+        );
+      }
       return {
         kind: "CallExpression",
         callee: parseExpression(ctx, expression.callee),
@@ -1290,18 +1304,72 @@ function jsimRangeExpression(
 
 function jsimStructExpression(
   ctx: JsimContext,
-  { base, fields }: Semantics.StructExpression,
+  { base, fields, path }: Semantics.StructExpression,
 ): JSIM.Expression {
+  const spreads = [base]
+    .filter(isSome)
+    .map((b) => parseExpression(ctx, b.value))
+    .map(makeSpread);
+  const ownFields = [...spreads, ...fields.map((f) => makeStructField(ctx, f))];
+  if (path.segments.length === 2) {
+    const variantName = path.segments[1];
+    assert(variantName !== undefined, "Unexpected undefined segment");
+    return {
+      kind: "StructExpression",
+      fields: [
+        jsimEnumTagField(variantName),
+        jsimEnumDataField({ kind: "StructExpression", fields: ownFields }),
+      ],
+    };
+  }
+  return { kind: "StructExpression", fields: ownFields };
+}
+
+/** `Message::Quit`-shaped bare unit-variant construction - a tagged object
+ * with no `data` payload, since a unit variant carries no fields. */
+function jsimEnumUnitVariantConstruction(
+  segments: readonly string[],
+): JSIM.Expression {
+  const variantName = segments[1];
+  assert(variantName !== undefined, "Unexpected undefined segment");
+  return { kind: "StructExpression", fields: [jsimEnumTagField(variantName)] };
+}
+
+/** `Message::Move(1, 2)`-shaped tuple-variant construction - the payload
+ * lowers to a plain `JSIM.TupleExpression` (not `ArrayExpression`), since a
+ * tuple variant's `data` is a fixed positional shape with no Vec/array
+ * runtime semantics (indexing, drop-wrapping, typed-array backing) - the
+ * same reasoning that already makes a real Hedge tuple *expression* lower
+ * to a plain `[...]` rather than `ArrayExpression`. */
+function jsimEnumTupleVariantConstruction(
+  ctx: JsimContext,
+  segments: readonly string[],
+  args: readonly Semantics.Expression[],
+): JSIM.Expression {
+  const variantName = segments[1];
+  assert(variantName !== undefined, "Unexpected undefined segment");
   return {
     kind: "StructExpression",
     fields: [
-      ...[base]
-        .filter(isSome)
-        .map((b) => parseExpression(ctx, b.value))
-        .map(makeSpread),
-      ...fields.map((f) => makeStructField(ctx, f)),
+      jsimEnumTagField(variantName),
+      jsimEnumDataField({
+        kind: "TupleExpression",
+        elements: args.map((arg) => parseExpression(ctx, arg)),
+      }),
     ],
   };
+}
+
+function jsimEnumTagField(variantName: string): JSIM.StructField {
+  return {
+    kind: "StructField",
+    name: "tag",
+    value: some({ kind: "StringLiteral", value: variantName }),
+  };
+}
+
+function jsimEnumDataField(value: JSIM.Expression): JSIM.StructField {
+  return { kind: "StructField", name: "data", value: some(value) };
 }
 
 function makeStructField(

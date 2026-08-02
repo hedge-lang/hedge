@@ -1,0 +1,8 @@
+enum Message {
+  Move(i32, i32),
+}
+
+fn main() {
+  let m = Message::Move(1, 2);
+  print("constructed");
+}

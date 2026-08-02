@@ -207,7 +207,7 @@ describe("semantic analysis", (): void => {
       `);
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toBe(
-        "variant `Quit` takes no arguments",
+        "variant `Quit` takes no arguments, but 1 was supplied",
       );
     });
 
@@ -226,7 +226,7 @@ describe("semantic analysis", (): void => {
       `);
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toBe(
-        "variant `Move` takes 2 argument(s)",
+        "variant `Move` takes 2 argument(s), but 1 was supplied",
       );
     });
 

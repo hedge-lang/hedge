@@ -1,0 +1,8 @@
+enum Message {
+  Quit,
+}
+
+fn main() {
+  let m = Message::Quit;
+  print("constructed");
+}
