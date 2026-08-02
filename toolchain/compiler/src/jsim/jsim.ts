@@ -619,9 +619,7 @@ function parseItem(
   if (item.kind === "LetStatement" || item.kind === "ExpressionStatement")
     return parseStatement(ctx, item);
   if (item.kind === "Struct") return parseStruct(item);
-  // TODO (Hedge-48): enum -> tagged-object lowering isn't implemented yet -
-  // a bare declaration erases to nothing, same as a non-pub const.
-  if (item.kind === "Enum") return [];
+  if (item.kind === "Enum") return [jsimEnumDecl(item)];
   // Every reference to a const already lowered to a literal at analysis
   // time (see `analyzer.ts`'s `analyzeConstReference`), so a non-pub
   // const's own declaration has no external consumer and erases entirely
@@ -674,6 +672,49 @@ function parseStruct(struct: Semantics.StructDecl): JSIM.Item[] {
   void struct;
   // TODO: Implement how structs are represented in JS (interface for .d.ts)
   return [];
+}
+
+/**
+ * Renders a variant field's type as `.d.ts` type text - reuses
+ * `semanticTypeToJsPrimitive` for the primitive cases, and additionally
+ * resolves a field typed as another enum to that enum's own `.d.ts` type
+ * name (unlike a plain struct-typed field, which still falls back to
+ * `unknown` - struct `.d.ts` generation doesn't exist yet, tracked by no
+ * issue currently).
+ */
+function enumFieldDtsType(type: Semantics.Type): string {
+  const primitive = semanticTypeToJsPrimitive(type);
+  if (isSome(primitive)) return primitive.value.value;
+  if (type.kind === "EnumType") return type.name.split("::").pop() ?? type.name;
+  return "unknown";
+}
+
+function jsimEnumDecl(enumDecl: Semantics.EnumDecl): JSIM.EnumDecl {
+  return {
+    kind: "EnumDecl",
+    name: enumDecl.name.text,
+    variants: enumDecl.variants.map((variant): JSIM.EnumDeclVariant => {
+      const tag = variant.name.text;
+      if (!isSome(variant.body)) return { kind: "UnitVariant", tag };
+      if (variant.body.value.kind === "TupleFields") {
+        return {
+          kind: "TupleVariant",
+          tag,
+          dataTypes: variant.body.value.fields.map((f) =>
+            enumFieldDtsType(f.type),
+          ),
+        };
+      }
+      return {
+        kind: "StructVariant",
+        tag,
+        dataFields: variant.body.value.fields.map((f) => ({
+          name: f.name.text,
+          type: enumFieldDtsType(f.type),
+        })),
+      };
+    }),
+  };
 }
 
 function parseFunction(

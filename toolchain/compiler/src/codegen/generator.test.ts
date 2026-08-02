@@ -297,6 +297,38 @@ describe("const and static codegen", (): void => {
   });
 });
 
+describe("enum declaration codegen", () => {
+  it("emits a discriminated union in .d.ts for an enum with unit, tuple, and struct variants", () => {
+    const code = gen(`
+      enum Message {
+        Quit,
+        Move(i32, i32),
+        Write { text: str },
+      }
+      fn main() {}
+    `);
+    expect(dts(code)).toBe(
+      [
+        "export type Message =",
+        '  | { tag: "Quit" }',
+        '  | { tag: "Move"; data: [number, number] }',
+        '  | { tag: "Write"; data: { text: string } };',
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("emits a .d.ts entry for a non-pub enum, unlike a non-pub fn or const", () => {
+    const code = gen("enum Message { Quit } fn helper() {}");
+    expect(dts(code)).not.toBe(null);
+  });
+
+  it("emits no JS at all for an enum declaration - only the tagged construction sites carry runtime shape", () => {
+    const code = gen("enum Message { Quit } fn helper() {}");
+    expect(js(code)).toBe("function helper() {}\n");
+  });
+});
+
 describe("binary expression codegen", () => {
   it.each([
     ["Add", "i32", "x + y", "((x + y)|0)"],

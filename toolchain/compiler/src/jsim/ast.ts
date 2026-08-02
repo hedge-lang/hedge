@@ -7,7 +7,38 @@ export interface Program {
   readonly docComment: Option<DocComment>;
 }
 
-export type Item = FunctionDecl | StaticDecl | ConstDecl | Statement;
+export type Item = FunctionDecl | StaticDecl | ConstDecl | EnumDecl | Statement;
+
+/**
+ * An enum's own runtime representation is purely structural (a variant's
+ * tagged-object shape carries its own discriminant - see the construction
+ * side's `StructExpression` lowering), so this item contributes nothing to
+ * emitted JS; it exists only to give codegen enough structure to emit a
+ * discriminated-union `.d.ts` type alias. Each variant's field types are
+ * already rendered to `.d.ts` type text at JSIM-lowering time (not carried
+ * as `Semantics.Type`/`JSIM.Type`), since the closed `PrimitiveType` union
+ * has no member for a named type reference (an enum field referencing
+ * another enum) and widening it is unwarranted for this one, `.d.ts`-only
+ * consumer.
+ */
+export interface EnumDecl {
+  readonly kind: "EnumDecl";
+  readonly name: string;
+  readonly variants: readonly EnumDeclVariant[];
+}
+
+export type EnumDeclVariant =
+  | { readonly kind: "UnitVariant"; readonly tag: string }
+  | {
+      readonly kind: "TupleVariant";
+      readonly tag: string;
+      readonly dataTypes: readonly string[];
+    }
+  | {
+      readonly kind: "StructVariant";
+      readonly tag: string;
+      readonly dataFields: readonly { readonly name: string; readonly type: string }[];
+    };
 
 /**
  * A `pub const`'s exported shape. Every *reference* to a const is inlined

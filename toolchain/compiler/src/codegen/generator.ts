@@ -9,6 +9,8 @@ import type {
   ConstDecl,
   DisposeCallStatement,
   DocComment,
+  EnumDecl,
+  EnumDeclVariant,
   Expression,
   FunctionDecl,
   IfStatement,
@@ -652,6 +654,10 @@ function emitItem(item: Item): string {
       return emitReturn(item);
     case "DisposeCallStatement":
       return emitDisposeCall(item);
+    case "EnumDecl":
+      // Purely structural at runtime - see jsim/ast.ts's EnumDecl doc
+      // comment. Only `emitDtsItem` renders anything for this item kind.
+      return "";
     default:
       return `${emitExpression(item)};`;
   }
@@ -681,12 +687,40 @@ function emitDtsFunction(
   return parts.join("\n");
 }
 
+function emitDtsEnumVariant(variant: EnumDeclVariant): string {
+  const tag = JSON.stringify(variant.tag);
+  switch (variant.kind) {
+    case "UnitVariant":
+      return `{ tag: ${tag} }`;
+    case "TupleVariant":
+      return `{ tag: ${tag}; data: [${variant.dataTypes.join(", ")}] }`;
+    case "StructVariant":
+      return `{ tag: ${tag}; data: { ${variant.dataFields.map((f) => `${f.name}: ${f.type}`).join("; ")} } }`;
+    default:
+      return assertNever(variant, `Unexpected enum variant: ${JSON.stringify(variant)}`);
+  }
+}
+
+/**
+ * Always emitted regardless of the enum's own `pub`-ness (unlike a
+ * const/fn, which need `pub` for a `.d.ts` entry at all) - a `pub`
+ * function's signature can reference a non-pub enum, and that reference
+ * needs a nameable `.d.ts` type regardless, so gating this on `pub` would
+ * need a real reachability analysis this ticket doesn't build. The minor
+ * over-export cost is accepted; see specification/0014-enums.md.
+ */
+function emitDtsEnum(item: EnumDecl): string {
+  const variants = item.variants.map(emitDtsEnumVariant);
+  return `export type ${item.name} =\n  | ${variants.join("\n  | ")};`;
+}
+
 function emitDtsItem(item: Item): string | null {
   if (item.kind === "ConstDecl") {
     return isSome(item.type)
       ? `export declare const ${item.name}: ${item.type.value.value};`
       : null;
   }
+  if (item.kind === "EnumDecl") return emitDtsEnum(item);
   if (item.kind !== "FunctionDecl" || !isSome(item.scope)) {
     return null;
   }
