@@ -675,12 +675,9 @@ function parseStruct(struct: Semantics.StructDecl): JSIM.Item[] {
 }
 
 /**
- * Renders a variant field's type as `.d.ts` type text - reuses
- * `semanticTypeToJsPrimitive` for the primitive cases, and additionally
- * resolves a field typed as another enum to that enum's own `.d.ts` type
- * name (unlike a plain struct-typed field, which still falls back to
- * `unknown` - struct `.d.ts` generation doesn't exist yet, tracked by no
- * issue currently).
+ * Renders a variant field's type as `.d.ts` type text. A field typed as
+ * another enum resolves to that enum's own type name; a struct-typed field
+ * falls back to `unknown` - struct `.d.ts` generation doesn't exist yet.
  */
 function enumFieldDtsType(type: Semantics.Type): string {
   const primitive = semanticTypeToJsPrimitive(type);
@@ -922,8 +919,12 @@ function parseStatement(
       // Struct declarations are type-only — no JS runtime representation.
       return { kind: "BlockStatement", body: [] };
     case "Enum":
-      // TODO (Hedge-48): same erasure as Struct above - enum-to-tagged-object
-      // codegen isn't implemented yet.
+      // A local enum's own declaration is still type-only, same as a
+      // struct's - `.d.ts` generation only ever walks top-level
+      // `program.items`, so a block-scoped enum has no `.d.ts`-visible
+      // consequence regardless. Construction (`Local::Variant`) and match
+      // against it both lower independently of this declaration, driven
+      // entirely by the Semantics AST's own type info.
       return { kind: "BlockStatement", body: [] };
     case "Const":
       // Same erasure as a top-level const (see `parseItem`) - every
@@ -1005,7 +1006,10 @@ function parseExpression(
     case "CharLiteral":
       return { kind: "StringLiteral", value: expression.value };
     case "PathExpression":
-      if (expression.path.segments.length === 2 && expression.type.kind === "EnumType") {
+      if (
+        expression.path.segments.length === 2 &&
+        expression.type.kind === "EnumType"
+      ) {
         return jsimEnumUnitVariantConstruction(expression.path.segments);
       }
       if (expression.path.segments.length === 1 && !expression.path.absolute) {
@@ -1075,13 +1079,7 @@ function parseExpression(
     case "IfExpression":
       return jsimIfExpression(ctx, expression);
     case "MatchExpression":
-      // TODO (Hedge-48): real match->switch codegen isn't implemented yet -
-      // a match that passes semantic analysis cleanly still can't be
-      // lowered, so this throws rather than silently erasing the arm
-      // values it would otherwise discard.
-      throw new Error(
-        "JSIM codegen for match expressions is not yet implemented",
-      );
+      return jsimMatchExpression(ctx, expression);
     case "Block":
       return jsimBlockExpression(ctx, expression);
 
@@ -1366,8 +1364,7 @@ function jsimStructExpression(
   return { kind: "StructExpression", fields: ownFields };
 }
 
-/** `Message::Quit`-shaped bare unit-variant construction - a tagged object
- * with no `data` payload, since a unit variant carries no fields. */
+/** A tagged object with no `data` payload - a unit variant has no fields. */
 function jsimEnumUnitVariantConstruction(
   segments: readonly string[],
 ): JSIM.Expression {
@@ -1376,12 +1373,8 @@ function jsimEnumUnitVariantConstruction(
   return { kind: "StructExpression", fields: [jsimEnumTagField(variantName)] };
 }
 
-/** `Message::Move(1, 2)`-shaped tuple-variant construction - the payload
- * lowers to a plain `JSIM.TupleExpression` (not `ArrayExpression`), since a
- * tuple variant's `data` is a fixed positional shape with no Vec/array
- * runtime semantics (indexing, drop-wrapping, typed-array backing) - the
- * same reasoning that already makes a real Hedge tuple *expression* lower
- * to a plain `[...]` rather than `ArrayExpression`. */
+/** Payload lowers to `JSIM.TupleExpression`, not `ArrayExpression` - same
+ * as a plain tuple expression, since it has no Vec/array runtime semantics. */
 function jsimEnumTupleVariantConstruction(
   ctx: JsimContext,
   segments: readonly string[],
@@ -1411,6 +1404,649 @@ function jsimEnumTagField(variantName: string): JSIM.StructField {
 
 function jsimEnumDataField(value: JSIM.Expression): JSIM.StructField {
   return { kind: "StructField", name: "data", value: some(value) };
+}
+
+/* ---------- match -> switch lowering ---------- */
+
+function jsimMatchExpression(
+  ctx: JsimContext,
+  matchExpr: Semantics.MatchExpression,
+): JSIM.Expression {
+  return {
+    kind: "CallExpression",
+    callee: {
+      kind: "ArrowFunctionExpression",
+      params: [],
+      body: jsimMatchBody(ctx, matchExpr),
+    },
+    arguments: [],
+  };
+}
+
+/** Evaluates the scrutinee once into a synthesized local, then lowers to a
+ * `switch` on its `.tag`. Only an enum scrutinee is handled here - a
+ * non-enum match is a separate, not-yet-scoped follow-up. */
+function jsimMatchBody(
+  ctx: JsimContext,
+  matchExpr: Semantics.MatchExpression,
+): JSIM.Statement[] {
+  pushRenameFrame(ctx);
+  try {
+    if (matchExpr.scrutinee.type.kind !== "EnumType") {
+      throw new Error(
+        "JSIM codegen for match on a non-enum scrutinee is not yet implemented",
+      );
+    }
+    const scrutineeValue = parseExpression(ctx, matchExpr.scrutinee);
+    const scrutineeName = bindLocalName(ctx, "matchScrutinee");
+    const span = resolveSpan(ctx.tokens, matchExpr.tokenId, matchExpr.tokenId);
+    const scrutineeDecl: JSIM.LetStatement = {
+      kind: "LetStatement",
+      name: scrutineeName,
+      mutable: false,
+      value: some(scrutineeValue),
+      docComment: none(),
+      span,
+      dispose: false,
+    };
+    const scrutineeIdent: JSIM.Expression = {
+      kind: "Identifier",
+      value: scrutineeName,
+      type: none(),
+    };
+    return [
+      scrutineeDecl,
+      buildEnumMatchSwitch(ctx, matchExpr, scrutineeIdent),
+    ];
+  } finally {
+    popRenameFrame(ctx);
+  }
+}
+
+/** One arm resolved to the sub-pattern applicable for a given tag - for a
+ * top-level or-pattern, whichever alternative names that tag. */
+interface DispatchedArm {
+  readonly pattern: Semantics.Pattern;
+  readonly guard: Option<Semantics.Expression>;
+  readonly body: Semantics.Expression;
+}
+
+type TagDispatch = "universal" | ReadonlyMap<string, Semantics.Pattern>;
+
+/** Which tag(s) an arm's pattern dispatches on, or `"universal"` for a
+ * wildcard/binding catch-all. Only sees pattern kinds real semantic
+ * analysis produces for an enum scrutinee - anything else was already
+ * guardrail-substituted to `WildcardPattern` upstream. */
+function topLevelPatternDispatch(pattern: Semantics.Pattern): TagDispatch {
+  if (pattern.kind === "WildcardPattern" || pattern.kind === "BindingPattern") {
+    return "universal";
+  }
+  if (pattern.kind === "OrPattern") {
+    const map = new Map<string, Semantics.Pattern>();
+    for (const alt of pattern.alternatives) {
+      if (alt.kind === "WildcardPattern" || alt.kind === "BindingPattern") {
+        return "universal";
+      }
+      map.set(variantTagOf(alt), alt);
+    }
+    return map;
+  }
+  return new Map([[variantTagOf(pattern), pattern]]);
+}
+
+function variantTagOf(pattern: Semantics.Pattern): string {
+  if (
+    pattern.kind !== "PathPattern" &&
+    pattern.kind !== "TupleStructPattern" &&
+    pattern.kind !== "StructPattern"
+  ) {
+    throw new Error(
+      `JSIM codegen for a match arm's top-level pattern kind "${pattern.kind}" against an enum scrutinee is not yet implemented`,
+    );
+  }
+  const tag = pattern.path.segments.at(-1);
+  assert(tag !== undefined, "Unexpected empty path segments");
+  return tag;
+}
+
+/**
+ * Appends the throw only when `chain` isn't already guaranteed to return -
+ * a trailing `ReturnStatement` (vs. `IfStatement`) proves every arm was
+ * unconditional, avoiding dead code after it.
+ */
+function withDefenseInDepthThrow(
+  chain: readonly JSIM.Statement[],
+): JSIM.Statement[] {
+  if (chain.at(-1)?.kind === "ReturnStatement") return [...chain];
+  return [...chain, { kind: "ThrowStatement", message: "unreachable" }];
+}
+
+/**
+ * Drops every arm after the first provably-unconditional one - anything
+ * past it is dead code, since match evaluates arms top-to-bottom. Without
+ * this, a tag whose own arm is already unconditional still drags in every
+ * later wildcard arm's statements.
+ */
+function truncateAtFirstUnconditionalArm(
+  arms: readonly DispatchedArm[],
+): DispatchedArm[] {
+  const index = arms.findIndex(
+    (arm) => !isSome(arm.guard) && isPatternUnconditional(arm.pattern, true),
+  );
+  return index === -1 ? [...arms] : arms.slice(0, index + 1);
+}
+
+/**
+ * `true` only when `pattern` is guaranteed to match with no runtime test -
+ * conservatively `false` otherwise (including every `OrPattern`, not worth
+ * the extra analysis here). `isTopLevel` mirrors `compilePatternInto`'s
+ * `includeOwnTag`.
+ */
+function isPatternUnconditional(
+  pattern: Semantics.Pattern,
+  isTopLevel: boolean,
+): boolean {
+  switch (pattern.kind) {
+    case "WildcardPattern":
+    case "BindingPattern":
+      return true;
+    case "PathPattern":
+      return isTopLevel;
+    case "TupleStructPattern":
+      if (pattern.type.kind === "EnumType" && !isTopLevel) return false;
+      return pattern.elements.every((el) => isPatternUnconditional(el, false));
+    case "StructPattern":
+      if (pattern.type.kind === "EnumType" && !isTopLevel) return false;
+      return pattern.fields.every(
+        (f) =>
+          !isSome(f.pattern) || isPatternUnconditional(f.pattern.value, false),
+      );
+    default:
+      return false;
+  }
+}
+
+function buildEnumMatchSwitch(
+  ctx: JsimContext,
+  matchExpr: Semantics.MatchExpression,
+  scrutineeExpr: JSIM.Expression,
+): JSIM.SwitchStatement {
+  const dispatched = matchExpr.arms.map((arm) => ({
+    arm,
+    dispatch: topLevelPatternDispatch(arm.pattern),
+  }));
+
+  const explicitTags = new Set<string>();
+  for (const { dispatch } of dispatched) {
+    if (dispatch !== "universal") {
+      for (const tag of dispatch.keys()) explicitTags.add(tag);
+    }
+  }
+
+  const armsForTag = (tag: string): DispatchedArm[] => {
+    const applicable = dispatched.flatMap(
+      ({ arm, dispatch }): DispatchedArm[] => {
+        if (dispatch === "universal") {
+          return [{ pattern: arm.pattern, guard: arm.guard, body: arm.body }];
+        }
+        const specific = dispatch.get(tag);
+        return specific === undefined
+          ? []
+          : [{ pattern: specific, guard: arm.guard, body: arm.body }];
+      },
+    );
+    return truncateAtFirstUnconditionalArm(applicable);
+  };
+
+  // Every chain gets its own defense-in-depth throw, not just the switch's
+  // overall default - exhaustiveness checking tracks coverage by outer
+  // variant name only, not nested refinement, so a chain that looks
+  // exhaustive to semantics can still fail to match at runtime. Without
+  // this, falling off the end would silently fall through into the next
+  // case via ordinary switch fallthrough.
+  const cases: JSIM.SwitchCase[] = [...explicitTags].map((tag) => ({
+    kind: "SwitchCase",
+    tag,
+    body: withDefenseInDepthThrow(
+      lowerMatchArmChain(ctx, armsForTag(tag), scrutineeExpr),
+    ),
+  }));
+
+  const universalArms: DispatchedArm[] = truncateAtFirstUnconditionalArm(
+    dispatched
+      .filter(({ dispatch }) => dispatch === "universal")
+      .map(({ arm }) => ({
+        pattern: arm.pattern,
+        guard: arm.guard,
+        body: arm.body,
+      })),
+  );
+
+  const defaultBody: JSIM.Statement[] =
+    universalArms.length > 0
+      ? withDefenseInDepthThrow(
+          lowerMatchArmChain(ctx, universalArms, scrutineeExpr),
+        )
+      : [{ kind: "ThrowStatement", message: "unreachable" }];
+
+  return {
+    kind: "SwitchStatement",
+    discriminant: jsimFieldAccess(scrutineeExpr, "tag"),
+    cases,
+    defaultBody,
+  };
+}
+
+/** Lowers a tag's (or the default's) applicable arms, in order, to a flat
+ * sequence of destructure-then-conditionally-return statements - a guard's
+ * failure (or a nested sub-pattern's own tag mismatch) falls through
+ * textually to the next arm, matching `match`'s own top-to-bottom
+ * evaluation order. Callers append their own defense-in-depth throw (see
+ * `withDefenseInDepthThrow`) since this chain isn't always guaranteed to
+ * end in a match. */
+function lowerMatchArmChain(
+  ctx: JsimContext,
+  arms: readonly DispatchedArm[],
+  scrutineeExpr: JSIM.Expression,
+): JSIM.Statement[] {
+  const stmts: JSIM.Statement[] = [];
+  for (const arm of arms) {
+    pushRenameFrame(ctx);
+    try {
+      // `continuation`'s call registers every name the pattern binds
+      // before the guard is parsed, so a guard referencing one resolves
+      // normally.
+      const continuation = compilePatternInto(
+        ctx,
+        arm.pattern,
+        scrutineeExpr,
+        false,
+        false,
+      );
+      const returnStmt: JSIM.Statement = {
+        kind: "ReturnStatement",
+        value: some(parseExpression(ctx, arm.body)),
+      };
+      const rest: JSIM.Statement[] = isSome(arm.guard)
+        ? [
+            {
+              kind: "IfStatement",
+              condition: parseExpression(ctx, arm.guard.value),
+              thenBranch: [returnStmt],
+              elseBranch: none(),
+            },
+          ]
+        : [returnStmt];
+      stmts.push(...continuation(rest));
+    } finally {
+      popRenameFrame(ctx);
+    }
+  }
+  return stmts;
+}
+
+/**
+ * A pattern compiled against a value expression, as a function from
+ * "statements once this pattern is confirmed" to "the full sequence
+ * including its own checks/bindings". Continuation-passing (not flat
+ * condition/binding lists) keeps nested binding extraction inside the `if`
+ * that confirmed it's safe - `Outer::Wrap(Inner::A(x))` must check
+ * `data[0].tag === "A"` before reading `data[0].data[0]`, or a mismatched
+ * `Inner::B` throws a raw `TypeError` instead of falling through.
+ */
+type PatternContinuation = (
+  rest: readonly JSIM.Statement[],
+) => readonly JSIM.Statement[];
+
+function guardedBy(condition: JSIM.Expression): PatternContinuation {
+  return (rest) => [
+    { kind: "IfStatement", condition, thenBranch: rest, elseBranch: none() },
+  ];
+}
+
+function composeContinuations(
+  continuations: readonly PatternContinuation[],
+): PatternContinuation {
+  return (rest) =>
+    continuations.reduceRight(
+      (acc: readonly JSIM.Statement[], cont) => cont(acc),
+      rest,
+    );
+}
+
+/**
+ * Recursively compiles a pattern against a lowered value expression -
+ * shared by the top-level arm-chain builder and any nested sub-pattern.
+ * Only sees pattern kinds `analyzePattern` actually produces (see
+ * `topLevelPatternDispatch`'s doc comment).
+ */
+// eslint-disable-next-line complexity -- Routing function over the full Pattern union
+function compilePatternInto(
+  ctx: JsimContext,
+  pattern: Semantics.Pattern,
+  valueExpr: JSIM.Expression,
+  ambientMutable: boolean,
+  // `false` only for a match arm's top-level pattern - the switch case
+  // already guarantees the tag. Every recursive call leaves this at `true`.
+  includeOwnTag: boolean = true,
+): PatternContinuation {
+  switch (pattern.kind) {
+    case "WildcardPattern":
+      return (rest) => rest;
+    case "BindingPattern": {
+      const binding = bindPatternName(
+        ctx,
+        pattern.name,
+        valueExpr,
+        pattern.mutable || ambientMutable,
+      );
+      return (rest) => [binding, ...rest];
+    }
+    case "LiteralPattern": {
+      const literalExpr = literalPatternExpression(
+        ctx,
+        pattern.literal,
+        pattern.negative,
+      );
+      return guardedBy(
+        jsimBinaryExpression(
+          ctx,
+          "Eq",
+          valueExpr,
+          literalExpr,
+          pattern.tokenId,
+        ),
+      );
+    }
+    case "RangePattern": {
+      const startExpr = literalPatternExpression(
+        ctx,
+        pattern.start.literal,
+        pattern.start.negative,
+      );
+      const endExpr = literalPatternExpression(
+        ctx,
+        pattern.end.literal,
+        pattern.end.negative,
+      );
+      const condition = jsimBinaryExpression(
+        ctx,
+        "And",
+        jsimBinaryExpression(ctx, "Ge", valueExpr, startExpr, pattern.tokenId),
+        jsimBinaryExpression(ctx, "Le", valueExpr, endExpr, pattern.tokenId),
+        pattern.tokenId,
+      );
+      return guardedBy(condition);
+    }
+    case "PathPattern":
+      return includeOwnTag
+        ? guardedBy(
+            variantTagCondition(
+              ctx,
+              valueExpr,
+              variantTagOf(pattern),
+              pattern.tokenId,
+            ),
+          )
+        : (rest: readonly JSIM.Statement[]): readonly JSIM.Statement[] => rest;
+    case "TupleStructPattern": {
+      const isEnumVariant = pattern.type.kind === "EnumType";
+      const effectiveMutable = pattern.mutable || ambientMutable;
+      const dataExpr = isEnumVariant
+        ? jsimFieldAccess(valueExpr, "data")
+        : valueExpr;
+      const elementsContinuation = composeContinuations(
+        pattern.elements.map((el, i) =>
+          compilePatternInto(
+            ctx,
+            el,
+            {
+              kind: "IndexExpression",
+              object: dataExpr,
+              index: { kind: "NumberLiteral", value: String(i) },
+              isArrayIndex: false,
+            },
+            effectiveMutable,
+          ),
+        ),
+      );
+      if (!isEnumVariant || !includeOwnTag) return elementsContinuation;
+      const tagCondition = variantTagCondition(
+        ctx,
+        valueExpr,
+        variantTagOf(pattern),
+        pattern.tokenId,
+      );
+      return (rest) => guardedBy(tagCondition)(elementsContinuation(rest));
+    }
+    case "StructPattern": {
+      const isEnumVariant = pattern.type.kind === "EnumType";
+      const effectiveMutable = pattern.mutable || ambientMutable;
+      const dataExpr = isEnumVariant
+        ? jsimFieldAccess(valueExpr, "data")
+        : valueExpr;
+      const fieldsContinuation = composeContinuations(
+        pattern.fields.map((field): PatternContinuation => {
+          const fieldValueExpr = jsimFieldAccess(dataExpr, field.name.text);
+          if (isSome(field.pattern)) {
+            return compilePatternInto(
+              ctx,
+              field.pattern.value,
+              fieldValueExpr,
+              effectiveMutable,
+            );
+          }
+          const binding = bindPatternName(
+            ctx,
+            field.name,
+            fieldValueExpr,
+            effectiveMutable,
+          );
+          return (rest) => [binding, ...rest];
+        }),
+      );
+      if (!isEnumVariant || !includeOwnTag) return fieldsContinuation;
+      const tagCondition = variantTagCondition(
+        ctx,
+        valueExpr,
+        variantTagOf(pattern),
+        pattern.tokenId,
+      );
+      return (rest) => guardedBy(tagCondition)(fieldsContinuation(rest));
+    }
+    case "OrPattern": {
+      // Only reachable for a nested or-pattern - a top-level one is
+      // disambiguated per-tag by `topLevelPatternDispatch` first. Only
+      // binding-free alternatives are supported; a binding one would need
+      // a conditional merge this pass doesn't build.
+      const altResults = pattern.alternatives.map((alt) =>
+        patternCondition(alt, ctx, valueExpr),
+      );
+      if (altResults.some((r) => r.kind === "unsupported")) {
+        throw new Error(
+          "JSIM codegen for a nested or-pattern that binds names is not yet implemented",
+        );
+      }
+      // Any unconditional alternative makes the whole disjunction
+      // unconditional - mirrors `isIrrefutablePattern`'s `.some`, not
+      // `.every`.
+      if (altResults.some((r) => r.kind === "unconditional"))
+        return (rest) => rest;
+      let disjunction: Option<JSIM.Expression> = none();
+      for (const r of altResults) {
+        if (r.kind !== "condition") continue;
+        disjunction = isSome(disjunction)
+          ? some(
+              jsimBinaryExpression(
+                ctx,
+                "Or",
+                disjunction.value,
+                r.expr,
+                pattern.tokenId,
+              ),
+            )
+          : some(r.expr);
+      }
+      return isSome(disjunction)
+        ? guardedBy(disjunction.value)
+        : (rest: readonly JSIM.Statement[]): readonly JSIM.Statement[] => rest;
+    }
+    default:
+      throw new Error(
+        `JSIM codegen for enum-match pattern kind "${pattern.kind}" is not yet implemented`,
+      );
+  }
+}
+
+type OrAlternativeResult =
+  | { readonly kind: "unconditional" }
+  | { readonly kind: "condition"; readonly expr: JSIM.Expression }
+  | { readonly kind: "unsupported" };
+
+/**
+ * A binding-free pattern's own match condition, used only for an
+ * `OrPattern`'s alternatives (see `compilePatternInto`'s `OrPattern` case)
+ * - `"unsupported"` for any pattern kind that would bind a name, since
+ * this helper never registers bindings itself.
+ */
+function patternCondition(
+  pattern: Semantics.Pattern,
+  ctx: JsimContext,
+  valueExpr: JSIM.Expression,
+): OrAlternativeResult {
+  switch (pattern.kind) {
+    case "WildcardPattern":
+      return { kind: "unconditional" };
+    case "LiteralPattern":
+      return {
+        kind: "condition",
+        expr: jsimBinaryExpression(
+          ctx,
+          "Eq",
+          valueExpr,
+          literalPatternExpression(ctx, pattern.literal, pattern.negative),
+          pattern.tokenId,
+        ),
+      };
+    case "RangePattern": {
+      const startExpr = literalPatternExpression(
+        ctx,
+        pattern.start.literal,
+        pattern.start.negative,
+      );
+      const endExpr = literalPatternExpression(
+        ctx,
+        pattern.end.literal,
+        pattern.end.negative,
+      );
+      return {
+        kind: "condition",
+        expr: jsimBinaryExpression(
+          ctx,
+          "And",
+          jsimBinaryExpression(
+            ctx,
+            "Ge",
+            valueExpr,
+            startExpr,
+            pattern.tokenId,
+          ),
+          jsimBinaryExpression(ctx, "Le", valueExpr, endExpr, pattern.tokenId),
+          pattern.tokenId,
+        ),
+      };
+    }
+    case "PathPattern":
+      return {
+        kind: "condition",
+        expr: variantTagCondition(
+          ctx,
+          valueExpr,
+          variantTagOf(pattern),
+          pattern.tokenId,
+        ),
+      };
+    default:
+      return { kind: "unsupported" };
+  }
+}
+
+function bindPatternName(
+  ctx: JsimContext,
+  name: Semantics.Identifier,
+  valueExpr: JSIM.Expression,
+  mutable: boolean,
+): JSIM.LetStatement {
+  const emittedName = bindLocalName(ctx, name.text);
+  recordEmittedName(ctx, name.tokenId, emittedName);
+  return {
+    kind: "LetStatement",
+    name: emittedName,
+    mutable,
+    value: some(valueExpr),
+    docComment: none(),
+    span: resolveSpan(ctx.tokens, name.tokenId, name.tokenId),
+    dispose: false,
+  };
+}
+
+function literalPatternExpression(
+  ctx: JsimContext,
+  literal:
+    | Semantics.StringLiteral
+    | Semantics.IntLiteral
+    | Semantics.FloatLiteral
+    | Semantics.CharLiteral
+    | Semantics.BoolLiteral,
+  negative: boolean,
+): JSIM.Expression {
+  const lowered = parseExpression(ctx, literal);
+  if (!negative) return lowered;
+  return {
+    kind: "UnaryExpression",
+    operator: "Neg",
+    operand: lowered,
+    numericKind: hedgeTypeToNumericKind(literal.type),
+  };
+}
+
+function variantTagCondition(
+  ctx: JsimContext,
+  valueExpr: JSIM.Expression,
+  tag: string,
+  tokenId: number,
+): JSIM.Expression {
+  return jsimBinaryExpression(
+    ctx,
+    "Eq",
+    jsimFieldAccess(valueExpr, "tag"),
+    { kind: "StringLiteral", value: tag },
+    tokenId,
+  );
+}
+
+function jsimFieldAccess(
+  object: JSIM.Expression,
+  field: string,
+): JSIM.Expression {
+  return { kind: "FieldAccessExpression", object, field };
+}
+
+function jsimBinaryExpression(
+  ctx: JsimContext,
+  operator: JSIM.BinaryOperator,
+  left: JSIM.Expression,
+  right: JSIM.Expression,
+  tokenId: number,
+): JSIM.Expression {
+  return {
+    kind: "BinaryExpression",
+    operator,
+    left,
+    right,
+    numericKind: none(),
+    span: resolveSpan(ctx.tokens, tokenId, tokenId),
+  };
 }
 
 function makeStructField(

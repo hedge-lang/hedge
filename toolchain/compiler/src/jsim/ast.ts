@@ -10,16 +10,11 @@ export interface Program {
 export type Item = FunctionDecl | StaticDecl | ConstDecl | EnumDecl | Statement;
 
 /**
- * An enum's own runtime representation is purely structural (a variant's
- * tagged-object shape carries its own discriminant - see the construction
- * side's `StructExpression` lowering), so this item contributes nothing to
- * emitted JS; it exists only to give codegen enough structure to emit a
- * discriminated-union `.d.ts` type alias. Each variant's field types are
- * already rendered to `.d.ts` type text at JSIM-lowering time (not carried
- * as `Semantics.Type`/`JSIM.Type`), since the closed `PrimitiveType` union
- * has no member for a named type reference (an enum field referencing
- * another enum) and widening it is unwarranted for this one, `.d.ts`-only
- * consumer.
+ * Contributes nothing to emitted JS - a variant's tagged object already
+ * carries its own discriminant. Exists only to emit a discriminated-union
+ * `.d.ts` type alias. Field types are pre-rendered to `.d.ts` text at
+ * lowering time rather than carried as `JSIM.Type`, since `PrimitiveType`
+ * has no member for a named type reference.
  */
 export interface EnumDecl {
   readonly kind: "EnumDecl";
@@ -37,7 +32,10 @@ export type EnumDeclVariant =
   | {
       readonly kind: "StructVariant";
       readonly tag: string;
-      readonly dataFields: readonly { readonly name: string; readonly type: string }[];
+      readonly dataFields: readonly {
+        readonly name: string;
+        readonly type: string;
+      }[];
     };
 
 /**
@@ -82,7 +80,9 @@ export type Statement =
   | LetStatement
   | BlockStatement
   | IfStatement
+  | SwitchStatement
   | ReturnStatement
+  | ThrowStatement
   | DisposeCallStatement
   | Expression
   | FunctionDecl;
@@ -149,6 +149,33 @@ export interface IfStatement {
   readonly condition: Expression;
   readonly thenBranch: readonly Statement[];
   readonly elseBranch: Option<readonly Statement[]>;
+}
+
+/**
+ * `match` on an enum lowers to `switch` on `<scrutinee>.tag` - one case per
+ * explicitly-named tag; a tag covered only by a wildcard/binding catch-all
+ * falls to `defaultBody`. `defaultBody` is never absent: the catch-all's
+ * own chain, or a `ThrowStatement` (defense-in-depth per spec 0016).
+ */
+export interface SwitchStatement {
+  readonly kind: "SwitchStatement";
+  readonly discriminant: Expression;
+  readonly cases: readonly SwitchCase[];
+  readonly defaultBody: readonly Statement[];
+}
+
+export interface SwitchCase {
+  readonly kind: "SwitchCase";
+  readonly tag: string;
+  readonly body: readonly Statement[];
+}
+
+/** `throw new Error(message);` - match's defense-in-depth fallback.
+ * Division-by-zero/array-bounds throws stay raw text in
+ * codegen/generator.ts; this is the only JSIM-node throw. */
+export interface ThrowStatement {
+  readonly kind: "ThrowStatement";
+  readonly message: string;
 }
 
 export interface ReturnStatement {

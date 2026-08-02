@@ -4055,17 +4055,11 @@ function analyzeCompoundAssignmentExpression(
 
 /**
  * `Message::Write { text: "hi" }`-shaped construction struct-literals.
- * `none()` whenever `structExpression.path` isn't a two-segment path naming
- * a known enum + variant - the caller falls back to ordinary
- * `StructExpression` analysis (a real plain-struct multi-segment path is
- * out of scope regardless; see the pre-existing `UnitType` fallback just
- * below this function's only call site). Reuses `analyzeStructNamedFields`
- * directly, since `Semantics.Variant.body`'s `NamedFieldsBody` is the exact
- * same node shape a plain struct's own body already is - the field
- * validation (duplicate/unknown/missing name, per-field type mismatch) has
- * no enum-specific difference, only the diagnostic wording says "struct"
- * generically rather than "variant" (an accepted minor imprecision, not a
- * functional gap).
+ * `none()` unless the path is a known enum + variant, falling back to
+ * ordinary `StructExpression` analysis. Reuses `analyzeStructNamedFields`
+ * directly, since a variant's `NamedFieldsBody` is the same node shape a
+ * struct's own body is - only the diagnostic wording says "struct" rather
+ * than "variant" (an accepted minor imprecision).
  */
 function analyzeEnumVariantStructConstruction(
   ctx: AnalysisContext,
@@ -4082,13 +4076,8 @@ function analyzeEnumVariantStructConstruction(
   const enumDecl = ctx.enumScope.get(enumName);
   if (enumDecl === undefined) return none();
   const variant = enumDecl.variants.find((v) => v.name.text === variantName);
-  // Unknown variant name is already diagnosed by whichever path-resolution
-  // route reaches `analyzePath` for this same path (none does today for a
-  // struct-literal path, since `parseStructExpression` never routes through
-  // `analyzePath` - so an unknown variant here falls through to the
-  // pre-existing generic `UnitType` placeholder with no diagnostic, a known
-  // gap symmetrical with plain structs' own pre-existing "cannot find
-  // struct" check, which this mirrors below instead of silently deferring).
+  // Diagnosed directly here, not via `analyzePath` - a struct-literal path
+  // never routes through it, so it needs its own unknown-variant check.
   if (variant === undefined) {
     emitError(
       ctx,
@@ -4377,11 +4366,7 @@ function analyzeCall(
 ): Semantics.CallExpression {
   const callee = analyzeExpression(ctx, call.callee);
   const args = call.arguments.map((arg) => analyzeExpression(ctx, arg));
-  const enumConstruction = analyzeEnumVariantCallConstruction(
-    ctx,
-    call,
-    args,
-  );
+  const enumConstruction = analyzeEnumVariantCallConstruction(ctx, call, args);
   if (isSome(enumConstruction)) {
     return {
       ...call,
@@ -4399,22 +4384,21 @@ function analyzeCall(
 }
 
 /**
- * `Message::Move(1, 2)`-shaped construction calls. `none()` whenever
- * `call.callee` isn't a two-segment path naming a known enum + variant -
- * the caller falls back to ordinary call analysis (a real function call, or
- * the pre-existing unresolved-callee placeholder), same as
- * `analyzeEnumVariantPathConstruction`'s own fallback shape. Unlike that
- * function, this one resolves regardless of the variant's body shape
- * (unit/tuple/struct) - only a call site has enough context to validate
- * arity, so a unit variant called with args, or a struct variant called
- * with parens instead of braces, are both diagnosed here rather than
- * silently deferred.
+ * `Message::Move(1, 2)`-shaped construction calls. `none()` when
+ * `call.callee` isn't a two-segment path naming a known enum + variant,
+ * falling back to ordinary call analysis. Unlike the path resolver, this
+ * one resolves regardless of the variant's body shape - only a call site
+ * can validate arity, so a unit variant called with args or a struct
+ * variant called with parens are both diagnosed here.
  */
 function analyzeEnumVariantCallConstruction(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
   args: readonly Semantics.Expression[],
-): Option<{ readonly type: Semantics.Type; readonly args: Semantics.Expression[] }> {
+): Option<{
+  readonly type: Semantics.Type;
+  readonly args: Semantics.Expression[];
+}> {
   if (call.callee.kind !== "PathExpression") return none();
   const { segments } = call.callee.path;
   if (segments.length !== 2) return none();
@@ -4423,9 +4407,8 @@ function analyzeEnumVariantCallConstruction(
   const enumDecl = ctx.enumScope.get(enumName);
   if (enumDecl === undefined) return none();
   const variant = enumDecl.variants.find((v) => v.name.text === variantName);
-  // Unknown variant name is already diagnosed by `analyzePath`'s own
-  // analysis of `call.callee` above (in `analyzeCall`) - not re-diagnosed
-  // here, to avoid a duplicate "no variant" cascade.
+  // Already diagnosed by `analyzePath`'s analysis of `call.callee` in
+  // `analyzeCall` - not repeated here, to avoid a duplicate cascade.
   if (variant === undefined) return none();
 
   if (!isSome(variant.body)) {
@@ -4448,7 +4431,26 @@ function analyzeEnumVariantCallConstruction(
     );
     return some({ type: enumDecl.type, args: [...args] });
   }
-  const fields = variant.body.value.fields;
+  const checkedArgs = checkTupleVariantCallArgs(
+    ctx,
+    call,
+    variantName,
+    variant.body.value.fields,
+    args,
+  );
+  return some({ type: enumDecl.type, args: checkedArgs });
+}
+
+/** Arity, then per-argument type checking, for a tuple-variant construction
+ * call. Split out from `analyzeEnumVariantCallConstruction` to stay under
+ * the file's complexity cap. */
+function checkTupleVariantCallArgs(
+  ctx: AnalysisContext,
+  call: Parser.CallExpression,
+  variantName: string,
+  fields: readonly Semantics.TupleField[],
+  args: readonly Semantics.Expression[],
+): Semantics.Expression[] {
   if (fields.length !== args.length) {
     emitError(
       ctx,
@@ -4456,9 +4458,9 @@ function analyzeEnumVariantCallConstruction(
       call.tokenId,
       none(),
     );
-    return some({ type: enumDecl.type, args: [...args] });
+    return [...args];
   }
-  const checkedArgs = args.map((arg, i) => {
+  return args.map((arg, i) => {
     const field = fields[i];
     if (field === undefined) return arg;
     const { expr, mismatch } = reconcileExpressionType(
@@ -4480,29 +4482,20 @@ function analyzeEnumVariantCallConstruction(
     }
     return expr;
   });
-  return some({ type: enumDecl.type, args: checkedArgs });
 }
 
 /**
  * `Enum::Variant`-shaped construction paths - the construction-side
- * counterpart to `resolveEnumDecl`/pattern-position variant resolution
- * above, but name-driven off the path's own two segments rather than
- * type-driven off a scrutinee. `none()` when `segments[0]` doesn't name a
- * known enum, so the caller falls through to the pre-existing generic
- * multi-segment-path placeholder unchanged (a real "associated
- * item"/module-path construct, once one of those exists, would also land
- * here for now).
+ * counterpart to the pattern-position resolvers above, name-driven off the
+ * path's segments rather than type-driven off a scrutinee. `none()` when
+ * `segments[0]` isn't a known enum, falling through to the generic
+ * multi-segment-path placeholder.
  *
- * Only resolves a *bare* reference to a unit variant (`Message::Quit`) -
- * `analyzeCall`/`analyzeStructExpression` handle `Message::Move(1, 2)`/
- * `Message::Write { .. }` themselves, since only they know whether the path
- * is actually being invoked as a call or struct literal. A bare reference
- * to a tuple/struct variant with no call/struct-literal following it
- * (`let x = Message::Move;`, a Rust-style implicit constructor-function
- * value) still falls through to `none()` here - unsupported, same
- * unresolved-`UnitType` placeholder as before this function existed, not a
- * new diagnostic, since real function-value semantics for a tuple/struct
- * variant's implicit constructor is out of scope.
+ * Only resolves a bare unit-variant reference (`Message::Quit`) -
+ * `analyzeCall`/`analyzeStructExpression` handle the call/struct-literal
+ * forms themselves, since only they know the syntactic context. A bare
+ * tuple/struct variant reference (`let x = Message::Move;`) still falls to
+ * `none()` - real constructor-function-value semantics are out of scope.
  */
 function analyzeEnumVariantPathConstruction(
   ctx: AnalysisContext,

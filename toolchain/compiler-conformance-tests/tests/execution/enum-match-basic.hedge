@@ -1,0 +1,21 @@
+enum Message {
+  Quit,
+  Move(i32, i32),
+  Write { text: str },
+}
+
+fn describe(m: Message) -> str {
+  match m {
+    Message::Quit => "quit",
+    Message::Move(x, y) => "move",
+    Message::Write { text } => text,
+  }
+}
+
+fn main() {
+  print(describe(Message::Quit));
+  print(",");
+  print(describe(Message::Move(1, 2)));
+  print(",");
+  print(describe(Message::Write { text: "hello" }));
+}

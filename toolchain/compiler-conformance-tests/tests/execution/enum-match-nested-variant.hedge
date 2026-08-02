@@ -1,0 +1,22 @@
+enum Inner {
+  A(i32),
+  B,
+}
+
+enum Outer {
+  Wrap(Inner),
+  Empty,
+}
+
+fn describe(o: Outer) -> i32 {
+  match o {
+    Outer::Wrap(Inner::A(x)) => x,
+    Outer::Empty => -2,
+  }
+}
+
+fn main() {
+  print(describe(Outer::Wrap(Inner::A(42))));
+  print(",");
+  print(describe(Outer::Empty));
+}
