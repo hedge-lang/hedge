@@ -4,14 +4,17 @@ function describe(m) {
   return (() => {
     const matchScrutinee = m;
     switch (matchScrutinee.tag) {
-      case "Quit":
+      case "Quit": {
         return 0;
-      case "Move":
+      }
+      case "Move": {
         const x = matchScrutinee.data[0];
         const y = matchScrutinee.data[1];
         return x;
-      default:
+      }
+      default: {
         throw new Error("unreachable");
+      }
     }
   })();
 }

@@ -4,10 +4,12 @@ function describe(m) {
   return (() => {
     const matchScrutinee = m;
     switch (matchScrutinee.tag) {
-      case "Quit":
+      case "Quit": {
         return 0;
-      default:
+      }
+      default: {
         return ((-1)|0);
+      }
     }
   })();
 }

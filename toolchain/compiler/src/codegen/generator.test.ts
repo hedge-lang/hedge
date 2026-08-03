@@ -329,6 +329,40 @@ describe("enum declaration codegen", () => {
   });
 });
 
+describe("match/switch codegen", () => {
+  it("wraps each switch case's body in its own block, so a destructured binding doesn't leak into sibling cases", () => {
+    const code = gen(`
+      enum Message { Quit, Move(i32, i32) }
+      fn _(m: Message) -> i32 {
+        match m {
+          Message::Quit => 0,
+          Message::Move(x, y) => x,
+        }
+      }
+    `);
+    expect(stmts(code)).toBe(
+      [
+        "return (() => {",
+        "  const matchScrutinee = m;",
+        "  switch (matchScrutinee.tag) {",
+        '    case "Quit": {',
+        "      return 0;",
+        "    }",
+        '    case "Move": {',
+        "      const x = matchScrutinee.data[0];",
+        "      const y = matchScrutinee.data[1];",
+        "      return x;",
+        "    }",
+        "    default: {",
+        '      throw new Error("unreachable");',
+        "    }",
+        "  }",
+        "})();",
+      ].join("\n"),
+    );
+  });
+});
+
 describe("binary expression codegen", () => {
   it.each([
     ["Add", "i32", "x + y", "((x + y)|0)"],

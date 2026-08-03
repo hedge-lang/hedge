@@ -458,17 +458,12 @@ function emitIfStatement(stmt: IfStatement): string {
   return `if (${cond}) ${thenStr} else ${emitBranchBlock(elseStmts, isMultiline)}`;
 }
 
-function emitSwitchCaseBody(body: readonly Statement[]): string {
-  const lines = body.map(emitStatement).filter((s) => s.length > 0);
-  return lines.map(indent).join("\n");
-}
-
 function emitSwitchStatement(stmt: SwitchStatement): string {
   const discriminant = emitExpression(stmt.discriminant);
   const caseBlocks = stmt.cases.map(
-    (c) => `case ${JSON.stringify(c.tag)}:\n${emitSwitchCaseBody(c.body)}`,
+    (c) => `case ${JSON.stringify(c.tag)}: ${emitBranchBlock(c.body, true)}`,
   );
-  const defaultBlock = `default:\n${emitSwitchCaseBody(stmt.defaultBody)}`;
+  const defaultBlock = `default: ${emitBranchBlock(stmt.defaultBody, true)}`;
   const body = [...caseBlocks, defaultBlock]
     .join("\n")
     .split("\n")
