@@ -616,6 +616,19 @@ describe("place-projection borrows", (): void => {
 });
 
 describe("pattern-derived &/&mut sub-bindings", (): void => {
+  it("rejects a let-destructuring &mut sub-binding of a scrutinee not declared mut", (): void => {
+    const diagnostics = check(`
+      enum Wrapper { Only(i32) }
+      fn main() {
+        let w = Wrapper::Only(1);
+        let Wrapper::Only(&mut x) = w;
+        print(x);
+      }
+    `);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("not declared mut");
+  });
+
   it("rejects a let-destructuring &mut sub-binding overlapping a later plain &mut borrow of the same scrutinee", (): void => {
     const diagnostics = check(`
       enum Wrapper { Only(i32) }
