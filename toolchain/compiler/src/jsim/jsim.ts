@@ -1444,7 +1444,15 @@ function jsimIfLetStatement(
       scrutineeIdent,
       false,
     );
-    const compiled = continuation(thenBranch);
+    // `thenBranch` is user code, wrapped in its own block before entering
+    // the continuation - `fillMissingElseBranch` below fills any elseless
+    // `IfStatement` it finds, and only pattern-generated guard `IfStatement`s
+    // may lack an else at this point. Splicing `thenBranch` in flat would let
+    // that same recursive fill reach into a user-written `if` with no else
+    // and wrongly attach this `if let`'s own else-branch to it.
+    const compiled = continuation([
+      { kind: "BlockStatement", body: thenBranch },
+    ]);
 
     const elseBranch = jsimElseBranch(ctx, ifExpr);
     const withElse = fillMissingElseBranch(

@@ -1,0 +1,16 @@
+enum Opt {
+  Some(i32),
+  None,
+}
+
+fn main() {
+  let o = Opt::Some(5);
+  if let Opt::Some(x) = o {
+    if x > 100 {
+      print("big");
+    }
+    print("done");
+  } else {
+    print("none");
+  }
+}
