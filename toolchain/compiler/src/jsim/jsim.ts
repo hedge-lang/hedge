@@ -246,17 +246,24 @@ function lowerDestructuringLetStatement(
 function withRefutablePatternThrow(
   stmts: readonly JSIM.Statement[],
 ): JSIM.Statement[] {
+  return fillMissingElseBranch(stmts, [
+    { kind: "ThrowStatement", message: "refutable pattern did not match" },
+  ]);
+}
+
+/** Recursively fills in `elseBranch` wherever `compilePatternInto` left one
+ * missing. See `withRefutablePatternThrow`/`jsimIfLetStatement` for what
+ * "on mismatch" means in each. */
+function fillMissingElseBranch(
+  stmts: readonly JSIM.Statement[],
+  onMismatch: readonly JSIM.Statement[],
+): JSIM.Statement[] {
   return stmts.map((stmt): JSIM.Statement => {
     if (stmt.kind === "IfStatement" && !isSome(stmt.elseBranch)) {
       return {
         ...stmt,
-        thenBranch: withRefutablePatternThrow(stmt.thenBranch),
-        elseBranch: some([
-          {
-            kind: "ThrowStatement",
-            message: "refutable pattern did not match",
-          },
-        ]),
+        thenBranch: fillMissingElseBranch(stmt.thenBranch, onMismatch),
+        elseBranch: some([...onMismatch]),
       };
     }
     return stmt;
@@ -1051,7 +1058,7 @@ function parseStatement(
         return [jsimBlockStatement(ctx, statement.expression)];
       }
       if (statement.expression.kind === "IfExpression") {
-        return [jsimIfExpressionAsStatement(ctx, statement.expression)];
+        return jsimIfExpressionAsStatement(ctx, statement.expression);
       }
       if (
         statement.expression.kind === "AssignExpression" ||
@@ -1128,11 +1135,11 @@ function jsimBlockStatement(
 function jsimIfExpressionAsStatement(
   ctx: JsimContext,
   ifExpr: Semantics.IfExpression,
-): JSIM.Statement {
+): JSIM.Statement[] {
   const hasResult =
     jsimBranchHasResult(ifExpr.thenBranch) ||
     (isSome(ifExpr.elseBranch) && jsimBranchHasResult(ifExpr.elseBranch.value));
-  if (hasResult) return jsimIfExpression(ctx, ifExpr);
+  if (hasResult) return [jsimIfExpression(ctx, ifExpr)];
   return jsimIfStatement(ctx, ifExpr);
 }
 
@@ -1225,6 +1232,12 @@ function parseExpression(
       return jsimStructExpression(ctx, expression);
     case "IfExpression":
       return jsimIfExpression(ctx, expression);
+    case "LetExpression":
+      // Only ever consumed as an IfExpression's own condition, handled by
+      // jsimIfStatement before reaching here - impossible otherwise.
+      throw new Error(
+        "a LetExpression reached generic JSIM expression lowering outside an if condition, which should be structurally impossible",
+      );
     case "MatchExpression":
       return jsimMatchExpression(ctx, expression);
     case "Block":
@@ -1294,7 +1307,7 @@ function jsimBranchElse(
   ctx: JsimContext,
   branch: Semantics.IfExpression | Semantics.Block,
 ): JSIM.Statement[] {
-  if (branch.kind === "IfExpression") return [jsimIfStatement(ctx, branch)];
+  if (branch.kind === "IfExpression") return jsimIfStatement(ctx, branch);
   return jsimBranchBody(ctx, branch);
 }
 
@@ -1347,32 +1360,118 @@ function branchAttributedDropDeclarations(
 function jsimIfStatement(
   ctx: JsimContext,
   ifExpr: Semantics.IfExpression,
-): JSIM.IfStatement {
+): JSIM.Statement[] {
+  if (ifExpr.condition.kind === "LetExpression") {
+    return jsimIfLetStatement(ctx, ifExpr, ifExpr.condition);
+  }
   const condition = parseExpression(ctx, ifExpr.condition);
   const thenBranch = [
     ...branchAttributedDropDeclarations(ctx, ifExpr.tokenId, "then"),
     ...jsimBranchBody(ctx, ifExpr.thenBranch),
   ];
+  return [
+    {
+      kind: "IfStatement",
+      condition,
+      thenBranch,
+      elseBranch: jsimElseBranch(ctx, ifExpr),
+    },
+  ];
+}
+
+/** The `else` branch's own statements (shadows + lowered else-body), shared
+ * by the plain-`if` and `if let` lowering paths. `none()` only when there's
+ * truly nothing to carry - no source `else` and no attributed shadows. */
+function jsimElseBranch(
+  ctx: JsimContext,
+  ifExpr: Semantics.IfExpression,
+): Option<JSIM.Statement[]> {
   const elseShadows = branchAttributedDropDeclarations(
     ctx,
     ifExpr.tokenId,
     "else",
   );
-  // A source-written `else` (even an empty one) always survives as `Some`,
-  // matching the pre-existing behavior for an explicit empty else block --
-  // only a *synthesized* else (no source else at all) collapses back to
-  // `none()` when there's nothing to carry.
-  const elseBranch: Option<JSIM.Statement[]> = isSome(ifExpr.elseBranch)
+  return isSome(ifExpr.elseBranch)
     ? some([...elseShadows, ...jsimBranchElse(ctx, ifExpr.elseBranch.value)])
     : elseShadows.length > 0
       ? some(elseShadows)
       : none();
-  return {
-    kind: "IfStatement",
-    condition,
-    thenBranch,
-    elseBranch,
-  };
+}
+
+/**
+ * The scrutinee is evaluated once into a synthesized temp - re-emitting it
+ * at every condition/destructure site would re-run a side-effecting
+ * scrutinee multiple times. `compilePatternInto` nests conditions/bindings
+ * around `thenBranch`'s statements; every mismatch falls through to the
+ * real `else`-branch via `fillMissingElseBranch` - unlike match/`let`,
+ * `if let` has one arm and a real `else` to fall back to.
+ *
+ * An unconditional pattern (e.g. a bare binding) leaves nothing to test,
+ * so this falls back to a literal `true` condition - rare, but still a
+ * valid `if` shape.
+ */
+function jsimIfLetStatement(
+  ctx: JsimContext,
+  ifExpr: Semantics.IfExpression,
+  letExpr: Semantics.LetExpression,
+): JSIM.Statement[] {
+  pushRenameFrame(ctx);
+  try {
+    const scrutineeValue = parseExpression(ctx, letExpr.scrutinee);
+    const scrutineeName = bindLocalName(ctx, "ifLetScrutinee");
+    const scrutineeDecl: JSIM.LetStatement = {
+      kind: "LetStatement",
+      name: scrutineeName,
+      mutable: false,
+      value: some(scrutineeValue),
+      docComment: none(),
+      span: resolveSpan(ctx.tokens, letExpr.tokenId, letExpr.tokenId),
+      dispose: false,
+    };
+    const scrutineeIdent: JSIM.Expression = {
+      kind: "Identifier",
+      value: scrutineeName,
+      type: none(),
+    };
+
+    const thenBranch = [
+      ...branchAttributedDropDeclarations(ctx, ifExpr.tokenId, "then"),
+      ...jsimBranchBody(ctx, ifExpr.thenBranch),
+    ];
+    const continuation = compilePatternInto(
+      ctx,
+      letExpr.pattern,
+      scrutineeIdent,
+      false,
+    );
+    const compiled = continuation(thenBranch);
+
+    const elseBranch = jsimElseBranch(ctx, ifExpr);
+    const withElse = fillMissingElseBranch(
+      compiled,
+      isSome(elseBranch) ? elseBranch.value : [],
+    );
+
+    const first = withElse[0];
+    if (
+      withElse.length === 1 &&
+      first !== undefined &&
+      first.kind === "IfStatement"
+    ) {
+      return [scrutineeDecl, first];
+    }
+    return [
+      scrutineeDecl,
+      {
+        kind: "IfStatement",
+        condition: { kind: "BooleanLiteral", value: true },
+        thenBranch: withElse,
+        elseBranch: none(),
+      },
+    ];
+  } finally {
+    popRenameFrame(ctx);
+  }
 }
 
 /**
@@ -1392,7 +1491,7 @@ function jsimTailStatements(
   ctx: JsimContext,
   expr: Semantics.Expression,
 ): JSIM.Statement[] {
-  if (expr.kind === "IfExpression") return [jsimIfStatement(ctx, expr)];
+  if (expr.kind === "IfExpression") return jsimIfStatement(ctx, expr);
   if (expr.kind === "Block") return jsimBranchBody(ctx, expr);
   return [{ kind: "ReturnStatement", value: some(parseExpression(ctx, expr)) }];
 }
@@ -2272,7 +2371,7 @@ function jsimIfExpression(
     callee: {
       kind: "ArrowFunctionExpression",
       params: [],
-      body: [jsimIfStatement(ctx, ifExpression)],
+      body: jsimIfStatement(ctx, ifExpression),
     },
     arguments: [],
   };

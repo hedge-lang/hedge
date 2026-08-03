@@ -886,7 +886,7 @@ describe("move-check", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(diagnostics[0].message).toContain("moved");
+      expect(diagnostics[0].message).toBe("use of moved value `a`");
     });
 
     it("rejects using an array after passing it by value into a function call", (): void => {
@@ -900,7 +900,7 @@ describe("move-check", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(diagnostics[0].message).toContain("moved");
+      expect(diagnostics[0].message).toBe("use of moved value `a`");
     });
 
     it("accepts reassigning an array binding after it was moved away", (): void => {
@@ -928,7 +928,7 @@ describe("move-check", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(diagnostics[0].message).toContain("moved");
+      expect(diagnostics[0].message).toBe("use of moved value `arr`");
     });
 
     it.fails(
@@ -998,7 +998,7 @@ describe("move-check", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(diagnostics[0].message).toContain("moved");
+      expect(diagnostics[0].message).toBe("use of moved value `p`");
     });
 
     it("does not move the scrutinee when every match-arm sub-binding is byRef", (): void => {
@@ -1025,7 +1025,7 @@ describe("move-check", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(diagnostics[0].message).toContain("moved");
+      expect(diagnostics[0].message).toBe("use of moved value `p`");
     });
   });
 });

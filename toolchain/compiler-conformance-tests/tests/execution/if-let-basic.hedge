@@ -1,0 +1,18 @@
+enum Message {
+  Quit,
+  Move(i32, i32),
+}
+
+fn describe(m: Message) -> str {
+  if let Message::Move(x, y) = m {
+    "move"
+  } else {
+    "other"
+  }
+}
+
+fn main() {
+  print(describe(Message::Move(1, 2)));
+  print(",");
+  print(describe(Message::Quit));
+}

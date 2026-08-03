@@ -1087,12 +1087,6 @@ function analyzeVariantBody(
 const WHILE_NOT_YET_SUPPORTED_MESSAGE =
   "`while` expressions are not yet supported by semantic analysis";
 
-// `LetExpression` only ever appears as (or within) an `if`/`while`
-// condition (see `parser/ast.ts`'s doc comment on the type) - this message
-// covers both the `if let` and `while let` surface forms.
-const LET_EXPRESSION_NOT_YET_SUPPORTED_MESSAGE =
-  "`if let`/`while let` are not yet supported by semantic analysis";
-
 /** Placeholder for an `Expression` variant with no `Semantics` counterpart
  * yet - same "parser accepts it, semantics doesn't yet" pattern as
  * `analyzeEnumPlaceholder`, at expression rather than item
@@ -3594,10 +3588,11 @@ function analyzeExpression(
     case "IfExpression":
       return analyzeIfExpression(ctx, expression);
     case "LetExpression":
-      return analyzeExpressionPlaceholder(
-        ctx,
-        expression.tokenId,
-        LET_EXPRESSION_NOT_YET_SUPPORTED_MESSAGE,
+      // The parser only constructs a LetExpression as an if/while condition,
+      // and analyzeIfExpression intercepts it first - reaching here should
+      // be impossible.
+      throw new Error(
+        "a LetExpression reached generic expression analysis outside an if condition, which should be structurally impossible",
       );
     case "MatchExpression":
       return analyzeMatchExpression(ctx, expression);
@@ -4307,6 +4302,9 @@ function analyzeIfExpression(
   ctx: AnalysisContext,
   ifExpression: Parser.IfExpression,
 ): Semantics.IfExpression {
+  if (ifExpression.condition.kind === "LetExpression") {
+    return analyzeIfLetExpression(ctx, ifExpression, ifExpression.condition);
+  }
   const condition = analyzeExpression(ctx, ifExpression.condition);
   const thenBranch = analyzeBlock(ctx, ifExpression.thenBranch);
   const elseBranch = mapSome(ifExpression.elseBranch, (elseBranch) =>
@@ -4322,6 +4320,81 @@ function analyzeIfExpression(
   ) {
     emitError(ctx, "if condition must be `bool`", ifExpression.tokenId, none());
   }
+
+  if (isSome(elseBranch)) {
+    const thenType = thenBranch.type;
+    const elseType = elseBranch.value.type;
+    if (
+      thenType.kind !== "UnitType" &&
+      elseType.kind !== "UnitType" &&
+      !typesEqual(thenType, elseType)
+    ) {
+      emitError(
+        ctx,
+        "if expression branches have incompatible types",
+        ifExpression.tokenId,
+        none(),
+      );
+    }
+  }
+
+  const type: Semantics.Type = isSome(elseBranch)
+    ? thenBranch.type
+    : { kind: "UnitType", tokenId: ifExpression.tokenId };
+  return {
+    ...ifExpression,
+    condition,
+    thenBranch,
+    elseBranch,
+    type,
+  };
+}
+
+/**
+ * Sugar over a single-arm `match` - the pattern is analyzed like a match
+ * arm's (refutable allowed, binding mode via `defaultBindingModeForScrutinee`),
+ * scoped to `thenBranch` only: pushed before it's analyzed, popped before
+ * `elseBranch`'s. `condition.type` is always `PrimitiveBooleanType` -
+ * inherently boolean by construction, so no bool-check is needed here.
+ */
+function analyzeIfLetExpression(
+  ctx: AnalysisContext,
+  ifExpression: Parser.IfExpression,
+  letExpression: Parser.LetExpression,
+): Semantics.IfExpression {
+  const scrutinee = analyzeExpression(ctx, letExpression.scrutinee);
+  const scrutineeType = getType(scrutinee);
+  const { mode: defaultMode, effectiveType } =
+    defaultBindingModeForScrutinee(scrutineeType);
+  const rootMutable = !isSome(placeMutabilityViolation(ctx, scrutinee, true));
+
+  let condition: Semantics.LetExpression;
+  let thenBranch: Semantics.Block;
+  ctx.scopes.push(new Map());
+  try {
+    const pattern = analyzePattern(
+      ctx,
+      letExpression.pattern,
+      effectiveType,
+      defaultMode,
+      rootMutable,
+    );
+    condition = {
+      ...letExpression,
+      pattern,
+      scrutinee,
+      type: { kind: "PrimitiveBooleanType" },
+    };
+    thenBranch = analyzeBlock(ctx, ifExpression.thenBranch);
+  } finally {
+    ctx.scopes.pop();
+  }
+
+  const elseBranch = mapSome(ifExpression.elseBranch, (elseBranch) =>
+    elseBranch.kind === "IfExpression"
+      ? analyzeIfExpression(ctx, elseBranch)
+      : analyzeBlock(ctx, elseBranch),
+  );
 
   if (isSome(elseBranch)) {
     const thenType = thenBranch.type;

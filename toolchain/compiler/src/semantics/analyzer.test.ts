@@ -785,16 +785,7 @@ describe("semantic analysis", (): void => {
     });
   });
 
-  describe("if let / while let (parsed, not yet semantically analyzed)", () => {
-    it("rejects an if-let with a clean 'not yet supported' diagnostic", () => {
-      const result = diagnose("fn main() { if let y = opt { } }");
-      expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain(
-        "not yet supported by semantic analysis",
-      );
-    });
-
+  describe("while let (parsed, not yet semantically analyzed)", () => {
     it("rejects a while-let with a clean 'not yet supported' diagnostic", () => {
       const result = diagnose("fn main() { while let y = opt { } }");
       expect(result.diagnostics).toHaveLength(1);
@@ -803,22 +794,74 @@ describe("semantic analysis", (): void => {
         "not yet supported by semantic analysis",
       );
     });
+  });
 
-    it("does not cascade a second 'condition must be bool' diagnostic for an if-let condition", () => {
-      // `LetExpression`'s placeholder resolves to `UnitType`, and
-      // `analyzeIfExpression`'s bool-check skips any `UnitType` condition
-      // outright (a plain kind check, not a call to `isAmbiguousUnitExpr`).
-      const result = diagnose("fn main() { if let y = opt { } }");
-      expect(result.diagnostics).toHaveLength(1);
+  describe("if let (semantically analyzed)", () => {
+    it("analyzes an if-let with a valid enum scrutinee and pattern cleanly", () => {
+      const result = diagnose(`
+        enum Option { Some(i32), None }
+        fn main() {
+          let opt = Option::Some(1);
+          if let Option::Some(x) = opt {
+            print(x);
+          }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
     });
 
-    it("still analyzes the then-branch normally around an if-let condition placeholder", () => {
-      const result = diagnose("fn main() { if let y = opt { missing_name; } }");
-      expect(result.diagnostics).toHaveLength(2);
-      expect(result.diagnostics[0]?.message).toContain(
-        "not yet supported by semantic analysis",
+    it("accepts a refutable multi-variant enum pattern, unlike let position", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move(i32) }
+        fn main() {
+          let m = Message::Quit;
+          if let Message::Move(x) = m {
+            print(x);
+          }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a reference to the if-let pattern's bound name from the else branch", () => {
+      const result = diagnose(`
+        enum Option { Some(i32), None }
+        fn main() {
+          let opt = Option::Some(1);
+          if let Option::Some(x) = opt {
+          } else {
+            print(x);
+          }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        'Cannot find name "x" in this scope.',
       );
-      expect(result.diagnostics[1]?.message).toContain("missing_name");
+    });
+
+    it("rejects a reference to the if-let pattern's bound name after the whole if", () => {
+      const result = diagnose(`
+        enum Option { Some(i32), None }
+        fn main() {
+          let opt = Option::Some(1);
+          if let Option::Some(x) = opt {
+          }
+          print(x);
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        'Cannot find name "x" in this scope.',
+      );
+    });
+
+    it("reports exactly one diagnostic for an undefined scrutinee, no cascade", () => {
+      const result = diagnose("fn main() { if let y = opt { } }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        'Cannot find name "opt" in this scope.',
+      );
     });
   });
 

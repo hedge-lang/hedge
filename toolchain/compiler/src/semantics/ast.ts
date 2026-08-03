@@ -115,6 +115,7 @@ export type Expression =
   | RangeExpression
   | StructExpression
   | IfExpression
+  | LetExpression
   | MatchExpression
   | Block;
 
@@ -671,4 +672,12 @@ export interface IfExpression extends DecoratedAstNode {
   readonly condition: Expression;
   readonly thenBranch: Block;
   readonly elseBranch: Option<IfExpression | Block>;
+}
+
+/** Only ever an `IfExpression`'s own condition - `analyzeExpression` rejects
+ * a bare one elsewhere, mirroring the parser's own restriction. */
+export interface LetExpression extends DecoratedAstNode {
+  readonly kind: "LetExpression";
+  readonly pattern: Pattern;
+  readonly scrutinee: Expression;
 }

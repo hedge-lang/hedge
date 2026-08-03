@@ -272,7 +272,14 @@ function recordExpressionUses(
       return;
     case "IfExpression":
       recordExpressionUses(target, scopeStack, expression.condition);
-      recordConfinedScope(target, scopeStack, expression.thenBranch);
+      if (expression.condition.kind === "LetExpression") {
+        scopeStack.push(new Map());
+        registerPatternBindings(scopeStack, expression.condition.pattern);
+        recordConfinedScope(target, scopeStack, expression.thenBranch);
+        scopeStack.pop();
+      } else {
+        recordConfinedScope(target, scopeStack, expression.thenBranch);
+      }
       if (isSome(expression.elseBranch)) {
         const elseBranch = expression.elseBranch.value;
         if (elseBranch.kind === "Block") {
@@ -281,6 +288,11 @@ function recordExpressionUses(
           recordExpressionUses(target, scopeStack, elseBranch);
         }
       }
+      return;
+    case "LetExpression":
+      // Only the scrutinee's uses are recorded here - the pattern's names
+      // aren't in scope until IfExpression pushes a frame for thenBranch.
+      recordExpressionUses(target, scopeStack, expression.scrutinee);
       return;
     case "MatchExpression":
       recordExpressionUses(target, scopeStack, expression.scrutinee);
@@ -765,12 +777,28 @@ function lowerIf(
 
   const thenId = pushBlock(blocks);
   pre.successors.push(thenId);
-  const thenExitId = lowerScope(
-    expression.thenBranch,
-    blocks,
-    thenId,
-    scopeStack,
-  );
+  let thenExitId: number;
+  if (expression.condition.kind === "LetExpression") {
+    // Pattern bindings are declarations of thenBranch alone - pushed here
+    // (mirrors buildControlFlowGraph's param registration), popped after
+    // thenBranch, invisible to elseBranch below.
+    scopeStack.push(new Map());
+    const patternDeclarations = declarationsOf(expression.condition.pattern);
+    for (const declaration of patternDeclarations) {
+      registerScopeName(scopeStack, declaration.name, declaration.id);
+    }
+    thenExitId = lowerScope(
+      expression.thenBranch,
+      blocks,
+      thenId,
+      scopeStack,
+      patternDeclarations,
+      false,
+    );
+    scopeStack.pop();
+  } else {
+    thenExitId = lowerScope(expression.thenBranch, blocks, thenId, scopeStack);
+  }
 
   let elseExitId: number | undefined;
   if (expression.elseBranch.kind === "Some") {

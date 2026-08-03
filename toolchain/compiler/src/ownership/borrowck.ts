@@ -372,12 +372,29 @@ function walkStatementPositionExpression(
   aliases: Map<BindingId, BindingId>,
 ): void {
   if (expression.kind === "IfExpression") {
-    walkScopeForBorrowBases(
-      expression.thenBranch,
-      scopeStack,
-      resolved,
-      aliases,
-    );
+    if (expression.condition.kind === "LetExpression") {
+      // Pattern bindings must resolve inside thenBranch - pushed here,
+      // popped before elseBranch, so a borrow of one resolves its base
+      // correctly instead of silently failing.
+      scopeStack.push(new Map<string, BindingId>());
+      for (const declaration of declarationsOf(expression.condition.pattern)) {
+        registerScopedName(scopeStack, declaration.name, declaration.id);
+      }
+      walkScopeForBorrowBases(
+        expression.thenBranch,
+        scopeStack,
+        resolved,
+        aliases,
+      );
+      scopeStack.pop();
+    } else {
+      walkScopeForBorrowBases(
+        expression.thenBranch,
+        scopeStack,
+        resolved,
+        aliases,
+      );
+    }
     if (isSome(expression.elseBranch)) {
       const elseBranch = expression.elseBranch.value;
       if (elseBranch.kind === "Block") {
@@ -520,6 +537,13 @@ function collectUses(expression: Semantics.Expression, out: Set<string>): void {
       }
       if (isSome(expression.elseBranch))
         collectUses(expression.elseBranch.value, out);
+      return;
+    case "LetExpression":
+      // Same unscoped over-approximation as MatchExpression below - a
+      // pattern-bound name referenced in `thenBranch` is already collected
+      // by the `IfExpression` case's own statement walk, same as any other
+      // name.
+      collectUses(expression.scrutinee, out);
       return;
     case "MatchExpression":
       // Same unscoped, name-only over-approximation this file already
