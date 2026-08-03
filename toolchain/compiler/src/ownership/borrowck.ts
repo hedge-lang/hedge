@@ -59,6 +59,13 @@ interface Place extends PlacePath {
 }
 
 /**
+ * A borrow's base is resolved from either a `let`'s own initializer
+ * expression or an `if let`'s own scrutinee expression - both register into
+ * the same `resolved`/`baseIds` map, keyed by object identity.
+ */
+type BorrowSite = Semantics.LetStatement | Semantics.LetExpression;
+
+/**
  * Flatten a borrow operand's expression tree into its base identifier and
  * projection chain, or `undefined` if `expr` isn't a place expression at
  * all (mirrors `semantics/analyzer.ts`'s `isBorrowablePlace`, which already
@@ -299,33 +306,50 @@ function recordAlias(
   }
 }
 
+/**
+ * Resolve `scrutinee`'s own base name to the `BindingId` it refers to at
+ * this point, keyed by `site` (object identity). Used both for a `let`'s
+ * `&[mut] place` initializer (`site` is the `LetStatement` itself, scrutinee
+ * is the reference's operand) and for a plain scrutinee read whose *pattern*
+ * carries a `&`/`&mut` sub-binding sigil (`let`/`if let`, scrutinee is the
+ * initializer/condition's own expression) - see `collectRefBorrowsFromPattern`
+ * for why the latter needs this base resolved at all.
+ */
+function recordScrutineeBase(
+  scrutinee: Semantics.Expression,
+  site: BorrowSite,
+  scopeStack: ScopeStack,
+  resolved: Map<BorrowSite, BindingId>,
+  aliases: ReadonlyMap<BindingId, BindingId>,
+): void {
+  const place = placeOf(scrutinee);
+  if (place === undefined) {
+    return;
+  }
+  const id = resolveScopedName(scopeStack, place.baseName);
+  if (id !== undefined) {
+    resolved.set(site, aliases.get(id) ?? id);
+  }
+}
+
 function recordBorrowBase(
   statement: Semantics.LetStatement,
   scopeStack: ScopeStack,
-  resolved: Map<Semantics.LetStatement, BindingId>,
+  resolved: Map<BorrowSite, BindingId>,
   aliases: ReadonlyMap<BindingId, BindingId>,
 ): void {
   if (!isSome(statement.initializer)) {
     return;
   }
   const init = statement.initializer.value;
-  if (init.kind !== "ReferenceExpression") {
-    return;
-  }
-  const place = placeOf(init.operand);
-  if (place === undefined) {
-    return;
-  }
-  const id = resolveScopedName(scopeStack, place.baseName);
-  if (id !== undefined) {
-    resolved.set(statement, aliases.get(id) ?? id);
-  }
+  const scrutinee = init.kind === "ReferenceExpression" ? init.operand : init;
+  recordScrutineeBase(scrutinee, statement, scopeStack, resolved, aliases);
 }
 
 function walkStatementForBorrowBases(
   statement: Semantics.Statement,
   scopeStack: ScopeStack,
-  resolved: Map<Semantics.LetStatement, BindingId>,
+  resolved: Map<BorrowSite, BindingId>,
   aliases: Map<BindingId, BindingId>,
 ): void {
   switch (statement.kind) {
@@ -368,11 +392,21 @@ function walkStatementForBorrowBases(
 function walkStatementPositionExpression(
   expression: Semantics.Expression,
   scopeStack: ScopeStack,
-  resolved: Map<Semantics.LetStatement, BindingId>,
+  resolved: Map<BorrowSite, BindingId>,
   aliases: Map<BindingId, BindingId>,
 ): void {
   if (expression.kind === "IfExpression") {
     if (expression.condition.kind === "LetExpression") {
+      // The condition's own scrutinee base is recorded against the
+      // `LetExpression` itself - needed when its pattern carries a
+      // `&`/`&mut` sub-binding (see `collectRefBorrowsFromPattern`).
+      recordScrutineeBase(
+        expression.condition.scrutinee,
+        expression.condition,
+        scopeStack,
+        resolved,
+        aliases,
+      );
       // Pattern bindings must resolve inside thenBranch - pushed here,
       // popped before elseBranch, so a borrow of one resolves its base
       // correctly instead of silently failing.
@@ -418,7 +452,7 @@ function walkStatementPositionExpression(
 function walkScopeForBorrowBases(
   scope: Semantics.Block,
   scopeStack: ScopeStack,
-  resolved: Map<Semantics.LetStatement, BindingId>,
+  resolved: Map<BorrowSite, BindingId>,
   aliases: Map<BindingId, BindingId>,
 ): void {
   scopeStack.push(new Map<string, BindingId>());
@@ -430,17 +464,17 @@ function walkScopeForBorrowBases(
 
 /**
  * Resolve every borrow's base `PathExpression` to the `BindingId` it refers
- * to at that point, keyed by the borrow's own `LetStatement` (object
- * identity - `buildControlFlowGraph` never clones nodes, so the same
- * statement objects appear in `graph.blocks[].statements`). Reference-typed
+ * to at that point, keyed by the borrow's own `LetStatement`/`LetExpression`
+ * (object identity - `buildControlFlowGraph` never clones nodes, so the same
+ * statement/condition objects appear in `graph.blocks[]`). Reference-typed
  * plain-copy aliases (see `recordAlias`) are resolved internally and never
  * exposed - callers only ever see the canonical `BindingId` a borrow's base
  * ultimately names.
  */
 function resolveBorrowBases(
   fn: Semantics.FunctionDecl,
-): ReadonlyMap<Semantics.LetStatement, BindingId> {
-  const resolved = new Map<Semantics.LetStatement, BindingId>();
+): ReadonlyMap<BorrowSite, BindingId> {
+  const resolved = new Map<BorrowSite, BindingId>();
   const aliases = new Map<BindingId, BindingId>();
   const scopeStack: ScopeStack = [new Map<string, BindingId>()];
   for (const param of fn.params) {
@@ -814,59 +848,213 @@ function borrowsOverlap(
   );
 }
 
+/** A `&`/`&mut` sub-binding found inside a destructuring pattern, paired with the place it borrows. */
+interface PatternRefBorrow {
+  readonly name: Semantics.Identifier;
+  readonly mutable: boolean;
+  readonly path: PlacePath;
+}
+
 /**
- * Collect borrows created anywhere in the graph by `let r = &[mut] base;`.
+ * Finds every `&`/`&mut` sub-binding in a destructuring pattern (the `x` in
+ * `Wrapper::Only(&mut x)`), paired with the place it borrows - projected
+ * from `basePath` (the scrutinee's own place) through the pattern's own
+ * tuple-index/field structure. A pattern's `byRef` sigil borrows through the
+ * *scrutinee*, not through a `ReferenceExpression` initializer, so neither
+ * `recordBorrowBase` nor `pushExplicitReferenceBorrow`'s single-binding
+ * explicit-reference path (below) ever sees it on its own.
+ */
+function collectRefBorrowsFromPattern(
+  pattern: Semantics.Pattern,
+  basePath: PlacePath,
+): readonly PatternRefBorrow[] {
+  switch (pattern.kind) {
+    case "BindingPattern":
+      return pattern.byRef
+        ? [{ name: pattern.name, mutable: pattern.mutable, path: basePath }]
+        : [];
+    case "TupleStructPattern":
+      return pattern.elements.flatMap((element) =>
+        collectRefBorrowsFromPattern(element, {
+          baseName: basePath.baseName,
+          projections: [...basePath.projections, { kind: "Index" }],
+        }),
+      );
+    case "StructPattern":
+      return pattern.fields.flatMap((field) =>
+        isSome(field.pattern)
+          ? collectRefBorrowsFromPattern(field.pattern.value, {
+              baseName: basePath.baseName,
+              projections: [
+                ...basePath.projections,
+                { kind: "Field", name: field.name.text },
+              ],
+            })
+          : [],
+      );
+    case "OrPattern":
+      return pattern.alternatives.flatMap((alt) =>
+        collectRefBorrowsFromPattern(alt, basePath),
+      );
+    default:
+      return [];
+  }
+}
+
+/**
+ * The single-binding `let r = &[mut] base;` borrow (unchanged from before
+ * pattern-derived borrows existed). A bare `&`/`&mut` borrow initializer only
+ * ever makes sense against a pattern binding exactly one name - a
+ * destructuring pattern combined with a `&expr` initializer (e.g.
+ * matching-by-reference through a struct pattern, spec 0016's binding-mode
+ * forms) is real syntax but a distinct concern from this single-binding
+ * borrow, so it's conservatively skipped here rather than guessed at.
+ */
+function pushExplicitReferenceBorrow(
+  borrows: Borrow[],
+  statement: Semantics.LetStatement,
+  block: BasicBlock,
+  index: number,
+  baseIds: ReadonlyMap<BorrowSite, BindingId>,
+): void {
+  const declarations = declarationsOf(statement.pattern);
+  if (declarations.length !== 1) {
+    return;
+  }
+  const declaration = declarations[0];
+  if (declaration === undefined) {
+    return;
+  }
+  const { initializer } = statement;
+  if (!isSome(initializer)) {
+    return;
+  }
+  const init = initializer.value;
+  if (init.kind !== "ReferenceExpression") {
+    return;
+  }
+  const path = placeOf(init.operand);
+  if (path === undefined) {
+    return;
+  }
+  borrows.push({
+    name: declaration.name,
+    bindingId: declaration.id,
+    place: { ...path, baseId: baseIds.get(statement) },
+    capability: capabilityDecision(init.operand, true),
+    mutable: init.mutable,
+    blockId: block.id,
+    declIndex: index,
+    tokenId: init.tokenId,
+  });
+}
+
+/** Every `&`/`&mut` pattern sub-binding of a `let`'s own scrutinee (see `collectRefBorrowsFromPattern`), independent of `pushExplicitReferenceBorrow` above - a `let` can carry both at once in principle, though today's grammar only reaches one or the other. */
+function pushLetPatternRefBorrows(
+  borrows: Borrow[],
+  statement: Semantics.LetStatement,
+  block: BasicBlock,
+  index: number,
+  baseIds: ReadonlyMap<BorrowSite, BindingId>,
+): void {
+  const { initializer } = statement;
+  if (!isSome(initializer)) {
+    return;
+  }
+  const init = initializer.value;
+  const scrutinee = init.kind === "ReferenceExpression" ? init.operand : init;
+  const basePath = placeOf(scrutinee);
+  if (basePath === undefined) {
+    return;
+  }
+  for (const refBorrow of collectRefBorrowsFromPattern(
+    statement.pattern,
+    basePath,
+  )) {
+    borrows.push({
+      name: refBorrow.name.text,
+      bindingId: refBorrow.name.tokenId,
+      place: { ...refBorrow.path, baseId: baseIds.get(statement) },
+      capability: capabilityDecision(scrutinee, true),
+      mutable: refBorrow.mutable,
+      blockId: block.id,
+      declIndex: index,
+      tokenId: refBorrow.name.tokenId,
+    });
+  }
+}
+
+/**
+ * Every `&`/`&mut` pattern sub-binding of an `if let` condition's own
+ * scrutinee. The binding only lives inside the then-branch, so the borrow is
+ * attached to the then-block (`block.successors[0]`) rather than the forking
+ * block itself, with `declIndex: -1` - the same "scan the whole block from
+ * its start" sentinel `borrowReachesInto` already uses for a binding that
+ * merely enters a block already live from an earlier one, since this borrow
+ * is likewise live from before the then-block's first real statement.
+ */
+function pushConditionPatternRefBorrows(
+  borrows: Borrow[],
+  condition: Semantics.LetExpression,
+  block: BasicBlock,
+  baseIds: ReadonlyMap<BorrowSite, BindingId>,
+): void {
+  const basePath = placeOf(condition.scrutinee);
+  if (basePath === undefined) {
+    return;
+  }
+  const thenBlockId = block.successors[0];
+  if (thenBlockId === undefined) {
+    return;
+  }
+  for (const refBorrow of collectRefBorrowsFromPattern(
+    condition.pattern,
+    basePath,
+  )) {
+    borrows.push({
+      name: refBorrow.name.text,
+      bindingId: refBorrow.name.tokenId,
+      place: { ...refBorrow.path, baseId: baseIds.get(condition) },
+      capability: capabilityDecision(condition.scrutinee, true),
+      mutable: refBorrow.mutable,
+      blockId: thenBlockId,
+      declIndex: -1,
+      tokenId: refBorrow.name.tokenId,
+    });
+  }
+}
+
+/**
+ * Collect borrows created anywhere in the graph, either by `let r = &[mut]
+ * base;` or by a `&`/`&mut` sub-binding inside a `let`/`if let` pattern.
  * Discovers borrows in every block, not just the entry block - fixes a real
  * gap where a borrow declared inside an `if`/`else` branch was previously
  * invisible to the checker entirely (see the module's own history).
  */
 function collectBorrowsFromGraph(
   graph: ControlFlowGraph,
-  baseIds: ReadonlyMap<Semantics.LetStatement, BindingId>,
+  baseIds: ReadonlyMap<BorrowSite, BindingId>,
 ): Borrow[] {
   const borrows: Borrow[] = [];
   for (const block of graph.blocks) {
+    if (
+      isSome(block.forkCondition) &&
+      block.forkCondition.value.kind === "LetExpression"
+    ) {
+      pushConditionPatternRefBorrows(
+        borrows,
+        block.forkCondition.value,
+        block,
+        baseIds,
+      );
+    }
     for (let index = 0; index < block.statements.length; index += 1) {
       const statement = block.statements[index];
       if (statement === undefined || statement.kind !== "LetStatement") {
         continue;
       }
-      // A bare `&`/`&mut` borrow initializer only ever makes sense against a
-      // pattern binding exactly one name - a destructuring pattern combined
-      // with a `&expr` initializer (e.g. matching-by-reference through a
-      // struct pattern) is real syntax (Hedge-47's binding-mode work) but a
-      // distinct concern from this single-binding borrow list, so it's
-      // conservatively skipped here rather than guessed at.
-      const declarations = declarationsOf(statement.pattern);
-      if (declarations.length !== 1) {
-        continue;
-      }
-      const declaration = declarations[0];
-      if (declaration === undefined) {
-        continue;
-      }
-      const { initializer } = statement;
-      if (!isSome(initializer)) {
-        continue;
-      }
-      const init = initializer.value;
-      if (init.kind !== "ReferenceExpression") {
-        continue;
-      }
-      const path = placeOf(init.operand);
-      if (path === undefined) {
-        continue;
-      }
-      borrows.push({
-        name: declaration.name,
-        bindingId: declaration.id,
-        place: { ...path, baseId: baseIds.get(statement) },
-        capability: capabilityDecision(init.operand, true),
-        mutable: init.mutable,
-        blockId: block.id,
-        declIndex: index,
-        tokenId: init.tokenId,
-      });
+      pushExplicitReferenceBorrow(borrows, statement, block, index, baseIds);
+      pushLetPatternRefBorrows(borrows, statement, block, index, baseIds);
     }
   }
   return borrows;
