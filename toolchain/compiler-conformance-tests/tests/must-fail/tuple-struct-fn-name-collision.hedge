@@ -1,0 +1,5 @@
+fn Pair() {}
+
+struct Pair(i32, i32);
+
+fn main() {}
