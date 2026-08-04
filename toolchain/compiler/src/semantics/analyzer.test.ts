@@ -292,6 +292,32 @@ describe("semantic analysis", (): void => {
         "unknown field `bogus` for struct `Write`",
       );
     });
+
+    it("rejects a bare unit-variant-shaped path naming an enum that doesn't exist", () => {
+      const result = diagnose(`fn main() { let m = NotAnEnum::Variant; }`);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find enum `NotAnEnum` in this scope",
+      );
+    });
+
+    it("rejects a call-shaped construction naming an enum that doesn't exist", () => {
+      const result = diagnose(`fn main() { let m = NotAnEnum::Variant(1); }`);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find enum `NotAnEnum` in this scope",
+      );
+    });
+
+    it("rejects a struct-literal-shaped construction naming an enum that doesn't exist", () => {
+      const result = diagnose(
+        `fn main() { let m = NotAnEnum::Variant { a: 1 }; }`,
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find enum `NotAnEnum` in this scope",
+      );
+    });
   });
 
   describe("match expressions (semantically analyzed)", () => {

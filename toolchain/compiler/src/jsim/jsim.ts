@@ -1597,14 +1597,14 @@ function jsimRangeExpression(
 
 function jsimStructExpression(
   ctx: JsimContext,
-  { base, fields, path }: Semantics.StructExpression,
+  { base, fields, path, type }: Semantics.StructExpression,
 ): JSIM.Expression {
   const spreads = [base]
     .filter(isSome)
     .map((b) => parseExpression(ctx, b.value))
     .map(makeSpread);
   const ownFields = [...spreads, ...fields.map((f) => makeStructField(ctx, f))];
-  if (path.segments.length === 2) {
+  if (path.segments.length === 2 && type.kind === "EnumType") {
     const variantName = path.segments[1];
     assert(variantName !== undefined, "Unexpected undefined segment");
     return {

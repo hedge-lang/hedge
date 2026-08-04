@@ -4069,10 +4069,19 @@ function analyzeEnumVariantStructConstruction(
   const [enumName, variantName] = segments;
   if (enumName === undefined || variantName === undefined) return none();
   const enumDecl = ctx.enumScope.get(enumName);
-  if (enumDecl === undefined) return none();
-  const variant = enumDecl.variants.find((v) => v.name.text === variantName);
   // Diagnosed directly here, not via `analyzePath` - a struct-literal path
-  // never routes through it, so it needs its own unknown-variant check.
+  // never routes through it, so it needs its own unknown-enum/unknown-variant
+  // checks.
+  if (enumDecl === undefined) {
+    emitError(
+      ctx,
+      `cannot find enum \`${enumName}\` in this scope`,
+      structExpression.tokenId,
+      none(),
+    );
+    return some({ type: UNIT, fields: [...fields] });
+  }
+  const variant = enumDecl.variants.find((v) => v.name.text === variantName);
   if (variant === undefined) {
     emitError(
       ctx,
@@ -4578,7 +4587,15 @@ function analyzeEnumVariantPathConstruction(
   const [enumName, variantName] = segments;
   if (enumName === undefined || variantName === undefined) return none();
   const enumDecl = ctx.enumScope.get(enumName);
-  if (enumDecl === undefined) return none();
+  if (enumDecl === undefined) {
+    emitError(
+      ctx,
+      `cannot find enum \`${enumName}\` in this scope`,
+      path.tokenId,
+      none(),
+    );
+    return some({ ...path, type: UNIT });
+  }
   const variant = enumDecl.variants.find((v) => v.name.text === variantName);
   if (variant === undefined) {
     emitError(
