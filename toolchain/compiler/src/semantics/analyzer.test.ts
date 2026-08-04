@@ -180,6 +180,146 @@ describe("semantic analysis", (): void => {
     });
   });
 
+  describe("enum variant construction (semantically analyzed)", () => {
+    it("accepts a unit variant assigned to a let bound to its own enum type", () => {
+      const result = diagnose(`
+        enum Message { Quit }
+        fn main() { let m: Message = Message::Quit; }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a unit variant construction to its enum's real type, not an ambiguous placeholder", () => {
+      const result = diagnose(`
+        enum Message { Quit }
+        fn main() { let m: i32 = Message::Quit; }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "type mismatch: explicit annotation does not match initializer type",
+      );
+    });
+
+    it("rejects passing arguments to a unit variant", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move(i32, i32) }
+        fn main() { let m = Message::Quit(1); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "variant `Quit` takes no arguments, but 1 was supplied",
+      );
+    });
+
+    it("accepts a tuple variant called with the correct arity and types", () => {
+      const result = diagnose(`
+        enum Message { Move(i32, i32) }
+        fn main() { let m: Message = Message::Move(1, 2); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a tuple variant called with too few arguments", () => {
+      const result = diagnose(`
+        enum Message { Move(i32, i32) }
+        fn main() { let m = Message::Move(1); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "variant `Move` takes 2 argument(s), but 1 was supplied",
+      );
+    });
+
+    it("rejects a tuple variant called with a mismatched argument type", () => {
+      const result = diagnose(`
+        enum Message { Move(i32, i32) }
+        fn main() { let m = Message::Move(1, true); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "argument 1 to variant `Move` type mismatch: expected `i32`, found `bool`",
+      );
+    });
+
+    it("rejects calling a struct variant with parens instead of braces", () => {
+      const result = diagnose(`
+        enum Message { Write { text: str } }
+        fn main() { let m = Message::Write(1); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "variant `Write` has named fields; use `Write { ... }`",
+      );
+    });
+
+    it("accepts a struct variant constructed with braces and the correct fields", () => {
+      const result = diagnose(`
+        enum Message { Write { text: str } }
+        fn main() { let m: Message = Message::Write { text: "hi" }; }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a struct variant construction to its enum's real type, not an ambiguous placeholder", () => {
+      const result = diagnose(`
+        enum Message { Write { text: str } }
+        fn main() { let m: i32 = Message::Write { text: "hi" }; }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "type mismatch: explicit annotation does not match initializer type",
+      );
+    });
+
+    it("rejects a struct variant construction missing a required field", () => {
+      const result = diagnose(`
+        enum Message { Write { text: str, urgent: bool } }
+        fn main() { let m = Message::Write { text: "hi" }; }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "missing required field `urgent` in struct literal of type `Write`",
+      );
+    });
+
+    it("rejects a struct variant construction with an unknown field", () => {
+      const result = diagnose(`
+        enum Message { Write { text: str } }
+        fn main() { let m = Message::Write { text: "hi", bogus: 1 }; }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "unknown field `bogus` for struct `Write`",
+      );
+    });
+
+    it("rejects a bare unit-variant-shaped path naming an enum that doesn't exist", () => {
+      const result = diagnose(`fn main() { let m = NotAnEnum::Variant; }`);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find enum `NotAnEnum` in this scope",
+      );
+    });
+
+    it("rejects a call-shaped construction naming an enum that doesn't exist", () => {
+      const result = diagnose(`fn main() { let m = NotAnEnum::Variant(1); }`);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find enum `NotAnEnum` in this scope",
+      );
+    });
+
+    it("rejects a struct-literal-shaped construction naming an enum that doesn't exist", () => {
+      const result = diagnose(
+        `fn main() { let m = NotAnEnum::Variant { a: 1 }; }`,
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find enum `NotAnEnum` in this scope",
+      );
+    });
+  });
+
   describe("match expressions (semantically analyzed)", () => {
     it("analyzes a match with a single plain-binding arm cleanly", () => {
       const result = diagnose("fn main() { match 1 { x => x }; }");
@@ -671,16 +811,7 @@ describe("semantic analysis", (): void => {
     });
   });
 
-  describe("if let / while let (parsed, not yet semantically analyzed)", () => {
-    it("rejects an if-let with a clean 'not yet supported' diagnostic", () => {
-      const result = diagnose("fn main() { if let y = opt { } }");
-      expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain(
-        "not yet supported by semantic analysis",
-      );
-    });
-
+  describe("while let (parsed, not yet semantically analyzed)", () => {
     it("rejects a while-let with a clean 'not yet supported' diagnostic", () => {
       const result = diagnose("fn main() { while let y = opt { } }");
       expect(result.diagnostics).toHaveLength(1);
@@ -689,22 +820,74 @@ describe("semantic analysis", (): void => {
         "not yet supported by semantic analysis",
       );
     });
+  });
 
-    it("does not cascade a second 'condition must be bool' diagnostic for an if-let condition", () => {
-      // `LetExpression`'s placeholder resolves to `UnitType`, and
-      // `analyzeIfExpression`'s bool-check skips any `UnitType` condition
-      // outright (a plain kind check, not a call to `isAmbiguousUnitExpr`).
-      const result = diagnose("fn main() { if let y = opt { } }");
-      expect(result.diagnostics).toHaveLength(1);
+  describe("if let (semantically analyzed)", () => {
+    it("analyzes an if-let with a valid enum scrutinee and pattern cleanly", () => {
+      const result = diagnose(`
+        enum Option { Some(i32), None }
+        fn main() {
+          let opt = Option::Some(1);
+          if let Option::Some(x) = opt {
+            print(x);
+          }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
     });
 
-    it("still analyzes the then-branch normally around an if-let condition placeholder", () => {
-      const result = diagnose("fn main() { if let y = opt { missing_name; } }");
-      expect(result.diagnostics).toHaveLength(2);
-      expect(result.diagnostics[0]?.message).toContain(
-        "not yet supported by semantic analysis",
+    it("accepts a refutable multi-variant enum pattern, unlike let position", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move(i32) }
+        fn main() {
+          let m = Message::Quit;
+          if let Message::Move(x) = m {
+            print(x);
+          }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a reference to the if-let pattern's bound name from the else branch", () => {
+      const result = diagnose(`
+        enum Option { Some(i32), None }
+        fn main() {
+          let opt = Option::Some(1);
+          if let Option::Some(x) = opt {
+          } else {
+            print(x);
+          }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        'Cannot find name "x" in this scope.',
       );
-      expect(result.diagnostics[1]?.message).toContain("missing_name");
+    });
+
+    it("rejects a reference to the if-let pattern's bound name after the whole if", () => {
+      const result = diagnose(`
+        enum Option { Some(i32), None }
+        fn main() {
+          let opt = Option::Some(1);
+          if let Option::Some(x) = opt {
+          }
+          print(x);
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        'Cannot find name "x" in this scope.',
+      );
+    });
+
+    it("reports exactly one diagnostic for an undefined scrutinee, no cascade", () => {
+      const result = diagnose("fn main() { if let y = opt { } }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        'Cannot find name "opt" in this scope.',
+      );
     });
   });
 

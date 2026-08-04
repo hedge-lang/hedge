@@ -1,0 +1,20 @@
+enum Message {
+  A(i32),
+  B(i32),
+  C,
+}
+
+fn describe(m: Message) -> i32 {
+  match m {
+    Message::A(x) | Message::B(x) => x,
+    Message::C => 0,
+  }
+}
+
+fn main() {
+  print(describe(Message::A(5)));
+  print(",");
+  print(describe(Message::B(7)));
+  print(",");
+  print(describe(Message::C));
+}

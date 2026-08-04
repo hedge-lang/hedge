@@ -886,7 +886,7 @@ describe("move-check", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(diagnostics[0].message).toContain("moved");
+      expect(diagnostics[0].message).toBe("use of moved value `a`");
     });
 
     it("rejects using an array after passing it by value into a function call", (): void => {
@@ -900,7 +900,7 @@ describe("move-check", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(diagnostics[0].message).toContain("moved");
+      expect(diagnostics[0].message).toBe("use of moved value `a`");
     });
 
     it("accepts reassigning an array binding after it was moved away", (): void => {
@@ -928,7 +928,7 @@ describe("move-check", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(diagnostics[0].message).toContain("moved");
+      expect(diagnostics[0].message).toBe("use of moved value `arr`");
     });
 
     it.fails(
@@ -954,5 +954,78 @@ describe("move-check", (): void => {
         expect(diagnostics[0].message).toContain("cannot move");
       },
     );
+  });
+
+  describe("destructuring pattern move vs. borrow of the scrutinee", (): void => {
+    it("does not move the scrutinee when every let-destructured sub-binding is byRef", (): void => {
+      const { diagnostics } = check(`
+        struct Point { x: i32, y: i32 }
+        fn main() {
+          let mut p = Point { x: 1, y: 2 };
+          let Point { x: &mut rx, y } = p;
+          *rx = 99;
+          print(p.y);
+        }
+      `);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("does not move the scrutinee when every let-destructured sub-binding is a Copy field with no byRef sigil", (): void => {
+      const { diagnostics } = check(`
+        struct Point { x: i32, y: i32 }
+        fn main() {
+          let p = Point { x: 1, y: 2 };
+          let Point { x, y } = p;
+          print(p.x);
+          print(x);
+          print(y);
+        }
+      `);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("still moves the scrutinee when a let-destructured sub-binding owns a non-Copy field", (): void => {
+      const { diagnostics } = check(`
+        struct Boxed { value: i32 }
+        struct Pair { a: Boxed, b: i32 }
+        fn main() {
+          let p = Pair { a: Boxed { value: 1 }, b: 2 };
+          let Pair { a, b } = p;
+          print(p.b);
+          print(a.value);
+          print(b);
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(diagnostics[0].message).toBe("use of moved value `p`");
+    });
+
+    it("does not move the scrutinee when every match-arm sub-binding is byRef", (): void => {
+      const { diagnostics } = check(`
+        struct Point { x: i32, y: i32 }
+        fn main() {
+          let mut p = Point { x: 1, y: 2 };
+          match p { Point { x: &mut rx, y } => { *rx = 99; } }
+          print(p.y);
+        }
+      `);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("still moves the scrutinee when a match-arm sub-binding owns a non-Copy field", (): void => {
+      const { diagnostics } = check(`
+        struct Boxed { value: i32 }
+        struct Pair { a: Boxed, b: i32 }
+        fn main() {
+          let p = Pair { a: Boxed { value: 1 }, b: 2 };
+          match p { Pair { a, b } => { print(a.value); print(b); } }
+          print(p.b);
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(diagnostics[0].message).toBe("use of moved value `p`");
+    });
   });
 });

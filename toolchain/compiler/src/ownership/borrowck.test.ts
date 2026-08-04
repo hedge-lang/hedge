@@ -614,3 +614,78 @@ describe("place-projection borrows", (): void => {
     expect(diagnostics[0]?.message).toContain("Conflicting borrows");
   });
 });
+
+describe("pattern-derived &/&mut sub-bindings", (): void => {
+  it("rejects a let-destructuring &mut sub-binding of a scrutinee not declared mut", (): void => {
+    const diagnostics = check(`
+      enum Wrapper { Only(i32) }
+      fn main() {
+        let w = Wrapper::Only(1);
+        let Wrapper::Only(&mut x) = w;
+        print(x);
+      }
+    `);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("not declared mut");
+  });
+
+  it("rejects a let-destructuring &mut sub-binding overlapping a later plain &mut borrow of the same scrutinee", (): void => {
+    const diagnostics = check(`
+      enum Wrapper { Only(i32) }
+      fn main() {
+        let mut w = Wrapper::Only(1);
+        let Wrapper::Only(&mut x) = w;
+        let r = &mut w;
+        print(x);
+        print(r);
+      }
+    `);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+  });
+
+  it("rejects an if-let &mut sub-binding overlapping a later plain &mut borrow of the same scrutinee", (): void => {
+    const diagnostics = check(`
+      enum Wrapper { Only(i32) }
+      fn main() {
+        let mut w = Wrapper::Only(1);
+        if let Wrapper::Only(&mut x) = w {
+          let r = &mut w;
+          print(x);
+          print(r);
+        }
+        let done = true;
+        print(done);
+      }
+    `);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+  });
+
+  it("accepts a let-destructuring &mut sub-binding whose extent ends before a later plain &mut borrow of the same scrutinee", (): void => {
+    const diagnostics = check(`
+      enum Wrapper { Only(i32) }
+      fn main() {
+        let mut w = Wrapper::Only(1);
+        let Wrapper::Only(&mut x) = w;
+        print(x);
+        let r = &mut w;
+        print(r);
+      }
+    `);
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("accepts two disjoint shared & sub-bindings of the same struct-variant scrutinee", (): void => {
+    const diagnostics = check(`
+      enum Wrapper { Pair { a: i32, b: i32 } }
+      fn main() {
+        let w = Wrapper::Pair { a: 1, b: 2 };
+        let Wrapper::Pair { a: &a, b: &b } = w;
+        print(a);
+        print(b);
+      }
+    `);
+    expect(diagnostics).toEqual([]);
+  });
+});

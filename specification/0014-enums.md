@@ -68,13 +68,16 @@ no box.
 ## Generated code
 
 An enum compiles to a tagged object and appears in the generated `.d.ts` as a
-discriminated union, the idiomatic TypeScript shape:
+discriminated union, the idiomatic TypeScript shape. A variant's payload
+nests under a `data` key, positional for a tuple variant and named for a
+struct variant, so a payload field can never collide with the `tag`
+discriminant itself:
 
 ```ts
 type Message =
   | { tag: "Quit" }
-  | { tag: "Move"; _0: number; _1: number }
-  | { tag: "Write"; text: string };
+  | { tag: "Move"; data: [number, number] }
+  | { tag: "Write"; data: { text: string } };
 ```
 
 A TypeScript consumer can `switch` on `tag` directly.

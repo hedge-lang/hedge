@@ -1087,12 +1087,6 @@ function analyzeVariantBody(
 const WHILE_NOT_YET_SUPPORTED_MESSAGE =
   "`while` expressions are not yet supported by semantic analysis";
 
-// `LetExpression` only ever appears as (or within) an `if`/`while`
-// condition (see `parser/ast.ts`'s doc comment on the type) - this message
-// covers both the `if let` and `while let` surface forms.
-const LET_EXPRESSION_NOT_YET_SUPPORTED_MESSAGE =
-  "`if let`/`while let` are not yet supported by semantic analysis";
-
 /** Placeholder for an `Expression` variant with no `Semantics` counterpart
  * yet - same "parser accepts it, semantics doesn't yet" pattern as
  * `analyzeEnumPlaceholder`, at expression rather than item
@@ -3594,10 +3588,11 @@ function analyzeExpression(
     case "IfExpression":
       return analyzeIfExpression(ctx, expression);
     case "LetExpression":
-      return analyzeExpressionPlaceholder(
-        ctx,
-        expression.tokenId,
-        LET_EXPRESSION_NOT_YET_SUPPORTED_MESSAGE,
+      // The parser only constructs a LetExpression as an if/while condition,
+      // and analyzeIfExpression intercepts it first - reaching here should
+      // be impossible.
+      throw new Error(
+        "a LetExpression reached generic expression analysis outside an if condition, which should be structurally impossible",
       );
     case "MatchExpression":
       return analyzeMatchExpression(ctx, expression);
@@ -4053,6 +4048,71 @@ function analyzeCompoundAssignmentExpression(
   };
 }
 
+/**
+ * `Message::Write { text: "hi" }`-shaped construction struct-literals.
+ * `none()` unless the path is a known enum + variant, falling back to
+ * ordinary `StructExpression` analysis. Reuses `analyzeStructNamedFields`
+ * directly, since a variant's `NamedFieldsBody` is the same node shape a
+ * struct's own body is - only the diagnostic wording says "struct" rather
+ * than "variant" (an accepted minor imprecision).
+ */
+function analyzeEnumVariantStructConstruction(
+  ctx: AnalysisContext,
+  structExpression: Parser.StructExpression,
+  fields: readonly Semantics.FieldInit[],
+  hasBase: boolean,
+): Option<{
+  readonly type: Semantics.Type;
+  readonly fields: Semantics.FieldInit[];
+}> {
+  const { segments } = structExpression.path;
+  const [enumName, variantName] = segments;
+  if (enumName === undefined || variantName === undefined) return none();
+  const enumDecl = ctx.enumScope.get(enumName);
+  // Diagnosed directly here, not via `analyzePath` - a struct-literal path
+  // never routes through it, so it needs its own unknown-enum/unknown-variant
+  // checks.
+  if (enumDecl === undefined) {
+    emitError(
+      ctx,
+      `cannot find enum \`${enumName}\` in this scope`,
+      structExpression.tokenId,
+      none(),
+    );
+    return some({ type: UNIT, fields: [...fields] });
+  }
+  const variant = enumDecl.variants.find((v) => v.name.text === variantName);
+  if (variant === undefined) {
+    emitError(
+      ctx,
+      `no variant \`${variantName}\` on enum \`${enumName}\``,
+      structExpression.tokenId,
+      none(),
+    );
+    return some({ type: enumDecl.type, fields: [...fields] });
+  }
+  if (!isSome(variant.body) || variant.body.value.kind !== "NamedFields") {
+    emitError(
+      ctx,
+      isSome(variant.body)
+        ? `variant \`${variantName}\` is a tuple variant; use \`${variantName}(...)\``
+        : `variant \`${variantName}\` is a unit variant; use \`${variantName}\` with no braces`,
+      structExpression.tokenId,
+      none(),
+    );
+    return some({ type: enumDecl.type, fields: [...fields] });
+  }
+  const checkedFields = analyzeStructNamedFields(
+    ctx,
+    variantName,
+    fields,
+    hasBase,
+    structExpression.tokenId,
+    variant.body.value,
+  );
+  return some({ type: enumDecl.type, fields: checkedFields });
+}
+
 function analyzeStructExpression(
   ctx: AnalysisContext,
   structExpression: Parser.StructExpression,
@@ -4074,6 +4134,23 @@ function analyzeStructExpression(
   const analyzedBase = mapSome(structExpression.base, (base) =>
     analyzeExpression(ctx, base),
   );
+
+  if (structExpression.path.segments.length === 2) {
+    const construction = analyzeEnumVariantStructConstruction(
+      ctx,
+      structExpression,
+      analyzedFields,
+      isSome(analyzedBase),
+    );
+    if (isSome(construction)) {
+      return {
+        ...structExpression,
+        fields: construction.value.fields,
+        base: analyzedBase,
+        type: construction.value.type,
+      };
+    }
+  }
 
   if (structExpression.path.segments.length !== 1) {
     return {
@@ -4234,6 +4311,9 @@ function analyzeIfExpression(
   ctx: AnalysisContext,
   ifExpression: Parser.IfExpression,
 ): Semantics.IfExpression {
+  if (ifExpression.condition.kind === "LetExpression") {
+    return analyzeIfLetExpression(ctx, ifExpression, ifExpression.condition);
+  }
   const condition = analyzeExpression(ctx, ifExpression.condition);
   const thenBranch = analyzeBlock(ctx, ifExpression.thenBranch);
   const elseBranch = mapSome(ifExpression.elseBranch, (elseBranch) =>
@@ -4279,6 +4359,81 @@ function analyzeIfExpression(
   };
 }
 
+/**
+ * Sugar over a single-arm `match` - the pattern is analyzed like a match
+ * arm's (refutable allowed, binding mode via `defaultBindingModeForScrutinee`),
+ * scoped to `thenBranch` only: pushed before it's analyzed, popped before
+ * `elseBranch`'s. `condition.type` is always `PrimitiveBooleanType` -
+ * inherently boolean by construction, so no bool-check is needed here.
+ */
+function analyzeIfLetExpression(
+  ctx: AnalysisContext,
+  ifExpression: Parser.IfExpression,
+  letExpression: Parser.LetExpression,
+): Semantics.IfExpression {
+  const scrutinee = analyzeExpression(ctx, letExpression.scrutinee);
+  const scrutineeType = getType(scrutinee);
+  const { mode: defaultMode, effectiveType } =
+    defaultBindingModeForScrutinee(scrutineeType);
+  const rootMutable = !isSome(placeMutabilityViolation(ctx, scrutinee, true));
+
+  let condition: Semantics.LetExpression;
+  let thenBranch: Semantics.Block;
+  ctx.scopes.push(new Map());
+  try {
+    const pattern = analyzePattern(
+      ctx,
+      letExpression.pattern,
+      effectiveType,
+      defaultMode,
+      rootMutable,
+    );
+    condition = {
+      ...letExpression,
+      pattern,
+      scrutinee,
+      type: { kind: "PrimitiveBooleanType" },
+    };
+    thenBranch = analyzeBlock(ctx, ifExpression.thenBranch);
+  } finally {
+    ctx.scopes.pop();
+  }
+
+  const elseBranch = mapSome(ifExpression.elseBranch, (elseBranch) =>
+    elseBranch.kind === "IfExpression"
+      ? analyzeIfExpression(ctx, elseBranch)
+      : analyzeBlock(ctx, elseBranch),
+  );
+
+  if (isSome(elseBranch)) {
+    const thenType = thenBranch.type;
+    const elseType = elseBranch.value.type;
+    if (
+      thenType.kind !== "UnitType" &&
+      elseType.kind !== "UnitType" &&
+      !typesEqual(thenType, elseType)
+    ) {
+      emitError(
+        ctx,
+        "if expression branches have incompatible types",
+        ifExpression.tokenId,
+        none(),
+      );
+    }
+  }
+
+  const type: Semantics.Type = isSome(elseBranch)
+    ? thenBranch.type
+    : { kind: "UnitType", tokenId: ifExpression.tokenId };
+  return {
+    ...ifExpression,
+    condition,
+    thenBranch,
+    elseBranch,
+    type,
+  };
+}
+
 function analyzeIdentifier(
   _ctx: AnalysisContext,
   identifier: Parser.Identifier,
@@ -4293,6 +4448,15 @@ function analyzeCall(
 ): Semantics.CallExpression {
   const callee = analyzeExpression(ctx, call.callee);
   const args = call.arguments.map((arg) => analyzeExpression(ctx, arg));
+  const enumConstruction = analyzeEnumVariantCallConstruction(ctx, call, args);
+  if (isSome(enumConstruction)) {
+    return {
+      ...call,
+      callee,
+      arguments: enumConstruction.value.args,
+      type: enumConstruction.value.type,
+    };
+  }
   const calleeType = getType(callee);
   const returnType: Semantics.Type =
     calleeType.kind === "FunctionType"
@@ -4301,11 +4465,164 @@ function analyzeCall(
   return { ...call, callee, arguments: args, type: returnType };
 }
 
+/**
+ * `Message::Move(1, 2)`-shaped construction calls. `none()` when
+ * `call.callee` isn't a two-segment path naming a known enum + variant,
+ * falling back to ordinary call analysis. Unlike the path resolver, this
+ * one resolves regardless of the variant's body shape - only a call site
+ * can validate arity, so a unit variant called with args or a struct
+ * variant called with parens are both diagnosed here.
+ */
+function analyzeEnumVariantCallConstruction(
+  ctx: AnalysisContext,
+  call: Parser.CallExpression,
+  args: readonly Semantics.Expression[],
+): Option<{
+  readonly type: Semantics.Type;
+  readonly args: Semantics.Expression[];
+}> {
+  if (call.callee.kind !== "PathExpression") return none();
+  const { segments } = call.callee.path;
+  if (segments.length !== 2) return none();
+  const [enumName, variantName] = segments;
+  if (enumName === undefined || variantName === undefined) return none();
+  const enumDecl = ctx.enumScope.get(enumName);
+  if (enumDecl === undefined) return none();
+  const variant = enumDecl.variants.find((v) => v.name.text === variantName);
+  // Already diagnosed by `analyzePath`'s analysis of `call.callee` in
+  // `analyzeCall` - not repeated here, to avoid a duplicate cascade.
+  if (variant === undefined) return none();
+
+  if (!isSome(variant.body)) {
+    if (args.length > 0) {
+      emitError(
+        ctx,
+        `variant \`${variantName}\` takes no arguments, but ${args.length} ${args.length === 1 ? "was" : "were"} supplied`,
+        call.tokenId,
+        none(),
+      );
+    }
+    return some({ type: enumDecl.type, args: [...args] });
+  }
+  if (variant.body.value.kind !== "TupleFields") {
+    emitError(
+      ctx,
+      `variant \`${variantName}\` has named fields; use \`${variantName} { ... }\``,
+      call.tokenId,
+      none(),
+    );
+    return some({ type: enumDecl.type, args: [...args] });
+  }
+  const checkedArgs = checkTupleVariantCallArgs(
+    ctx,
+    call,
+    variantName,
+    variant.body.value.fields,
+    args,
+  );
+  return some({ type: enumDecl.type, args: checkedArgs });
+}
+
+/** Arity, then per-argument type checking, for a tuple-variant construction
+ * call. Split out from `analyzeEnumVariantCallConstruction` to stay under
+ * the file's complexity cap. */
+function checkTupleVariantCallArgs(
+  ctx: AnalysisContext,
+  call: Parser.CallExpression,
+  variantName: string,
+  fields: readonly Semantics.TupleField[],
+  args: readonly Semantics.Expression[],
+): Semantics.Expression[] {
+  if (fields.length !== args.length) {
+    emitError(
+      ctx,
+      `variant \`${variantName}\` takes ${fields.length} argument(s), but ${args.length} ${args.length === 1 ? "was" : "were"} supplied`,
+      call.tokenId,
+      none(),
+    );
+    return [...args];
+  }
+  return args.map((arg, i) => {
+    const field = fields[i];
+    if (field === undefined) return arg;
+    const { expr, mismatch } = reconcileExpressionType(
+      ctx,
+      arg,
+      field.type,
+      arg.tokenId,
+    );
+    if (expr.kind === "IntLiteral") {
+      checkPosLiteralRange(ctx, expr, field.type);
+    }
+    if (mismatch) {
+      emitError(
+        ctx,
+        `argument ${i} to variant \`${variantName}\` type mismatch: expected \`${describeType(field.type)}\`, found \`${describeType(getType(expr))}\``,
+        arg.tokenId,
+        none(),
+      );
+    }
+    return expr;
+  });
+}
+
+/**
+ * `Enum::Variant`-shaped construction paths - the construction-side
+ * counterpart to the pattern-position resolvers above, name-driven off the
+ * path's segments rather than type-driven off a scrutinee. `none()` when
+ * `segments[0]` isn't a known enum, falling through to the generic
+ * multi-segment-path placeholder.
+ *
+ * Only resolves a bare unit-variant reference (`Message::Quit`) -
+ * `analyzeCall`/`analyzeStructExpression` handle the call/struct-literal
+ * forms themselves, since only they know the syntactic context. A bare
+ * tuple/struct variant reference (`let x = Message::Move;`) still falls to
+ * `none()` - real constructor-function-value semantics are out of scope.
+ */
+function analyzeEnumVariantPathConstruction(
+  ctx: AnalysisContext,
+  path: Parser.PathExpression,
+  segments: readonly string[],
+): Option<Semantics.PathExpression> {
+  const [enumName, variantName] = segments;
+  if (enumName === undefined || variantName === undefined) return none();
+  const enumDecl = ctx.enumScope.get(enumName);
+  if (enumDecl === undefined) {
+    emitError(
+      ctx,
+      `cannot find enum \`${enumName}\` in this scope`,
+      path.tokenId,
+      none(),
+    );
+    return some({ ...path, type: UNIT });
+  }
+  const variant = enumDecl.variants.find((v) => v.name.text === variantName);
+  if (variant === undefined) {
+    emitError(
+      ctx,
+      `no variant \`${variantName}\` on enum \`${enumName}\``,
+      path.tokenId,
+      none(),
+    );
+    return some({ ...path, type: enumDecl.type });
+  }
+  if (isSome(variant.body)) return none();
+  return some({ ...path, type: enumDecl.type });
+}
+
 function analyzePath(
   ctx: AnalysisContext,
   path: Parser.PathExpression,
 ): Semantics.PathExpression {
   const { segments } = path.path;
+  if (segments.length === 2) {
+    const construction = analyzeEnumVariantPathConstruction(
+      ctx,
+      path,
+      segments,
+    );
+    if (isSome(construction)) return construction.value;
+  }
   // Multi-segment paths (modules, associated items) are a later slice.
   if (segments.length !== 1) {
     return { ...path, type: { kind: "UnitType", tokenId: path.tokenId } };

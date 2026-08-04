@@ -562,10 +562,12 @@ describe("toJsim", () => {
   });
 
   describe("match expression lowering", () => {
-    it("throws lowering a semantically clean match expression, since codegen is a following ticket", () => {
+    it("throws lowering a semantically clean match on a non-enum (int) scrutinee, since only enum-discriminant switch codegen exists", () => {
       expect(() =>
         jsimSource("fn f(x: i32) -> i32 { match x { _ => 0 } }"),
-      ).toThrow("JSIM codegen for match expressions is not yet implemented");
+      ).toThrow(
+        "JSIM codegen for match on a non-enum scrutinee is not yet implemented",
+      );
     });
   });
 

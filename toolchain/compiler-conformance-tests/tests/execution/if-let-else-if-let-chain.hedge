@@ -1,0 +1,23 @@
+enum Message {
+  A(i32),
+  B(i32),
+  C,
+}
+
+fn describe(m: Message) -> str {
+  if let Message::A(x) = m {
+    "a"
+  } else if let Message::B(x) = m {
+    "b"
+  } else {
+    "c"
+  }
+}
+
+fn main() {
+  print(describe(Message::A(1)));
+  print(",");
+  print(describe(Message::B(2)));
+  print(",");
+  print(describe(Message::C));
+}

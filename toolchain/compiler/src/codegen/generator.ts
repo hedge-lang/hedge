@@ -9,6 +9,8 @@ import type {
   ConstDecl,
   DisposeCallStatement,
   DocComment,
+  EnumDecl,
+  EnumDeclVariant,
   Expression,
   FunctionDecl,
   IfStatement,
@@ -18,6 +20,8 @@ import type {
   ReturnStatement,
   Statement,
   StaticDecl,
+  SwitchStatement,
+  ThrowStatement,
 } from "../jsim/ast.js";
 import type { Code, SourceMapMapping } from "./output.js";
 
@@ -454,6 +458,24 @@ function emitIfStatement(stmt: IfStatement): string {
   return `if (${cond}) ${thenStr} else ${emitBranchBlock(elseStmts, isMultiline)}`;
 }
 
+function emitSwitchStatement(stmt: SwitchStatement): string {
+  const discriminant = emitExpression(stmt.discriminant);
+  const caseBlocks = stmt.cases.map(
+    (c) => `case ${JSON.stringify(c.tag)}: ${emitBranchBlock(c.body, true)}`,
+  );
+  const defaultBlock = `default: ${emitBranchBlock(stmt.defaultBody, true)}`;
+  const body = [...caseBlocks, defaultBlock]
+    .join("\n")
+    .split("\n")
+    .map(indent)
+    .join("\n");
+  return `switch (${discriminant}) {\n${body}\n}`;
+}
+
+function emitThrowStatement(stmt: ThrowStatement): string {
+  return `throw new Error(${JSON.stringify(stmt.message)});`;
+}
+
 function emitBlockStatement(stmt: BlockStatement): string {
   const lines = stmt.body.map(emitStatement).filter((s) => s.length > 0);
   if (lines.length === 0) return "";
@@ -495,8 +517,12 @@ function emitStatement(statement: Statement): string {
       return emitBlockStatement(statement);
     case "IfStatement":
       return emitIfStatement(statement);
+    case "SwitchStatement":
+      return emitSwitchStatement(statement);
     case "ReturnStatement":
       return emitReturn(statement);
+    case "ThrowStatement":
+      return emitThrowStatement(statement);
     case "DisposeCallStatement":
       return emitDisposeCall(statement);
     case "FunctionDecl":
@@ -648,10 +674,19 @@ function emitItem(item: Item): string {
       return emitBlockStatement(item);
     case "IfStatement":
       return emitIfStatement(item);
+    case "SwitchStatement":
+      // Never actually a top-level Item - handled only for exhaustiveness.
+      return emitSwitchStatement(item);
     case "ReturnStatement":
       return emitReturn(item);
+    case "ThrowStatement":
+      return emitThrowStatement(item);
     case "DisposeCallStatement":
       return emitDisposeCall(item);
+    case "EnumDecl":
+      // Purely structural at runtime - only `emitDtsItem` renders anything
+      // for this kind.
+      return "";
     default:
       return `${emitExpression(item)};`;
   }
@@ -681,12 +716,41 @@ function emitDtsFunction(
   return parts.join("\n");
 }
 
+function emitDtsEnumVariant(variant: EnumDeclVariant): string {
+  const tag = JSON.stringify(variant.tag);
+  switch (variant.kind) {
+    case "UnitVariant":
+      return `{ tag: ${tag} }`;
+    case "TupleVariant":
+      return `{ tag: ${tag}; data: [${variant.dataTypes.join(", ")}] }`;
+    case "StructVariant":
+      return `{ tag: ${tag}; data: { ${variant.dataFields.map((f) => `${f.name}: ${f.type}`).join("; ")} } }`;
+    default:
+      return assertNever(
+        variant,
+        `Unexpected enum variant: ${JSON.stringify(variant)}`,
+      );
+  }
+}
+
+/**
+ * Always emitted regardless of the enum's own `pub`-ness, unlike const/fn -
+ * a `pub` function's signature can reference a non-pub enum, which needs a
+ * nameable `.d.ts` type regardless. Gating on `pub` would need a
+ * reachability analysis this doesn't build.
+ */
+function emitDtsEnum(item: EnumDecl): string {
+  const variants = item.variants.map(emitDtsEnumVariant);
+  return `export type ${item.name} =\n  | ${variants.join("\n  | ")};`;
+}
+
 function emitDtsItem(item: Item): string | null {
   if (item.kind === "ConstDecl") {
     return isSome(item.type)
       ? `export declare const ${item.name}: ${item.type.value.value};`
       : null;
   }
+  if (item.kind === "EnumDecl") return emitDtsEnum(item);
   if (item.kind !== "FunctionDecl" || !isSome(item.scope)) {
     return null;
   }

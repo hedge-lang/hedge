@@ -739,6 +739,17 @@ function walkExpression(
     case "IfExpression":
       walkIf(ctx, expression, state, scopeStack);
       return;
+    case "LetExpression":
+      // Only the scrutinee is walked here - `walkIf` handles registering
+      // the pattern's own bindings, scoped to `thenBranch` alone.
+      walkScrutinee(
+        ctx,
+        expression.scrutinee,
+        expression.pattern,
+        state,
+        scopeStack,
+      );
+      return;
     case "MatchExpression":
       walkMatchExpression(ctx, expression, state, scopeStack);
       return;
@@ -762,6 +773,21 @@ function walkExpression(
 interface PatternDeclaration {
   readonly identifier: Semantics.Identifier;
   readonly mutable: boolean;
+}
+
+/**
+ * `true` when binding `pattern` needs ownership of its scrutinee - `false`
+ * only when it binds at least one name and every bound name is `Copy` (a
+ * `byRef` sub-binding, or a plain `Copy` field like `Point { x, y }`'s
+ * `i32`s). A pattern with no bindings (`_`) still counts as moving,
+ * preserving prior behavior.
+ */
+function patternRequiresScrutineeMove(pattern: Semantics.Pattern): boolean {
+  const declarations = collectPatternDeclarations(pattern);
+  if (declarations.length === 0) return true;
+  return declarations.some(
+    ({ identifier }) => !hasCapability(identifier.type, "copy"),
+  );
 }
 
 /**
@@ -851,7 +877,20 @@ function walkMatchExpression(
   state: StateMap,
   scopeStack: ScopeStack,
 ): void {
-  walkExpression(ctx, expression.scrutinee, state, scopeStack);
+  // Special-cased like LetStatement (see walkLetInitializer) - moves only
+  // if some arm binds a non-Copy name, checked across all arms up front
+  // since this runs once before the fork.
+  if (expression.scrutinee.kind === "PathExpression") {
+    useOrMove(
+      ctx,
+      expression.scrutinee,
+      state,
+      scopeStack,
+      expression.arms.some((arm) => patternRequiresScrutineeMove(arm.pattern)),
+    );
+  } else {
+    walkExpression(ctx, expression.scrutinee, state, scopeStack);
+  }
 
   // Arms are mutually exclusive alternatives, not a sequence -- mirroring
   // `walkIf`, each arm is walked against its own clone of the pre-match
@@ -989,7 +1028,38 @@ function walkIf(
   walkExpression(ctx, expression.condition, state, scopeStack);
 
   const thenState = cloneState(state);
-  walkScope(ctx, expression.thenBranch, thenState, scopeStack, true);
+  if (expression.condition.kind === "LetExpression") {
+    // Pattern bindings are declarations of thenBranch alone - pushed here
+    // (mirrors walkFunction's param registration), popped after
+    // thenBranch, invisible to elseBranch below.
+    scopeStack.push(new Map());
+    const declarations: Declaration[] = [];
+    for (const { identifier, mutable } of collectPatternDeclarations(
+      expression.condition.pattern,
+    )) {
+      registerBinding(thenState, scopeStack, identifier, true);
+      const declaration: Declaration = {
+        id: identifier.tokenId,
+        name: identifier.text,
+        type: identifier.type,
+        tokenId: identifier.tokenId,
+        mutable,
+      };
+      declarations.push(declaration);
+      ctx.declarationsById.set(declaration.id, declaration);
+    }
+    walkScope(
+      ctx,
+      expression.thenBranch,
+      thenState,
+      scopeStack,
+      false,
+      declarations,
+    );
+    scopeStack.pop();
+  } else {
+    walkScope(ctx, expression.thenBranch, thenState, scopeStack, true);
+  }
 
   const elseState = cloneState(state);
   if (expression.elseBranch.kind === "Some") {
@@ -1010,6 +1080,48 @@ function walkIf(
   }
 }
 
+function walkLetInitializer(
+  ctx: Ctx,
+  statement: Semantics.LetStatement,
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  if (!isSome(statement.initializer)) return;
+  walkScrutinee(
+    ctx,
+    statement.initializer.value,
+    statement.pattern,
+    state,
+    scopeStack,
+  );
+}
+
+/**
+ * A bare-identifier scrutinee is special-cased so an all-Copy destructuring
+ * pattern doesn't move it - `walkExpression`'s own `PathExpression` case
+ * always moves, with no visibility into the pattern being bound against.
+ * Shared by `let` and `if let`.
+ */
+function walkScrutinee(
+  ctx: Ctx,
+  scrutinee: Semantics.Expression,
+  pattern: Semantics.Pattern,
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  if (scrutinee.kind !== "PathExpression") {
+    walkExpression(ctx, scrutinee, state, scopeStack);
+    return;
+  }
+  useOrMove(
+    ctx,
+    scrutinee,
+    state,
+    scopeStack,
+    patternRequiresScrutineeMove(pattern),
+  );
+}
+
 function walkStatement(
   ctx: Ctx,
   statement: Semantics.Statement,
@@ -1020,14 +1132,11 @@ function walkStatement(
   ctx.currentStatementTokenId = statement.tokenId;
   switch (statement.kind) {
     case "LetStatement": {
-      // The initializer is walked *before* registerBinding, so `let x = x;`
-      // resolves the rhs `x` against whatever `x` was already in scope
-      // (shadowing an outer binding, if any) rather than the new one being
-      // declared — the new binding doesn't exist yet as far as `resolve` is
-      // concerned.
-      if (isSome(statement.initializer)) {
-        walkExpression(ctx, statement.initializer.value, state, scopeStack);
-      }
+      // Walked *before* registerBinding, so `let x = x;` resolves the rhs
+      // `x` against whatever `x` was already in scope (shadowing an outer
+      // binding, if any) rather than the new one being declared - the new
+      // binding doesn't exist yet as far as `resolve` is concerned.
+      walkLetInitializer(ctx, statement, state, scopeStack);
       for (const { identifier, mutable } of collectPatternDeclarations(
         statement.pattern,
       )) {

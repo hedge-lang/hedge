@@ -1,0 +1,18 @@
+enum Message {
+  Some(i32),
+  None,
+}
+
+fn unwrap_or(m: Message, fallback: i32) -> i32 {
+  if let Message::Some(x) = m {
+    x
+  } else {
+    fallback
+  }
+}
+
+fn main() {
+  print(unwrap_or(Message::Some(7), 0));
+  print(",");
+  print(unwrap_or(Message::None, 42));
+}
