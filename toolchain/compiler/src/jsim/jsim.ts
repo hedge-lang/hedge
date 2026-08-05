@@ -2308,8 +2308,21 @@ function compilePatternInto(
             beforeCount,
             restLength,
           );
-          // A `&mut` rest binding's accessor cell needs a real lvalue to
-          // close over; the view expression itself isn't assignable.
+          const restMutable = el.mutable || ambientMutable;
+          // Only a `&mut` rest binding's accessor cell needs a real lvalue
+          // to close over (the view expression itself isn't assignable) -
+          // every other rest binding can bind straight to the view.
+          if (!(el.byRef && restMutable)) {
+            const binding = bindPatternName(
+              ctx,
+              el.name.value,
+              viewExpr,
+              restMutable,
+              el.byRef,
+              predecls,
+            );
+            return (rest) => [binding, ...rest];
+          }
           const viewTempName = reserveLocalName(ctx, "restView");
           const viewDecl: JSIM.LetStatement = {
             kind: "LetStatement",
@@ -2329,7 +2342,7 @@ function compilePatternInto(
             ctx,
             el.name.value,
             viewIdent,
-            el.mutable || ambientMutable,
+            restMutable,
             el.byRef,
             predecls,
           );
