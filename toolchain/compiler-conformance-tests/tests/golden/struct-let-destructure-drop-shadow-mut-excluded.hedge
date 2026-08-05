@@ -1,0 +1,10 @@
+struct Item { v: i32 }
+struct Pair { a: Item, b: Item }
+
+fn main() {
+  let p = Pair { a: Item { v: 1 }, b: Item { v: 2 } };
+  let Pair { a: mut a, b } = p;
+  a = Item { v: 99 };
+  print(a.v);
+  print(b.v);
+}

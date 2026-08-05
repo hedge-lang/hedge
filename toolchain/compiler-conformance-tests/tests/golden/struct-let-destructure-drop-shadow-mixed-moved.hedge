@@ -1,0 +1,11 @@
+struct Item { v: i32 }
+struct Pair { a: Item, b: Item }
+
+fn consume(x: Item) {}
+
+fn main() {
+  let p = Pair { a: Item { v: 1 }, b: Item { v: 2 } };
+  let Pair { a, b } = p;
+  consume(a);
+  print(b.v);
+}

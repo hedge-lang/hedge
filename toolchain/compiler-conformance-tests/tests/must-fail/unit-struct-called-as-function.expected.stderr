@@ -1,0 +1,1 @@
+error: struct `Marker` is a unit struct and cannot be constructed with `()`
