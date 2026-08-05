@@ -17,7 +17,7 @@ function main() {
   let first;
   let tail;
   first = ((_arr, _i) => _i < 0 || _i >= _arr.length ? (() => { throw new RangeError("index out of bounds"); })() : (_arr[_i]))(letDestructure, 0);
-  const restView = __hedgeDisposeArray(letDestructure.subarray(1, 4));
+  let restView = __hedgeDisposeArray(letDestructure.subarray(1, 4));
   tail = ({ get v() { return restView; }, set v(nv) { restView = nv; } });
   ((_arr, _i) => _i < 0 || _i >= _arr.length ? (() => { throw new RangeError("index out of bounds"); })() : (_arr[_i] = 99))(tail.v, 0);
   print(first);

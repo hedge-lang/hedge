@@ -2327,7 +2327,10 @@ function compilePatternInto(
           const viewDecl: JSIM.LetStatement = {
             kind: "LetStatement",
             name: viewTempName,
-            mutable: false,
+            // Reached only for a `&mut` rest binding (see the branch above)
+            // - its accessor cell's setter reassigns this temp, so it must
+            // be a real JS `let`, not `const`.
+            mutable: true,
             value: some(viewExpr),
             docComment: none(),
             span: resolveSpan(ctx.tokens, el.tokenId, el.tokenId),
