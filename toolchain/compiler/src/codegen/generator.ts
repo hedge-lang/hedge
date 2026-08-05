@@ -81,6 +81,7 @@ type PrecKey =
   | "TupleExpression"
   | "ArrayExpression"
   | "ArrayRepeatExpression"
+  | "ArraySliceViewExpression"
   | "RangeExpression"
   | "StructExpression"
   | "RefCellExpression"
@@ -229,6 +230,43 @@ const ARRAY_DISPOSE_HELPER = `function ${ARRAY_DISPOSE_HELPER_NAME}(arr) {
 }`;
 
 /**
+ * `Proxy`-based rest-pattern view (`..tail`) for a non-numeric array, which
+ * has no `subarray` zero-copy option. Indices below `len` write through to
+ * `target`; everything else (length, iteration, dispose) lives on `extras`,
+ * never `target` - otherwise disposing the view would clobber the original.
+ */
+const ARRAY_SLICE_VIEW_HELPER_NAME = "__hedgeArraySliceView";
+const ARRAY_SLICE_VIEW_HELPER = `function ${ARRAY_SLICE_VIEW_HELPER_NAME}(target, start, len) {
+  const extras = {};
+  return new Proxy(extras, {
+    get(_, prop) {
+      if (prop === "length") return len;
+      if (prop === Symbol.iterator) {
+        return function* () {
+          for (let i = 0; i < len; i++) yield target[start + i];
+        };
+      }
+      if (typeof prop === "string" && /^\\d+$/.test(prop)) {
+        const i = Number(prop);
+        return i < len ? target[start + i] : undefined;
+      }
+      return extras[prop];
+    },
+    set(_, prop, value) {
+      if (typeof prop === "string" && /^\\d+$/.test(prop)) {
+        const i = Number(prop);
+        if (i < len) {
+          target[start + i] = value;
+          return true;
+        }
+      }
+      extras[prop] = value;
+      return true;
+    },
+  });
+}`;
+
+/**
  * Wraps an array index access (read via `IndexExpression`, or write via
  * `AssignExpression`'s own special-cased lhs handling) in the same
  * zero-guard IIFE shape `emitNumericBinaryOp` already uses for division -
@@ -371,6 +409,17 @@ function emitExpression(expression: Expression): string {
         ? typedArrayConstructor(expression.numericKind.value)
         : "Array";
       const value = `new ${ctor}(${String(expression.count)}).fill(${emitExpression(expression.value)})`;
+      return `${ARRAY_DISPOSE_HELPER_NAME}(${value})`;
+    }
+    case "ArraySliceViewExpression": {
+      const source = needsAtLeast(
+        expression.source,
+        "ArraySliceViewExpression",
+      );
+      const { start, length } = expression;
+      const value = isSome(expression.numericKind)
+        ? `${source}.subarray(${String(start)}, ${String(start + length)})`
+        : `${ARRAY_SLICE_VIEW_HELPER_NAME}(${source}, ${String(start)}, ${String(length)})`;
       return `${ARRAY_DISPOSE_HELPER_NAME}(${value})`;
     }
     case "StructExpression": {
@@ -851,6 +900,12 @@ export function generate(program: Program): Code {
     parts.some((part) => part.text.includes(`${ARRAY_DISPOSE_HELPER_NAME}(`))
   ) {
     parts.unshift({ text: ARRAY_DISPOSE_HELPER, mappings: [] });
+  }
+
+  if (
+    parts.some((part) => part.text.includes(`${ARRAY_SLICE_VIEW_HELPER_NAME}(`))
+  ) {
+    parts.unshift({ text: ARRAY_SLICE_VIEW_HELPER, mappings: [] });
   }
 
   if (hasMain(program)) {
