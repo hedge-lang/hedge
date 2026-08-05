@@ -12,6 +12,7 @@ function main() {
   let b;
   a = letDestructure.a;
   b = letDestructure.b;
+  using dropShadow_b = b;
   if (cond) { consume(a); } else { using dropShadow_a = a; }
   print(b.v);
 }

@@ -1,0 +1,9 @@
+fn Pair() {
+  print("fn");
+}
+
+struct Pair(i32, i32);
+
+fn main() {
+  Pair();
+}

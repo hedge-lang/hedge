@@ -1,7 +1,6 @@
 fn main() {
-  // TODO(Hedge-63): array literal elements don't yet coerce against the
-  // let annotation's element type, so literals are explicitly suffixed
-  // here instead of relying on unsuffixed inference.
+  // TODO(Hedge-63): array literals don't coerce against the let
+  // annotation's element type yet, so suffix explicitly.
   let mut arr: [u8; 3] = [10u8, 20u8, 30u8];
   let [first, ..&mut tail] = arr;
   tail[0] = 250;

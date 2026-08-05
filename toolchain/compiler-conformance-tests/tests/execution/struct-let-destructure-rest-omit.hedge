@@ -1,0 +1,7 @@
+struct Point { x: i32, y: i32 }
+
+fn main() {
+  let p = Point { x: 7, y: 8 };
+  let Point { x, .. } = p;
+  print(x);
+}

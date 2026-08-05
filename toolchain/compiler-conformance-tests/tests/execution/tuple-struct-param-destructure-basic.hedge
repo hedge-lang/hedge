@@ -1,0 +1,9 @@
+struct Pair(i32, i32);
+
+fn sum(Pair(a, b): Pair) -> i32 {
+  a + b
+}
+
+fn main() {
+  print(sum(Pair(3, 4)));
+}

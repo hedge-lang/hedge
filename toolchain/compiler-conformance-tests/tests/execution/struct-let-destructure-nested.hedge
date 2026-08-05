@@ -1,0 +1,10 @@
+struct Inner { v: i32 }
+struct Outer { inner: Inner, tag: i32 }
+
+fn main() {
+  let o = Outer { inner: Inner { v: 5 }, tag: 9 };
+  let Outer { inner: Inner { v }, tag } = o;
+  print(v);
+  print(",");
+  print(tag);
+}
