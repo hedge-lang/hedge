@@ -562,12 +562,37 @@ describe("toJsim", () => {
   });
 
   describe("match expression lowering", () => {
-    it("throws lowering a semantically clean match on a non-enum (int) scrutinee, since only enum-discriminant switch codegen exists", () => {
-      expect(() =>
-        jsimSource("fn f(x: i32) -> i32 { match x { _ => 0 } }"),
-      ).toThrow(
-        "JSIM codegen for match on a non-enum scrutinee is not yet implemented",
-      );
+    it("lowers a match on a non-enum (int) scrutinee to an if chain", () => {
+      const program = jsimSource("fn f(x: i32) -> i32 { match x { _ => 0 } }");
+      expect(program).toMatchObject({
+        items: [
+          {
+            kind: "FunctionDecl",
+            body: [
+              {
+                kind: "ReturnStatement",
+                value: {
+                  value: {
+                    kind: "CallExpression",
+                    callee: {
+                      kind: "ArrowFunctionExpression",
+                      body: [
+                        { kind: "LetStatement", name: "matchScrutinee" },
+                        {
+                          kind: "ReturnStatement",
+                          value: {
+                            value: { kind: "NumberLiteral", value: "0" },
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      });
     });
   });
 

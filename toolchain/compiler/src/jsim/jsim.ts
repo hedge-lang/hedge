@@ -1784,19 +1784,14 @@ function jsimMatchExpression(
 }
 
 /** Evaluates the scrutinee once into a synthesized local, then lowers to a
- * `switch` on its `.tag`. Only an enum scrutinee is handled here - a
- * non-enum match is a separate, not-yet-scoped follow-up. */
+ * `switch` on its `.tag` for an enum scrutinee, or an `if` chain
+ * (`buildNonEnumMatchChain`) for anything else. */
 function jsimMatchBody(
   ctx: JsimContext,
   matchExpr: Semantics.MatchExpression,
 ): JSIM.Statement[] {
   pushRenameFrame(ctx);
   try {
-    if (matchExpr.scrutinee.type.kind !== "EnumType") {
-      throw new Error(
-        "JSIM codegen for match on a non-enum scrutinee is not yet implemented",
-      );
-    }
     const scrutineeValue = parseExpression(ctx, matchExpr.scrutinee);
     const scrutineeName = reserveLocalName(ctx, "matchScrutinee");
     const span = resolveSpan(ctx.tokens, matchExpr.tokenId, matchExpr.tokenId);
@@ -1814,10 +1809,11 @@ function jsimMatchBody(
       value: scrutineeName,
       type: none(),
     };
-    return [
-      scrutineeDecl,
-      buildEnumMatchSwitch(ctx, matchExpr, scrutineeIdent),
-    ];
+    const dispatch: JSIM.Statement[] =
+      matchExpr.scrutinee.type.kind === "EnumType"
+        ? [buildEnumMatchSwitch(ctx, matchExpr, scrutineeIdent)]
+        : buildNonEnumMatchChain(ctx, matchExpr, scrutineeIdent);
+    return [scrutineeDecl, ...dispatch];
   } finally {
     popRenameFrame(ctx);
   }
@@ -1995,6 +1991,24 @@ function buildEnumMatchSwitch(
     cases,
     defaultBody,
   };
+}
+
+/** Non-enum scrutinee (e.g. `bool`): no `.tag` to bucket on, so every arm is
+ * tried in order via the same `compilePatternInto`/`lowerMatchArmChain`
+ * machinery the enum switch's per-tag chains already use. */
+function buildNonEnumMatchChain(
+  ctx: JsimContext,
+  matchExpr: Semantics.MatchExpression,
+  scrutineeExpr: JSIM.Expression,
+): JSIM.Statement[] {
+  const arms: DispatchedArm[] = truncateAtFirstUnconditionalArm(
+    matchExpr.arms.map((arm) => ({
+      pattern: arm.pattern,
+      guard: arm.guard,
+      body: arm.body,
+    })),
+  );
+  return withDefenseInDepthThrow(lowerMatchArmChain(ctx, arms, scrutineeExpr));
 }
 
 /** Lowers a tag's (or the default's) applicable arms, in order, to a flat
@@ -2230,10 +2244,10 @@ function compilePatternInto(
       return (rest) => guardedBy(tagCondition)(fieldsContinuation(rest));
     }
     case "OrPattern": {
-      // Only reachable for a nested or-pattern - a top-level one is
-      // disambiguated per-tag by `topLevelPatternDispatch` first. Only
-      // binding-free alternatives are supported; a binding one would need
-      // a conditional merge this pass doesn't build.
+      // Reachable for a nested or-pattern, and also top-level for a
+      // non-enum scrutinee (no tag to dispatch on there). Only binding-free
+      // alternatives are supported; a binding one would need a conditional
+      // merge this pass doesn't build.
       const altResults = pattern.alternatives.map((alt) =>
         patternCondition(alt, ctx, valueExpr),
       );
