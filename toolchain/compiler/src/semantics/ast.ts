@@ -1,5 +1,5 @@
 // Mirrors parser/ast.ts structurally but every expression node extends
-// DecoratedAstNode — the resolved Type field is the semantic layer's invariant.
+// DecoratedAstNode - the resolved Type field is the semantic layer's invariant.
 // Duplication is intentional; do not merge these two ASTs.
 
 import type { Option } from "../option.js";
@@ -385,7 +385,7 @@ export interface StringLiteral extends DecoratedAstNode {
 
 export interface IntLiteral extends DecoratedAstNode {
   readonly kind: "IntLiteral";
-  /** Digits only — no prefix, underscores stripped. */
+  /** Digits only - no prefix, underscores stripped. */
   readonly value: string;
   readonly base: 10 | 16 | 8 | 2;
   readonly suffix: Option<IntSuffix>;

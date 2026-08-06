@@ -88,7 +88,7 @@ type PrecKey =
   | "RefCellExpression"
   | BinaryOperator;
 
-// Ascending precedence: earlier entries bind looser → more likely to need parens.
+// Ascending precedence: earlier entries bind looser -> more likely to need parens.
 // Atoms (literals, identifiers, etc.) are absent; levelOf returns PREC_LEVELS.length,
 // placing them above everything (they never need parens in any position).
 const PREC_LEVELS: ReadonlyArray<readonly PrecKey[]> = [
@@ -122,7 +122,7 @@ function precKey(expr: Expression): PrecKey {
   return expr.kind;
 }
 
-// Left operand of a left-assoc op: same level is fine (x + y + z → no parens on `x + y`)
+// Left operand of a left-assoc op: same level is fine (x + y + z -> no parens on `x + y`)
 function needsAtLeast(expr: Expression, levelKey: PrecKey): string {
   const s = emitExpression(expr);
   return levelOf(precKey(expr)) < levelOf(levelKey) ? `(${s})` : s;
@@ -149,7 +149,7 @@ function emitDocComment(doc: DocComment, isModule: boolean = false): string {
   return ["/**", ...body, " */"].join("\n");
 }
 
-// eslint-disable-next-line complexity -- Routing function: one branch per numeric kind × op
+// eslint-disable-next-line complexity -- Routing function: one branch per numeric kind x op
 function emitNumericBinaryOp(
   nk: NumericKind,
   op: BinaryOperator,
@@ -227,9 +227,21 @@ function ownFieldAccess(name: string): string {
     : `this[${JSON.stringify(name)}]`;
 }
 
+/**
+ * Fields are released with `using` rather than direct `[Symbol.dispose]()`
+ * calls: spec 0007 requires a throwing drop to surface as a `SuppressedError`
+ * wrapping any in-flight error, which is what `using` lowering provides and a
+ * manual call chain does not - it would also abandon every later field. `using`
+ * disposes in reverse declaration order, matching the same spec's scope rule,
+ * and tolerates a null field once `Option<T>` lowers to `T | null`.
+ *
+ * The bindings are numbered rather than named after their fields, since a
+ * field name need not be a legal JS binding (`default`, or a tuple struct's
+ * `0`).
+ */
 function structDisposer(disposableFields: readonly string[]): string {
   const body = disposableFields
-    .map((name) => `${ownFieldAccess(name)}[Symbol.dispose]();`)
+    .map((name, i) => `using _d${String(i)} = ${ownFieldAccess(name)};`)
     .join(" ");
   return `[Symbol.dispose]() {${body === "" ? "" : ` ${body} `}}`;
 }

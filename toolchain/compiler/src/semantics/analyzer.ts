@@ -2642,7 +2642,7 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
       emitError(ctx, TOP_LEVEL_ITEM_RESTRICTION_MESSAGE, item.tokenId, none());
       const prevLen = ctx.diagnostics.length;
       const analyzed = analyzeStatement(ctx, item);
-      ctx.diagnostics.splice(prevLen); // suppress cascading errors — the restriction error is good enough
+      ctx.diagnostics.splice(prevLen); // suppress cascading errors - the restriction error is good enough
       return analyzed;
     }
     default:
@@ -2902,12 +2902,12 @@ function danglingReferenceOperandName(
  * (or implicit-unit) return type, coercing an unsuffixed-integer-literal
  * trailing expression first. A body with no trailing expression at all
  * (e.g. `fn f() -> i32 { let x = 1; }`) takes the early-return branch below
- * instead — it's checked for a missing return value there, not for a type
+ * instead - it's checked for a missing return value there, not for a type
  * mismatch, since there's no trailing-expression type to reconcile against.
  *
  * Cascade guard: if the trailing expression's own analysis already failed
  * (its type is the `UnitType` error-recovery placeholder), no diagnostic is
- * emitted here — see {@link reconcileExpressionType}.
+ * emitted here - see {@link reconcileExpressionType}.
  */
 function checkEscapingReferenceExpression(
   ctx: AnalysisContext,
@@ -3535,21 +3535,21 @@ function isAmbiguousUnitExpr(expr: Semantics.Expression): boolean {
 }
 
 /**
- * Reconciles an analyzed expression against an `expectedType` context — a
+ * Reconciles an analyzed expression against an `expectedType` context - a
  * `let` binding's explicit annotation, a function's declared return type, or
- * a struct field's declared type — applying Slice 1's unsuffixed-integer-
+ * a struct field's declared type - applying Slice 1's unsuffixed-integer-
  * literal coercion (0010-primitive-types.md: an unconstrained literal adopts
  * the type its context expects) and negative-literal range checks before
  * falling back to a plain type-equality comparison.
  *
  * Callers are responsible for (a) emitting their own call-site-specific
  * message when `mismatch` is true, and (b) running {@link checkPosLiteralRange}
- * on the result if it is an `IntLiteral` — kept out of this helper so each
+ * on the result if it is an `IntLiteral` - kept out of this helper so each
  * call site performs the positive-range check exactly once.
  *
  * Cascade guard: `mismatch` is always `false` when the resolved expression's
  * type is the `UnitType` error-recovery placeholder (see
- * {@link isAmbiguousUnitExpr}) — that failure already reported its own
+ * {@link isAmbiguousUnitExpr}) - that failure already reported its own
  * diagnostic. A genuinely unit-typed result (e.g. a `print(...)` call) is
  * compared normally, not suppressed.
  */
@@ -3637,7 +3637,7 @@ function inferBinaryType(
 
   // UnitType is ambiguous: it's either the error-recovery placeholder from a
   // failed sub-analysis, or a genuine unit value (e.g. a `print(...)` call).
-  // Only suppress cascading type errors for the former — see
+  // Only suppress cascading type errors for the former - see
   // isAmbiguousUnitExpr.
   const isLeftTypeValid =
     leftType.kind !== "UnitType" || !isAmbiguousUnitExpr(left);
@@ -4622,7 +4622,7 @@ function analyzeStructNamedFields(
       return field;
     }
 
-    // Shorthand `Foo { x }` (field.value is none()) — value-type inference
+    // Shorthand `Foo { x }` (field.value is none()) - value-type inference
     // for shorthand is a separate, pre-existing gap; out of scope here.
     if (!isSome(field.value)) return field;
 

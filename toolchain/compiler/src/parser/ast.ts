@@ -461,7 +461,7 @@ export interface StringLiteral extends AstNode {
 
 export interface IntLiteral extends AstNode {
   readonly kind: "IntLiteral";
-  /** Digits only — no prefix, underscores stripped. */
+  /** Digits only - no prefix, underscores stripped. */
   readonly value: string;
   readonly base: 10 | 16 | 8 | 2;
   readonly suffix: Option<IntSuffix>;

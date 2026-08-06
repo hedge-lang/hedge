@@ -414,7 +414,7 @@ describe("move-check", (): void => {
         }
         // There is a branch (cond == false) where x is never initialized
         // at all, so the compiler can't be sure it exists by the time the
-        // scope closes. That's the actual reason this is rejected — not a
+        // scope closes. That's the actual reason this is rejected - not a
         // drop-flag question, since there's nothing to drop until x is
         // known to have been constructed in the first place.
       }`,

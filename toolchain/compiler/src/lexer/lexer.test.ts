@@ -933,14 +933,14 @@ describe("string literals", () => {
     });
 
     it("escaped backslash \\\\", () => {
-      // Hedge source: "\\" — a string containing one backslash
+      // Hedge source: "\\" - a string containing one backslash
       const { tokens } = tokenize(`"\\\\"`);
       expect(tokens).toMatchObject([{ kind: "string" }, { kind: "eof" }]);
       expect(tokens).toHaveLength(2);
     });
 
     it('escaped double quote \\"', () => {
-      // Hedge source: "\"hello\"" — escapes preserved in token text
+      // Hedge source: "\"hello\"" - escapes preserved in token text
       const { tokens } = tokenize(`"\\"hello\\""`);
       expect(tokens).toMatchObject([{ kind: "string" }, { kind: "eof" }]);
     });
@@ -1643,7 +1643,7 @@ describe("char literals", () => {
     });
 
     it("literal newline in char position is rejected — ' with \\n as n1 falls to error path", () => {
-      // Source: '  newline  '  — n1 === "\n" blocks the single-char branch
+      // Source: '  newline  '  - n1 === "\n" blocks the single-char branch
       const { tokens } = tokenize("'\n'");
       expect(tokens[0]).toMatchObject({ kind: "error" });
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });

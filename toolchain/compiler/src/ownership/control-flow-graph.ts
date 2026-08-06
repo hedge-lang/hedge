@@ -68,7 +68,7 @@ export interface BasicBlock {
    * expression's own condition. Without this, a consumer walking only
    * `statements`/`trailingExpression` to find uses or moves would silently
    * miss anything evaluated in the condition itself (e.g. `if consume(x)`)
-   * — the condition is evaluated as part of this block's own control flow,
+   * - the condition is evaluated as part of this block's own control flow,
    * but isn't a statement or a trailing expression, so it has nowhere else
    * to live on the block.
    */
@@ -482,22 +482,22 @@ function pushBlock(blocks: MutableBlock[]): number {
 
 /**
  * Every name a `let`/`Param` pattern binds, each with its own place-level
- * `Declaration` — move/drop tracking needs one per binding, not one for the
+ * `Declaration` - move/drop tracking needs one per binding, not one for the
  * whole pattern. Generalizes the old single-binding `declarationOf` to the
  * same `Semantics.Pattern` union `registerPatternBindings` above already
  * walks for match arms; a `_` name (wildcard or an explicit `_`-named
  * binding/field) contributes no declaration, since it is never move-tracked
  * or drop-annotated. Each `BindingPattern`'s own `mutable` flag is
- * authoritative for that one binding — there's no single pattern-wide
+ * authoritative for that one binding - there's no single pattern-wide
  * `mutable` anymore (Hedge-47), since a destructuring pattern can mix
  * mutable and immutable bindings in one `let`/parameter
  * (`Point { x: mut x, y }`). A struct pattern's shorthand field binding
- * (`Point { x }`, no explicit sub-pattern) is always immutable — the
+ * (`Point { x }`, no explicit sub-pattern) is always immutable - the
  * grammar has no sigil position for shorthand fields, only the explicit
  * `x: mut x` form can carry one (see `parser/pattern.ts`).
  * `SlicePattern` is real as of Hedge-47 (against a fixed-length array
  * scrutinee); `TuplePattern` still isn't (no real tuple value type exists
- * yet) — `analyzer.ts`'s `analyzePattern` always substitutes a
+ * yet) - `analyzer.ts`'s `analyzePattern` always substitutes a
  * `WildcardPattern` for it (see `analyzePatternGuardrail`), so that one case
  * alone stays unreached, mirroring `registerPatternBindings`'s own note.
  */
@@ -577,7 +577,7 @@ export function declarationsOf(
 
 /**
  * Function parameters are treated as declared before the body, so they seed
- * the root scope's declarations list (see `buildControlFlowGraph`) — the
+ * the root scope's declarations list (see `buildControlFlowGraph`) - the
  * body's own locals then drop before them, matching real drop order.
  */
 function paramDeclarations(params: readonly Semantics.Param[]): Declaration[] {
@@ -612,7 +612,7 @@ function lowerLet(
 /**
  * Lower a nested bare-block statement (`{ ... }` with no `if`). It doesn't
  * fork, but its lexical scope still closes independently of the enclosing
- * one, and a block can carry only one `scopeExit` — so this shares the
+ * one, and a block can carry only one `scopeExit` - so this shares the
  * current block chain for the inner block's own content, then splits into a
  * fresh, otherwise-empty continuation block for whatever follows in the
  * outer scope.
@@ -657,7 +657,7 @@ function lowerExpressionStatement(
  * at statement-position `if` expressions and splitting at nested bare-block
  * statements (so each block carries at most one `scopeExit`). Value-position
  * `if`/`Block` expressions (inside a `let` initializer, call argument, etc.)
- * are not lowered into the CFG structure — only statement-position control
+ * are not lowered into the CFG structure - only statement-position control
  * flow forks the graph; a value-position `if`/`Block` stays an ordinary
  * nested expression on whichever statement contains it, handled by
  * `recordConfinedStatement` instead. A new `Semantics.Statement` kind needs a
@@ -759,11 +759,11 @@ function lowerScope(
 /**
  * Lower an `if`/`else` fork starting at `preId`, returning the join block's
  * id. An `else if` is a nested `IfExpression` in `elseBranch`, so it's lowered
- * by recursing into `lowerIf` with the `else` block as its own `preId` — the
+ * by recursing into `lowerIf` with the `else` block as its own `preId` - the
  * chain of `else if`s becomes a chain of forks, not a special case. When
  * there is no `else` at all, the false path has nowhere to go but straight to
  * `join`, so `preId` itself gets a direct edge there alongside the edge to
- * `then` — that's the "3 blocks, pre.successors = [then, join]" shape.
+ * `then` - that's the "3 blocks, pre.successors = [then, join]" shape.
  */
 function lowerIf(
   expression: Semantics.IfExpression,
@@ -824,7 +824,7 @@ function lowerIf(
 /**
  * Build a trivial control-flow graph over a function body. Slice 1 has no
  * loops, so a single forward walk with fork-at-`if`/join-after-`if` is
- * sufficient — no fixpoint iteration is needed.
+ * sufficient - no fixpoint iteration is needed.
  */
 export function buildControlFlowGraph(
   fn: Semantics.FunctionDecl,

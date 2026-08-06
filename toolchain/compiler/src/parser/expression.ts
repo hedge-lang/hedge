@@ -86,14 +86,14 @@ type InfixEntry =
 // eslint-disable-next-line complexity -- dispatch table; more readable than alternatives
 function infixOp(token: Token): InfixEntry | null {
   switch (token.kind) {
-    // Prec 1 — postfix (bp 26, left-to-right)
+    // Prec 1 - postfix (bp 26, left-to-right)
     case "lparen":
       return { kind: "postfix-call", leftBp: 26 };
     case "dot":
       return { kind: "postfix-field", leftBp: 26 };
     case "lbracket":
       return { kind: "postfix-index", leftBp: 26 };
-    // Prec 3 — multiplicative (bp 22, left-assoc)
+    // Prec 3 - multiplicative (bp 22, left-assoc)
     case "star":
       return {
         kind: "binary",
@@ -121,7 +121,7 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: false,
         sigil: "%",
       };
-    // Prec 4 — additive (bp 20, left-assoc)
+    // Prec 4 - additive (bp 20, left-assoc)
     case "plus":
       return {
         kind: "binary",
@@ -140,7 +140,7 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: false,
         sigil: "-",
       };
-    // Prec 5 — bitshift (bp 18, left-assoc)
+    // Prec 5 - bitshift (bp 18, left-assoc)
     case "lt_lt":
       return {
         kind: "binary",
@@ -159,7 +159,7 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: false,
         sigil: ">>",
       };
-    // Prec 6 — bit-and (bp 16, left-assoc); infix position only — prefix & is ReferenceExpression
+    // Prec 6 - bit-and (bp 16, left-assoc); infix position only - prefix & is ReferenceExpression
     case "amp":
       return {
         kind: "binary",
@@ -169,7 +169,7 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: false,
         sigil: "&",
       };
-    // Prec 7 — bit-xor (bp 14, left-assoc)
+    // Prec 7 - bit-xor (bp 14, left-assoc)
     case "caret":
       return {
         kind: "binary",
@@ -179,7 +179,7 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: false,
         sigil: "^",
       };
-    // Prec 8 — bit-or (bp 12, left-assoc)
+    // Prec 8 - bit-or (bp 12, left-assoc)
     case "pipe":
       return {
         kind: "binary",
@@ -189,7 +189,7 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: false,
         sigil: "|",
       };
-    // Prec 9 — comparison (bp 10, non-associative)
+    // Prec 9 - comparison (bp 10, non-associative)
     case "eq_eq":
       return {
         kind: "binary",
@@ -244,7 +244,7 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: true,
         sigil: ">=",
       };
-    // Prec 10 — logical-and (bp 8, left-assoc)
+    // Prec 10 - logical-and (bp 8, left-assoc)
     case "amp_amp":
       return {
         kind: "binary",
@@ -254,7 +254,7 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: false,
         sigil: "&&",
       };
-    // Prec 11 — logical-or (bp 6, left-assoc)
+    // Prec 11 - logical-or (bp 6, left-assoc)
     case "pipe_pipe":
       return {
         kind: "binary",
@@ -283,7 +283,7 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: true,
         sigil: "..=",
       };
-    // Prec 13 — assignment (bp 2, right-assoc: rightBp < leftBp)
+    // Prec 13 - assignment (bp 2, right-assoc: rightBp < leftBp)
     case "eq":
       return {
         kind: "assign",
@@ -421,7 +421,7 @@ function parseReference(
     cursor += 1;
   }
   // Parse the operand at unary precedence (24) so postfix ops like . and () bind to
-  // the operand rather than the surrounding expression: &a.b ⟹ &(a.b), &f() ⟹ &(f())
+  // the operand rather than the surrounding expression: &a.b => &(a.b), &f() => &(f())
   const operandResult = parseExpressionWithBindingPower(
     tokens,
     diagnostics,
@@ -471,7 +471,7 @@ function parseTupleOrGroup(
   if (isErr(firstResult)) return firstResult;
   cursor = firstResult.value.next;
 
-  // No comma → transparent grouping (passes allowStruct through; no new node)
+  // No comma -> transparent grouping (passes allowStruct through; no new node)
   if (tokens[cursor]?.kind === "rparen") {
     return ok({ node: firstResult.value.node, next: cursor + 1 });
   }
@@ -654,7 +654,7 @@ function parseIfExpression(
   pos: number,
 ): PR<Parsed<IfExpression>> {
   const start = pos;
-  // Token at pos is the `if` keyword — advance past it
+  // Token at pos is the `if` keyword - advance past it
   const afterIf = pos + 1;
 
   const condResult = parseCondition(tokens, diagnostics, afterIf);
@@ -1659,7 +1659,7 @@ export function parseExpression(
  * @param tokens The sequence of tokens to parse.
  * @param diagnostics The diagnostic warnings and errors array.
  * @param pos The current position in the token sequence to start parsing.
- * @param minBp The minimum binding power; operators with leftBp ≤ minBp are not consumed.
+ * @param minBp The minimum binding power; operators with leftBp <= minBp are not consumed.
  * @param allowStruct Whether structs are allowed in this space.
  *
  * @return The result of parsing, which includes either the parsed expression or an error.

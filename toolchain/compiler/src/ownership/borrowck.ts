@@ -1,7 +1,7 @@
 /**
  * @module
  *
- * NLL borrow checking (spec §0005, §0006, §0002): enforces the four borrow
+ * NLL borrow checking (spec 0005, 0006, 0002): enforces the four borrow
  * rules over a per-function {@link ControlFlowGraph}/{@link Liveness} (from
  * `control-flow-graph.ts`/`liveness.ts`), so a borrow's extent ends at its
  * last use rather than its lexical scope, across block boundaries as well as
@@ -132,7 +132,7 @@ function describePlace(path: PlacePath): string {
 
 /**
  * Whether two places' projection chains can alias. Diverging at a `Field`
- * with different names proves disjointness (spec §0013 "Borrowing fields");
+ * with different names proves disjointness (spec 0013 "Borrowing fields");
  * two `Index` projections at the same depth always overlap, since a dynamic
  * index is never statically provable distinct; `Deref` is transparent and
  * never itself introduces disjointness. One chain running out before the

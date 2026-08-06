@@ -10,7 +10,7 @@ function f(paramDestructure) {
 }
 
 function main() {
-  print(f(({inner: ({v: 5, [Symbol.dispose]() {}}), tag: 9, [Symbol.dispose]() { this.inner[Symbol.dispose](); }})));
+  print(f(({inner: ({v: 5, [Symbol.dispose]() {}}), tag: 9, [Symbol.dispose]() { using _d0 = this.inner; }})));
 }
 
 main();

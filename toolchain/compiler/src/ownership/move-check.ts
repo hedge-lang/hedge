@@ -229,7 +229,7 @@ function resolve(scopeStack: ScopeStack, name: string): BindingId | undefined {
 
 /**
  * Add `identifier` to the current scope frame and seed its move state.
- * Wildcard (`_`) patterns bind no name and are silently skipped — they can
+ * Wildcard (`_`) patterns bind no name and are silently skipped - they can
  * never be read back, so there is nothing to track.
  */
 function registerBinding(
@@ -290,7 +290,7 @@ function resolveBinding(
  * use-after-move/use-before-init and poisons to `Owned` to avoid cascading).
  * When `asMove` is true and the binding's type has no `copy` capability, the
  * binding transitions to `Unbound`. Copy-typed bindings never transition
- * regardless of `asMove` — a "move" of a Copy value is a duplication.
+ * regardless of `asMove` - a "move" of a Copy value is a duplication.
  * Silently does nothing for names that don't resolve to a tracked local
  * binding (function names, builtins, already-diagnosed unresolved names).
  */
@@ -377,17 +377,17 @@ function cloneState(state: StateMap): StateMap {
  * Combine two predecessor states for the same binding at a branch merge.
  * Exhaustive over both sides' `kind` (nested switch, each with an
  * `assertNever` default) so a future 6th `MoveState` can't be silently
- * half-handled here — see the `MoveState` doc comment for why `Unbound`/
+ * half-handled here - see the `MoveState` doc comment for why `Unbound`/
  * `ConditionallyMoved` and `Uninitialized`/`PossiblyUninitialized` must each
  * stay distinct rather than collapsing into their "definitely gone" sibling.
  *
  * The one invariant every branch here must preserve: if either side "could
  * still be Owned" (that's `Owned` itself, or either ambiguous state), the
- * result must also "could still be Owned" — never silently resolve to a
+ * result must also "could still be Owned" - never silently resolve to a
  * side that's definitely-not-owned (`Uninitialized`/`Unbound`) just because
  * the OTHER side happens to be definitely-not-owned too but for a different
  * reason. `Owned` + `Uninitialized` collapsing to plain `Uninitialized` was
- * exactly this mistake in an earlier version of this function — it silently
+ * exactly this mistake in an earlier version of this function - it silently
  * discarded the fact that the binding genuinely was constructed on one path.
  */
 // eslint-disable-next-line complexity -- exhaustive over a 5x5 state pairing, not incidental branching
@@ -420,7 +420,7 @@ function combineStates(av: MoveState, bv: MoveState): MoveState {
         case "Unbound":
           // Neither path ever leaves the binding genuinely Owned (one never
           // constructed it, the other moved it away), so there is nothing
-          // to drop either way — fold to Unbound rather than inventing a
+          // to drop either way - fold to Unbound rather than inventing a
           // third "doubly dead" state for a case with no drop-safety
           // consequence.
           return {
@@ -429,7 +429,7 @@ function combineStates(av: MoveState, bv: MoveState): MoveState {
             moveStatementTokenId: bv.moveStatementTokenId,
           };
         case "ConditionallyMoved":
-          // `bv` may still be Owned on one of its own sub-paths — that
+          // `bv` may still be Owned on one of its own sub-paths - that
           // possibility must survive the merge, not be discarded just
           // because `av` is definitely-uninitialized.
           return {
@@ -493,7 +493,7 @@ function combineStates(av: MoveState, bv: MoveState): MoveState {
           };
         case "PossiblyUninitialized":
           // Compound ambiguity (moved on some path, uninitialized on
-          // another) — both are "may still be Owned somewhere"; picking
+          // another) - both are "may still be Owned somewhere"; picking
           // ConditionallyMoved as the reported reason only affects
           // diagnostic wording, not correctness (either way this is
           // rejected, not silently resolved).
@@ -634,7 +634,7 @@ function checkProjectionMove(
  * operand, or an `AssignExpression`'s lhs. A bare `PathExpression` is a use,
  * not a move (see `useOrMove`'s `asMove: false`); a `DereferenceExpression`
  * recurses the same way, since `(*r).field` and `*r = value` both access the
- * referent without moving it out — only a `DereferenceExpression` reached
+ * referent without moving it out - only a `DereferenceExpression` reached
  * from a genuinely moving position (the default case in `walkExpression`)
  * needs the move-out check. Any other shape falls through to the ordinary
  * moving walk, unchanged from before this distinction existed.
@@ -674,7 +674,7 @@ function walkNonMovingPlace(
  * This is safe to apply almost uniformly because Hedge's type-capability
  * system already restricts which types can appear where: only `Copy` types
  * can be arithmetic/comparison operands, so walking `x` inside `x + 1` as a
- * "move" is a no-op — `useOrMove` only actually transitions a binding to
+ * "move" is a no-op - `useOrMove` only actually transitions a binding to
  * `Unbound` when its type has no `copy` capability, and a non-`Copy` struct
  * could never legally reach a `BinaryExpression` operand in the first place.
  * `FieldAccessExpression`/`ReferenceExpression`/`AssignExpression`/
@@ -685,8 +685,8 @@ function walkNonMovingPlace(
  * through a reference never moves its referent either.
  * `DereferenceExpression` is the remaining exception in the other direction:
  * unlike a `BinaryExpression` operand, a dereferenced place's referent *can*
- * be non-`Copy`, so reaching one here (a genuinely moving position — a call
- * argument, a `let` initializer, …) is a real move-out-of-a-reference check,
+ * be non-`Copy`, so reaching one here (a genuinely moving position - a call
+ * argument, a `let` initializer, ...) is a real move-out-of-a-reference check,
  * not a no-op.
  */
 // eslint-disable-next-line complexity -- This is a routing function
@@ -1063,7 +1063,7 @@ function attributeConditionalMoves(
  * Clone the incoming state once per branch, walk each branch to completion
  * against its own clone, then merge the two results back into `state` via
  * the meet rule (`mergeStates`). Cloning means the two branches can never
- * see each other's moves — e.g. moving `x` in `then` cannot affect the
+ * see each other's moves - e.g. moving `x` in `then` cannot affect the
  * state `else` starts from. A missing `else` still gets an `elseState`
  * clone of the pre-`if` state (unmodified), representing the "condition was
  * false, nothing in the body ran" path. `attributeConditionalMoves` runs
@@ -1295,7 +1295,7 @@ function ambiguousDropMessage(name: string, state: MoveState): string {
  * dropping for free. Skipping `Copy` types and keeping only bindings
  * `dropDecision` reports as `"Drop"` needs no special-casing for moved-away
  * values or values moved out via a trailing/return expression: both
- * leave the binding `Unbound` by the time this runs — walkScope calls this
+ * leave the binding `Unbound` by the time this runs - walkScope calls this
  * only after walking the scope's trailing expression, so a
  * `fn f() -> Boxed { let x = ...; x }` body has already marked `x` `Unbound`
  * (moved out to the caller) before its drop list is computed, and it's
@@ -1402,7 +1402,7 @@ function walkScope(
 }
 
 /**
- * Fresh `state`/`scopeStack` per call — move state never crosses a function
+ * Fresh `state`/`scopeStack` per call - move state never crosses a function
  * boundary, so two functions can freely reuse the same binding name without
  * interference. Parameters are always seeded `Owned` (never `Uninitialized`):
  * a function can't be called without its arguments already existing.
@@ -1433,7 +1433,7 @@ function walkFunction(ctx: Ctx, fn: Semantics.FunctionDecl): void {
 /**
  * Ownership analysis for Slice 1: move/use-before-init checking and
  * scope-end drop-point computation over a trivial CFG (ADR 0002). Runs on
- * the type-annotated `Semantics.Program`, one function at a time — move
+ * the type-annotated `Semantics.Program`, one function at a time - move
  * state never crosses a function boundary.
  */
 export function analyzeOwnership(

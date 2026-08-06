@@ -63,7 +63,7 @@ export function parsePathSegments(
       break;
     }
     if (tokens[cursor + 1]?.kind === "lt") {
-      // Turbofish (`::<...>`) — leave the `::` unconsumed for the caller,
+      // Turbofish (`::<...>`) - leave the `::` unconsumed for the caller,
       // which is responsible for the actual guardrail diagnostic.
       break;
     }

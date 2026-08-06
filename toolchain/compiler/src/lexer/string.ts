@@ -76,7 +76,7 @@ export function scanRawString(
   start: number,
   hashCount: number,
 ): number {
-  const contentStart = start + 1 + hashCount + 1; // skip r, N×#, "
+  const contentStart = start + 1 + hashCount + 1; // skip r, Nx#, "
   const close = '"' + "#".repeat(hashCount);
   let i = contentStart;
   while (i < source.length) {

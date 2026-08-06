@@ -9,8 +9,8 @@ import { elideLifetimes } from "./lifetime-elision.js";
 import { kindAt, skipToItemStartKeyword, tokenAt } from "./parse-utils.js";
 
 /**
- * @returns the token index of a missing `fn`/`struct` name — the one
- * top-level failure this ticket recovers from — or `undefined` for any other
+ * @returns the token index of a missing `fn`/`struct` name - the one
+ * top-level failure this ticket recovers from - or `undefined` for any other
  * failure. Detected structurally, not by message content or by `itemStart`:
  * a `fn`/`struct`'s very first step after the keyword is always parsing its
  * name, so a failure whose span starts exactly one token after an `fn`/
@@ -18,11 +18,11 @@ import { kindAt, skipToItemStartKeyword, tokenAt } from "./parse-utils.js";
  * keyword (`pub`, attributes, ...). Anchoring on the error's own span rather
  * than `itemStart` matters: `itemStart` points at the item's leading token
  * (e.g. `pub`), which is *not* where the name lives once a visibility prefix
- * is present — `tokens[itemStart + 1]` would then be `fn` itself, not the
+ * is present - `tokens[itemStart + 1]` would then be `fn` itself, not the
  * name, and a `pub`-prefixed missing name would never be recognized.
  * Anything else (a bad param/field/type/pattern deeper in the declaration, a
  * missing brace, a disallowed `pub` combination, ...) keeps failing fast
- * exactly as before — retrofitting recovery onto those would silently
+ * exactly as before - retrofitting recovery onto those would silently
  * swallow diagnostics the rest of the suite pins as hard failures (see e.g.
  * the reference-type, generic-type, and `mut`-as-name guardrails).
  */
@@ -106,7 +106,7 @@ export function parse(tokens: readonly Token[]): ParseResult {
       if (badNameIdx === undefined) {
         return { program: none(), diagnostics };
       }
-      // Skip past the bad name token before scanning for the next item —
+      // Skip past the bad name token before scanning for the next item -
       // otherwise a keyword reused as the bad name (`fn enum() {}`, or
       // `pub fn enum() {}`) would have it immediately re-matched as a fresh
       // item's start, since it's itself an `ITEM_START_KEYWORDS` member.

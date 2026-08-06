@@ -125,7 +125,7 @@ export const MUT_MESSAGE: string =
  * used throughout this file and `type.ts`/`pattern.ts`) or the `mut`-as-
  * identifier guardrail. These are permanent, deliberately fail-fast
  * rejections of syntax that belongs to a later slice or is otherwise
- * reserved — list-element panic-mode recovery must never swallow one, since
+ * reserved - list-element panic-mode recovery must never swallow one, since
  * that would silently retrofit recovery onto a guardrail the rest of the
  * test suite pins as a total parse failure.
  */
@@ -147,8 +147,8 @@ export interface LoopKeywordMatch {
 }
 
 /**
- * If a `loop`/`while`/`for` construct — optionally label-prefixed
- * (`'name: loop {}`) — starts at `pos`, returns the position and token of
+ * If a `loop`/`while`/`for` construct - optionally label-prefixed
+ * (`'name: loop {}`) - starts at `pos`, returns the position and token of
  * the `loop`/`while`/`for` keyword. Otherwise `none()`.
  */
 export function loopKeywordAt(
@@ -253,9 +253,9 @@ export interface SkipAngleListResult {
 
 /**
  * Skips a balanced `<...>` list starting at `ltPos` (the caller has already
- * confirmed `tokens[ltPos]` is a `lt` token). Counts `lt`/`gt` as depth ±1
- * and `lt_lt`/`gt_gt` as depth ±2, since `>>` lexes as a single `gt_gt`
- * token under maximal munch (see lexer/symbol.ts) — a naive one-token-at-a-
+ * confirmed `tokens[ltPos]` is a `lt` token). Counts `lt`/`gt` as depth +/-1
+ * and `lt_lt`/`gt_gt` as depth +/-2, since `>>` lexes as a single `gt_gt`
+ * token under maximal munch (see lexer/symbol.ts) - a naive one-token-at-a-
  * time count would never see the second `>` of a doubly-nested close.
  */
 // eslint-disable-next-line complexity -- Token-kind dispatch loop; each branch is a necessary depth-counting case.
@@ -376,9 +376,9 @@ export function skipUntilKind(
 
 /**
  * @returns the nesting-depth contribution of a single token: +1/-1 for
- * `(`/`)`, `[`/`]`, `{`/`}`, and `<`/`>`; ±2 for `lt_lt`/`gt_gt`, since `>>`
+ * `(`/`)`, `[`/`]`, `{`/`}`, and `<`/`>`; +/-2 for `lt_lt`/`gt_gt`, since `>>`
  * lexes as one `gt_gt` token under maximal munch (see `skipBalancedAngleList`,
- * which uses the same technique) — a naive one-token count would never see
+ * which uses the same technique) - a naive one-token count would never see
  * the second `>` of a doubly-nested generic close. 0 for everything else.
  */
 function delimiterDepthDelta(kind: Token["kind"]): number {
@@ -404,18 +404,18 @@ function delimiterDepthDelta(kind: Token["kind"]): number {
 
 /**
  * Scans forward from `pos` to the first token of one of `kinds` at the same
- * nesting depth as `pos` itself — tracking `(`/`[`/`{`/`<` depth so a token
+ * nesting depth as `pos` itself - tracking `(`/`[`/`{`/`<` depth so a token
  * nested inside them is never mistaken for the enclosing list's own comma or
  * closing delimiter. Two concrete cases this guards against: the closing `)`
  * of an attribute's own `#[attr(1.5)]` argument list, and a comma inside a
- * generic argument list (`x<A, B>, y: i32` — without `<`/`>` tracking, the
+ * generic argument list (`x<A, B>, y: i32` - without `<`/`>` tracking, the
  * scan would stop at the comma between `A` and `B` instead of the one after
  * `>`). `skipUntilKind` is unsafe for list-element recovery for exactly this
  * reason; use this instead whenever the scanned span can contain its own
  * nested delimiters. All four delimiter kinds share one `depth` counter
  * rather than a separate stack per kind, so a genuinely mismatched mix
  * (e.g. `(` opened, `>` closed) can under- or over-count relative to a true
- * per-kind balance check — an accepted imprecise-but-safe tradeoff on
+ * per-kind balance check - an accepted imprecise-but-safe tradeoff on
  * malformed input, matching this file's other recovery helpers.
  */
 export function skipUntilKindBalanced(
@@ -441,8 +441,8 @@ export function skipUntilKindBalanced(
 
 /**
  * Scans forward from `pos` to the next token that can start a top-level item
- * (`fn`/`struct`/`let`/`pub`/...). Matching the full set — not just
- * `fn`/`struct`/`let` — matters: it lets recovery resume from `pub` in a
+ * (`fn`/`struct`/`let`/`pub`/...). Matching the full set - not just
+ * `fn`/`struct`/`let` - matters: it lets recovery resume from `pub` in a
  * `pub fn`/`pub struct`, rather than landing past it and silently losing the
  * item's visibility.
  */

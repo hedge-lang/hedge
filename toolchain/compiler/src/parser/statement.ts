@@ -86,7 +86,7 @@ function findLoopBodyOpenBrace(
  * block's statement loop can resume at the next statement boundary.
  *
  * Anything unsupported nested inside the skipped body (e.g. a `loop` inside
- * a rejected `loop`) is swallowed silently — recovery only reports the
+ * a rejected `loop`) is swallowed silently - recovery only reports the
  * outermost construct.
  */
 function skipUnsupportedLoopConstruct(
@@ -246,7 +246,7 @@ export function parseBlock(
     if (tokens[cursor]?.kind === "rbrace") {
       break;
     }
-    // Empty statement — lone `;` carries no semantic content; skip silently.
+    // Empty statement - lone `;` carries no semantic content; skip silently.
     if (tokens[cursor]?.kind === "semi") {
       cursor += 1;
       continue;
@@ -258,7 +258,7 @@ export function parseBlock(
       return outerResult;
     }
     cursor = outerResult.value.next;
-    // Attributes followed by `;` — still an empty statement; discard the attributes.
+    // Attributes followed by `;` - still an empty statement; discard the attributes.
     if (tokens[cursor]?.kind === "semi") {
       cursor += 1;
       continue;
@@ -336,7 +336,7 @@ export function parseBlock(
       continue;
     }
     // `loop`/`while`/`for` statements, optionally label-prefixed, are not
-    // supported until Slice 6 — reject with a diagnostic and recover by
+    // supported until Slice 6 - reject with a diagnostic and recover by
     // skipping the whole construct so later statements still parse. The
     // exact unlabeled `while` `let` sequence is the one exception: it falls
     // through to the ordinary expression path below, which routes

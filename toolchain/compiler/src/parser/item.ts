@@ -159,7 +159,7 @@ function parseParams(
 
   for (;;) {
     // The `eof` check avoids attempting (and separately diagnosing) an
-    // element parse when nothing remains — the outer `expect(rparen)` below
+    // element parse when nothing remains - the outer `expect(rparen)` below
     // already produces the single, correct "found end of input" diagnostic
     // for a truncated list; without this, both would fire redundantly.
     if (
