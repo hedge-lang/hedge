@@ -3253,13 +3253,49 @@ function checkPosLiteralRange(
   }
 }
 
+/**
+ * Binary operators whose result type is their operand type, so an expected
+ * type flows down into both operands. Comparison and logical operators
+ * produce `bool` regardless of what they are given, so an expected integer
+ * type must never propagate through one.
+ */
+const TYPE_PRESERVING_BINARY_OPS: ReadonlySet<Parser.BinaryOperator> = new Set([
+  "Add",
+  "Sub",
+  "Mul",
+  "Div",
+  "Rem",
+  "Shl",
+  "Shr",
+  "BitAnd",
+  "BitXor",
+  "BitOr",
+]);
+
+/**
+ * Whether an expected integer type can be pushed into `expr` - true for a
+ * bare unsuffixed literal, a negated one, and (recursively) a
+ * type-preserving binary expression whose operands are themselves all
+ * unsuffixed literals. The recursion is what makes `let v: i8 = 1 + 1;`
+ * work: coercing only the outermost node leaves the operands at the default
+ * `i32`, and the annotation check then fails against a value that was never
+ * really typed.
+ */
 function isUnsuffixedLiteralExpr(expr: Semantics.Expression): boolean {
   if (expr.kind === "IntLiteral" && !isSome(expr.suffix)) return true;
-  return (
+  if (
     expr.kind === "UnaryExpression" &&
     expr.operator === "Neg" &&
     expr.operand.kind === "IntLiteral" &&
     !isSome(expr.operand.suffix)
+  ) {
+    return true;
+  }
+  return (
+    expr.kind === "BinaryExpression" &&
+    TYPE_PRESERVING_BINARY_OPS.has(expr.operator) &&
+    isUnsuffixedLiteralExpr(expr.left) &&
+    isUnsuffixedLiteralExpr(expr.right)
   );
 }
 
@@ -3283,6 +3319,18 @@ function coerceToIntegerType(
       operand: { ...expr.operand, type: targetType },
     };
   }
+  if (
+    expr.kind === "BinaryExpression" &&
+    TYPE_PRESERVING_BINARY_OPS.has(expr.operator) &&
+    isUnsuffixedLiteralExpr(expr)
+  ) {
+    return {
+      ...expr,
+      type: targetType,
+      left: coerceToIntegerType(expr.left, targetType),
+      right: coerceToIntegerType(expr.right, targetType),
+    };
+  }
   return expr;
 }
 
@@ -3301,6 +3349,12 @@ function checkCoercedLiteralRange(
     if (isSome(rangeError)) {
       emitError(ctx, rangeError.value, expr.operand.tokenId, none());
     }
+  } else if (expr.kind === "BinaryExpression") {
+    // Each operand carries the coerced type now, so range-check them
+    // individually: `let v: i8 = 200 + 1;` must reject `200` for the same
+    // reason `let v: i8 = 200;` does.
+    checkCoercedLiteralRange(ctx, expr.left);
+    checkCoercedLiteralRange(ctx, expr.right);
   }
 }
 
@@ -3395,6 +3449,12 @@ function reconcileExpressionType(
 
   if (isUnsuffixedLiteralExpr(expr) && isIntegerType(expectedType)) {
     result = coerceToIntegerType(expr, expectedType);
+    if (result.kind === "BinaryExpression") {
+      // A bare/negated literal is range-checked by the caller (see this
+      // function's doc); a coerced binary expression has no single literal
+      // for the caller to check, so its operands are checked here.
+      checkCoercedLiteralRange(ctx, result);
+    }
     suppressed = true;
   }
 

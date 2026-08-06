@@ -1815,6 +1815,50 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
+    describe("literal coercion through a binary expression", () => {
+      it("coerces both operands of an arithmetic expression to the annotated type", () => {
+        const result = diagnose("fn main() { let v: i8 = 1 + 1; }");
+        expect(result.diagnostics).toEqual([]);
+      });
+
+      it("coerces both operands to a bigint-backed annotated type", () => {
+        const result = diagnose("fn main() { let v: i64 = 1 + 1; }");
+        expect(result.diagnostics).toEqual([]);
+      });
+
+      it("coerces through a nested arithmetic expression", () => {
+        const result = diagnose("fn main() { let v: i8 = (1 + 2) * 3; }");
+        expect(result.diagnostics).toEqual([]);
+      });
+
+      it("coerces through a bitwise expression", () => {
+        const result = diagnose("fn main() { let v: i8 = 1 & 2; }");
+        expect(result.diagnostics).toEqual([]);
+      });
+
+      it("coerces a negated operand alongside a plain one", () => {
+        const result = diagnose("fn main() { let v: i8 = -1 + 2; }");
+        expect(result.diagnostics).toEqual([]);
+      });
+
+      it("range-checks each operand against the coerced type", () => {
+        const result = diagnose("fn main() { let v: i8 = 200 + 1; }");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain("out of range for i8");
+      });
+
+      it("does not coerce through a comparison operator, whose result is always bool", () => {
+        const result = diagnose("fn main() { let v: i8 = 1 < 2; }");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain("type mismatch");
+      });
+
+      it("still accepts a comparison expression bound to bool", () => {
+        const result = diagnose("fn main() { let b: bool = 1 < 2; }");
+        expect(result.diagnostics).toEqual([]);
+      });
+    });
+
     it("rejects a coerced literal trailing expression that is out of range for the return type", (): void => {
       const { diagnostics } = diagnose("fn f() -> u8 { 300 }");
       expect(diagnostics).toHaveLength(1);
