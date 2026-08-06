@@ -563,7 +563,9 @@ describe("toJsim", () => {
 
   describe("match expression lowering", () => {
     it("lowers a match on a non-enum (int) scrutinee to an if chain", () => {
-      const program = jsimSource("fn f(x: i32) -> i32 { match x { _ => 0 } }");
+      const program = jsimSource(
+        "fn f(x: i32) -> i32 { match x { 1 => 10, _ => 0 } }",
+      );
       expect(program).toMatchObject({
         items: [
           {
@@ -578,6 +580,23 @@ describe("toJsim", () => {
                       kind: "ArrowFunctionExpression",
                       body: [
                         { kind: "LetStatement", name: "matchScrutinee" },
+                        {
+                          kind: "IfStatement",
+                          condition: {
+                            kind: "BinaryExpression",
+                            operator: "Eq",
+                            left: { kind: "Identifier", value: "matchScrutinee" },
+                            right: { kind: "NumberLiteral", value: "1" },
+                          },
+                          thenBranch: [
+                            {
+                              kind: "ReturnStatement",
+                              value: {
+                                value: { kind: "NumberLiteral", value: "10" },
+                              },
+                            },
+                          ],
+                        },
                         {
                           kind: "ReturnStatement",
                           value: {
