@@ -589,6 +589,45 @@ function derefPlaceDescription(operand: Semantics.Expression): string {
   return "the dereferenced value";
 }
 
+/** Render a projection chain for a diagnostic, e.g. `o.i` or `a[_]`. */
+function projectionDescription(expression: Semantics.Expression): string {
+  switch (expression.kind) {
+    case "PathExpression": {
+      const name = expression.path.segments[0];
+      return expression.path.segments.length === 1 && name !== undefined
+        ? name
+        : "_";
+    }
+    case "FieldAccessExpression":
+      return `${projectionDescription(expression.object)}.${expression.field.text}`;
+    case "IndexExpression":
+      return `${projectionDescription(expression.object)}[_]`;
+    case "DereferenceExpression":
+      return `*${projectionDescription(expression.operand)}`;
+    default:
+      return "_";
+  }
+}
+
+/**
+ * Moving a non-`Copy` value out of a field or element is not tracked: the
+ * owner keeps its own drop obligation, so both it and the new binding would
+ * dispose the same value. Rejected until partial moves are modelled, with
+ * the borrow named as the alternative since that is what most callers want.
+ */
+function checkProjectionMove(
+  ctx: Ctx,
+  expression: Semantics.FieldAccessExpression | Semantics.IndexExpression,
+): void {
+  if (hasCapability(expression.type, "copy")) return;
+  const place = projectionDescription(expression);
+  emitDiagnostic(
+    ctx,
+    `cannot move out of \`${place}\`; borrow it with \`&${place}\` instead`,
+    expression.tokenId,
+  );
+}
+
 /**
  * Walk a place expression that is being read or written *through*, not
  * moved out of: a `FieldAccessExpression`'s object, a `ReferenceExpression`'s
@@ -612,6 +651,18 @@ function walkNonMovingPlace(
   }
   if (expression.kind === "DereferenceExpression") {
     walkNonMovingPlace(ctx, expression.operand, state, scopeStack);
+    return;
+  }
+  // A projection reached this way is being borrowed or written through, so
+  // it keeps recursing non-movingly rather than tripping the move-out check
+  // `walkExpression` applies to the same node.
+  if (expression.kind === "FieldAccessExpression") {
+    walkNonMovingPlace(ctx, expression.object, state, scopeStack);
+    return;
+  }
+  if (expression.kind === "IndexExpression") {
+    walkNonMovingPlace(ctx, expression.object, state, scopeStack);
+    walkExpression(ctx, expression.index, state, scopeStack);
     return;
   }
   walkExpression(ctx, expression, state, scopeStack);
@@ -650,6 +701,7 @@ function walkExpression(
       useOrMove(ctx, expression, state, scopeStack, true);
       return;
     case "FieldAccessExpression":
+      checkProjectionMove(ctx, expression);
       walkNonMovingPlace(ctx, expression.object, state, scopeStack);
       return;
     case "CallExpression":
@@ -703,8 +755,8 @@ function walkExpression(
     case "IndexExpression":
       // The object is a *use*, not a move, mirroring FieldAccessExpression's
       // own treatment above: `arr[i]` reads through the array, it doesn't
-      // move `arr` out (Slice 1 doesn't track partial/element-level moves
-      // out of an array any more than it does out of a struct's fields).
+      // move `arr` out.
+      checkProjectionMove(ctx, expression);
       if (expression.object.kind === "PathExpression") {
         useOrMove(ctx, expression.object, state, scopeStack, false);
       } else {

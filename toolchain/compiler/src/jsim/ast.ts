@@ -418,6 +418,12 @@ interface RangeExpression {
 interface StructExpression {
   readonly kind: "StructExpression";
   readonly fields: readonly StructExpressionField[];
+  /**
+   * Fields holding a non-`Copy` value, which the struct's own disposer must
+   * dispose in turn. Empty for an all-`Copy` struct, which then emits the
+   * same no-op disposer it always did.
+   */
+  readonly disposableFields: readonly string[];
 }
 
 /**

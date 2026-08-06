@@ -12,6 +12,7 @@ import type {
 } from "../ownership/move-check.js";
 import { constValueToLiteralExpression } from "../semantics/analyzer.js";
 import type * as Semantics from "../semantics/ast.js";
+import { hasCapability } from "../semantics/type-capabilities.js";
 import type * as JSIM from "./ast.js";
 import { toDocComment } from "./parts/doc-comment.js";
 import {
@@ -1693,6 +1694,7 @@ function jsimStructExpression(
     .map((b) => parseExpression(ctx, b.value))
     .map(makeSpread);
   const ownFields = [...spreads, ...fields.map((f) => makeStructField(ctx, f))];
+  const disposableFields = nonCopyFieldNames(fields);
   if (path.segments.length === 2 && type.kind === "EnumType") {
     const variantName = path.segments[1];
     assert(variantName !== undefined, "Unexpected undefined segment");
@@ -1700,11 +1702,16 @@ function jsimStructExpression(
       kind: "StructExpression",
       fields: [
         jsimEnumTagField(variantName),
-        jsimEnumDataField({ kind: "StructExpression", fields: ownFields }),
+        jsimEnumDataField({
+          kind: "StructExpression",
+          fields: ownFields,
+          disposableFields,
+        }),
       ],
+      disposableFields: [],
     };
   }
-  return { kind: "StructExpression", fields: ownFields };
+  return { kind: "StructExpression", fields: ownFields, disposableFields };
 }
 
 /** A tagged object with no `data` payload - a unit variant has no fields. */
@@ -1713,7 +1720,11 @@ function jsimEnumUnitVariantConstruction(
 ): JSIM.Expression {
   const variantName = segments[1];
   assert(variantName !== undefined, "Unexpected undefined segment");
-  return { kind: "StructExpression", fields: [jsimEnumTagField(variantName)] };
+  return {
+    kind: "StructExpression",
+    fields: [jsimEnumTagField(variantName)],
+    disposableFields: [],
+  };
 }
 
 /** Payload lowers to `JSIM.TupleExpression`, not `ArrayExpression` - same
@@ -1734,6 +1745,7 @@ function jsimEnumTupleVariantConstruction(
         elements: args.map((arg) => parseExpression(ctx, arg)),
       }),
     ],
+    disposableFields: [],
   };
 }
 
@@ -1751,7 +1763,20 @@ function jsimTupleStructConstruction(
       name: String(i),
       value: some(parseExpression(ctx, arg)),
     })),
+    disposableFields: args
+      .map((arg, i) => ({ arg, name: String(i) }))
+      .filter(({ arg }) => !hasCapability(arg.type, "copy"))
+      .map(({ name }) => name),
   };
+}
+
+/** Fields whose values own something the struct's disposer must release. */
+function nonCopyFieldNames(
+  fields: readonly Semantics.FieldInit[],
+): readonly string[] {
+  return fields
+    .filter((f) => !hasCapability(f.type, "copy"))
+    .map((f) => f.name.text);
 }
 
 function jsimEnumTagField(variantName: string): JSIM.StructField {

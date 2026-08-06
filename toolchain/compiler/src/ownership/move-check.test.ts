@@ -931,17 +931,8 @@ describe("move-check", (): void => {
       expect(diagnostics[0].message).toBe("use of moved value `arr`");
     });
 
-    it.fails(
-      "rejects binding a non-Copy array element to a new variable by value out of an index",
-      (): void => {
-        // arr[i] is treated as a use of arr (not a move), matching field
-        // access - but nothing yet stops the *result* of that index from
-        // being bound elsewhere, and a JS object read this way is a true
-        // alias, not a copy. Both `x` and `arr` would dispose the same
-        // underlying object at scope end. Same class of gap as the
-        // dereferenced-non-Copy-value it.fails above, just reached through
-        // indexing instead of a reference.
-        const { diagnostics } = check(`
+    it("rejects binding a non-Copy array element to a new variable by value out of an index", (): void => {
+      const { diagnostics } = check(`
           struct Boxed { value: i32 }
           fn main() {
             let arr = [Boxed { value: 1 }, Boxed { value: 2 }];
@@ -949,11 +940,38 @@ describe("move-check", (): void => {
             print(x.value);
           }
         `);
-        expect(diagnostics).toHaveLength(1);
-        assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-        expect(diagnostics[0].message).toContain("cannot move");
-      },
-    );
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(diagnostics[0].message).toContain("cannot move");
+    });
+
+    it("rejects binding a non-Copy struct field to a new variable by value", (): void => {
+      const { diagnostics } = check(`
+          struct Inner { value: i32 }
+          struct Outer { inner: Inner }
+          fn main() {
+            let o = Outer { inner: Inner { value: 1 } };
+            let x = o.inner;
+            print(x.value);
+          }
+        `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(diagnostics[0].message).toContain("cannot move out of `o.inner`");
+    });
+
+    it("still allows borrowing a non-Copy field rather than moving it", (): void => {
+      const { diagnostics } = check(`
+          struct Inner { value: i32 }
+          struct Outer { inner: Inner }
+          fn take(r: &Inner) {}
+          fn main() {
+            let o = Outer { inner: Inner { value: 1 } };
+            take(&o.inner);
+          }
+        `);
+      expect(diagnostics).toEqual([]);
+    });
   });
 
   describe("destructuring pattern move vs. borrow of the scrutinee", (): void => {

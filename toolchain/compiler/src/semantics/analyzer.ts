@@ -26,10 +26,6 @@ export interface AnalysisResult {
 }
 
 /**
- * Mutable analysis context threaded explicitly through every pass function.
- * Maps onto `struct AnalysisContext { scopes: ..., diagnostics: ... }` in Hedge.
- */
-/**
  * Everything one lexical scope owns, in a single object so a scope is pushed
  * and popped as one unit. Frame *indices* are compared across these maps
  * (`scopeFrameIndexOf` against `findConstFrameIndex`,
@@ -45,6 +41,10 @@ interface ScopeFrame {
   readonly enums: Map<string, Semantics.EnumDecl>;
 }
 
+/**
+ * Mutable analysis context threaded explicitly through every pass function.
+ * Maps onto `struct AnalysisContext { scopes: ..., diagnostics: ... }` in Hedge.
+ */
 interface AnalysisContext {
   /** Innermost scope last. Frame 0 is the top-level program. */
   readonly frames: ScopeFrame[];
@@ -2867,18 +2867,6 @@ function fnSignatureType(
 }
 
 /**
- * Checks a function body's trailing-expression type against its declared
- * (or implicit-unit) return type, coercing an unsuffixed-integer-literal
- * trailing expression first. A body with no trailing expression at all
- * (e.g. `fn f() -> i32 { let x = 1; }`) takes the early-return branch below
- * instead — it's checked for a missing return value there, not for a type
- * mismatch, since there's no trailing-expression type to reconcile against.
- *
- * Cascade guard: if the trailing expression's own analysis already failed
- * (its type is the `UnitType` error-recovery placeholder), no diagnostic is
- * emitted here — see {@link reconcileExpressionType}.
- */
-/**
  * `operand` is a fresh borrow of a plain value that lives only in this
  * function's own frame - a `let`-local or a by-value parameter - when it
  * is a bare single-segment path whose own type is not already a
@@ -2909,6 +2897,18 @@ function danglingReferenceOperandName(
   return operand.path.segments[0];
 }
 
+/**
+ * Checks a function body's trailing-expression type against its declared
+ * (or implicit-unit) return type, coercing an unsuffixed-integer-literal
+ * trailing expression first. A body with no trailing expression at all
+ * (e.g. `fn f() -> i32 { let x = 1; }`) takes the early-return branch below
+ * instead — it's checked for a missing return value there, not for a type
+ * mismatch, since there's no trailing-expression type to reconcile against.
+ *
+ * Cascade guard: if the trailing expression's own analysis already failed
+ * (its type is the `UnitType` error-recovery placeholder), no diagnostic is
+ * emitted here — see {@link reconcileExpressionType}.
+ */
 function checkEscapingReferenceExpression(
   ctx: AnalysisContext,
   expr: Semantics.ReferenceExpression,

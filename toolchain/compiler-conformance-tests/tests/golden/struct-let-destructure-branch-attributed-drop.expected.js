@@ -6,7 +6,7 @@ function consume(x) {
 
 function main() {
   const cond = true;
-  const p = ({a: ({v: 1, [Symbol.dispose]() {}}), b: ({v: 2, [Symbol.dispose]() {}}), [Symbol.dispose]() {}});
+  const p = ({a: ({v: 1, [Symbol.dispose]() {}}), b: ({v: 2, [Symbol.dispose]() {}}), [Symbol.dispose]() { this.a[Symbol.dispose](); this.b[Symbol.dispose](); }});
   const letDestructure = p;
   let a;
   let b;

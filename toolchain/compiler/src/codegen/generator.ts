@@ -218,6 +218,22 @@ function emitNumericUnaryOp(nk: NumericKind, inner: string): string {
  * always emits one, even if a no-op, see `StructExpression` codegen below) -
  * an element type with neither (every primitive) is a no-op.
  */
+const IDENTIFIER_KEY = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
+
+/** A tuple struct's fields are numeric strings, which `this.0` cannot spell. */
+function ownFieldAccess(name: string): string {
+  return IDENTIFIER_KEY.test(name)
+    ? `this.${name}`
+    : `this[${JSON.stringify(name)}]`;
+}
+
+function structDisposer(disposableFields: readonly string[]): string {
+  const body = disposableFields
+    .map((name) => `${ownFieldAccess(name)}[Symbol.dispose]();`)
+    .join(" ");
+  return `[Symbol.dispose]() {${body === "" ? "" : ` ${body} `}}`;
+}
+
 const ARRAY_DISPOSE_HELPER_NAME = "__hedgeDisposeArray";
 const ARRAY_DISPOSE_HELPER = `function ${ARRAY_DISPOSE_HELPER_NAME}(arr) {
   arr[Symbol.dispose] = function () {
@@ -438,12 +454,12 @@ function emitExpression(expression: Expression): string {
               f.name,
             ),
       );
-      // Every struct value carries a (currently no-op) disposer, so any
-      // binding for it can uniformly lower to `using`. Slice 1 has no
-      // trait/`impl` support yet, so there is no way to write a custom
-      // `Drop` for a struct; this establishes the codegen shape a later
-      // slice's real Drop impls will fill in.
-      return `({${[...fields, "[Symbol.dispose]() {}"].join(", ")}})`;
+      // Every struct value carries a disposer so any binding for it can
+      // uniformly lower to `using`; it releases the struct's own non-`Copy`
+      // fields, mirroring what the array helper does for elements. Slice 1
+      // has no trait/`impl` support, so a user-written `Drop` body will join
+      // it here later.
+      return `({${[...fields, structDisposer(expression.disposableFields)].join(", ")}})`;
     }
     case "RefCellExpression": {
       const place = expression.place;
