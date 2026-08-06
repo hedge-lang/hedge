@@ -49,6 +49,7 @@ const BINARY_OPS: Record<BinaryOperator, string> = {
 const UNARY_OPS: Record<UnaryOperator, string> = {
   Neg: "-",
   Not: "!",
+  BitNot: "~",
 };
 
 const ASSIGN_OPS: Record<AssignOperator, string> = {

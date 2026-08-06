@@ -3797,6 +3797,35 @@ function inferBinaryType(
   }
 }
 
+/**
+ * `!` is logical negation on `bool` and bitwise negation on an integer,
+ * mirroring Rust; either way the result keeps the operand's type. Anything
+ * else has no meaning to give it.
+ */
+function unaryNotResultType(
+  ctx: AnalysisContext,
+  operand: Semantics.Expression,
+  tokenId: number,
+): Semantics.Type {
+  const operandType = getType(operand);
+  if (
+    hasCapability(operandType, "logical") ||
+    hasCapability(operandType, "bitwise")
+  ) {
+    return operandType;
+  }
+  if (operandType.kind === "UnitType" && isAmbiguousUnitExpr(operand)) {
+    return operandType;
+  }
+  emitError(
+    ctx,
+    `\`!\` requires \`bool\` or an integer, found \`${describeType(operandType)}\``,
+    tokenId,
+    none(),
+  );
+  return { kind: "PrimitiveBooleanType" };
+}
+
 // eslint-disable-next-line complexity -- This is a routing function
 function analyzeExpression(
   ctx: AnalysisContext,
@@ -3855,7 +3884,7 @@ function analyzeExpression(
           : analyzeExpression(ctx, expression.operand);
       const type: Semantics.Type =
         expression.operator === "Not"
-          ? { kind: "PrimitiveBooleanType" }
+          ? unaryNotResultType(ctx, operand, expression.tokenId)
           : getType(operand);
       if (
         expression.operator === "Neg" &&
@@ -4636,6 +4665,45 @@ function analyzeStructNamedFields(
   return checkedFields;
 }
 
+/**
+ * Whether a branch's `UnitType` came from a failed sub-analysis rather than
+ * being a genuine unit value. A branch is a `Block`, so its own kind says
+ * nothing; what matters is the trailing expression its type came from. A
+ * block with no trailing expression is genuinely unit.
+ */
+function branchUnitIsAmbiguous(
+  branch: Semantics.Block | Semantics.IfExpression,
+): boolean {
+  if (branch.kind === "IfExpression") {
+    return branchUnitIsAmbiguous(branch.thenBranch);
+  }
+  return (
+    isSome(branch.trailingExpression) &&
+    isAmbiguousUnitExpr(branch.trailingExpression.value)
+  );
+}
+
+function checkBranchTypesAgree(
+  ctx: AnalysisContext,
+  thenBranch: Semantics.Block,
+  elseBranch: Semantics.IfExpression | Semantics.Block,
+  tokenId: number,
+): void {
+  const thenType = thenBranch.type;
+  const elseType = elseBranch.type;
+  const suppressed =
+    (thenType.kind === "UnitType" && branchUnitIsAmbiguous(thenBranch)) ||
+    (elseType.kind === "UnitType" && branchUnitIsAmbiguous(elseBranch));
+  if (!suppressed && !typesEqual(thenType, elseType)) {
+    emitError(
+      ctx,
+      "if expression branches have incompatible types",
+      tokenId,
+      none(),
+    );
+  }
+}
+
 function analyzeIfExpression(
   ctx: AnalysisContext,
   ifExpression: Parser.IfExpression,
@@ -4660,20 +4728,12 @@ function analyzeIfExpression(
   }
 
   if (isSome(elseBranch)) {
-    const thenType = thenBranch.type;
-    const elseType = elseBranch.value.type;
-    if (
-      thenType.kind !== "UnitType" &&
-      elseType.kind !== "UnitType" &&
-      !typesEqual(thenType, elseType)
-    ) {
-      emitError(
-        ctx,
-        "if expression branches have incompatible types",
-        ifExpression.tokenId,
-        none(),
-      );
-    }
+    checkBranchTypesAgree(
+      ctx,
+      thenBranch,
+      elseBranch.value,
+      ifExpression.tokenId,
+    );
   }
 
   const type: Semantics.Type = isSome(elseBranch)
@@ -4735,20 +4795,12 @@ function analyzeIfLetExpression(
   );
 
   if (isSome(elseBranch)) {
-    const thenType = thenBranch.type;
-    const elseType = elseBranch.value.type;
-    if (
-      thenType.kind !== "UnitType" &&
-      elseType.kind !== "UnitType" &&
-      !typesEqual(thenType, elseType)
-    ) {
-      emitError(
-        ctx,
-        "if expression branches have incompatible types",
-        ifExpression.tokenId,
-        none(),
-      );
-    }
+    checkBranchTypesAgree(
+      ctx,
+      thenBranch,
+      elseBranch.value,
+      ifExpression.tokenId,
+    );
   }
 
   const type: Semantics.Type = isSome(elseBranch)

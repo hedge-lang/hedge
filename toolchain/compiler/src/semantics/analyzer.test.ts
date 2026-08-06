@@ -108,6 +108,85 @@ describe("semantic analysis", (): void => {
     expect(result.diagnostics).toEqual([]);
   });
 
+  describe("unary `!`", () => {
+    it("keeps `bool` for a logical negation", () => {
+      const result = diagnose(
+        "fn main() { let b: bool = true; let c: bool = !b; }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("yields the operand's integer type for a bitwise negation", () => {
+      const result = diagnose("fn main() { let x: i32 = 5; let y: i32 = !x; }");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects binding a negated integer to bool", () => {
+      const result = diagnose(
+        "fn main() { let x: i32 = 5; let b: bool = !x; }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("type mismatch");
+    });
+
+    it("rejects negating a string", () => {
+      const result = diagnose(
+        'fn main() { let s: str = "a"; let b: bool = !s; }',
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "`!` requires `bool` or an integer, found `str`",
+      );
+    });
+
+    it("rejects negating a float, which has no bitwise meaning", () => {
+      const result = diagnose(
+        "fn main() { let f: f64 = 1.0; let b: bool = !f; }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("found `f64`");
+    });
+  });
+
+  describe("if expression branch types", () => {
+    it("rejects an empty else branch against a value-producing then branch", () => {
+      const result = diagnose(
+        "fn main() { let c: bool = true; let x: i32 = if c { 1 } else { }; }",
+      );
+      expect(result.diagnostics[0]?.message).toContain(
+        "if expression branches have incompatible types",
+      );
+    });
+
+    it("rejects branches of differing value types", () => {
+      const result = diagnose(
+        'fn main() { let c: bool = true; let x: i32 = if c { 1 } else { "a" }; }',
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "if expression branches have incompatible types",
+      );
+    });
+
+    it("accepts a statement-position if whose branches both produce no value", () => {
+      const result = diagnose(
+        'fn main() { let c: bool = true; if c { print("a"); } else { print("b"); } }',
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("does not add a branch-type error when a branch's own analysis already failed", () => {
+      const result = diagnose(
+        "fn main() { let c: bool = true; let x: i32 = if c { nope } else { 2 }; }",
+      );
+      expect(
+        result.diagnostics.filter((d) =>
+          d.message.includes("if expression branches"),
+        ),
+      ).toEqual([]);
+    });
+  });
+
   describe("pattern type checking", () => {
     it("rejects a string-literal pattern against an integer scrutinee", () => {
       const result = diagnose(

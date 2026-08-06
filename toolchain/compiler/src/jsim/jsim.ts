@@ -2634,15 +2634,17 @@ function parseUnaryExpression(
   ctx: JsimContext,
   unaryExp: Semantics.UnaryExpression,
 ): JSIM.Expression {
-  const numericKind: Option<JSIM.NumericKind> =
-    unaryExp.operator === "Neg"
-      ? hedgeTypeToNumericKind(unaryExp.type)
-      : none();
+  const numericKind = hedgeTypeToNumericKind(unaryExp.type);
+  // A numeric `!` is bitwise, and needs the same width wrapping `Neg` gets.
+  const operator: JSIM.UnaryOperator =
+    unaryExp.operator === "Not" && isSome(numericKind)
+      ? "BitNot"
+      : unaryExp.operator;
   return {
     kind: unaryExp.kind,
-    operator: unaryExp.operator,
+    operator,
     operand: parseExpression(ctx, unaryExp.operand),
-    numericKind,
+    numericKind: operator === "Not" ? none() : numericKind,
   };
 }
 

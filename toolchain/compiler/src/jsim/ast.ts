@@ -291,7 +291,9 @@ interface BinaryExpression {
   readonly span: Span;
 }
 
-export type UnaryOperator = "Neg" | "Not";
+/** Hedge's single `!` splits here: JS spells logical and bitwise negation
+ * differently, so lowering picks one by the operand's type. */
+export type UnaryOperator = "Neg" | "Not" | "BitNot";
 interface UnaryExpression {
   readonly kind: "UnaryExpression";
   readonly operator: UnaryOperator;
