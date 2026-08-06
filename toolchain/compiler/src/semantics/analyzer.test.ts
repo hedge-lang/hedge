@@ -664,17 +664,28 @@ describe("semantic analysis", (): void => {
       const result = diagnose(`
         enum Message { Quit, Move }
         fn f(m: Message) -> i32 {
-          match m { _ | Message::Quit => 0 }
+          match m { Message::Quit | _ => 0 }
         }
       `);
       expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects an or-pattern alternative following an already-irrefutable earlier one as unreachable", () => {
+      const result = diagnose(`
+        enum Message { Quit, Move }
+        fn f(m: Message) -> i32 {
+          match m { _ | Message::Quit => 0 }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("unreachable pattern");
     });
 
     it("rejects an arm following an irrefutable or-pattern as unreachable", () => {
       const result = diagnose(`
         enum Message { Quit, Move }
         fn f(m: Message) -> i32 {
-          match m { _ | Message::Quit => 0, Message::Move => 1 }
+          match m { Message::Quit | _ => 0, Message::Move => 1 }
         }
       `);
       expect(result.diagnostics).toHaveLength(1);
@@ -2606,7 +2617,7 @@ describe("or-pattern binding consistency", () => {
   it("still analyzes an or-pattern where every alternative binds no names at all cleanly", () => {
     const result = diagnose(`
       enum Message { Quit, Move }
-      fn f(m: Message) -> i32 { match m { _ | Message::Quit => 0 } }
+      fn f(m: Message) -> i32 { match m { Message::Quit | _ => 0 } }
     `);
     expect(result.diagnostics).toEqual([]);
   });

@@ -1621,6 +1621,7 @@ function analyzePattern(
         type: scrutineeType,
       };
       checkOrPatternConsistency(ctx, result);
+      checkOrPatternReachability(ctx, result);
       return result;
     }
     case "PathPattern": {
@@ -2017,6 +2018,22 @@ function checkOrPatternConsistency(
         pattern.tokenId,
         none(),
       );
+    }
+  }
+}
+
+/** Once one alternative is irrefutable, everything after it in the same
+ * or-pattern is dead. */
+function checkOrPatternReachability(
+  ctx: AnalysisContext,
+  pattern: Semantics.OrPattern,
+): void {
+  let sawIrrefutable = false;
+  for (const alt of pattern.alternatives) {
+    if (sawIrrefutable) {
+      emitError(ctx, "unreachable pattern", alt.tokenId, none());
+    } else if (isIrrefutablePattern(ctx, alt)) {
+      sawIrrefutable = true;
     }
   }
 }

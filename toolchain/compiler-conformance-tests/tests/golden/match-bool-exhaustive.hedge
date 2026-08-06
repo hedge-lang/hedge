@@ -1,0 +1,10 @@
+fn describe(flag: bool) -> i32 {
+  match flag {
+    true => 1,
+    false => 0,
+  }
+}
+
+fn main() {
+  print(describe(true));
+}

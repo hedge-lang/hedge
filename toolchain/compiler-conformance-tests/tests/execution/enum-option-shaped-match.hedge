@@ -1,0 +1,17 @@
+enum Maybe {
+  Some(i32),
+  None,
+}
+
+fn unwrap_or(m: Maybe, fallback: i32) -> i32 {
+  match m {
+    Maybe::Some(x) => x,
+    Maybe::None => fallback,
+  }
+}
+
+fn main() {
+  print(unwrap_or(Maybe::Some(7), 0));
+  print(",");
+  print(unwrap_or(Maybe::None, -1));
+}
