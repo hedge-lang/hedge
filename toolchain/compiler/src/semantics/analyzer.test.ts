@@ -108,6 +108,88 @@ describe("semantic analysis", (): void => {
     expect(result.diagnostics).toEqual([]);
   });
 
+  describe("call argument checking", () => {
+    it("rejects a call with too few arguments", () => {
+      const result = diagnose("fn f(a: i32, b: str) {} fn main() { f(); }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "takes 2 argument(s), but 0 were supplied",
+      );
+    });
+
+    it("rejects a call with too many arguments", () => {
+      const result = diagnose("fn f(a: i32) {} fn main() { f(1, 2); }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "takes 1 argument(s), but 2 were supplied",
+      );
+    });
+
+    it("rejects an argument whose type does not match the parameter", () => {
+      const result = diagnose("fn f(a: i32) {} fn main() { f(true); }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "argument 0 to function `f` type mismatch: expected `i32`, found `bool`",
+      );
+    });
+
+    it("reports each mismatched argument separately", () => {
+      const result = diagnose(
+        'fn f(a: i32, b: str) {} fn main() { f("x", 1); }',
+      );
+      expect(result.diagnostics).toHaveLength(2);
+    });
+
+    it("resolves a user-declared struct in a parameter type so a matching argument is accepted", () => {
+      const result = diagnose(
+        "struct P { x: i32 } fn f(p: P) {} fn main() { f(P { x: 1 }); }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a struct argument of the wrong struct type", () => {
+      const result = diagnose(
+        "struct P { x: i32 } struct Q { x: i32 } fn f(p: P) {} fn main() { f(Q { x: 1 }); }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("argument 0");
+    });
+
+    it("coerces an unsuffixed literal argument to the parameter type", () => {
+      const result = diagnose("fn f(a: i8) {} fn main() { f(1 + 1); }");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("accepts a string literal argument for a shared-reference parameter", () => {
+      const result = diagnose(
+        'fn first(s: &str) -> &str { s } fn main() { print(first("hello")); }',
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still requires an explicit borrow when passing a binding to a reference parameter", () => {
+      const result = diagnose(
+        'fn f(s: &str) {} fn main() { let s = "a"; f(s); }',
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "expected `&str`, found `str`",
+      );
+    });
+
+    it("accepts an explicit borrow of a binding for a reference parameter", () => {
+      const result = diagnose(
+        'fn f(s: &str) {} fn main() { let s = "a"; f(&s); }',
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("does not argument-check a builtin whose parameter list is a placeholder", () => {
+      const result = diagnose("fn main() { print(42); }");
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
   describe("type scoping and declaration order", () => {
     it("resolves a struct field typed as an enum declared later in the file", () => {
       const result = diagnose("struct S { e: E } enum E { A } fn main() {}");
@@ -813,7 +895,7 @@ describe("semantic analysis", (): void => {
 
   describe("match expressions over a #[non_exhaustive] enum", () => {
     it("analyzes an exhaustive match with no wildcard cleanly within the enum's own defining scope", () => {
-      // TODO (Hedge-222): cross-package enforcement (a foreign match
+      // TODO(Hedge-222): cross-package enforcement (a foreign match
       // needing `_`) has no referent yet - there's no module/package
       // system (ROADMAP Slice 7). Every match the compiler can analyze
       // today is "within the defining package", so #[non_exhaustive] is a

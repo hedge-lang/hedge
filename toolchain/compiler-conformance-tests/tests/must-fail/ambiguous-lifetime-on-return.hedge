@@ -5,5 +5,5 @@ fn longest(a: &str, b: &str) -> &str {
 fn main() {
   let s1 = "hello";
   let s2 = "hi";
-  print(longest(s1, s2));
+  print(longest(&s1, &s2));
 }

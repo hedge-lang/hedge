@@ -315,8 +315,7 @@ export interface OrPattern extends DecoratedAstNode {
 /** Not exported: `Pattern` never actually constructs this kind today - a
  * `TuplePattern` in match position always falls through `analyzer.ts`'s
  * `analyzePatternGuardrail` (mirrors `let`/`Param`'s own scope boundary).
- * TODO (Hedge-47): add the `export` back once this is promoted to real
- * match-position semantics. */
+ * Exporting an unused declaration trips `knip`. */
 interface TuplePattern extends DecoratedAstNode {
   readonly kind: "TuplePattern";
   readonly elements: readonly Pattern[];
@@ -441,6 +440,13 @@ export interface FunctionType {
   readonly kind: "FunctionType";
   readonly params: readonly Type[];
   readonly returnType: Type;
+  /**
+   * Whether `params` is a stand-in rather than a signature a call site must
+   * satisfy. True only for a builtin whose real signature cannot be
+   * expressed yet, in which case calls to it are not argument-checked; every
+   * user-declared function is `false`. See `BUILTIN_SCOPE` in `analyzer.ts`.
+   */
+  readonly paramsArePlaceholder: boolean;
 }
 
 /**

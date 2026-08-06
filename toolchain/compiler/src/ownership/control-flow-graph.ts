@@ -689,8 +689,8 @@ function lowerStatements(
       case "Enum":
       case "Const":
       case "Static":
-        // Local item declarations have no CFG effect in Slice 1 (they don't
-        // use outer bindings — see the equivalent TODO in ownership/borrowck.ts).
+        // Local item declarations have no CFG effect in Slice 1: they don't
+        // use outer bindings.
         blockAt(blocks, currentId).statements.push(statement);
         break;
       default:

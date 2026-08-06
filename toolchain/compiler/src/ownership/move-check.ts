@@ -867,9 +867,8 @@ function collectPatternDeclarations(
  * `Uninitialized`), mirroring `walkFunction`'s own parameter seeding - a
  * pattern only ever binds a name once its scrutinee has already been
  * matched against it.
- * TODO (Hedge-47): move-vs-borrow binding mode (per the scrutinee's own
- * `match x`/`match &x`/`match &mut x` form, spec 0016) isn't tracked here -
- * every binding is treated as an ordinary by-value read.
+ * TODO(Hedge-238): binding mode (spec 0016's `match x`/`&x`/`&mut x`) isn't
+ * tracked, so every binding reads by value even under a reference scrutinee.
  */
 function walkMatchExpression(
   ctx: Ctx,
@@ -1174,8 +1173,7 @@ function walkStatement(
     case "Enum":
     case "Const":
     case "Static":
-      // Local item declarations don't use outer bindings in Slice 1 (mirrors
-      // the equivalent TODO in ownership/borrowck.ts).
+      // Local item declarations don't use outer bindings in Slice 1.
       return;
     default:
       assertNever(

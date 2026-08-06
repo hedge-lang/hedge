@@ -30,17 +30,11 @@ export interface AnalysisResult {
  * Maps onto `struct AnalysisContext { scopes: ..., diagnostics: ... }` in Hedge.
  */
 /**
- * Everything one lexical scope owns. Held as a single object so a scope is
- * pushed and popped as one unit: an earlier shape kept six parallel arrays
- * and relied on every push having a matching push in the other five, which
- * `analyzeMatchArm` silently violated. Frame *indices* are compared across
- * these maps (see `scopeFrameIndexOf` / `resolvedNameIsStatic`), so that
- * alignment is load-bearing rather than cosmetic - keeping the maps together
- * makes it impossible to break instead of merely documented.
- *
- * A name is looked up innermost-first, so an inner scope shadows an outer
- * one of the same name; a name already present in the *current* frame is a
- * redefinition diagnostic, not shadowing.
+ * Everything one lexical scope owns, in a single object so a scope is pushed
+ * and popped as one unit. Frame *indices* are compared across these maps
+ * (`scopeFrameIndexOf` against `findConstFrameIndex`,
+ * `resolvedNameIsStatic`), so they must stay aligned; separate per-kind
+ * stacks made that a convention rather than a guarantee.
  */
 interface ScopeFrame {
   readonly vars: Map<string, ScopedVariable>;
@@ -91,10 +85,7 @@ function currentFrame(ctx: AnalysisContext): ScopeFrame {
   return frame;
 }
 
-/**
- * Innermost frame index whose `select`ed map declares `name`, or -1. Shared
- * by every innermost-first lookup so they all agree on search order.
- */
+/** Innermost frame index whose `select`ed map declares `name`, or -1. */
 function frameIndexOf(
   ctx: AnalysisContext,
   name: string,
@@ -109,7 +100,7 @@ function frameIndexOf(
   return -1;
 }
 
-/** Innermost-first struct lookup - an inner declaration shadows an outer one. */
+/** Innermost-first: an inner declaration shadows an outer one. */
 function lookupStruct(
   ctx: AnalysisContext,
   name: string,
@@ -121,7 +112,7 @@ function lookupStruct(
   return undefined;
 }
 
-/** Innermost-first enum lookup - an inner declaration shadows an outer one. */
+/** Innermost-first: an inner declaration shadows an outer one. */
 function lookupEnum(
   ctx: AnalysisContext,
   name: string,
@@ -150,7 +141,17 @@ function getType(expr: Semantics.Expression): Semantics.Type {
   return expr.type;
 }
 
-/** Names and types available before any user code — Slice 1 prelude. */
+/**
+ * Names and types available before any user code - Slice 1 prelude.
+ *
+ * TODO(Hedge-64): `print`'s declared parameter list is a stand-in, not its
+ * real signature. Its runtime shim accepts any value and stringifies it,
+ * and there is no conversion facility in the language yet, so a strict
+ * `str` parameter would make it impossible to print a number at all. Once
+ * `Display` exists, this should become a bound on it and
+ * `paramsArePlaceholder` should go back to false so calls are checked like
+ * any other.
+ */
 const BUILTIN_SCOPE: [string, ScopedVariable][] = [
   [
     "print",
@@ -159,6 +160,7 @@ const BUILTIN_SCOPE: [string, ScopedVariable][] = [
         kind: "FunctionType",
         params: [{ kind: "PrimitiveStringType" }],
         returnType: UNIT,
+        paramsArePlaceholder: true,
       },
       mutable: false,
     },
@@ -874,15 +876,9 @@ function scopedTypeName(ctx: AnalysisContext, name: string): string {
 }
 
 /**
- * Registers every struct/enum declared directly in `items` into the current
- * frame, in two passes: first each declaration's name and type identity,
- * then each body. Splitting them is what lets a field type name a type
- * declared later in the same scope, and lets two types refer to each other -
- * resolving a reference only needs the declaration's own `type`, which is
- * known from its name alone.
- *
- * A duplicate name in the *same* frame is a diagnostic; a name present only
- * in an outer frame is shadowing, which is allowed and mirrors `let`.
+ * Names first, then bodies. Resolving a type reference needs only the
+ * declaration's own `type`, which its name alone determines, so the split is
+ * what lets types be declared in any order and refer to each other.
  */
 function declareStructName(
   ctx: AnalysisContext,
@@ -951,10 +947,9 @@ function registerTypeDecls(
       declareEnumName(ctx, frame, item);
     }
   }
-  // Second pass: real bodies, now that every name in this scope resolves.
-  // A declaration that lost the duplicate check above is skipped rather than
-  // overwriting the one that won it - matched by `tokenId`, since the losing
-  // declaration shares the winner's name.
+  // A declaration that lost the duplicate check is skipped rather than
+  // overwriting the one that won it; `tokenId` distinguishes them, since
+  // they share a name.
   for (const item of items) {
     if (item.kind === "Struct") {
       if (frame.types.get(item.name.text)?.name.tokenId === item.name.tokenId) {
@@ -2696,7 +2691,14 @@ function analyzeCharLiteral(
   return { ...charLiteral, type: { kind: "PrimitiveCharType" } };
 }
 
+/**
+ * Resolves a declared type without emitting, for building a signature before
+ * the declaration is analyzed; emitting here would double-report. Must
+ * resolve user-declared names too, not just primitives, or every struct and
+ * enum in a signature becomes `()` and call-site checking silently passes.
+ */
 function resolveSlice1Type(
+  ctx: AnalysisContext,
   type: Parser.Type,
   fallbackTokenId: number,
 ): Semantics.Type {
@@ -2707,6 +2709,10 @@ function resolveSlice1Type(
         assert(name !== undefined, "Name segment missing");
         const prim = namedTypeToPrimitive(name);
         if (isSome(prim)) return prim.value;
+        const structDecl = lookupStruct(ctx, name);
+        if (structDecl !== undefined) return structDecl.type;
+        const enumDecl = lookupEnum(ctx, name);
+        if (enumDecl !== undefined) return enumDecl.type;
       }
       return { kind: "UnitType", tokenId: fallbackTokenId };
     }
@@ -2717,12 +2723,13 @@ function resolveSlice1Type(
         kind: "ReferenceType",
         tokenId: fallbackTokenId,
         mutable: type.mutable,
-        referent: resolveSlice1Type(type.referent, type.referent.tokenId),
+        referent: resolveSlice1Type(ctx, type.referent, type.referent.tokenId),
       };
     case "ArrayType":
       return {
         kind: "ArrayType",
         elementType: resolveSlice1Type(
+          ctx,
           type.elementType,
           type.elementType.tokenId,
         ),
@@ -2743,13 +2750,19 @@ function resolveSlice1Type(
   }
 }
 
-function fnSignatureType(fn: Parser.FunctionDecl): Semantics.FunctionType {
+function fnSignatureType(
+  ctx: AnalysisContext,
+  fn: Parser.FunctionDecl,
+): Semantics.FunctionType {
   return {
     kind: "FunctionType",
-    params: fn.params.map((p) => resolveSlice1Type(p.type, p.type.tokenId)),
+    params: fn.params.map((p) =>
+      resolveSlice1Type(ctx, p.type, p.type.tokenId),
+    ),
     returnType: isSome(fn.returnType)
-      ? resolveSlice1Type(fn.returnType.value, fn.returnType.value.tokenId)
+      ? resolveSlice1Type(ctx, fn.returnType.value, fn.returnType.value.tokenId)
       : { kind: "UnitType", tokenId: fn.tokenId },
+    paramsArePlaceholder: false,
   };
 }
 
@@ -3036,14 +3049,12 @@ function analyzeStatement(
       // Bind the function name into the current scope before analyzing the body
       // so the function is callable from subsequent statements in the same block.
       bind(ctx, statement.name.text, {
-        type: fnSignatureType(statement),
+        type: fnSignatureType(ctx, statement),
         mutable: false,
       });
       return analyzeFunctionDecl(ctx, statement);
     }
     case "Struct": {
-      // Registered and analyzed by `registerTypeDecls` at block entry, so a
-      // reference from anywhere in the block resolves regardless of order.
       const analyzed = lookupStruct(ctx, statement.name.text);
       assert(analyzed !== undefined, "struct not registered for this scope");
       return analyzed;
@@ -3253,6 +3264,18 @@ function checkPosLiteralRange(
   }
 }
 
+/** A literal with no sub-expressions - the values spec 0010's
+ * "an unconstrained literal adopts the type its context expects" applies to. */
+function isLiteralExpr(expr: Semantics.Expression): boolean {
+  return (
+    expr.kind === "StringLiteral" ||
+    expr.kind === "IntLiteral" ||
+    expr.kind === "FloatLiteral" ||
+    expr.kind === "CharLiteral" ||
+    expr.kind === "BoolLiteral"
+  );
+}
+
 /**
  * Binary operators whose result type is their operand type, so an expected
  * type flows down into both operands. Comparison and logical operators
@@ -3273,13 +3296,9 @@ const TYPE_PRESERVING_BINARY_OPS: ReadonlySet<Parser.BinaryOperator> = new Set([
 ]);
 
 /**
- * Whether an expected integer type can be pushed into `expr` - true for a
- * bare unsuffixed literal, a negated one, and (recursively) a
- * type-preserving binary expression whose operands are themselves all
- * unsuffixed literals. The recursion is what makes `let v: i8 = 1 + 1;`
- * work: coercing only the outermost node leaves the operands at the default
- * `i32`, and the annotation check then fails against a value that was never
- * really typed.
+ * Whether an expected integer type can be pushed into `expr`. Recurses,
+ * because coercing only the outermost node would leave the operands at the
+ * default `i32` and fail the annotation check against them.
  */
 function isUnsuffixedLiteralExpr(expr: Semantics.Expression): boolean {
   if (expr.kind === "IntLiteral" && !isSome(expr.suffix)) return true;
@@ -3350,9 +3369,6 @@ function checkCoercedLiteralRange(
       emitError(ctx, rangeError.value, expr.operand.tokenId, none());
     }
   } else if (expr.kind === "BinaryExpression") {
-    // Each operand carries the coerced type now, so range-check them
-    // individually: `let v: i8 = 200 + 1;` must reject `200` for the same
-    // reason `let v: i8 = 200;` does.
     checkCoercedLiteralRange(ctx, expr.left);
     checkCoercedLiteralRange(ctx, expr.right);
   }
@@ -3450,11 +3466,23 @@ function reconcileExpressionType(
   if (isUnsuffixedLiteralExpr(expr) && isIntegerType(expectedType)) {
     result = coerceToIntegerType(expr, expectedType);
     if (result.kind === "BinaryExpression") {
-      // A bare/negated literal is range-checked by the caller (see this
-      // function's doc); a coerced binary expression has no single literal
-      // for the caller to check, so its operands are checked here.
+      // No single literal for the caller to range-check, unlike the bare case.
       checkCoercedLiteralRange(ctx, result);
     }
+    suppressed = true;
+  }
+
+  // A literal satisfies a shared reference to its own type, so
+  // `fn first(s: &str)` takes `first("hello")` - as it reads in Rust, where
+  // a string literal already is one. Never `&mut`: that needs a real place.
+  // The literal's own type stays as-is, since a shared reference erases in
+  // codegen.
+  if (
+    isLiteralExpr(expr) &&
+    expectedType.kind === "ReferenceType" &&
+    !expectedType.mutable &&
+    typesEqual(expectedType.referent, getType(expr))
+  ) {
     suppressed = true;
   }
 
@@ -4674,11 +4702,38 @@ function analyzeCall(
     };
   }
   const calleeType = getType(callee);
-  const returnType: Semantics.Type =
-    calleeType.kind === "FunctionType"
-      ? calleeType.returnType
-      : { kind: "UnitType", tokenId: call.tokenId };
-  return { ...call, callee, arguments: args, type: returnType };
+  if (calleeType.kind !== "FunctionType") {
+    return {
+      ...call,
+      callee,
+      arguments: args,
+      type: { kind: "UnitType", tokenId: call.tokenId },
+    };
+  }
+  const checkedArgs = calleeType.paramsArePlaceholder
+    ? [...args]
+    : checkPositionalCallArgs(
+        ctx,
+        call,
+        "function",
+        calleeName(call),
+        calleeType.params.map((type) => ({ type })),
+        args,
+      );
+  return {
+    ...call,
+    callee,
+    arguments: checkedArgs,
+    type: calleeType.returnType,
+  };
+}
+
+/** The callee's source-level name for a diagnostic. */
+function calleeName(call: Parser.CallExpression): string {
+  if (call.callee.kind === "PathExpression") {
+    return call.callee.path.segments.join("::");
+  }
+  return "this call";
 }
 
 /**
@@ -4729,7 +4784,7 @@ function analyzeEnumVariantCallConstruction(
     );
     return some({ type: enumDecl.type, args: [...args] });
   }
-  const checkedArgs = checkTupleConstructionCallArgs(
+  const checkedArgs = checkPositionalCallArgs(
     ctx,
     call,
     "variant",
@@ -4740,17 +4795,21 @@ function analyzeEnumVariantCallConstruction(
   return some({ type: enumDecl.type, args: checkedArgs });
 }
 
-/** Arity, then per-argument type checking, for a tuple-shaped construction
- * call - shared by `Enum::Variant(...)` and a tuple struct's own
- * `Name(...)`, distinguished only by `kindLabel`'s wording. */
-function checkTupleConstructionCallArgs(
+/** Arity, then per-argument type checking, for any call whose callee has a
+ * known positional parameter list - a tuple-shaped construction
+ * (`Enum::Variant(...)`, a tuple struct's own `Name(...)`) or an ordinary
+ * function call, distinguished only by `kindLabel`'s wording. `params` is
+ * anything carrying a declared type per position, so a `TupleField[]` and a
+ * `FunctionType`'s own `Type[]` both satisfy it. */
+function checkPositionalCallArgs(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
-  kindLabel: "variant" | "struct",
+  kindLabel: "variant" | "struct" | "function",
   name: string,
-  fields: readonly Semantics.TupleField[],
+  params: readonly { readonly type: Semantics.Type }[],
   args: readonly Semantics.Expression[],
 ): Semantics.Expression[] {
+  const fields = params;
   if (fields.length !== args.length) {
     emitError(
       ctx,
@@ -4833,7 +4892,7 @@ function analyzeTupleStructCallConstruction(
     );
     return some({ callee, type: structDecl.type, args: [...args] });
   }
-  const checkedArgs = checkTupleConstructionCallArgs(
+  const checkedArgs = checkPositionalCallArgs(
     ctx,
     call,
     "struct",
@@ -4942,9 +5001,7 @@ export function analyze(
     tokens,
     constResolving: new Set(),
   };
-  // Types first, in their own two-pass registration, so a function
-  // signature or another type's field can name any of them regardless of
-  // declaration order.
+  // Before functions, so a signature can name any declared type.
   registerTypeDecls(ctx, program.items);
   const topLevelFunctionNames = new Set<string>();
   for (const item of program.items) {
@@ -4959,7 +5016,7 @@ export function analyze(
       } else {
         topLevelFunctionNames.add(item.name.text);
         bind(ctx, item.name.text, {
-          type: fnSignatureType(item),
+          type: fnSignatureType(ctx, item),
           mutable: false,
         });
       }

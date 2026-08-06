@@ -835,7 +835,7 @@ function parseStaticDecl(
 
 function parseStruct(struct: Semantics.StructDecl): JSIM.Item[] {
   void struct;
-  // TODO: Implement how structs are represented in JS (interface for .d.ts)
+  // TODO(Hedge-90): Implement how structs are represented in JS (interface for .d.ts)
   return [];
 }
 
