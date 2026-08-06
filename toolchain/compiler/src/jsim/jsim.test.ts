@@ -585,7 +585,10 @@ describe("toJsim", () => {
                           condition: {
                             kind: "BinaryExpression",
                             operator: "Eq",
-                            left: { kind: "Identifier", value: "matchScrutinee" },
+                            left: {
+                              kind: "Identifier",
+                              value: "matchScrutinee",
+                            },
                             right: { kind: "NumberLiteral", value: "1" },
                           },
                           thenBranch: [
