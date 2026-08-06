@@ -1,0 +1,14 @@
+enum Res {
+  Ok(i32),
+  Err(i32),
+}
+
+fn describe(r: Res) -> i32 {
+  match r {
+    Res::Ok(n) | Res::Err(m) => n,
+  }
+}
+
+fn main() {
+  print(describe(Res::Ok(1)));
+}

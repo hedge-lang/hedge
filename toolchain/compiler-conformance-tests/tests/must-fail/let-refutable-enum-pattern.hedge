@@ -1,0 +1,10 @@
+enum Maybe {
+  Some(i32),
+  None,
+}
+
+fn main() {
+  let m = Maybe::Some(3);
+  let Maybe::Some(x) = m;
+  print(x);
+}
