@@ -108,6 +108,96 @@ describe("semantic analysis", (): void => {
     expect(result.diagnostics).toEqual([]);
   });
 
+  describe("pattern type checking", () => {
+    it("rejects a string-literal pattern against an integer scrutinee", () => {
+      const result = diagnose(
+        'fn main() { let x: i32 = 1; match x { "hello" => {}, _ => {} } }',
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "expected `i32`, found `str`",
+      );
+    });
+
+    it("rejects an integer-literal pattern against a string scrutinee", () => {
+      const result = diagnose(
+        'fn main() { let x: str = "a"; match x { 1 => {}, _ => {} } }',
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "expected `str`, found `i32`",
+      );
+    });
+
+    it("rejects a literal pattern against an enum scrutinee instead of crashing in lowering", () => {
+      const result = diagnose(
+        "enum E { A(i32) } fn main() { let e = E::A(1); match e { 7 => {}, _ => {} } }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("expected `E`");
+    });
+
+    it("rejects a range pattern whose bounds disagree with the scrutinee", () => {
+      const result = diagnose(
+        "fn main() { let x: char = 'a'; match x { 1..=5 => {}, _ => {} } }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "expected `char`, found `i32`",
+      );
+    });
+
+    it("rejects a range pattern whose two bounds have different types", () => {
+      const result = diagnose(
+        "fn main() { let x: i32 = 1; match x { 1..='z' => {}, _ => {} } }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "range bounds must have the same type",
+      );
+    });
+
+    it("rejects a range whose lower bound exceeds its upper bound", () => {
+      const result = diagnose(
+        "fn main() { let x: i32 = 1; match x { 10..=2 => {}, _ => {} } }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("matches nothing");
+    });
+
+    it("rejects a mistyped pattern in an if let scrutinee too", () => {
+      const result = diagnose(
+        'fn main() { let x: i32 = 1; if let "s" = x { } }',
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "expected `i32`, found `str`",
+      );
+    });
+
+    it("coerces an unsuffixed integer-literal pattern to the scrutinee's type", () => {
+      const result = diagnose(
+        "fn main() { let x: u8 = 1; match x { 1 => {}, _ => {} } }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("range-checks a coerced literal pattern against the scrutinee's type", () => {
+      const result = diagnose(
+        "fn main() { let x: u8 = 1; match x { 300 => {}, _ => {} } }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("out of range for u8");
+    });
+
+    it("accepts a negative range against a signed scrutinee", () => {
+      const result = diagnose(
+        "fn main() { let x: i32 = 1; match x { -5..=-1 => {}, _ => {} } }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
   describe("call argument checking", () => {
     it("rejects a call with too few arguments", () => {
       const result = diagnose("fn f(a: i32, b: str) {} fn main() { f(); }");

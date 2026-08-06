@@ -1325,6 +1325,63 @@ function analyzePatternGuardrail(
   };
 }
 
+type PatternLiteral =
+  | Semantics.StringLiteral
+  | Semantics.IntLiteral
+  | Semantics.FloatLiteral
+  | Semantics.CharLiteral
+  | Semantics.BoolLiteral;
+
+/**
+ * An unsuffixed integer literal in pattern position adopts the scrutinee's
+ * type, matching spec 0010's rule for value position - without it
+ * `match x { 1 => ... }` against a `u8` would compare an `i32`.
+ */
+function coercePatternLiteral(
+  literal: PatternLiteral,
+  scrutineeType: Semantics.Type,
+): PatternLiteral {
+  return literal.kind === "IntLiteral" &&
+    !isSome(literal.suffix) &&
+    isIntegerType(scrutineeType)
+    ? { ...literal, type: scrutineeType }
+    : literal;
+}
+
+/**
+ * A literal or range pattern only ever matches values of its own type, so a
+ * mismatch here can never match and is rejected rather than compiled into a
+ * comparison that is statically false.
+ *
+ * A `UnitType` scrutinee is skipped: pattern position has no expression to
+ * hand `isAmbiguousUnitExpr`, and the placeholder a failed scrutinee
+ * analysis produces is far more common than a genuine `match ()`.
+ */
+function checkPatternLiteralType(
+  ctx: AnalysisContext,
+  literalType: Semantics.Type,
+  scrutineeType: Semantics.Type,
+  tokenId: number,
+): void {
+  if (scrutineeType.kind === "UnitType") return;
+  if (typesEqual(literalType, scrutineeType)) return;
+  emitError(
+    ctx,
+    `expected \`${describeType(scrutineeType)}\`, found \`${describeType(literalType)}\``,
+    tokenId,
+    none(),
+  );
+}
+
+/** Signed value of a range bound, or `undefined` for a non-integer bound. */
+function rangeBoundValue(
+  bound: Semantics.RangePatternBound,
+): bigint | undefined {
+  if (bound.literal.kind !== "IntLiteral") return undefined;
+  const magnitude = intLiteralValue(bound.literal);
+  return bound.negative ? -magnitude : magnitude;
+}
+
 type PatternBindingMode = "owned" | "shared" | "mut";
 
 /** Derives the default binding mode + the "effective" (already-dereferenced)
@@ -1730,7 +1787,19 @@ function analyzePattern(
       return result;
     }
     case "LiteralPattern": {
-      const literal = analyzeLiteralValue(ctx, pattern.literal);
+      const literal = coercePatternLiteral(
+        analyzeLiteralValue(ctx, pattern.literal),
+        scrutineeType,
+      );
+      checkPatternLiteralType(
+        ctx,
+        literal.type,
+        scrutineeType,
+        pattern.tokenId,
+      );
+      if (literal.kind === "IntLiteral") {
+        checkPosLiteralRange(ctx, literal, literal.type);
+      }
       const result: Semantics.LiteralPattern = {
         ...pattern,
         literal,
@@ -1739,8 +1808,14 @@ function analyzePattern(
       return result;
     }
     case "RangePattern": {
-      const start = analyzeLiteralValue(ctx, pattern.start.literal);
-      const end = analyzeLiteralValue(ctx, pattern.end.literal);
+      const start = coercePatternLiteral(
+        analyzeLiteralValue(ctx, pattern.start.literal),
+        scrutineeType,
+      );
+      const end = coercePatternLiteral(
+        analyzeLiteralValue(ctx, pattern.end.literal),
+        scrutineeType,
+      );
       const startBound: Semantics.RangePatternBound = {
         ...pattern.start,
         literal: start,
@@ -1749,6 +1824,31 @@ function analyzePattern(
         ...pattern.end,
         literal: end,
       };
+      if (!typesEqual(start.type, end.type)) {
+        emitError(
+          ctx,
+          `range bounds must have the same type: \`${describeType(start.type)}\` and \`${describeType(end.type)}\``,
+          pattern.tokenId,
+          none(),
+        );
+      } else {
+        checkPatternLiteralType(
+          ctx,
+          start.type,
+          scrutineeType,
+          pattern.tokenId,
+        );
+      }
+      const low = rangeBoundValue(startBound);
+      const high = rangeBoundValue(endBound);
+      if (low !== undefined && high !== undefined && low > high) {
+        emitError(
+          ctx,
+          `lower range bound ${low} is greater than upper bound ${high}, so the range matches nothing`,
+          pattern.tokenId,
+          none(),
+        );
+      }
       const result: Semantics.RangePattern = {
         ...pattern,
         start: startBound,
