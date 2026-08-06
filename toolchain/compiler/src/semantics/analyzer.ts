@@ -29,22 +29,33 @@ export interface AnalysisResult {
  * Mutable analysis context threaded explicitly through every pass function.
  * Maps onto `struct AnalysisContext { scopes: ..., diagnostics: ... }` in Hedge.
  */
+/**
+ * Everything one lexical scope owns. Held as a single object so a scope is
+ * pushed and popped as one unit: an earlier shape kept six parallel arrays
+ * and relied on every push having a matching push in the other five, which
+ * `analyzeMatchArm` silently violated. Frame *indices* are compared across
+ * these maps (see `scopeFrameIndexOf` / `resolvedNameIsStatic`), so that
+ * alignment is load-bearing rather than cosmetic - keeping the maps together
+ * makes it impossible to break instead of merely documented.
+ *
+ * A name is looked up innermost-first, so an inner scope shadows an outer
+ * one of the same name; a name already present in the *current* frame is a
+ * redefinition diagnostic, not shadowing.
+ */
+interface ScopeFrame {
+  readonly vars: Map<string, ScopedVariable>;
+  readonly constDecls: Map<string, Parser.ConstDecl>;
+  readonly constValues: Map<string, ConstEntry>;
+  readonly staticTypes: Map<string, Semantics.Type>;
+  readonly types: Map<string, Semantics.StructDecl>;
+  readonly enums: Map<string, Semantics.EnumDecl>;
+}
+
 interface AnalysisContext {
-  readonly scopes: Map<string, ScopedVariable>[];
-  readonly typeScope: Map<string, Semantics.StructDecl>;
-  readonly enumScope: Map<string, Semantics.EnumDecl>;
+  /** Innermost scope last. Frame 0 is the top-level program. */
+  readonly frames: ScopeFrame[];
   readonly diagnostics: Diagnostic[];
   readonly tokens: readonly Token[];
-  /**
-   * One frame per scope (top-level program is frame 0, then one pushed per
-   * `analyzeBlock`), mirroring `scopes`. A name is looked up innermost-first
-   * so a block-local const/static can shadow an outer one of the same name;
-   * a name already used in the *current* frame is a redefinition diagnostic,
-   * not shadowing (see `registerConstsAndStatics`).
-   */
-  readonly constDeclScopes: Map<string, Parser.ConstDecl>[];
-  readonly constValueScopes: Map<string, ConstEntry>[];
-  readonly staticTypeScopes: Map<string, Semantics.Type>[];
   /**
    * Flat, not scoped - only tracks names currently mid-resolution on the
    * call stack for cycle detection, which never spans scopes (an outer
@@ -52,6 +63,74 @@ interface AnalysisContext {
    * yet).
    */
   readonly constResolving: Set<string>;
+}
+
+function newScopeFrame(): ScopeFrame {
+  return {
+    vars: new Map(),
+    constDecls: new Map(),
+    constValues: new Map(),
+    staticTypes: new Map(),
+    types: new Map(),
+    enums: new Map(),
+  };
+}
+
+function pushFrame(ctx: AnalysisContext): void {
+  ctx.frames.push(newScopeFrame());
+}
+
+function popFrame(ctx: AnalysisContext): void {
+  ctx.frames.pop();
+}
+
+/** The innermost frame. An empty stack is an internal invariant violation. */
+function currentFrame(ctx: AnalysisContext): ScopeFrame {
+  const frame = ctx.frames[ctx.frames.length - 1];
+  assert(frame !== undefined, "no active scope frame");
+  return frame;
+}
+
+/**
+ * Innermost frame index whose `select`ed map declares `name`, or -1. Shared
+ * by every innermost-first lookup so they all agree on search order.
+ */
+function frameIndexOf(
+  ctx: AnalysisContext,
+  name: string,
+  select: (frame: ScopeFrame) => ReadonlyMap<string, unknown>,
+): number {
+  for (let i = ctx.frames.length - 1; i >= 0; i -= 1) {
+    const frame = ctx.frames[i];
+    if (frame !== undefined && select(frame).has(name)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/** Innermost-first struct lookup - an inner declaration shadows an outer one. */
+function lookupStruct(
+  ctx: AnalysisContext,
+  name: string,
+): Semantics.StructDecl | undefined {
+  for (let i = ctx.frames.length - 1; i >= 0; i -= 1) {
+    const decl = ctx.frames[i]?.types.get(name);
+    if (decl !== undefined) return decl;
+  }
+  return undefined;
+}
+
+/** Innermost-first enum lookup - an inner declaration shadows an outer one. */
+function lookupEnum(
+  ctx: AnalysisContext,
+  name: string,
+): Semantics.EnumDecl | undefined {
+  for (let i = ctx.frames.length - 1; i >= 0; i -= 1) {
+    const decl = ctx.frames[i]?.enums.get(name);
+    if (decl !== undefined) return decl;
+  }
+  return undefined;
 }
 
 interface ConstEntry {
@@ -98,10 +177,7 @@ function bind(
   name: string,
   scopedVariable: ScopedVariable,
 ): void {
-  const scope = ctx.scopes[ctx.scopes.length - 1];
-  if (scope !== undefined) {
-    scope.set(name, scopedVariable);
-  }
+  currentFrame(ctx).vars.set(name, scopedVariable);
 }
 
 const REFUTABLE_LET_OR_PARAM_PATTERN_MESSAGE =
@@ -158,12 +234,9 @@ function analyzeLetOrParamPattern(
  * @return An optional semantic type if the name is found, or none if it is not.
  */
 function resolve(ctx: AnalysisContext, name: string): Option<ScopedVariable> {
-  for (let i = ctx.scopes.length - 1; i >= 0; i -= 1) {
-    const scope = ctx.scopes[i];
-    if (scope !== undefined) {
-      const type = scope.get(name);
-      if (type !== undefined) return some(type);
-    }
+  for (let i = ctx.frames.length - 1; i >= 0; i -= 1) {
+    const scopedVariable = ctx.frames[i]?.vars.get(name);
+    if (scopedVariable !== undefined) return some(scopedVariable);
   }
   return none();
 }
@@ -356,11 +429,11 @@ function validateSlice1Type(
         if (isSome(prim)) {
           return prim.value;
         }
-        const structDecl = ctx.typeScope.get(name);
+        const structDecl = lookupStruct(ctx, name);
         if (structDecl !== undefined) {
           return structDecl.type;
         }
-        const enumDecl = ctx.enumScope.get(name);
+        const enumDecl = lookupEnum(ctx, name);
         if (enumDecl !== undefined) {
           return enumDecl.type;
         }
@@ -518,41 +591,25 @@ export function constValueToLiteralExpression(
 
 /** Innermost-to-outermost frame index declaring `name`, or -1 if none does. */
 function findConstFrameIndex(ctx: AnalysisContext, name: string): number {
-  for (let i = ctx.constDeclScopes.length - 1; i >= 0; i -= 1) {
-    if (ctx.constDeclScopes[i]?.has(name)) {
-      return i;
-    }
-  }
-  return -1;
+  return frameIndexOf(ctx, name, (frame) => frame.constDecls);
 }
 
 /**
  * Innermost frame index where `name` resolves as an ordinary binding
- * (let/param/function/static), or -1. `scopes` and `constDeclScopes` are
- * always pushed/popped together (`analyzeBlock`, `analyzeFunctionDecl`), so
- * comparing this against `findConstFrameIndex`'s result tells
- * `analyzeConstReference` whether a closer ordinary binding shadows an
- * outer const of the same name - a const's own frame index does not
- * appear in `scopes` at all (consts are never `bind()`-ed), so without
- * this check a same-named parameter or local `let` would be silently
- * ignored in favor of the const's inlined value.
+ * (let/param/function/static), or -1. Comparing this against
+ * `findConstFrameIndex`'s result tells `analyzeConstReference` whether a
+ * closer ordinary binding shadows an outer const of the same name - a
+ * const's own name is never `bind()`-ed into `vars`, so without this check
+ * a same-named parameter or local `let` would be silently ignored in favor
+ * of the const's inlined value. Both indices address the same `frames`
+ * stack, so they are directly comparable by construction.
  */
 function scopeFrameIndexOf(ctx: AnalysisContext, name: string): number {
-  for (let i = ctx.scopes.length - 1; i >= 0; i -= 1) {
-    if (ctx.scopes[i]?.has(name)) {
-      return i;
-    }
-  }
-  return -1;
+  return frameIndexOf(ctx, name, (frame) => frame.vars);
 }
 
 function findStaticFrameIndex(ctx: AnalysisContext, name: string): number {
-  for (let i = ctx.staticTypeScopes.length - 1; i >= 0; i -= 1) {
-    if (ctx.staticTypeScopes[i]?.has(name)) {
-      return i;
-    }
-  }
-  return -1;
+  return frameIndexOf(ctx, name, (frame) => frame.staticTypes);
 }
 
 /** The declared type `registerConstsAndStatics` already resolved for a static - avoids re-validating it (and re-diagnosing a bad type) in `analyzeStaticDecl`. */
@@ -562,7 +619,7 @@ function resolveStaticType(ctx: AnalysisContext, name: string): Semantics.Type {
     frameIndex >= 0,
     `resolveStaticType called for undeclared static \`${name}\``,
   );
-  const type = ctx.staticTypeScopes[frameIndex]?.get(name);
+  const type = ctx.frames[frameIndex]?.staticTypes.get(name);
   assert(
     type !== undefined,
     `resolveStaticType found no type for \`${name}\` in its own frame`,
@@ -626,14 +683,14 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
     frameIndex >= 0,
     `resolveConstDecl called for undeclared const \`${name}\``,
   );
-  const valueFrame = ctx.constValueScopes[frameIndex];
+  const valueFrame = ctx.frames[frameIndex]?.constValues;
   assert(valueFrame !== undefined, "const value scope frame missing");
 
   const cached = valueFrame.get(name);
   if (cached !== undefined) {
     return cached;
   }
-  const decl = ctx.constDeclScopes[frameIndex]?.get(name);
+  const decl = ctx.frames[frameIndex]?.constDecls.get(name);
   assert(
     decl !== undefined,
     `resolveConstDecl found no decl for \`${name}\` in its own frame`,
@@ -753,15 +810,16 @@ function analyzeConstReference(
 /**
  * Whether `name` resolves (innermost-first, matching `resolve()`'s own
  * search order) to a static's binding specifically, not a same-named local
- * variable shadowing it. `scopes` and `staticTypeScopes` are always pushed
- * and popped together (`analyzeBlock`), so the frame where `name` is first
- * found in `scopes` has a corresponding `staticTypeScopes` entry if and only
- * if that binding actually came from a static, not a shadowing `let`/param.
+ * variable shadowing it. `vars` and `staticTypes` live in the same frame, so
+ * the frame where `name` is first found in `vars` has a `staticTypes` entry
+ * if and only if that binding actually came from a static rather than a
+ * shadowing `let`/param.
  */
 function resolvedNameIsStatic(ctx: AnalysisContext, name: string): boolean {
-  for (let i = ctx.scopes.length - 1; i >= 0; i -= 1) {
-    if (ctx.scopes[i]?.has(name)) {
-      return ctx.staticTypeScopes[i]?.has(name) ?? false;
+  for (let i = ctx.frames.length - 1; i >= 0; i -= 1) {
+    const frame = ctx.frames[i];
+    if (frame?.vars.has(name) === true) {
+      return frame.staticTypes.has(name);
     }
   }
   return false;
@@ -808,6 +866,109 @@ function analyzeStaticReference(
 }
 
 /**
+ * A type's scope-qualified name. Frame depth disambiguates two same-named
+ * declarations in nested scopes.
+ */
+function scopedTypeName(ctx: AnalysisContext, name: string): string {
+  return `scoped(${ctx.frames.length})::${name}`;
+}
+
+/**
+ * Registers every struct/enum declared directly in `items` into the current
+ * frame, in two passes: first each declaration's name and type identity,
+ * then each body. Splitting them is what lets a field type name a type
+ * declared later in the same scope, and lets two types refer to each other -
+ * resolving a reference only needs the declaration's own `type`, which is
+ * known from its name alone.
+ *
+ * A duplicate name in the *same* frame is a diagnostic; a name present only
+ * in an outer frame is shadowing, which is allowed and mirrors `let`.
+ */
+function declareStructName(
+  ctx: AnalysisContext,
+  frame: ScopeFrame,
+  item: Parser.StructDecl,
+): void {
+  if (frame.types.has(item.name.text)) {
+    emitError(
+      ctx,
+      `struct \`${item.name.text}\` is defined more than once`,
+      item.name.tokenId,
+      none(),
+    );
+    return;
+  }
+  const type: Semantics.Type = {
+    kind: "StructType",
+    name: scopedTypeName(ctx, item.name.text),
+  };
+  frame.types.set(item.name.text, {
+    ...item,
+    name: { ...item.name, type },
+    attributes: [],
+    body: { kind: "Unit" },
+    type,
+  });
+}
+
+function declareEnumName(
+  ctx: AnalysisContext,
+  frame: ScopeFrame,
+  item: Parser.EnumDecl,
+): void {
+  if (frame.enums.has(item.name.text)) {
+    emitError(
+      ctx,
+      `enum \`${item.name.text}\` is defined more than once`,
+      item.name.tokenId,
+      none(),
+    );
+    return;
+  }
+  const type: Semantics.Type = {
+    kind: "EnumType",
+    name: scopedTypeName(ctx, item.name.text),
+  };
+  frame.enums.set(item.name.text, {
+    ...item,
+    name: { ...item.name, type },
+    generics: [],
+    variants: [],
+    attributes: [],
+    type,
+  });
+}
+
+function registerTypeDecls(
+  ctx: AnalysisContext,
+  items: readonly (Parser.Item | Parser.Statement)[],
+): void {
+  const frame = currentFrame(ctx);
+  for (const item of items) {
+    if (item.kind === "Struct") {
+      declareStructName(ctx, frame, item);
+    } else if (item.kind === "Enum") {
+      declareEnumName(ctx, frame, item);
+    }
+  }
+  // Second pass: real bodies, now that every name in this scope resolves.
+  // A declaration that lost the duplicate check above is skipped rather than
+  // overwriting the one that won it - matched by `tokenId`, since the losing
+  // declaration shares the winner's name.
+  for (const item of items) {
+    if (item.kind === "Struct") {
+      if (frame.types.get(item.name.text)?.name.tokenId === item.name.tokenId) {
+        frame.types.set(item.name.text, analyzeStruct(ctx, item));
+      }
+    } else if (item.kind === "Enum") {
+      if (frame.enums.get(item.name.text)?.name.tokenId === item.name.tokenId) {
+        frame.enums.set(item.name.text, analyzeEnum(ctx, item));
+      }
+    }
+  }
+}
+
+/**
  * Registers every `Const`/`Static` declared directly in `items` into the
  * *current* (innermost) const/static scope frame - called once per scope,
  * right after that scope's frame is pushed (top-level `analyze()` for frame
@@ -817,18 +978,14 @@ function analyzeStaticReference(
  * same frame is a redefinition diagnostic; a name only present in an outer
  * frame is shadowing, which is allowed.
  */
-// eslint-disable-next-line complexity -- Registration loop with a duplicate/collision/pub-rejection branch per item kind; each is a necessary, independent check.
 function registerConstsAndStatics(
   ctx: AnalysisContext,
   items: readonly Parser.Item[],
 ): void {
-  const constFrame = ctx.constDeclScopes[ctx.constDeclScopes.length - 1];
-  const staticFrame = ctx.staticTypeScopes[ctx.staticTypeScopes.length - 1];
-  assert(
-    constFrame !== undefined && staticFrame !== undefined,
-    "registerConstsAndStatics called with no active scope frame",
-  );
-  const currentScope = ctx.scopes[ctx.scopes.length - 1];
+  const frame = currentFrame(ctx);
+  const constFrame = frame.constDecls;
+  const staticFrame = frame.staticTypes;
+  const currentScope = frame.vars;
   // Pre-scanned up front, independent of registration order: a static gets
   // `bind()`-registered into `currentScope` as this loop runs (below), so a
   // same-frame const/static name collision would otherwise be order-
@@ -857,7 +1014,7 @@ function registerConstsAndStatics(
         // `currentScope`) doesn't produce a second, mislabeled diagnostic.
         if (
           !staticFrame.has(item.name.text) &&
-          currentScope?.has(item.name.text)
+          currentScope.has(item.name.text)
         ) {
           // A reference to this name would be ambiguous: `analyzeExpression`
           // always tries `analyzeConstReference` first (see its
@@ -895,7 +1052,7 @@ function registerConstsAndStatics(
             item.name.tokenId,
             none(),
           );
-        } else if (currentScope?.has(item.name.text)) {
+        } else if (currentScope.has(item.name.text)) {
           // A static lowers to a real top-level accessor function of its
           // own name (see jsim.ts's StaticDecl lowering) - sharing a name
           // with an existing function would collide at codegen, not just
@@ -1000,7 +1157,7 @@ function analyzeEnum(
   ctx: AnalysisContext,
   item: Parser.EnumDecl,
 ): Semantics.EnumDecl {
-  const scopedName = `scoped(${ctx.scopes.length})::${item.name.text}`;
+  const scopedName = `scoped(${ctx.frames.length})::${item.name.text}`;
   const enumType: Semantics.Type = { kind: "EnumType", name: scopedName };
   const seenVariantNames = new Set<string>();
   for (const variant of item.variants) {
@@ -1289,7 +1446,7 @@ function resolveEnumDecl(
 ): Option<Semantics.EnumDecl> {
   if (scrutineeType.kind !== "EnumType") return none();
   const name = scrutineeType.name.split("::").pop() ?? scrutineeType.name;
-  const decl = ctx.enumScope.get(name);
+  const decl = lookupEnum(ctx, name);
   return decl === undefined ? none() : some(decl);
 }
 
@@ -1311,7 +1468,7 @@ function resolveStructDecl(
 ): Option<Semantics.StructDecl> {
   if (scrutineeType.kind !== "StructType") return none();
   const name = scrutineeType.name.split("::").pop() ?? scrutineeType.name;
-  const decl = ctx.typeScope.get(name);
+  const decl = lookupStruct(ctx, name);
   return decl === undefined ? none() : some(decl);
 }
 
@@ -2290,7 +2447,7 @@ function analyzeMatchArm(
   defaultMode: PatternBindingMode,
   rootMutable: boolean,
 ): Semantics.MatchArm {
-  ctx.scopes.push(new Map());
+  pushFrame(ctx);
   try {
     const pattern = analyzePattern(
       ctx,
@@ -2303,7 +2460,7 @@ function analyzeMatchArm(
     const body = analyzeExpression(ctx, arm.body);
     return { ...arm, pattern, guard, body };
   } finally {
-    ctx.scopes.pop();
+    popFrame(ctx);
   }
 }
 
@@ -2370,13 +2527,13 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
     case "Function":
       return analyzeFunctionDecl(ctx, item);
     case "Struct": {
-      const cached = ctx.typeScope.get(item.name.text);
+      const cached = lookupStruct(ctx, item.name.text);
       return cached !== undefined && cached.tokenId === item.tokenId
         ? cached
         : analyzeStruct(ctx, item);
     }
     case "Enum": {
-      const cached = ctx.enumScope.get(item.name.text);
+      const cached = lookupEnum(ctx, item.name.text);
       return cached !== undefined && cached.tokenId === item.tokenId
         ? cached
         : analyzeEnum(ctx, item);
@@ -2403,7 +2560,7 @@ function analyzeStruct(
   ctx: AnalysisContext,
   item: Parser.StructDecl,
 ): Semantics.StructDecl {
-  const scopedName = `scoped(${ctx.scopes.length})::${item.name.text}`;
+  const scopedName = `scoped(${ctx.frames.length})::${item.name.text}`;
   return {
     ...item,
     name: { ...item.name, type: { kind: "StructType", name: scopedName } },
@@ -2789,10 +2946,7 @@ function analyzeFunctionDecl(
   // check in `analyzeConstReference` both compare frame *indices* across
   // `scopes` and these stacks, which only lines up if every `scopes` push
   // has a matching push here, everywhere, not just in `analyzeBlock`.
-  ctx.scopes.push(new Map());
-  ctx.constDeclScopes.push(new Map());
-  ctx.constValueScopes.push(new Map());
-  ctx.staticTypeScopes.push(new Map());
+  pushFrame(ctx);
   const analyzedParams = decl.params.map(
     (param: Parser.Param): Semantics.Param => {
       const paramType = validateSlice1Type(ctx, param.type, param.type.tokenId);
@@ -2832,10 +2986,7 @@ function analyzeFunctionDecl(
     returnType,
     body,
   };
-  ctx.scopes.pop();
-  ctx.constDeclScopes.pop();
-  ctx.constValueScopes.pop();
-  ctx.staticTypeScopes.pop();
+  popFrame(ctx);
   return result;
 }
 
@@ -2843,12 +2994,8 @@ function analyzeBlock(
   ctx: AnalysisContext,
   block: Parser.Block,
 ): Semantics.Block {
-  ctx.scopes.push(new Map());
-  ctx.constDeclScopes.push(new Map());
-  ctx.constValueScopes.push(new Map());
-  ctx.staticTypeScopes.push(new Map());
-  const typeScopeBefore = new Set(ctx.typeScope.keys());
-  const enumScopeBefore = new Set(ctx.enumScope.keys());
+  pushFrame(ctx);
+  registerTypeDecls(ctx, block.statements);
   registerConstsAndStatics(ctx, block.statements);
   const analyzedStatements = block.statements.map((statement) =>
     analyzeStatement(ctx, statement),
@@ -2868,16 +3015,7 @@ function analyzeBlock(
     trailingExpression: analyzedTrailing,
     type,
   };
-  ctx.scopes.pop();
-  ctx.constDeclScopes.pop();
-  ctx.constValueScopes.pop();
-  ctx.staticTypeScopes.pop();
-  for (const key of ctx.typeScope.keys()) {
-    if (!typeScopeBefore.has(key)) ctx.typeScope.delete(key);
-  }
-  for (const key of ctx.enumScope.keys()) {
-    if (!enumScopeBefore.has(key)) ctx.enumScope.delete(key);
-  }
+  popFrame(ctx);
   return result;
 }
 
@@ -2904,29 +3042,15 @@ function analyzeStatement(
       return analyzeFunctionDecl(ctx, statement);
     }
     case "Struct": {
-      if (ctx.typeScope.has(statement.name.text)) {
-        emitError(
-          ctx,
-          `struct \`${statement.name.text}\` is defined more than once`,
-          statement.name.tokenId,
-          none(),
-        );
-      }
-      const analyzed = analyzeStruct(ctx, statement);
-      ctx.typeScope.set(statement.name.text, analyzed);
+      // Registered and analyzed by `registerTypeDecls` at block entry, so a
+      // reference from anywhere in the block resolves regardless of order.
+      const analyzed = lookupStruct(ctx, statement.name.text);
+      assert(analyzed !== undefined, "struct not registered for this scope");
       return analyzed;
     }
     case "Enum": {
-      if (ctx.enumScope.has(statement.name.text)) {
-        emitError(
-          ctx,
-          `enum \`${statement.name.text}\` is defined more than once`,
-          statement.name.tokenId,
-          none(),
-        );
-      }
-      const analyzed = analyzeEnum(ctx, statement);
-      ctx.enumScope.set(statement.name.text, analyzed);
+      const analyzed = lookupEnum(ctx, statement.name.text);
+      assert(analyzed !== undefined, "enum not registered for this scope");
       return analyzed;
     }
     case "Const":
@@ -3907,7 +4031,7 @@ function analyzeFieldAccessExpression(
   }
 
   const structName = structType.name.split("::").pop() ?? structType.name;
-  const structDecl = ctx.typeScope.get(structName);
+  const structDecl = lookupStruct(ctx, structName);
   const fieldName = expression.field.text;
 
   if (structDecl === undefined) {
@@ -4085,7 +4209,7 @@ function analyzeEnumVariantStructConstruction(
   const { segments } = structExpression.path;
   const [enumName, variantName] = segments;
   if (enumName === undefined || variantName === undefined) return none();
-  const enumDecl = ctx.enumScope.get(enumName);
+  const enumDecl = lookupEnum(ctx, enumName);
   // Diagnosed directly here, not via `analyzePath` - a struct-literal path
   // never routes through it, so it needs its own unknown-enum/unknown-variant
   // checks.
@@ -4187,7 +4311,7 @@ function analyzeStructExpression(
     };
   }
 
-  const structDecl = ctx.typeScope.get(structName);
+  const structDecl = lookupStruct(ctx, structName);
   if (structDecl === undefined) {
     emitError(
       ctx,
@@ -4396,7 +4520,7 @@ function analyzeIfLetExpression(
 
   let condition: Semantics.LetExpression;
   let thenBranch: Semantics.Block;
-  ctx.scopes.push(new Map());
+  pushFrame(ctx);
   try {
     const pattern = analyzePattern(
       ctx,
@@ -4413,7 +4537,7 @@ function analyzeIfLetExpression(
     };
     thenBranch = analyzeBlock(ctx, ifExpression.thenBranch);
   } finally {
-    ctx.scopes.pop();
+    popFrame(ctx);
   }
 
   const elseBranch = mapSome(ifExpression.elseBranch, (elseBranch) =>
@@ -4518,7 +4642,7 @@ function analyzeEnumVariantCallConstruction(
   if (segments.length !== 2) return none();
   const [enumName, variantName] = segments;
   if (enumName === undefined || variantName === undefined) return none();
-  const enumDecl = ctx.enumScope.get(enumName);
+  const enumDecl = lookupEnum(ctx, enumName);
   if (enumDecl === undefined) return none();
   const variant = enumDecl.variants.find((v) => v.name.text === variantName);
   // Already diagnosed by `analyzePath`'s analysis of `call.callee` in
@@ -4621,7 +4745,7 @@ function analyzeTupleStructCallConstruction(
   const [structName] = segments;
   if (structName === undefined) return none();
   if (isSome(resolve(ctx, structName))) return none();
-  const structDecl = ctx.typeScope.get(structName);
+  const structDecl = lookupStruct(ctx, structName);
   if (structDecl === undefined) return none();
   const callee: Semantics.PathExpression = {
     ...call.callee,
@@ -4680,7 +4804,7 @@ function analyzeEnumVariantPathConstruction(
 ): Option<Semantics.PathExpression> {
   const [enumName, variantName] = segments;
   if (enumName === undefined || variantName === undefined) return none();
-  const enumDecl = ctx.enumScope.get(enumName);
+  const enumDecl = lookupEnum(ctx, enumName);
   if (enumDecl === undefined) {
     emitError(
       ctx,
@@ -4748,42 +4872,23 @@ export function analyze(
   program: Parser.Program,
   tokens: readonly Token[],
 ): AnalysisResult {
+  const rootFrame = newScopeFrame();
+  for (const [name, scopedVariable] of BUILTIN_SCOPE) {
+    rootFrame.vars.set(name, scopedVariable);
+  }
   const ctx: AnalysisContext = {
-    scopes: [new Map(BUILTIN_SCOPE)],
-    typeScope: new Map(),
-    enumScope: new Map(),
+    frames: [rootFrame],
     diagnostics: [],
     tokens,
-    constDeclScopes: [new Map<string, Parser.ConstDecl>()],
-    constValueScopes: [new Map<string, ConstEntry>()],
-    staticTypeScopes: [new Map<string, Semantics.Type>()],
     constResolving: new Set(),
   };
+  // Types first, in their own two-pass registration, so a function
+  // signature or another type's field can name any of them regardless of
+  // declaration order.
+  registerTypeDecls(ctx, program.items);
   const topLevelFunctionNames = new Set<string>();
   for (const item of program.items) {
-    if (item.kind === "Struct") {
-      if (ctx.typeScope.has(item.name.text)) {
-        emitError(
-          ctx,
-          `struct \`${item.name.text}\` is defined more than once`,
-          item.name.tokenId,
-          none(),
-        );
-      } else {
-        ctx.typeScope.set(item.name.text, analyzeStruct(ctx, item));
-      }
-    } else if (item.kind === "Enum") {
-      if (ctx.enumScope.has(item.name.text)) {
-        emitError(
-          ctx,
-          `enum \`${item.name.text}\` is defined more than once`,
-          item.name.tokenId,
-          none(),
-        );
-      } else {
-        ctx.enumScope.set(item.name.text, analyzeEnum(ctx, item));
-      }
-    } else if (item.kind === "Function") {
+    if (item.kind === "Function") {
       if (topLevelFunctionNames.has(item.name.text)) {
         emitError(
           ctx,
@@ -4802,7 +4907,7 @@ export function analyze(
   }
   // A tuple struct's name shares the value namespace with functions -
   // checked after both loops above, so declaration order doesn't matter.
-  for (const structDecl of ctx.typeScope.values()) {
+  for (const structDecl of currentFrame(ctx).types.values()) {
     if (
       structDecl.body.kind === "TupleFields" &&
       topLevelFunctionNames.has(structDecl.name.text)

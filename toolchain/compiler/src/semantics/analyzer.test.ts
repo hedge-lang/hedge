@@ -108,6 +108,66 @@ describe("semantic analysis", (): void => {
     expect(result.diagnostics).toEqual([]);
   });
 
+  describe("type scoping and declaration order", () => {
+    it("resolves a struct field typed as an enum declared later in the file", () => {
+      const result = diagnose("struct S { e: E } enum E { A } fn main() {}");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a struct field typed as a struct declared later in the file", () => {
+      const result = diagnose(
+        "struct A { b: B } struct B { x: i32 } fn main() {}",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("accepts two mutually recursive struct declarations", () => {
+      const result = diagnose(
+        "struct A { b: B } struct B { a: A } fn main() {}",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a forward type reference between two structs declared inside a block", () => {
+      const result = diagnose(
+        "fn main() { struct A { b: B } struct B { x: i32 } }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("lets a block-local struct shadow an outer one without disturbing the outer declaration", () => {
+      const result = diagnose(
+        "struct P { a: i32 } fn main() { { struct P { b: i32 } } let p: P = P { a: 1 }; }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("lets a block-local enum shadow an outer one without disturbing the outer declaration", () => {
+      const result = diagnose(
+        "enum E { A } fn main() { { enum E { B } } let e: E = E::A; }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still rejects two structs with the same name in the same scope", () => {
+      const result = diagnose(
+        "struct P { a: i32 } struct P { b: i32 } fn main() {}",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "struct `P` is defined more than once",
+      );
+    });
+
+    it("still rejects two enums with the same name in the same scope", () => {
+      const result = diagnose("enum E { A } enum E { B } fn main() {}");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "enum `E` is defined more than once",
+      );
+    });
+  });
+
   describe("enum declarations (semantically analyzed)", () => {
     it("analyzes a unit-variant enum declaration cleanly", () => {
       const result = diagnose("enum Message { Quit } fn main() {}");
