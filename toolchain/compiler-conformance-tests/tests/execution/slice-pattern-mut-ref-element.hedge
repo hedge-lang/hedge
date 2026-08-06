@@ -1,0 +1,10 @@
+fn main() {
+  let mut arr: [i32; 3] = [1, 2, 3];
+  let [&mut first, second, third] = arr;
+  *first = 99;
+  print(arr[0]);
+  print(",");
+  print(second);
+  print(",");
+  print(third);
+}

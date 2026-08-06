@@ -1,0 +1,8 @@
+struct Pair(i32, i32);
+
+fn main() {
+  let Pair(a, b) = Pair(3, 4);
+  print(a);
+  print(",");
+  print(b);
+}

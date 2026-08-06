@@ -1,0 +1,10 @@
+struct Item { v: i32 }
+
+fn main() {
+  let mut arr: [Item; 3] = [Item { v: 1 }, Item { v: 2 }, Item { v: 3 }];
+  let [&first, ..&mut tail] = arr;
+  tail[0] = Item { v: 99 };
+  print(first.v);
+  print(",");
+  print(arr[1].v);
+}

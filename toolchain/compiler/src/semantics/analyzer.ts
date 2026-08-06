@@ -4446,8 +4446,23 @@ function analyzeCall(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
 ): Semantics.CallExpression {
-  const callee = analyzeExpression(ctx, call.callee);
   const args = call.arguments.map((arg) => analyzeExpression(ctx, arg));
+  // Must run before ordinary path analysis on `call.callee`, which would
+  // otherwise emit "Cannot find name" for an unresolved single-segment name.
+  const structConstruction = analyzeTupleStructCallConstruction(
+    ctx,
+    call,
+    args,
+  );
+  if (isSome(structConstruction)) {
+    return {
+      ...call,
+      callee: structConstruction.value.callee,
+      arguments: structConstruction.value.args,
+      type: structConstruction.value.type,
+    };
+  }
+  const callee = analyzeExpression(ctx, call.callee);
   const enumConstruction = analyzeEnumVariantCallConstruction(ctx, call, args);
   if (isSome(enumConstruction)) {
     return {
@@ -4513,9 +4528,10 @@ function analyzeEnumVariantCallConstruction(
     );
     return some({ type: enumDecl.type, args: [...args] });
   }
-  const checkedArgs = checkTupleVariantCallArgs(
+  const checkedArgs = checkTupleConstructionCallArgs(
     ctx,
     call,
+    "variant",
     variantName,
     variant.body.value.fields,
     args,
@@ -4523,20 +4539,21 @@ function analyzeEnumVariantCallConstruction(
   return some({ type: enumDecl.type, args: checkedArgs });
 }
 
-/** Arity, then per-argument type checking, for a tuple-variant construction
- * call. Split out from `analyzeEnumVariantCallConstruction` to stay under
- * the file's complexity cap. */
-function checkTupleVariantCallArgs(
+/** Arity, then per-argument type checking, for a tuple-shaped construction
+ * call - shared by `Enum::Variant(...)` and a tuple struct's own
+ * `Name(...)`, distinguished only by `kindLabel`'s wording. */
+function checkTupleConstructionCallArgs(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
-  variantName: string,
+  kindLabel: "variant" | "struct",
+  name: string,
   fields: readonly Semantics.TupleField[],
   args: readonly Semantics.Expression[],
 ): Semantics.Expression[] {
   if (fields.length !== args.length) {
     emitError(
       ctx,
-      `variant \`${variantName}\` takes ${fields.length} argument(s), but ${args.length} ${args.length === 1 ? "was" : "were"} supplied`,
+      `${kindLabel} \`${name}\` takes ${fields.length} argument(s), but ${args.length} ${args.length === 1 ? "was" : "were"} supplied`,
       call.tokenId,
       none(),
     );
@@ -4557,13 +4574,73 @@ function checkTupleVariantCallArgs(
     if (mismatch) {
       emitError(
         ctx,
-        `argument ${i} to variant \`${variantName}\` type mismatch: expected \`${describeType(field.type)}\`, found \`${describeType(getType(expr))}\``,
+        `argument ${i} to ${kindLabel} \`${name}\` type mismatch: expected \`${describeType(field.type)}\`, found \`${describeType(getType(expr))}\``,
         arg.tokenId,
         none(),
       );
     }
     return expr;
   });
+}
+
+/**
+ * `Pair(3, 4)`-shaped construction for a plain tuple struct - the struct
+ * counterpart to `analyzeEnumVariantCallConstruction`. `none()` when the
+ * callee isn't a known tuple struct's name, or a function of that name
+ * already resolves (`analyze()`'s own pass rejects that collision itself).
+ */
+function analyzeTupleStructCallConstruction(
+  ctx: AnalysisContext,
+  call: Parser.CallExpression,
+  args: readonly Semantics.Expression[],
+): Option<{
+  readonly callee: Semantics.PathExpression;
+  readonly type: Semantics.Type;
+  readonly args: Semantics.Expression[];
+}> {
+  if (call.callee.kind !== "PathExpression") return none();
+  const { segments } = call.callee.path;
+  if (segments.length !== 1) return none();
+  const [structName] = segments;
+  if (structName === undefined) return none();
+  if (isSome(resolve(ctx, structName))) return none();
+  const structDecl = ctx.typeScope.get(structName);
+  if (structDecl === undefined) return none();
+  const callee: Semantics.PathExpression = {
+    ...call.callee,
+    type: structDecl.type,
+  };
+  // Claim the call rather than falling through to `none()`, which would
+  // otherwise surface a misleading "Cannot find name" for a real struct.
+  if (structDecl.body.kind === "NamedFields") {
+    emitError(
+      ctx,
+      `struct \`${structName}\` has named fields; use \`${structName} { ... }\``,
+      call.tokenId,
+      none(),
+    );
+    return some({ callee, type: structDecl.type, args: [...args] });
+  }
+  if (structDecl.body.kind === "Unit") {
+    // Unlike a unit enum variant, a unit struct has no construction syntax
+    // yet at all - reject unconditionally rather than accepting `()`.
+    emitError(
+      ctx,
+      `struct \`${structName}\` is a unit struct and cannot be constructed with \`()\``,
+      call.tokenId,
+      none(),
+    );
+    return some({ callee, type: structDecl.type, args: [...args] });
+  }
+  const checkedArgs = checkTupleConstructionCallArgs(
+    ctx,
+    call,
+    "struct",
+    structName,
+    structDecl.body.fields,
+    args,
+  );
+  return some({ callee, type: structDecl.type, args: checkedArgs });
 }
 
 /**
@@ -4704,6 +4781,21 @@ export function analyze(
           mutable: false,
         });
       }
+    }
+  }
+  // A tuple struct's name shares the value namespace with functions -
+  // checked after both loops above, so declaration order doesn't matter.
+  for (const structDecl of ctx.typeScope.values()) {
+    if (
+      structDecl.body.kind === "TupleFields" &&
+      topLevelFunctionNames.has(structDecl.name.text)
+    ) {
+      emitError(
+        ctx,
+        `\`${structDecl.name.text}\` is defined multiple times: a function and a tuple struct constructor share the value namespace`,
+        structDecl.name.tokenId,
+        none(),
+      );
     }
   }
   registerConstsAndStatics(ctx, program.items);

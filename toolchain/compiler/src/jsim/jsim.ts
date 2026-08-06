@@ -1,8 +1,9 @@
 import { isSome, mapSome, none, type Option, some } from "../option.js";
 import type { Token } from "../lexer/token.js";
-import type {
-  BindingId,
-  Declaration,
+import {
+  declarationsOf,
+  type BindingId,
+  type Declaration,
 } from "../ownership/control-flow-graph.js";
 import type {
   BranchDrop,
@@ -179,6 +180,36 @@ function simpleBindingMutable(pattern: Semantics.Pattern): boolean {
 }
 
 /**
+ * `using dropShadow_<name> = <name>;` for every sub-binding still owed a
+ * scope-end drop and not reassignable (`using` can't wrap a `mut` local).
+ * `declarationsOf` walks the whole pattern, so this fires per sub-binding,
+ * not once for the pattern as a whole.
+ */
+function destructuredPatternDropShadows(
+  ctx: JsimContext,
+  pattern: Semantics.Pattern,
+  scopeDropsForBlock: readonly Declaration[],
+): JSIM.LetStatement[] {
+  return declarationsOf(pattern)
+    .filter(
+      (d) => !d.mutable && scopeDropsForBlock.some((sd) => sd.id === d.id),
+    )
+    .map((d): JSIM.LetStatement => ({
+      kind: "LetStatement",
+      name: reserveLocalName(ctx, `dropShadow_${d.name}`),
+      mutable: false,
+      value: some({
+        kind: "Identifier",
+        value: emittedNameForBinding(ctx, d),
+        type: none(),
+      }),
+      docComment: none(),
+      span: resolveSpan(ctx.tokens, d.tokenId, d.tokenId),
+      dispose: true,
+    }));
+}
+
+/**
  * `let Wrapper::Only(x) = w;` - evaluates the initializer once into a
  * synthesized temp, then reuses `compilePatternInto` (built for match) to
  * destructure it, with an empty `rest` (nothing needs to happen "after" a
@@ -189,12 +220,13 @@ function simpleBindingMutable(pattern: Semantics.Pattern): boolean {
 function lowerDestructuringLetStatement(
   ctx: JsimContext,
   statement: Semantics.LetStatement,
+  scopeDropsForBlock: readonly Declaration[],
 ): JSIM.Statement[] {
   const value = mapSome(statement.initializer, (expr) =>
     parseExpression(ctx, expr),
   );
   assert(isSome(value), "A destructuring let must have an initializer");
-  const tempName = bindLocalName(ctx, "letDestructure");
+  const tempName = reserveLocalName(ctx, "letDestructure");
   const tempDecl: JSIM.LetStatement = {
     kind: "LetStatement",
     name: tempName,
@@ -231,6 +263,11 @@ function lowerDestructuringLetStatement(
     tempDecl,
     ...predecls,
     ...withRefutablePatternThrow(continuation([])),
+    ...destructuredPatternDropShadows(
+      ctx,
+      statement.pattern,
+      scopeDropsForBlock,
+    ),
   ];
 }
 
@@ -310,7 +347,7 @@ function dropFlagName(ctx: JsimContext, declaration: Declaration): string {
   if (existing !== undefined) {
     return existing;
   }
-  const allocated = bindLocalName(ctx, `dropFlag_${declaration.name}`);
+  const allocated = reserveLocalName(ctx, `dropFlag_${declaration.name}`);
   names.set(declaration.id, allocated);
   return allocated;
 }
@@ -521,36 +558,57 @@ function getCurrentRenameContext(ctx: JsimContext): Option<RenameCtx> {
   return renameCtx ? some(renameCtx) : none();
 }
 
+/**
+ * Collision-free JS name for `base`, probed against every visible frame
+ * plus `emittedNames` (incremental, to catch a collision a frame lookup
+ * alone would miss). Only computes the name - `bindLocalName` and
+ * `reserveLocalName` decide how to register it.
+ */
+function probeFreeName(renameCtx: RenameCtx, base: string): string {
+  const visible = renameCtx.frames.some((f) => f.has(base));
+  if (!visible && !renameCtx.emittedNames.has(base)) {
+    return base;
+  }
+  let k = (renameCtx.counters.get(base) ?? 0) + 1;
+  let candidate = `${base}$${k}`;
+  while (
+    renameCtx.frames.some((f) => f.has(candidate)) ||
+    renameCtx.emittedNames.has(candidate)
+  ) {
+    k += 1;
+    candidate = `${base}$${k}`;
+  }
+  renameCtx.counters.set(base, k);
+  return candidate;
+}
+
 function bindLocalName(ctx: JsimContext, sourceName: string): string {
   const renameCtx = getCurrentRenameContext(ctx);
   if (!isSome(renameCtx)) {
     return sourceName;
   }
-  const visible = renameCtx.value.frames.some((f) => f.has(sourceName));
   const frame = renameCtx.value.frames.at(-1);
   assert(frame !== undefined, "Expected a rename frame to be present");
-  // emittedNames is maintained incrementally to avoid O(N²) flatMap on each
-  // bind call. It catches value collisions: if a shadow of x already emitted
-  // x$1, a subsequent user-defined x$1 must also be renamed.
-  const { emittedNames } = renameCtx.value;
-  if (visible || emittedNames.has(sourceName)) {
-    let k = (renameCtx.value.counters.get(sourceName) ?? 0) + 1;
-    let emitted = `${sourceName}$${k}`;
-    while (
-      renameCtx.value.frames.some((f) => f.has(emitted)) ||
-      emittedNames.has(emitted)
-    ) {
-      k += 1;
-      emitted = `${sourceName}$${k}`;
-    }
-    renameCtx.value.counters.set(sourceName, k);
-    frame.set(sourceName, emitted);
-    emittedNames.add(emitted);
-    return emitted;
+  const emitted = probeFreeName(renameCtx.value, sourceName);
+  frame.set(sourceName, emitted);
+  renameCtx.value.emittedNames.add(emitted);
+  return emitted;
+}
+
+/**
+ * Collision-safe name for a synthesized temp with no Hedge-level identity
+ * (`"letDestructure"`, `dropFlag_${name}`, ...). Unlike `bindLocalName`,
+ * never registers `base` under `frame` - that would let a real user
+ * binding of the same spelling get silently shadowed by this temp.
+ */
+function reserveLocalName(ctx: JsimContext, base: string): string {
+  const renameCtx = getCurrentRenameContext(ctx);
+  if (!isSome(renameCtx)) {
+    return base;
   }
-  emittedNames.add(sourceName);
-  frame.set(sourceName, sourceName);
-  return sourceName;
+  const emitted = probeFreeName(renameCtx.value, base);
+  renameCtx.value.emittedNames.add(emitted);
+  return emitted;
 }
 
 function lookupLocalName(ctx: JsimContext, sourceName: string): string {
@@ -836,7 +894,7 @@ function parseFunction(
       if (!isSimpleBindingPattern(p.pattern)) {
         return {
           param: p,
-          emittedName: bindLocalName(ctx, "paramDestructure"),
+          emittedName: reserveLocalName(ctx, "paramDestructure"),
         };
       }
       const identity = simpleBindingIdentity(p.pattern);
@@ -870,7 +928,12 @@ function dropParamShadows(
 ): JSIM.LetStatement[] {
   const shadows: JSIM.LetStatement[] = [];
   for (const { param, emittedName } of emittedParams) {
-    if (!isSimpleBindingPattern(param.pattern)) continue;
+    if (!isSimpleBindingPattern(param.pattern)) {
+      shadows.push(
+        ...destructuredPatternDropShadows(ctx, param.pattern, rootDrops),
+      );
+      continue;
+    }
     if (simpleBindingMutable(param.pattern)) continue;
     const identity = simpleBindingIdentity(param.pattern);
     const needsDrop = rootDrops.some((d) => d.id === identity.tokenId);
@@ -1024,7 +1087,7 @@ function parseStatement(
   switch (statement.kind) {
     case "LetStatement": {
       if (!isSimpleBindingPattern(statement.pattern)) {
-        return lowerDestructuringLetStatement(ctx, statement);
+        return lowerDestructuringLetStatement(ctx, statement, scopeDrops);
       }
       // Evaluate the initializer BEFORE binding the name so that
       // `let x = x + 1` resolves the RHS `x` to the *outer* binding.
@@ -1188,6 +1251,15 @@ function parseExpression(
           expression.arguments,
         );
       }
+      // A tuple struct constructor call - checked on the *callee's* type,
+      // not the call's result type, so `fn makePoint() -> Point` (a
+      // FunctionType callee) isn't misread as construction.
+      if (
+        expression.callee.kind === "PathExpression" &&
+        expression.callee.type.kind === "StructType"
+      ) {
+        return jsimTupleStructConstruction(ctx, expression.arguments);
+      }
       return {
         kind: "CallExpression",
         callee: parseExpression(ctx, expression.callee),
@@ -1340,7 +1412,7 @@ function branchAttributedDropDeclarations(
     .filter((d) => d.ifTokenId === ifTokenId && d.branch === branch)
     .map((d): JSIM.LetStatement => ({
       kind: "LetStatement",
-      name: bindLocalName(ctx, `dropShadow_${d.declaration.name}`),
+      name: reserveLocalName(ctx, `dropShadow_${d.declaration.name}`),
       mutable: false,
       value: some({
         kind: "Identifier",
@@ -1418,7 +1490,7 @@ function jsimIfLetStatement(
   pushRenameFrame(ctx);
   try {
     const scrutineeValue = parseExpression(ctx, letExpr.scrutinee);
-    const scrutineeName = bindLocalName(ctx, "ifLetScrutinee");
+    const scrutineeName = reserveLocalName(ctx, "ifLetScrutinee");
     const scrutineeDecl: JSIM.LetStatement = {
       kind: "LetStatement",
       name: scrutineeName,
@@ -1583,6 +1655,23 @@ function jsimArrayRepeatExpression(
   };
 }
 
+/** The view a slice pattern's rest binding (`..tail`) binds to - see
+ * `JSIM.ArraySliceViewExpression` for the codegen split this defers to. */
+function jsimArraySliceView(
+  source: JSIM.Expression,
+  elementType: Semantics.Type,
+  start: number,
+  length: number,
+): JSIM.Expression {
+  return {
+    kind: "ArraySliceViewExpression",
+    source,
+    start,
+    length,
+    numericKind: hedgeTypeToNumericKind(elementType),
+  };
+}
+
 function jsimRangeExpression(
   ctx: JsimContext,
   rangeExpression: Semantics.RangeExpression,
@@ -1648,6 +1737,23 @@ function jsimEnumTupleVariantConstruction(
   };
 }
 
+/** `Pair(3, 4)` lowers to `{"0": 3, "1": 4, [Symbol.dispose]() {}}` - the
+ * numeric-string keys are what `TupleStructPattern` reads back via
+ * `dataExpr[i]`, reusing the same `StructExpression` codegen. */
+function jsimTupleStructConstruction(
+  ctx: JsimContext,
+  args: readonly Semantics.Expression[],
+): JSIM.Expression {
+  return {
+    kind: "StructExpression",
+    fields: args.map((arg, i): JSIM.StructField => ({
+      kind: "StructField",
+      name: String(i),
+      value: some(parseExpression(ctx, arg)),
+    })),
+  };
+}
+
 function jsimEnumTagField(variantName: string): JSIM.StructField {
   return {
     kind: "StructField",
@@ -1692,7 +1798,7 @@ function jsimMatchBody(
       );
     }
     const scrutineeValue = parseExpression(ctx, matchExpr.scrutinee);
-    const scrutineeName = bindLocalName(ctx, "matchScrutinee");
+    const scrutineeName = reserveLocalName(ctx, "matchScrutinee");
     const span = resolveSpan(ctx.tokens, matchExpr.tokenId, matchExpr.tokenId);
     const scrutineeDecl: JSIM.LetStatement = {
       kind: "LetStatement",
@@ -2159,6 +2265,94 @@ function compilePatternInto(
       return isSome(disjunction)
         ? guardedBy(disjunction.value)
         : (rest: readonly JSIM.Statement[]): readonly JSIM.Statement[] => rest;
+    }
+    case "SlicePattern": {
+      // Always resolved against a same-length ArrayType, so it's
+      // statically irrefutable - no guard needed, unlike an enum variant.
+      assert(
+        pattern.type.kind === "ArrayType",
+        `Expected a SlicePattern to resolve to ArrayType, got "${pattern.type.kind}"`,
+      );
+      const { elementType, length: totalLength } = pattern.type;
+      const restIndex = pattern.elements.findIndex(
+        (el) => el.kind === "RestPattern",
+      );
+      const hasRest = restIndex !== -1;
+      const beforeCount = hasRest ? restIndex : pattern.elements.length;
+      const afterCount = hasRest ? pattern.elements.length - restIndex - 1 : 0;
+      const continuations = pattern.elements.map(
+        (el, i): PatternContinuation => {
+          if (el.kind !== "RestPattern") {
+            const index =
+              i < beforeCount ? i : totalLength - (pattern.elements.length - i);
+            return compilePatternInto(
+              ctx,
+              el,
+              {
+                kind: "IndexExpression",
+                object: valueExpr,
+                index: { kind: "NumberLiteral", value: String(index) },
+                isArrayIndex: true,
+              },
+              ambientMutable,
+              true,
+              predecls,
+            );
+          }
+          // Anonymous rest (`..`) - nothing to bind.
+          if (!isSome(el.name)) return (rest) => rest;
+          const restLength = totalLength - beforeCount - afterCount;
+          const viewExpr = jsimArraySliceView(
+            valueExpr,
+            elementType,
+            beforeCount,
+            restLength,
+          );
+          const restMutable = el.mutable || ambientMutable;
+          // Only a `&mut` rest binding's accessor cell needs a real lvalue
+          // to close over (the view expression itself isn't assignable) -
+          // every other rest binding can bind straight to the view.
+          if (!(el.byRef && restMutable)) {
+            const binding = bindPatternName(
+              ctx,
+              el.name.value,
+              viewExpr,
+              restMutable,
+              el.byRef,
+              predecls,
+            );
+            return (rest) => [binding, ...rest];
+          }
+          const viewTempName = reserveLocalName(ctx, "restView");
+          const viewDecl: JSIM.LetStatement = {
+            kind: "LetStatement",
+            name: viewTempName,
+            // Reached only for a `&mut` rest binding (see the branch above)
+            // - its accessor cell's setter reassigns this temp, so it must
+            // be a real JS `let`, not `const`.
+            mutable: true,
+            value: some(viewExpr),
+            docComment: none(),
+            span: resolveSpan(ctx.tokens, el.tokenId, el.tokenId),
+            dispose: false,
+          };
+          const viewIdent: JSIM.Expression = {
+            kind: "Identifier",
+            value: viewTempName,
+            type: none(),
+          };
+          const binding = bindPatternName(
+            ctx,
+            el.name.value,
+            viewIdent,
+            restMutable,
+            el.byRef,
+            predecls,
+          );
+          return (rest) => [viewDecl, binding, ...rest];
+        },
+      );
+      return composeContinuations(continuations);
     }
     default:
       throw new Error(

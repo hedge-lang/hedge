@@ -1,0 +1,1 @@
+error: struct `Point` has named fields; use `Point { ... }`

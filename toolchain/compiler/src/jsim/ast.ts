@@ -200,6 +200,7 @@ export type Expression =
   | TupleExpression
   | ArrayExpression
   | ArrayRepeatExpression
+  | ArraySliceViewExpression
   | RangeExpression
   | StructExpression
   | RefCellExpression;
@@ -388,6 +389,20 @@ interface ArrayRepeatExpression {
   readonly kind: "ArrayRepeatExpression";
   readonly value: Expression;
   readonly count: number;
+  readonly numericKind: Option<NumericKind>;
+}
+
+/**
+ * A slice pattern's rest binding (`..tail`) over `[start, start+length)` of
+ * a fixed-length array. `numericKind` picks the codegen path, mirroring
+ * {@link ArrayExpression}: `some(...)` for a real `subarray` view, `none()`
+ * for the `Proxy`-based helper (no `TypedArray` to slice otherwise).
+ */
+interface ArraySliceViewExpression {
+  readonly kind: "ArraySliceViewExpression";
+  readonly source: Expression;
+  readonly start: number;
+  readonly length: number;
   readonly numericKind: Option<NumericKind>;
 }
 

@@ -1,0 +1,11 @@
+fn main() {
+  let mut arr: [i32; 4] = [1, 2, 3, 4];
+  let mut other: [i32; 2] = [7, 8];
+  let [first, ..&mut tail] = arr;
+  *tail = other;
+  print(first);
+  print(",");
+  print(tail[0]);
+  print(",");
+  print(tail[1]);
+}

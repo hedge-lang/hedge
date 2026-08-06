@@ -1,0 +1,9 @@
+struct Point { x: i32, y: i32 }
+
+fn dist(Point { x, y }: Point, paramDestructure: i32) -> i32 {
+  x + y + paramDestructure
+}
+
+fn main() {
+  print(dist(Point { x: 1, y: 2 }, 10));
+}

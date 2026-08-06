@@ -1,0 +1,14 @@
+struct Item { v: i32 }
+struct Pair { a: Item, b: Item }
+
+fn consume(x: Item) {}
+
+fn main() {
+  let cond = true;
+  let p = Pair { a: Item { v: 1 }, b: Item { v: 2 } };
+  let Pair { a, b } = p;
+  if cond {
+    consume(a);
+  }
+  print(b.v);
+}

@@ -1,0 +1,10 @@
+struct Inner { v: i32 }
+struct Outer { inner: Inner, tag: i32 }
+
+fn f(Outer { inner, tag }: Outer) -> i32 {
+  tag
+}
+
+fn main() {
+  print(f(Outer { inner: Inner { v: 5 }, tag: 9 }));
+}

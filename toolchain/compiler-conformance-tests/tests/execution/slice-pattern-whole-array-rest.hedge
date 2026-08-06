@@ -1,0 +1,9 @@
+fn main() {
+  let arr: [i32; 3] = [1, 2, 3];
+  let [..all] = arr;
+  print(all[0]);
+  print(",");
+  print(all[1]);
+  print(",");
+  print(all[2]);
+}
