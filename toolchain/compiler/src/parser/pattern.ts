@@ -44,7 +44,7 @@ function tryParseRangePatternBound(
       return some(
         err(
           errorDiagnostic(
-            none(),
+            some("HEDGE-PARSE-001"),
             `Expected a numeric literal after "-" in a pattern, found ${
               nextTok === undefined ? "end of input" : `"${nextTok.kind}"`
             }`,
@@ -160,7 +160,7 @@ function parsePatternNoAlt(
         const tok = tokens[afterOp];
         return err(
           errorDiagnostic(
-            none(),
+            some("HEDGE-PARSE-001"),
             `Expected a literal after "..=" in a range pattern, found ${
               tok === undefined ? "end of input" : `"${tok.kind}"`
             }`,
@@ -247,7 +247,11 @@ function parseIdentifierRootedPattern(
   if (kindAt(tokens, next) === "path_sep") {
     if (byRef) {
       return err(
-        errorDiagnostic(none(), sigilOnPathMessage, spanAt(tokens, pos)),
+        errorDiagnostic(
+          some("HEDGE-PARSE-006"),
+          sigilOnPathMessage,
+          spanAt(tokens, pos),
+        ),
       );
     }
     const pathResult = parsePathSegments(tokens, afterMut);
@@ -260,7 +264,7 @@ function parseIdentifierRootedPattern(
     if (isMut || byRef) {
       return err(
         errorDiagnostic(
-          none(),
+          some("HEDGE-PARSE-006"),
           byRef
             ? "`&`/`&mut` cannot be applied to the wildcard pattern `_`"
             : "`mut` cannot be applied to the wildcard pattern `_`",
@@ -277,7 +281,11 @@ function parseIdentifierRootedPattern(
   if (kindAt(tokens, next) === "lbrace" || kindAt(tokens, next) === "lparen") {
     if (byRef) {
       return err(
-        errorDiagnostic(none(), sigilOnPathMessage, spanAt(tokens, pos)),
+        errorDiagnostic(
+          some("HEDGE-PARSE-006"),
+          sigilOnPathMessage,
+          spanAt(tokens, pos),
+        ),
       );
     }
     return parsePathRootedPatternTail(
@@ -442,7 +450,7 @@ function parsePathRootedPatternTail(
   if (mutable) {
     return err(
       errorDiagnostic(
-        none(),
+        some("HEDGE-PARSE-006"),
         "`mut` cannot be applied to a fieldless pattern like a bare unit variant",
         spanAt(tokens, startPos),
       ),

@@ -27,6 +27,13 @@ export type DiagnosticCode =
   | "HEDGE-LEX-007" // malformed raw prefix
   | "HEDGE-LEX-008" // invalid escape sequence
   | "HEDGE-LEX-009" // scanner read past end of source (internal invariant)
+  // Parsing.
+  | "HEDGE-PARSE-001" // unexpected token
+  | "HEDGE-PARSE-002" // unexpected end of input
+  | "HEDGE-PARSE-003" // non-associative operator chained
+  | "HEDGE-PARSE-004" // construct not supported in this slice
+  | "HEDGE-PARSE-005" // stray extra `>`
+  | "HEDGE-PARSE-006" // construct not allowed in this position
   | "HEDGE-BORROW-CHECK-001"
   | "HEDGE-BORROW-CHECK-002"
   | "HEDGE-BORROW-CHECK-003"

@@ -79,7 +79,7 @@ function parseVisibility(
       if (scope !== "package") {
         return err(
           errorDiagnostic(
-            none(),
+            some("HEDGE-PARSE-004"),
             `pub(${scope}) is not supported in Slice 1`,
             some(scopeToken.span),
           ),
@@ -120,7 +120,7 @@ function parseParam(tokens: readonly Token[], pos: number): PR<Parsed<Param>> {
     const name = unwrapSomeOr(patternBindingName(pattern), "_");
     return err(
       errorDiagnostic(
-        none(),
+        some("HEDGE-PARSE-001"),
         `expected ':' after parameter name '${name}'`,
         spanAt(tokens, cursor),
       ),
@@ -410,7 +410,7 @@ function parseGenericParamList(
     const badToken = tokens[afterParam.next];
     return err(
       errorDiagnostic(
-        none(),
+        some("HEDGE-PARSE-001"),
         `expected ',' or '>' in generic parameter list, found "${badToken?.kind ?? "end of input"}"`,
         badToken !== undefined ? some(badToken.span) : none(),
       ),
@@ -444,7 +444,7 @@ function parseDeclarationGenerics(
     const strayToken = tokens[listResult.value.cursor.next];
     diagnostics.push(
       errorDiagnostic(
-        none(),
+        some("HEDGE-PARSE-005"),
         "unexpected extra '>' after generic parameter list",
         strayToken !== undefined ? some(strayToken.span) : none(),
       ),
@@ -500,7 +500,7 @@ function parseWherePredicate(
     const strayToken = tokens[next];
     diagnostics.push(
       errorDiagnostic(
-        none(),
+        some("HEDGE-PARSE-005"),
         "unexpected extra '>' after trait bound",
         strayToken !== undefined ? some(strayToken.span) : none(),
       ),
@@ -718,7 +718,7 @@ function parseNamedField(
     const token = tokens[cursor];
     return err(
       errorDiagnostic(
-        none(),
+        some("HEDGE-PARSE-001"),
         `expected ':' after field name '${fieldName.text}'`,
         token !== undefined ? some(token.span) : none(),
       ),
@@ -965,7 +965,7 @@ function parseStruct(
   } else {
     return err(
       errorDiagnostic(
-        none(),
+        some("HEDGE-PARSE-001"),
         `expected struct body (\`{\`, \`(\`, or \`;\`), found "${bodyToken?.kind ?? "end of input"}"`,
         bodyToken !== undefined ? some(bodyToken.span) : none(),
       ),
@@ -1357,7 +1357,7 @@ export function parseItem(
       const visToken = tokens[cursor];
       return err(
         errorDiagnostic(
-          none(),
+          some("HEDGE-PARSE-006"),
           "visibility qualifiers are not allowed on let statements",
           visToken !== undefined ? some(visToken.span) : none(),
         ),
@@ -1397,7 +1397,7 @@ export function parseItem(
     const visToken = tokens[cursor];
     return err(
       errorDiagnostic(
-        none(),
+        some("HEDGE-PARSE-006"),
         "visibility qualifiers are not allowed here",
         visToken !== undefined ? some(visToken.span) : none(),
       ),

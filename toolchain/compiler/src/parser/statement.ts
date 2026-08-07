@@ -60,7 +60,7 @@ function findLoopBodyOpenBrace(
     if (tok === undefined || tok.kind === "eof") {
       return err(
         errorDiagnostic(
-          none(),
+          some("HEDGE-PARSE-002"),
           "expected `{` to open loop body, found end of input",
           none(),
         ),
@@ -94,7 +94,7 @@ function skipUnsupportedLoopConstruct(
   match: LoopKeywordMatch,
 ): PR<{ diagnostic: Diagnostic; next: number }> {
   const diagnostic: Diagnostic = errorDiagnostic(
-    none(),
+    some("HEDGE-PARSE-004"),
     unsupportedLoopMessage(match.token.text),
     some(match.token.span),
   );
@@ -264,7 +264,7 @@ export function parseBlock(
     if (tokens[cursor]?.kind === "eof") {
       return err(
         errorDiagnostic(
-          none(),
+          some("HEDGE-PARSE-002"),
           "expected `}` to close block, found end of input",
           none(),
         ),
@@ -310,7 +310,7 @@ export function parseBlock(
         const token = tokens[item.value.tokenId];
         return err(
           errorDiagnostic(
-            none(),
+            some("HEDGE-PARSE-006"),
             `unexpected item kind '${item.value.kind}' in block position`,
             token === undefined ? none() : some(token.span),
           ),
@@ -392,7 +392,7 @@ export function parseBlock(
   if (closeTok === undefined || closeTok.kind !== "rbrace") {
     return err(
       errorDiagnostic(
-        none(),
+        some("HEDGE-PARSE-001"),
         `Expected '}' to close block`,
         closeTok !== undefined ? some(closeTok.span) : none(),
       ),
