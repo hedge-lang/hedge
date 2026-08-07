@@ -12,6 +12,16 @@ describe("tokenToString", (): void => {
     expect(tokenToString(token)).toBe("ident(foo)");
   });
 
+  it("formats char tokens with their literal text", (): void => {
+    const token: Token = { kind: "char", span, text: "'a'" };
+    expect(tokenToString(token)).toBe("char('a')");
+  });
+
+  it("formats float tokens with their literal text", (): void => {
+    const token: Token = { kind: "float", span, text: "1.5", suffix: none() };
+    expect(tokenToString(token)).toBe("float(1.5)");
+  });
+
   it("formats keyword tokens", (): void => {
     const token: Token = { kind: "keyword", span, text: "fn" };
     expect(tokenToString(token)).toBe("keyword(fn)");

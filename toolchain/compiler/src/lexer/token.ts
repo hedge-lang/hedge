@@ -200,13 +200,16 @@ export function tokenToString(token: Token): string {
       return `int(${escapeText(token.text)})`;
     case "string":
       return `string(${escapeText(token.text)})`;
+    case "char":
+      return `char(${escapeText(token.text)})`;
+    case "float":
+      return `float(${escapeText(token.text)})`;
     case "lifetime":
       return `lifetime(${escapeText(token.text)})`;
     case "error":
       return `error(${escapeText(token.text)})`;
     case "eof":
       return "end of input";
-    case "char":
     case "lparen":
     case "rparen":
     case "lbrace":
@@ -254,7 +257,6 @@ export function tokenToString(token: Token): string {
     case "fat_arrow":
     case "dot_dot":
     case "dot_dot_eq":
-    case "float":
     case "path_sep":
       // Carries no text: the kind name is the whole token.
       return token.kind;
