@@ -1,7 +1,7 @@
 import { assert, assertNever } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
 import { resolveEscape } from "../lexer/escape.js";
-import type { Token } from "../lexer/token.js";
+import type { Token, TokenKind } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import type {
@@ -1486,7 +1486,7 @@ function parseInfixBinary(
  * to decide whether `a..`/`..b`/`..` left an operand out (as opposed to the
  * parser attempting to consume a following construct as the range's end).
  */
-const RANGE_END_TERMINATORS: ReadonlySet<Token["kind"]> = new Set([
+const RANGE_END_TERMINATORS: ReadonlySet<TokenKind> = new Set([
   "eof",
   "semi",
   "comma",

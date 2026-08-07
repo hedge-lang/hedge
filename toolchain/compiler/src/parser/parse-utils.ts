@@ -7,6 +7,7 @@ import type {
   PathSepToken,
   Span,
   Token,
+  TokenKind,
 } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok, type Result } from "../result.js";
@@ -47,7 +48,7 @@ export function tokenAt(tokens: readonly Token[], pos: number): PR<Token> {
 export function kindAt(
   tokens: readonly Token[],
   pos: number,
-): Token["kind"] | undefined {
+): TokenKind | undefined {
   return tokens[pos]?.kind;
 }
 
@@ -67,7 +68,7 @@ export function spanAt(tokens: readonly Token[], pos: number): Option<Span> {
 export function expect(
   tokens: readonly Token[],
   pos: number,
-  kind: Token["kind"],
+  kind: TokenKind,
 ): PR<number> {
   const tokenAtResult = tokenAt(tokens, pos);
   if (isErr(tokenAtResult)) {
@@ -375,7 +376,7 @@ export function skipUntil(
 export function skipUntilKind(
   tokens: readonly Token[],
   pos: number,
-  ...kinds: readonly Token["kind"][]
+  ...kinds: readonly TokenKind[]
 ): number {
   const kindSet = new Set(kinds);
   return skipUntil(tokens, pos, (tok) => kindSet.has(tok.kind));
@@ -388,7 +389,7 @@ export function skipUntilKind(
  * which uses the same technique) - a naive one-token count would never see
  * the second `>` of a doubly-nested generic close. 0 for everything else.
  */
-function delimiterDepthDelta(kind: Token["kind"]): number {
+function delimiterDepthDelta(kind: TokenKind): number {
   switch (kind) {
     case "lparen":
     case "lbracket":
@@ -428,7 +429,7 @@ function delimiterDepthDelta(kind: Token["kind"]): number {
 export function skipUntilKindBalanced(
   tokens: readonly Token[],
   pos: number,
-  ...kinds: readonly Token["kind"][]
+  ...kinds: readonly TokenKind[]
 ): number {
   const kindSet = new Set(kinds);
   let depth = 0;

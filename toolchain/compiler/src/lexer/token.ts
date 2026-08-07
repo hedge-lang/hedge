@@ -115,6 +115,9 @@ export type Token =
   | { readonly kind: "dot_dot"; readonly span: Span } // ".."
   | { readonly kind: "dot_dot_eq"; readonly span: Span }; // "..="
 
+/** Every token category. Named once here so call sites refer to it directly. */
+export type TokenKind = Token["kind"];
+
 function escapeText(text: string): string {
   return text
     .replaceAll("\\", "\\\\")

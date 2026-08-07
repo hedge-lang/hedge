@@ -1031,7 +1031,7 @@ function parseFunction(
 function dropParamShadows(
   ctx: JsimContext,
   emittedParams: ReadonlyArray<{
-    param: Semantics.FunctionDecl["params"][number];
+    param: Semantics.Param;
     emittedName: string;
   }>,
   rootDrops: readonly Declaration[],
@@ -1069,7 +1069,7 @@ function dropParamShadows(
 function destructureFunctionParams(
   ctx: JsimContext,
   emittedParams: ReadonlyArray<{
-    param: Semantics.FunctionDecl["params"][number];
+    param: Semantics.Param;
     emittedName: string;
   }>,
 ): JSIM.Statement[] {
@@ -1097,7 +1097,7 @@ function parseFunctionBody(
   ctx: JsimContext,
   fn: Semantics.FunctionDecl,
   emittedParams: ReadonlyArray<{
-    param: Semantics.FunctionDecl["params"][number];
+    param: Semantics.Param;
     emittedName: string;
   }>,
 ): JSIM.FunctionDecl {
