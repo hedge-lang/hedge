@@ -405,10 +405,15 @@ function foldArrayLength(
     emitError(ctx, "array length cannot be negative", length.tokenId, none());
     return none();
   }
-  if (outcome.value.value > BigInt(Number.MAX_SAFE_INTEGER)) {
+  // An index is a `usize`, so a longer array could not be indexed by the type
+  // that describes its own length. Derived from `usize`'s own bounds rather
+  // than restating a literal, so the two cannot drift apart.
+  const usizeMax = INT_BOUNDS.PrimitiveUsizeType?.[1];
+  assert(usizeMax !== undefined, "usize has no declared bounds");
+  if (outcome.value.value > usizeMax) {
     emitError(
       ctx,
-      `array length ${outcome.value.value} is too large to represent`,
+      `array length ${outcome.value.value} exceeds the maximum ${usizeMax}`,
       length.tokenId,
       none(),
     );
@@ -3758,7 +3763,18 @@ function inferBinaryType(
     }
 
     case "Shl":
-    case "Shr":
+    case "Shr": {
+      // A shift amount is independent of the shifted value's type (matching
+      // Rust), unlike the other bitwise operators below, which combine two
+      // values of one type.
+      if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
+        emitError(ctx, "the shifted value must be an integer", tokenId, none());
+      }
+      if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
+        emitError(ctx, "the shift amount must be an integer", tokenId, none());
+      }
+      return isLeftTypeValid ? leftType : rightType;
+    }
     case "BitAnd":
     case "BitXor":
     case "BitOr": {

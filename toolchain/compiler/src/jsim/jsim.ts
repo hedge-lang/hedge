@@ -2631,6 +2631,30 @@ function jsimIntLiteral({
   return { kind: "NumberLiteral", value: isBigInt ? numStr + "n" : numStr };
 }
 
+/**
+ * A shift's amount need not share the shifted value's type, but JS refuses to
+ * mix a BigInt with a Number, so a non-bigint amount is converted when the
+ * shifted value is `i64`/`u64`. Every other operand passes through unchanged.
+ */
+function shiftAmount(
+  ctx: JsimContext,
+  binExp: Semantics.BinaryExpression,
+): JSIM.Expression {
+  const right = parseExpression(ctx, binExp.right);
+  const isShift = binExp.operator === "Shl" || binExp.operator === "Shr";
+  if (!isShift) return right;
+  const shifted = hedgeTypeToNumericKind(binExp.left.type);
+  const amount = hedgeTypeToNumericKind(binExp.right.type);
+  const shiftedIsBigint = isSome(shifted) && shifted.value.kind === "bigint";
+  const amountIsBigint = isSome(amount) && amount.value.kind === "bigint";
+  if (!shiftedIsBigint || amountIsBigint) return right;
+  return {
+    kind: "CallExpression",
+    callee: { kind: "Identifier", value: "BigInt", type: none() },
+    arguments: [right],
+  };
+}
+
 function parseBinaryExpression(
   ctx: JsimContext,
   binExp: Semantics.BinaryExpression,
@@ -2645,7 +2669,7 @@ function parseBinaryExpression(
     kind: binExp.kind,
     operator: binExp.operator,
     left: parseExpression(ctx, binExp.left),
-    right: parseExpression(ctx, binExp.right),
+    right: shiftAmount(ctx, binExp),
     numericKind,
     span: resolveSpan(
       ctx.tokens,

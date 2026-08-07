@@ -108,6 +108,55 @@ describe("semantic analysis", (): void => {
     expect(result.diagnostics).toEqual([]);
   });
 
+  describe("shift operand types", () => {
+    it("accepts a shift amount whose type differs from the shifted value", () => {
+      const result = diagnose(
+        "fn main() { let x: i32 = 1; let n: u8 = 2u8; let y: i32 = x << n; }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("accepts a non-bigint shift amount against a bigint value", () => {
+      const result = diagnose(
+        "fn main() { let x: i64 = 1i64; let n: i32 = 2; let y: i64 = x << n; }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a non-integer shift amount", () => {
+      const result = diagnose(
+        'fn main() { let x: i32 = 1; let s: str = "a"; let y: i32 = x << s; }',
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "the shift amount must be an integer",
+      );
+    });
+
+    it("still requires matching operand types for a non-shift bitwise operator", () => {
+      const result = diagnose(
+        "fn main() { let x: i32 = 1; let n: u8 = 2u8; let y: i32 = x & n; }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "bitwise operands must have the same type",
+      );
+    });
+  });
+
+  describe("array length bound", () => {
+    it("accepts an array length equal to the maximum a usize index can hold", () => {
+      const result = diagnose("fn f(arr: [i32; 4294967295]) { }");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects an array length one past that maximum", () => {
+      const result = diagnose("fn f(arr: [i32; 4294967296]) { }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("exceeds the maximum");
+    });
+  });
+
   describe("unary `!`", () => {
     it("keeps `bool` for a logical negation", () => {
       const result = diagnose(
@@ -3088,7 +3137,7 @@ describe("array types", (): void => {
     );
   });
 
-  it("rejects a repeat-form count too large to represent as a safe integer", (): void => {
+  it("rejects a repeat-form count larger than the maximum array length", (): void => {
     const result = diagnose(`
       fn main() {
         let arr = [1; 99999999999999999999999999];
@@ -3097,10 +3146,10 @@ describe("array types", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("too large");
+    expect(result.diagnostics[0].message).toContain("exceeds the maximum");
   });
 
-  it("rejects an array type annotation whose length is too large to represent as a safe integer", (): void => {
+  it("rejects an array type annotation whose length exceeds the maximum", (): void => {
     // Uses a function parameter's type, not a `let` annotation, so the only
     // diagnostic in play is the length check itself - a `let` annotation
     // this invalid would independently trigger a second, pre-existing
@@ -3112,7 +3161,7 @@ describe("array types", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("too large");
+    expect(result.diagnostics[0].message).toContain("exceeds the maximum");
   });
 
   describe("const-length arrays", (): void => {
