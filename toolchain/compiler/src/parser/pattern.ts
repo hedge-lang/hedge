@@ -429,7 +429,7 @@ function parseTupleStructPattern(
  * `Message::Quit`). `mutable` (a leading `mut` sigil - see
  * `parseIdentifierRootedPattern`) is only meaningful for the first two: a
  * struct/tuple-struct pattern has fields whose binding-mode legality
- * (Hedge-47) can depend on treating the whole destructured value as
+ * can depend on treating the whole destructured value as
  * mutable, but a bare unit-variant `PathPattern` binds nothing at all, so
  * `mut` there has no place to apply to and is rejected instead of silently
  * dropped.

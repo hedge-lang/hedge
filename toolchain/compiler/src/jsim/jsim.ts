@@ -168,7 +168,7 @@ function simpleBindingIdentity(pattern: Semantics.Pattern): {
   );
 }
 
-/** A `WildcardPattern` binding is never mutable - mirrors the pre-Hedge-47
+/** A `WildcardPattern` binding is never mutable - mirrors the earlier
  * behavior, where a wildcard `let`/param was never given `mut`. A `byRef`
  * binding's own `mutable` sigil (`&mut name`) means "this is a mutable
  * *borrow*", not "this local slot is reassignable" - there's no sigil

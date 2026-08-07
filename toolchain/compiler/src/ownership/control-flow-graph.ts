@@ -331,7 +331,7 @@ function recordExpressionUses(
  * Mirrors `declarationOf` below, generalized to the richer
  * `Semantics.Pattern` union - a `let`/`Param`'s `BindingPattern` binds at
  * most one name, so that helper only ever needs one.
- * `SlicePattern` is real as of Hedge-47 (against a fixed-length array
+ * `SlicePattern` is real (against a fixed-length array
  * scrutinee); `TuplePattern` still isn't (no real tuple value type exists
  * yet) - `analyzer.ts`'s `analyzePattern` always substitutes a
  * `WildcardPattern` for it (see `analyzePatternGuardrail`), so that one case
@@ -489,13 +489,13 @@ function pushBlock(blocks: MutableBlock[]): number {
  * binding/field) contributes no declaration, since it is never move-tracked
  * or drop-annotated. Each `BindingPattern`'s own `mutable` flag is
  * authoritative for that one binding - there's no single pattern-wide
- * `mutable` anymore (Hedge-47), since a destructuring pattern can mix
+ * `mutable` anymore, since a destructuring pattern can mix
  * mutable and immutable bindings in one `let`/parameter
  * (`Point { x: mut x, y }`). A struct pattern's shorthand field binding
  * (`Point { x }`, no explicit sub-pattern) is always immutable - the
  * grammar has no sigil position for shorthand fields, only the explicit
  * `x: mut x` form can carry one (see `parser/pattern.ts`).
- * `SlicePattern` is real as of Hedge-47 (against a fixed-length array
+ * `SlicePattern` is real (against a fixed-length array
  * scrutinee); `TuplePattern` still isn't (no real tuple value type exists
  * yet) - `analyzer.ts`'s `analyzePattern` always substitutes a
  * `WildcardPattern` for it (see `analyzePatternGuardrail`), so that one case

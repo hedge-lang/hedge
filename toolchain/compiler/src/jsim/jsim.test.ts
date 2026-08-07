@@ -888,7 +888,7 @@ describe("toJsim", () => {
     });
   });
 
-  describe("let-position binding-mode sigils (Hedge-47)", () => {
+  describe("let-position binding-mode sigils", () => {
     it("lowers a `&mut name` override to an immutable JS binding, since the local slot is never separately reassignable", () => {
       const program = jsimSource("fn f(mut x: i32) { let &mut bx = x; }");
       const functionDecl = program.items.find(

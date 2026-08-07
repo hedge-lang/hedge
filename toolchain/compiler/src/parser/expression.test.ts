@@ -2326,7 +2326,7 @@ describe("Slice 3 pattern kinds - tuple-struct and path patterns", (): void => {
     expect(result.program).toEqual(none());
   });
 
-  it("parses a mut sigil applied to a tuple-struct pattern as a real, mutable TupleStructPattern (Hedge-47)", (): void => {
+  it("parses a mut sigil applied to a tuple-struct pattern as a real, mutable TupleStructPattern", (): void => {
     const ast = parseProgram("match x { mut Some(x) => x }");
     expect(ast).toMatchObject({
       items: [

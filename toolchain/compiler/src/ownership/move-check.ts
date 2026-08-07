@@ -870,10 +870,10 @@ function patternRequiresScrutineeMove(pattern: Semantics.Pattern): boolean {
 
 /**
  * Every name a pattern binds, deepest-first - shared by match arms and, as
- * of Hedge-47, `let`/`Param` too (mirroring `control-flow-graph.ts`'s own
+ * `let`/`Param` too (mirroring `control-flow-graph.ts`'s own
  * `declarationsOf`, which returns the CFG's `Declaration` shape instead of
  * this file's own `PatternDeclaration`).
- * `SlicePattern` is real as of Hedge-47 (against a fixed-length array
+ * `SlicePattern` is real (against a fixed-length array
  * scrutinee); `TuplePattern` still isn't (no real tuple value type exists
  * yet) - `analyzer.ts`'s `analyzePattern` always substitutes a
  * `WildcardPattern` for it (see `analyzePatternGuardrail`), so that one case

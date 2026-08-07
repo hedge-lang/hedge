@@ -199,7 +199,7 @@ const REFUTABLE_LET_OR_PARAM_PATTERN_MESSAGE =
  * `TuplePattern` and a dynamic-length `SlicePattern` (no real tuple/slice
  * value type exists yet) and an `@`-subpattern binding - those keep hitting
  * `analyzePatternGuardrail`'s own "not yet supported" diagnostic instead of
- * this one, unchanged from before Hedge-47.
+ * this one, unchanged.
  */
 function analyzeLetOrParamPattern(
   ctx: AnalysisContext,
@@ -211,7 +211,7 @@ function analyzeLetOrParamPattern(
   // A parameter has no initializer expression to check root place
   // mutability against at all (`rootExpression` is `none()`) - the only way
   // to make a &mut field override legal there is the pattern's own `mut`
-  // marker (Hedge-47), applied by `analyzePattern` itself once it reaches a
+  // marker, applied by `analyzePattern` itself once it reaches a
   // `mutable: true` struct/tuple-struct pattern node.
   const rootMutable = isSome(rootExpression)
     ? !isSome(placeMutabilityViolation(ctx, rootExpression.value, true))
@@ -651,8 +651,7 @@ function resolveStaticType(ctx: AnalysisContext, name: string): Semantics.Type {
  * Resolves a bare-identifier reference inside a const-folded expression to
  * another const's value, a "references a static" rejection, or "undeclared"
  * - cycle-safe via `ctx.constResolving`. Shared by `resolveConstDecl`'s own
- * initializer fold and, later, array-length const-folding (Hedge-200's
- * `[T; N]` restriction).
+ * initializer fold and, later, array-length const-folding for `[T; N]`.
  */
 function resolveConstRef(
   ctx: AnalysisContext,
@@ -1312,8 +1311,8 @@ function analyzeLiteralValue(
 
 // TuplePattern/SlicePattern (dynamic-length)/an `@`-subpattern binding stay
 // out of scope entirely, in match, `let`, and parameter position alike
-// (Hedge-47 promoted struct/tuple-struct/fixed-length-slice patterns, but
-// not these). The message deliberately doesn't name a specific position -
+// (struct, tuple-struct and fixed-length-slice patterns are supported,
+// but not these). The message deliberately doesn't name a specific position -
 // `analyzePattern` is shared by all three, so a position-specific wording
 // would be wrong two-thirds of the time.
 const PATTERN_KIND_NOT_YET_SUPPORTED_MESSAGE =
@@ -1470,13 +1469,13 @@ function effectiveBindingType(
  * Whether a `&mut` binding-mode override (`x: &mut bx`, or a bare `&mut
  * name`) is legal at this point in a pattern. `defaultMode === "shared"`
  * rejects it unconditionally - capability comes from the reference already
- * being crossed (Hedge-25's rule for `&mut` through a `Deref` of a shared
+ * being crossed (spec 0005's rule for `&mut` through a `Deref` of a shared
  * reference), regardless of `rootMutable`. `defaultMode === "mut"` always
  * allows it (an `&mut` scrutinee's own chain permits further `&mut`
  * sub-borrows). `defaultMode === "owned"` defers to `rootMutable` - whether
  * the scrutinee/initializer's own root place is mutable (from
  * `placeMutabilityViolation`), or a `mut`-marked ancestor struct/tuple-struct
- * pattern (Hedge-47) stood in for it.
+ * pattern stood in for it.
  */
 function checkMutOverrideLegality(
   ctx: AnalysisContext,
@@ -1942,7 +1941,7 @@ function analyzePattern(
           none(),
         );
       }
-      // A `mut` sigil on this whole tuple-struct pattern (Hedge-47) treats
+      // A `mut` sigil on this whole tuple-struct pattern treats
       // the destructured value as mutable for every field reached through
       // it, regardless of the ambient `rootMutable` - it never demotes an
       // already-mutable ambient context back to immutable, only ever adds
@@ -2033,7 +2032,7 @@ function analyzePattern(
       // A dynamic-length scrutinee has no real type to destructure against
       // yet (no `Vec`/slice type exists - Slice 5), so only a fixed-length
       // `ArrayType` is promoted to real semantics here; anything else still
-      // falls to the generic guardrail, unchanged from before Hedge-47.
+      // falls to the generic guardrail, unchanged.
       if (scrutineeType.kind !== "ArrayType") {
         return analyzePatternGuardrail(ctx, pattern, scrutineeType);
       }
@@ -2890,7 +2889,7 @@ function fnSignatureType(
  * is a bare single-segment path whose own type is not already a
  * reference. A reference-typed operand (an incoming `&T` parameter, or a
  * dereference of one) means the borrow is grounded in something the
- * caller owns, not this frame. This is Hedge-26's narrow, single-hop
+ * caller owns, not this frame. This is the narrow, single-hop
  * "borrow outliving referent" check - it does not trace through an
  * intermediate alias binding, e.g. `let r = &x; r`, a known, deliberately
  * deferred gap.
@@ -2969,7 +2968,7 @@ function checkEscapingStructExpression(
 }
 
 /**
- * Hedge-26's narrow "borrow outliving referent" check: a function's
+ * The narrow "borrow outliving referent" check (spec 0006): a function's
  * trailing/return-position expression must not carry a fresh borrow of a
  * value grounded in this function's own frame. The two leaf shapes named in
  * the ticket - a bare `&local`, and a struct literal field initialized with

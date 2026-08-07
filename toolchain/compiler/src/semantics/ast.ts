@@ -289,7 +289,7 @@ export interface MatchArm extends AstNode {
 
 /**
  * A single `Pattern` union shared by match arms, `let` statements, and
- * function parameters (Hedge-47) - mirrors `Parser.Pattern` structurally.
+ * function parameters - mirrors `Parser.Pattern` structurally.
  * `let`/`Param` only ever bind an irrefutable pattern (enforced by semantic
  * analysis, not the type system - see `analyzer.ts`'s refutability check),
  * but there's no separate reduced pattern shape for that position anymore:
@@ -381,7 +381,7 @@ export interface PathPattern extends DecoratedAstNode {
 }
 
 /** A slice pattern's own rest element (`..`, `..tail`, `..&rest`,
- * `..&mut rest`) - real as of Hedge-47, only ever constructed against a
+ * `..&mut rest`) - real only ever constructed against a
  * fixed-length `ArrayType` scrutinee (see `analyzer.ts`'s `analyzePattern`
  * `SlicePattern` case; a dynamic-length scrutinee still has no real type to
  * destructure against, so it stays guardrailed). */
@@ -392,7 +392,7 @@ export interface RestPattern extends AstNode {
   readonly name: Option<Identifier>;
 }
 
-/** Real as of Hedge-47 against a fixed-length `ArrayType` scrutinee only -
+/** Real against a fixed-length `ArrayType` scrutinee only -
  * see `RestPattern`'s own doc comment. */
 export interface SlicePattern extends DecoratedAstNode {
   readonly kind: "SlicePattern";
