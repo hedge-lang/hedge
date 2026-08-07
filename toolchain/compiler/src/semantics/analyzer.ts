@@ -502,8 +502,19 @@ function foldWidthOf(type: Semantics.Type): Option<FoldWidth> {
       return some({ kind: "float", bits: 32 });
     case "PrimitiveF64Type":
       return some({ kind: "float", bits: 64 });
-    default:
+    case "PrimitiveBooleanType":
+    case "PrimitiveCharType":
+    case "PrimitiveStringType":
+    case "NamedType":
+    case "UnitType":
+    case "StructType":
+    case "EnumType":
+    case "FunctionType":
+    case "ReferenceType":
+    case "ArrayType":
       return none();
+    default:
+      return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
 }
 
@@ -3305,6 +3316,7 @@ const NUMERIC_TYPE_NAME: Partial<Record<Semantics.Type["kind"], string>> = {
  * user (`i32`, `bool`, `str`, a struct's simple name, `()`). Complements
  * {@link NUMERIC_TYPE_NAME}, which only covers the numeric kinds.
  */
+// eslint-disable-next-line complexity -- Routing function over the full Type union
 function describeType(type: Semantics.Type): string {
   switch (type.kind) {
     case "PrimitiveBooleanType":
@@ -3322,8 +3334,25 @@ function describeType(type: Semantics.Type): string {
       return `&${type.mutable ? "mut " : ""}${describeType(type.referent)}`;
     case "ArrayType":
       return `[${describeType(type.elementType)}; ${String(type.length)}]`;
-    default:
+    case "PrimitiveI8Type":
+    case "PrimitiveI16Type":
+    case "PrimitiveI32Type":
+    case "PrimitiveI64Type":
+    case "PrimitiveIsizeType":
+    case "PrimitiveU8Type":
+    case "PrimitiveU16Type":
+    case "PrimitiveU32Type":
+    case "PrimitiveU64Type":
+    case "PrimitiveUsizeType":
+    case "PrimitiveF32Type":
+    case "PrimitiveF64Type":
       return NUMERIC_TYPE_NAME[type.kind] ?? type.kind;
+    case "NamedType":
+      return type.path.segments.at(-1) ?? "unknown";
+    case "FunctionType":
+      return `fn(${type.params.map(describeType).join(", ")}) -> ${describeType(type.returnType)}`;
+    default:
+      return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
 }
 
