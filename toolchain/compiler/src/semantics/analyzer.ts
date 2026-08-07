@@ -1,5 +1,5 @@
 import { assert, assertNever } from "../assert.js";
-import type { Diagnostic } from "../diagnostics.js";
+import type { Diagnostic, DiagnosticCode } from "../diagnostics.js";
 import type { IntSuffix, Token } from "../lexer/token.js";
 import {
   isNone,
@@ -249,20 +249,20 @@ function resolve(ctx: AnalysisContext, name: string): Option<ScopedVariable> {
  * @param ctx - The analysis context where the error will be recorded.
  * @param message - The error message to emit.
  * @param tokenId - The identifier of the token associated with the error.
- * @param extra - Additional information to attach to the error.
+ * @param code - Stable identifier for this diagnostic, if it has one.
  */
 function emitError(
   ctx: AnalysisContext,
   message: string,
   tokenId: number,
-  extra: Option<{ readonly code: string }>,
+  code: Option<DiagnosticCode>,
 ): void {
   const token = ctx.tokens[tokenId];
   ctx.diagnostics.push({
     severity: "error",
     message,
     span: token !== undefined ? some(token.span) : none(),
-    code: mapSome(extra, (e) => e.code),
+    code,
     relatedSpans: [],
   });
 }
@@ -2969,7 +2969,7 @@ function checkEscapingReferenceExpression(
     ctx,
     `returns a reference to \`${name}\`, which does not live beyond this function`,
     expr.tokenId,
-    some({ code: "HEDGE-LIFETIME-002" }),
+    some("HEDGE-LIFETIME-002"),
   );
 }
 
@@ -2993,7 +2993,7 @@ function checkEscapingStructExpression(
       ctx,
       `struct literal field \`${field.name.text}\` borrows \`${name}\`, which does not live beyond this function`,
       fieldValue.tokenId,
-      some({ code: "HEDGE-LIFETIME-002" }),
+      some("HEDGE-LIFETIME-002"),
     );
   }
 }

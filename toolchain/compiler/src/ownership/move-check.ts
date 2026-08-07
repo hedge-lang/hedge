@@ -24,7 +24,11 @@
  */
 
 import { assert, assertNever } from "../assert.js";
-import type { Diagnostic, RelatedSpan } from "../diagnostics.js";
+import type {
+  Diagnostic,
+  RelatedSpan,
+  DiagnosticCode,
+} from "../diagnostics.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { hasCapability } from "../semantics/type-capabilities.js";
@@ -180,7 +184,7 @@ function emitDiagnostic(
   message: string,
   tokenId: number,
   extra?: {
-    readonly code?: string;
+    readonly code?: DiagnosticCode;
     readonly relatedSpans?: readonly RelatedSpan[];
   },
 ): void {
