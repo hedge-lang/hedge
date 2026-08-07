@@ -21,7 +21,7 @@ export function isWhitespace(
   if (ch === undefined) {
     return err(
       errorDiagnostic(
-        none(),
+        some("HEDGE-LEX-009"),
         `Attempted to read beyond end of source at index ${index} of ${source.length}`,
         none(),
       ),

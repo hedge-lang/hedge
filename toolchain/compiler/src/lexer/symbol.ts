@@ -1,5 +1,5 @@
 import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
-import { none, some } from "../option.js";
+import { some } from "../option.js";
 import { type Token } from "./token.js";
 
 function peek(source: string, i: number, offset: number = 1): string {
@@ -309,7 +309,7 @@ export function tokenizeSymbol(
       const end = start + 1;
       diagnostics.push(
         errorDiagnostic(
-          none(),
+          some("HEDGE-LEX-005"),
           `Unexpected character "${ch}" at offset ${start}`,
           some({ start, end }),
         ),

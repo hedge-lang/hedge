@@ -1,6 +1,6 @@
 import { errorDiagnostic } from "../diagnostics.js";
 import type { Diagnostic } from "../diagnostics.js";
-import { isSome, none, some } from "../option.js";
+import { isSome, some } from "../option.js";
 import type { Token } from "./token.js";
 import { tokenizeComment } from "./comments.js";
 import { tokenizeIdent, tokenizeRawIdent } from "./ident.js";
@@ -131,7 +131,7 @@ function tokenizeRString(
   const end = start + 1 + hashCount;
   diagnostics.push(
     errorDiagnostic(
-      none(),
+      some("HEDGE-LEX-007"),
       `raw string prefix \`r${"#".repeat(hashCount || 1)}\` must be followed by '"'`,
       some({ start, end }),
     ),

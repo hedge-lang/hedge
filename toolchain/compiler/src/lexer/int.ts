@@ -59,7 +59,9 @@ function numError(
   end: number,
   message: string,
 ): number {
-  diagnostics.push(errorDiagnostic(none(), message, some({ start, end })));
+  diagnostics.push(
+    errorDiagnostic(some("HEDGE-LEX-006"), message, some({ start, end })),
+  );
   tokens.push({
     kind: "error",
     span: { start, end },

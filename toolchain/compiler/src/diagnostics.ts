@@ -17,6 +17,16 @@ export interface RelatedSpan {
  * merely discouraged; until then this union is the registry.
  */
 export type DiagnosticCode =
+  // Lexing.
+  | "HEDGE-LEX-001" // unterminated string literal
+  | "HEDGE-LEX-002" // unterminated char literal
+  | "HEDGE-LEX-003" // unterminated block comment
+  | "HEDGE-LEX-004" // empty char literal
+  | "HEDGE-LEX-005" // unexpected character
+  | "HEDGE-LEX-006" // malformed numeric literal
+  | "HEDGE-LEX-007" // malformed raw prefix
+  | "HEDGE-LEX-008" // invalid escape sequence
+  | "HEDGE-LEX-009" // scanner read past end of source (internal invariant)
   | "HEDGE-BORROW-CHECK-001"
   | "HEDGE-BORROW-CHECK-002"
   | "HEDGE-BORROW-CHECK-003"

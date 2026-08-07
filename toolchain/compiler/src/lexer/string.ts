@@ -1,6 +1,6 @@
 import { errorDiagnostic } from "../diagnostics.js";
 import type { Diagnostic } from "../diagnostics.js";
-import { none, some } from "../option.js";
+import { some } from "../option.js";
 import { scanEscapeSeq } from "./escape.js";
 import type { Token } from "./token.js";
 
@@ -28,7 +28,7 @@ export function scanStringLiteral(
         if (lastToken === undefined) {
           diagnostics.push(
             errorDiagnostic(
-              none(),
+              some("HEDGE-LEX-001"),
               `Unterminated string literal starting at ${start}`,
               some({ start, end: source.length }),
             ),
@@ -51,7 +51,7 @@ export function scanStringLiteral(
   }
   diagnostics.push(
     errorDiagnostic(
-      none(),
+      some("HEDGE-LEX-001"),
       `Unterminated string literal starting at ${start}`,
       some({ start, end: source.length }),
     ),
@@ -94,7 +94,7 @@ export function scanRawString(
   }
   diagnostics.push(
     errorDiagnostic(
-      none(),
+      some("HEDGE-LEX-001"),
       `Unterminated raw string literal starting at ${start}`,
       some({ start, end: source.length }),
     ),

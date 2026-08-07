@@ -96,7 +96,7 @@ export function tokenizeRawIdent(
     const end = start + 2;
     diagnostics.push(
       errorDiagnostic(
-        none(),
+        some("HEDGE-LEX-007"),
         "raw identifier prefix `r#` must be followed by an identifier",
         some({ start, end }),
       ),

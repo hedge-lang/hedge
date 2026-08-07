@@ -91,7 +91,7 @@ export function isLineComment(
   if (ch === undefined) {
     return err(
       errorDiagnostic(
-        none(),
+        some("HEDGE-LEX-009"),
         `Attempted to read beyond end of source at index ${index} of ${source.length}`,
         none(),
       ),
@@ -145,7 +145,7 @@ export function isBlockComment(
   if (ch === undefined) {
     return err(
       errorDiagnostic(
-        none(),
+        some("HEDGE-LEX-009"),
         `Attempted to read beyond end of source at index ${index} of ${source.length}`,
         none(),
       ),
@@ -193,7 +193,7 @@ export function tokenizeBlockComment(
   }
   diagnostics.push(
     errorDiagnostic(
-      none(),
+      some("HEDGE-LEX-003"),
       "Unterminated block comment",
       some({ start, end: source.length }),
     ),
@@ -219,7 +219,7 @@ function isBlockOuterDocComment(
   if (ch === undefined) {
     return err(
       errorDiagnostic(
-        none(),
+        some("HEDGE-LEX-009"),
         `Attempted to read beyond end of source at index ${index} of ${source.length}`,
         none(),
       ),
@@ -307,7 +307,7 @@ function tokenizeBlockOuterDocComment(
   }
   diagnostics.push(
     errorDiagnostic(
-      none(),
+      some("HEDGE-LEX-003"),
       "Unterminated block comment",
       some({ start, end: source.length }),
     ),
@@ -333,7 +333,7 @@ function isBlockInnerDocComment(
   if (ch === undefined) {
     return err(
       errorDiagnostic(
-        none(),
+        some("HEDGE-LEX-009"),
         `Attempted to read beyond end of source at index ${index} of ${source.length}`,
         none(),
       ),
@@ -425,7 +425,7 @@ function tokenizeBlockInnerDocComment(
   }
   diagnostics.push(
     errorDiagnostic(
-      none(),
+      some("HEDGE-LEX-003"),
       "Unterminated block comment",
       some({ start, end: source.length }),
     ),
@@ -451,7 +451,7 @@ function isOuterDocComment(
   if (ch === undefined) {
     return err(
       errorDiagnostic(
-        none(),
+        some("HEDGE-LEX-009"),
         `Attempted to read beyond end of source at index ${index} of ${source.length}`,
         none(),
       ),
@@ -588,7 +588,7 @@ function isInnerDocComment(
   if (ch === undefined) {
     return err(
       errorDiagnostic(
-        none(),
+        some("HEDGE-LEX-009"),
         `Attempted to read beyond end of source at index ${index} of ${source.length}`,
         none(),
       ),
