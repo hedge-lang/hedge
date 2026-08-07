@@ -73,6 +73,7 @@ type BorrowSite = Semantics.LetStatement | Semantics.LetExpression;
  * are discovered outer-to-inner while descending toward the base, so they're
  * collected in reverse application order and reversed once before returning.
  */
+// eslint-disable-next-line complexity -- Routing function over the full Expression union
 function placeOf(expr: Semantics.Expression): PlacePath | undefined {
   const projections: Projection[] = [];
   let current = expr;
@@ -99,8 +100,34 @@ function placeOf(expr: Semantics.Expression): PlacePath | undefined {
         projections.push({ kind: "Deref" });
         current = current.operand;
         continue;
-      default:
+      case "StringLiteral":
+      case "IntLiteral":
+      case "FloatLiteral":
+      case "BoolLiteral":
+      case "CharLiteral":
+      case "CallExpression":
+      case "ReferenceExpression":
+      case "BinaryExpression":
+      case "UnaryExpression":
+      case "AssignExpression":
+      case "CompoundAssignExpression":
+      case "MethodCallExpression":
+      case "TupleExpression":
+      case "ArrayExpression":
+      case "ArrayRepeatExpression":
+      case "RangeExpression":
+      case "StructExpression":
+      case "IfExpression":
+      case "LetExpression":
+      case "MatchExpression":
+      case "Block":
+        // Not a place: nothing to project from.
         return undefined;
+      default:
+        return assertNever(
+          current,
+          `Unexpected expression: ${JSON.stringify(current)}`,
+        );
     }
   }
 }
@@ -194,6 +221,7 @@ type CapabilityDecision =
   | { readonly kind: "blocked"; readonly through: string }
   | { readonly kind: "root-mut-required" };
 
+// eslint-disable-next-line complexity -- Routing function over the full Expression union
 function capabilityDecision(
   expr: Semantics.Expression,
   isRoot: boolean,
@@ -216,8 +244,35 @@ function capabilityDecision(
       return capabilityDecision(expr.object, false);
     case "DereferenceExpression":
       return capabilityDecision(expr.operand, false);
-    default:
+    case "PathExpression":
+    case "StringLiteral":
+    case "IntLiteral":
+    case "FloatLiteral":
+    case "BoolLiteral":
+    case "CharLiteral":
+    case "CallExpression":
+    case "ReferenceExpression":
+    case "BinaryExpression":
+    case "UnaryExpression":
+    case "AssignExpression":
+    case "CompoundAssignExpression":
+    case "MethodCallExpression":
+    case "TupleExpression":
+    case "ArrayExpression":
+    case "ArrayRepeatExpression":
+    case "RangeExpression":
+    case "StructExpression":
+    case "IfExpression":
+    case "LetExpression":
+    case "MatchExpression":
+    case "Block":
+      // Anything that is not a projection is the root of the chain.
       return { kind: "root-mut-required" };
+    default:
+      return assertNever(
+        expr,
+        `Unexpected expression: ${JSON.stringify(expr)}`,
+      );
   }
 }
 

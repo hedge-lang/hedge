@@ -590,6 +590,7 @@ function derefPlaceDescription(operand: Semantics.Expression): string {
 }
 
 /** Render a projection chain for a diagnostic, e.g. `o.i` or `a[_]`. */
+// eslint-disable-next-line complexity -- Routing function over the full Expression union
 function projectionDescription(expression: Semantics.Expression): string {
   switch (expression.kind) {
     case "PathExpression": {
@@ -604,8 +605,33 @@ function projectionDescription(expression: Semantics.Expression): string {
       return `${projectionDescription(expression.object)}[_]`;
     case "DereferenceExpression":
       return `*${projectionDescription(expression.operand)}`;
-    default:
+    case "StringLiteral":
+    case "IntLiteral":
+    case "FloatLiteral":
+    case "BoolLiteral":
+    case "CharLiteral":
+    case "CallExpression":
+    case "ReferenceExpression":
+    case "BinaryExpression":
+    case "UnaryExpression":
+    case "AssignExpression":
+    case "CompoundAssignExpression":
+    case "MethodCallExpression":
+    case "TupleExpression":
+    case "ArrayExpression":
+    case "ArrayRepeatExpression":
+    case "RangeExpression":
+    case "StructExpression":
+    case "IfExpression":
+    case "LetExpression":
+    case "MatchExpression":
+    case "Block":
       return "_";
+    default:
+      return assertNever(
+        expression,
+        `Unexpected expression: ${JSON.stringify(expression)}`,
+      );
   }
 }
 
