@@ -1817,7 +1817,7 @@ function jsimStructExpression(
           disposableFields,
         }),
       ],
-      disposableFields: [],
+      disposableFields: ENUM_PAYLOAD_DISPOSABLE_FIELDS,
     };
   }
   return { kind: "StructExpression", fields: ownFields, disposableFields };
@@ -1836,8 +1836,10 @@ function jsimEnumUnitVariantConstruction(
   };
 }
 
-/** Payload lowers to `JSIM.TupleExpression`, not `ArrayExpression` - same
- * as a plain tuple expression, since it has no Vec/array runtime semantics. */
+/** Payload lowers to `JSIM.ArrayExpression` so it reaches the array dispose
+ * helper: the wrapper drops `data` as a unit, and a bare tuple carries no
+ * disposer of its own. It stays a plain array (never a TypedArray) because a
+ * variant's payload has no Vec/array runtime semantics. */
 function jsimEnumTupleVariantConstruction(
   ctx: JsimContext,
   segments: readonly string[],
@@ -1850,11 +1852,12 @@ function jsimEnumTupleVariantConstruction(
     fields: [
       jsimEnumTagField(variantName),
       jsimEnumDataField({
-        kind: "TupleExpression",
+        kind: "ArrayExpression",
         elements: args.map((arg) => parseExpression(ctx, arg)),
+        numericKind: none(),
       }),
     ],
-    disposableFields: [],
+    disposableFields: ENUM_PAYLOAD_DISPOSABLE_FIELDS,
   };
 }
 
@@ -1896,8 +1899,23 @@ function jsimEnumTagField(variantName: string): JSIM.StructField {
   };
 }
 
+const ENUM_DATA_FIELD_NAME = "data";
+
+/**
+ * The tagged wrapper disposes its payload as a whole; the payload object or
+ * array in turn disposes whatever it owns, so a variant needs exactly one
+ * entry here regardless of how many fields it carries.
+ */
+const ENUM_PAYLOAD_DISPOSABLE_FIELDS: readonly string[] = [
+  ENUM_DATA_FIELD_NAME,
+];
+
 function jsimEnumDataField(value: JSIM.Expression): JSIM.StructField {
-  return { kind: "StructField", name: "data", value: some(value) };
+  return {
+    kind: "StructField",
+    name: ENUM_DATA_FIELD_NAME,
+    value: some(value),
+  };
 }
 
 /* ---------- match -> switch lowering ---------- */

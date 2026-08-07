@@ -761,6 +761,30 @@ describe("struct expression codegen", () => {
   });
 });
 
+describe("enum payload disposal codegen", () => {
+  const DECLS =
+    "struct Leaf { v: i32 } struct Mid { l: Leaf } enum E { A(Mid), B { m: Mid }, C }";
+
+  it("disposes a tuple variant's payload through the array dispose helper", () => {
+    const out = js(gen(`${DECLS} fn _() { E::A(Mid { l: Leaf { v: 1 } }); }`));
+    expect(out).toContain("__hedgeDisposeArray([");
+    expect(out).toContain("[Symbol.dispose]() { using _d0 = this.data; }");
+  });
+
+  it("disposes a struct variant's payload", () => {
+    const out = stmts(
+      gen(`${DECLS} fn _() { E::B { m: Mid { l: Leaf { v: 2 } } }; }`),
+    );
+    expect(out).toContain("[Symbol.dispose]() { using _d0 = this.data; }");
+  });
+
+  it("leaves a unit variant's disposer empty, since it carries no payload", () => {
+    expect(stmts(gen(`${DECLS} fn _() { E::C; }`))).toBe(
+      '({tag: "C", [Symbol.dispose]() {}});',
+    );
+  });
+});
+
 describe("using / scope-end drop codegen", (): void => {
   it("a non-mut struct binding never moved lowers to using", (): void => {
     const code = genWithOwnership(
