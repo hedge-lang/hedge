@@ -3430,18 +3430,6 @@ function checkPosLiteralRange(
   }
 }
 
-/** A literal with no sub-expressions - the values spec 0010's
- * "an unconstrained literal adopts the type its context expects" applies to. */
-function isLiteralExpr(expr: Semantics.Expression): boolean {
-  return (
-    expr.kind === "StringLiteral" ||
-    expr.kind === "IntLiteral" ||
-    expr.kind === "FloatLiteral" ||
-    expr.kind === "CharLiteral" ||
-    expr.kind === "BoolLiteral"
-  );
-}
-
 /**
  * Binary operators whose result type is their operand type, so an expected
  * type flows down into both operands. Comparison and logical operators
@@ -3635,20 +3623,6 @@ function reconcileExpressionType(
       // No single literal for the caller to range-check, unlike the bare case.
       checkCoercedLiteralRange(ctx, result);
     }
-    suppressed = true;
-  }
-
-  // A literal satisfies a shared reference to its own type, so
-  // `fn first(s: &str)` takes `first("hello")` - as it reads in Rust, where
-  // a string literal already is one. Never `&mut`: that needs a real place.
-  // The literal's own type stays as-is, since a shared reference erases in
-  // codegen.
-  if (
-    isLiteralExpr(expr) &&
-    expectedType.kind === "ReferenceType" &&
-    !expectedType.mutable &&
-    typesEqual(expectedType.referent, getType(expr))
-  ) {
     suppressed = true;
   }
 

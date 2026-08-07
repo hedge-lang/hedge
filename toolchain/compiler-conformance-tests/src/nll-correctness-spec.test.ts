@@ -119,7 +119,7 @@ describe("NLL and lifetime correctness spec", (): void => {
     assertRunsTo(
       `
       fn first(s: &str) -> &str { s }
-      fn main() { print(first("hello")); }
+      fn main() { let s = "hello"; print(first(&s)); }
     `,
       ["hello"],
     );
@@ -129,7 +129,7 @@ describe("NLL and lifetime correctness spec", (): void => {
     assertRunsTo(
       `
       fn longest<'a>(a: &'a str, b: &'a str) -> &'a str { a }
-      fn main() { print(longest("first", "second")); }
+      fn main() { let a = "first"; let b = "second"; print(longest(&a, &b)); }
     `,
       ["first"],
     );
@@ -141,7 +141,8 @@ describe("NLL and lifetime correctness spec", (): void => {
       struct Cursor<'a> { source: &'a str, pos: usize }
       fn make(s: &str) -> Cursor { Cursor { source: s, pos: 0 } }
       fn main() {
-        let c = make("text");
+        let s = "text";
+        let c = make(&s);
         print(c.source);
       }
     `,

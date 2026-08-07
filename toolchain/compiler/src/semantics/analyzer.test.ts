@@ -378,11 +378,29 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
-    it("accepts a string literal argument for a shared-reference parameter", () => {
+    it("accepts a string literal for a str parameter, like any other primitive", () => {
+      const result = diagnose(
+        'fn first(s: str) -> str { s } fn main() { print(first("hello")); }',
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a string literal for a shared-reference parameter, since a literal is not a reference", () => {
       const result = diagnose(
         'fn first(s: &str) -> &str { s } fn main() { print(first("hello")); }',
       );
-      expect(result.diagnostics).toEqual([]);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "expected `&str`, found `str`",
+      );
+    });
+
+    it("rejects an integer literal for a shared-reference parameter, the same way", () => {
+      const result = diagnose("fn f(r: &i32) {} fn main() { f(5); }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "expected `&i32`, found `i32`",
+      );
     });
 
     it("still requires an explicit borrow when passing a binding to a reference parameter", () => {
