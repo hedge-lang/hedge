@@ -2512,9 +2512,15 @@ function compilePatternInto(
       );
       return composeContinuations(continuations);
     }
-    default:
+    case "TuplePattern":
+    case "SlicePattern":
       throw new Error(
         `JSIM codegen for enum-match pattern kind "${pattern.kind}" is not yet implemented`,
+      );
+    default:
+      return assertNever(
+        pattern,
+        `Unexpected pattern: ${JSON.stringify(pattern)}`,
       );
   }
 }

@@ -2634,6 +2634,7 @@ function analyzeMatchExpression(
   return { ...matchExpr, scrutinee, arms, type: resultType };
 }
 
+// eslint-disable-next-line complexity -- Routing function over the full Item union
 function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
   switch (item.kind) {
     case "Function":
@@ -2662,9 +2663,39 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
       ctx.diagnostics.splice(prevLen); // suppress cascading errors - the restriction error is good enough
       return analyzed;
     }
-    default:
+    case "StringLiteral":
+    case "IntLiteral":
+    case "FloatLiteral":
+    case "BoolLiteral":
+    case "CharLiteral":
+    case "PathExpression":
+    case "CallExpression":
+    case "ReferenceExpression":
+    case "DereferenceExpression":
+    case "BinaryExpression":
+    case "UnaryExpression":
+    case "AssignExpression":
+    case "CompoundAssignExpression":
+    case "FieldAccessExpression":
+    case "MethodCallExpression":
+    case "IndexExpression":
+    case "TupleExpression":
+    case "ArrayExpression":
+    case "ArrayRepeatExpression":
+    case "StructExpression":
+    case "RangeExpression":
+    case "IfExpression":
+    case "LetExpression":
+    case "MatchExpression":
+    case "WhileExpression":
+    case "Block":
+    case "Identifier":
+      // A bare expression at top level: rejected, then analyzed anyway so a
+      // reference inside it does not cascade a second diagnostic.
       emitError(ctx, TOP_LEVEL_ITEM_RESTRICTION_MESSAGE, item.tokenId, none());
       return analyzeExpression(ctx, item);
+    default:
+      return assertNever(item, `Unexpected item: ${JSON.stringify(item)}`);
   }
 }
 
