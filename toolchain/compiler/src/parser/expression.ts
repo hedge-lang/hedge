@@ -389,8 +389,33 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: false,
         sigil: ">>=",
       };
-    default:
+    case "ident":
+    case "char":
+    case "string":
+    case "lifetime":
+    case "error":
+    case "eof":
+    case "rparen":
+    case "lbrace":
+    case "rbrace":
+    case "rbracket":
+    case "comma":
+    case "semi":
+    case "colon":
+    case "hash":
+    case "at":
+    case "question":
+    case "bang":
+    case "arrow":
+    case "fat_arrow":
+    case "keyword":
+    case "int":
+    case "float":
+    case "path_sep":
+      // Never appears in infix position.
       return null;
+    default:
+      return assertNever(token, `Unexpected token: ${JSON.stringify(token)}`);
   }
 }
 

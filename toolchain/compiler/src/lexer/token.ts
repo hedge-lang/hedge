@@ -1,3 +1,4 @@
+import { assertNever } from "../assert.js";
 import type { Option } from "../option.js";
 
 export type IntSuffix =
@@ -188,6 +189,7 @@ function escapeText(text: string): string {
     .replaceAll('"', '\\"');
 }
 
+// eslint-disable-next-line complexity -- Routing function over the full Token union
 export function tokenToString(token: Token): string {
   switch (token.kind) {
     case "ident":
@@ -204,7 +206,59 @@ export function tokenToString(token: Token): string {
       return `error(${escapeText(token.text)})`;
     case "eof":
       return "end of input";
-    default:
+    case "char":
+    case "lparen":
+    case "rparen":
+    case "lbrace":
+    case "rbrace":
+    case "lbracket":
+    case "rbracket":
+    case "comma":
+    case "semi":
+    case "colon":
+    case "dot":
+    case "hash":
+    case "at":
+    case "question":
+    case "plus":
+    case "minus":
+    case "star":
+    case "slash":
+    case "percent":
+    case "amp":
+    case "pipe":
+    case "caret":
+    case "bang":
+    case "lt":
+    case "gt":
+    case "eq":
+    case "eq_eq":
+    case "bang_eq":
+    case "lt_eq":
+    case "gt_eq":
+    case "amp_amp":
+    case "pipe_pipe":
+    case "lt_lt":
+    case "gt_gt":
+    case "lt_lt_eq":
+    case "gt_gt_eq":
+    case "plus_eq":
+    case "minus_eq":
+    case "star_eq":
+    case "slash_eq":
+    case "percent_eq":
+    case "amp_eq":
+    case "pipe_eq":
+    case "caret_eq":
+    case "arrow":
+    case "fat_arrow":
+    case "dot_dot":
+    case "dot_dot_eq":
+    case "float":
+    case "path_sep":
+      // Carries no text: the kind name is the whole token.
       return token.kind;
+    default:
+      return assertNever(token, `Unexpected token: ${JSON.stringify(token)}`);
   }
 }
