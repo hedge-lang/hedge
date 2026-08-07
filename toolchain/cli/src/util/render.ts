@@ -1,5 +1,4 @@
 import type { Diagnostic } from "@hedge-lang/compiler";
-import {} from "@hedge-lang/compiler";
 
 /**
  * Render diagnostics as one `severity[code]: message` line each (the code
