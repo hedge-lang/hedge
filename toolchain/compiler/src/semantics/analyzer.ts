@@ -4037,6 +4037,7 @@ function analyzeExpression(
  * can actually reason about - the soundness gap this guard originally
  * existed to prevent.
  */
+// eslint-disable-next-line complexity -- Routing function over the full Expression union
 function isBorrowablePlace(expr: Parser.Expression): boolean {
   switch (expr.kind) {
     case "PathExpression":
@@ -4047,8 +4048,36 @@ function isBorrowablePlace(expr: Parser.Expression): boolean {
       return isBorrowablePlace(expr.object);
     case "DereferenceExpression":
       return isBorrowablePlace(expr.operand);
-    default:
+    case "StringLiteral":
+    case "IntLiteral":
+    case "FloatLiteral":
+    case "BoolLiteral":
+    case "CharLiteral":
+    case "CallExpression":
+    case "ReferenceExpression":
+    case "BinaryExpression":
+    case "UnaryExpression":
+    case "AssignExpression":
+    case "CompoundAssignExpression":
+    case "MethodCallExpression":
+    case "TupleExpression":
+    case "ArrayExpression":
+    case "ArrayRepeatExpression":
+    case "StructExpression":
+    case "RangeExpression":
+    case "IfExpression":
+    case "LetExpression":
+    case "MatchExpression":
+    case "WhileExpression":
+    case "Block":
+    case "Identifier":
+      // Not grounded in a binding, so there is no place to borrow.
       return false;
+    default:
+      return assertNever(
+        expr,
+        `Unexpected expression: ${JSON.stringify(expr)}`,
+      );
   }
 }
 
