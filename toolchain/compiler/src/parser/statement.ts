@@ -1,4 +1,4 @@
-import type { Diagnostic } from "../diagnostics.js";
+import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
@@ -58,13 +58,13 @@ function findLoopBodyOpenBrace(
   for (;;) {
     const tok = tokens[cursor];
     if (tok === undefined || tok.kind === "eof") {
-      return err({
-        severity: "error",
-        message: "expected `{` to open loop body, found end of input",
-        span: none(),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-002",
+          "expected `{` to open loop body, found end of input",
+          none(),
+        ),
+      );
     }
     if (condDepth === 0 && tok.kind === "lbrace") {
       return ok(cursor);
@@ -86,20 +86,18 @@ function findLoopBodyOpenBrace(
  * block's statement loop can resume at the next statement boundary.
  *
  * Anything unsupported nested inside the skipped body (e.g. a `loop` inside
- * a rejected `loop`) is swallowed silently — recovery only reports the
+ * a rejected `loop`) is swallowed silently - recovery only reports the
  * outermost construct.
  */
 function skipUnsupportedLoopConstruct(
   tokens: readonly Token[],
   match: LoopKeywordMatch,
 ): PR<{ diagnostic: Diagnostic; next: number }> {
-  const diagnostic: Diagnostic = {
-    severity: "error",
-    message: unsupportedLoopMessage(match.token.text),
-    span: some(match.token.span),
-    code: none(),
-    relatedSpans: [],
-  };
+  const diagnostic: Diagnostic = errorDiagnostic(
+    "HEDGE-PARSE-004",
+    unsupportedLoopMessage(match.token.text),
+    some(match.token.span),
+  );
 
   const openBraceResult = findLoopBodyOpenBrace(tokens, match.pos + 1);
   if (isErr(openBraceResult)) {
@@ -168,8 +166,8 @@ export function parseLetStatement(
 
   let initializer: Option<Expression> = none();
   if (tokens[cursor]?.kind === "eq") {
-    // Assignment expressions are valid let initializers syntactically — they return `()`.
-    // TODO: misuse (e.g. `let x: i32 = y = 5`) is not yet validated; will be caught by the type checker.
+    // Syntactically valid here; an assignment returns `()`.
+    // TODO(Hedge-239): `let x: i32 = y = 5` is not rejected anywhere.
     const initResult = parseExpression(tokens, diagnostics, cursor + 1);
     if (isErr(initResult)) {
       return initResult;
@@ -246,7 +244,7 @@ export function parseBlock(
     if (tokens[cursor]?.kind === "rbrace") {
       break;
     }
-    // Empty statement — lone `;` carries no semantic content; skip silently.
+    // Empty statement - lone `;` carries no semantic content; skip silently.
     if (tokens[cursor]?.kind === "semi") {
       cursor += 1;
       continue;
@@ -258,19 +256,19 @@ export function parseBlock(
       return outerResult;
     }
     cursor = outerResult.value.next;
-    // Attributes followed by `;` — still an empty statement; discard the attributes.
+    // Attributes followed by `;` - still an empty statement; discard the attributes.
     if (tokens[cursor]?.kind === "semi") {
       cursor += 1;
       continue;
     }
     if (tokens[cursor]?.kind === "eof") {
-      return err({
-        severity: "error",
-        message: "expected `}` to close block, found end of input",
-        span: none(),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-002",
+          "expected `}` to close block, found end of input",
+          none(),
+        ),
+      );
     }
     if (tokens[cursor]?.kind === "rbrace") {
       break;
@@ -310,13 +308,13 @@ export function parseBlock(
         item.value.kind !== "Const"
       ) {
         const token = tokens[item.value.tokenId];
-        return err({
-          severity: "error",
-          message: `unexpected item kind '${item.value.kind}' in block position`,
-          span: token === undefined ? none() : some(token.span),
-          code: none(),
-          relatedSpans: [],
-        });
+        return err(
+          errorDiagnostic(
+            "HEDGE-PARSE-006",
+            `unexpected item kind '${item.value.kind}' in block position`,
+            token === undefined ? none() : some(token.span),
+          ),
+        );
       }
       statements.push(item.value);
       continue;
@@ -336,7 +334,7 @@ export function parseBlock(
       continue;
     }
     // `loop`/`while`/`for` statements, optionally label-prefixed, are not
-    // supported until Slice 6 — reject with a diagnostic and recover by
+    // supported until Slice 6 - reject with a diagnostic and recover by
     // skipping the whole construct so later statements still parse. The
     // exact unlabeled `while` `let` sequence is the one exception: it falls
     // through to the ordinary expression path below, which routes
@@ -392,13 +390,13 @@ export function parseBlock(
   };
   const closeTok = tokens[cursor];
   if (closeTok === undefined || closeTok.kind !== "rbrace") {
-    return err({
-      severity: "error",
-      message: `Expected '}' to close block`,
-      span: closeTok !== undefined ? some(closeTok.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `Expected '}' to close block`,
+        closeTok !== undefined ? some(closeTok.span) : none(),
+      ),
+    );
   }
   return ok({ node: block, next: cursor + 1 });
 }

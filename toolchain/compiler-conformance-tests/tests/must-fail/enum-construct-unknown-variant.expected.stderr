@@ -1,1 +1,1 @@
-error: no variant `Bogus` on enum `Message`
+error[HEDGE-NAME-004]: no variant `Bogus` on enum `Message`

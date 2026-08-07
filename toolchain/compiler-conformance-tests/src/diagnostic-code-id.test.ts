@@ -1,5 +1,5 @@
 import type { Diagnostic } from "@hedge-lang/compiler";
-import { compile, isSome } from "@hedge-lang/compiler";
+import { compile } from "@hedge-lang/compiler";
 import { describe, expect, it } from "vitest";
 
 const DIAGNOSTIC_CODE_PATTERN = /^HEDGE-[A-Z][A-Z0-9-]*-\d{3,}$/u;
@@ -7,10 +7,7 @@ const DIAGNOSTIC_CODE_PATTERN = /^HEDGE-[A-Z][A-Z0-9-]*-\d{3,}$/u;
 function extractDiagnosticCode(
   diagnostic: Diagnostic | undefined,
 ): string | null {
-  if (diagnostic === undefined || !isSome(diagnostic.code)) {
-    return null;
-  }
-  return diagnostic.code.value;
+  return diagnostic === undefined ? null : diagnostic.code;
 }
 
 describe("diagnostic code ID conformance", (): void => {
@@ -20,43 +17,47 @@ describe("diagnostic code ID conformance", (): void => {
     expect("PARSE-001").not.toMatch(DIAGNOSTIC_CODE_PATTERN);
   });
 
-  it.fails(
-    "emitted diagnostics expose a code field with schema-valid IDs",
-    (): void => {
-      const result = compile(`fn main() { print(missing_name); }`);
-      const first = result.diagnostics[0];
-      expect(first).toBeDefined();
-      const code = extractDiagnosticCode(first);
-      expect(code).not.toBeNull();
-      if (code === null) {
-        return;
-      }
-      expect(code).toMatch(DIAGNOSTIC_CODE_PATTERN);
-    },
-  );
+  it("exposes a schema-valid code on an emitted diagnostic", (): void => {
+    const result = compile(`fn main() { print(missing_name); }`);
+    const first = result.diagnostics[0];
+    expect(first).toBeDefined();
+    const code = extractDiagnosticCode(first);
+    expect(code).not.toBeNull();
+    if (code === null) {
+      return;
+    }
+    expect(code).toMatch(DIAGNOSTIC_CODE_PATTERN);
+  });
 
-  it.fails(
-    "all diagnostics in the core error corpus include schema-valid code ids",
-    (): void => {
-      const corpus = [
-        `fn main(`,
-        `fn main() { print(missing_name); }`,
-        `fn main() { let x = "a"; let r = &x; }`,
-      ];
-      for (const source of corpus) {
-        const result = compile(source);
-        expect(result.diagnostics.length).toBeGreaterThan(0);
-        for (const diagnostic of result.diagnostics) {
-          const code = extractDiagnosticCode(diagnostic);
-          expect(code).not.toBeNull();
-          if (code === null) {
-            return;
-          }
-          expect(code).toMatch(DIAGNOSTIC_CODE_PATTERN);
+  it("codes every diagnostic in the core error corpus with a schema-valid id", (): void => {
+    const corpus = [
+      `fn main() { let s = "unterminated; }`,
+      `fn main(`,
+      `fn main() { print(missing_name); }`,
+      `fn main() { let x: i32 = "a"; print(x); }`,
+      `fn main() { let x = "a"; let r = &mut x; print(r); }`,
+      `enum E { A, B }
+         fn main() { let e = E::A; match e { E::A => 1 }; }`,
+    ];
+    for (const source of corpus) {
+      const result = compile(source);
+      expect(
+        result.diagnostics.length,
+        `expected at least one diagnostic for: ${source}`,
+      ).toBeGreaterThan(0);
+      for (const diagnostic of result.diagnostics) {
+        const code = extractDiagnosticCode(diagnostic);
+        expect(
+          code,
+          `uncoded diagnostic: ${diagnostic.message}`,
+        ).not.toBeNull();
+        if (code === null) {
+          return;
         }
+        expect(code).toMatch(DIAGNOSTIC_CODE_PATTERN);
       }
-    },
-  );
+    }
+  });
 
   it("every borrow and lifetime error category in the corpus carries a schema-valid, stable code", (): void => {
     const corpus: Record<string, string> = {

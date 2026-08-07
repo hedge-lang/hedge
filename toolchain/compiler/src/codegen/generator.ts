@@ -49,6 +49,7 @@ const BINARY_OPS: Record<BinaryOperator, string> = {
 const UNARY_OPS: Record<UnaryOperator, string> = {
   Neg: "-",
   Not: "!",
+  BitNot: "~",
 };
 
 const ASSIGN_OPS: Record<AssignOperator, string> = {
@@ -87,7 +88,7 @@ type PrecKey =
   | "RefCellExpression"
   | BinaryOperator;
 
-// Ascending precedence: earlier entries bind looser → more likely to need parens.
+// Ascending precedence: earlier entries bind looser -> more likely to need parens.
 // Atoms (literals, identifiers, etc.) are absent; levelOf returns PREC_LEVELS.length,
 // placing them above everything (they never need parens in any position).
 const PREC_LEVELS: ReadonlyArray<readonly PrecKey[]> = [
@@ -121,7 +122,7 @@ function precKey(expr: Expression): PrecKey {
   return expr.kind;
 }
 
-// Left operand of a left-assoc op: same level is fine (x + y + z → no parens on `x + y`)
+// Left operand of a left-assoc op: same level is fine (x + y + z -> no parens on `x + y`)
 function needsAtLeast(expr: Expression, levelKey: PrecKey): string {
   const s = emitExpression(expr);
   return levelOf(precKey(expr)) < levelOf(levelKey) ? `(${s})` : s;
@@ -148,7 +149,7 @@ function emitDocComment(doc: DocComment, isModule: boolean = false): string {
   return ["/**", ...body, " */"].join("\n");
 }
 
-// eslint-disable-next-line complexity -- Routing function: one branch per numeric kind × op
+// eslint-disable-next-line complexity -- Routing function: one branch per numeric kind x op
 function emitNumericBinaryOp(
   nk: NumericKind,
   op: BinaryOperator,
@@ -204,6 +205,34 @@ function emitNumericUnaryOp(nk: NumericKind, inner: string): string {
   }
 }
 
+const IDENTIFIER_KEY = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
+
+/** A tuple struct's fields are numeric strings, which `this.0` cannot spell. */
+function ownFieldAccess(name: string): string {
+  return IDENTIFIER_KEY.test(name)
+    ? `this.${name}`
+    : `this[${JSON.stringify(name)}]`;
+}
+
+/**
+ * Fields are released with `using` rather than direct `[Symbol.dispose]()`
+ * calls: spec 0007 requires a throwing drop to surface as a `SuppressedError`
+ * wrapping any in-flight error, which is what `using` lowering provides and a
+ * manual call chain does not - it would also abandon every later field. `using`
+ * disposes in reverse declaration order, matching the same spec's scope rule,
+ * and tolerates a null field once `Option<T>` lowers to `T | null`.
+ *
+ * The bindings are numbered rather than named after their fields, since a
+ * field name need not be a legal JS binding (`default`, or a tuple struct's
+ * `0`).
+ */
+function structDisposer(disposableFields: readonly string[]): string {
+  const body = disposableFields
+    .map((name, i) => `using _d${String(i)} = ${ownFieldAccess(name)};`)
+    .join(" ");
+  return `[Symbol.dispose]() {${body === "" ? "" : ` ${body} `}}`;
+}
+
 /**
  * `[T; N]` is move-only (never `Copy`, even when `T` is - see
  * `semantics/type-capabilities.ts`'s own note on why), so every array
@@ -214,8 +243,8 @@ function emitNumericUnaryOp(nk: NumericKind, inner: string): string {
  * actually constructed (see `generate`'s own `usesArrayDisposeHelper`
  * check). The disposer recursively disposes each element that has its own
  * `[Symbol.dispose]` (a nested array, or a struct - every struct literal
- * always emits one, even if a no-op, see `StructExpression` codegen below) -
- * an element type with neither (every primitive) is a no-op.
+ * always emits one, see `StructExpression` codegen below) - an element type
+ * with neither (every primitive) is a no-op.
  */
 const ARRAY_DISPOSE_HELPER_NAME = "__hedgeDisposeArray";
 const ARRAY_DISPOSE_HELPER = `function ${ARRAY_DISPOSE_HELPER_NAME}(arr) {
@@ -437,12 +466,12 @@ function emitExpression(expression: Expression): string {
               f.name,
             ),
       );
-      // Every struct value carries a (currently no-op) disposer, so any
-      // binding for it can uniformly lower to `using`. Slice 1 has no
-      // trait/`impl` support yet, so there is no way to write a custom
-      // `Drop` for a struct; this establishes the codegen shape a later
-      // slice's real Drop impls will fill in.
-      return `({${[...fields, "[Symbol.dispose]() {}"].join(", ")}})`;
+      // Every struct value carries a disposer so any binding for it can
+      // uniformly lower to `using`; it releases the struct's own non-`Copy`
+      // fields, mirroring what the array helper does for elements. Slice 1
+      // has no trait/`impl` support, so a user-written `Drop` body will join
+      // it here later.
+      return `({${[...fields, structDisposer(expression.disposableFields)].join(", ")}})`;
     }
     case "RefCellExpression": {
       const place = expression.place;
@@ -558,6 +587,7 @@ function emitDisposeCall(statement: DisposeCallStatement): string {
   return `${statement.target}[Symbol.dispose]();`;
 }
 
+// eslint-disable-next-line complexity -- Routing function over the full union
 function emitStatement(statement: Statement): string {
   switch (statement.kind) {
     case "LetStatement":
@@ -576,8 +606,34 @@ function emitStatement(statement: Statement): string {
       return emitDisposeCall(statement);
     case "FunctionDecl":
       return emitFunction(statement);
-    default:
+    case "BooleanLiteral":
+    case "StringLiteral":
+    case "NumberLiteral":
+    case "PathExpression":
+    case "CallExpression":
+    case "BinaryExpression":
+    case "UnaryExpression":
+    case "AssignExpression":
+    case "FieldAccessExpression":
+    case "Identifier":
+    case "MethodCallExpression":
+    case "ArrowFunctionExpression":
+    case "IndexExpression":
+    case "TupleExpression":
+    case "ArrayExpression":
+    case "ArrayRepeatExpression":
+    case "ArraySliceViewExpression":
+    case "RangeExpression":
+    case "StructExpression":
+    case "RefCellExpression":
+      // Everything left in the union is an expression, emitted as an
+      // expression statement.
       return `${emitExpression(statement)};`;
+    default:
+      return assertNever(
+        statement,
+        `Unexpected statement: ${JSON.stringify(statement)}`,
+      );
   }
 }
 
@@ -709,6 +765,7 @@ function emitConstPart(decl: ConstDecl): EmittedPart {
   };
 }
 
+// eslint-disable-next-line complexity -- Routing function over the full union
 function emitItem(item: Item): string {
   switch (item.kind) {
     case "FunctionDecl":
@@ -736,8 +793,31 @@ function emitItem(item: Item): string {
       // Purely structural at runtime - only `emitDtsItem` renders anything
       // for this kind.
       return "";
-    default:
+    case "BooleanLiteral":
+    case "StringLiteral":
+    case "NumberLiteral":
+    case "PathExpression":
+    case "CallExpression":
+    case "BinaryExpression":
+    case "UnaryExpression":
+    case "AssignExpression":
+    case "FieldAccessExpression":
+    case "Identifier":
+    case "MethodCallExpression":
+    case "ArrowFunctionExpression":
+    case "IndexExpression":
+    case "TupleExpression":
+    case "ArrayExpression":
+    case "ArrayRepeatExpression":
+    case "ArraySliceViewExpression":
+    case "RangeExpression":
+    case "StructExpression":
+    case "RefCellExpression":
+      // Everything left in the union is an expression, emitted as an
+      // expression statement.
       return `${emitExpression(item)};`;
+    default:
+      return assertNever(item, `Unexpected item: ${JSON.stringify(item)}`);
   }
 }
 

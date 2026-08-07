@@ -1,5 +1,5 @@
 // Mirrors parser/ast.ts structurally but every expression node extends
-// DecoratedAstNode — the resolved Type field is the semantic layer's invariant.
+// DecoratedAstNode - the resolved Type field is the semantic layer's invariant.
 // Duplication is intentional; do not merge these two ASTs.
 
 import type { Option } from "../option.js";
@@ -118,6 +118,37 @@ export type Expression =
   | LetExpression
   | MatchExpression
   | Block;
+
+/**
+ * Every {@link Expression} discriminant. Spelled out rather than derived so
+ * it ports directly to a Hedge enum.
+ */
+export type ExpressionKind =
+  | "StringLiteral"
+  | "IntLiteral"
+  | "FloatLiteral"
+  | "BoolLiteral"
+  | "CharLiteral"
+  | "PathExpression"
+  | "CallExpression"
+  | "ReferenceExpression"
+  | "DereferenceExpression"
+  | "BinaryExpression"
+  | "UnaryExpression"
+  | "AssignExpression"
+  | "CompoundAssignExpression"
+  | "FieldAccessExpression"
+  | "MethodCallExpression"
+  | "IndexExpression"
+  | "TupleExpression"
+  | "ArrayExpression"
+  | "ArrayRepeatExpression"
+  | "RangeExpression"
+  | "StructExpression"
+  | "IfExpression"
+  | "LetExpression"
+  | "MatchExpression"
+  | "Block";
 
 interface Visibility {
   readonly kind: "Visibility";
@@ -258,7 +289,7 @@ export interface MatchArm extends AstNode {
 
 /**
  * A single `Pattern` union shared by match arms, `let` statements, and
- * function parameters (Hedge-47) - mirrors `Parser.Pattern` structurally.
+ * function parameters - mirrors `Parser.Pattern` structurally.
  * `let`/`Param` only ever bind an irrefutable pattern (enforced by semantic
  * analysis, not the type system - see `analyzer.ts`'s refutability check),
  * but there's no separate reduced pattern shape for that position anymore:
@@ -315,8 +346,7 @@ export interface OrPattern extends DecoratedAstNode {
 /** Not exported: `Pattern` never actually constructs this kind today - a
  * `TuplePattern` in match position always falls through `analyzer.ts`'s
  * `analyzePatternGuardrail` (mirrors `let`/`Param`'s own scope boundary).
- * TODO (Hedge-47): add the `export` back once this is promoted to real
- * match-position semantics. */
+ * Exporting an unused declaration trips `knip`. */
 interface TuplePattern extends DecoratedAstNode {
   readonly kind: "TuplePattern";
   readonly elements: readonly Pattern[];
@@ -351,7 +381,7 @@ export interface PathPattern extends DecoratedAstNode {
 }
 
 /** A slice pattern's own rest element (`..`, `..tail`, `..&rest`,
- * `..&mut rest`) - real as of Hedge-47, only ever constructed against a
+ * `..&mut rest`) - real only ever constructed against a
  * fixed-length `ArrayType` scrutinee (see `analyzer.ts`'s `analyzePattern`
  * `SlicePattern` case; a dynamic-length scrutinee still has no real type to
  * destructure against, so it stays guardrailed). */
@@ -362,7 +392,7 @@ export interface RestPattern extends AstNode {
   readonly name: Option<Identifier>;
 }
 
-/** Real as of Hedge-47 against a fixed-length `ArrayType` scrutinee only -
+/** Real against a fixed-length `ArrayType` scrutinee only -
  * see `RestPattern`'s own doc comment. */
 export interface SlicePattern extends DecoratedAstNode {
   readonly kind: "SlicePattern";
@@ -386,7 +416,7 @@ export interface StringLiteral extends DecoratedAstNode {
 
 export interface IntLiteral extends DecoratedAstNode {
   readonly kind: "IntLiteral";
-  /** Digits only — no prefix, underscores stripped. */
+  /** Digits only - no prefix, underscores stripped. */
   readonly value: string;
   readonly base: 10 | 16 | 8 | 2;
   readonly suffix: Option<IntSuffix>;
@@ -441,6 +471,13 @@ export interface FunctionType {
   readonly kind: "FunctionType";
   readonly params: readonly Type[];
   readonly returnType: Type;
+  /**
+   * Whether `params` is a stand-in rather than a signature a call site must
+   * satisfy. True only for a builtin whose real signature cannot be
+   * expressed yet, in which case calls to it are not argument-checked; every
+   * user-declared function is `false`. See `BUILTIN_SCOPE` in `analyzer.ts`.
+   */
+  readonly paramsArePlaceholder: boolean;
 }
 
 /**
@@ -463,7 +500,18 @@ export type PrimitiveType =
   | PrimitiveCharType
   | PrimitiveStringType;
 
-export type PrimitiveIntegerType = PrimitiveUintType | PrimitiveIntType;
+/** Every integer-primitive discriminant, spelled out. */
+export type PrimitiveIntegerTypeKind =
+  | "PrimitiveI8Type"
+  | "PrimitiveI16Type"
+  | "PrimitiveI32Type"
+  | "PrimitiveI64Type"
+  | "PrimitiveIsizeType"
+  | "PrimitiveU8Type"
+  | "PrimitiveU16Type"
+  | "PrimitiveU32Type"
+  | "PrimitiveU64Type"
+  | "PrimitiveUsizeType";
 type PrimitiveUintType =
   | PrimitiveU8Type
   | PrimitiveU16Type

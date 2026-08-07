@@ -1,5 +1,5 @@
 import { isSome, mapSome, none, type Option, some } from "../option.js";
-import type { Token } from "../lexer/token.js";
+import type { Span, Token } from "../lexer/token.js";
 import {
   declarationsOf,
   type BindingId,
@@ -12,6 +12,7 @@ import type {
 } from "../ownership/move-check.js";
 import { constValueToLiteralExpression } from "../semantics/analyzer.js";
 import type * as Semantics from "../semantics/ast.js";
+import { hasCapability } from "../semantics/type-capabilities.js";
 import type * as JSIM from "./ast.js";
 import { toDocComment } from "./parts/doc-comment.js";
 import {
@@ -167,7 +168,7 @@ function simpleBindingIdentity(pattern: Semantics.Pattern): {
   );
 }
 
-/** A `WildcardPattern` binding is never mutable - mirrors the pre-Hedge-47
+/** A `WildcardPattern` binding is never mutable - mirrors the earlier
  * behavior, where a wildcard `let`/param was never given `mut`. A `byRef`
  * binding's own `mutable` sigil (`&mut name`) means "this is a mutable
  * *borrow*", not "this local slot is reassignable" - there's no sigil
@@ -356,7 +357,7 @@ function dropFlagName(ctx: JsimContext, declaration: Declaration): string {
 function dropFlagDeclareStatement(
   ctx: JsimContext,
   declaration: Declaration,
-  span: JSIM.LetStatement["span"],
+  span: Span,
 ): JSIM.LetStatement {
   return {
     kind: "LetStatement",
@@ -564,9 +565,100 @@ function getCurrentRenameContext(ctx: JsimContext): Option<RenameCtx> {
  * alone would miss). Only computes the name - `bindLocalName` and
  * `reserveLocalName` decide how to register it.
  */
+/**
+ * Names a Hedge binding may not keep in the emitted JS. Two kinds, both of
+ * which the `$k` suffix already resolves:
+ *
+ * - JS reserved words, which are a syntax error as a binding and so produce
+ *   output that will not parse (`fn f(default: i32)`).
+ * - Globals the emitted code itself calls. Shadowing one fails silently
+ *   rather than loudly: a local named `Symbol` makes a struct's disposer
+ *   attach under the key `undefined`, so the value is simply never disposed.
+ *
+ * Hedge's own grammar permits all of these, so they are renamed rather than
+ * rejected - hiding backend naming rules is what this pass is for.
+ */
+const JS_UNUSABLE_NAMES: ReadonlySet<string> = new Set([
+  // Reserved words.
+  "break",
+  "case",
+  "catch",
+  "class",
+  "const",
+  "continue",
+  "debugger",
+  "default",
+  "delete",
+  "do",
+  "else",
+  "enum",
+  "export",
+  "extends",
+  "false",
+  "finally",
+  "for",
+  "function",
+  "if",
+  "import",
+  "in",
+  "instanceof",
+  "new",
+  "null",
+  "return",
+  "super",
+  "switch",
+  "this",
+  "throw",
+  "true",
+  "try",
+  "typeof",
+  "var",
+  "void",
+  "while",
+  "with",
+  // Reserved in strict mode, which module output always is.
+  "implements",
+  "interface",
+  "let",
+  "package",
+  "private",
+  "protected",
+  "public",
+  "static",
+  "yield",
+  "await",
+  "eval",
+  "arguments",
+  // Globals the emitted code depends on.
+  "Array",
+  "BigInt",
+  "BigInt64Array",
+  "BigUint64Array",
+  "Error",
+  "Float32Array",
+  "Float64Array",
+  "Int8Array",
+  "Int16Array",
+  "Int32Array",
+  "JSON",
+  "Math",
+  "Number",
+  "Proxy",
+  "RangeError",
+  "String",
+  "Symbol",
+  "Uint8Array",
+  "Uint16Array",
+  "Uint32Array",
+]);
+
 function probeFreeName(renameCtx: RenameCtx, base: string): string {
   const visible = renameCtx.frames.some((f) => f.has(base));
-  if (!visible && !renameCtx.emittedNames.has(base)) {
+  if (
+    !visible &&
+    !renameCtx.emittedNames.has(base) &&
+    !JS_UNUSABLE_NAMES.has(base)
+  ) {
     return base;
   }
   let k = (renameCtx.counters.get(base) ?? 0) + 1;
@@ -722,8 +814,15 @@ function semanticTypeToJsPrimitive(
       // (that's the still-guardrailed `&mut`-cell lowering work), so a
       // reference-typed value's JS representation is just its referent's.
       return semanticTypeToJsPrimitive(type.referent);
-    default:
+    case "NamedType":
+    case "StructType":
+    case "EnumType":
+    case "FunctionType":
+    case "ArrayType":
+      // No JS primitive to erase to; the caller renders these itself.
       return none();
+    default:
+      return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
 }
 
@@ -771,8 +870,19 @@ function hedgeTypeToNumericKind(
       return some({ kind: "float", bits: 64 });
     case "ReferenceType":
       return hedgeTypeToNumericKind(type.referent);
-    default:
+    case "PrimitiveBooleanType":
+    case "PrimitiveCharType":
+    case "PrimitiveStringType":
+    case "NamedType":
+    case "UnitType":
+    case "StructType":
+    case "EnumType":
+    case "FunctionType":
+    case "ArrayType":
+      // Not numeric, so no wrapping applies.
       return none();
+    default:
+      return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
 }
 
@@ -835,7 +945,7 @@ function parseStaticDecl(
 
 function parseStruct(struct: Semantics.StructDecl): JSIM.Item[] {
   void struct;
-  // TODO: Implement how structs are represented in JS (interface for .d.ts)
+  // TODO(Hedge-90): Implement how structs are represented in JS (interface for .d.ts)
   return [];
 }
 
@@ -921,7 +1031,7 @@ function parseFunction(
 function dropParamShadows(
   ctx: JsimContext,
   emittedParams: ReadonlyArray<{
-    param: Semantics.FunctionDecl["params"][number];
+    param: Semantics.Param;
     emittedName: string;
   }>,
   rootDrops: readonly Declaration[],
@@ -959,7 +1069,7 @@ function dropParamShadows(
 function destructureFunctionParams(
   ctx: JsimContext,
   emittedParams: ReadonlyArray<{
-    param: Semantics.FunctionDecl["params"][number];
+    param: Semantics.Param;
     emittedName: string;
   }>,
 ): JSIM.Statement[] {
@@ -987,7 +1097,7 @@ function parseFunctionBody(
   ctx: JsimContext,
   fn: Semantics.FunctionDecl,
   emittedParams: ReadonlyArray<{
-    param: Semantics.FunctionDecl["params"][number];
+    param: Semantics.Param;
     emittedName: string;
   }>,
 ): JSIM.FunctionDecl {
@@ -997,7 +1107,7 @@ function parseFunctionBody(
 
   // A declared, non-unit return type. When Some, Gap-A's return-type-mismatch
   // check (checkFunctionReturnType in analyzer.ts) already guarantees
-  // fn.body.trailingExpression is Some and its type matches — no defensive
+  // fn.body.trailingExpression is Some and its type matches - no defensive
   // handling needed here for "declared return type but missing/wrong trailing
   // expression."
   const declaredReturnType: Option<Semantics.Type> =
@@ -1039,7 +1149,7 @@ function parseFunctionBody(
     statements.push(...dropCheckStatements(ctx, fn.body.tokenId));
   }
 
-  const scope: JSIM.FunctionDecl["scope"] = mapSome(
+  const scope: Option<"public" | "package"> = mapSome(
     fn.visibility,
     (visibility) =>
       isSome(visibility.scope) && visibility.scope.value === "package"
@@ -1559,12 +1669,12 @@ function jsimIfLetStatement(
  * ending in `return`, used only when the function has a declared non-unit
  * return type. `IfExpression` and `Block` reuse the existing leaf-return
  * lowering (`jsimIfStatement` / `jsimBranchBody`) spliced directly into the
- * function body — no IIFE. Anything else becomes a single `ReturnStatement`.
+ * function body - no IIFE. Anything else becomes a single `ReturnStatement`.
  *
  * Scoped to exactly one level: a branch/block nested *inside* the function's
  * own trailing `Block`/`IfExpression` still goes through the general
  * IIFE-wrapping `parseExpression` path (e.g. a bare block whose own trailing
- * expression is itself an `if`). Deliberately not chased further — this is
+ * expression is itself an `if`). Deliberately not chased further - this is
  * an obscure, non-idiomatic construct.
  */
 function jsimTailStatements(
@@ -1693,6 +1803,7 @@ function jsimStructExpression(
     .map((b) => parseExpression(ctx, b.value))
     .map(makeSpread);
   const ownFields = [...spreads, ...fields.map((f) => makeStructField(ctx, f))];
+  const disposableFields = nonCopyFieldNames(fields);
   if (path.segments.length === 2 && type.kind === "EnumType") {
     const variantName = path.segments[1];
     assert(variantName !== undefined, "Unexpected undefined segment");
@@ -1700,11 +1811,16 @@ function jsimStructExpression(
       kind: "StructExpression",
       fields: [
         jsimEnumTagField(variantName),
-        jsimEnumDataField({ kind: "StructExpression", fields: ownFields }),
+        jsimEnumDataField({
+          kind: "StructExpression",
+          fields: ownFields,
+          disposableFields,
+        }),
       ],
+      disposableFields: ENUM_PAYLOAD_DISPOSABLE_FIELDS,
     };
   }
-  return { kind: "StructExpression", fields: ownFields };
+  return { kind: "StructExpression", fields: ownFields, disposableFields };
 }
 
 /** A tagged object with no `data` payload - a unit variant has no fields. */
@@ -1713,11 +1829,17 @@ function jsimEnumUnitVariantConstruction(
 ): JSIM.Expression {
   const variantName = segments[1];
   assert(variantName !== undefined, "Unexpected undefined segment");
-  return { kind: "StructExpression", fields: [jsimEnumTagField(variantName)] };
+  return {
+    kind: "StructExpression",
+    fields: [jsimEnumTagField(variantName)],
+    disposableFields: [],
+  };
 }
 
-/** Payload lowers to `JSIM.TupleExpression`, not `ArrayExpression` - same
- * as a plain tuple expression, since it has no Vec/array runtime semantics. */
+/** Payload lowers to `JSIM.ArrayExpression` so it reaches the array dispose
+ * helper: the wrapper drops `data` as a unit, and a bare tuple carries no
+ * disposer of its own. It stays a plain array (never a TypedArray) because a
+ * variant's payload has no Vec/array runtime semantics. */
 function jsimEnumTupleVariantConstruction(
   ctx: JsimContext,
   segments: readonly string[],
@@ -1730,10 +1852,12 @@ function jsimEnumTupleVariantConstruction(
     fields: [
       jsimEnumTagField(variantName),
       jsimEnumDataField({
-        kind: "TupleExpression",
+        kind: "ArrayExpression",
         elements: args.map((arg) => parseExpression(ctx, arg)),
+        numericKind: none(),
       }),
     ],
+    disposableFields: ENUM_PAYLOAD_DISPOSABLE_FIELDS,
   };
 }
 
@@ -1751,7 +1875,20 @@ function jsimTupleStructConstruction(
       name: String(i),
       value: some(parseExpression(ctx, arg)),
     })),
+    disposableFields: args
+      .map((arg, i) => ({ arg, name: String(i) }))
+      .filter(({ arg }) => !hasCapability(arg.type, "copy"))
+      .map(({ name }) => name),
   };
+}
+
+/** Fields whose values own something the struct's disposer must release. */
+function nonCopyFieldNames(
+  fields: readonly Semantics.FieldInit[],
+): readonly string[] {
+  return fields
+    .filter((f) => !hasCapability(f.type, "copy"))
+    .map((f) => f.name.text);
 }
 
 function jsimEnumTagField(variantName: string): JSIM.StructField {
@@ -1762,8 +1899,23 @@ function jsimEnumTagField(variantName: string): JSIM.StructField {
   };
 }
 
+const ENUM_DATA_FIELD_NAME = "data";
+
+/**
+ * The tagged wrapper disposes its payload as a whole; the payload object or
+ * array in turn disposes whatever it owns, so a variant needs exactly one
+ * entry here regardless of how many fields it carries.
+ */
+const ENUM_PAYLOAD_DISPOSABLE_FIELDS: readonly string[] = [
+  ENUM_DATA_FIELD_NAME,
+];
+
 function jsimEnumDataField(value: JSIM.Expression): JSIM.StructField {
-  return { kind: "StructField", name: "data", value: some(value) };
+  return {
+    kind: "StructField",
+    name: ENUM_DATA_FIELD_NAME,
+    value: some(value),
+  };
 }
 
 /* ---------- match -> switch lowering ---------- */
@@ -1898,6 +2050,7 @@ function truncateAtFirstUnconditionalArm(
  * the extra analysis here). `isTopLevel` mirrors `compilePatternInto`'s
  * `includeOwnTag`.
  */
+// eslint-disable-next-line complexity -- Routing function over the full Pattern union
 function isPatternUnconditional(
   pattern: Semantics.Pattern,
   isTopLevel: boolean,
@@ -1917,8 +2070,17 @@ function isPatternUnconditional(
         (f) =>
           !isSome(f.pattern) || isPatternUnconditional(f.pattern.value, false),
       );
-    default:
+    case "LiteralPattern":
+    case "RangePattern":
+    case "OrPattern":
+    case "TuplePattern":
+    case "SlicePattern":
       return false;
+    default:
+      return assertNever(
+        pattern,
+        `Unexpected pattern: ${JSON.stringify(pattern)}`,
+      );
   }
 }
 
@@ -2368,9 +2530,15 @@ function compilePatternInto(
       );
       return composeContinuations(continuations);
     }
-    default:
+    case "TuplePattern":
+    case "SlicePattern":
       throw new Error(
         `JSIM codegen for enum-match pattern kind "${pattern.kind}" is not yet implemented`,
+      );
+    default:
+      return assertNever(
+        pattern,
+        `Unexpected pattern: ${JSON.stringify(pattern)}`,
       );
   }
 }
@@ -2443,8 +2611,18 @@ function patternCondition(
           pattern.tokenId,
         ),
       };
-    default:
+    case "BindingPattern":
+    case "OrPattern":
+    case "TuplePattern":
+    case "StructPattern":
+    case "TupleStructPattern":
+    case "SlicePattern":
       return { kind: "unsupported" };
+    default:
+      return assertNever(
+        pattern,
+        `Unexpected pattern: ${JSON.stringify(pattern)}`,
+      );
   }
 }
 
@@ -2606,6 +2784,30 @@ function jsimIntLiteral({
   return { kind: "NumberLiteral", value: isBigInt ? numStr + "n" : numStr };
 }
 
+/**
+ * A shift's amount need not share the shifted value's type, but JS refuses to
+ * mix a BigInt with a Number, so a non-bigint amount is converted when the
+ * shifted value is `i64`/`u64`. Every other operand passes through unchanged.
+ */
+function shiftAmount(
+  ctx: JsimContext,
+  binExp: Semantics.BinaryExpression,
+): JSIM.Expression {
+  const right = parseExpression(ctx, binExp.right);
+  const isShift = binExp.operator === "Shl" || binExp.operator === "Shr";
+  if (!isShift) return right;
+  const shifted = hedgeTypeToNumericKind(binExp.left.type);
+  const amount = hedgeTypeToNumericKind(binExp.right.type);
+  const shiftedIsBigint = isSome(shifted) && shifted.value.kind === "bigint";
+  const amountIsBigint = isSome(amount) && amount.value.kind === "bigint";
+  if (!shiftedIsBigint || amountIsBigint) return right;
+  return {
+    kind: "CallExpression",
+    callee: { kind: "Identifier", value: "BigInt", type: none() },
+    arguments: [right],
+  };
+}
+
 function parseBinaryExpression(
   ctx: JsimContext,
   binExp: Semantics.BinaryExpression,
@@ -2620,7 +2822,7 @@ function parseBinaryExpression(
     kind: binExp.kind,
     operator: binExp.operator,
     left: parseExpression(ctx, binExp.left),
-    right: parseExpression(ctx, binExp.right),
+    right: shiftAmount(ctx, binExp),
     numericKind,
     span: resolveSpan(
       ctx.tokens,
@@ -2634,15 +2836,17 @@ function parseUnaryExpression(
   ctx: JsimContext,
   unaryExp: Semantics.UnaryExpression,
 ): JSIM.Expression {
-  const numericKind: Option<JSIM.NumericKind> =
-    unaryExp.operator === "Neg"
-      ? hedgeTypeToNumericKind(unaryExp.type)
-      : none();
+  const numericKind = hedgeTypeToNumericKind(unaryExp.type);
+  // A numeric `!` is bitwise, and needs the same width wrapping `Neg` gets.
+  const operator: JSIM.UnaryOperator =
+    unaryExp.operator === "Not" && isSome(numericKind)
+      ? "BitNot"
+      : unaryExp.operator;
   return {
     kind: unaryExp.kind,
-    operator: unaryExp.operator,
+    operator,
     operand: parseExpression(ctx, unaryExp.operand),
-    numericKind,
+    numericKind: operator === "Not" ? none() : numericKind,
   };
 }
 

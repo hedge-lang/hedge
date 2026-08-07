@@ -132,7 +132,7 @@ export function renderDiagnostics(diagnostics: readonly Diagnostic[]): string {
 }
 
 function renderDiagnostic(diagnostic: Diagnostic): string {
-  const code = isSome(diagnostic.code) ? `[${diagnostic.code.value}]` : "";
+  const code = `[${diagnostic.code}]`;
   const lines = [`${diagnostic.severity}${code}: ${diagnostic.message}`];
   for (const related of diagnostic.relatedSpans) {
     lines.push(`  = note: ${related.label} at offset ${related.span.start}`);

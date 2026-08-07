@@ -1,3 +1,4 @@
+import { errorDiagnostic } from "../diagnostics.js";
 import type { Diagnostic } from "../diagnostics.js";
 import { none, some, type Option } from "../option.js";
 import { isIdentContinue } from "./ident.js";
@@ -38,13 +39,13 @@ function scanExponent(
   let i = pos + 1; // skip e/E
   if (source[i] === "+" || source[i] === "-") i += 1;
   if (!isDigit(source[i] ?? "")) {
-    diagnostics.push({
-      severity: "error",
-      message: `float exponent has no digits at offset ${pos}`,
-      span: some({ start, end: i }),
-      code: none(),
-      relatedSpans: [],
-    });
+    diagnostics.push(
+      errorDiagnostic(
+        "HEDGE-LEX-006",
+        `float exponent has no digits at offset ${pos}`,
+        some({ start, end: i }),
+      ),
+    );
     tokens.push({
       kind: "error",
       span: { start, end: i },
@@ -67,13 +68,13 @@ export function scanExponentFloat(
   if (expEnd === null) {
     const token = tokens.at(-1);
     if (!token) {
-      diagnostics.push({
-        severity: "error",
-        message: `Unterminated float literal starting at ${start}`,
-        span: some({ start, end: source.length }),
-        code: none(),
-        relatedSpans: [],
-      });
+      diagnostics.push(
+        errorDiagnostic(
+          "HEDGE-LEX-006",
+          `Unterminated float literal starting at ${start}`,
+          some({ start, end: source.length }),
+        ),
+      );
       tokens.push({
         kind: "error",
         span: { start, end: source.length },
@@ -110,13 +111,13 @@ export function scanDotFloat(
     if (expEnd === null) {
       const lastToken = tokens.at(-1);
       if (lastToken === undefined) {
-        diagnostics.push({
-          severity: "error",
-          message: `Unterminated float literal starting at ${start}`,
-          span: some({ start, end: source.length }),
-          code: none(),
-          relatedSpans: [],
-        });
+        diagnostics.push(
+          errorDiagnostic(
+            "HEDGE-LEX-006",
+            `Unterminated float literal starting at ${start}`,
+            some({ start, end: source.length }),
+          ),
+        );
         tokens.push({
           kind: "error",
           span: { start, end: source.length },

@@ -265,7 +265,7 @@ describe("driver", (): void => {
     it("compiles and runs fn first(s: &str) -> &str { s } - AC1's elision shape", (): void => {
       const result = compile(`
         fn first(s: &str) -> &str { s }
-        fn main() { print(first("hello")); }
+        fn main() { let s = "hello"; print(first(&s)); }
       `);
       expect(result.diagnostics).toEqual([]);
       expect(isSome(result.code)).toBe(true);
@@ -290,7 +290,7 @@ describe("driver", (): void => {
     it("compiles and runs fn longest<'a>(a: &'a str, b: &'a str) -> &'a str { a } - AC4", (): void => {
       const result = compile(`
         fn longest<'a>(a: &'a str, b: &'a str) -> &'a str { a }
-        fn main() { print(longest("first", "second")); }
+        fn main() { let a = "first"; let b = "second"; print(longest(&a, &b)); }
       `);
       expect(result.diagnostics).toEqual([]);
       expect(isSome(result.code)).toBe(true);

@@ -1,6 +1,6 @@
 /**
  * Splits a shell command string into an argv array, respecting single- and
- * double-quoted segments. No backslash escape handling — sufficient for
+ * double-quoted segments. No backslash escape handling - sufficient for
  * splitting compiler invocation strings in CI.
  */
 export function shellSplit(cmd: string): string[] {

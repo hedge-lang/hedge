@@ -1,4 +1,4 @@
-import type { Diagnostic } from "../diagnostics.js";
+import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
 import { isSome, none, some, unwrapSomeOr, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
@@ -77,13 +77,13 @@ function parseVisibility(
     ) {
       const scope = scopeToken.text;
       if (scope !== "package") {
-        return err({
-          severity: "error",
-          message: `pub(${scope}) is not supported in Slice 1`,
-          span: some(scopeToken.span),
-          code: none(),
-          relatedSpans: [],
-        });
+        return err(
+          errorDiagnostic(
+            "HEDGE-PARSE-004",
+            `pub(${scope}) is not supported in Slice 1`,
+            some(scopeToken.span),
+          ),
+        );
       }
       return ok({
         node: some({ kind: "Visibility", scope: some(scope) }),
@@ -118,13 +118,13 @@ function parseParam(tokens: readonly Token[], pos: number): PR<Parsed<Param>> {
 
   if (kindAt(tokens, cursor) !== "colon") {
     const name = unwrapSomeOr(patternBindingName(pattern), "_");
-    return err({
-      severity: "error",
-      message: `expected ':' after parameter name '${name}'`,
-      span: spanAt(tokens, cursor),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `expected ':' after parameter name '${name}'`,
+        spanAt(tokens, cursor),
+      ),
+    );
   }
   cursor += 1;
 
@@ -159,7 +159,7 @@ function parseParams(
 
   for (;;) {
     // The `eof` check avoids attempting (and separately diagnosing) an
-    // element parse when nothing remains — the outer `expect(rparen)` below
+    // element parse when nothing remains - the outer `expect(rparen)` below
     // already produces the single, correct "found end of input" diagnostic
     // for a truncated list; without this, both would fire redundantly.
     if (
@@ -408,13 +408,13 @@ function parseGenericParamList(
       return ok({ generics, cursor: closeResult.cursor });
     }
     const badToken = tokens[afterParam.next];
-    return err({
-      severity: "error",
-      message: `expected ',' or '>' in generic parameter list, found "${badToken?.kind ?? "end of input"}"`,
-      span: badToken !== undefined ? some(badToken.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `expected ',' or '>' in generic parameter list, found "${badToken?.kind ?? "end of input"}"`,
+        badToken !== undefined ? some(badToken.span) : none(),
+      ),
+    );
   }
 }
 
@@ -442,13 +442,13 @@ function parseDeclarationGenerics(
   // diagnosed and recovered past, not silently accepted.
   if (listResult.value.cursor.pendingCloseHalf) {
     const strayToken = tokens[listResult.value.cursor.next];
-    diagnostics.push({
-      severity: "error",
-      message: "unexpected extra '>' after generic parameter list",
-      span: strayToken !== undefined ? some(strayToken.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    diagnostics.push(
+      errorDiagnostic(
+        "HEDGE-PARSE-005",
+        "unexpected extra '>' after generic parameter list",
+        strayToken !== undefined ? some(strayToken.span) : none(),
+      ),
+    );
     return {
       generics: listResult.value.generics,
       next: listResult.value.cursor.next + 1,
@@ -498,13 +498,13 @@ function parseWherePredicate(
   let next = boundsResult.value.cursor.next;
   if (boundsResult.value.cursor.pendingCloseHalf) {
     const strayToken = tokens[next];
-    diagnostics.push({
-      severity: "error",
-      message: "unexpected extra '>' after trait bound",
-      span: strayToken !== undefined ? some(strayToken.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    diagnostics.push(
+      errorDiagnostic(
+        "HEDGE-PARSE-005",
+        "unexpected extra '>' after trait bound",
+        strayToken !== undefined ? some(strayToken.span) : none(),
+      ),
+    );
     next += 1;
   }
   return ok({
@@ -716,13 +716,13 @@ function parseNamedField(
 
   if (tokens[cursor]?.kind !== "colon") {
     const token = tokens[cursor];
-    return err({
-      severity: "error",
-      message: `expected ':' after field name '${fieldName.text}'`,
-      span: token !== undefined ? some(token.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `expected ':' after field name '${fieldName.text}'`,
+        token !== undefined ? some(token.span) : none(),
+      ),
+    );
   }
   cursor += 1;
 
@@ -963,13 +963,13 @@ function parseStruct(
     }
     cursor = afterSemi.value;
   } else {
-    return err({
-      severity: "error",
-      message: `expected struct body (\`{\`, \`(\`, or \`;\`), found "${bodyToken?.kind ?? "end of input"}"`,
-      span: bodyToken !== undefined ? some(bodyToken.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `expected struct body (\`{\`, \`(\`, or \`;\`), found "${bodyToken?.kind ?? "end of input"}"`,
+        bodyToken !== undefined ? some(bodyToken.span) : none(),
+      ),
+    );
   }
 
   const decl: StructDecl = {
@@ -1355,13 +1355,13 @@ export function parseItem(
   if (token?.kind === "keyword" && token.text === "let") {
     if (afterVis > cursor) {
       const visToken = tokens[cursor];
-      return err({
-        severity: "error",
-        message: "visibility qualifiers are not allowed on let statements",
-        span: visToken !== undefined ? some(visToken.span) : none(),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-006",
+          "visibility qualifiers are not allowed on let statements",
+          visToken !== undefined ? some(visToken.span) : none(),
+        ),
+      );
     }
     const letResult = parseLetStatement(
       tokens,
@@ -1395,13 +1395,13 @@ export function parseItem(
   }
   if (afterVis > cursor) {
     const visToken = tokens[cursor];
-    return err({
-      severity: "error",
-      message: "visibility qualifiers are not allowed here",
-      span: visToken !== undefined ? some(visToken.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-006",
+        "visibility qualifiers are not allowed here",
+        visToken !== undefined ? some(visToken.span) : none(),
+      ),
+    );
   }
   const exprResult = parseExpression(tokens, diagnostics, cursor);
   if (isErr(exprResult)) {

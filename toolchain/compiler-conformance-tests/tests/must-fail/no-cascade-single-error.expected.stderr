@@ -1,1 +1,1 @@
-error: Cannot find name "missing" in this scope.
+error[HEDGE-NAME-001]: Cannot find name "missing" in this scope.

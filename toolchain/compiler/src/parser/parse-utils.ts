@@ -1,6 +1,14 @@
-import type { Diagnostic } from "../diagnostics.js";
+import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
 import { resolveEscape } from "../lexer/escape.js";
-import type { Span, Token } from "../lexer/token.js";
+import type {
+  FloatToken,
+  IntToken,
+  KeywordToken,
+  PathSepToken,
+  Span,
+  Token,
+  TokenKind,
+} from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok, type Result } from "../result.js";
 import type {
@@ -23,13 +31,13 @@ export type PR<T> = Result<T, Diagnostic>;
 export function tokenAt(tokens: readonly Token[], pos: number): PR<Token> {
   const token = tokens[pos];
   if (token === undefined) {
-    return err({
-      severity: "error",
-      message: `Unexpected end of input at token ${pos}`,
-      span: none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-002",
+        `Unexpected end of input at token ${pos}`,
+        none(),
+      ),
+    );
   }
   return ok(token);
 }
@@ -40,7 +48,7 @@ export function tokenAt(tokens: readonly Token[], pos: number): PR<Token> {
 export function kindAt(
   tokens: readonly Token[],
   pos: number,
-): Token["kind"] | undefined {
+): TokenKind | undefined {
   return tokens[pos]?.kind;
 }
 
@@ -60,7 +68,7 @@ export function spanAt(tokens: readonly Token[], pos: number): Option<Span> {
 export function expect(
   tokens: readonly Token[],
   pos: number,
-  kind: Token["kind"],
+  kind: TokenKind,
 ): PR<number> {
   const tokenAtResult = tokenAt(tokens, pos);
   if (isErr(tokenAtResult)) {
@@ -68,13 +76,13 @@ export function expect(
   }
   const token = tokenAtResult.value;
   if (token.kind !== kind) {
-    return err({
-      severity: "error",
-      message: `Expected ${kind}, found "${token.kind}" at offset ${token.span.start}`,
-      span: some(token.span),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `Expected ${kind}, found "${token.kind}" at offset ${token.span.start}`,
+        some(token.span),
+      ),
+    );
   }
   return ok(pos + 1);
 }
@@ -96,13 +104,13 @@ export function expectKeyword(
   const token = tokenAtResult.value;
   if (token.kind !== "keyword" || token.text !== text) {
     const found = token.kind === "keyword" ? token.text : token.kind;
-    return err({
-      severity: "error",
-      message: `Expected keyword "${text}", found "${found}" at offset ${token.span.start}`,
-      span: some(token.span),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `Expected keyword "${text}", found "${found}" at offset ${token.span.start}`,
+        some(token.span),
+      ),
+    );
   }
   return ok(pos + 1);
 }
@@ -125,7 +133,7 @@ export const MUT_MESSAGE: string =
  * used throughout this file and `type.ts`/`pattern.ts`) or the `mut`-as-
  * identifier guardrail. These are permanent, deliberately fail-fast
  * rejections of syntax that belongs to a later slice or is otherwise
- * reserved — list-element panic-mode recovery must never swallow one, since
+ * reserved - list-element panic-mode recovery must never swallow one, since
  * that would silently retrofit recovery onto a guardrail the rest of the
  * test suite pins as a total parse failure.
  */
@@ -143,12 +151,12 @@ const LOOP_KEYWORDS: ReadonlySet<string> = new Set(["loop", "while", "for"]);
 
 export interface LoopKeywordMatch {
   readonly pos: number;
-  readonly token: Extract<Token, { kind: "keyword" }>;
+  readonly token: KeywordToken;
 }
 
 /**
- * If a `loop`/`while`/`for` construct — optionally label-prefixed
- * (`'name: loop {}`) — starts at `pos`, returns the position and token of
+ * If a `loop`/`while`/`for` construct - optionally label-prefixed
+ * (`'name: loop {}`) - starts at `pos`, returns the position and token of
  * the `loop`/`while`/`for` keyword. Otherwise `none()`.
  */
 export function loopKeywordAt(
@@ -205,7 +213,7 @@ const PATH_KEYWORDS: ReadonlySet<string> = new Set(["self", "super", "Self"]);
 export function pathKeywordAt(
   tokens: readonly Token[],
   pos: number,
-): Option<Extract<Token, { kind: "keyword" }>> {
+): Option<KeywordToken> {
   const token = tokens[pos];
   if (token?.kind === "keyword" && PATH_KEYWORDS.has(token.text)) {
     return some(token);
@@ -238,7 +246,7 @@ export function isLifetimeGenericsStart(
 export function pathSepBeforeLt(
   tokens: readonly Token[],
   pos: number,
-): Option<Extract<Token, { kind: "path_sep" }>> {
+): Option<PathSepToken> {
   const token = tokens[pos];
   if (token?.kind === "path_sep" && tokens[pos + 1]?.kind === "lt") {
     return some(token);
@@ -253,9 +261,9 @@ export interface SkipAngleListResult {
 
 /**
  * Skips a balanced `<...>` list starting at `ltPos` (the caller has already
- * confirmed `tokens[ltPos]` is a `lt` token). Counts `lt`/`gt` as depth ±1
- * and `lt_lt`/`gt_gt` as depth ±2, since `>>` lexes as a single `gt_gt`
- * token under maximal munch (see lexer/symbol.ts) — a naive one-token-at-a-
+ * confirmed `tokens[ltPos]` is a `lt` token). Counts `lt`/`gt` as depth +/-1
+ * and `lt_lt`/`gt_gt` as depth +/-2, since `>>` lexes as a single `gt_gt`
+ * token under maximal munch (see lexer/symbol.ts) - a naive one-token-at-a-
  * time count would never see the second `>` of a doubly-nested close.
  */
 // eslint-disable-next-line complexity -- Token-kind dispatch loop; each branch is a necessary depth-counting case.
@@ -368,7 +376,7 @@ export function skipUntil(
 export function skipUntilKind(
   tokens: readonly Token[],
   pos: number,
-  ...kinds: readonly Token["kind"][]
+  ...kinds: readonly TokenKind[]
 ): number {
   const kindSet = new Set(kinds);
   return skipUntil(tokens, pos, (tok) => kindSet.has(tok.kind));
@@ -376,12 +384,12 @@ export function skipUntilKind(
 
 /**
  * @returns the nesting-depth contribution of a single token: +1/-1 for
- * `(`/`)`, `[`/`]`, `{`/`}`, and `<`/`>`; ±2 for `lt_lt`/`gt_gt`, since `>>`
+ * `(`/`)`, `[`/`]`, `{`/`}`, and `<`/`>`; +/-2 for `lt_lt`/`gt_gt`, since `>>`
  * lexes as one `gt_gt` token under maximal munch (see `skipBalancedAngleList`,
- * which uses the same technique) — a naive one-token count would never see
+ * which uses the same technique) - a naive one-token count would never see
  * the second `>` of a doubly-nested generic close. 0 for everything else.
  */
-function delimiterDepthDelta(kind: Token["kind"]): number {
+function delimiterDepthDelta(kind: TokenKind): number {
   switch (kind) {
     case "lparen":
     case "lbracket":
@@ -404,24 +412,24 @@ function delimiterDepthDelta(kind: Token["kind"]): number {
 
 /**
  * Scans forward from `pos` to the first token of one of `kinds` at the same
- * nesting depth as `pos` itself — tracking `(`/`[`/`{`/`<` depth so a token
+ * nesting depth as `pos` itself - tracking `(`/`[`/`{`/`<` depth so a token
  * nested inside them is never mistaken for the enclosing list's own comma or
  * closing delimiter. Two concrete cases this guards against: the closing `)`
  * of an attribute's own `#[attr(1.5)]` argument list, and a comma inside a
- * generic argument list (`x<A, B>, y: i32` — without `<`/`>` tracking, the
+ * generic argument list (`x<A, B>, y: i32` - without `<`/`>` tracking, the
  * scan would stop at the comma between `A` and `B` instead of the one after
  * `>`). `skipUntilKind` is unsafe for list-element recovery for exactly this
  * reason; use this instead whenever the scanned span can contain its own
  * nested delimiters. All four delimiter kinds share one `depth` counter
  * rather than a separate stack per kind, so a genuinely mismatched mix
  * (e.g. `(` opened, `>` closed) can under- or over-count relative to a true
- * per-kind balance check — an accepted imprecise-but-safe tradeoff on
+ * per-kind balance check - an accepted imprecise-but-safe tradeoff on
  * malformed input, matching this file's other recovery helpers.
  */
 export function skipUntilKindBalanced(
   tokens: readonly Token[],
   pos: number,
-  ...kinds: readonly Token["kind"][]
+  ...kinds: readonly TokenKind[]
 ): number {
   const kindSet = new Set(kinds);
   let depth = 0;
@@ -441,8 +449,8 @@ export function skipUntilKindBalanced(
 
 /**
  * Scans forward from `pos` to the next token that can start a top-level item
- * (`fn`/`struct`/`let`/`pub`/...). Matching the full set — not just
- * `fn`/`struct`/`let` — matters: it lets recovery resume from `pub` in a
+ * (`fn`/`struct`/`let`/`pub`/...). Matching the full set - not just
+ * `fn`/`struct`/`let` - matters: it lets recovery resume from `pub` in a
  * `pub fn`/`pub struct`, rather than landing past it and silently losing the
  * item's visibility.
  */
@@ -469,26 +477,26 @@ export function skipBalancedBraceBlock(
 ): PR<number> {
   const openBraceToken = tokens[openBrace];
   if (openBraceToken?.kind !== "lbrace") {
-    return err({
-      severity: "error",
-      message: `expected \`{\` to start block, found \`${openBraceToken?.kind ?? "MISSING"}\``,
-      span: openBraceToken ? some(openBraceToken.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `expected \`{\` to start block, found \`${openBraceToken?.kind ?? "MISSING"}\``,
+        openBraceToken ? some(openBraceToken.span) : none(),
+      ),
+    );
   }
   let cursor = openBrace;
   let braceDepth = 0;
   for (;;) {
     const tok = tokens[cursor];
     if (tok === undefined || tok.kind === "eof") {
-      return err({
-        severity: "error",
-        message: "expected `}` to close block, found end of input",
-        span: some(openBraceToken.span),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-002",
+          "expected `}` to close block, found end of input",
+          some(openBraceToken.span),
+        ),
+      );
     }
     if (tok.kind === "lbrace") {
       braceDepth += 1;
@@ -635,27 +643,25 @@ function findTopLevelItemBodyStart(
  */
 export function skipUnsupportedTopLevelItem(
   tokens: readonly Token[],
-  keyword: Extract<Token, { kind: "keyword" }>,
+  keyword: KeywordToken,
   pos: number,
   message: string,
 ): PR<{ diagnostic: Diagnostic; next: number }> {
-  const diagnostic: Diagnostic = {
-    severity: "error",
+  const diagnostic = errorDiagnostic(
+    "HEDGE-PARSE-004",
     message,
-    span: some(keyword.span),
-    code: none(),
-    relatedSpans: [],
-  };
+    some(keyword.span),
+  );
 
   const bodyStart = findTopLevelItemBodyStart(tokens, pos);
   if (bodyStart === undefined) {
-    return err({
-      severity: "error",
-      message: `${message}; expected a body for \`${keyword.text}\`, found end of input`,
-      span: some(keyword.span),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-002",
+        `${message}; expected a body for \`${keyword.text}\`, found end of input`,
+        some(keyword.span),
+      ),
+    );
   }
   if (bodyStart.kind === "semi") {
     return ok({ diagnostic, next: bodyStart.pos + 1 });
@@ -690,25 +696,25 @@ export function parseIdentifier(
   }
   const token = tokenAtResult.value;
   if (token.kind === "keyword" && token.text === "mut") {
-    return err({
-      severity: "error",
-      span: some({ start: token.span.start, end: token.span.end }),
-      code: none(),
-      relatedSpans: [],
-      message: MUT_MESSAGE,
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-004",
+        MUT_MESSAGE,
+        some({ start: token.span.start, end: token.span.end }),
+      ),
+    );
   }
 
   if (token.kind !== "ident") {
     const found =
       token.kind === "keyword" ? `keyword "${token.text}"` : `"${token.kind}"`;
-    return err({
-      severity: "error",
-      message: `Expected an identifier, found ${found} at offset ${token.span.start}`,
-      span: some(token.span),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `Expected an identifier, found ${found} at offset ${token.span.start}`,
+        some(token.span),
+      ),
+    );
   }
   const ident: Identifier = {
     kind: "Identifier",
@@ -720,7 +726,7 @@ export function parseIdentifier(
 
 export function parseIntLiteral(
   pos: number,
-  token: Extract<Token, { kind: "int" }>,
+  token: IntToken,
 ): Parsed<IntLiteral> {
   const rawDigits = stripPrefix(token.text, token.radix);
   const digits = isSome(token.suffix)
@@ -741,7 +747,7 @@ export function parseIntLiteral(
 
 export function parseFloatLiteral(
   pos: number,
-  token: Extract<Token, { kind: "float" }>,
+  token: FloatToken,
 ): Parsed<FloatLiteral> {
   const floatText = isSome(token.suffix)
     ? token.text.slice(0, -token.suffix.value.length)

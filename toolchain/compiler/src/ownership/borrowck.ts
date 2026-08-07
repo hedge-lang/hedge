@@ -1,7 +1,7 @@
 /**
  * @module
  *
- * NLL borrow checking (spec §0005, §0006, §0002): enforces the four borrow
+ * NLL borrow checking (spec 0005, 0006, 0002): enforces the four borrow
  * rules over a per-function {@link ControlFlowGraph}/{@link Liveness} (from
  * `control-flow-graph.ts`/`liveness.ts`), so a borrow's extent ends at its
  * last use rather than its lexical scope, across block boundaries as well as
@@ -17,7 +17,7 @@
  * alone.
  */
 import { assert, assertNever } from "../assert.js";
-import type { Diagnostic } from "../diagnostics.js";
+import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import type * as Semantics from "../semantics/ast.js";
@@ -73,6 +73,7 @@ type BorrowSite = Semantics.LetStatement | Semantics.LetExpression;
  * are discovered outer-to-inner while descending toward the base, so they're
  * collected in reverse application order and reversed once before returning.
  */
+// eslint-disable-next-line complexity -- Routing function over the full Expression union
 function placeOf(expr: Semantics.Expression): PlacePath | undefined {
   const projections: Projection[] = [];
   let current = expr;
@@ -99,8 +100,34 @@ function placeOf(expr: Semantics.Expression): PlacePath | undefined {
         projections.push({ kind: "Deref" });
         current = current.operand;
         continue;
-      default:
+      case "StringLiteral":
+      case "IntLiteral":
+      case "FloatLiteral":
+      case "BoolLiteral":
+      case "CharLiteral":
+      case "CallExpression":
+      case "ReferenceExpression":
+      case "BinaryExpression":
+      case "UnaryExpression":
+      case "AssignExpression":
+      case "CompoundAssignExpression":
+      case "MethodCallExpression":
+      case "TupleExpression":
+      case "ArrayExpression":
+      case "ArrayRepeatExpression":
+      case "RangeExpression":
+      case "StructExpression":
+      case "IfExpression":
+      case "LetExpression":
+      case "MatchExpression":
+      case "Block":
+        // Not a place: nothing to project from.
         return undefined;
+      default:
+        return assertNever(
+          current,
+          `Unexpected expression: ${JSON.stringify(current)}`,
+        );
     }
   }
 }
@@ -132,7 +159,7 @@ function describePlace(path: PlacePath): string {
 
 /**
  * Whether two places' projection chains can alias. Diverging at a `Field`
- * with different names proves disjointness (spec §0013 "Borrowing fields");
+ * with different names proves disjointness (spec 0013 "Borrowing fields");
  * two `Index` projections at the same depth always overlap, since a dynamic
  * index is never statically provable distinct; `Deref` is transparent and
  * never itself introduces disjointness. One chain running out before the
@@ -194,6 +221,7 @@ type CapabilityDecision =
   | { readonly kind: "blocked"; readonly through: string }
   | { readonly kind: "root-mut-required" };
 
+// eslint-disable-next-line complexity -- Routing function over the full Expression union
 function capabilityDecision(
   expr: Semantics.Expression,
   isRoot: boolean,
@@ -216,8 +244,35 @@ function capabilityDecision(
       return capabilityDecision(expr.object, false);
     case "DereferenceExpression":
       return capabilityDecision(expr.operand, false);
-    default:
+    case "PathExpression":
+    case "StringLiteral":
+    case "IntLiteral":
+    case "FloatLiteral":
+    case "BoolLiteral":
+    case "CharLiteral":
+    case "CallExpression":
+    case "ReferenceExpression":
+    case "BinaryExpression":
+    case "UnaryExpression":
+    case "AssignExpression":
+    case "CompoundAssignExpression":
+    case "MethodCallExpression":
+    case "TupleExpression":
+    case "ArrayExpression":
+    case "ArrayRepeatExpression":
+    case "RangeExpression":
+    case "StructExpression":
+    case "IfExpression":
+    case "LetExpression":
+    case "MatchExpression":
+    case "Block":
+      // Anything that is not a projection is the root of the chain.
       return { kind: "root-mut-required" };
+    default:
+      return assertNever(
+        expr,
+        `Unexpected expression: ${JSON.stringify(expr)}`,
+      );
   }
 }
 
@@ -896,8 +951,26 @@ function collectRefBorrowsFromPattern(
       return pattern.alternatives.flatMap((alt) =>
         collectRefBorrowsFromPattern(alt, basePath),
       );
-    default:
+    case "SlicePattern":
+      // A slice pattern's positions are statically disjoint, but `Projection`
+      // has no index to say so - every element would collapse to the same
+      // `Index` place, which `placesOverlap` treats as always conflicting.
+      // Recording them would reject `let [&a, ..&mut rest] = arr;`, which is
+      // legal. Needs an offset-carrying projection before these can be
+      // tracked.
       return [];
+    case "WildcardPattern":
+    case "LiteralPattern":
+    case "RangePattern":
+    case "PathPattern":
+    case "TuplePattern":
+      // Bind no names, so they can introduce no borrow.
+      return [];
+    default:
+      return assertNever(
+        pattern,
+        `Unexpected pattern: ${JSON.stringify(pattern)}`,
+      );
   }
 }
 
@@ -1104,26 +1177,26 @@ function checkCapabilities(
       case "allowed":
         continue;
       case "blocked":
-        diagnostics.push({
-          severity: "error",
-          message: `cannot borrow \`${describePlace(borrow.place)}\` as mutable because \`${borrow.capability.through}\` is a shared reference.`,
-          span: spanOf(tokens, borrow.tokenId),
-          code: some("HEDGE-BORROW-CHECK-002"),
-          relatedSpans: [],
-        });
+        diagnostics.push(
+          errorDiagnostic(
+            "HEDGE-BORROW-CHECK-002",
+            `cannot borrow \`${describePlace(borrow.place)}\` as mutable because \`${borrow.capability.through}\` is a shared reference.`,
+            spanOf(tokens, borrow.tokenId),
+          ),
+        );
         continue;
       case "root-mut-required":
         if (
           borrow.place.baseId !== undefined &&
           capabilities.get(borrow.place.baseId) === false
         ) {
-          diagnostics.push({
-            severity: "error",
-            message: `Cannot borrow "${borrow.place.baseName}" as &mut because it is not declared mut.`,
-            span: spanOf(tokens, borrow.tokenId),
-            code: some("HEDGE-BORROW-CHECK-002"),
-            relatedSpans: [],
-          });
+          diagnostics.push(
+            errorDiagnostic(
+              "HEDGE-BORROW-CHECK-002",
+              `Cannot borrow "${borrow.place.baseName}" as &mut because it is not declared mut.`,
+              spanOf(tokens, borrow.tokenId),
+            ),
+          );
         }
         continue;
       default:
@@ -1167,12 +1240,12 @@ function checkExclusivity(
       }
       const firstBorrowSpan = spanOf(tokens, a.tokenId);
       diagnostics.push({
-        severity: "error",
-        message:
+        ...errorDiagnostic(
+          "HEDGE-BORROW-CHECK-001",
           `Conflicting borrows of "${describePlace(a.place)}": ${describeBorrow(a)} at offset ${String(offsetOf(tokens, a.tokenId))} ` +
-          `and ${describeBorrow(b)} at offset ${String(offsetOf(tokens, b.tokenId))} are both live.`,
-        span: spanOf(tokens, b.tokenId),
-        code: some("HEDGE-BORROW-CHECK-001"),
+            `and ${describeBorrow(b)} at offset ${String(offsetOf(tokens, b.tokenId))} are both live.`,
+          spanOf(tokens, b.tokenId),
+        ),
         relatedSpans: isSome(firstBorrowSpan)
           ? [
               {

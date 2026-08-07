@@ -1,13 +1,13 @@
 import { assert } from "../../assert.js";
-import type { Span, Token } from "../../lexer/token.js";
+import type { Span, Token, TokenKind } from "../../lexer/token.js";
 import type * as Semantics from "../../semantics/ast.js";
 
-const OPENERS: ReadonlySet<Token["kind"]> = new Set([
+const OPENERS: ReadonlySet<TokenKind> = new Set([
   "lparen",
   "lbrace",
   "lbracket",
 ]);
-const CLOSERS: ReadonlySet<Token["kind"]> = new Set([
+const CLOSERS: ReadonlySet<TokenKind> = new Set([
   "rparen",
   "rbrace",
   "rbracket",

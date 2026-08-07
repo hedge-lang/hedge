@@ -1,5 +1,6 @@
 import { assertNever } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
+import { errorDiagnostic } from "../diagnostics.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import type {
@@ -21,6 +22,7 @@ import type {
   TupleFieldsBody,
   Type,
   Variant,
+  LifetimeParam,
 } from "./ast.js";
 
 const NO_ELISION_RULE_MESSAGE =
@@ -77,10 +79,7 @@ function createSynthesizer(
  * contributes nothing, since only lifetime collisions matter here. */
 function declaredLifetimeNames(generics: readonly GenericParam[]): string[] {
   return generics
-    .filter(
-      (param): param is Extract<GenericParam, { kind: "LifetimeParam" }> =>
-        param.kind === "LifetimeParam",
-    )
+    .filter((param): param is LifetimeParam => param.kind === "LifetimeParam")
     .map((param) => param.lifetime.name);
 }
 
@@ -124,13 +123,13 @@ function resolveNestedReferenceTypes(
   if (isSome(type.lifetime)) {
     return { ...type, referent };
   }
-  diagnostics.push({
-    severity: "error",
-    message: NO_ELISION_RULE_MESSAGE,
-    span: spanOf(tokens, type.tokenId),
-    code: some("HEDGE-LIFETIME-001"),
-    relatedSpans: [],
-  });
+  diagnostics.push(
+    errorDiagnostic(
+      "HEDGE-LIFETIME-001",
+      NO_ELISION_RULE_MESSAGE,
+      spanOf(tokens, type.tokenId),
+    ),
+  );
   return { ...type, lifetime: some(synth(type.tokenId)), referent };
 }
 
@@ -332,13 +331,13 @@ function elideFunctionDecl(
     ) {
       lifetime = soleReferenceParamLifetime;
     } else {
-      diagnostics.push({
-        severity: "error",
-        message: ambiguousReturnLifetimeMessage(referenceParamCount),
-        span: spanOf(tokens, returnRef.tokenId),
-        code: some("HEDGE-LIFETIME-001"),
-        relatedSpans: [],
-      });
+      diagnostics.push(
+        errorDiagnostic(
+          "HEDGE-LIFETIME-001",
+          ambiguousReturnLifetimeMessage(referenceParamCount),
+          spanOf(tokens, returnRef.tokenId),
+        ),
+      );
       lifetime = synth(returnRef.tokenId);
     }
     const referent = resolveNestedReferenceTypes(

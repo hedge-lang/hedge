@@ -529,7 +529,7 @@ describe("type annotation error diagnostics", (): void => {
   });
 });
 
-describe("generics guardrail — type position", (): void => {
+describe("generics guardrail - type position", (): void => {
   it("produces an error diagnostic for a generic type on a let binding", (): void => {
     const { tokens } = tokenize("let x: Vec<T>;");
     const lt = tokens.find((t) => t.kind === "lt");
@@ -611,7 +611,7 @@ describe("generics guardrail — type position", (): void => {
   });
 });
 
-describe("lifetime guardrail — generic type argument position", (): void => {
+describe("lifetime guardrail - generic type argument position", (): void => {
   it("produces a lifetime-specific diagnostic for Vec<'a>", (): void => {
     const { tokens } = tokenize("let x: Vec<'a>;");
     const lt = tokens.find((t) => t.kind === "lt");
@@ -2968,7 +2968,7 @@ describe("call expression edge cases", (): void => {
   });
 });
 
-describe("parse errors — missing tokens", (): void => {
+describe("parse errors - missing tokens", (): void => {
   it("errors on a let statement with no semicolon", (): void => {
     const result = parse(tokenize("let x = 1").tokens);
     expect(result.program).toEqual(none());
@@ -3011,7 +3011,7 @@ describe("parse errors — missing tokens", (): void => {
   });
 
   it.todo(
-    "let x = y = 5 and let x = (y = 5) produce type errors — assignment returns () and cannot initialize a non-unit binding",
+    "let x = y = 5 and let x = (y = 5) produce type errors - assignment returns () and cannot initialize a non-unit binding",
   );
 });
 
@@ -3651,7 +3651,7 @@ describe("item error recovery", (): void => {
   it("does not cascade a second diagnostic when a malformed parameter's garbage contains a comma inside `<...>`", (): void => {
     // `x<A, B>` isn't valid Slice 1 pattern syntax: `x` parses as a binding
     // pattern, then the missing-colon check fails since the next token is
-    // `<`, not `:` — a recoverable, non-guardrail error. If the resync scan
+    // `<`, not `:` - a recoverable, non-guardrail error. If the resync scan
     // doesn't track `<`/`>` depth, it stops at the comma between A and B
     // (the first comma it sees) instead of the list's real separator after
     // `>`, then tries to parse "B>, y: i32" as a bogus second element.
@@ -3851,7 +3851,7 @@ describe("item error recovery", (): void => {
   });
 
   it("reports an error for a tuple field missing its type (a Slice 1 type guardrail, so the whole struct stays fail-fast)", (): void => {
-    // Every parseType failure — even a wholly absent type — carries the
+    // Every parseType failure - even a wholly absent type - carries the
     // "not supported in Slice 1" guardrail phrasing (see type.ts's own doc
     // comment), so it is never eligible for per-element list recovery; see
     // isGuardrailDiagnostic in parse-utils.ts.
@@ -4519,7 +4519,7 @@ describe("lifetime + reference type interactions", (): void => {
   });
 });
 
-describe("lifetime guardrail — nested and reversed-order generics", (): void => {
+describe("lifetime guardrail - nested and reversed-order generics", (): void => {
   it("let x: Vec<Vec<'a>>; diagnoses only the outer generic (inner lifetime never reached)", (): void => {
     const { tokens } = tokenize("let x: Vec<Vec<'a>>;");
     const { program, diagnostics } = parse(tokens);
@@ -5089,7 +5089,7 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     // (same `allowStruct: false` restriction `if`/`while` already enforce
     // elsewhere), so the recovery skip has no real condition grammar to
     // respect here. It lands on the condition's own `{`, not the loop's
-    // intended body — but the construct is still rejected and the parser
+    // intended body - but the construct is still rejected and the parser
     // still recovers rather than hanging or crashing.
     const { tokens } = tokenize("fn f() { while Foo { x: 1 } { } }");
     const { program, diagnostics } = parse(tokens);
@@ -5099,7 +5099,7 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
   });
 
   it("recovers even when a malformed condition has a stray closing bracket", (): void => {
-    // A stray `]` with no matching `[` must not drive condDepth negative —
+    // A stray `]` with no matching `[` must not drive condDepth negative -
     // otherwise the scan can never recognize the real loop body's `{` as
     // being at top-level depth, and misreports "end of input" instead of
     // recovering.

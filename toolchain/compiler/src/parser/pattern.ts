@@ -1,3 +1,4 @@
+import { errorDiagnostic } from "../diagnostics.js";
 import { assert } from "../assert.js";
 import type { Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
@@ -41,16 +42,15 @@ function tryParseRangePatternBound(
     const nextTok = tokens[afterMinus];
     if (nextTok?.kind !== "int" && nextTok?.kind !== "float") {
       return some(
-        err({
-          severity: "error",
-          message: `Expected a numeric literal after "-" in a pattern, found ${
-            nextTok === undefined ? "end of input" : `"${nextTok.kind}"`
-          }`,
-          span:
+        err(
+          errorDiagnostic(
+            "HEDGE-PARSE-001",
+            `Expected a numeric literal after "-" in a pattern, found ${
+              nextTok === undefined ? "end of input" : `"${nextTok.kind}"`
+            }`,
             nextTok !== undefined ? some(nextTok.span) : spanAt(tokens, pos),
-          code: none(),
-          relatedSpans: [],
-        }),
+          ),
+        ),
       );
     }
     const literalResult = tryParseLiteral(tokens, afterMinus);
@@ -158,15 +158,15 @@ function parsePatternNoAlt(
       const endAttempt = tryParseRangePatternBound(tokens, afterOp);
       if (!isSome(endAttempt)) {
         const tok = tokens[afterOp];
-        return err({
-          severity: "error",
-          message: `Expected a literal after "..=" in a range pattern, found ${
-            tok === undefined ? "end of input" : `"${tok.kind}"`
-          }`,
-          span: tok !== undefined ? some(tok.span) : spanAt(tokens, afterOp),
-          code: none(),
-          relatedSpans: [],
-        });
+        return err(
+          errorDiagnostic(
+            "HEDGE-PARSE-001",
+            `Expected a literal after "..=" in a range pattern, found ${
+              tok === undefined ? "end of input" : `"${tok.kind}"`
+            }`,
+            tok !== undefined ? some(tok.span) : spanAt(tokens, afterOp),
+          ),
+        );
       }
       if (isErr(endAttempt.value)) return endAttempt.value;
       const { node: end, next: afterEnd } = endAttempt.value.value;
@@ -246,13 +246,13 @@ function parseIdentifierRootedPattern(
   // a struct/tuple-struct variant.
   if (kindAt(tokens, next) === "path_sep") {
     if (byRef) {
-      return err({
-        severity: "error",
-        message: sigilOnPathMessage,
-        span: spanAt(tokens, pos),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-006",
+          sigilOnPathMessage,
+          spanAt(tokens, pos),
+        ),
+      );
     }
     const pathResult = parsePathSegments(tokens, afterMut);
     if (isErr(pathResult)) return pathResult;
@@ -262,15 +262,15 @@ function parseIdentifierRootedPattern(
 
   if (ident.text === "_") {
     if (isMut || byRef) {
-      return err({
-        severity: "error",
-        message: byRef
-          ? "`&`/`&mut` cannot be applied to the wildcard pattern `_`"
-          : "`mut` cannot be applied to the wildcard pattern `_`",
-        span: spanAt(tokens, pos),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-006",
+          byRef
+            ? "`&`/`&mut` cannot be applied to the wildcard pattern `_`"
+            : "`mut` cannot be applied to the wildcard pattern `_`",
+          spanAt(tokens, pos),
+        ),
+      );
     }
     return ok({
       node: { kind: "WildcardPattern", tokenId: ident.tokenId },
@@ -280,13 +280,13 @@ function parseIdentifierRootedPattern(
 
   if (kindAt(tokens, next) === "lbrace" || kindAt(tokens, next) === "lparen") {
     if (byRef) {
-      return err({
-        severity: "error",
-        message: sigilOnPathMessage,
-        span: spanAt(tokens, pos),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-006",
+          sigilOnPathMessage,
+          spanAt(tokens, pos),
+        ),
+      );
     }
     return parsePathRootedPatternTail(
       tokens,
@@ -429,7 +429,7 @@ function parseTupleStructPattern(
  * `Message::Quit`). `mutable` (a leading `mut` sigil - see
  * `parseIdentifierRootedPattern`) is only meaningful for the first two: a
  * struct/tuple-struct pattern has fields whose binding-mode legality
- * (Hedge-47) can depend on treating the whole destructured value as
+ * can depend on treating the whole destructured value as
  * mutable, but a bare unit-variant `PathPattern` binds nothing at all, so
  * `mut` there has no place to apply to and is rejected instead of silently
  * dropped.
@@ -448,14 +448,13 @@ function parsePathRootedPatternTail(
     return parseTupleStructPattern(tokens, startPos, path, afterPath, mutable);
   }
   if (mutable) {
-    return err({
-      severity: "error",
-      message:
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-006",
         "`mut` cannot be applied to a fieldless pattern like a bare unit variant",
-      span: spanAt(tokens, startPos),
-      code: none(),
-      relatedSpans: [],
-    });
+        spanAt(tokens, startPos),
+      ),
+    );
   }
   return ok({
     node: { kind: "PathPattern", tokenId: startPos, path },

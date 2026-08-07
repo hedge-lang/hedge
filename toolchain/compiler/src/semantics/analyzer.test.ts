@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { assert } from "../assert.js";
 
 import { tokenize } from "../lexer/lexer.js";
-import { isSome, none, some } from "../option.js";
+import { isSome, none } from "../option.js";
 import { parse } from "../parser/parser.js";
 import type { AnalysisResult } from "./analyzer.js";
 import { analyze } from "./analyzer.js";
@@ -106,6 +106,384 @@ describe("semantic analysis", (): void => {
   it("struct declaration does not crash the analyzer", (): void => {
     const result = diagnose("struct Foo;");
     expect(result.diagnostics).toEqual([]);
+  });
+
+  describe("shift operand types", () => {
+    it("accepts a shift amount whose type differs from the shifted value", () => {
+      const result = diagnose(
+        "fn main() { let x: i32 = 1; let n: u8 = 2u8; let y: i32 = x << n; }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("accepts a non-bigint shift amount against a bigint value", () => {
+      const result = diagnose(
+        "fn main() { let x: i64 = 1i64; let n: i32 = 2; let y: i64 = x << n; }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a non-integer shift amount", () => {
+      const result = diagnose(
+        'fn main() { let x: i32 = 1; let s: str = "a"; let y: i32 = x << s; }',
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "the shift amount must be an integer",
+      );
+    });
+
+    it("still requires matching operand types for a non-shift bitwise operator", () => {
+      const result = diagnose(
+        "fn main() { let x: i32 = 1; let n: u8 = 2u8; let y: i32 = x & n; }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "bitwise operands must have the same type",
+      );
+    });
+  });
+
+  describe("array length bound", () => {
+    it("accepts an array length equal to the maximum a usize index can hold", () => {
+      const result = diagnose("fn f(arr: [i32; 4294967295]) { }");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects an array length one past that maximum", () => {
+      const result = diagnose("fn f(arr: [i32; 4294967296]) { }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("exceeds the maximum");
+    });
+  });
+
+  describe("unary `!`", () => {
+    it("keeps `bool` for a logical negation", () => {
+      const result = diagnose(
+        "fn main() { let b: bool = true; let c: bool = !b; }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("yields the operand's integer type for a bitwise negation", () => {
+      const result = diagnose("fn main() { let x: i32 = 5; let y: i32 = !x; }");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects binding a negated integer to bool", () => {
+      const result = diagnose(
+        "fn main() { let x: i32 = 5; let b: bool = !x; }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("type mismatch");
+    });
+
+    it("rejects negating a string", () => {
+      const result = diagnose(
+        'fn main() { let s: str = "a"; let b: bool = !s; }',
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "`!` requires `bool` or an integer, found `str`",
+      );
+    });
+
+    it("rejects negating a float, which has no bitwise meaning", () => {
+      const result = diagnose(
+        "fn main() { let f: f64 = 1.0; let b: bool = !f; }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("found `f64`");
+    });
+  });
+
+  describe("if expression branch types", () => {
+    it("rejects an empty else branch against a value-producing then branch", () => {
+      const result = diagnose(
+        "fn main() { let c: bool = true; let x: i32 = if c { 1 } else { }; }",
+      );
+      expect(result.diagnostics[0]?.message).toContain(
+        "if expression branches have incompatible types",
+      );
+    });
+
+    it("rejects branches of differing value types", () => {
+      const result = diagnose(
+        'fn main() { let c: bool = true; let x: i32 = if c { 1 } else { "a" }; }',
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "if expression branches have incompatible types",
+      );
+    });
+
+    it("accepts a statement-position if whose branches both produce no value", () => {
+      const result = diagnose(
+        'fn main() { let c: bool = true; if c { print("a"); } else { print("b"); } }',
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("does not add a branch-type error when a branch's own analysis already failed", () => {
+      const result = diagnose(
+        "fn main() { let c: bool = true; let x: i32 = if c { nope } else { 2 }; }",
+      );
+      expect(
+        result.diagnostics.filter((d) =>
+          d.message.includes("if expression branches"),
+        ),
+      ).toEqual([]);
+    });
+  });
+
+  describe("pattern type checking", () => {
+    it("rejects a string-literal pattern against an integer scrutinee", () => {
+      const result = diagnose(
+        'fn main() { let x: i32 = 1; match x { "hello" => {}, _ => {} } }',
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "expected `i32`, found `str`",
+      );
+    });
+
+    it("rejects an integer-literal pattern against a string scrutinee", () => {
+      const result = diagnose(
+        'fn main() { let x: str = "a"; match x { 1 => {}, _ => {} } }',
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "expected `str`, found `i32`",
+      );
+    });
+
+    it("rejects a literal pattern against an enum scrutinee instead of crashing in lowering", () => {
+      const result = diagnose(
+        "enum E { A(i32) } fn main() { let e = E::A(1); match e { 7 => {}, _ => {} } }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("expected `E`");
+    });
+
+    it("rejects a range pattern whose bounds disagree with the scrutinee", () => {
+      const result = diagnose(
+        "fn main() { let x: char = 'a'; match x { 1..=5 => {}, _ => {} } }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "expected `char`, found `i32`",
+      );
+    });
+
+    it("rejects a range pattern whose two bounds have different types", () => {
+      const result = diagnose(
+        "fn main() { let x: i32 = 1; match x { 1..='z' => {}, _ => {} } }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "range bounds must have the same type",
+      );
+    });
+
+    it("rejects a range whose lower bound exceeds its upper bound", () => {
+      const result = diagnose(
+        "fn main() { let x: i32 = 1; match x { 10..=2 => {}, _ => {} } }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("matches nothing");
+    });
+
+    it("rejects a mistyped pattern in an if let scrutinee too", () => {
+      const result = diagnose(
+        'fn main() { let x: i32 = 1; if let "s" = x { } }',
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "expected `i32`, found `str`",
+      );
+    });
+
+    it("coerces an unsuffixed integer-literal pattern to the scrutinee's type", () => {
+      const result = diagnose(
+        "fn main() { let x: u8 = 1; match x { 1 => {}, _ => {} } }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("range-checks a coerced literal pattern against the scrutinee's type", () => {
+      const result = diagnose(
+        "fn main() { let x: u8 = 1; match x { 300 => {}, _ => {} } }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("out of range for u8");
+    });
+
+    it("accepts a negative range against a signed scrutinee", () => {
+      const result = diagnose(
+        "fn main() { let x: i32 = 1; match x { -5..=-1 => {}, _ => {} } }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
+  describe("call argument checking", () => {
+    it("rejects a call with too few arguments", () => {
+      const result = diagnose("fn f(a: i32, b: str) {} fn main() { f(); }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "takes 2 argument(s), but 0 were supplied",
+      );
+    });
+
+    it("rejects a call with too many arguments", () => {
+      const result = diagnose("fn f(a: i32) {} fn main() { f(1, 2); }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "takes 1 argument(s), but 2 were supplied",
+      );
+    });
+
+    it("rejects an argument whose type does not match the parameter", () => {
+      const result = diagnose("fn f(a: i32) {} fn main() { f(true); }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "argument 0 to function `f` type mismatch: expected `i32`, found `bool`",
+      );
+    });
+
+    it("reports each mismatched argument separately", () => {
+      const result = diagnose(
+        'fn f(a: i32, b: str) {} fn main() { f("x", 1); }',
+      );
+      expect(result.diagnostics).toHaveLength(2);
+    });
+
+    it("resolves a user-declared struct in a parameter type so a matching argument is accepted", () => {
+      const result = diagnose(
+        "struct P { x: i32 } fn f(p: P) {} fn main() { f(P { x: 1 }); }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a struct argument of the wrong struct type", () => {
+      const result = diagnose(
+        "struct P { x: i32 } struct Q { x: i32 } fn f(p: P) {} fn main() { f(Q { x: 1 }); }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("argument 0");
+    });
+
+    it("coerces an unsuffixed literal argument to the parameter type", () => {
+      const result = diagnose("fn f(a: i8) {} fn main() { f(1 + 1); }");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("accepts a string literal for a str parameter, like any other primitive", () => {
+      const result = diagnose(
+        'fn first(s: str) -> str { s } fn main() { print(first("hello")); }',
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a string literal for a shared-reference parameter, since a literal is not a reference", () => {
+      const result = diagnose(
+        'fn first(s: &str) -> &str { s } fn main() { print(first("hello")); }',
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "expected `&str`, found `str`",
+      );
+    });
+
+    it("rejects an integer literal for a shared-reference parameter, the same way", () => {
+      const result = diagnose("fn f(r: &i32) {} fn main() { f(5); }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "expected `&i32`, found `i32`",
+      );
+    });
+
+    it("still requires an explicit borrow when passing a binding to a reference parameter", () => {
+      const result = diagnose(
+        'fn f(s: &str) {} fn main() { let s = "a"; f(s); }',
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "expected `&str`, found `str`",
+      );
+    });
+
+    it("accepts an explicit borrow of a binding for a reference parameter", () => {
+      const result = diagnose(
+        'fn f(s: &str) {} fn main() { let s = "a"; f(&s); }',
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("does not argument-check a builtin whose parameter list is a placeholder", () => {
+      const result = diagnose("fn main() { print(42); }");
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
+  describe("type scoping and declaration order", () => {
+    it("resolves a struct field typed as an enum declared later in the file", () => {
+      const result = diagnose("struct S { e: E } enum E { A } fn main() {}");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a struct field typed as a struct declared later in the file", () => {
+      const result = diagnose(
+        "struct A { b: B } struct B { x: i32 } fn main() {}",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("accepts two mutually recursive struct declarations", () => {
+      const result = diagnose(
+        "struct A { b: B } struct B { a: A } fn main() {}",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a forward type reference between two structs declared inside a block", () => {
+      const result = diagnose(
+        "fn main() { struct A { b: B } struct B { x: i32 } }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("lets a block-local struct shadow an outer one without disturbing the outer declaration", () => {
+      const result = diagnose(
+        "struct P { a: i32 } fn main() { { struct P { b: i32 } } let p: P = P { a: 1 }; }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("lets a block-local enum shadow an outer one without disturbing the outer declaration", () => {
+      const result = diagnose(
+        "enum E { A } fn main() { { enum E { B } } let e: E = E::A; }",
+      );
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still rejects two structs with the same name in the same scope", () => {
+      const result = diagnose(
+        "struct P { a: i32 } struct P { b: i32 } fn main() {}",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "struct `P` is defined more than once",
+      );
+    });
+
+    it("still rejects two enums with the same name in the same scope", () => {
+      const result = diagnose("enum E { A } enum E { B } fn main() {}");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "enum `E` is defined more than once",
+      );
+    });
   });
 
   describe("enum declarations (semantically analyzed)", () => {
@@ -753,7 +1131,7 @@ describe("semantic analysis", (): void => {
 
   describe("match expressions over a #[non_exhaustive] enum", () => {
     it("analyzes an exhaustive match with no wildcard cleanly within the enum's own defining scope", () => {
-      // TODO (Hedge-222): cross-package enforcement (a foreign match
+      // TODO(Hedge-222): cross-package enforcement (a foreign match
       // needing `_`) has no referent yet - there's no module/package
       // system (ROADMAP Slice 7). Every match the compiler can analyze
       // today is "within the defining package", so #[non_exhaustive] is a
@@ -1755,6 +2133,50 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
+    describe("literal coercion through a binary expression", () => {
+      it("coerces both operands of an arithmetic expression to the annotated type", () => {
+        const result = diagnose("fn main() { let v: i8 = 1 + 1; }");
+        expect(result.diagnostics).toEqual([]);
+      });
+
+      it("coerces both operands to a bigint-backed annotated type", () => {
+        const result = diagnose("fn main() { let v: i64 = 1 + 1; }");
+        expect(result.diagnostics).toEqual([]);
+      });
+
+      it("coerces through a nested arithmetic expression", () => {
+        const result = diagnose("fn main() { let v: i8 = (1 + 2) * 3; }");
+        expect(result.diagnostics).toEqual([]);
+      });
+
+      it("coerces through a bitwise expression", () => {
+        const result = diagnose("fn main() { let v: i8 = 1 & 2; }");
+        expect(result.diagnostics).toEqual([]);
+      });
+
+      it("coerces a negated operand alongside a plain one", () => {
+        const result = diagnose("fn main() { let v: i8 = -1 + 2; }");
+        expect(result.diagnostics).toEqual([]);
+      });
+
+      it("range-checks each operand against the coerced type", () => {
+        const result = diagnose("fn main() { let v: i8 = 200 + 1; }");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain("out of range for i8");
+      });
+
+      it("does not coerce through a comparison operator, whose result is always bool", () => {
+        const result = diagnose("fn main() { let v: i8 = 1 < 2; }");
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0]?.message).toContain("type mismatch");
+      });
+
+      it("still accepts a comparison expression bound to bool", () => {
+        const result = diagnose("fn main() { let b: bool = 1 < 2; }");
+        expect(result.diagnostics).toEqual([]);
+      });
+    });
+
     it("rejects a coerced literal trailing expression that is out of range for the return type", (): void => {
       const { diagnostics } = diagnose("fn f() -> u8 { 300 }");
       expect(diagnostics).toHaveLength(1);
@@ -1836,7 +2258,7 @@ describe("semantic analysis", (): void => {
       );
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].code).toBe("HEDGE-LIFETIME-002");
       expect(diagnostics[0].message).toContain("x");
     });
 
@@ -1844,7 +2266,7 @@ describe("semantic analysis", (): void => {
       const { diagnostics } = diagnose("fn f(x: i32) -> &i32 { &x }");
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].code).toBe("HEDGE-LIFETIME-002");
     });
 
     it("rejects a struct literal field that borrows a let-local, when the struct instance is returned", (): void => {
@@ -1857,7 +2279,7 @@ describe("semantic analysis", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].code).toBe("HEDGE-LIFETIME-002");
       expect(diagnostics[0].message).toContain("s");
     });
 
@@ -1884,7 +2306,7 @@ describe("semantic analysis", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].code).toBe("HEDGE-LIFETIME-002");
       expect(diagnostics[0].message).toContain("x");
     });
 
@@ -1903,7 +2325,7 @@ describe("semantic analysis", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].code).toBe("HEDGE-LIFETIME-002");
       expect(diagnostics[0].message).toContain("x");
     });
 
@@ -1918,7 +2340,7 @@ describe("semantic analysis", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].code).toBe("HEDGE-LIFETIME-002");
       expect(diagnostics[0].message).toContain("x");
     });
 
@@ -1940,7 +2362,7 @@ describe("semantic analysis", (): void => {
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
       expect(diagnostics[0].message).toContain("missing_name");
-      expect(diagnostics[0].code).toEqual(none());
+      expect(diagnostics[0].code).toBe("HEDGE-NAME-001");
     });
 
     it("does not cascade into a third diagnostic when a struct field borrows an unresolved name, on top of the name-resolution and field-type-mismatch diagnostics", (): void => {
@@ -1949,7 +2371,9 @@ describe("semantic analysis", (): void => {
         fn make() -> S { S { f: &missing_name } }
       `);
       expect(diagnostics).toHaveLength(2);
-      expect(diagnostics.some((d) => isSome(d.code))).toBe(false);
+      expect(diagnostics.every((d) => d.code !== "HEDGE-LIFETIME-002")).toBe(
+        true,
+      );
     });
 
     it.fails(
@@ -1960,7 +2384,7 @@ describe("semantic analysis", (): void => {
         );
         expect(diagnostics).toHaveLength(1);
         assert(diagnostics[0] !== undefined, "Expected diagnostics");
-        expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+        expect(diagnostics[0].code).toBe("HEDGE-LIFETIME-002");
       },
     );
   });
@@ -2733,7 +3157,7 @@ describe("array types", (): void => {
     );
   });
 
-  it("rejects a repeat-form count too large to represent as a safe integer", (): void => {
+  it("rejects a repeat-form count larger than the maximum array length", (): void => {
     const result = diagnose(`
       fn main() {
         let arr = [1; 99999999999999999999999999];
@@ -2742,10 +3166,10 @@ describe("array types", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("too large");
+    expect(result.diagnostics[0].message).toContain("exceeds the maximum");
   });
 
-  it("rejects an array type annotation whose length is too large to represent as a safe integer", (): void => {
+  it("rejects an array type annotation whose length exceeds the maximum", (): void => {
     // Uses a function parameter's type, not a `let` annotation, so the only
     // diagnostic in play is the length check itself - a `let` annotation
     // this invalid would independently trigger a second, pre-existing
@@ -2757,7 +3181,7 @@ describe("array types", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("too large");
+    expect(result.diagnostics[0].message).toContain("exceeds the maximum");
   });
 
   describe("const-length arrays", (): void => {

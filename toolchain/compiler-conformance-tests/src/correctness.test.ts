@@ -1,7 +1,7 @@
 /**
  * @module
  *
- * Correctness test layer — property, metamorphic, and differential tests.
+ * Correctness test layer - property, metamorphic, and differential tests.
  *
  * A) Property/metamorphic tests over generated and hand-written programs.
  * B) Differential conformance tests comparing compiled JS to a reference evaluator.
@@ -29,7 +29,7 @@ function assert(cond: boolean, msg?: string): asserts cond {
 }
 
 // ---------------------------------------------------------------------------
-// Seeded PRNG — Mulberry32, deterministic across runs.
+// Seeded PRNG - Mulberry32, deterministic across runs.
 // ---------------------------------------------------------------------------
 function mulberry32(seed: number): () => number {
   let s = seed >>> 0;
@@ -130,7 +130,7 @@ function genComputeProgram(seed: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// AST structural equality helper — strips tokenId so spans don't affect shape.
+// AST structural equality helper - strips tokenId so spans don't affect shape.
 // ---------------------------------------------------------------------------
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -149,7 +149,7 @@ function stripTokenIds(value: unknown): unknown {
 }
 
 // ---------------------------------------------------------------------------
-// Parse helper — mirrors the pattern used across existing test files.
+// Parse helper - mirrors the pattern used across existing test files.
 // ---------------------------------------------------------------------------
 function parseProgram(source: string): Program {
   const { tokens } = tokenize(source);
@@ -332,7 +332,7 @@ function evalFunctionBody(program: Program): RefValue {
 }
 
 // ---------------------------------------------------------------------------
-// Compiled runner — compile source, define the generated function, and call
+// Compiled runner - compile source, define the generated function, and call
 // it for its real return value.
 // Returns null when compilation produced no code or the shape is unexpected.
 // ---------------------------------------------------------------------------
@@ -347,7 +347,7 @@ function runCompiledSource(source: string): RefValue | null {
   // structurally matching the source, which is sensitive to whitespace,
   // parameter lists, and function ordering.
   if (!/\bfunction\s+compute\s*\(/.test(jsSource)) return null;
-  // Narrow the result at runtime — eval returns any, so we validate the type.
+  // Narrow the result at runtime - eval returns any, so we validate the type.
   const evalResult: unknown = runInNewContext(`${jsSource}\ncompute();`, {
     Math,
   });
@@ -428,7 +428,7 @@ describe("property: alpha-renaming preserves diagnostics", (): void => {
   it("alpha-rename preserves error-free status across multiple generated seeds", (): void => {
     for (const seed of [10, 20, 30, 40]) {
       const source = genComputeProgram(seed);
-      // Rename v0→z0, v1→z1, etc. at source level.
+      // Rename v0->z0, v1->z1, etc. at source level.
       const renamed = source.replace(
         /\bv(\d+)\b/g,
         (match: string) => `z${match.slice(1)}`,
@@ -493,7 +493,7 @@ describe("property: determinism", (): void => {
 });
 
 // ---------------------------------------------------------------------------
-// B) Differential / conformance tests — hand-written programs.
+// B) Differential / conformance tests - hand-written programs.
 // ---------------------------------------------------------------------------
 
 describe("differential: formal subset hand-written programs", (): void => {
@@ -590,7 +590,7 @@ describe("differential: generated programs", (): void => {
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         if (msg.startsWith("SKIP:")) {
-          // Unsupported construct in reference evaluator — explicit skip, not a failure.
+          // Unsupported construct in reference evaluator - explicit skip, not a failure.
           stdout.write(`[SKIP seed=${seed}] ${msg}\n`);
           return;
         }
@@ -610,7 +610,7 @@ describe("differential: generated programs", (): void => {
 });
 
 // ---------------------------------------------------------------------------
-// C) Integer semantics — differential tests that catch JS float vs Rust i32 divergence
+// C) Integer semantics - differential tests that catch JS float vs Rust i32 divergence
 // ---------------------------------------------------------------------------
 
 describe("differential: integer semantics", (): void => {
@@ -642,7 +642,7 @@ describe("differential: integer semantics", (): void => {
 });
 
 // ---------------------------------------------------------------------------
-// D) Algebraic laws — specification-level property tests
+// D) Algebraic laws - specification-level property tests
 // ---------------------------------------------------------------------------
 
 describe("property: algebraic laws", (): void => {

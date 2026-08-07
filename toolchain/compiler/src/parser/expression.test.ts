@@ -12,7 +12,7 @@ function parseProgram(source: string): Program {
   return program.value;
 }
 
-describe("binary expressions — smoke tests", (): void => {
+describe("binary expressions - smoke tests", (): void => {
   it("parses 1 + 2 as BinaryExpression(Add)", (): void => {
     const ast = parseProgram("1 + 2");
     expect(ast).toMatchObject({
@@ -155,7 +155,7 @@ describe("binary expressions — smoke tests", (): void => {
 });
 
 describe("operator precedence", (): void => {
-  it("1 + 2 * 3 parses as 1 + (2 * 3) — AC requirement", (): void => {
+  it("1 + 2 * 3 parses as 1 + (2 * 3) - AC requirement", (): void => {
     const ast = parseProgram("1 + 2 * 3");
     expect(ast).toMatchObject({
       items: [
@@ -193,7 +193,7 @@ describe("operator precedence", (): void => {
     });
   });
 
-  it("a || b && c parses as a || (b && c) — && is tighter than ||", (): void => {
+  it("a || b && c parses as a || (b && c) - && is tighter than ||", (): void => {
     const ast = parseProgram("a || b && c");
     expect(ast).toMatchObject({
       items: [
@@ -212,7 +212,7 @@ describe("operator precedence", (): void => {
     });
   });
 
-  it("a && b == c parses as a && (b == c) — comparison is tighter than &&", (): void => {
+  it("a && b == c parses as a && (b == c) - comparison is tighter than &&", (): void => {
     const ast = parseProgram("a && b == c");
     expect(ast).toMatchObject({
       items: [
@@ -231,7 +231,7 @@ describe("operator precedence", (): void => {
     });
   });
 
-  it("a == b + c * d parses as a == (b + (c * d)) — chain across three levels", (): void => {
+  it("a == b + c * d parses as a == (b + (c * d)) - chain across three levels", (): void => {
     const ast = parseProgram("a == b + c * d");
     expect(ast).toMatchObject({
       items: [
@@ -255,7 +255,7 @@ describe("operator precedence", (): void => {
     });
   });
 
-  it("a | b & c parses as a | (b & c) — BitAnd is tighter than BitOr", (): void => {
+  it("a | b & c parses as a | (b & c) - BitAnd is tighter than BitOr", (): void => {
     const ast = parseProgram("a | b & c");
     expect(ast).toMatchObject({
       items: [
@@ -274,7 +274,7 @@ describe("operator precedence", (): void => {
     });
   });
 
-  it("a ^ b | c parses as (a ^ b) | c — BitXor is tighter than BitOr", (): void => {
+  it("a ^ b | c parses as (a ^ b) | c - BitXor is tighter than BitOr", (): void => {
     const ast = parseProgram("a ^ b | c");
     expect(ast).toMatchObject({
       items: [
@@ -293,7 +293,7 @@ describe("operator precedence", (): void => {
     });
   });
 
-  it("a + b << c parses as (a + b) << c — Add is tighter than Shl", (): void => {
+  it("a + b << c parses as (a + b) << c - Add is tighter than Shl", (): void => {
     const ast = parseProgram("a + b << c");
     expect(ast).toMatchObject({
       items: [
@@ -408,7 +408,7 @@ describe("left-associativity", (): void => {
   });
 });
 
-describe("right-associativity — assignment", (): void => {
+describe("right-associativity - assignment", (): void => {
   it("x = 1 parses as AssignExpression", (): void => {
     const ast = parseProgram("x = 1");
     expect(ast).toMatchObject({
@@ -471,7 +471,7 @@ describe("right-associativity — assignment", (): void => {
   it.todo("if x = y { } is a parse success and a type error");
 });
 
-describe("non-associative operators — comparison", (): void => {
+describe("non-associative operators - comparison", (): void => {
   const NON_ASSOCIATIVE_OPERATORS: readonly [string, string][] = [
     ["a < b < c", "<"],
     ["a > b > c", ">"],
@@ -490,7 +490,7 @@ describe("non-associative operators — comparison", (): void => {
     },
   );
 
-  it("a < b > c is a syntax error — chaining different comparison operators", (): void => {
+  it("a < b > c is a syntax error - chaining different comparison operators", (): void => {
     const result = parse(tokenize("a < b > c").tokens);
     expect(result.program).toEqual(none());
     expect(result.diagnostics[0]?.message).toContain(
@@ -498,7 +498,7 @@ describe("non-associative operators — comparison", (): void => {
     );
   });
 
-  it("a < b == c is a syntax error — mixing non-associative operators at the same precedence level", (): void => {
+  it("a < b == c is a syntax error - mixing non-associative operators at the same precedence level", (): void => {
     const result = parse(tokenize("a < b == c").tokens);
     expect(result.program).toEqual(none());
     expect(result.diagnostics[0]?.message).toContain(
@@ -559,7 +559,7 @@ describe("unary expressions", (): void => {
     });
   });
 
-  it("-a * b parses as (-a) * b — unary prefix is tighter than multiplicative", (): void => {
+  it("-a * b parses as (-a) * b - unary prefix is tighter than multiplicative", (): void => {
     const ast = parseProgram("-a * b");
     expect(ast).toMatchObject({
       items: [
@@ -577,7 +577,7 @@ describe("unary expressions", (): void => {
     });
   });
 
-  it("!a || b parses as (!a) || b — unary prefix is tighter than logical", (): void => {
+  it("!a || b parses as (!a) || b - unary prefix is tighter than logical", (): void => {
     const ast = parseProgram("!a || b");
     expect(ast).toMatchObject({
       items: [
@@ -683,7 +683,7 @@ describe("unary expressions", (): void => {
   });
 });
 
-describe("grouping — transparent", (): void => {
+describe("grouping - transparent", (): void => {
   it("(1 + 2) * 3 parses as Mul(Add(1, 2), 3) with no GroupExpression node", (): void => {
     const ast = parseProgram("(1 + 2) * 3");
     expect(ast).toMatchObject({
@@ -722,7 +722,7 @@ describe("grouping — transparent", (): void => {
     });
   });
 
-  it("((a)) parses as a plain PathExpression — nested parens leave no trace", (): void => {
+  it("((a)) parses as a plain PathExpression - nested parens leave no trace", (): void => {
     const ast = parseProgram("((a))");
     expect(ast).toMatchObject({
       items: [
@@ -794,7 +794,7 @@ describe("call expression interactions", (): void => {
     });
   });
 
-  it("f()(g()) chains calls — inner call is an argument to the outer result", (): void => {
+  it("f()(g()) chains calls - inner call is an argument to the outer result", (): void => {
     const ast = parseProgram("f()(g())");
     expect(ast).toMatchObject({
       items: [
@@ -849,7 +849,7 @@ describe("field access", (): void => {
     });
   });
 
-  it("a.b + c.d — field access is tighter than addition", (): void => {
+  it("a.b + c.d - field access is tighter than addition", (): void => {
     const ast = parseProgram("a.b + c.d");
     expect(ast).toMatchObject({
       items: [
@@ -871,7 +871,7 @@ describe("field access", (): void => {
     });
   });
 
-  it("f().x — call and field access at the same precedence level, left-to-right", (): void => {
+  it("f().x - call and field access at the same precedence level, left-to-right", (): void => {
     const ast = parseProgram("f().x");
     expect(ast).toMatchObject({
       items: [
@@ -888,7 +888,7 @@ describe("field access", (): void => {
     });
   });
 
-  it("a.b() — method call syntax parses as MethodCallExpression", (): void => {
+  it("a.b() - method call syntax parses as MethodCallExpression", (): void => {
     const ast = parseProgram("a.b()");
     expect(ast).toMatchObject({
       items: [
@@ -902,7 +902,7 @@ describe("field access", (): void => {
     });
   });
 
-  it("(a.b)(c) — explicit field extraction then call is CallExpression, not MethodCallExpression", (): void => {
+  it("(a.b)(c) - explicit field extraction then call is CallExpression, not MethodCallExpression", (): void => {
     const ast = parseProgram("(a.b)(c)");
     expect(ast).toMatchObject({
       items: [
@@ -919,7 +919,7 @@ describe("field access", (): void => {
     });
   });
 
-  it("a.b * 2 + c.d — mixed precedence with field access at the tightest level", (): void => {
+  it("a.b * 2 + c.d - mixed precedence with field access at the tightest level", (): void => {
     const ast = parseProgram("a.b * 2 + c.d");
     expect(ast).toMatchObject({
       items: [
@@ -1299,7 +1299,7 @@ describe("adversarial / edge cases", (): void => {
     expect(result.diagnostics[0]?.message).toContain("Expected");
   });
 
-  it("a = b < c parses as Assign(a, Lt(b, c)) — lvalue check is semantic, not syntactic", (): void => {
+  it("a = b < c parses as Assign(a, Lt(b, c)) - lvalue check is semantic, not syntactic", (): void => {
     const ast = parseProgram("a = b < c");
     expect(ast).toMatchObject({
       items: [
@@ -1317,7 +1317,7 @@ describe("adversarial / edge cases", (): void => {
     });
   });
 
-  it("a < b = c parses as Assign(Lt(a, b), c) — assignment is looser than comparison", (): void => {
+  it("a < b = c parses as Assign(Lt(a, b), c) - assignment is looser than comparison", (): void => {
     const ast = parseProgram("a < b = c");
     expect(ast).toMatchObject({
       items: [
@@ -1335,7 +1335,7 @@ describe("adversarial / edge cases", (): void => {
     });
   });
 
-  it("1 + 2 = 3 parses as Assign(Add(1, 2), 3) — parser does not enforce lvalue", (): void => {
+  it("1 + 2 = 3 parses as Assign(Add(1, 2), 3) - parser does not enforce lvalue", (): void => {
     const ast = parseProgram("1 + 2 = 3");
     expect(ast).toMatchObject({
       items: [
@@ -1375,7 +1375,7 @@ describe("adversarial / edge cases", (): void => {
 });
 
 describe("if expressions", (): void => {
-  it("if true { 1 } — no else, block with trailing expression", (): void => {
+  it("if true { 1 } - no else, block with trailing expression", (): void => {
     const ast = parseProgram("if true { 1 }");
     expect(ast).toMatchObject({
       items: [
@@ -1393,7 +1393,7 @@ describe("if expressions", (): void => {
     });
   });
 
-  it("if cond { a } else { b } — both branches present", (): void => {
+  it("if cond { a } else { b } - both branches present", (): void => {
     const ast = parseProgram("if cond { a } else { b }");
     expect(ast).toMatchObject({
       items: [
@@ -1419,7 +1419,7 @@ describe("if expressions", (): void => {
     });
   });
 
-  it("if a { 1 } else if b { 2 } else { 3 } — else branch is IfExpression, not a desugared block", (): void => {
+  it("if a { 1 } else if b { 2 } else { 3 } - else branch is IfExpression, not a desugared block", (): void => {
     const ast = parseProgram("if a { 1 } else if b { 2 } else { 3 }");
     expect(ast).toMatchObject({
       items: [
@@ -1443,7 +1443,7 @@ describe("if expressions", (): void => {
     });
   });
 
-  it("if a { 1 } else if b { 2 } — else-if chain without terminal else", (): void => {
+  it("if a { 1 } else if b { 2 } - else-if chain without terminal else", (): void => {
     const ast = parseProgram("if a { 1 } else if b { 2 }");
     expect(ast).toMatchObject({
       items: [
@@ -1458,7 +1458,7 @@ describe("if expressions", (): void => {
     });
   });
 
-  it("let x = if cond { 1 } else { 2 }; — if expression as let initializer", (): void => {
+  it("let x = if cond { 1 } else { 2 }; - if expression as let initializer", (): void => {
     const ast = parseProgram("let x = if cond { 1 } else { 2 };");
     expect(ast).toMatchObject({
       items: [
@@ -1470,7 +1470,7 @@ describe("if expressions", (): void => {
     });
   });
 
-  it("if a + b > 0 { x } — compound binary condition", (): void => {
+  it("if a + b > 0 { x } - compound binary condition", (): void => {
     const ast = parseProgram("if a + b > 0 { x }");
     expect(ast).toMatchObject({
       items: [
@@ -1487,7 +1487,7 @@ describe("if expressions", (): void => {
     });
   });
 
-  it("if !flag { } — unary prefix in condition", (): void => {
+  it("if !flag { } - unary prefix in condition", (): void => {
     const ast = parseProgram("if !flag { }");
     expect(ast).toMatchObject({
       items: [
@@ -1508,7 +1508,7 @@ describe("if expressions", (): void => {
     });
   });
 
-  it("if a && b || c { } — logical operators retain correct precedence in condition", (): void => {
+  it("if a && b || c { } - logical operators retain correct precedence in condition", (): void => {
     const ast = parseProgram("if a && b || c { }");
     expect(ast).toMatchObject({
       items: [
@@ -1525,7 +1525,7 @@ describe("if expressions", (): void => {
     });
   });
 
-  it("if outer { if inner { 1 } else { 2 } } else { 3 } — nested if expressions", (): void => {
+  it("if outer { if inner { 1 } else { 2 } } else { 3 } - nested if expressions", (): void => {
     const ast = parseProgram(
       "if outer { if inner { 1 } else { 2 } } else { 3 }",
     );
@@ -1543,7 +1543,7 @@ describe("if expressions", (): void => {
     });
   });
 
-  it("if cond {} else {} — empty branches both yield unit blocks", (): void => {
+  it("if cond {} else {} - empty branches both yield unit blocks", (): void => {
     const ast = parseProgram("if cond {} else {}");
     expect(ast).toMatchObject({
       items: [
@@ -1564,7 +1564,7 @@ describe("if expressions", (): void => {
     });
   });
 
-  it("if { let x = 1; x > 0 } { result } — block expression as condition is valid", (): void => {
+  it("if { let x = 1; x > 0 } { result } - block expression as condition is valid", (): void => {
     const ast = parseProgram("if { let x = 1; x > 0 } { result }");
     expect(ast).toMatchObject({
       items: [
@@ -1582,7 +1582,7 @@ describe("if expressions", (): void => {
     });
   });
 
-  it("if (Foo { x: 1 }).flag { body } — struct expr inside parens is allowed as condition", (): void => {
+  it("if (Foo { x: 1 }).flag { body } - struct expr inside parens is allowed as condition", (): void => {
     const ast = parseProgram("if (Foo { x: 1 }).flag { body }");
     expect(ast).toMatchObject({
       items: [
@@ -1598,7 +1598,7 @@ describe("if expressions", (): void => {
     });
   });
 
-  it("if cond { Foo { x: 1 } } — struct expr in branch body is allowed", (): void => {
+  it("if cond { Foo { x: 1 } } - struct expr in branch body is allowed", (): void => {
     const ast = parseProgram("if cond { Foo { x: 1 } }");
     expect(ast).toMatchObject({
       items: [
@@ -1613,18 +1613,18 @@ describe("if expressions", (): void => {
     });
   });
 
-  it("if Foo { x: 1 } { body } — struct expr as direct if condition is a parse error", (): void => {
+  it("if Foo { x: 1 } { body } - struct expr as direct if condition is a parse error", (): void => {
     const result = parse(tokenize("if Foo { x: 1 } { body }").tokens);
     expect(result.program).toEqual(none());
   });
 
-  it("if cond is missing then-block — error", (): void => {
+  it("if cond is missing then-block - error", (): void => {
     const result = parse(tokenize("if cond").tokens);
     expect(result.program).toEqual(none());
     expect(result.diagnostics[0]?.message).toContain("{");
   });
 
-  it("if cond { a } else with no block — error", (): void => {
+  it("if cond { a } else with no block - error", (): void => {
     const result = parse(tokenize("if cond { a } else 42").tokens);
     expect(result.program).toEqual(none());
   });
@@ -2326,7 +2326,7 @@ describe("Slice 3 pattern kinds - tuple-struct and path patterns", (): void => {
     expect(result.program).toEqual(none());
   });
 
-  it("parses a mut sigil applied to a tuple-struct pattern as a real, mutable TupleStructPattern (Hedge-47)", (): void => {
+  it("parses a mut sigil applied to a tuple-struct pattern as a real, mutable TupleStructPattern", (): void => {
     const ast = parseProgram("match x { mut Some(x) => x }");
     expect(ast).toMatchObject({
       items: [
@@ -2900,7 +2900,7 @@ describe("bare `while`/`loop`/`for` regression after while-let support", (): voi
 });
 
 describe("block expressions", (): void => {
-  it("{ } — empty block yields unit (no trailing expression)", (): void => {
+  it("{ } - empty block yields unit (no trailing expression)", (): void => {
     const ast = parseProgram("{ }");
     expect(ast).toMatchObject({
       items: [
@@ -2913,7 +2913,7 @@ describe("block expressions", (): void => {
     });
   });
 
-  it("{ let x = 1; } — block ending in statement yields unit", (): void => {
+  it("{ let x = 1; } - block ending in statement yields unit", (): void => {
     const ast = parseProgram("{ let x = 1; }");
     expect(ast).toMatchObject({
       items: [
@@ -2926,7 +2926,7 @@ describe("block expressions", (): void => {
     });
   });
 
-  it("{ let x = 1; x } — block with trailing expression yields that expression", (): void => {
+  it("{ let x = 1; x } - block with trailing expression yields that expression", (): void => {
     const ast = parseProgram("{ let x = 1; x }");
     expect(ast).toMatchObject({
       items: [
@@ -2942,7 +2942,7 @@ describe("block expressions", (): void => {
     });
   });
 
-  it("{ 1; } — expression followed by semicolon becomes a statement, no trailing expression", (): void => {
+  it("{ 1; } - expression followed by semicolon becomes a statement, no trailing expression", (): void => {
     const ast = parseProgram("{ 1; }");
     expect(ast).toMatchObject({
       items: [
@@ -2955,7 +2955,7 @@ describe("block expressions", (): void => {
     });
   });
 
-  it("{ 1 } — integer literal as trailing expression", (): void => {
+  it("{ 1 } - integer literal as trailing expression", (): void => {
     const ast = parseProgram("{ 1 }");
     expect(ast).toMatchObject({
       items: [
@@ -2968,7 +2968,7 @@ describe("block expressions", (): void => {
     });
   });
 
-  it("let x = { 1 + 2 }; — block expression as let initializer", (): void => {
+  it("let x = { 1 + 2 }; - block expression as let initializer", (): void => {
     const ast = parseProgram("let x = { 1 + 2 };");
     expect(ast).toMatchObject({
       items: [
@@ -2986,7 +2986,7 @@ describe("block expressions", (): void => {
     });
   });
 
-  it("{ { 1 } } — inner block is the trailing expression of outer block", (): void => {
+  it("{ { 1 } } - inner block is the trailing expression of outer block", (): void => {
     const ast = parseProgram("{ { 1 } }");
     expect(ast).toMatchObject({
       items: [
@@ -3010,14 +3010,14 @@ describe("block expressions", (): void => {
 });
 
 describe("tuple expressions and unit", (): void => {
-  it("() — unit is a zero-element TupleExpression", (): void => {
+  it("() - unit is a zero-element TupleExpression", (): void => {
     const ast = parseProgram("()");
     expect(ast).toMatchObject({
       items: [{ kind: "TupleExpression", elements: [] }],
     });
   });
 
-  it("(1,) — single-element tuple requires trailing comma to disambiguate from grouping", (): void => {
+  it("(1,) - single-element tuple requires trailing comma to disambiguate from grouping", (): void => {
     const ast = parseProgram("(1,)");
     expect(ast).toMatchObject({
       items: [
@@ -3029,7 +3029,7 @@ describe("tuple expressions and unit", (): void => {
     });
   });
 
-  it("(1, 2) — two-element tuple", (): void => {
+  it("(1, 2) - two-element tuple", (): void => {
     const ast = parseProgram("(1, 2)");
     expect(ast).toMatchObject({
       items: [
@@ -3044,7 +3044,7 @@ describe("tuple expressions and unit", (): void => {
     });
   });
 
-  it("(1, 2,) — trailing comma on multi-element tuple is accepted", (): void => {
+  it("(1, 2,) - trailing comma on multi-element tuple is accepted", (): void => {
     const ast = parseProgram("(1, 2,)");
     expect(ast).toMatchObject({
       items: [
@@ -3056,7 +3056,7 @@ describe("tuple expressions and unit", (): void => {
     });
   });
 
-  it("(1) — single expression without trailing comma is transparent grouping", (): void => {
+  it("(1) - single expression without trailing comma is transparent grouping", (): void => {
     const ast = parseProgram("(1)");
     expect(ast).toMatchObject({
       items: [{ kind: "IntLiteral", value: "1" }],
@@ -3066,7 +3066,7 @@ describe("tuple expressions and unit", (): void => {
     expect(item.kind).not.toBe("TupleExpression");
   });
 
-  it("((1, 2), 3) — nested tuple", (): void => {
+  it("((1, 2), 3) - nested tuple", (): void => {
     const ast = parseProgram("((1, 2), 3)");
     expect(ast).toMatchObject({
       items: [
@@ -3084,7 +3084,7 @@ describe("tuple expressions and unit", (): void => {
     });
   });
 
-  it("(a + b, c * d) — expressions as tuple elements", (): void => {
+  it("(a + b, c * d) - expressions as tuple elements", (): void => {
     const ast = parseProgram("(a + b, c * d)");
     expect(ast).toMatchObject({
       items: [
@@ -3099,7 +3099,7 @@ describe("tuple expressions and unit", (): void => {
     });
   });
 
-  it("let u: () = (); — unit type annotation with unit initializer", (): void => {
+  it("let u: () = (); - unit type annotation with unit initializer", (): void => {
     const ast = parseProgram("let u: () = ();");
     expect(ast).toMatchObject({
       items: [
@@ -3117,7 +3117,7 @@ describe("tuple expressions and unit", (): void => {
     expect(result.program).toEqual(none());
   });
 
-  it("(1 2) — missing comma between tuple elements is an error", (): void => {
+  it("(1 2) - missing comma between tuple elements is an error", (): void => {
     const result = parse(tokenize("(1 2)").tokens);
     expect(result.program).toEqual(none());
     expect(result.diagnostics).toMatchObject([
@@ -3130,7 +3130,7 @@ describe("tuple expressions and unit", (): void => {
 });
 
 describe("array expressions", (): void => {
-  it("[1, 2, 3] — list-form array literal", (): void => {
+  it("[1, 2, 3] - list-form array literal", (): void => {
     const ast = parseProgram("[1, 2, 3]");
     expect(ast).toMatchObject({
       items: [
@@ -3146,7 +3146,7 @@ describe("array expressions", (): void => {
     });
   });
 
-  it("[1, 2, 3,] — trailing comma on a list-form array literal is accepted", (): void => {
+  it("[1, 2, 3,] - trailing comma on a list-form array literal is accepted", (): void => {
     const ast = parseProgram("[1, 2, 3,]");
     expect(ast).toMatchObject({
       items: [
@@ -3162,14 +3162,14 @@ describe("array expressions", (): void => {
     });
   });
 
-  it("[] — empty list-form array literal parses with zero elements", (): void => {
+  it("[] - empty list-form array literal parses with zero elements", (): void => {
     const ast = parseProgram("[]");
     expect(ast).toMatchObject({
       items: [{ kind: "ArrayExpression", elements: [] }],
     });
   });
 
-  it("[0; 5] — repeat-form array literal", (): void => {
+  it("[0; 5] - repeat-form array literal", (): void => {
     const ast = parseProgram("[0; 5]");
     expect(ast).toMatchObject({
       items: [
@@ -3182,7 +3182,7 @@ describe("array expressions", (): void => {
     });
   });
 
-  it("[[1, 2], [3, 4]] — nested array literals", (): void => {
+  it("[[1, 2], [3, 4]] - nested array literals", (): void => {
     const ast = parseProgram("[[1, 2], [3, 4]]");
     expect(ast).toMatchObject({
       items: [
@@ -3203,7 +3203,7 @@ describe("array expressions", (): void => {
     });
   });
 
-  it("[a + b, c * d] — expressions as array elements", (): void => {
+  it("[a + b, c * d] - expressions as array elements", (): void => {
     const ast = parseProgram("[a + b, c * d]");
     expect(ast).toMatchObject({
       items: [
@@ -3223,14 +3223,14 @@ describe("array expressions", (): void => {
     expect(result.program).toEqual(none());
   });
 
-  it("[1 2] — missing comma between array elements is an error", (): void => {
+  it("[1 2] - missing comma between array elements is an error", (): void => {
     const result = parse(tokenize("[1 2]").tokens);
     expect(result.program).toEqual(none());
   });
 });
 
 describe("index expressions", (): void => {
-  it("a[0] — simple integer index", (): void => {
+  it("a[0] - simple integer index", (): void => {
     const ast = parseProgram("a[0]");
     expect(ast).toMatchObject({
       items: [
@@ -3243,7 +3243,7 @@ describe("index expressions", (): void => {
     });
   });
 
-  it("a[b + c] — expression as index", (): void => {
+  it("a[b + c] - expression as index", (): void => {
     const ast = parseProgram("a[b + c]");
     expect(ast).toMatchObject({
       items: [
@@ -3256,7 +3256,7 @@ describe("index expressions", (): void => {
     });
   });
 
-  it("a[b][c] — index is left-associative", (): void => {
+  it("a[b][c] - index is left-associative", (): void => {
     const ast = parseProgram("a[b][c]");
     expect(ast).toMatchObject({
       items: [
@@ -3273,7 +3273,7 @@ describe("index expressions", (): void => {
     });
   });
 
-  it("a[b.c] — field access as index", (): void => {
+  it("a[b.c] - field access as index", (): void => {
     const ast = parseProgram("a[b.c]");
     expect(ast).toMatchObject({
       items: [
@@ -3289,7 +3289,7 @@ describe("index expressions", (): void => {
     });
   });
 
-  it("f()[0] — index on a call result", (): void => {
+  it("f()[0] - index on a call result", (): void => {
     const ast = parseProgram("f()[0]");
     expect(ast).toMatchObject({
       items: [
@@ -3305,7 +3305,7 @@ describe("index expressions", (): void => {
     });
   });
 
-  it("a[b] * 2 — index binds tighter than multiplication", (): void => {
+  it("a[b] * 2 - index binds tighter than multiplication", (): void => {
     const ast = parseProgram("a[b] * 2");
     expect(ast).toMatchObject({
       items: [
@@ -3325,14 +3325,14 @@ describe("index expressions", (): void => {
     expect(result.diagnostics[0]?.message).toContain("]");
   });
 
-  it("a[] — empty index expression is an error", (): void => {
+  it("a[] - empty index expression is an error", (): void => {
     const result = parse(tokenize("a[]").tokens);
     expect(result.program).toEqual(none());
   });
 });
 
 describe("method call expressions", (): void => {
-  it("a.method() — no-arg method call", (): void => {
+  it("a.method() - no-arg method call", (): void => {
     const ast = parseProgram("a.method()");
     expect(ast).toMatchObject({
       items: [
@@ -3346,7 +3346,7 @@ describe("method call expressions", (): void => {
     });
   });
 
-  it("a.method(b, c) — method call with arguments", (): void => {
+  it("a.method(b, c) - method call with arguments", (): void => {
     const ast = parseProgram("a.method(b, c)");
     expect(ast).toMatchObject({
       items: [
@@ -3363,7 +3363,7 @@ describe("method call expressions", (): void => {
     });
   });
 
-  it("a.method(b, c,) — trailing comma in method arguments is accepted", (): void => {
+  it("a.method(b, c,) - trailing comma in method arguments is accepted", (): void => {
     const ast = parseProgram("a.method(b, c,)");
     expect(ast).toMatchObject({
       items: [
@@ -3375,7 +3375,7 @@ describe("method call expressions", (): void => {
     });
   });
 
-  it("a.b.method() — receiver is a FieldAccessExpression", (): void => {
+  it("a.b.method() - receiver is a FieldAccessExpression", (): void => {
     const ast = parseProgram("a.b.method()");
     expect(ast).toMatchObject({
       items: [
@@ -3392,7 +3392,7 @@ describe("method call expressions", (): void => {
     });
   });
 
-  it("a.method().field — method call result used in field access", (): void => {
+  it("a.method().field - method call result used in field access", (): void => {
     const ast = parseProgram("a.method().field");
     expect(ast).toMatchObject({
       items: [
@@ -3409,7 +3409,7 @@ describe("method call expressions", (): void => {
     });
   });
 
-  it("a.method().other() — chained method calls", (): void => {
+  it("a.method().other() - chained method calls", (): void => {
     const ast = parseProgram("a.method().other()");
     expect(ast).toMatchObject({
       items: [
@@ -3422,7 +3422,7 @@ describe("method call expressions", (): void => {
     });
   });
 
-  it("(a + b).method() — grouped expression as receiver", (): void => {
+  it("(a + b).method() - grouped expression as receiver", (): void => {
     const ast = parseProgram("(a + b).method()");
     expect(ast).toMatchObject({
       items: [
@@ -3435,7 +3435,7 @@ describe("method call expressions", (): void => {
     });
   });
 
-  it("a.b — plain field access is still FieldAccessExpression", (): void => {
+  it("a.b - plain field access is still FieldAccessExpression", (): void => {
     const ast = parseProgram("a.b");
     expect(ast).toMatchObject({
       items: [{ kind: "FieldAccessExpression" }],
@@ -3599,14 +3599,14 @@ describe("turbofish", (): void => {
 });
 
 describe("comparison expressions unaffected by turbofish guardrail", (): void => {
-  it("a < b — plain comparison is unaffected", (): void => {
+  it("a < b - plain comparison is unaffected", (): void => {
     const ast = parseProgram("a < b");
     expect(ast).toMatchObject({
       items: [{ kind: "BinaryExpression", operator: "Lt" }],
     });
   });
 
-  it("a < b > c — still the existing non-assoc chain error, not the turbofish diagnostic", (): void => {
+  it("a < b > c - still the existing non-assoc chain error, not the turbofish diagnostic", (): void => {
     const { program, diagnostics } = parse(tokenize("a < b > c").tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
@@ -3616,28 +3616,28 @@ describe("comparison expressions unaffected by turbofish guardrail", (): void =>
     expect(diagnostics[0].message).not.toContain("generic");
   });
 
-  it("if x < y { } — comparison in condition position is unaffected", (): void => {
+  it("if x < y { } - comparison in condition position is unaffected", (): void => {
     const ast = parseProgram("if x < y { }");
     expect(ast).toMatchObject({
       items: [{ kind: "IfExpression" }],
     });
   });
 
-  it("a << b — shift is unaffected", (): void => {
+  it("a << b - shift is unaffected", (): void => {
     const ast = parseProgram("a << b");
     expect(ast).toMatchObject({
       items: [{ kind: "BinaryExpression", operator: "Shl" }],
     });
   });
 
-  it("a >> b — shift is unaffected", (): void => {
+  it("a >> b - shift is unaffected", (): void => {
     const ast = parseProgram("a >> b");
     expect(ast).toMatchObject({
       items: [{ kind: "BinaryExpression", operator: "Shr" }],
     });
   });
 
-  it("foo < bar — a bare path (no ::) followed by < is comparison, not a misdetected turbofish", (): void => {
+  it("foo < bar - a bare path (no ::) followed by < is comparison, not a misdetected turbofish", (): void => {
     const ast = parseProgram("foo < bar");
     expect(ast).toMatchObject({
       items: [
@@ -3653,7 +3653,7 @@ describe("comparison expressions unaffected by turbofish guardrail", (): void =>
 });
 
 describe("struct expressions", (): void => {
-  it("Foo {} — empty struct expression", (): void => {
+  it("Foo {} - empty struct expression", (): void => {
     const ast = parseProgram("Foo {}");
     expect(ast).toMatchObject({
       items: [
@@ -3667,7 +3667,7 @@ describe("struct expressions", (): void => {
     });
   });
 
-  it("Foo { x: 1 } — single explicit field", (): void => {
+  it("Foo { x: 1 } - single explicit field", (): void => {
     const ast = parseProgram("Foo { x: 1 }");
     expect(ast).toMatchObject({
       items: [
@@ -3687,7 +3687,7 @@ describe("struct expressions", (): void => {
     });
   });
 
-  it("Foo { x: 1, y: 2 } — multiple fields", (): void => {
+  it("Foo { x: 1, y: 2 } - multiple fields", (): void => {
     const ast = parseProgram("Foo { x: 1, y: 2 }");
     expect(ast).toMatchObject({
       items: [
@@ -3708,7 +3708,7 @@ describe("struct expressions", (): void => {
     });
   });
 
-  it("Foo { x: 1, y: 2, } — trailing comma is accepted", (): void => {
+  it("Foo { x: 1, y: 2, } - trailing comma is accepted", (): void => {
     const ast = parseProgram("Foo { x: 1, y: 2, }");
     expect(ast).toMatchObject({
       items: [
@@ -3720,7 +3720,7 @@ describe("struct expressions", (): void => {
     });
   });
 
-  it("Foo { x } — shorthand field initializer (value is none)", (): void => {
+  it("Foo { x } - shorthand field initializer (value is none)", (): void => {
     const ast = parseProgram("Foo { x }");
     expect(ast).toMatchObject({
       items: [
@@ -3738,7 +3738,7 @@ describe("struct expressions", (): void => {
     });
   });
 
-  it("Foo { x: 1, ..base } — struct update spread is parsed; base captured", (): void => {
+  it("Foo { x: 1, ..base } - struct update spread is parsed; base captured", (): void => {
     const ast = parseProgram("Foo { x: 1, ..base }");
     expect(ast).toMatchObject({
       items: [
@@ -3751,14 +3751,14 @@ describe("struct expressions", (): void => {
     });
   });
 
-  it("Foo { x: 1, ..base } — struct update spread emits a not-yet-supported diagnostic", (): void => {
+  it("Foo { x: 1, ..base } - struct update spread emits a not-yet-supported diagnostic", (): void => {
     const result = parse(tokenize("Foo { x: 1, ..base }").tokens);
     expect(
       result.diagnostics.some((d) => d.message.toLowerCase().includes("not")),
     ).toBe(true);
   });
 
-  it("ns::Foo { x: 1 } — qualified path in struct expression", (): void => {
+  it("ns::Foo { x: 1 } - qualified path in struct expression", (): void => {
     const ast = parseProgram("ns::Foo { x: 1 }");
     expect(ast).toMatchObject({
       items: [
@@ -3770,7 +3770,7 @@ describe("struct expressions", (): void => {
     });
   });
 
-  it("Foo { x: 1, ..base, y: 2 } — spread must be last field; error otherwise", (): void => {
+  it("Foo { x: 1, ..base, y: 2 } - spread must be last field; error otherwise", (): void => {
     const result = parse(tokenize("Foo { x: 1, ..base, y: 2 }").tokens);
     expect(result.program).toEqual(none());
   });
@@ -3783,7 +3783,7 @@ describe("struct expressions", (): void => {
 });
 
 describe("composition / integration", (): void => {
-  it("a[i].field — index then field access", (): void => {
+  it("a[i].field - index then field access", (): void => {
     const ast = parseProgram("a[i].field");
     expect(ast).toMatchObject({
       items: [
@@ -3800,7 +3800,7 @@ describe("composition / integration", (): void => {
     });
   });
 
-  it("a.method()[i] — method call result used as index base", (): void => {
+  it("a.method()[i] - method call result used as index base", (): void => {
     const ast = parseProgram("a.method()[i]");
     expect(ast).toMatchObject({
       items: [
@@ -3813,7 +3813,7 @@ describe("composition / integration", (): void => {
     });
   });
 
-  it("if cond { a[i] } else { b.c } — complex expressions in if branches", (): void => {
+  it("if cond { a[i] } else { b.c } - complex expressions in if branches", (): void => {
     const ast = parseProgram("if cond { a[i] } else { b.c }");
     expect(ast).toMatchObject({
       items: [
@@ -3828,7 +3828,7 @@ describe("composition / integration", (): void => {
     });
   });
 
-  it("{ let t = (1, 2); t } — tuple in block expression", (): void => {
+  it("{ let t = (1, 2); t } - tuple in block expression", (): void => {
     const ast = parseProgram("{ let t = (1, 2); t }");
     expect(ast).toMatchObject({
       items: [
@@ -3849,7 +3849,7 @@ describe("composition / integration", (): void => {
     });
   });
 
-  it("f(Foo { x: 1 }) — struct expression as function argument is allowed", (): void => {
+  it("f(Foo { x: 1 }) - struct expression as function argument is allowed", (): void => {
     const ast = parseProgram("f(Foo { x: 1 })");
     expect(ast).toMatchObject({
       items: [
@@ -3864,7 +3864,7 @@ describe("composition / integration", (): void => {
     });
   });
 
-  it("a.method(b[0], Foo { x: c }) — mixed argument types", (): void => {
+  it("a.method(b[0], Foo { x: c }) - mixed argument types", (): void => {
     const ast = parseProgram("a.method(b[0], Foo { x: c })");
     expect(ast).toMatchObject({
       items: [
@@ -3880,6 +3880,6 @@ describe("composition / integration", (): void => {
   });
 
   it.todo(
-    "(1, 2).0 — tuple element access via DecInt field (requires FieldAccess to accept IntLiteral)",
+    "(1, 2).0 - tuple element access via DecInt field (requires FieldAccess to accept IntLiteral)",
   );
 });

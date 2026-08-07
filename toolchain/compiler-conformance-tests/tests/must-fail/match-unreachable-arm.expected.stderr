@@ -1,1 +1,1 @@
-error: unreachable pattern
+error[HEDGE-PATTERN-003]: unreachable pattern

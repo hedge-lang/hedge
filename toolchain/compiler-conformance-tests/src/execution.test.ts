@@ -94,7 +94,7 @@ describe("execution tests", (): void => {
 
     it("arithmetic right shift is signed (sign-extending)", (): void => {
       // Rust and JS both use arithmetic (sign-extending) >>
-      // -8 in binary: 1111…1000; >> 1 = 1111…1100 = -4
+      // -8 in binary: 1111...1000; >> 1 = 1111...1100 = -4
       assertRunsTo(`fn main() { print(-8 >> 1); }`, ["-4"]);
     });
 

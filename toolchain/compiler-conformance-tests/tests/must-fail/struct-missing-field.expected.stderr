@@ -1,1 +1,1 @@
-error: missing required field `y` in struct literal of type `Foo`
+error[HEDGE-TYPE-008]: missing required field `y` in struct literal of type `Foo`

@@ -591,42 +591,42 @@ describe("lexer", (): void => {
         expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
       });
 
-      it("r#$ — raw ident starting with dollar sign", () => {
+      it("r#$ - raw ident starting with dollar sign", () => {
         expect(tokenize("r#$").tokens[0]).toMatchObject({
           kind: "ident",
           text: "$",
         });
       });
 
-      it("r#_ — raw ident starting with underscore", () => {
+      it("r#_ - raw ident starting with underscore", () => {
         expect(tokenize("r#_").tokens[0]).toMatchObject({
           kind: "ident",
           text: "_",
         });
       });
 
-      it("r#r — raw ident where the name is the sigil character", () => {
+      it("r#r - raw ident where the name is the sigil character", () => {
         expect(tokenize("r#r").tokens[0]).toMatchObject({
           kind: "ident",
           text: "r",
         });
       });
 
-      it("r#true — boolean keyword escaped as raw ident", () => {
+      it("r#true - boolean keyword escaped as raw ident", () => {
         expect(tokenize("r#true").tokens[0]).toMatchObject({
           kind: "ident",
           text: "true",
         });
       });
 
-      it("r#false — boolean keyword escaped as raw ident", () => {
+      it("r#false - boolean keyword escaped as raw ident", () => {
         expect(tokenize("r#false").tokens[0]).toMatchObject({
           kind: "ident",
           text: "false",
         });
       });
 
-      it("r#π — raw ident with Unicode IdentStart", () => {
+      it("r#π - raw ident with Unicode IdentStart", () => {
         expect(tokenize("r#π").tokens[0]).toMatchObject({
           kind: "ident",
           text: "π",
@@ -933,14 +933,14 @@ describe("string literals", () => {
     });
 
     it("escaped backslash \\\\", () => {
-      // Hedge source: "\\" — a string containing one backslash
+      // Hedge source: "\\" - a string containing one backslash
       const { tokens } = tokenize(`"\\\\"`);
       expect(tokens).toMatchObject([{ kind: "string" }, { kind: "eof" }]);
       expect(tokens).toHaveLength(2);
     });
 
     it('escaped double quote \\"', () => {
-      // Hedge source: "\"hello\"" — escapes preserved in token text
+      // Hedge source: "\"hello\"" - escapes preserved in token text
       const { tokens } = tokenize(`"\\"hello\\""`);
       expect(tokens).toMatchObject([{ kind: "string" }, { kind: "eof" }]);
     });
@@ -1400,7 +1400,7 @@ describe("float literals", () => {
       });
     });
 
-    it("method call on int: 1.method → int dot ident", () => {
+    it("method call on int: 1.method -> int dot ident", () => {
       expect(tokenize("1.method").tokens).toMatchObject([
         { kind: "int", text: "1", radix: 10, suffix: none() },
         { kind: "dot" },
@@ -1409,7 +1409,7 @@ describe("float literals", () => {
       ]);
     });
 
-    it("method call on float: 1.5.method → float dot ident", () => {
+    it("method call on float: 1.5.method -> float dot ident", () => {
       expect(tokenize("1.5.method").tokens).toMatchObject([
         { kind: "float", text: "1.5", suffix: none() },
         { kind: "dot" },
@@ -1636,14 +1636,14 @@ describe("char literals", () => {
       });
     });
 
-    it("'ab' does not form a char literal — falls back to lifetime 'ab", () => {
+    it("'ab' does not form a char literal - falls back to lifetime 'ab", () => {
       const { tokens } = tokenize("'ab'");
       // 'ab' is a lifetime named "ab" (whole ident body), then ' is an error
       expect(tokens[0]).toMatchObject({ kind: "lifetime", text: "ab" });
     });
 
-    it("literal newline in char position is rejected — ' with \\n as n1 falls to error path", () => {
-      // Source: '  newline  '  — n1 === "\n" blocks the single-char branch
+    it("literal newline in char position is rejected - ' with \\n as n1 falls to error path", () => {
+      // Source: '  newline  '  - n1 === "\n" blocks the single-char branch
       const { tokens } = tokenize("'\n'");
       expect(tokens[0]).toMatchObject({ kind: "error" });
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
@@ -1673,7 +1673,7 @@ describe("symbol tokens", () => {
     [":", "colon"],
     ["@", "at"],
     ["?", "question"],
-  ])("%s → %s", (src, kind) => {
+  ])("%s -> %s", (src, kind) => {
     expect(tokenize(src).tokens[0]).toMatchObject({ kind });
   });
 
@@ -1836,7 +1836,7 @@ describe("comment edge cases", () => {
 });
 
 describe("raw identifier additional cases", () => {
-  it("r#a1_$ — raw ident with mixed continue chars has correct span", () => {
+  it("r#a1_$ - raw ident with mixed continue chars has correct span", () => {
     expect(tokenize("r#a1_$").tokens[0]).toMatchObject({
       kind: "ident",
       text: "a1_$",
@@ -1855,7 +1855,7 @@ describe("raw identifier additional cases", () => {
 
 describe("keyword adversarial", () => {
   it.each(["fn_write", "let_bind", "loop_package"])(
-    "%s is a single ident token — keyword prefix must not split",
+    "%s is a single ident token - keyword prefix must not split",
     (src) => {
       const { tokens } = tokenize(src);
       expect(tokens[0]).toMatchObject({ kind: "ident", text: src });
@@ -1924,7 +1924,7 @@ describe("operator token spans", () => {
     ["&=", "amp_eq", 2],
     ["|=", "pipe_eq", 2],
     ["^=", "caret_eq", 2],
-  ])('"%s" → %s with span {0, %i}', (src, kind, length) => {
+  ])('"%s" -> %s with span {0, %i}', (src, kind, length) => {
     expect(tokenize(src).tokens[0]).toMatchObject({
       kind,
       span: { start: 0, end: length },
@@ -2155,7 +2155,7 @@ describe("operator tokens in expression contexts", () => {
   });
 });
 
-describe("operator token disambiguation — adversarial", () => {
+describe("operator token disambiguation - adversarial", () => {
   it("=== splits as eq_eq then eq (no triple-equals token)", () => {
     expect(tokenize("===").tokens).toMatchObject([
       { kind: "eq_eq" },

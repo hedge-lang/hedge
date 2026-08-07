@@ -1,0 +1,11 @@
+enum Message {
+  Quit,
+  Move,
+}
+
+fn describe(m: Message) -> i32 {
+  match m {
+    7 => 0,
+    _ => 1,
+  }
+}

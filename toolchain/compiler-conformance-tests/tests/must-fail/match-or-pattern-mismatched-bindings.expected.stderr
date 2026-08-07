@@ -1,1 +1,1 @@
-error: or-pattern alternatives must bind the same names; `n`, `m` are not bound by every alternative
+error[HEDGE-PATTERN-004]: or-pattern alternatives must bind the same names; `n`, `m` are not bound by every alternative

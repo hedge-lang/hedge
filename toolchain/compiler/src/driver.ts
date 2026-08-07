@@ -51,8 +51,8 @@ function hasError(diagnostics: readonly Diagnostic[]): boolean {
 }
 
 /**
- * Compile Hedge source to JavaScript. Runs the full pipeline — lex, parse,
- * resolve, borrow-check, optimize, generate — and collects diagnostics. `code`
+ * Compile Hedge source to JavaScript. Runs the full pipeline - lex, parse,
+ * resolve, borrow-check, optimize, generate - and collects diagnostics. `code`
  * is `none()` when any error diagnostic is reported.
  */
 export function compile(

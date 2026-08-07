@@ -422,25 +422,25 @@ describe("binary expression codegen", () => {
     ).toThrow();
   });
 
-  it("(x + y) * z — parens preserved because + binds looser than *", () => {
+  it("(x + y) * z - parens preserved because + binds looser than *", () => {
     expect(stmts(gen("fn _(x: (), y: (), z: ()) { (x + y) * z; }"))).toBe(
       "(x + y) * z;",
     );
   });
 
-  it("x + y * z — no parens needed, * binds tighter", () => {
+  it("x + y * z - no parens needed, * binds tighter", () => {
     expect(stmts(gen("fn _(x: (), y: (), z: ()) { x + y * z; }"))).toBe(
       "x + y * z;",
     );
   });
 
-  it("x - (y - z) — right-side same-precedence op is parenthesised", () => {
+  it("x - (y - z) - right-side same-precedence op is parenthesised", () => {
     expect(stmts(gen("fn _(x: (), y: (), z: ()) { x - (y - z); }"))).toBe(
       "x - (y - z);",
     );
   });
 
-  it("x || y && z — && binds tighter than ||, no parens needed", () => {
+  it("x || y && z - && binds tighter than ||, no parens needed", () => {
     expect(stmts(gen("fn _(x: bool, y: bool, z: bool) { x || y && z; }"))).toBe(
       "x || y && z;",
     );
@@ -758,6 +758,30 @@ describe("struct expression codegen", () => {
         ),
       ),
     ).toBe("({...base, x: 1, [Symbol.dispose]() {}});");
+  });
+});
+
+describe("enum payload disposal codegen", () => {
+  const DECLS =
+    "struct Leaf { v: i32 } struct Mid { l: Leaf } enum E { A(Mid), B { m: Mid }, C }";
+
+  it("disposes a tuple variant's payload through the array dispose helper", () => {
+    const out = js(gen(`${DECLS} fn _() { E::A(Mid { l: Leaf { v: 1 } }); }`));
+    expect(out).toContain("__hedgeDisposeArray([");
+    expect(out).toContain("[Symbol.dispose]() { using _d0 = this.data; }");
+  });
+
+  it("disposes a struct variant's payload", () => {
+    const out = js(
+      gen(`${DECLS} fn _() { E::B { m: Mid { l: Leaf { v: 2 } } }; }`),
+    );
+    expect(out).toContain("[Symbol.dispose]() { using _d0 = this.data; }");
+  });
+
+  it("leaves a unit variant's disposer empty, since it carries no payload", () => {
+    expect(stmts(gen(`${DECLS} fn _() { E::C; }`))).toBe(
+      '({tag: "C", [Symbol.dispose]() {}});',
+    );
   });
 });
 

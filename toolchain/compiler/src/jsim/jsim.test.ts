@@ -374,7 +374,7 @@ describe("toJsim", () => {
   });
 
   describe("reference expressions", () => {
-    it("ReferenceExpression is transparent — emits the operand directly", () => {
+    it("ReferenceExpression is transparent - emits the operand directly", () => {
       const program = jsimSource("&x;");
       expect(program.items[0]).toMatchObject({
         kind: "Identifier",
@@ -451,7 +451,7 @@ describe("toJsim", () => {
   describe("unknown param types", () => {
     it.todo(
       "unknown param type emits FunctionParam with type { kind: 'PrimitiveType', value: 'unknown' }" +
-        " — currently the param is silently dropped; correct behavior is to emit `unknown`",
+        " - currently the param is silently dropped; correct behavior is to emit `unknown`",
     );
   });
 
@@ -738,6 +738,44 @@ describe("toJsim", () => {
     });
   });
 
+  describe("alpha-rename of names JS cannot use", () => {
+    it("renames a binding whose name is a JS reserved word", () => {
+      const program = jsimSource("fn main() { let default = 1; }");
+      expect(program).toMatchObject({
+        items: [
+          {
+            kind: "FunctionDecl",
+            body: [{ kind: "LetStatement", name: "default$1" }],
+          },
+        ],
+      });
+    });
+
+    it("renames a binding that would shadow a global the emitted code calls", () => {
+      const program = jsimSource("fn main() { let Symbol = 1; }");
+      expect(program).toMatchObject({
+        items: [
+          {
+            kind: "FunctionDecl",
+            body: [{ kind: "LetStatement", name: "Symbol$1" }],
+          },
+        ],
+      });
+    });
+
+    it("leaves a name that is neither reserved nor a depended-on global alone", () => {
+      const program = jsimSource("fn main() { let constructor = 1; }");
+      expect(program).toMatchObject({
+        items: [
+          {
+            kind: "FunctionDecl",
+            body: [{ kind: "LetStatement", name: "constructor" }],
+          },
+        ],
+      });
+    });
+  });
+
   describe("alpha-rename", () => {
     it("three sequential shadows of the same name produce distinct emitted identifiers", () => {
       const program = jsimSource(
@@ -850,7 +888,7 @@ describe("toJsim", () => {
     });
   });
 
-  describe("let-position binding-mode sigils (Hedge-47)", () => {
+  describe("let-position binding-mode sigils", () => {
     it("lowers a `&mut name` override to an immutable JS binding, since the local slot is never separately reassignable", () => {
       const program = jsimSource("fn f(mut x: i32) { let &mut bx = x; }");
       const functionDecl = program.items.find(

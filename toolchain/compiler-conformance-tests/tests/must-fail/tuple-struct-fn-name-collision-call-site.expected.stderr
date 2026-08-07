@@ -1,1 +1,1 @@
-error: `Pair` is defined multiple times: a function and a tuple struct constructor share the value namespace
+error[HEDGE-NAME-002]: `Pair` is defined multiple times: a function and a tuple struct constructor share the value namespace

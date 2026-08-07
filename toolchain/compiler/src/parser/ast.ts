@@ -331,7 +331,7 @@ export interface FieldPattern extends AstNode {
 export interface StructPattern extends AstNode {
   readonly kind: "StructPattern";
   readonly path: Path;
-  /** `true` for a leading `mut` sigil (Hedge-47) - treats the whole
+  /** `true` for a leading `mut` sigil - treats the whole
    * destructured value as mutable for binding-mode legality purposes (e.g.
    * a field's own `&mut` override), since the pattern itself binds no name
    * of its own to carry that mutability the way a plain `BindingPattern`
@@ -461,7 +461,7 @@ export interface StringLiteral extends AstNode {
 
 export interface IntLiteral extends AstNode {
   readonly kind: "IntLiteral";
-  /** Digits only — no prefix, underscores stripped. */
+  /** Digits only - no prefix, underscores stripped. */
   readonly value: string;
   readonly base: 10 | 16 | 8 | 2;
   readonly suffix: Option<IntSuffix>;

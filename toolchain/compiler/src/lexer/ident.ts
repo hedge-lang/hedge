@@ -1,4 +1,4 @@
-import { type Diagnostic } from "../diagnostics.js";
+import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
 import { none, type Option, some } from "../option.js";
 import { scanWhile } from "./scan-while.js";
 import { type Token } from "./token.js";
@@ -94,13 +94,13 @@ export function tokenizeRawIdent(
   if (source.at(start) !== "r" || source.at(start + 1) !== "#") return none();
   if (!isIdentStart(source.at(start + 2) ?? "")) {
     const end = start + 2;
-    diagnostics.push({
-      severity: "error",
-      message: "raw identifier prefix `r#` must be followed by an identifier",
-      span: some({ start, end }),
-      code: none(),
-      relatedSpans: [],
-    });
+    diagnostics.push(
+      errorDiagnostic(
+        "HEDGE-LEX-007",
+        "raw identifier prefix `r#` must be followed by an identifier",
+        some({ start, end }),
+      ),
+    );
     tokens.push({ kind: "error", span: { start, end }, text: "r#" });
     return some(end);
   }

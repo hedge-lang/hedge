@@ -1,3 +1,4 @@
+import { errorDiagnostic } from "../diagnostics.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some } from "../option.js";
 import { err, isErr, ok } from "../result.js";
@@ -41,13 +42,13 @@ export function parsePathSegments(
 
   const firstKeyword = pathKeywordAt(tokens, cursor);
   if (isSome(firstKeyword)) {
-    return err({
-      severity: "error",
-      message: unsupportedPathKeywordMessage(firstKeyword.value.text),
-      span: some(firstKeyword.value.span),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-004",
+        unsupportedPathKeywordMessage(firstKeyword.value.text),
+        some(firstKeyword.value.span),
+      ),
+    );
   }
 
   const nextResult = parseIdentifier(tokens, cursor);
@@ -63,7 +64,7 @@ export function parsePathSegments(
       break;
     }
     if (tokens[cursor + 1]?.kind === "lt") {
-      // Turbofish (`::<...>`) — leave the `::` unconsumed for the caller,
+      // Turbofish (`::<...>`) - leave the `::` unconsumed for the caller,
       // which is responsible for the actual guardrail diagnostic.
       break;
     }
@@ -71,23 +72,19 @@ export function parsePathSegments(
     const nextToken = tokens[cursor];
     if (nextToken === undefined || nextToken.kind !== "ident") {
       if (nextToken?.kind === "keyword" && nextToken.text === "mut") {
-        return err({
-          severity: "error",
-          message: MUT_MESSAGE,
-          span: some(nextToken.span),
-          code: none(),
-          relatedSpans: [],
-        });
+        return err(
+          errorDiagnostic("HEDGE-PARSE-004", MUT_MESSAGE, some(nextToken.span)),
+        );
       }
       const keyword = pathKeywordAt(tokens, cursor);
       if (isSome(keyword)) {
-        return err({
-          severity: "error",
-          message: unsupportedPathKeywordMessage(keyword.value.text),
-          span: some(keyword.value.span),
-          code: none(),
-          relatedSpans: [],
-        });
+        return err(
+          errorDiagnostic(
+            "HEDGE-PARSE-004",
+            unsupportedPathKeywordMessage(keyword.value.text),
+            some(keyword.value.span),
+          ),
+        );
       }
       const foundDesc =
         nextToken === undefined
@@ -97,13 +94,13 @@ export function parsePathSegments(
             : nextToken.kind;
       const span =
         nextToken !== undefined ? some(nextToken.span) : none<Span>();
-      return err({
-        severity: "error",
-        message: `Expected identifier after "::", found ${foundDesc}`,
-        span,
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-001",
+          `Expected identifier after "::", found ${foundDesc}`,
+          span,
+        ),
+      );
     }
     const segmentResult = parseIdentifier(tokens, cursor);
     if (isErr(segmentResult)) {

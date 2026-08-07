@@ -1,7 +1,11 @@
 import { assert, assertNever } from "../assert.js";
-import type { Diagnostic } from "../diagnostics.js";
+import {
+  type Diagnostic,
+  errorDiagnostic,
+  warningDiagnostic,
+} from "../diagnostics.js";
 import { resolveEscape } from "../lexer/escape.js";
-import type { Token } from "../lexer/token.js";
+import type { Token, TokenKind } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import type {
@@ -9,6 +13,7 @@ import type {
   ArrayRepeatExpression,
   BinaryExpression,
   BinaryOperator,
+  Block,
   CompoundAssignOperator,
   DereferenceExpression,
   Expression,
@@ -47,30 +52,36 @@ import { parsePattern } from "./pattern.js";
 import { parseBlock } from "./statement.js";
 import { parseTypeArgumentList } from "./type.js";
 
+interface BinaryInfixEntry {
+  readonly kind: "binary";
+  readonly operator: BinaryOperator;
+  readonly leftBp: number;
+  readonly rightBp: number;
+  readonly nonAssoc: boolean;
+  readonly sigil: string;
+}
+
+interface AssignInfixEntry {
+  readonly kind: "assign";
+  readonly leftBp: number;
+  readonly rightBp: number;
+  readonly nonAssoc: boolean;
+  readonly sigil: string;
+}
+
+interface CompoundAssignInfixEntry {
+  readonly kind: "compound-assign";
+  readonly operator: CompoundAssignOperator;
+  readonly leftBp: number;
+  readonly rightBp: number;
+  readonly nonAssoc: boolean;
+  readonly sigil: string;
+}
+
 type InfixEntry =
-  | {
-      readonly kind: "binary";
-      readonly operator: BinaryOperator;
-      readonly leftBp: number;
-      readonly rightBp: number;
-      readonly nonAssoc: boolean;
-      readonly sigil: string;
-    }
-  | {
-      readonly kind: "assign";
-      readonly leftBp: number;
-      readonly rightBp: number;
-      readonly nonAssoc: boolean;
-      readonly sigil: string;
-    }
-  | {
-      readonly kind: "compound-assign";
-      readonly operator: CompoundAssignOperator;
-      readonly leftBp: number;
-      readonly rightBp: number;
-      readonly nonAssoc: boolean;
-      readonly sigil: string;
-    }
+  | BinaryInfixEntry
+  | AssignInfixEntry
+  | CompoundAssignInfixEntry
   | { readonly kind: "postfix-call"; readonly leftBp: number }
   | { readonly kind: "postfix-field"; readonly leftBp: number }
   | { readonly kind: "postfix-index"; readonly leftBp: number }
@@ -86,14 +97,14 @@ type InfixEntry =
 // eslint-disable-next-line complexity -- dispatch table; more readable than alternatives
 function infixOp(token: Token): InfixEntry | null {
   switch (token.kind) {
-    // Prec 1 — postfix (bp 26, left-to-right)
+    // Prec 1 - postfix (bp 26, left-to-right)
     case "lparen":
       return { kind: "postfix-call", leftBp: 26 };
     case "dot":
       return { kind: "postfix-field", leftBp: 26 };
     case "lbracket":
       return { kind: "postfix-index", leftBp: 26 };
-    // Prec 3 — multiplicative (bp 22, left-assoc)
+    // Prec 3 - multiplicative (bp 22, left-assoc)
     case "star":
       return {
         kind: "binary",
@@ -121,7 +132,7 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: false,
         sigil: "%",
       };
-    // Prec 4 — additive (bp 20, left-assoc)
+    // Prec 4 - additive (bp 20, left-assoc)
     case "plus":
       return {
         kind: "binary",
@@ -140,7 +151,7 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: false,
         sigil: "-",
       };
-    // Prec 5 — bitshift (bp 18, left-assoc)
+    // Prec 5 - bitshift (bp 18, left-assoc)
     case "lt_lt":
       return {
         kind: "binary",
@@ -159,7 +170,7 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: false,
         sigil: ">>",
       };
-    // Prec 6 — bit-and (bp 16, left-assoc); infix position only — prefix & is ReferenceExpression
+    // Prec 6 - bit-and (bp 16, left-assoc); infix position only - prefix & is ReferenceExpression
     case "amp":
       return {
         kind: "binary",
@@ -169,7 +180,7 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: false,
         sigil: "&",
       };
-    // Prec 7 — bit-xor (bp 14, left-assoc)
+    // Prec 7 - bit-xor (bp 14, left-assoc)
     case "caret":
       return {
         kind: "binary",
@@ -179,7 +190,7 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: false,
         sigil: "^",
       };
-    // Prec 8 — bit-or (bp 12, left-assoc)
+    // Prec 8 - bit-or (bp 12, left-assoc)
     case "pipe":
       return {
         kind: "binary",
@@ -189,7 +200,7 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: false,
         sigil: "|",
       };
-    // Prec 9 — comparison (bp 10, non-associative)
+    // Prec 9 - comparison (bp 10, non-associative)
     case "eq_eq":
       return {
         kind: "binary",
@@ -244,7 +255,7 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: true,
         sigil: ">=",
       };
-    // Prec 10 — logical-and (bp 8, left-assoc)
+    // Prec 10 - logical-and (bp 8, left-assoc)
     case "amp_amp":
       return {
         kind: "binary",
@@ -254,7 +265,7 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: false,
         sigil: "&&",
       };
-    // Prec 11 — logical-or (bp 6, left-assoc)
+    // Prec 11 - logical-or (bp 6, left-assoc)
     case "pipe_pipe":
       return {
         kind: "binary",
@@ -283,7 +294,7 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: true,
         sigil: "..=",
       };
-    // Prec 13 — assignment (bp 2, right-assoc: rightBp < leftBp)
+    // Prec 13 - assignment (bp 2, right-assoc: rightBp < leftBp)
     case "eq":
       return {
         kind: "assign",
@@ -382,8 +393,33 @@ function infixOp(token: Token): InfixEntry | null {
         nonAssoc: false,
         sigil: ">>=",
       };
-    default:
+    case "ident":
+    case "char":
+    case "string":
+    case "lifetime":
+    case "error":
+    case "eof":
+    case "rparen":
+    case "lbrace":
+    case "rbrace":
+    case "rbracket":
+    case "comma":
+    case "semi":
+    case "colon":
+    case "hash":
+    case "at":
+    case "question":
+    case "bang":
+    case "arrow":
+    case "fat_arrow":
+    case "keyword":
+    case "int":
+    case "float":
+    case "path_sep":
+      // Never appears in infix position.
       return null;
+    default:
+      return assertNever(token, `Unexpected token: ${JSON.stringify(token)}`);
   }
 }
 
@@ -421,7 +457,7 @@ function parseReference(
     cursor += 1;
   }
   // Parse the operand at unary precedence (24) so postfix ops like . and () bind to
-  // the operand rather than the surrounding expression: &a.b ⟹ &(a.b), &f() ⟹ &(f())
+  // the operand rather than the surrounding expression: &a.b => &(a.b), &f() => &(f())
   const operandResult = parseExpressionWithBindingPower(
     tokens,
     diagnostics,
@@ -471,20 +507,20 @@ function parseTupleOrGroup(
   if (isErr(firstResult)) return firstResult;
   cursor = firstResult.value.next;
 
-  // No comma → transparent grouping (passes allowStruct through; no new node)
+  // No comma -> transparent grouping (passes allowStruct through; no new node)
   if (tokens[cursor]?.kind === "rparen") {
     return ok({ node: firstResult.value.node, next: cursor + 1 });
   }
 
   if (tokens[cursor]?.kind !== "comma") {
     const tok = tokens[cursor];
-    return err({
-      severity: "error",
-      message: `Expected ',' or ')' after expression in parentheses`,
-      span: tok !== undefined ? some(tok.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `Expected ',' or ')' after expression in parentheses`,
+        tok !== undefined ? some(tok.span) : none(),
+      ),
+    );
   }
 
   // Collect remaining tuple elements
@@ -569,13 +605,13 @@ function parseArrayLiteral(
 
   if (tokens[cursor]?.kind !== "comma" && tokens[cursor]?.kind !== "rbracket") {
     const tok = tokens[cursor];
-    return err({
-      severity: "error",
-      message: `Expected ',', ';', or ']' after expression in array literal`,
-      span: tok !== undefined ? some(tok.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `Expected ',', ';', or ']' after expression in array literal`,
+        tok !== undefined ? some(tok.span) : none(),
+      ),
+    );
   }
 
   // Collect remaining list elements
@@ -654,7 +690,7 @@ function parseIfExpression(
   pos: number,
 ): PR<Parsed<IfExpression>> {
   const start = pos;
-  // Token at pos is the `if` keyword — advance past it
+  // Token at pos is the `if` keyword - advance past it
   const afterIf = pos + 1;
 
   const condResult = parseCondition(tokens, diagnostics, afterIf);
@@ -662,19 +698,19 @@ function parseIfExpression(
 
   const thenTok = tokens[condResult.value.next];
   if (thenTok === undefined || thenTok.kind !== "lbrace") {
-    return err({
-      severity: "error",
-      message: `Expected '{' to start if body`,
-      span: thenTok !== undefined ? some(thenTok.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `Expected '{' to start if body`,
+        thenTok !== undefined ? some(thenTok.span) : none(),
+      ),
+    );
   }
   const thenResult = parseBlock(tokens, diagnostics, condResult.value.next);
   if (isErr(thenResult)) return thenResult;
 
   let cursor = thenResult.value.next;
-  let elseBranch: IfExpression["elseBranch"] = none();
+  let elseBranch: Option<IfExpression | Block> = none();
 
   const elseToken = tokens[cursor];
   if (elseToken?.kind === "keyword" && elseToken.text === "else") {
@@ -691,13 +727,13 @@ function parseIfExpression(
       elseBranch = some(elseBlockResult.value.node);
       cursor = elseBlockResult.value.next;
     } else {
-      return err({
-        severity: "error",
-        message: `Expected 'if' or '{' after 'else'`,
-        span: afterElse !== undefined ? some(afterElse.span) : none(),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-001",
+          `Expected 'if' or '{' after 'else'`,
+          afterElse !== undefined ? some(afterElse.span) : none(),
+        ),
+      );
     }
   }
 
@@ -744,13 +780,13 @@ function parseWhileExpression(
 
   const bodyTok = tokens[condResult.value.next];
   if (bodyTok === undefined || bodyTok.kind !== "lbrace") {
-    return err({
-      severity: "error",
-      message: `Expected '{' to start while body`,
-      span: bodyTok !== undefined ? some(bodyTok.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `Expected '{' to start while body`,
+        bodyTok !== undefined ? some(bodyTok.span) : none(),
+      ),
+    );
   }
   const bodyResult = parseBlock(tokens, diagnostics, condResult.value.next);
   if (isErr(bodyResult)) return bodyResult;
@@ -775,7 +811,7 @@ function parseMatchArm(
   if (isErr(patternResult)) return patternResult;
   let cursor = patternResult.value.next;
 
-  let guard: MatchArm["guard"] = none();
+  let guard: Option<Expression> = none();
   const guardTok = tokens[cursor];
   if (guardTok?.kind === "keyword" && guardTok.text === "if") {
     const guardResult = parseExpressionWithBindingPower(
@@ -792,13 +828,13 @@ function parseMatchArm(
 
   const arrowTok = tokens[cursor];
   if (arrowTok === undefined || arrowTok.kind !== "fat_arrow") {
-    return err({
-      severity: "error",
-      message: `Expected '=>' in match arm`,
-      span: arrowTok !== undefined ? some(arrowTok.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `Expected '=>' in match arm`,
+        arrowTok !== undefined ? some(arrowTok.span) : none(),
+      ),
+    );
   }
   cursor += 1;
 
@@ -850,13 +886,13 @@ function parseMatchExpression(
   while (tokens[cursor]?.kind !== "rbrace") {
     const tok = tokens[cursor];
     if (tok === undefined || tok.kind === "eof") {
-      return err({
-        severity: "error",
-        message: "Expected '}' to close match expression, found end of input",
-        span: none(),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-002",
+          "Expected '}' to close match expression, found end of input",
+          none(),
+        ),
+      );
     }
 
     const armResult = parseMatchArm(tokens, diagnostics, cursor);
@@ -876,21 +912,21 @@ function parseMatchExpression(
     }
     const nextTok = tokens[cursor];
     if (nextTok === undefined || nextTok.kind === "eof") {
-      return err({
-        severity: "error",
-        message: "Expected '}' to close match expression, found end of input",
-        span: none(),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-002",
+          "Expected '}' to close match expression, found end of input",
+          none(),
+        ),
+      );
     }
-    return err({
-      severity: "error",
-      message: `Expected ',' between match arms`,
-      span: some(nextTok.span),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `Expected ',' between match arms`,
+        some(nextTok.span),
+      ),
+    );
   }
 
   const node: MatchExpression = {
@@ -913,7 +949,7 @@ function parseStructExpression(
   let cursor = pos + 1; // skip `{`
 
   const fields: FieldInit[] = [];
-  let base: StructExpression["base"] = none();
+  let base: Option<Expression> = none();
 
   while (
     tokens[cursor]?.kind !== "rbrace" &&
@@ -935,24 +971,23 @@ function parseStructExpression(
       if (isErr(baseResult)) return baseResult;
       base = some(baseResult.value.node);
       cursor = baseResult.value.next;
-      diagnostics.push({
-        severity: "warning",
-        message:
+      diagnostics.push(
+        warningDiagnostic(
+          "HEDGE-UNSUPPORTED-001",
           "struct update expression (`..base`) is not yet supported in semantic analysis",
-        span: some(spreadTok.span),
-        code: none(),
-        relatedSpans: [],
-      });
+          some(spreadTok.span),
+        ),
+      );
       if (tokens[cursor]?.kind === "comma") cursor += 1; // trailing comma after spread
       if (tokens[cursor]?.kind !== "rbrace") {
         const tok = tokens[cursor];
-        return err({
-          severity: "error",
-          message: `Expected '}' after struct update expression — spread must be last`,
-          span: tok !== undefined ? some(tok.span) : none(),
-          code: none(),
-          relatedSpans: [],
-        });
+        return err(
+          errorDiagnostic(
+            "HEDGE-PARSE-001",
+            `Expected '}' after struct update expression; spread must be last`,
+            tok !== undefined ? some(tok.span) : none(),
+          ),
+        );
       }
       break;
     }
@@ -962,7 +997,7 @@ function parseStructExpression(
     if (isErr(nameResult)) return nameResult;
     cursor = nameResult.value.next;
 
-    let fieldValue: FieldInit["value"] = none();
+    let fieldValue: Option<Expression> = none();
     if (tokens[cursor]?.kind === "colon") {
       cursor += 1;
       const valResult = parseExpressionWithBindingPower(
@@ -994,13 +1029,13 @@ function parseStructExpression(
 
   const closeTok = tokens[cursor];
   if (closeTok === undefined || closeTok.kind !== "rbrace") {
-    return err({
-      severity: "error",
-      message: `Expected '}' to close struct expression`,
-      span: closeTok !== undefined ? some(closeTok.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `Expected '}' to close struct expression`,
+        closeTok !== undefined ? some(closeTok.span) : none(),
+      ),
+    );
   }
 
   const node: StructExpression = {
@@ -1119,13 +1154,13 @@ function parsePrimary(
 
   const loopKeyword = loopKeywordAt(tokens, pos);
   if (isSome(loopKeyword)) {
-    return err({
-      severity: "error",
-      message: unsupportedLoopMessage(loopKeyword.value.token.text),
-      span: some(loopKeyword.value.token.span),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-004",
+        unsupportedLoopMessage(loopKeyword.value.token.text),
+        some(loopKeyword.value.token.span),
+      ),
+    );
   }
 
   // `match` expression
@@ -1245,13 +1280,13 @@ function parsePrimary(
     return ok({ node: deref, next: operandResult.value.next });
   }
 
-  return err({
-    severity: "error",
-    message: `Expected an expression, found "${token.kind}" at offset ${token.span.start}`,
-    span: some(token.span),
-    code: none(),
-    relatedSpans: [],
-  });
+  return err(
+    errorDiagnostic(
+      "HEDGE-PARSE-001",
+      `Expected an expression, found "${token.kind}" at offset ${token.span.start}`,
+      some(token.span),
+    ),
+  );
 }
 
 /**
@@ -1276,13 +1311,13 @@ function parseArguments(
     if (tokens[cursor]?.kind === "rparen") break;
     const cur = tokens[cursor];
     if (cur === undefined || cur.kind === "eof") {
-      return err({
-        severity: "error",
-        message: "Expected ')' to close argument list",
-        span: none(),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-001",
+          "Expected ')' to close argument list",
+          none(),
+        ),
+      );
     }
     // Arguments are always in struct-ok position (they're inside parens)
     const argResult = parseExpressionWithBindingPower(
@@ -1366,13 +1401,13 @@ function parseInfixField(
   // valid anywhere.
   if (hadTurbofish) {
     const badToken = tokens[afterTurbofish];
-    return err({
-      severity: "error",
-      message: `expected '(' after generic arguments in method position, found "${badToken?.kind ?? "end of input"}"`,
-      span: badToken !== undefined ? some(badToken.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `expected '(' after generic arguments in method position, found "${badToken?.kind ?? "end of input"}"`,
+        badToken !== undefined ? some(badToken.span) : none(),
+      ),
+    );
   }
 
   return ok({
@@ -1396,13 +1431,13 @@ function parseInfixIndex(
 
   const tok = tokens[cursor];
   if (tok === undefined || tok.kind === "eof" || tok.kind === "rbracket") {
-    return err({
-      severity: "error",
-      message: `Expected an expression inside '[...]'`,
-      span: tok !== undefined && tok.kind !== "eof" ? some(tok.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `Expected an expression inside '[...]'`,
+        tok !== undefined && tok.kind !== "eof" ? some(tok.span) : none(),
+      ),
+    );
   }
 
   // Index expressions are always in struct-ok position
@@ -1433,7 +1468,7 @@ function parseInfixBinary(
   diagnostics: Diagnostic[],
   lhs: Parsed<Expression>,
   opPos: number,
-  infix: Extract<InfixEntry, { kind: "binary" }>,
+  infix: BinaryInfixEntry,
   allowStruct: boolean,
 ): PR<Parsed<Expression>> {
   const rhsResult = parseExpressionWithBindingPower(
@@ -1462,13 +1497,13 @@ function parseInfixBinary(
         nextInfix.nonAssoc &&
         nextInfix.leftBp === infix.leftBp
       ) {
-        return err({
-          severity: "error",
-          message: `cannot chain '${infix.sigil}' with '${nextInfix.sigil}'`,
-          span: some(peek.span),
-          code: none(),
-          relatedSpans: [],
-        });
+        return err(
+          errorDiagnostic(
+            "HEDGE-PARSE-003",
+            `cannot chain '${infix.sigil}' with '${nextInfix.sigil}'`,
+            some(peek.span),
+          ),
+        );
       }
     }
   }
@@ -1480,7 +1515,7 @@ function parseInfixBinary(
  * to decide whether `a..`/`..b`/`..` left an operand out (as opposed to the
  * parser attempting to consume a following construct as the range's end).
  */
-const RANGE_END_TERMINATORS: ReadonlySet<Token["kind"]> = new Set([
+const RANGE_END_TERMINATORS: ReadonlySet<TokenKind> = new Set([
   "eof",
   "semi",
   "comma",
@@ -1533,16 +1568,15 @@ function parseRangeTail(
 
   if (isRangeEndTerminator(afterOp, allowStruct)) {
     if (inclusive) {
-      return err({
-        severity: "error",
-        message: "Expected an expression after '..='",
-        span:
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-001",
+          "Expected an expression after '..='",
           afterOp !== undefined && afterOp.kind !== "eof"
             ? some(afterOp.span)
             : none(),
-        code: none(),
-        relatedSpans: [],
-      });
+        ),
+      );
     }
     end = none();
     next = cursor;
@@ -1573,13 +1607,13 @@ function parseRangeTail(
     const nextInfix = infixOp(peek);
     if (nextInfix !== null && nextInfix.kind === "range") {
       const sigil = inclusive ? "..=" : "..";
-      return err({
-        severity: "error",
-        message: `cannot chain '${sigil}' with '${nextInfix.sigil}'`,
-        span: some(peek.span),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-003",
+          `cannot chain '${sigil}' with '${nextInfix.sigil}'`,
+          some(peek.span),
+        ),
+      );
     }
   }
 
@@ -1591,7 +1625,7 @@ function parseInfixAssign(
   diagnostics: Diagnostic[],
   lhs: Parsed<Expression>,
   opPos: number,
-  infix: Extract<InfixEntry, { kind: "assign" }>,
+  infix: AssignInfixEntry,
   allowStruct: boolean,
 ): PR<Parsed<Expression>> {
   const rhsResult = parseExpressionWithBindingPower(
@@ -1618,7 +1652,7 @@ function parseInfixCompoundAssign(
   diagnostics: Diagnostic[],
   lhs: Parsed<Expression>,
   opPos: number,
-  infix: Extract<InfixEntry, { kind: "compound-assign" }>,
+  infix: CompoundAssignInfixEntry,
   allowStruct: boolean,
 ): PR<Parsed<Expression>> {
   const rhsResult = parseExpressionWithBindingPower(
@@ -1659,7 +1693,7 @@ export function parseExpression(
  * @param tokens The sequence of tokens to parse.
  * @param diagnostics The diagnostic warnings and errors array.
  * @param pos The current position in the token sequence to start parsing.
- * @param minBp The minimum binding power; operators with leftBp ≤ minBp are not consumed.
+ * @param minBp The minimum binding power; operators with leftBp <= minBp are not consumed.
  * @param allowStruct Whether structs are allowed in this space.
  *
  * @return The result of parsing, which includes either the parsed expression or an error.
