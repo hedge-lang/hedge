@@ -529,7 +529,7 @@ describe("type annotation error diagnostics", (): void => {
   });
 });
 
-describe("generics guardrail — type position", (): void => {
+describe("generics guardrail - type position", (): void => {
   it("produces an error diagnostic for a generic type on a let binding", (): void => {
     const { tokens } = tokenize("let x: Vec<T>;");
     const lt = tokens.find((t) => t.kind === "lt");
@@ -611,7 +611,7 @@ describe("generics guardrail — type position", (): void => {
   });
 });
 
-describe("lifetime guardrail — generic type argument position", (): void => {
+describe("lifetime guardrail - generic type argument position", (): void => {
   it("produces a lifetime-specific diagnostic for Vec<'a>", (): void => {
     const { tokens } = tokenize("let x: Vec<'a>;");
     const lt = tokens.find((t) => t.kind === "lt");
@@ -2968,7 +2968,7 @@ describe("call expression edge cases", (): void => {
   });
 });
 
-describe("parse errors — missing tokens", (): void => {
+describe("parse errors - missing tokens", (): void => {
   it("errors on a let statement with no semicolon", (): void => {
     const result = parse(tokenize("let x = 1").tokens);
     expect(result.program).toEqual(none());
@@ -3011,7 +3011,7 @@ describe("parse errors — missing tokens", (): void => {
   });
 
   it.todo(
-    "let x = y = 5 and let x = (y = 5) produce type errors — assignment returns () and cannot initialize a non-unit binding",
+    "let x = y = 5 and let x = (y = 5) produce type errors - assignment returns () and cannot initialize a non-unit binding",
   );
 });
 
@@ -4519,7 +4519,7 @@ describe("lifetime + reference type interactions", (): void => {
   });
 });
 
-describe("lifetime guardrail — nested and reversed-order generics", (): void => {
+describe("lifetime guardrail - nested and reversed-order generics", (): void => {
   it("let x: Vec<Vec<'a>>; diagnoses only the outer generic (inner lifetime never reached)", (): void => {
     const { tokens } = tokenize("let x: Vec<Vec<'a>>;");
     const { program, diagnostics } = parse(tokens);

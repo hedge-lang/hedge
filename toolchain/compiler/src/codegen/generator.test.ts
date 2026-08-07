@@ -422,25 +422,25 @@ describe("binary expression codegen", () => {
     ).toThrow();
   });
 
-  it("(x + y) * z — parens preserved because + binds looser than *", () => {
+  it("(x + y) * z - parens preserved because + binds looser than *", () => {
     expect(stmts(gen("fn _(x: (), y: (), z: ()) { (x + y) * z; }"))).toBe(
       "(x + y) * z;",
     );
   });
 
-  it("x + y * z — no parens needed, * binds tighter", () => {
+  it("x + y * z - no parens needed, * binds tighter", () => {
     expect(stmts(gen("fn _(x: (), y: (), z: ()) { x + y * z; }"))).toBe(
       "x + y * z;",
     );
   });
 
-  it("x - (y - z) — right-side same-precedence op is parenthesised", () => {
+  it("x - (y - z) - right-side same-precedence op is parenthesised", () => {
     expect(stmts(gen("fn _(x: (), y: (), z: ()) { x - (y - z); }"))).toBe(
       "x - (y - z);",
     );
   });
 
-  it("x || y && z — && binds tighter than ||, no parens needed", () => {
+  it("x || y && z - && binds tighter than ||, no parens needed", () => {
     expect(stmts(gen("fn _(x: bool, y: bool, z: bool) { x || y && z; }"))).toBe(
       "x || y && z;",
     );

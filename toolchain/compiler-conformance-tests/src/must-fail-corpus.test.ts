@@ -11,7 +11,7 @@ import {
  * Test corpus for programs that must be rejected by the compiler.
  * Each test validates that a specific error category is caught.
  */
-describe("must-fail corpus — rejection tests", (): void => {
+describe("must-fail corpus - rejection tests", (): void => {
   describe("name resolution errors", (): void => {
     it("rejects undefined variable in expression", (): void => {
       assertRejectsWithMessage(

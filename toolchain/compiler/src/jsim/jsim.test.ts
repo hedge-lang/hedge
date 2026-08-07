@@ -374,7 +374,7 @@ describe("toJsim", () => {
   });
 
   describe("reference expressions", () => {
-    it("ReferenceExpression is transparent — emits the operand directly", () => {
+    it("ReferenceExpression is transparent - emits the operand directly", () => {
       const program = jsimSource("&x;");
       expect(program.items[0]).toMatchObject({
         kind: "Identifier",
@@ -451,7 +451,7 @@ describe("toJsim", () => {
   describe("unknown param types", () => {
     it.todo(
       "unknown param type emits FunctionParam with type { kind: 'PrimitiveType', value: 'unknown' }" +
-        " — currently the param is silently dropped; correct behavior is to emit `unknown`",
+        " - currently the param is silently dropped; correct behavior is to emit `unknown`",
     );
   });
 
