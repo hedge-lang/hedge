@@ -410,7 +410,7 @@ function foldArrayLength(
   // An index is a `usize`, so a longer array could not be indexed by the type
   // that describes its own length. Derived from `usize`'s own bounds rather
   // than restating a literal, so the two cannot drift apart.
-  const usizeMax = INT_BOUNDS.PrimitiveUsizeType?.[1];
+  const usizeMax = INT_BOUNDS.get("PrimitiveUsizeType")?.[1];
   assert(usizeMax !== undefined, "usize has no declared bounds");
   if (outcome.value.value > usizeMax) {
     emitError(
@@ -3278,38 +3278,38 @@ function analyzeLetStatement(
   };
 }
 
-const INT_BOUNDS: Partial<Record<Semantics.Type["kind"], [bigint, bigint]>> = {
-  PrimitiveI8Type: [-0x80n, 0x7fn],
-  PrimitiveI16Type: [-0x8000n, 0x7fffn],
-  PrimitiveI32Type: [-0x8000_0000n, 0x7fff_ffffn],
-  PrimitiveI64Type: [-0x8000_0000_0000_0000n, 0x7fff_ffff_ffff_ffffn],
-  PrimitiveU8Type: [0n, 0xffn],
-  PrimitiveU16Type: [0n, 0xffffn],
-  PrimitiveU32Type: [0n, 0xffff_ffffn],
-  PrimitiveU64Type: [0n, 0xffff_ffff_ffff_ffffn],
-  PrimitiveUsizeType: [0n, 0xffff_ffffn],
-  PrimitiveIsizeType: [-0x8000_0000n, 0x7fff_ffffn],
-};
+const INT_BOUNDS: ReadonlyMap<string, readonly [bigint, bigint]> = new Map([
+  ["PrimitiveI8Type", [-0x80n, 0x7fn]],
+  ["PrimitiveI16Type", [-0x8000n, 0x7fffn]],
+  ["PrimitiveI32Type", [-0x8000_0000n, 0x7fff_ffffn]],
+  ["PrimitiveI64Type", [-0x8000_0000_0000_0000n, 0x7fff_ffff_ffff_ffffn]],
+  ["PrimitiveU8Type", [0n, 0xffn]],
+  ["PrimitiveU16Type", [0n, 0xffffn]],
+  ["PrimitiveU32Type", [0n, 0xffff_ffffn]],
+  ["PrimitiveU64Type", [0n, 0xffff_ffff_ffff_ffffn]],
+  ["PrimitiveUsizeType", [0n, 0xffff_ffffn]],
+  ["PrimitiveIsizeType", [-0x8000_0000n, 0x7fff_ffffn]],
+]);
 
-const NEG_FLOAT_MAX: Partial<Record<Semantics.Type["kind"], number>> = {
-  PrimitiveF32Type: 3.4028234663852886e38,
-  PrimitiveF64Type: 1.7976931348623157e308,
-};
+const NEG_FLOAT_MAX: ReadonlyMap<string, number> = new Map([
+  ["PrimitiveF32Type", 3.4028234663852886e38],
+  ["PrimitiveF64Type", 1.7976931348623157e308],
+]);
 
-const NUMERIC_TYPE_NAME: Partial<Record<Semantics.Type["kind"], string>> = {
-  PrimitiveI8Type: "i8",
-  PrimitiveI16Type: "i16",
-  PrimitiveI32Type: "i32",
-  PrimitiveI64Type: "i64",
-  PrimitiveIsizeType: "isize",
-  PrimitiveU8Type: "u8",
-  PrimitiveU16Type: "u16",
-  PrimitiveU32Type: "u32",
-  PrimitiveU64Type: "u64",
-  PrimitiveUsizeType: "usize",
-  PrimitiveF32Type: "f32",
-  PrimitiveF64Type: "f64",
-};
+const NUMERIC_TYPE_NAME: ReadonlyMap<string, string> = new Map([
+  ["PrimitiveI8Type", "i8"],
+  ["PrimitiveI16Type", "i16"],
+  ["PrimitiveI32Type", "i32"],
+  ["PrimitiveI64Type", "i64"],
+  ["PrimitiveIsizeType", "isize"],
+  ["PrimitiveU8Type", "u8"],
+  ["PrimitiveU16Type", "u16"],
+  ["PrimitiveU32Type", "u32"],
+  ["PrimitiveU64Type", "u64"],
+  ["PrimitiveUsizeType", "usize"],
+  ["PrimitiveF32Type", "f32"],
+  ["PrimitiveF64Type", "f64"],
+]);
 
 /**
  * Renders a {@link Semantics.Type} as the name a diagnostic should show the
@@ -3346,7 +3346,7 @@ function describeType(type: Semantics.Type): string {
     case "PrimitiveUsizeType":
     case "PrimitiveF32Type":
     case "PrimitiveF64Type":
-      return NUMERIC_TYPE_NAME[type.kind] ?? type.kind;
+      return NUMERIC_TYPE_NAME.get(type.kind) ?? type.kind;
     case "NamedType":
       return type.path.segments.at(-1) ?? "unknown";
     case "FunctionType":
@@ -3360,12 +3360,12 @@ function checkNegLiteralRange(
   operand: Semantics.Expression,
   annotationType: Semantics.Type,
 ): Option<string> {
-  const typeName = NUMERIC_TYPE_NAME[annotationType.kind];
+  const typeName = NUMERIC_TYPE_NAME.get(annotationType.kind);
   if (typeName === undefined) return none();
 
   if (operand.kind === "IntLiteral") {
     const val = -intLiteralValue(operand);
-    const [min, max] = INT_BOUNDS[annotationType.kind] ?? [];
+    const [min, max] = INT_BOUNDS.get(annotationType.kind) ?? [];
     if (min === undefined || max === undefined) {
       return some(`unexpected int-literal range check for type ${typeName}`);
     }
@@ -3374,7 +3374,7 @@ function checkNegLiteralRange(
     }
   } else if (operand.kind === "FloatLiteral") {
     const val = parseFloat(operand.value);
-    const max = NEG_FLOAT_MAX[annotationType.kind];
+    const max = NEG_FLOAT_MAX.get(annotationType.kind);
     if (max === undefined) {
       return some(`unexpected float-literal range check for type ${typeName}`);
     }
@@ -3390,12 +3390,12 @@ function checkPosLiteralRange(
   literal: Semantics.IntLiteral,
   type: Semantics.Type,
 ): void {
-  const bounds = INT_BOUNDS[type.kind];
+  const bounds = INT_BOUNDS.get(type.kind);
   if (bounds === undefined) return;
   const val = intLiteralValue(literal);
   const [, max] = bounds;
   if (val > max) {
-    const name = NUMERIC_TYPE_NAME[type.kind] ?? type.kind;
+    const name = NUMERIC_TYPE_NAME.get(type.kind) ?? type.kind;
     emitError(ctx, `out of range for ${name}`, literal.tokenId, none());
   }
 }

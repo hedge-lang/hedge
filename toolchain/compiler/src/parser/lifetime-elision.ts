@@ -21,6 +21,7 @@ import type {
   TupleFieldsBody,
   Type,
   Variant,
+  LifetimeParam,
 } from "./ast.js";
 
 const NO_ELISION_RULE_MESSAGE =
@@ -77,10 +78,7 @@ function createSynthesizer(
  * contributes nothing, since only lifetime collisions matter here. */
 function declaredLifetimeNames(generics: readonly GenericParam[]): string[] {
   return generics
-    .filter(
-      (param): param is Extract<GenericParam, { kind: "LifetimeParam" }> =>
-        param.kind === "LifetimeParam",
-    )
+    .filter((param): param is LifetimeParam => param.kind === "LifetimeParam")
     .map((param) => param.lifetime.name);
 }
 

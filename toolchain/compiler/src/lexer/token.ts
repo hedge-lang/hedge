@@ -1,6 +1,16 @@
 import type { Option } from "../option.js";
 
-export type IntSuffix = `${"u" | "i"}${8 | 16 | 32 | 64 | "size"}`;
+export type IntSuffix =
+  | "i8"
+  | "i16"
+  | "i32"
+  | "i64"
+  | "isize"
+  | "u8"
+  | "u16"
+  | "u32"
+  | "u64"
+  | "usize";
 export type FloatSuffix = "f32" | "f64";
 
 /** A half-open source range, measured in UTF-16 code units, 0-based. */
@@ -9,24 +19,41 @@ export interface Span {
   readonly end: number;
 }
 
+/** A keyword token; `text` is the keyword itself. */
+export interface KeywordToken {
+  readonly kind: "keyword";
+  readonly span: Span;
+  readonly text: string;
+}
+
+export interface IntToken {
+  readonly kind: "int";
+  readonly span: Span;
+  readonly text: string;
+  readonly radix: 2 | 8 | 10 | 16;
+  readonly suffix: Option<IntSuffix>;
+}
+
+export interface FloatToken {
+  readonly kind: "float";
+  readonly span: Span;
+  readonly text: string;
+  readonly suffix: Option<FloatSuffix>;
+}
+
+/** The `::` path separator. */
+export interface PathSepToken {
+  readonly kind: "path_sep";
+  readonly span: Span;
+}
+
 /** The lexical category of a {@link Token}. */
 export type Token =
   // Non-symbol tokens: identifiers, keywords, literals, and structural markers.
   | { readonly kind: "ident"; readonly span: Span; readonly text: string }
-  | { readonly kind: "keyword"; readonly span: Span; readonly text: string }
-  | {
-      readonly kind: "int";
-      readonly span: Span;
-      readonly text: string;
-      readonly radix: 2 | 8 | 10 | 16;
-      readonly suffix: Option<IntSuffix>;
-    }
-  | {
-      readonly kind: "float";
-      readonly span: Span;
-      readonly text: string;
-      readonly suffix: Option<FloatSuffix>;
-    }
+  | KeywordToken
+  | IntToken
+  | FloatToken
   | { readonly kind: "char"; readonly span: Span; readonly text: string }
   | { readonly kind: "string"; readonly span: Span; readonly text: string }
   | { readonly kind: "lifetime"; readonly span: Span; readonly text: string }
@@ -84,7 +111,7 @@ export type Token =
   | { readonly kind: "caret_eq"; readonly span: Span } // "^="
   | { readonly kind: "arrow"; readonly span: Span } // "->"
   | { readonly kind: "fat_arrow"; readonly span: Span } // "=>"
-  | { readonly kind: "path_sep"; readonly span: Span } // "::"
+  | PathSepToken // "::"
   | { readonly kind: "dot_dot"; readonly span: Span } // ".."
   | { readonly kind: "dot_dot_eq"; readonly span: Span }; // "..="
 

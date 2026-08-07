@@ -47,30 +47,36 @@ import { parsePattern } from "./pattern.js";
 import { parseBlock } from "./statement.js";
 import { parseTypeArgumentList } from "./type.js";
 
+interface BinaryInfixEntry {
+  readonly kind: "binary";
+  readonly operator: BinaryOperator;
+  readonly leftBp: number;
+  readonly rightBp: number;
+  readonly nonAssoc: boolean;
+  readonly sigil: string;
+}
+
+interface AssignInfixEntry {
+  readonly kind: "assign";
+  readonly leftBp: number;
+  readonly rightBp: number;
+  readonly nonAssoc: boolean;
+  readonly sigil: string;
+}
+
+interface CompoundAssignInfixEntry {
+  readonly kind: "compound-assign";
+  readonly operator: CompoundAssignOperator;
+  readonly leftBp: number;
+  readonly rightBp: number;
+  readonly nonAssoc: boolean;
+  readonly sigil: string;
+}
+
 type InfixEntry =
-  | {
-      readonly kind: "binary";
-      readonly operator: BinaryOperator;
-      readonly leftBp: number;
-      readonly rightBp: number;
-      readonly nonAssoc: boolean;
-      readonly sigil: string;
-    }
-  | {
-      readonly kind: "assign";
-      readonly leftBp: number;
-      readonly rightBp: number;
-      readonly nonAssoc: boolean;
-      readonly sigil: string;
-    }
-  | {
-      readonly kind: "compound-assign";
-      readonly operator: CompoundAssignOperator;
-      readonly leftBp: number;
-      readonly rightBp: number;
-      readonly nonAssoc: boolean;
-      readonly sigil: string;
-    }
+  | BinaryInfixEntry
+  | AssignInfixEntry
+  | CompoundAssignInfixEntry
   | { readonly kind: "postfix-call"; readonly leftBp: number }
   | { readonly kind: "postfix-field"; readonly leftBp: number }
   | { readonly kind: "postfix-index"; readonly leftBp: number }
@@ -1433,7 +1439,7 @@ function parseInfixBinary(
   diagnostics: Diagnostic[],
   lhs: Parsed<Expression>,
   opPos: number,
-  infix: Extract<InfixEntry, { kind: "binary" }>,
+  infix: BinaryInfixEntry,
   allowStruct: boolean,
 ): PR<Parsed<Expression>> {
   const rhsResult = parseExpressionWithBindingPower(
@@ -1591,7 +1597,7 @@ function parseInfixAssign(
   diagnostics: Diagnostic[],
   lhs: Parsed<Expression>,
   opPos: number,
-  infix: Extract<InfixEntry, { kind: "assign" }>,
+  infix: AssignInfixEntry,
   allowStruct: boolean,
 ): PR<Parsed<Expression>> {
   const rhsResult = parseExpressionWithBindingPower(
@@ -1618,7 +1624,7 @@ function parseInfixCompoundAssign(
   diagnostics: Diagnostic[],
   lhs: Parsed<Expression>,
   opPos: number,
-  infix: Extract<InfixEntry, { kind: "compound-assign" }>,
+  infix: CompoundAssignInfixEntry,
   allowStruct: boolean,
 ): PR<Parsed<Expression>> {
   const rhsResult = parseExpressionWithBindingPower(

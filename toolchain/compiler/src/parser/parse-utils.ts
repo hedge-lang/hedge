@@ -1,6 +1,13 @@
 import type { Diagnostic } from "../diagnostics.js";
 import { resolveEscape } from "../lexer/escape.js";
-import type { Span, Token } from "../lexer/token.js";
+import type {
+  FloatToken,
+  IntToken,
+  KeywordToken,
+  PathSepToken,
+  Span,
+  Token,
+} from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok, type Result } from "../result.js";
 import type {
@@ -143,7 +150,7 @@ const LOOP_KEYWORDS: ReadonlySet<string> = new Set(["loop", "while", "for"]);
 
 export interface LoopKeywordMatch {
   readonly pos: number;
-  readonly token: Extract<Token, { kind: "keyword" }>;
+  readonly token: KeywordToken;
 }
 
 /**
@@ -205,7 +212,7 @@ const PATH_KEYWORDS: ReadonlySet<string> = new Set(["self", "super", "Self"]);
 export function pathKeywordAt(
   tokens: readonly Token[],
   pos: number,
-): Option<Extract<Token, { kind: "keyword" }>> {
+): Option<KeywordToken> {
   const token = tokens[pos];
   if (token?.kind === "keyword" && PATH_KEYWORDS.has(token.text)) {
     return some(token);
@@ -238,7 +245,7 @@ export function isLifetimeGenericsStart(
 export function pathSepBeforeLt(
   tokens: readonly Token[],
   pos: number,
-): Option<Extract<Token, { kind: "path_sep" }>> {
+): Option<PathSepToken> {
   const token = tokens[pos];
   if (token?.kind === "path_sep" && tokens[pos + 1]?.kind === "lt") {
     return some(token);
@@ -635,7 +642,7 @@ function findTopLevelItemBodyStart(
  */
 export function skipUnsupportedTopLevelItem(
   tokens: readonly Token[],
-  keyword: Extract<Token, { kind: "keyword" }>,
+  keyword: KeywordToken,
   pos: number,
   message: string,
 ): PR<{ diagnostic: Diagnostic; next: number }> {
@@ -720,7 +727,7 @@ export function parseIdentifier(
 
 export function parseIntLiteral(
   pos: number,
-  token: Extract<Token, { kind: "int" }>,
+  token: IntToken,
 ): Parsed<IntLiteral> {
   const rawDigits = stripPrefix(token.text, token.radix);
   const digits = isSome(token.suffix)
@@ -741,7 +748,7 @@ export function parseIntLiteral(
 
 export function parseFloatLiteral(
   pos: number,
-  token: Extract<Token, { kind: "float" }>,
+  token: FloatToken,
 ): Parsed<FloatLiteral> {
   const floatText = isSome(token.suffix)
     ? token.text.slice(0, -token.suffix.value.length)
