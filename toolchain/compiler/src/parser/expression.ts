@@ -955,7 +955,7 @@ function parseStructExpression(
         const tok = tokens[cursor];
         return err({
           severity: "error",
-          message: `Expected '}' after struct update expression — spread must be last`,
+          message: `Expected '}' after struct update expression; spread must be last`,
           span: tok !== undefined ? some(tok.span) : none(),
           code: none(),
           relatedSpans: [],

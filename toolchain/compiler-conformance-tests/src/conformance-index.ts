@@ -193,7 +193,7 @@ export const CORE_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   {
     id: "EXEC-BLOCKS",
     description:
-      "Block grammar — empty statements, local item declarations, nested blocks, and block-as-expression execute correctly end-to-end",
+      "Block grammar: empty statements, local item declarations, nested blocks, and block-as-expression execute correctly end-to-end",
     specRefs: ["0008-expressions-and-control-flow.md", "0025-grammar.md"],
     testIds: [
       "empty block returns unit",
