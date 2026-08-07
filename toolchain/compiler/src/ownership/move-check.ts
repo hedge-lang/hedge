@@ -642,8 +642,10 @@ function projectionDescription(expression: Semantics.Expression): string {
 /**
  * Moving a non-`Copy` value out of a field or element is not tracked: the
  * owner keeps its own drop obligation, so both it and the new binding would
- * dispose the same value. Rejected until partial moves are modelled, with
- * the borrow named as the alternative since that is what most callers want.
+ * dispose the same value. The borrow is named as the alternative since that
+ * is what most callers want.
+ *
+ * TODO(Hedge-240): lift this once move state is keyed by place.
  */
 function checkProjectionMove(
   ctx: Ctx,
