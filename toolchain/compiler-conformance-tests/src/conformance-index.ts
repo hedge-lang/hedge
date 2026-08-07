@@ -2,6 +2,14 @@ export interface ConformanceRule {
   readonly id: string;
   readonly description: string;
   readonly testIds: readonly string[];
+  /**
+   * Test IDs currently marked `it.fails`. Listing a rule's testId here says
+   * the rule is *described* but not yet *demonstrated*, so a reader of this
+   * index cannot mistake a red test for coverage. A rule in
+   * {@link CORE_REQUIRED_RULE_IDS} may have none - that list is the T1 core
+   * fragment, whose definition is that it is green.
+   */
+  readonly expectedFailTestIds?: readonly string[];
   readonly specRefs?: readonly string[];
   readonly proofRefs?: readonly string[];
 }
@@ -435,11 +443,13 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   },
   {
     id: "DTS-CONFORMANCE",
+    expectedFailTestIds: ["pub struct emits a typedef declaration"],
     description: "Declaration output preserves visibility and docs contract",
     testIds: [
       "emits public declarations for pub fn",
       "marks pub(package) declarations as @internal",
       "includes module doc comment in declaration output",
+      "pub struct emits a typedef declaration",
     ],
   },
   {
@@ -457,6 +467,10 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   },
   {
     id: "DIAG-CODE-ID-PLAN",
+    expectedFailTestIds: [
+      "emitted diagnostics expose a code field with schema-valid IDs",
+      "all diagnostics in the core error corpus include schema-valid code ids",
+    ],
     description:
       "Diagnostic code IDs are schema-validated in active conformance",
     testIds: [
@@ -503,6 +517,12 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   },
   {
     id: "JS-INTEROP-NEGATIVE-SPECS",
+    expectedFailTestIds: [
+      "rejects non-primitive boundary payloads without explicit unsafe escape hatches",
+      "rejects invalid unsafe boundary usage patterns",
+      "permits primitive-only safe JS interop calls",
+      "generated JS export includes runtime guard checks",
+    ],
     description:
       "Negative JS interop boundary behavior is defined as executable specs",
     testIds: [
@@ -534,6 +554,9 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   },
   {
     id: "NLL-CORRECTNESS",
+    expectedFailTestIds: [
+      "assigns the receiver's lifetime to the returned reference for self-receiver elision",
+    ],
     description:
       "Non-lexical lifetime behavior is captured as executable borrow contracts",
     testIds: [
@@ -557,6 +580,10 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   },
   {
     id: "DROP-DETERMINISM",
+    expectedFailTestIds: [
+      "drop cannot occur while mutable borrow is live",
+      "early drop occurs at last use instead of lexical scope end",
+    ],
     description:
       "Deterministic cleanup contracts and Symbol.dispose wiring are specified",
     testIds: [
@@ -664,4 +691,5 @@ export const CROSS_DOMAIN_REQUIRED_RULE_IDS: readonly string[] = [
   "FUZZ-STABILITY",
   "PERF-GUARDRAIL",
   "SPEC-FIRST-GOVERNANCE",
+  "DIAG-CODE-BORROW-LIFETIME",
 ];
