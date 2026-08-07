@@ -1,3 +1,4 @@
+import { errorDiagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
 import { none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
@@ -77,13 +78,13 @@ function parseAttributeArg(
       next: pathResult.value.next,
     });
   }
-  return err({
-    severity: "error",
-    message: `Expected attribute argument, found "${token.kind}" at offset ${token.span.start}`,
-    span: some(token.span),
-    code: none(),
-    relatedSpans: [],
-  });
+  return err(
+    errorDiagnostic(
+      none(),
+      `Expected attribute argument, found "${token.kind}" at offset ${token.span.start}`,
+      some(token.span),
+    ),
+  );
 }
 
 /**
@@ -119,13 +120,13 @@ function parseAttribute(
     cursor += 1; // skip `(`
     while (tokens[cursor]?.kind !== "rparen") {
       if (tokens[cursor]?.kind === "eof") {
-        return err({
-          severity: "error",
-          message: "unterminated attribute argument list",
-          span: lparenSpan !== undefined ? some(lparenSpan) : none(),
-          code: none(),
-          relatedSpans: [],
-        });
+        return err(
+          errorDiagnostic(
+            none(),
+            "unterminated attribute argument list",
+            lparenSpan !== undefined ? some(lparenSpan) : none(),
+          ),
+        );
       }
       const argResult = parseAttributeArg(tokens, cursor);
       if (isErr(argResult)) {

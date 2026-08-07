@@ -1,4 +1,4 @@
-import type { Diagnostic } from "../diagnostics.js";
+import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
@@ -58,13 +58,13 @@ function findLoopBodyOpenBrace(
   for (;;) {
     const tok = tokens[cursor];
     if (tok === undefined || tok.kind === "eof") {
-      return err({
-        severity: "error",
-        message: "expected `{` to open loop body, found end of input",
-        span: none(),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          none(),
+          "expected `{` to open loop body, found end of input",
+          none(),
+        ),
+      );
     }
     if (condDepth === 0 && tok.kind === "lbrace") {
       return ok(cursor);
@@ -93,13 +93,11 @@ function skipUnsupportedLoopConstruct(
   tokens: readonly Token[],
   match: LoopKeywordMatch,
 ): PR<{ diagnostic: Diagnostic; next: number }> {
-  const diagnostic: Diagnostic = {
-    severity: "error",
-    message: unsupportedLoopMessage(match.token.text),
-    span: some(match.token.span),
-    code: none(),
-    relatedSpans: [],
-  };
+  const diagnostic: Diagnostic = errorDiagnostic(
+    none(),
+    unsupportedLoopMessage(match.token.text),
+    some(match.token.span),
+  );
 
   const openBraceResult = findLoopBodyOpenBrace(tokens, match.pos + 1);
   if (isErr(openBraceResult)) {
@@ -264,13 +262,13 @@ export function parseBlock(
       continue;
     }
     if (tokens[cursor]?.kind === "eof") {
-      return err({
-        severity: "error",
-        message: "expected `}` to close block, found end of input",
-        span: none(),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          none(),
+          "expected `}` to close block, found end of input",
+          none(),
+        ),
+      );
     }
     if (tokens[cursor]?.kind === "rbrace") {
       break;
@@ -310,13 +308,13 @@ export function parseBlock(
         item.value.kind !== "Const"
       ) {
         const token = tokens[item.value.tokenId];
-        return err({
-          severity: "error",
-          message: `unexpected item kind '${item.value.kind}' in block position`,
-          span: token === undefined ? none() : some(token.span),
-          code: none(),
-          relatedSpans: [],
-        });
+        return err(
+          errorDiagnostic(
+            none(),
+            `unexpected item kind '${item.value.kind}' in block position`,
+            token === undefined ? none() : some(token.span),
+          ),
+        );
       }
       statements.push(item.value);
       continue;
@@ -392,13 +390,13 @@ export function parseBlock(
   };
   const closeTok = tokens[cursor];
   if (closeTok === undefined || closeTok.kind !== "rbrace") {
-    return err({
-      severity: "error",
-      message: `Expected '}' to close block`,
-      span: closeTok !== undefined ? some(closeTok.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Expected '}' to close block`,
+        closeTok !== undefined ? some(closeTok.span) : none(),
+      ),
+    );
   }
   return ok({ node: block, next: cursor + 1 });
 }

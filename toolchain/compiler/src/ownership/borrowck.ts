@@ -17,7 +17,7 @@
  * alone.
  */
 import { assert, assertNever } from "../assert.js";
-import type { Diagnostic } from "../diagnostics.js";
+import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import type * as Semantics from "../semantics/ast.js";
@@ -1177,26 +1177,26 @@ function checkCapabilities(
       case "allowed":
         continue;
       case "blocked":
-        diagnostics.push({
-          severity: "error",
-          message: `cannot borrow \`${describePlace(borrow.place)}\` as mutable because \`${borrow.capability.through}\` is a shared reference.`,
-          span: spanOf(tokens, borrow.tokenId),
-          code: some("HEDGE-BORROW-CHECK-002"),
-          relatedSpans: [],
-        });
+        diagnostics.push(
+          errorDiagnostic(
+            some("HEDGE-BORROW-CHECK-002"),
+            `cannot borrow \`${describePlace(borrow.place)}\` as mutable because \`${borrow.capability.through}\` is a shared reference.`,
+            spanOf(tokens, borrow.tokenId),
+          ),
+        );
         continue;
       case "root-mut-required":
         if (
           borrow.place.baseId !== undefined &&
           capabilities.get(borrow.place.baseId) === false
         ) {
-          diagnostics.push({
-            severity: "error",
-            message: `Cannot borrow "${borrow.place.baseName}" as &mut because it is not declared mut.`,
-            span: spanOf(tokens, borrow.tokenId),
-            code: some("HEDGE-BORROW-CHECK-002"),
-            relatedSpans: [],
-          });
+          diagnostics.push(
+            errorDiagnostic(
+              some("HEDGE-BORROW-CHECK-002"),
+              `Cannot borrow "${borrow.place.baseName}" as &mut because it is not declared mut.`,
+              spanOf(tokens, borrow.tokenId),
+            ),
+          );
         }
         continue;
       default:

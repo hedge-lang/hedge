@@ -1,4 +1,4 @@
-import type { Diagnostic } from "../diagnostics.js";
+import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
 import { resolveEscape } from "../lexer/escape.js";
 import type {
   FloatToken,
@@ -31,13 +31,13 @@ export type PR<T> = Result<T, Diagnostic>;
 export function tokenAt(tokens: readonly Token[], pos: number): PR<Token> {
   const token = tokens[pos];
   if (token === undefined) {
-    return err({
-      severity: "error",
-      message: `Unexpected end of input at token ${pos}`,
-      span: none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Unexpected end of input at token ${pos}`,
+        none(),
+      ),
+    );
   }
   return ok(token);
 }
@@ -76,13 +76,13 @@ export function expect(
   }
   const token = tokenAtResult.value;
   if (token.kind !== kind) {
-    return err({
-      severity: "error",
-      message: `Expected ${kind}, found "${token.kind}" at offset ${token.span.start}`,
-      span: some(token.span),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Expected ${kind}, found "${token.kind}" at offset ${token.span.start}`,
+        some(token.span),
+      ),
+    );
   }
   return ok(pos + 1);
 }
@@ -104,13 +104,13 @@ export function expectKeyword(
   const token = tokenAtResult.value;
   if (token.kind !== "keyword" || token.text !== text) {
     const found = token.kind === "keyword" ? token.text : token.kind;
-    return err({
-      severity: "error",
-      message: `Expected keyword "${text}", found "${found}" at offset ${token.span.start}`,
-      span: some(token.span),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Expected keyword "${text}", found "${found}" at offset ${token.span.start}`,
+        some(token.span),
+      ),
+    );
   }
   return ok(pos + 1);
 }
@@ -477,26 +477,26 @@ export function skipBalancedBraceBlock(
 ): PR<number> {
   const openBraceToken = tokens[openBrace];
   if (openBraceToken?.kind !== "lbrace") {
-    return err({
-      severity: "error",
-      message: `expected \`{\` to start block, found \`${openBraceToken?.kind ?? "MISSING"}\``,
-      span: openBraceToken ? some(openBraceToken.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `expected \`{\` to start block, found \`${openBraceToken?.kind ?? "MISSING"}\``,
+        openBraceToken ? some(openBraceToken.span) : none(),
+      ),
+    );
   }
   let cursor = openBrace;
   let braceDepth = 0;
   for (;;) {
     const tok = tokens[cursor];
     if (tok === undefined || tok.kind === "eof") {
-      return err({
-        severity: "error",
-        message: "expected `}` to close block, found end of input",
-        span: some(openBraceToken.span),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          none(),
+          "expected `}` to close block, found end of input",
+          some(openBraceToken.span),
+        ),
+      );
     }
     if (tok.kind === "lbrace") {
       braceDepth += 1;
@@ -647,23 +647,17 @@ export function skipUnsupportedTopLevelItem(
   pos: number,
   message: string,
 ): PR<{ diagnostic: Diagnostic; next: number }> {
-  const diagnostic: Diagnostic = {
-    severity: "error",
-    message,
-    span: some(keyword.span),
-    code: none(),
-    relatedSpans: [],
-  };
+  const diagnostic = errorDiagnostic(none(), message, some(keyword.span));
 
   const bodyStart = findTopLevelItemBodyStart(tokens, pos);
   if (bodyStart === undefined) {
-    return err({
-      severity: "error",
-      message: `${message}; expected a body for \`${keyword.text}\`, found end of input`,
-      span: some(keyword.span),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `${message}; expected a body for \`${keyword.text}\`, found end of input`,
+        some(keyword.span),
+      ),
+    );
   }
   if (bodyStart.kind === "semi") {
     return ok({ diagnostic, next: bodyStart.pos + 1 });
@@ -698,25 +692,25 @@ export function parseIdentifier(
   }
   const token = tokenAtResult.value;
   if (token.kind === "keyword" && token.text === "mut") {
-    return err({
-      severity: "error",
-      span: some({ start: token.span.start, end: token.span.end }),
-      code: none(),
-      relatedSpans: [],
-      message: MUT_MESSAGE,
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        MUT_MESSAGE,
+        some({ start: token.span.start, end: token.span.end }),
+      ),
+    );
   }
 
   if (token.kind !== "ident") {
     const found =
       token.kind === "keyword" ? `keyword "${token.text}"` : `"${token.kind}"`;
-    return err({
-      severity: "error",
-      message: `Expected an identifier, found ${found} at offset ${token.span.start}`,
-      span: some(token.span),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Expected an identifier, found ${found} at offset ${token.span.start}`,
+        some(token.span),
+      ),
+    );
   }
   const ident: Identifier = {
     kind: "Identifier",

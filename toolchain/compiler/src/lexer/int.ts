@@ -1,4 +1,5 @@
 import type { Diagnostic } from "../diagnostics.js";
+import { errorDiagnostic } from "../diagnostics.js";
 import { none, some, type Option } from "../option.js";
 import { isIdentContinue } from "./ident.js";
 import type { IntSuffix, Token } from "./token.js";
@@ -58,13 +59,7 @@ function numError(
   end: number,
   message: string,
 ): number {
-  diagnostics.push({
-    severity: "error",
-    message,
-    span: some({ start, end }),
-    code: none(),
-    relatedSpans: [],
-  });
+  diagnostics.push(errorDiagnostic(none(), message, some({ start, end })));
   tokens.push({
     kind: "error",
     span: { start, end },

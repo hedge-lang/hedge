@@ -1,3 +1,4 @@
+import { errorDiagnostic } from "../diagnostics.js";
 import type { Diagnostic } from "../diagnostics.js";
 import { none, some } from "../option.js";
 import { scanEscapeSeq } from "./escape.js";
@@ -25,13 +26,13 @@ export function scanStringLiteral(
       if (escEnd === null) {
         const lastToken = tokens.at(-1);
         if (lastToken === undefined) {
-          diagnostics.push({
-            severity: "error",
-            message: `Unterminated string literal starting at ${start}`,
-            span: some({ start, end: source.length }),
-            code: none(),
-            relatedSpans: [],
-          });
+          diagnostics.push(
+            errorDiagnostic(
+              none(),
+              `Unterminated string literal starting at ${start}`,
+              some({ start, end: source.length }),
+            ),
+          );
           tokens.push({
             kind: "error",
             span: { start, end: source.length },
@@ -48,13 +49,13 @@ export function scanStringLiteral(
     }
     i++;
   }
-  diagnostics.push({
-    severity: "error",
-    message: `Unterminated string literal starting at ${start}`,
-    span: some({ start, end: source.length }),
-    code: none(),
-    relatedSpans: [],
-  });
+  diagnostics.push(
+    errorDiagnostic(
+      none(),
+      `Unterminated string literal starting at ${start}`,
+      some({ start, end: source.length }),
+    ),
+  );
   tokens.push({
     kind: "error",
     span: { start, end: source.length },
@@ -91,13 +92,13 @@ export function scanRawString(
     }
     i++;
   }
-  diagnostics.push({
-    severity: "error",
-    message: `Unterminated raw string literal starting at ${start}`,
-    span: some({ start, end: source.length }),
-    code: none(),
-    relatedSpans: [],
-  });
+  diagnostics.push(
+    errorDiagnostic(
+      none(),
+      `Unterminated raw string literal starting at ${start}`,
+      some({ start, end: source.length }),
+    ),
+  );
   tokens.push({
     kind: "error",
     span: { start, end: source.length },

@@ -1,4 +1,4 @@
-import { type Diagnostic } from "../diagnostics.js";
+import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
 import { none, type Option, some } from "../option.js";
 import { err, isErr, ok, type Result } from "../result.js";
 import { type Token } from "./token.js";
@@ -89,13 +89,13 @@ export function isLineComment(
 ): Result<boolean, Diagnostic> {
   const ch = source.at(index);
   if (ch === undefined) {
-    return err({
-      severity: "error",
-      message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
-      span: none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+        none(),
+      ),
+    );
   }
   return ok(ch === "/" && source.at(index + 1) === "/");
 }
@@ -143,13 +143,13 @@ export function isBlockComment(
 ): Result<boolean, Diagnostic> {
   const ch = source.at(index);
   if (ch === undefined) {
-    return err({
-      severity: "error",
-      message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
-      span: none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+        none(),
+      ),
+    );
   }
   return ok(
     ch === "/" &&
@@ -191,13 +191,13 @@ export function tokenizeBlockComment(
       nesting -= 1;
     }
   }
-  diagnostics.push({
-    severity: "error",
-    message: "Unterminated block comment",
-    span: some({ start, end: source.length }),
-    code: none(),
-    relatedSpans: [],
-  });
+  diagnostics.push(
+    errorDiagnostic(
+      none(),
+      "Unterminated block comment",
+      some({ start, end: source.length }),
+    ),
+  );
   return some(source.length);
 }
 
@@ -217,13 +217,13 @@ function isBlockOuterDocComment(
 ): Result<boolean, Diagnostic> {
   const ch = source.at(index);
   if (ch === undefined) {
-    return err({
-      severity: "error",
-      message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
-      span: none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+        none(),
+      ),
+    );
   }
   return ok(
     ch === "/" && source.at(index + 1) === "*" && source.at(index + 2) === "*",
@@ -305,13 +305,13 @@ function tokenizeBlockOuterDocComment(
       return some(end);
     }
   }
-  diagnostics.push({
-    severity: "error",
-    message: "Unterminated block comment",
-    span: some({ start, end: source.length }),
-    code: none(),
-    relatedSpans: [],
-  });
+  diagnostics.push(
+    errorDiagnostic(
+      none(),
+      "Unterminated block comment",
+      some({ start, end: source.length }),
+    ),
+  );
   return some(source.length);
 }
 
@@ -331,13 +331,13 @@ function isBlockInnerDocComment(
 ): Result<boolean, Diagnostic> {
   const ch = source.at(index);
   if (ch === undefined) {
-    return err({
-      severity: "error",
-      message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
-      span: none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+        none(),
+      ),
+    );
   }
   return ok(
     ch === "/" && source.at(index + 1) === "*" && source.at(index + 2) === "!",
@@ -423,13 +423,13 @@ function tokenizeBlockInnerDocComment(
       return some(end);
     }
   }
-  diagnostics.push({
-    severity: "error",
-    message: "Unterminated block comment",
-    span: some({ start, end: source.length }),
-    code: none(),
-    relatedSpans: [],
-  });
+  diagnostics.push(
+    errorDiagnostic(
+      none(),
+      "Unterminated block comment",
+      some({ start, end: source.length }),
+    ),
+  );
   return some(source.length);
 }
 
@@ -449,13 +449,13 @@ function isOuterDocComment(
 ): Result<boolean, Diagnostic> {
   const ch = source.at(index);
   if (ch === undefined) {
-    return err({
-      severity: "error",
-      message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
-      span: none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+        none(),
+      ),
+    );
   }
   return ok(
     ch === "/" && source.at(index + 1) === "/" && source.at(index + 2) === "/",
@@ -586,13 +586,13 @@ function isInnerDocComment(
 ): Result<boolean, Diagnostic> {
   const ch = source.at(index);
   if (ch === undefined) {
-    return err({
-      severity: "error",
-      message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
-      span: none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+        none(),
+      ),
+    );
   }
   return ok(
     ch === "/" && source.at(index + 1) === "/" && source.at(index + 2) === "!",

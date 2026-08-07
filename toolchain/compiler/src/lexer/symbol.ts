@@ -1,4 +1,4 @@
-import { type Diagnostic } from "../diagnostics.js";
+import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
 import { none, some } from "../option.js";
 import { type Token } from "./token.js";
 
@@ -307,13 +307,13 @@ export function tokenizeSymbol(
 
     default: {
       const end = start + 1;
-      diagnostics.push({
-        severity: "error",
-        message: `Unexpected character "${ch}" at offset ${start}`,
-        span: some({ start, end }),
-        code: none(),
-        relatedSpans: [],
-      });
+      diagnostics.push(
+        errorDiagnostic(
+          none(),
+          `Unexpected character "${ch}" at offset ${start}`,
+          some({ start, end }),
+        ),
+      );
       tokens.push({ kind: "error", span: { start, end }, text: ch ?? "" });
       return end;
     }

@@ -1,4 +1,4 @@
-import { type Diagnostic } from "../diagnostics.js";
+import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
 import { none, type Option, some } from "../option.js";
 import { err, isErr, ok, type Result } from "../result.js";
 import { type Token } from "./token.js";
@@ -19,13 +19,13 @@ export function isWhitespace(
 ): Result<boolean, Diagnostic> {
   const ch = source.at(index);
   if (ch === undefined) {
-    return err({
-      severity: "error",
-      message: `Attempted to read beyond end of source at index ${index} of ${source.length}`,
-      span: none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+        none(),
+      ),
+    );
   }
 
   return ok(ch === " " || ch === "\t" || ch === "\n" || ch === "\r");

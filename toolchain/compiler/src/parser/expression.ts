@@ -1,5 +1,9 @@
 import { assert, assertNever } from "../assert.js";
-import type { Diagnostic } from "../diagnostics.js";
+import {
+  type Diagnostic,
+  errorDiagnostic,
+  warningDiagnostic,
+} from "../diagnostics.js";
 import { resolveEscape } from "../lexer/escape.js";
 import type { Token, TokenKind } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
@@ -510,13 +514,13 @@ function parseTupleOrGroup(
 
   if (tokens[cursor]?.kind !== "comma") {
     const tok = tokens[cursor];
-    return err({
-      severity: "error",
-      message: `Expected ',' or ')' after expression in parentheses`,
-      span: tok !== undefined ? some(tok.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Expected ',' or ')' after expression in parentheses`,
+        tok !== undefined ? some(tok.span) : none(),
+      ),
+    );
   }
 
   // Collect remaining tuple elements
@@ -601,13 +605,13 @@ function parseArrayLiteral(
 
   if (tokens[cursor]?.kind !== "comma" && tokens[cursor]?.kind !== "rbracket") {
     const tok = tokens[cursor];
-    return err({
-      severity: "error",
-      message: `Expected ',', ';', or ']' after expression in array literal`,
-      span: tok !== undefined ? some(tok.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Expected ',', ';', or ']' after expression in array literal`,
+        tok !== undefined ? some(tok.span) : none(),
+      ),
+    );
   }
 
   // Collect remaining list elements
@@ -694,13 +698,13 @@ function parseIfExpression(
 
   const thenTok = tokens[condResult.value.next];
   if (thenTok === undefined || thenTok.kind !== "lbrace") {
-    return err({
-      severity: "error",
-      message: `Expected '{' to start if body`,
-      span: thenTok !== undefined ? some(thenTok.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Expected '{' to start if body`,
+        thenTok !== undefined ? some(thenTok.span) : none(),
+      ),
+    );
   }
   const thenResult = parseBlock(tokens, diagnostics, condResult.value.next);
   if (isErr(thenResult)) return thenResult;
@@ -723,13 +727,13 @@ function parseIfExpression(
       elseBranch = some(elseBlockResult.value.node);
       cursor = elseBlockResult.value.next;
     } else {
-      return err({
-        severity: "error",
-        message: `Expected 'if' or '{' after 'else'`,
-        span: afterElse !== undefined ? some(afterElse.span) : none(),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          none(),
+          `Expected 'if' or '{' after 'else'`,
+          afterElse !== undefined ? some(afterElse.span) : none(),
+        ),
+      );
     }
   }
 
@@ -776,13 +780,13 @@ function parseWhileExpression(
 
   const bodyTok = tokens[condResult.value.next];
   if (bodyTok === undefined || bodyTok.kind !== "lbrace") {
-    return err({
-      severity: "error",
-      message: `Expected '{' to start while body`,
-      span: bodyTok !== undefined ? some(bodyTok.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Expected '{' to start while body`,
+        bodyTok !== undefined ? some(bodyTok.span) : none(),
+      ),
+    );
   }
   const bodyResult = parseBlock(tokens, diagnostics, condResult.value.next);
   if (isErr(bodyResult)) return bodyResult;
@@ -824,13 +828,13 @@ function parseMatchArm(
 
   const arrowTok = tokens[cursor];
   if (arrowTok === undefined || arrowTok.kind !== "fat_arrow") {
-    return err({
-      severity: "error",
-      message: `Expected '=>' in match arm`,
-      span: arrowTok !== undefined ? some(arrowTok.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Expected '=>' in match arm`,
+        arrowTok !== undefined ? some(arrowTok.span) : none(),
+      ),
+    );
   }
   cursor += 1;
 
@@ -882,13 +886,13 @@ function parseMatchExpression(
   while (tokens[cursor]?.kind !== "rbrace") {
     const tok = tokens[cursor];
     if (tok === undefined || tok.kind === "eof") {
-      return err({
-        severity: "error",
-        message: "Expected '}' to close match expression, found end of input",
-        span: none(),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          none(),
+          "Expected '}' to close match expression, found end of input",
+          none(),
+        ),
+      );
     }
 
     const armResult = parseMatchArm(tokens, diagnostics, cursor);
@@ -908,21 +912,21 @@ function parseMatchExpression(
     }
     const nextTok = tokens[cursor];
     if (nextTok === undefined || nextTok.kind === "eof") {
-      return err({
-        severity: "error",
-        message: "Expected '}' to close match expression, found end of input",
-        span: none(),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          none(),
+          "Expected '}' to close match expression, found end of input",
+          none(),
+        ),
+      );
     }
-    return err({
-      severity: "error",
-      message: `Expected ',' between match arms`,
-      span: some(nextTok.span),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Expected ',' between match arms`,
+        some(nextTok.span),
+      ),
+    );
   }
 
   const node: MatchExpression = {
@@ -967,24 +971,23 @@ function parseStructExpression(
       if (isErr(baseResult)) return baseResult;
       base = some(baseResult.value.node);
       cursor = baseResult.value.next;
-      diagnostics.push({
-        severity: "warning",
-        message:
+      diagnostics.push(
+        warningDiagnostic(
+          none(),
           "struct update expression (`..base`) is not yet supported in semantic analysis",
-        span: some(spreadTok.span),
-        code: none(),
-        relatedSpans: [],
-      });
+          some(spreadTok.span),
+        ),
+      );
       if (tokens[cursor]?.kind === "comma") cursor += 1; // trailing comma after spread
       if (tokens[cursor]?.kind !== "rbrace") {
         const tok = tokens[cursor];
-        return err({
-          severity: "error",
-          message: `Expected '}' after struct update expression; spread must be last`,
-          span: tok !== undefined ? some(tok.span) : none(),
-          code: none(),
-          relatedSpans: [],
-        });
+        return err(
+          errorDiagnostic(
+            none(),
+            `Expected '}' after struct update expression; spread must be last`,
+            tok !== undefined ? some(tok.span) : none(),
+          ),
+        );
       }
       break;
     }
@@ -1026,13 +1029,13 @@ function parseStructExpression(
 
   const closeTok = tokens[cursor];
   if (closeTok === undefined || closeTok.kind !== "rbrace") {
-    return err({
-      severity: "error",
-      message: `Expected '}' to close struct expression`,
-      span: closeTok !== undefined ? some(closeTok.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Expected '}' to close struct expression`,
+        closeTok !== undefined ? some(closeTok.span) : none(),
+      ),
+    );
   }
 
   const node: StructExpression = {
@@ -1151,13 +1154,13 @@ function parsePrimary(
 
   const loopKeyword = loopKeywordAt(tokens, pos);
   if (isSome(loopKeyword)) {
-    return err({
-      severity: "error",
-      message: unsupportedLoopMessage(loopKeyword.value.token.text),
-      span: some(loopKeyword.value.token.span),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        unsupportedLoopMessage(loopKeyword.value.token.text),
+        some(loopKeyword.value.token.span),
+      ),
+    );
   }
 
   // `match` expression
@@ -1277,13 +1280,13 @@ function parsePrimary(
     return ok({ node: deref, next: operandResult.value.next });
   }
 
-  return err({
-    severity: "error",
-    message: `Expected an expression, found "${token.kind}" at offset ${token.span.start}`,
-    span: some(token.span),
-    code: none(),
-    relatedSpans: [],
-  });
+  return err(
+    errorDiagnostic(
+      none(),
+      `Expected an expression, found "${token.kind}" at offset ${token.span.start}`,
+      some(token.span),
+    ),
+  );
 }
 
 /**
@@ -1308,13 +1311,9 @@ function parseArguments(
     if (tokens[cursor]?.kind === "rparen") break;
     const cur = tokens[cursor];
     if (cur === undefined || cur.kind === "eof") {
-      return err({
-        severity: "error",
-        message: "Expected ')' to close argument list",
-        span: none(),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(none(), "Expected ')' to close argument list", none()),
+      );
     }
     // Arguments are always in struct-ok position (they're inside parens)
     const argResult = parseExpressionWithBindingPower(
@@ -1398,13 +1397,13 @@ function parseInfixField(
   // valid anywhere.
   if (hadTurbofish) {
     const badToken = tokens[afterTurbofish];
-    return err({
-      severity: "error",
-      message: `expected '(' after generic arguments in method position, found "${badToken?.kind ?? "end of input"}"`,
-      span: badToken !== undefined ? some(badToken.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `expected '(' after generic arguments in method position, found "${badToken?.kind ?? "end of input"}"`,
+        badToken !== undefined ? some(badToken.span) : none(),
+      ),
+    );
   }
 
   return ok({
@@ -1428,13 +1427,13 @@ function parseInfixIndex(
 
   const tok = tokens[cursor];
   if (tok === undefined || tok.kind === "eof" || tok.kind === "rbracket") {
-    return err({
-      severity: "error",
-      message: `Expected an expression inside '[...]'`,
-      span: tok !== undefined && tok.kind !== "eof" ? some(tok.span) : none(),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        `Expected an expression inside '[...]'`,
+        tok !== undefined && tok.kind !== "eof" ? some(tok.span) : none(),
+      ),
+    );
   }
 
   // Index expressions are always in struct-ok position
@@ -1494,13 +1493,13 @@ function parseInfixBinary(
         nextInfix.nonAssoc &&
         nextInfix.leftBp === infix.leftBp
       ) {
-        return err({
-          severity: "error",
-          message: `cannot chain '${infix.sigil}' with '${nextInfix.sigil}'`,
-          span: some(peek.span),
-          code: none(),
-          relatedSpans: [],
-        });
+        return err(
+          errorDiagnostic(
+            none(),
+            `cannot chain '${infix.sigil}' with '${nextInfix.sigil}'`,
+            some(peek.span),
+          ),
+        );
       }
     }
   }
@@ -1565,16 +1564,15 @@ function parseRangeTail(
 
   if (isRangeEndTerminator(afterOp, allowStruct)) {
     if (inclusive) {
-      return err({
-        severity: "error",
-        message: "Expected an expression after '..='",
-        span:
+      return err(
+        errorDiagnostic(
+          none(),
+          "Expected an expression after '..='",
           afterOp !== undefined && afterOp.kind !== "eof"
             ? some(afterOp.span)
             : none(),
-        code: none(),
-        relatedSpans: [],
-      });
+        ),
+      );
     }
     end = none();
     next = cursor;
@@ -1605,13 +1603,13 @@ function parseRangeTail(
     const nextInfix = infixOp(peek);
     if (nextInfix !== null && nextInfix.kind === "range") {
       const sigil = inclusive ? "..=" : "..";
-      return err({
-        severity: "error",
-        message: `cannot chain '${sigil}' with '${nextInfix.sigil}'`,
-        span: some(peek.span),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          none(),
+          `cannot chain '${sigil}' with '${nextInfix.sigil}'`,
+          some(peek.span),
+        ),
+      );
     }
   }
 

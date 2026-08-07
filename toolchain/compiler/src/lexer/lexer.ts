@@ -1,3 +1,4 @@
+import { errorDiagnostic } from "../diagnostics.js";
 import type { Diagnostic } from "../diagnostics.js";
 import { isSome, none, some } from "../option.js";
 import type { Token } from "./token.js";
@@ -128,13 +129,13 @@ function tokenizeRString(
   }
 
   const end = start + 1 + hashCount;
-  diagnostics.push({
-    severity: "error",
-    message: `raw string prefix \`r${"#".repeat(hashCount || 1)}\` must be followed by '"'`,
-    span: some({ start, end }),
-    code: none(),
-    relatedSpans: [],
-  });
+  diagnostics.push(
+    errorDiagnostic(
+      none(),
+      `raw string prefix \`r${"#".repeat(hashCount || 1)}\` must be followed by '"'`,
+      some({ start, end }),
+    ),
+  );
   tokens.push({
     kind: "error",
     span: { start, end },

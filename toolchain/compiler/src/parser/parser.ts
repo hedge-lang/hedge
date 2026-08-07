@@ -1,4 +1,4 @@
-import type { Diagnostic } from "../diagnostics.js";
+import { type Diagnostic, warningDiagnostic } from "../diagnostics.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { isErr } from "../result.js";
@@ -133,13 +133,13 @@ export function parse(tokens: readonly Token[]): ParseResult {
       !isSome(node.value.initializer)
     ) {
       const token = tokens[node.value.tokenId];
-      diagnostics.push({
-        severity: "warning",
-        message: "immutable binding declared without a value can never be used",
-        span: token !== undefined ? some(token.span) : none(),
-        code: none(),
-        relatedSpans: [],
-      });
+      diagnostics.push(
+        warningDiagnostic(
+          none(),
+          "immutable binding declared without a value can never be used",
+          token !== undefined ? some(token.span) : none(),
+        ),
+      );
     }
   }
   const program = elideLifetimes(

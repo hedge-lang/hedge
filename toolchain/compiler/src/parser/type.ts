@@ -1,3 +1,4 @@
+import { errorDiagnostic } from "../diagnostics.js";
 import type { Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
@@ -69,21 +70,21 @@ export function parseType(
       return ok({ node: unit, next: pos + 2 });
     }
     if (next.kind === "eof") {
-      return err({
-        severity: "error",
-        message: "expected `)` to close type, found end of input",
-        span: some(token.span),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          none(),
+          "expected `)` to close type, found end of input",
+          some(token.span),
+        ),
+      );
     }
-    return err({
-      severity: "error",
-      message: "tuple types are not supported in Slice 1",
-      span: some(token.span),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        "tuple types are not supported in Slice 1",
+        some(token.span),
+      ),
+    );
   }
 
   if (
@@ -100,26 +101,16 @@ export function parseType(
       const message = isLifetimeGenericsStart(tokens, pathResult.value.next)
         ? unsupportedLifetimeMessage("lifetime arguments")
         : unsupportedGenericsMessage("generic type arguments");
-      return err({
-        severity: "error",
-        message,
-        span: some(genericToken.span),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(errorDiagnostic(none(), message, some(genericToken.span)));
     }
     const pathSepMatch = pathSepBeforeLt(tokens, pathResult.value.next);
     if (isSome(pathSepMatch)) {
       const message = isLifetimeGenericsStart(tokens, pathResult.value.next + 1)
         ? unsupportedLifetimeMessage("lifetime arguments")
         : unsupportedGenericsMessage("generic type arguments");
-      return err({
-        severity: "error",
-        message,
-        span: some(pathSepMatch.value.span),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(none(), message, some(pathSepMatch.value.span)),
+      );
     }
     const named: NamedType = {
       kind: "NamedType",
@@ -130,13 +121,13 @@ export function parseType(
   }
 
   if (token.kind === "lt") {
-    return err({
-      severity: "error",
-      message: unsupportedGenericsMessage("generic type arguments"),
-      span: some(token.span),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        unsupportedGenericsMessage("generic type arguments"),
+        some(token.span),
+      ),
+    );
   }
 
   if (token.kind === "amp") {
@@ -179,25 +170,24 @@ export function parseType(
     const afterElement = elementResult.value.next;
     const afterElementToken = tokens[afterElement];
     if (afterElementToken?.kind === "rbracket") {
-      return err({
-        severity: "error",
-        message: "slice types ([T]) are not supported in Slice 1",
-        span: some(token.span),
-        code: none(),
-        relatedSpans: [],
-      });
+      return err(
+        errorDiagnostic(
+          none(),
+          "slice types ([T]) are not supported in Slice 1",
+          some(token.span),
+        ),
+      );
     }
     if (afterElementToken?.kind !== "semi") {
-      return err({
-        severity: "error",
-        message: `expected ';' or ']' in array type, found "${afterElementToken?.kind ?? "eof"}"`,
-        span:
+      return err(
+        errorDiagnostic(
+          none(),
+          `expected ';' or ']' in array type, found "${afterElementToken?.kind ?? "eof"}"`,
           afterElementToken !== undefined
             ? some(afterElementToken.span)
             : some(token.span),
-        code: none(),
-        relatedSpans: [],
-      });
+        ),
+      );
     }
     const lengthPos = afterElement + 1;
     // Any expression is accepted syntactically here - semantic analysis
@@ -226,32 +216,32 @@ export function parseType(
   }
 
   if (token.kind === "bang") {
-    return err({
-      severity: "error",
-      message: "the never type (!) is not supported in Slice 1",
-      span: some(token.span),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        "the never type (!) is not supported in Slice 1",
+        some(token.span),
+      ),
+    );
   }
 
   if (token.kind === "lifetime") {
-    return err({
-      severity: "error",
-      message: unsupportedLifetimeMessage("lifetime annotations"),
-      span: some(token.span),
-      code: none(),
-      relatedSpans: [],
-    });
+    return err(
+      errorDiagnostic(
+        none(),
+        unsupportedLifetimeMessage("lifetime annotations"),
+        some(token.span),
+      ),
+    );
   }
 
-  return err({
-    severity: "error",
-    message: `type syntax "${token.kind}" is not supported in Slice 1`,
-    span: some(token.span),
-    code: none(),
-    relatedSpans: [],
-  });
+  return err(
+    errorDiagnostic(
+      none(),
+      `type syntax "${token.kind}" is not supported in Slice 1`,
+      some(token.span),
+    ),
+  );
 }
 
 export interface TypeArgumentListResult {
@@ -305,11 +295,11 @@ export function parseTypeArgumentList(
     return ok({ typeArguments, cursor: closeResult.cursor });
   }
   const badToken = tokens[cursor];
-  return err({
-    severity: "error",
-    message: `expected ',' or '>' in type argument list, found "${badToken?.kind ?? "end of input"}"`,
-    span: badToken !== undefined ? some(badToken.span) : none(),
-    code: none(),
-    relatedSpans: [],
-  });
+  return err(
+    errorDiagnostic(
+      none(),
+      `expected ',' or '>' in type argument list, found "${badToken?.kind ?? "end of input"}"`,
+      badToken !== undefined ? some(badToken.span) : none(),
+    ),
+  );
 }

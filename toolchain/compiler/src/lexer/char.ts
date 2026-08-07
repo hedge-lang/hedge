@@ -1,3 +1,4 @@
+import { errorDiagnostic } from "../diagnostics.js";
 import type { Diagnostic } from "../diagnostics.js";
 import { none, some } from "../option.js";
 import { scanEscapeSeq } from "./escape.js";
@@ -27,13 +28,13 @@ function scanCharLiteral(
     if (escEnd === null) {
       const lastToken = tokens.at(-1);
       if (lastToken === undefined) {
-        diagnostics.push({
-          severity: "error",
-          message: `unterminated char literal at offset ${start}`,
-          span: some({ start, end: source.length }),
-          code: none(),
-          relatedSpans: [],
-        });
+        diagnostics.push(
+          errorDiagnostic(
+            none(),
+            `unterminated char literal at offset ${start}`,
+            some({ start, end: source.length }),
+          ),
+        );
         tokens.push({
           kind: "error",
           span: { start, end: source.length },
@@ -46,13 +47,13 @@ function scanCharLiteral(
       return j < source.length ? j + 1 : j;
     }
     if (source[escEnd] !== "'") {
-      diagnostics.push({
-        severity: "error",
-        message: `unterminated char literal at offset ${start}`,
-        span: some({ start, end: escEnd }),
-        code: none(),
-        relatedSpans: [],
-      });
+      diagnostics.push(
+        errorDiagnostic(
+          none(),
+          `unterminated char literal at offset ${start}`,
+          some({ start, end: escEnd }),
+        ),
+      );
       tokens.push({
         kind: "error",
         span: { start, end: escEnd },
@@ -101,13 +102,13 @@ export function scanCharOrLifetime(
 
   if (n1 === "'") {
     // Empty char literal: ''
-    diagnostics.push({
-      severity: "error",
-      message: `empty char literal at offset ${start}`,
-      span: some({ start, end: start + 2 }),
-      code: none(),
-      relatedSpans: [],
-    });
+    diagnostics.push(
+      errorDiagnostic(
+        none(),
+        `empty char literal at offset ${start}`,
+        some({ start, end: start + 2 }),
+      ),
+    );
     tokens.push({ kind: "error", span: { start, end: start + 2 }, text: "''" });
     return start + 2;
   }
@@ -132,13 +133,13 @@ export function scanCharOrLifetime(
 
   // Unrecognised
   const end = start + 1;
-  diagnostics.push({
-    severity: "error",
-    message: `Unexpected character "'" at offset ${start}`,
-    span: some({ start, end }),
-    code: none(),
-    relatedSpans: [],
-  });
+  diagnostics.push(
+    errorDiagnostic(
+      none(),
+      `Unexpected character "'" at offset ${start}`,
+      some({ start, end }),
+    ),
+  );
   tokens.push({ kind: "error", span: { start, end }, text: "'" });
   return end;
 }

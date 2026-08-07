@@ -32,3 +32,25 @@ export interface Diagnostic {
   readonly code: Option<DiagnosticCode>;
   readonly relatedSpans: readonly RelatedSpan[];
 }
+
+/**
+ * Build an error. `code` comes first so it is answered rather than trailed
+ * off the end, and so the signature barely moves once it stops being
+ * optional. The lexer and parser build every diagnostic through these; the
+ * analyzer has its own `emitError`, which pushes onto its context.
+ */
+export function errorDiagnostic(
+  code: Option<DiagnosticCode>,
+  message: string,
+  span: Option<Span>,
+): Diagnostic {
+  return { severity: "error", message, span, code, relatedSpans: [] };
+}
+
+export function warningDiagnostic(
+  code: Option<DiagnosticCode>,
+  message: string,
+  span: Option<Span>,
+): Diagnostic {
+  return { severity: "warning", message, span, code, relatedSpans: [] };
+}
