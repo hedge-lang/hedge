@@ -814,8 +814,15 @@ function semanticTypeToJsPrimitive(
       // (that's the still-guardrailed `&mut`-cell lowering work), so a
       // reference-typed value's JS representation is just its referent's.
       return semanticTypeToJsPrimitive(type.referent);
-    default:
+    case "NamedType":
+    case "StructType":
+    case "EnumType":
+    case "FunctionType":
+    case "ArrayType":
+      // No JS primitive to erase to; the caller renders these itself.
       return none();
+    default:
+      return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
 }
 
@@ -863,8 +870,19 @@ function hedgeTypeToNumericKind(
       return some({ kind: "float", bits: 64 });
     case "ReferenceType":
       return hedgeTypeToNumericKind(type.referent);
-    default:
+    case "PrimitiveBooleanType":
+    case "PrimitiveCharType":
+    case "PrimitiveStringType":
+    case "NamedType":
+    case "UnitType":
+    case "StructType":
+    case "EnumType":
+    case "FunctionType":
+    case "ArrayType":
+      // Not numeric, so no wrapping applies.
       return none();
+    default:
+      return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
 }
 
@@ -2014,6 +2032,7 @@ function truncateAtFirstUnconditionalArm(
  * the extra analysis here). `isTopLevel` mirrors `compilePatternInto`'s
  * `includeOwnTag`.
  */
+// eslint-disable-next-line complexity -- Routing function over the full Pattern union
 function isPatternUnconditional(
   pattern: Semantics.Pattern,
   isTopLevel: boolean,
@@ -2033,8 +2052,17 @@ function isPatternUnconditional(
         (f) =>
           !isSome(f.pattern) || isPatternUnconditional(f.pattern.value, false),
       );
-    default:
+    case "LiteralPattern":
+    case "RangePattern":
+    case "OrPattern":
+    case "TuplePattern":
+    case "SlicePattern":
       return false;
+    default:
+      return assertNever(
+        pattern,
+        `Unexpected pattern: ${JSON.stringify(pattern)}`,
+      );
   }
 }
 
@@ -2559,8 +2587,18 @@ function patternCondition(
           pattern.tokenId,
         ),
       };
-    default:
+    case "BindingPattern":
+    case "OrPattern":
+    case "TuplePattern":
+    case "StructPattern":
+    case "TupleStructPattern":
+    case "SlicePattern":
       return { kind: "unsupported" };
+    default:
+      return assertNever(
+        pattern,
+        `Unexpected pattern: ${JSON.stringify(pattern)}`,
+      );
   }
 }
 
