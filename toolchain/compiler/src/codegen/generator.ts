@@ -205,19 +205,6 @@ function emitNumericUnaryOp(nk: NumericKind, inner: string): string {
   }
 }
 
-/**
- * `[T; N]` is move-only (never `Copy`, even when `T` is - see
- * `semantics/type-capabilities.ts`'s own note on why), so every array
- * reaching scope end without being moved needs disposing like any other
- * move-only value. A bare JS `Array`/`TypedArray` has no `[Symbol.dispose]`
- * of its own, so every array construction attaches one via this shared
- * helper - emitted once per compiled program, only when an array is
- * actually constructed (see `generate`'s own `usesArrayDisposeHelper`
- * check). The disposer recursively disposes each element that has its own
- * `[Symbol.dispose]` (a nested array, or a struct - every struct literal
- * always emits one, even if a no-op, see `StructExpression` codegen below) -
- * an element type with neither (every primitive) is a no-op.
- */
 const IDENTIFIER_KEY = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
 
 /** A tuple struct's fields are numeric strings, which `this.0` cannot spell. */
@@ -246,6 +233,19 @@ function structDisposer(disposableFields: readonly string[]): string {
   return `[Symbol.dispose]() {${body === "" ? "" : ` ${body} `}}`;
 }
 
+/**
+ * `[T; N]` is move-only (never `Copy`, even when `T` is - see
+ * `semantics/type-capabilities.ts`'s own note on why), so every array
+ * reaching scope end without being moved needs disposing like any other
+ * move-only value. A bare JS `Array`/`TypedArray` has no `[Symbol.dispose]`
+ * of its own, so every array construction attaches one via this shared
+ * helper - emitted once per compiled program, only when an array is
+ * actually constructed (see `generate`'s own `usesArrayDisposeHelper`
+ * check). The disposer recursively disposes each element that has its own
+ * `[Symbol.dispose]` (a nested array, or a struct - every struct literal
+ * always emits one, see `StructExpression` codegen below) - an element type
+ * with neither (every primitive) is a no-op.
+ */
 const ARRAY_DISPOSE_HELPER_NAME = "__hedgeDisposeArray";
 const ARRAY_DISPOSE_HELPER = `function ${ARRAY_DISPOSE_HELPER_NAME}(arr) {
   arr[Symbol.dispose] = function () {
@@ -587,6 +587,7 @@ function emitDisposeCall(statement: DisposeCallStatement): string {
   return `${statement.target}[Symbol.dispose]();`;
 }
 
+// eslint-disable-next-line complexity -- Routing function over the full union
 function emitStatement(statement: Statement): string {
   switch (statement.kind) {
     case "LetStatement":
@@ -605,8 +606,34 @@ function emitStatement(statement: Statement): string {
       return emitDisposeCall(statement);
     case "FunctionDecl":
       return emitFunction(statement);
-    default:
+    case "BooleanLiteral":
+    case "StringLiteral":
+    case "NumberLiteral":
+    case "PathExpression":
+    case "CallExpression":
+    case "BinaryExpression":
+    case "UnaryExpression":
+    case "AssignExpression":
+    case "FieldAccessExpression":
+    case "Identifier":
+    case "MethodCallExpression":
+    case "ArrowFunctionExpression":
+    case "IndexExpression":
+    case "TupleExpression":
+    case "ArrayExpression":
+    case "ArrayRepeatExpression":
+    case "ArraySliceViewExpression":
+    case "RangeExpression":
+    case "StructExpression":
+    case "RefCellExpression":
+      // Everything left in the union is an expression, emitted as an
+      // expression statement.
       return `${emitExpression(statement)};`;
+    default:
+      return assertNever(
+        statement,
+        `Unexpected statement: ${JSON.stringify(statement)}`,
+      );
   }
 }
 
@@ -738,6 +765,7 @@ function emitConstPart(decl: ConstDecl): EmittedPart {
   };
 }
 
+// eslint-disable-next-line complexity -- Routing function over the full union
 function emitItem(item: Item): string {
   switch (item.kind) {
     case "FunctionDecl":
@@ -765,8 +793,31 @@ function emitItem(item: Item): string {
       // Purely structural at runtime - only `emitDtsItem` renders anything
       // for this kind.
       return "";
-    default:
+    case "BooleanLiteral":
+    case "StringLiteral":
+    case "NumberLiteral":
+    case "PathExpression":
+    case "CallExpression":
+    case "BinaryExpression":
+    case "UnaryExpression":
+    case "AssignExpression":
+    case "FieldAccessExpression":
+    case "Identifier":
+    case "MethodCallExpression":
+    case "ArrowFunctionExpression":
+    case "IndexExpression":
+    case "TupleExpression":
+    case "ArrayExpression":
+    case "ArrayRepeatExpression":
+    case "ArraySliceViewExpression":
+    case "RangeExpression":
+    case "StructExpression":
+    case "RefCellExpression":
+      // Everything left in the union is an expression, emitted as an
+      // expression statement.
       return `${emitExpression(item)};`;
+    default:
+      return assertNever(item, `Unexpected item: ${JSON.stringify(item)}`);
   }
 }
 

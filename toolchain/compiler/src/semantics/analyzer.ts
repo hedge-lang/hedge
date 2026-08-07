@@ -4420,8 +4420,34 @@ function placeMutabilityViolation(
       }
       return none();
     }
-    default:
+    case "StringLiteral":
+    case "IntLiteral":
+    case "FloatLiteral":
+    case "BoolLiteral":
+    case "CharLiteral":
+    case "CallExpression":
+    case "ReferenceExpression":
+    case "BinaryExpression":
+    case "UnaryExpression":
+    case "AssignExpression":
+    case "CompoundAssignExpression":
+    case "MethodCallExpression":
+    case "TupleExpression":
+    case "ArrayExpression":
+    case "ArrayRepeatExpression":
+    case "RangeExpression":
+    case "StructExpression":
+    case "IfExpression":
+    case "LetExpression":
+    case "MatchExpression":
+    case "Block":
+      // Not a place, so there is no binding whose mutability could be violated.
       return none();
+    default:
+      return assertNever(
+        expr,
+        `Unexpected expression: ${JSON.stringify(expr)}`,
+      );
   }
 }
 
