@@ -772,7 +772,7 @@ describe("enum payload disposal codegen", () => {
   });
 
   it("disposes a struct variant's payload", () => {
-    const out = stmts(
+    const out = js(
       gen(`${DECLS} fn _() { E::B { m: Mid { l: Leaf { v: 2 } } }; }`),
     );
     expect(out).toContain("[Symbol.dispose]() { using _d0 = this.data; }");
