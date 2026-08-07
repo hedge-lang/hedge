@@ -24,10 +24,12 @@
  */
 
 import { assert, assertNever } from "../assert.js";
-import type {
-  Diagnostic,
-  RelatedSpan,
-  DiagnosticCode,
+import {
+  type Diagnostic,
+  type RelatedSpan,
+  type DiagnosticCode,
+  errorDiagnostic,
+  warningDiagnostic,
 } from "../diagnostics.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
@@ -183,28 +185,30 @@ function emitDiagnostic(
   ctx: Ctx,
   message: string,
   tokenId: number,
-  extra?: {
-    readonly code?: DiagnosticCode;
+  extra: {
+    readonly code: DiagnosticCode;
     readonly relatedSpans?: readonly RelatedSpan[];
   },
 ): void {
   ctx.diagnostics.push({
-    severity: "error",
-    message,
-    span: diagnosticSpan(ctx.tokens, tokenId),
-    code: extra?.code !== undefined ? some(extra.code) : none(),
-    relatedSpans: extra?.relatedSpans ?? [],
+    ...errorDiagnostic(
+      extra.code,
+      message,
+      diagnosticSpan(ctx.tokens, tokenId),
+    ),
+    relatedSpans: extra.relatedSpans ?? [],
   });
 }
 
-function emitWarning(ctx: Ctx, message: string, tokenId: number): void {
-  ctx.diagnostics.push({
-    severity: "warning",
-    message,
-    span: diagnosticSpan(ctx.tokens, tokenId),
-    code: none(),
-    relatedSpans: [],
-  });
+function emitWarning(
+  ctx: Ctx,
+  message: string,
+  tokenId: number,
+  code: DiagnosticCode,
+): void {
+  ctx.diagnostics.push(
+    warningDiagnostic(code, message, diagnosticSpan(ctx.tokens, tokenId)),
+  );
 }
 
 /**
@@ -320,6 +324,7 @@ function useOrMove(
         ctx,
         `use of uninitialized binding \`${name}\``,
         pathExpr.tokenId,
+        { code: "HEDGE-MOVE-001" },
       );
       state.set(id, { kind: "Owned" });
       return;
@@ -335,6 +340,7 @@ function useOrMove(
         ctx,
         `use of possibly-moved value \`${name}\`: moved on some paths but not others`,
         pathExpr.tokenId,
+        { code: "HEDGE-BORROW-CHECK-003" },
       );
       state.set(id, { kind: "Owned" });
       return;
@@ -343,6 +349,7 @@ function useOrMove(
         ctx,
         `use of possibly-uninitialized binding \`${name}\`: initialized on some paths but not others`,
         pathExpr.tokenId,
+        { code: "HEDGE-MOVE-001" },
       );
       state.set(id, { kind: "Owned" });
       return;
@@ -657,6 +664,7 @@ function checkProjectionMove(
     ctx,
     `cannot move out of \`${place}\`; borrow it with \`&${place}\` instead`,
     expression.tokenId,
+    { code: "HEDGE-MOVE-002" },
   );
 }
 
@@ -774,6 +782,7 @@ function walkExpression(
           ctx,
           `cannot move ${derefPlaceDescription(expression.operand)} out of a reference`,
           expression.tokenId,
+          { code: "HEDGE-MOVE-002" },
         );
       }
       walkExpression(ctx, expression.operand, state, scopeStack);
@@ -1373,6 +1382,7 @@ function recordDrops(
             ctx,
             conditionalDropFlagWarning(declaration.name),
             declaration.tokenId,
+            "HEDGE-MOVE-004",
           );
         }
         break;
@@ -1383,6 +1393,7 @@ function recordDrops(
           ctx,
           ambiguousDropMessage(declaration.name, declState),
           declaration.tokenId,
+          { code: "HEDGE-MOVE-003" },
         );
         break;
       }

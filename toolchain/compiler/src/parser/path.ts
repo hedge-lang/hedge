@@ -44,7 +44,7 @@ export function parsePathSegments(
   if (isSome(firstKeyword)) {
     return err(
       errorDiagnostic(
-        some("HEDGE-PARSE-004"),
+        "HEDGE-PARSE-004",
         unsupportedPathKeywordMessage(firstKeyword.value.text),
         some(firstKeyword.value.span),
       ),
@@ -73,18 +73,14 @@ export function parsePathSegments(
     if (nextToken === undefined || nextToken.kind !== "ident") {
       if (nextToken?.kind === "keyword" && nextToken.text === "mut") {
         return err(
-          errorDiagnostic(
-            some("HEDGE-PARSE-004"),
-            MUT_MESSAGE,
-            some(nextToken.span),
-          ),
+          errorDiagnostic("HEDGE-PARSE-004", MUT_MESSAGE, some(nextToken.span)),
         );
       }
       const keyword = pathKeywordAt(tokens, cursor);
       if (isSome(keyword)) {
         return err(
           errorDiagnostic(
-            some("HEDGE-PARSE-004"),
+            "HEDGE-PARSE-004",
             unsupportedPathKeywordMessage(keyword.value.text),
             some(keyword.value.span),
           ),
@@ -100,7 +96,7 @@ export function parsePathSegments(
         nextToken !== undefined ? some(nextToken.span) : none<Span>();
       return err(
         errorDiagnostic(
-          some("HEDGE-PARSE-001"),
+          "HEDGE-PARSE-001",
           `Expected identifier after "::", found ${foundDesc}`,
           span,
         ),

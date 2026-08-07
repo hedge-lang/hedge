@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { assert } from "../assert.js";
 
 import { tokenize } from "../lexer/lexer.js";
-import { isSome, none, some } from "../option.js";
+import { isSome, none } from "../option.js";
 import { parse } from "../parser/parser.js";
 import type { AnalysisResult } from "./analyzer.js";
 import { analyze } from "./analyzer.js";
@@ -2258,7 +2258,7 @@ describe("semantic analysis", (): void => {
       );
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].code).toBe("HEDGE-LIFETIME-002");
       expect(diagnostics[0].message).toContain("x");
     });
 
@@ -2266,7 +2266,7 @@ describe("semantic analysis", (): void => {
       const { diagnostics } = diagnose("fn f(x: i32) -> &i32 { &x }");
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].code).toBe("HEDGE-LIFETIME-002");
     });
 
     it("rejects a struct literal field that borrows a let-local, when the struct instance is returned", (): void => {
@@ -2279,7 +2279,7 @@ describe("semantic analysis", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].code).toBe("HEDGE-LIFETIME-002");
       expect(diagnostics[0].message).toContain("s");
     });
 
@@ -2306,7 +2306,7 @@ describe("semantic analysis", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].code).toBe("HEDGE-LIFETIME-002");
       expect(diagnostics[0].message).toContain("x");
     });
 
@@ -2325,7 +2325,7 @@ describe("semantic analysis", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].code).toBe("HEDGE-LIFETIME-002");
       expect(diagnostics[0].message).toContain("x");
     });
 
@@ -2340,7 +2340,7 @@ describe("semantic analysis", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+      expect(diagnostics[0].code).toBe("HEDGE-LIFETIME-002");
       expect(diagnostics[0].message).toContain("x");
     });
 
@@ -2362,7 +2362,7 @@ describe("semantic analysis", (): void => {
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
       expect(diagnostics[0].message).toContain("missing_name");
-      expect(diagnostics[0].code).toEqual(none());
+      expect(diagnostics[0].code).toBe("HEDGE-NAME-001");
     });
 
     it("does not cascade into a third diagnostic when a struct field borrows an unresolved name, on top of the name-resolution and field-type-mismatch diagnostics", (): void => {
@@ -2371,7 +2371,9 @@ describe("semantic analysis", (): void => {
         fn make() -> S { S { f: &missing_name } }
       `);
       expect(diagnostics).toHaveLength(2);
-      expect(diagnostics.some((d) => isSome(d.code))).toBe(false);
+      expect(diagnostics.every((d) => d.code !== "HEDGE-LIFETIME-002")).toBe(
+        true,
+      );
     });
 
     it.fails(
@@ -2382,7 +2384,7 @@ describe("semantic analysis", (): void => {
         );
         expect(diagnostics).toHaveLength(1);
         assert(diagnostics[0] !== undefined, "Expected diagnostics");
-        expect(diagnostics[0].code).toEqual(some("HEDGE-LIFETIME-002"));
+        expect(diagnostics[0].code).toBe("HEDGE-LIFETIME-002");
       },
     );
   });

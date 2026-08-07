@@ -80,7 +80,7 @@ function parseAttributeArg(
   }
   return err(
     errorDiagnostic(
-      some("HEDGE-PARSE-001"),
+      "HEDGE-PARSE-001",
       `Expected attribute argument, found "${token.kind}" at offset ${token.span.start}`,
       some(token.span),
     ),
@@ -122,7 +122,7 @@ function parseAttribute(
       if (tokens[cursor]?.kind === "eof") {
         return err(
           errorDiagnostic(
-            some("HEDGE-PARSE-002"),
+            "HEDGE-PARSE-002",
             "unterminated attribute argument list",
             lparenSpan !== undefined ? some(lparenSpan) : none(),
           ),

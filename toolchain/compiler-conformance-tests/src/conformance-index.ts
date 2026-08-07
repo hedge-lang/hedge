@@ -467,16 +467,13 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   },
   {
     id: "DIAG-CODE-ID-PLAN",
-    expectedFailTestIds: [
-      "emitted diagnostics expose a code field with schema-valid IDs",
-      "all diagnostics in the core error corpus include schema-valid code ids",
-    ],
     description:
       "Diagnostic code IDs are schema-validated in active conformance",
     testIds: [
       "defines a stable diagnostic code schema pattern",
-      "emitted diagnostics expose a code field with schema-valid IDs",
-      "all diagnostics in the core error corpus include schema-valid code ids",
+      "exposes a schema-valid code on an emitted diagnostic",
+      "codes every diagnostic in the core error corpus with a schema-valid id",
+      "every borrow and lifetime error category in the corpus carries a schema-valid, stable code",
     ],
   },
   {

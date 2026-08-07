@@ -1,1 +1,1 @@
-error: if expression branches have incompatible types
+error[HEDGE-TYPE-004]: if expression branches have incompatible types

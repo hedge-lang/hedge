@@ -131,7 +131,7 @@ function tokenizeRString(
   const end = start + 1 + hashCount;
   diagnostics.push(
     errorDiagnostic(
-      some("HEDGE-LEX-007"),
+      "HEDGE-LEX-007",
       `raw string prefix \`r${"#".repeat(hashCount || 1)}\` must be followed by '"'`,
       some({ start, end }),
     ),

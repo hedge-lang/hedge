@@ -30,7 +30,7 @@ function scanCharLiteral(
       if (lastToken === undefined) {
         diagnostics.push(
           errorDiagnostic(
-            some("HEDGE-LEX-002"),
+            "HEDGE-LEX-002",
             `unterminated char literal at offset ${start}`,
             some({ start, end: source.length }),
           ),
@@ -49,7 +49,7 @@ function scanCharLiteral(
     if (source[escEnd] !== "'") {
       diagnostics.push(
         errorDiagnostic(
-          some("HEDGE-LEX-002"),
+          "HEDGE-LEX-002",
           `unterminated char literal at offset ${start}`,
           some({ start, end: escEnd }),
         ),
@@ -104,7 +104,7 @@ export function scanCharOrLifetime(
     // Empty char literal: ''
     diagnostics.push(
       errorDiagnostic(
-        some("HEDGE-LEX-004"),
+        "HEDGE-LEX-004",
         `empty char literal at offset ${start}`,
         some({ start, end: start + 2 }),
       ),
@@ -135,7 +135,7 @@ export function scanCharOrLifetime(
   const end = start + 1;
   diagnostics.push(
     errorDiagnostic(
-      some("HEDGE-LEX-005"),
+      "HEDGE-LEX-005",
       `Unexpected character "'" at offset ${start}`,
       some({ start, end }),
     ),

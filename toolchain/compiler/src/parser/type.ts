@@ -72,7 +72,7 @@ export function parseType(
     if (next.kind === "eof") {
       return err(
         errorDiagnostic(
-          some("HEDGE-PARSE-002"),
+          "HEDGE-PARSE-002",
           "expected `)` to close type, found end of input",
           some(token.span),
         ),
@@ -80,7 +80,7 @@ export function parseType(
     }
     return err(
       errorDiagnostic(
-        some("HEDGE-PARSE-004"),
+        "HEDGE-PARSE-004",
         "tuple types are not supported in Slice 1",
         some(token.span),
       ),
@@ -102,11 +102,7 @@ export function parseType(
         ? unsupportedLifetimeMessage("lifetime arguments")
         : unsupportedGenericsMessage("generic type arguments");
       return err(
-        errorDiagnostic(
-          some("HEDGE-PARSE-004"),
-          message,
-          some(genericToken.span),
-        ),
+        errorDiagnostic("HEDGE-PARSE-004", message, some(genericToken.span)),
       );
     }
     const pathSepMatch = pathSepBeforeLt(tokens, pathResult.value.next);
@@ -116,7 +112,7 @@ export function parseType(
         : unsupportedGenericsMessage("generic type arguments");
       return err(
         errorDiagnostic(
-          some("HEDGE-PARSE-004"),
+          "HEDGE-PARSE-004",
           message,
           some(pathSepMatch.value.span),
         ),
@@ -133,7 +129,7 @@ export function parseType(
   if (token.kind === "lt") {
     return err(
       errorDiagnostic(
-        some("HEDGE-PARSE-004"),
+        "HEDGE-PARSE-004",
         unsupportedGenericsMessage("generic type arguments"),
         some(token.span),
       ),
@@ -182,7 +178,7 @@ export function parseType(
     if (afterElementToken?.kind === "rbracket") {
       return err(
         errorDiagnostic(
-          some("HEDGE-PARSE-004"),
+          "HEDGE-PARSE-004",
           "slice types ([T]) are not supported in Slice 1",
           some(token.span),
         ),
@@ -191,7 +187,7 @@ export function parseType(
     if (afterElementToken?.kind !== "semi") {
       return err(
         errorDiagnostic(
-          some("HEDGE-PARSE-001"),
+          "HEDGE-PARSE-001",
           `expected ';' or ']' in array type, found "${afterElementToken?.kind ?? "eof"}"`,
           afterElementToken !== undefined
             ? some(afterElementToken.span)
@@ -228,7 +224,7 @@ export function parseType(
   if (token.kind === "bang") {
     return err(
       errorDiagnostic(
-        some("HEDGE-PARSE-004"),
+        "HEDGE-PARSE-004",
         "the never type (!) is not supported in Slice 1",
         some(token.span),
       ),
@@ -238,7 +234,7 @@ export function parseType(
   if (token.kind === "lifetime") {
     return err(
       errorDiagnostic(
-        some("HEDGE-PARSE-004"),
+        "HEDGE-PARSE-004",
         unsupportedLifetimeMessage("lifetime annotations"),
         some(token.span),
       ),
@@ -247,7 +243,7 @@ export function parseType(
 
   return err(
     errorDiagnostic(
-      some("HEDGE-PARSE-004"),
+      "HEDGE-PARSE-004",
       `type syntax "${token.kind}" is not supported in Slice 1`,
       some(token.span),
     ),
@@ -307,7 +303,7 @@ export function parseTypeArgumentList(
   const badToken = tokens[cursor];
   return err(
     errorDiagnostic(
-      some("HEDGE-PARSE-001"),
+      "HEDGE-PARSE-001",
       `expected ',' or '>' in type argument list, found "${badToken?.kind ?? "end of input"}"`,
       badToken !== undefined ? some(badToken.span) : none(),
     ),

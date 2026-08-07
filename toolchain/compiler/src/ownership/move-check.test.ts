@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { assert } from "../assert.js";
-import { isSome, some } from "../option.js";
+import { isSome } from "../option.js";
 import { analyzeSource } from "../testing/analyze-source.js";
 import type { OwnershipCheckResult } from "./move-check.js";
 import { analyzeOwnership, conditionalDropFlagWarning } from "./move-check.js";
@@ -624,7 +624,7 @@ describe("move-check", (): void => {
     expect(diagnostics).toHaveLength(1);
     const diagnostic = diagnostics[0];
     assert(diagnostic !== undefined, "Expected a diagnostic");
-    expect(diagnostic.code).toEqual(some("HEDGE-BORROW-CHECK-003"));
+    expect(diagnostic.code).toBe("HEDGE-BORROW-CHECK-003");
     expect(diagnostic.relatedSpans).toHaveLength(1);
     const moveOffset = source.indexOf("x;", source.indexOf("let y ="));
     const relatedSpan = diagnostic.relatedSpans[0];

@@ -1,1 +1,1 @@
-error: non-exhaustive patterns: `false` not covered
+error[HEDGE-PATTERN-002]: non-exhaustive patterns: `false` not covered

@@ -13,11 +13,7 @@ function escapeError(
   message: string,
 ): null {
   diagnostics.push(
-    errorDiagnostic(
-      some("HEDGE-LEX-008"),
-      message,
-      some({ start: tokenStart, end }),
-    ),
+    errorDiagnostic("HEDGE-LEX-008", message, some({ start: tokenStart, end })),
   );
   tokens.push({
     kind: "error",

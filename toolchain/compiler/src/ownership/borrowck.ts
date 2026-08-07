@@ -1179,7 +1179,7 @@ function checkCapabilities(
       case "blocked":
         diagnostics.push(
           errorDiagnostic(
-            some("HEDGE-BORROW-CHECK-002"),
+            "HEDGE-BORROW-CHECK-002",
             `cannot borrow \`${describePlace(borrow.place)}\` as mutable because \`${borrow.capability.through}\` is a shared reference.`,
             spanOf(tokens, borrow.tokenId),
           ),
@@ -1192,7 +1192,7 @@ function checkCapabilities(
         ) {
           diagnostics.push(
             errorDiagnostic(
-              some("HEDGE-BORROW-CHECK-002"),
+              "HEDGE-BORROW-CHECK-002",
               `Cannot borrow "${borrow.place.baseName}" as &mut because it is not declared mut.`,
               spanOf(tokens, borrow.tokenId),
             ),
@@ -1240,12 +1240,12 @@ function checkExclusivity(
       }
       const firstBorrowSpan = spanOf(tokens, a.tokenId);
       diagnostics.push({
-        severity: "error",
-        message:
+        ...errorDiagnostic(
+          "HEDGE-BORROW-CHECK-001",
           `Conflicting borrows of "${describePlace(a.place)}": ${describeBorrow(a)} at offset ${String(offsetOf(tokens, a.tokenId))} ` +
-          `and ${describeBorrow(b)} at offset ${String(offsetOf(tokens, b.tokenId))} are both live.`,
-        span: spanOf(tokens, b.tokenId),
-        code: some("HEDGE-BORROW-CHECK-001"),
+            `and ${describeBorrow(b)} at offset ${String(offsetOf(tokens, b.tokenId))} are both live.`,
+          spanOf(tokens, b.tokenId),
+        ),
         relatedSpans: isSome(firstBorrowSpan)
           ? [
               {

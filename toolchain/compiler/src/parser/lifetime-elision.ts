@@ -125,7 +125,7 @@ function resolveNestedReferenceTypes(
   }
   diagnostics.push(
     errorDiagnostic(
-      some("HEDGE-LIFETIME-001"),
+      "HEDGE-LIFETIME-001",
       NO_ELISION_RULE_MESSAGE,
       spanOf(tokens, type.tokenId),
     ),
@@ -333,7 +333,7 @@ function elideFunctionDecl(
     } else {
       diagnostics.push(
         errorDiagnostic(
-          some("HEDGE-LIFETIME-001"),
+          "HEDGE-LIFETIME-001",
           ambiguousReturnLifetimeMessage(referenceParamCount),
           spanOf(tokens, returnRef.tokenId),
         ),

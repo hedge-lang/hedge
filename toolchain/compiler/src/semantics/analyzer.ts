@@ -1,5 +1,9 @@
 import { assert, assertNever } from "../assert.js";
-import type { Diagnostic, DiagnosticCode } from "../diagnostics.js";
+import {
+  errorDiagnostic,
+  type Diagnostic,
+  type DiagnosticCode,
+} from "../diagnostics.js";
 import type { IntSuffix, Token } from "../lexer/token.js";
 import {
   isNone,
@@ -222,7 +226,7 @@ function analyzeLetOrParamPattern(
       ctx,
       REFUTABLE_LET_OR_PARAM_PATTERN_MESSAGE,
       pattern.tokenId,
-      none(),
+      "HEDGE-PATTERN-001",
     );
   }
   return result;
@@ -255,16 +259,16 @@ function emitError(
   ctx: AnalysisContext,
   message: string,
   tokenId: number,
-  code: Option<DiagnosticCode>,
+  code: DiagnosticCode,
 ): void {
   const token = ctx.tokens[tokenId];
-  ctx.diagnostics.push({
-    severity: "error",
-    message,
-    span: token !== undefined ? some(token.span) : none(),
-    code,
-    relatedSpans: [],
-  });
+  ctx.diagnostics.push(
+    errorDiagnostic(
+      code,
+      message,
+      token !== undefined ? some(token.span) : none(),
+    ),
+  );
 }
 
 // eslint-disable-next-line complexity -- Routing function
@@ -362,7 +366,7 @@ function foldArrayLength(
         ctx,
         "array length must be a compile-time constant expression",
         outcome.tokenId,
-        none(),
+        "HEDGE-CONST-004",
       );
       return none();
     case "Undeclared":
@@ -370,7 +374,7 @@ function foldArrayLength(
         ctx,
         `Cannot find name "${outcome.name}" in this scope.`,
         outcome.tokenId,
-        none(),
+        "HEDGE-NAME-001",
       );
       return none();
     case "DivideByZero":
@@ -378,7 +382,7 @@ function foldArrayLength(
         ctx,
         "attempt to divide by zero in a constant expression",
         outcome.tokenId,
-        none(),
+        "HEDGE-CONST-003",
       );
       return none();
     case "InvalidShift":
@@ -386,7 +390,7 @@ function foldArrayLength(
         ctx,
         "shift amount must be between 0 and 63 in a constant expression",
         outcome.tokenId,
-        none(),
+        "HEDGE-CONST-003",
       );
       return none();
     case "AlreadyDiagnosed":
@@ -400,11 +404,21 @@ function foldArrayLength(
       );
   }
   if (outcome.value.kind !== "Int") {
-    emitError(ctx, "array length must be an integer", length.tokenId, none());
+    emitError(
+      ctx,
+      "array length must be an integer",
+      length.tokenId,
+      "HEDGE-CONST-004",
+    );
     return none();
   }
   if (outcome.value.value < 0n) {
-    emitError(ctx, "array length cannot be negative", length.tokenId, none());
+    emitError(
+      ctx,
+      "array length cannot be negative",
+      length.tokenId,
+      "HEDGE-CONST-004",
+    );
     return none();
   }
   // An index is a `usize`, so a longer array could not be indexed by the type
@@ -417,7 +431,7 @@ function foldArrayLength(
       ctx,
       `array length ${outcome.value.value} exceeds the maximum ${usizeMax}`,
       length.tokenId,
-      none(),
+      "HEDGE-CONST-004",
     );
     return none();
   }
@@ -472,7 +486,12 @@ function validateSlice1Type(
     default:
       assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
-  emitError(ctx, "type is not supported in Slice 1", tokenId, none());
+  emitError(
+    ctx,
+    "type is not supported in Slice 1",
+    tokenId,
+    "HEDGE-UNSUPPORTED-001",
+  );
   return { kind: "UnitType", tokenId };
 }
 
@@ -663,7 +682,7 @@ function resolveConstRef(
       ctx,
       `const \`${name}\` cannot be defined in terms of itself`,
       tokenId,
-      none(),
+      "HEDGE-CONST-002",
     );
     return { kind: "AlreadyDiagnosed", tokenId };
   }
@@ -735,7 +754,7 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
           ctx,
           `const \`${name}\`'s initializer does not match its declared type ${describeType(declaredType)}`,
           decl.value.tokenId,
-          none(),
+          "HEDGE-TYPE-001",
         );
       }
       break;
@@ -744,7 +763,7 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
         ctx,
         `const \`${name}\`'s initializer must be a compile-time constant expression`,
         outcome.tokenId,
-        none(),
+        "HEDGE-CONST-001",
       );
       break;
     case "DivideByZero":
@@ -752,7 +771,7 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
         ctx,
         "attempt to divide by zero in a constant expression",
         outcome.tokenId,
-        none(),
+        "HEDGE-CONST-003",
       );
       break;
     case "InvalidShift":
@@ -760,7 +779,7 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
         ctx,
         "shift amount must be between 0 and 63 in a constant expression",
         outcome.tokenId,
-        none(),
+        "HEDGE-CONST-003",
       );
       break;
     case "Undeclared":
@@ -768,7 +787,7 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
         ctx,
         `Cannot find name "${outcome.name}" in this scope.`,
         outcome.tokenId,
-        none(),
+        "HEDGE-NAME-001",
       );
       break;
     case "AlreadyDiagnosed":
@@ -907,7 +926,7 @@ function declareStructName(
       ctx,
       `struct \`${item.name.text}\` is defined more than once`,
       item.name.tokenId,
-      none(),
+      "HEDGE-NAME-002",
     );
     return;
   }
@@ -934,7 +953,7 @@ function declareEnumName(
       ctx,
       `enum \`${item.name.text}\` is defined more than once`,
       item.name.tokenId,
-      none(),
+      "HEDGE-NAME-002",
     );
     return;
   }
@@ -1016,7 +1035,7 @@ function registerConstsAndStatics(
           ctx,
           `const \`${item.name.text}\` is defined more than once`,
           item.name.tokenId,
-          none(),
+          "HEDGE-NAME-002",
         );
       } else {
         // A same-frame static collision is reported once, from the static
@@ -1039,7 +1058,7 @@ function registerConstsAndStatics(
             ctx,
             `const \`${item.name.text}\` collides with an existing function name`,
             item.name.tokenId,
-            none(),
+            "HEDGE-NAME-002",
           );
         }
         constFrame.set(item.name.text, item);
@@ -1050,7 +1069,7 @@ function registerConstsAndStatics(
           ctx,
           `static \`${item.name.text}\` is defined more than once`,
           item.name.tokenId,
-          none(),
+          "HEDGE-NAME-002",
         );
       } else {
         if (constNamesInFrame.has(item.name.text)) {
@@ -1062,7 +1081,7 @@ function registerConstsAndStatics(
             ctx,
             `static \`${item.name.text}\` collides with a const of the same name`,
             item.name.tokenId,
-            none(),
+            "HEDGE-NAME-002",
           );
         } else if (currentScope.has(item.name.text)) {
           // A static lowers to a real top-level accessor function of its
@@ -1074,7 +1093,7 @@ function registerConstsAndStatics(
             ctx,
             `static \`${item.name.text}\` collides with an existing function name`,
             item.name.tokenId,
-            none(),
+            "HEDGE-NAME-002",
           );
         }
         if (isSome(item.visibility)) {
@@ -1082,7 +1101,7 @@ function registerConstsAndStatics(
             ctx,
             "static items cannot be pub yet",
             item.tokenId,
-            none(),
+            "HEDGE-ITEM-001",
           );
         }
         const declaredType = validateSlice1Type(
@@ -1122,7 +1141,7 @@ function analyzeStaticDecl(
       ctx,
       "type mismatch: static's declared type does not match its initializer",
       item.value.tokenId,
-      none(),
+      "HEDGE-TYPE-001",
     );
   }
   if (value.kind === "IntLiteral") {
@@ -1178,7 +1197,7 @@ function analyzeEnum(
         ctx,
         `variant \`${variant.name.text}\` is defined more than once`,
         variant.name.tokenId,
-        none(),
+        "HEDGE-NAME-002",
       );
     }
     seenVariantNames.add(variant.name.text);
@@ -1267,7 +1286,7 @@ function analyzeExpressionPlaceholder(
   tokenId: number,
   message: string,
 ): Semantics.Expression {
-  emitError(ctx, message, tokenId, none());
+  emitError(ctx, message, tokenId, "HEDGE-UNSUPPORTED-001");
   return {
     kind: "TupleExpression",
     tokenId,
@@ -1333,7 +1352,7 @@ function analyzePatternGuardrail(
     ctx,
     PATTERN_KIND_NOT_YET_SUPPORTED_MESSAGE,
     pattern.tokenId,
-    none(),
+    "HEDGE-UNSUPPORTED-001",
   );
   return {
     kind: "WildcardPattern",
@@ -1386,7 +1405,7 @@ function checkPatternLiteralType(
     ctx,
     `expected \`${describeType(scrutineeType)}\`, found \`${describeType(literalType)}\``,
     tokenId,
-    none(),
+    "HEDGE-TYPE-001",
   );
 }
 
@@ -1489,7 +1508,7 @@ function checkMutOverrideLegality(
       ctx,
       `cannot bind \`${name}\` as \`&mut\` through a shared reference`,
       tokenId,
-      none(),
+      "HEDGE-PATTERN-007",
     );
     return;
   }
@@ -1498,7 +1517,7 @@ function checkMutOverrideLegality(
       ctx,
       `cannot bind \`${name}\` as \`&mut\` because the underlying place is not mutable`,
       tokenId,
-      none(),
+      "HEDGE-PATTERN-007",
     );
   }
 }
@@ -1568,7 +1587,7 @@ function resolveTupleVariantForPattern(
       ctx,
       `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
       pattern.tokenId,
-      none(),
+      "HEDGE-NAME-004",
     );
     return none();
   }
@@ -1577,7 +1596,7 @@ function resolveTupleVariantForPattern(
       ctx,
       `variant \`${variantName}\` is not a tuple variant`,
       pattern.tokenId,
-      none(),
+      "HEDGE-PATTERN-005",
     );
     return none();
   }
@@ -1600,7 +1619,7 @@ function resolveStructVariantForPattern(
       ctx,
       `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
       pattern.tokenId,
-      none(),
+      "HEDGE-NAME-004",
     );
     return none();
   }
@@ -1609,7 +1628,7 @@ function resolveStructVariantForPattern(
       ctx,
       `variant \`${variantName}\` is not a struct variant`,
       pattern.tokenId,
-      none(),
+      "HEDGE-PATTERN-005",
     );
     return none();
   }
@@ -1655,7 +1674,7 @@ function resolveTupleStructForPattern(
       ctx,
       `expected struct \`${structDecl.value.name.text}\`, found \`${patternName}\``,
       pattern.tokenId,
-      none(),
+      "HEDGE-PATTERN-005",
     );
     return some({ fields: [], label, alreadyErrored: true });
   }
@@ -1664,7 +1683,7 @@ function resolveTupleStructForPattern(
       ctx,
       `struct \`${patternName}\` is not a tuple struct`,
       pattern.tokenId,
-      none(),
+      "HEDGE-PATTERN-005",
     );
     return some({ fields: [], label, alreadyErrored: true });
   }
@@ -1692,7 +1711,7 @@ function resolveStructForPattern(
       ctx,
       `expected struct \`${structDecl.value.name.text}\`, found \`${patternName}\``,
       pattern.tokenId,
-      none(),
+      "HEDGE-PATTERN-005",
     );
     return some({ fields: [], label, alreadyErrored: true });
   }
@@ -1701,7 +1720,7 @@ function resolveStructForPattern(
       ctx,
       `struct \`${patternName}\` does not have named fields`,
       pattern.tokenId,
-      none(),
+      "HEDGE-PATTERN-005",
     );
     return some({ fields: [], label, alreadyErrored: true });
   }
@@ -1846,7 +1865,7 @@ function analyzePattern(
           ctx,
           `range bounds must have the same type: \`${describeType(start.type)}\` and \`${describeType(end.type)}\``,
           pattern.tokenId,
-          none(),
+          "HEDGE-PATTERN-006",
         );
       } else {
         checkPatternLiteralType(
@@ -1863,7 +1882,7 @@ function analyzePattern(
           ctx,
           `lower range bound ${low} is greater than upper bound ${high}, so the range matches nothing`,
           pattern.tokenId,
-          none(),
+          "HEDGE-PATTERN-006",
         );
       }
       const result: Semantics.RangePattern = {
@@ -1907,7 +1926,7 @@ function analyzePattern(
           ctx,
           `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
           pattern.tokenId,
-          none(),
+          "HEDGE-NAME-004",
         );
         return analyzePatternGuardrail(ctx, pattern, scrutineeType);
       }
@@ -1916,7 +1935,7 @@ function analyzePattern(
           ctx,
           `variant \`${variantName}\` has fields; use \`${variantName}(...)\` or \`${variantName} { ... }\``,
           pattern.tokenId,
-          none(),
+          "HEDGE-PATTERN-005",
         );
         return analyzePatternGuardrail(ctx, pattern, scrutineeType);
       }
@@ -1938,7 +1957,7 @@ function analyzePattern(
           ctx,
           `${label} has ${fields.length} field(s), but the pattern has ${pattern.elements.length}`,
           pattern.tokenId,
-          none(),
+          "HEDGE-PATTERN-005",
         );
       }
       // A `mut` sigil on this whole tuple-struct pattern treats
@@ -1985,7 +2004,7 @@ function analyzePattern(
             ctx,
             `no field \`${field.name.text}\` on ${label}`,
             field.name.tokenId,
-            none(),
+            "HEDGE-NAME-003",
           );
         }
         if (isSome(field.pattern)) {
@@ -2047,7 +2066,7 @@ function analyzePattern(
           ctx,
           `a slice pattern can have at most one \`..\` rest, but this one has ${restCount}`,
           pattern.tokenId,
-          none(),
+          "HEDGE-PATTERN-005",
         );
       } else {
         const hasRest = restCount === 1;
@@ -2061,7 +2080,7 @@ function analyzePattern(
               ? `array has ${length} element(s), but the pattern requires at least ${nonRestCount}`
               : `array has ${length} element(s), but the pattern requires exactly ${nonRestCount}`,
             pattern.tokenId,
-            none(),
+            "HEDGE-PATTERN-005",
           );
         }
       }
@@ -2255,7 +2274,7 @@ function checkOrPatternConsistency(
       ctx,
       `or-pattern alternatives must bind the same names; \`${inconsistentNames.join("`, `")}\` ${inconsistentNames.length === 1 ? "is" : "are"} not bound by every alternative`,
       pattern.tokenId,
-      none(),
+      "HEDGE-PATTERN-004",
     );
   }
 
@@ -2285,7 +2304,7 @@ function checkOrPatternConsistency(
         ctx,
         `or-pattern alternatives must bind \`${name}\` with the same type and mode in every alternative`,
         pattern.tokenId,
-        none(),
+        "HEDGE-PATTERN-004",
       );
     }
   }
@@ -2300,7 +2319,7 @@ function checkOrPatternReachability(
   let sawIrrefutable = false;
   for (const alt of pattern.alternatives) {
     if (sawIrrefutable) {
-      emitError(ctx, "unreachable pattern", alt.tokenId, none());
+      emitError(ctx, "unreachable pattern", alt.tokenId, "HEDGE-PATTERN-003");
     } else if (isIrrefutablePattern(ctx, alt)) {
       sawIrrefutable = true;
     }
@@ -2461,7 +2480,7 @@ function checkUnreachableArms(
 
   for (const arm of arms) {
     if (hasCatchAll) {
-      emitError(ctx, "unreachable pattern", arm.tokenId, none());
+      emitError(ctx, "unreachable pattern", arm.tokenId, "HEDGE-PATTERN-003");
     } else if (isSome(enumDecl)) {
       const thisArmVariants = new Set<string>();
       collectCoveredVariantNames(arm.pattern, thisArmVariants);
@@ -2469,7 +2488,7 @@ function checkUnreachableArms(
         thisArmVariants.size > 0 &&
         [...thisArmVariants].every((name) => coveredVariants.has(name))
       ) {
-        emitError(ctx, "unreachable pattern", arm.tokenId, none());
+        emitError(ctx, "unreachable pattern", arm.tokenId, "HEDGE-PATTERN-003");
       }
     } else if (isBool) {
       const thisArmBools = new Set<boolean>();
@@ -2478,7 +2497,7 @@ function checkUnreachableArms(
         thisArmBools.size > 0 &&
         [...thisArmBools].every((v) => coveredBools.has(v))
       ) {
-        emitError(ctx, "unreachable pattern", arm.tokenId, none());
+        emitError(ctx, "unreachable pattern", arm.tokenId, "HEDGE-PATTERN-003");
       }
     }
 
@@ -2519,7 +2538,7 @@ function checkMatchExhaustiveness(
         ctx,
         `non-exhaustive patterns: \`${missing.join("`, `")}\` not covered`,
         matchExpr.tokenId,
-        none(),
+        "HEDGE-PATTERN-002",
       );
     }
     return;
@@ -2538,7 +2557,7 @@ function checkMatchExhaustiveness(
         ctx,
         `non-exhaustive patterns: \`${missing.join("`, `")}\` not covered`,
         matchExpr.tokenId,
-        none(),
+        "HEDGE-PATTERN-002",
       );
     }
     return;
@@ -2548,7 +2567,7 @@ function checkMatchExhaustiveness(
     ctx,
     "non-exhaustive patterns: `_` not covered",
     matchExpr.tokenId,
-    none(),
+    "HEDGE-PATTERN-002",
   );
 }
 
@@ -2625,7 +2644,7 @@ function analyzeMatchExpression(
         ctx,
         "match arms have incompatible types",
         matchExpr.tokenId,
-        none(),
+        "HEDGE-TYPE-004",
       );
       break;
     }
@@ -2657,7 +2676,12 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
       return analyzeStaticDecl(ctx, item);
     case "LetStatement":
     case "ExpressionStatement": {
-      emitError(ctx, TOP_LEVEL_ITEM_RESTRICTION_MESSAGE, item.tokenId, none());
+      emitError(
+        ctx,
+        TOP_LEVEL_ITEM_RESTRICTION_MESSAGE,
+        item.tokenId,
+        "HEDGE-ITEM-001",
+      );
       const prevLen = ctx.diagnostics.length;
       const analyzed = analyzeStatement(ctx, item);
       ctx.diagnostics.splice(prevLen); // suppress cascading errors - the restriction error is good enough
@@ -2692,7 +2716,12 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
     case "Identifier":
       // A bare expression at top level: rejected, then analyzed anyway so a
       // reference inside it does not cascade a second diagnostic.
-      emitError(ctx, TOP_LEVEL_ITEM_RESTRICTION_MESSAGE, item.tokenId, none());
+      emitError(
+        ctx,
+        TOP_LEVEL_ITEM_RESTRICTION_MESSAGE,
+        item.tokenId,
+        "HEDGE-ITEM-001",
+      );
       return analyzeExpression(ctx, item);
     default:
       return assertNever(item, `Unexpected item: ${JSON.stringify(item)}`);
@@ -2969,7 +2998,7 @@ function checkEscapingReferenceExpression(
     ctx,
     `returns a reference to \`${name}\`, which does not live beyond this function`,
     expr.tokenId,
-    some("HEDGE-LIFETIME-002"),
+    "HEDGE-LIFETIME-002",
   );
 }
 
@@ -2993,7 +3022,7 @@ function checkEscapingStructExpression(
       ctx,
       `struct literal field \`${field.name.text}\` borrows \`${name}\`, which does not live beyond this function`,
       fieldValue.tokenId,
-      some("HEDGE-LIFETIME-002"),
+      "HEDGE-LIFETIME-002",
     );
   }
 }
@@ -3065,7 +3094,7 @@ function checkFunctionReturnType(
         ctx,
         `missing return value: expected \`${describeType(expectedReturnType)}\``,
         body.tokenId,
-        none(),
+        "HEDGE-TYPE-001",
       );
     }
     return body;
@@ -3086,7 +3115,7 @@ function checkFunctionReturnType(
       ctx,
       `return type mismatch: expected \`${describeType(expectedReturnType)}\`, found \`${describeType(getType(expr))}\``,
       trailing.tokenId,
-      none(),
+      "HEDGE-TYPE-001",
     );
   } else {
     checkEscapingReference(ctx, expr);
@@ -3260,7 +3289,7 @@ function analyzeLetStatement(
           ctx,
           "type mismatch: explicit annotation does not match initializer type",
           statement.tokenId,
-          none(),
+          "HEDGE-TYPE-001",
         );
       }
       bindingType = annotationType;
@@ -3272,7 +3301,7 @@ function analyzeLetStatement(
         ctx,
         "cannot infer element type of an empty array literal without an explicit type annotation",
         statement.tokenId,
-        none(),
+        "HEDGE-TYPE-006",
       );
     }
   } else if (isSome(statement.type)) {
@@ -3426,7 +3455,12 @@ function checkPosLiteralRange(
   const [, max] = bounds;
   if (val > max) {
     const name = NUMERIC_TYPE_NAME.get(type.kind) ?? type.kind;
-    emitError(ctx, `out of range for ${name}`, literal.tokenId, none());
+    emitError(
+      ctx,
+      `out of range for ${name}`,
+      literal.tokenId,
+      "HEDGE-TYPE-005",
+    );
   }
 }
 
@@ -3520,7 +3554,7 @@ function checkCoercedLiteralRange(
   ) {
     const rangeError = checkNegLiteralRange(expr.operand, expr.type);
     if (isSome(rangeError)) {
-      emitError(ctx, rangeError.value, expr.operand.tokenId, none());
+      emitError(ctx, rangeError.value, expr.operand.tokenId, "HEDGE-TYPE-005");
     }
   } else if (expr.kind === "BinaryExpression") {
     checkCoercedLiteralRange(ctx, expr.left);
@@ -3648,7 +3682,7 @@ function reconcileExpressionType(
   ) {
     const rangeError = checkNegLiteralRange(result.operand, expectedType);
     if (isSome(rangeError)) {
-      emitError(ctx, rangeError.value, tokenId, none());
+      emitError(ctx, rangeError.value, tokenId, "HEDGE-TYPE-005");
       suppressed = true;
     }
   }
@@ -3694,7 +3728,7 @@ function inferBinaryType(
           ctx,
           "type does not support equality comparison",
           tokenId,
-          none(),
+          "HEDGE-TYPE-002",
         );
       } else if (
         isLeftTypeValid &&
@@ -3705,7 +3739,7 @@ function inferBinaryType(
           ctx,
           "comparison operands must have the same type",
           tokenId,
-          none(),
+          "HEDGE-TYPE-003",
         );
       }
       return bool;
@@ -3723,7 +3757,7 @@ function inferBinaryType(
           ctx,
           "type does not support ordering comparison",
           tokenId,
-          none(),
+          "HEDGE-TYPE-002",
         );
       } else if (
         isLeftTypeValid &&
@@ -3734,7 +3768,7 @@ function inferBinaryType(
           ctx,
           "comparison operands must have the same type",
           tokenId,
-          none(),
+          "HEDGE-TYPE-003",
         );
       }
       return bool;
@@ -3747,7 +3781,7 @@ function inferBinaryType(
           ctx,
           "logical operator operands must be `bool`",
           tokenId,
-          none(),
+          "HEDGE-TYPE-002",
         );
       }
       if (isRightTypeValid && !hasCapability(rightType, "logical")) {
@@ -3755,7 +3789,7 @@ function inferBinaryType(
           ctx,
           "logical operator operands must be `bool`",
           tokenId,
-          none(),
+          "HEDGE-TYPE-002",
         );
       }
       return bool;
@@ -3771,7 +3805,7 @@ function inferBinaryType(
           ctx,
           `arithmetic operands must be numeric; left-operand is type \`${describeType(leftType)}\``,
           tokenId,
-          none(),
+          "HEDGE-TYPE-002",
         );
       }
       if (isRightTypeValid && !hasCapability(rightType, "arithmetic")) {
@@ -3779,7 +3813,7 @@ function inferBinaryType(
           ctx,
           `arithmetic operands must be numeric; right-operand is type \`${describeType(rightType)}\``,
           tokenId,
-          none(),
+          "HEDGE-TYPE-002",
         );
       }
       if (
@@ -3791,7 +3825,7 @@ function inferBinaryType(
           ctx,
           "arithmetic operands must have the same type",
           tokenId,
-          none(),
+          "HEDGE-TYPE-003",
         );
       }
       return isLeftTypeValid ? leftType : rightType;
@@ -3803,10 +3837,20 @@ function inferBinaryType(
       // Rust), unlike the other bitwise operators below, which combine two
       // values of one type.
       if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
-        emitError(ctx, "the shifted value must be an integer", tokenId, none());
+        emitError(
+          ctx,
+          "the shifted value must be an integer",
+          tokenId,
+          "HEDGE-TYPE-002",
+        );
       }
       if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
-        emitError(ctx, "the shift amount must be an integer", tokenId, none());
+        emitError(
+          ctx,
+          "the shift amount must be an integer",
+          tokenId,
+          "HEDGE-TYPE-002",
+        );
       }
       return isLeftTypeValid ? leftType : rightType;
     }
@@ -3818,7 +3862,7 @@ function inferBinaryType(
           ctx,
           "bitwise operations require integer operands",
           tokenId,
-          none(),
+          "HEDGE-TYPE-002",
         );
       }
       if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
@@ -3826,7 +3870,7 @@ function inferBinaryType(
           ctx,
           "bitwise operations require integer operands",
           tokenId,
-          none(),
+          "HEDGE-TYPE-002",
         );
       }
       if (
@@ -3838,7 +3882,7 @@ function inferBinaryType(
           ctx,
           "bitwise operands must have the same type",
           tokenId,
-          none(),
+          "HEDGE-TYPE-003",
         );
       }
       return isLeftTypeValid ? leftType : rightType;
@@ -3872,7 +3916,7 @@ function unaryNotResultType(
     ctx,
     `\`!\` requires \`bool\` or an integer, found \`${describeType(operandType)}\``,
     tokenId,
-    none(),
+    "HEDGE-TYPE-002",
   );
   return { kind: "PrimitiveBooleanType" };
 }
@@ -3944,7 +3988,7 @@ function analyzeExpression(
       ) {
         const rangeError = checkNegLiteralRange(operand, type);
         if (isSome(rangeError))
-          emitError(ctx, rangeError.value, operand.tokenId, none());
+          emitError(ctx, rangeError.value, operand.tokenId, "HEDGE-TYPE-005");
       }
       return { ...expression, operand, type };
     }
@@ -4096,7 +4140,7 @@ function analyzeReferenceExpression(
       ctx,
       "only a local binding, a parameter, or a field, index, or dereference of one can be borrowed directly",
       expression.tokenId,
-      none(),
+      "HEDGE-BORROW-CHECK-005",
     );
     return {
       ...expression,
@@ -4134,7 +4178,7 @@ function analyzeDereferenceExpression(
         ctx,
         "cannot dereference a non-reference type",
         expression.tokenId,
-        none(),
+        "HEDGE-TYPE-007",
       );
     }
     return {
@@ -4186,7 +4230,7 @@ function analyzeArrayExpression(
         ctx,
         `array elements must all have the same type; expected \`${describeType(elementType)}\`, found \`${describeType(elemType)}\``,
         elem.tokenId,
-        none(),
+        "HEDGE-TYPE-003",
       );
       break;
     }
@@ -4219,7 +4263,7 @@ function analyzeArrayRepeatExpression(
       ctx,
       `repeat-form array element type must be Copy, found \`${describeType(valueType)}\``,
       expression.value.tokenId,
-      none(),
+      "HEDGE-TYPE-002",
     );
     return { ...expression, value, count: 0, type: UNIT };
   }
@@ -4267,7 +4311,7 @@ function analyzeIndexExpression(
       ctx,
       `cannot index into non-array type \`${describeType(objectType)}\``,
       expression.tokenId,
-      none(),
+      "HEDGE-TYPE-007",
     );
     return { ...expression, object, index, type: UNIT };
   }
@@ -4277,7 +4321,7 @@ function analyzeIndexExpression(
       ctx,
       `array index must be \`usize\`, found \`${describeType(getType(index))}\``,
       expression.index.tokenId,
-      none(),
+      "HEDGE-TYPE-001",
     );
     return { ...expression, object, index, type: arrayType.elementType };
   }
@@ -4289,7 +4333,7 @@ function analyzeIndexExpression(
         ctx,
         `index ${String(literalIndex)} out of bounds for array of length ${String(arrayType.length)}`,
         expression.index.tokenId,
-        none(),
+        "HEDGE-TYPE-005",
       );
     }
   }
@@ -4322,7 +4366,7 @@ function analyzeFieldAccessExpression(
       ctx,
       "field access on non-struct type",
       expression.field.tokenId,
-      none(),
+      "HEDGE-TYPE-007",
     );
     return unresolved();
   }
@@ -4339,7 +4383,7 @@ function analyzeFieldAccessExpression(
       ctx,
       `no field \`${fieldName}\` on struct \`${structName}\``,
       expression.field.tokenId,
-      none(),
+      "HEDGE-NAME-003",
     );
     return unresolved();
   }
@@ -4352,7 +4396,7 @@ function analyzeFieldAccessExpression(
       ctx,
       `no field \`${fieldName}\` on struct \`${structName}\``,
       expression.field.tokenId,
-      none(),
+      "HEDGE-NAME-003",
     );
     return unresolved();
   }
@@ -4465,14 +4509,19 @@ function checkLhsMutability(
   if (isSome(violation)) {
     switch (violation.value) {
       case "immutable-binding":
-        emitError(ctx, "cannot assign to immutable binding", tokenId, none());
+        emitError(
+          ctx,
+          "cannot assign to immutable binding",
+          tokenId,
+          "HEDGE-BORROW-CHECK-006",
+        );
         break;
       case "shared-reference":
         emitError(
           ctx,
           "cannot assign through a shared reference",
           tokenId,
-          none(),
+          "HEDGE-BORROW-CHECK-006",
         );
         break;
       default:
@@ -4541,7 +4590,7 @@ function analyzeEnumVariantStructConstruction(
       ctx,
       `cannot find enum \`${enumName}\` in this scope`,
       structExpression.tokenId,
-      none(),
+      "HEDGE-NAME-001",
     );
     return some({ type: UNIT, fields: [...fields] });
   }
@@ -4551,7 +4600,7 @@ function analyzeEnumVariantStructConstruction(
       ctx,
       `no variant \`${variantName}\` on enum \`${enumName}\``,
       structExpression.tokenId,
-      none(),
+      "HEDGE-NAME-004",
     );
     return some({ type: enumDecl.type, fields: [...fields] });
   }
@@ -4562,7 +4611,7 @@ function analyzeEnumVariantStructConstruction(
         ? `variant \`${variantName}\` is a tuple variant; use \`${variantName}(...)\``
         : `variant \`${variantName}\` is a unit variant; use \`${variantName}\` with no braces`,
       structExpression.tokenId,
-      none(),
+      "HEDGE-TYPE-008",
     );
     return some({ type: enumDecl.type, fields: [...fields] });
   }
@@ -4640,7 +4689,7 @@ function analyzeStructExpression(
       ctx,
       `cannot find struct \`${structName}\` in this scope`,
       structExpression.tokenId,
-      none(),
+      "HEDGE-NAME-001",
     );
     return {
       ...structExpression,
@@ -4669,7 +4718,7 @@ function analyzeStructExpression(
         ctx,
         `field \`${field.name.text}\` provided for unit struct \`${structName}\``,
         field.name.tokenId,
-        none(),
+        "HEDGE-TYPE-008",
       );
     }
   }
@@ -4712,7 +4761,7 @@ function analyzeStructNamedFields(
         ctx,
         `field \`${field.name.text}\` specified more than once in struct literal`,
         field.name.tokenId,
-        none(),
+        "HEDGE-NAME-005",
       );
     }
     seenFields.add(field.name.text);
@@ -4723,7 +4772,7 @@ function analyzeStructNamedFields(
         ctx,
         `unknown field \`${field.name.text}\` for struct \`${structName}\``,
         field.name.tokenId,
-        none(),
+        "HEDGE-NAME-003",
       );
       return field;
     }
@@ -4747,7 +4796,7 @@ function analyzeStructNamedFields(
         ctx,
         `field \`${field.name.text}\` type mismatch: expected \`${describeType(declaredField.type)}\`, found \`${describeType(getType(expr))}\``,
         value.tokenId,
-        none(),
+        "HEDGE-TYPE-001",
       );
     }
     return expr === value
@@ -4762,7 +4811,7 @@ function analyzeStructNamedFields(
           ctx,
           `missing required field \`${fieldName}\` in struct literal of type \`${structName}\``,
           structTokenId,
-          none(),
+          "HEDGE-TYPE-008",
         );
       }
     }
@@ -4805,7 +4854,7 @@ function checkBranchTypesAgree(
       ctx,
       "if expression branches have incompatible types",
       tokenId,
-      none(),
+      "HEDGE-TYPE-004",
     );
   }
 }
@@ -4830,7 +4879,12 @@ function analyzeIfExpression(
     condType.kind !== "UnitType" &&
     condType.kind !== "PrimitiveBooleanType"
   ) {
-    emitError(ctx, "if condition must be `bool`", ifExpression.tokenId, none());
+    emitError(
+      ctx,
+      "if condition must be `bool`",
+      ifExpression.tokenId,
+      "HEDGE-TYPE-002",
+    );
   }
 
   if (isSome(elseBranch)) {
@@ -5028,7 +5082,7 @@ function analyzeEnumVariantCallConstruction(
         ctx,
         `variant \`${variantName}\` takes no arguments, but ${args.length} ${args.length === 1 ? "was" : "were"} supplied`,
         call.tokenId,
-        none(),
+        "HEDGE-TYPE-008",
       );
     }
     return some({ type: enumDecl.type, args: [...args] });
@@ -5038,7 +5092,7 @@ function analyzeEnumVariantCallConstruction(
       ctx,
       `variant \`${variantName}\` has named fields; use \`${variantName} { ... }\``,
       call.tokenId,
-      none(),
+      "HEDGE-TYPE-008",
     );
     return some({ type: enumDecl.type, args: [...args] });
   }
@@ -5073,7 +5127,7 @@ function checkPositionalCallArgs(
       ctx,
       `${kindLabel} \`${name}\` takes ${fields.length} argument(s), but ${args.length} ${args.length === 1 ? "was" : "were"} supplied`,
       call.tokenId,
-      none(),
+      "HEDGE-TYPE-008",
     );
     return [...args];
   }
@@ -5094,7 +5148,7 @@ function checkPositionalCallArgs(
         ctx,
         `argument ${i} to ${kindLabel} \`${name}\` type mismatch: expected \`${describeType(field.type)}\`, found \`${describeType(getType(expr))}\``,
         arg.tokenId,
-        none(),
+        "HEDGE-TYPE-001",
       );
     }
     return expr;
@@ -5135,7 +5189,7 @@ function analyzeTupleStructCallConstruction(
       ctx,
       `struct \`${structName}\` has named fields; use \`${structName} { ... }\``,
       call.tokenId,
-      none(),
+      "HEDGE-TYPE-008",
     );
     return some({ callee, type: structDecl.type, args: [...args] });
   }
@@ -5146,7 +5200,7 @@ function analyzeTupleStructCallConstruction(
       ctx,
       `struct \`${structName}\` is a unit struct and cannot be constructed with \`()\``,
       call.tokenId,
-      none(),
+      "HEDGE-TYPE-008",
     );
     return some({ callee, type: structDecl.type, args: [...args] });
   }
@@ -5187,7 +5241,7 @@ function analyzeEnumVariantPathConstruction(
       ctx,
       `cannot find enum \`${enumName}\` in this scope`,
       path.tokenId,
-      none(),
+      "HEDGE-NAME-001",
     );
     return some({ ...path, type: UNIT });
   }
@@ -5197,7 +5251,7 @@ function analyzeEnumVariantPathConstruction(
       ctx,
       `no variant \`${variantName}\` on enum \`${enumName}\``,
       path.tokenId,
-      none(),
+      "HEDGE-NAME-004",
     );
     return some({ ...path, type: enumDecl.type });
   }
@@ -5234,7 +5288,7 @@ function analyzePath(
     ctx,
     `Cannot find name "${name}" in this scope.`,
     path.tokenId,
-    none(),
+    "HEDGE-NAME-001",
   );
   return { ...path, type: { kind: "UnitType", tokenId: path.tokenId } };
 }
@@ -5269,7 +5323,7 @@ export function analyze(
           ctx,
           `function \`${item.name.text}\` is defined more than once`,
           item.name.tokenId,
-          none(),
+          "HEDGE-NAME-002",
         );
       } else {
         topLevelFunctionNames.add(item.name.text);
@@ -5291,7 +5345,7 @@ export function analyze(
         ctx,
         `\`${structDecl.name.text}\` is defined multiple times: a function and a tuple struct constructor share the value namespace`,
         structDecl.name.tokenId,
-        none(),
+        "HEDGE-NAME-002",
       );
     }
   }

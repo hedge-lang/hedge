@@ -309,7 +309,7 @@ export function tokenizeSymbol(
       const end = start + 1;
       diagnostics.push(
         errorDiagnostic(
-          some("HEDGE-LEX-005"),
+          "HEDGE-LEX-005",
           `Unexpected character "${ch}" at offset ${start}`,
           some({ start, end }),
         ),

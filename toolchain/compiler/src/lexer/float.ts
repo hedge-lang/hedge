@@ -41,7 +41,7 @@ function scanExponent(
   if (!isDigit(source[i] ?? "")) {
     diagnostics.push(
       errorDiagnostic(
-        some("HEDGE-LEX-006"),
+        "HEDGE-LEX-006",
         `float exponent has no digits at offset ${pos}`,
         some({ start, end: i }),
       ),
@@ -70,7 +70,7 @@ export function scanExponentFloat(
     if (!token) {
       diagnostics.push(
         errorDiagnostic(
-          some("HEDGE-LEX-006"),
+          "HEDGE-LEX-006",
           `Unterminated float literal starting at ${start}`,
           some({ start, end: source.length }),
         ),
@@ -113,7 +113,7 @@ export function scanDotFloat(
       if (lastToken === undefined) {
         diagnostics.push(
           errorDiagnostic(
-            some("HEDGE-LEX-006"),
+            "HEDGE-LEX-006",
             `Unterminated float literal starting at ${start}`,
             some({ start, end: source.length }),
           ),

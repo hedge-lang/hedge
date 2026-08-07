@@ -1,1 +1,1 @@
-error: struct `Point` has named fields; use `Point { ... }`
+error[HEDGE-TYPE-008]: struct `Point` has named fields; use `Point { ... }`

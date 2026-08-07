@@ -1,1 +1,1 @@
-error: refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match
+error[HEDGE-PATTERN-001]: refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match

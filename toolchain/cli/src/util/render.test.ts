@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Diagnostic } from "@hedge-lang/compiler";
-import { none, some } from "@hedge-lang/compiler";
+import { none } from "@hedge-lang/compiler";
 import { renderDiagnostics } from "./render.js";
 
 describe("renderDiagnostics", (): void => {
@@ -15,29 +15,29 @@ describe("renderDiagnostics", (): void => {
         severity: "error",
         message: "boom",
         span: none(),
-        code: none(),
+        code: "HEDGE-BORROW-CHECK-001",
         relatedSpans: [],
       },
       {
         severity: "warning",
         message: "careful",
         span: none(),
-        code: none(),
+        code: "HEDGE-LINT-001",
         relatedSpans: [],
       },
     ];
     expect(renderDiagnostics(diagnostics)).toBe(
-      "error: boom\nwarning: careful",
+      "error[HEDGE-BORROW-CHECK-001]: boom\nwarning[HEDGE-LINT-001]: careful",
     );
   });
 
-  it("renders a diagnostic's code in brackets when present", (): void => {
+  it("renders a diagnostic's code in brackets after its severity", (): void => {
     const diagnostics: readonly Diagnostic[] = [
       {
         severity: "error",
         message: "boom",
         span: none(),
-        code: some("HEDGE-BORROW-CHECK-001"),
+        code: "HEDGE-BORROW-CHECK-001",
         relatedSpans: [],
       },
     ];
@@ -52,12 +52,12 @@ describe("renderDiagnostics", (): void => {
         severity: "error",
         message: "boom",
         span: none(),
-        code: none(),
+        code: "HEDGE-BORROW-CHECK-001",
         relatedSpans: [{ span: { start: 7, end: 8 }, label: "first here" }],
       },
     ];
     expect(renderDiagnostics(diagnostics)).toBe(
-      "error: boom\n  = note: first here at offset 7",
+      "error[HEDGE-BORROW-CHECK-001]: boom\n  = note: first here at offset 7",
     );
   });
 });

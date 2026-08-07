@@ -135,7 +135,7 @@ export function parse(tokens: readonly Token[]): ParseResult {
       const token = tokens[node.value.tokenId];
       diagnostics.push(
         warningDiagnostic(
-          none(),
+          "HEDGE-LINT-001",
           "immutable binding declared without a value can never be used",
           token !== undefined ? some(token.span) : none(),
         ),

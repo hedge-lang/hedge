@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { assert } from "../assert.js";
 import type { Diagnostic } from "../diagnostics.js";
 import { tokenize } from "../lexer/lexer.js";
-import { isSome, some } from "../option.js";
+import { isSome } from "../option.js";
 import { parse } from "../parser/parser.js";
 import { analyze } from "../semantics/analyzer.js";
 import { checkBorrows } from "./borrowck.js";
@@ -68,7 +68,7 @@ describe("borrow checker", (): void => {
     expect(diagnostics).toHaveLength(1);
     const diagnostic = diagnostics[0];
     assert(diagnostic !== undefined, "Expected diagnostic");
-    expect(diagnostic.code).toEqual(some("HEDGE-BORROW-CHECK-001"));
+    expect(diagnostic.code).toBe("HEDGE-BORROW-CHECK-001");
     expect(diagnostic.relatedSpans).toHaveLength(1);
     const firstBorrowOffset = source.indexOf("&mut x", source.indexOf("r1"));
     const relatedSpan = diagnostic.relatedSpans[0];
@@ -121,7 +121,7 @@ describe("borrow checker", (): void => {
       'fn main() { let x = "a"; let r = &mut x; print(r); }',
     );
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.code).toEqual(some("HEDGE-BORROW-CHECK-002"));
+    expect(diagnostics[0]?.code).toBe("HEDGE-BORROW-CHECK-002");
   });
 
   it("accepts &mut borrow of a mutable function parameter", (): void => {
@@ -483,7 +483,7 @@ describe("place-projection borrows", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.code).toEqual(some("HEDGE-BORROW-CHECK-002"));
+    expect(diagnostics[0]?.code).toBe("HEDGE-BORROW-CHECK-002");
   });
 
   it("describes the blocking reference as shared, not as an active borrow, since no borrow bookkeeping is involved in this check", (): void => {

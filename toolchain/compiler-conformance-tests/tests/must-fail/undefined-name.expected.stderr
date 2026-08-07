@@ -1,1 +1,1 @@
-error: Cannot find name "undefined_name" in this scope.
+error[HEDGE-NAME-001]: Cannot find name "undefined_name" in this scope.

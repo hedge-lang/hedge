@@ -28,7 +28,7 @@ export function scanStringLiteral(
         if (lastToken === undefined) {
           diagnostics.push(
             errorDiagnostic(
-              some("HEDGE-LEX-001"),
+              "HEDGE-LEX-001",
               `Unterminated string literal starting at ${start}`,
               some({ start, end: source.length }),
             ),
@@ -51,7 +51,7 @@ export function scanStringLiteral(
   }
   diagnostics.push(
     errorDiagnostic(
-      some("HEDGE-LEX-001"),
+      "HEDGE-LEX-001",
       `Unterminated string literal starting at ${start}`,
       some({ start, end: source.length }),
     ),
@@ -94,7 +94,7 @@ export function scanRawString(
   }
   diagnostics.push(
     errorDiagnostic(
-      some("HEDGE-LEX-001"),
+      "HEDGE-LEX-001",
       `Unterminated raw string literal starting at ${start}`,
       some({ start, end: source.length }),
     ),

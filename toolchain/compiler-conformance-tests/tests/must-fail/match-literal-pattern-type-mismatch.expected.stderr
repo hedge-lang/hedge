@@ -1,1 +1,1 @@
-error: expected `Message`, found `i32`
+error[HEDGE-TYPE-001]: expected `Message`, found `i32`
