@@ -896,8 +896,26 @@ function collectRefBorrowsFromPattern(
       return pattern.alternatives.flatMap((alt) =>
         collectRefBorrowsFromPattern(alt, basePath),
       );
-    default:
+    case "SlicePattern":
+      // A slice pattern's positions are statically disjoint, but `Projection`
+      // has no index to say so - every element would collapse to the same
+      // `Index` place, which `placesOverlap` treats as always conflicting.
+      // Recording them would reject `let [&a, ..&mut rest] = arr;`, which is
+      // legal. Needs an offset-carrying projection before these can be
+      // tracked.
       return [];
+    case "WildcardPattern":
+    case "LiteralPattern":
+    case "RangePattern":
+    case "PathPattern":
+    case "TuplePattern":
+      // Bind no names, so they can introduce no borrow.
+      return [];
+    default:
+      return assertNever(
+        pattern,
+        `Unexpected pattern: ${JSON.stringify(pattern)}`,
+      );
   }
 }
 

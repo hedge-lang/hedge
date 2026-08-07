@@ -327,6 +327,8 @@ function intSuffixToPrimitive(suffix: IntSuffix): Semantics.PrimitiveType {
       return { kind: "PrimitiveU64Type" };
     case "usize":
       return { kind: "PrimitiveUsizeType" };
+    default:
+      return assertNever(suffix, `Unexpected int suffix: ${String(suffix)}`);
   }
 }
 

@@ -139,16 +139,23 @@ const BITWISE_OPS: ReadonlySet<Parser.BinaryOperator> = new Set([
   "BitXor",
   "BitOr",
 ]);
-const COMPARISON_OPS: ReadonlySet<Parser.BinaryOperator> = new Set([
-  "Eq",
-  "Ne",
-  "Lt",
-  "Gt",
-  "Le",
-  "Ge",
-]);
+type ComparisonOperator = "Eq" | "Ne" | "Lt" | "Gt" | "Le" | "Ge";
 
-function compare(op: Parser.BinaryOperator, order: -1 | 0 | 1): boolean {
+function isComparisonOp(op: Parser.BinaryOperator): op is ComparisonOperator {
+  switch (op) {
+    case "Eq":
+    case "Ne":
+    case "Lt":
+    case "Gt":
+    case "Le":
+    case "Ge":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function compare(op: ComparisonOperator, order: -1 | 0 | 1): boolean {
   switch (op) {
     case "Eq":
       return order === 0;
@@ -163,7 +170,7 @@ function compare(op: Parser.BinaryOperator, order: -1 | 0 | 1): boolean {
     case "Ge":
       return order >= 0;
     default:
-      throw new Error(`Unexpected comparison operator: ${op}`);
+      return assertNever(op, `Unexpected comparison operator: ${String(op)}`);
   }
 }
 
@@ -252,7 +259,7 @@ function applyBinaryOp(
     }
     return { kind: "NotFoldable", tokenId };
   }
-  if (COMPARISON_OPS.has(op)) {
+  if (isComparisonOp(op)) {
     if (
       (left.kind === "Int" && right.kind === "Int") ||
       (left.kind === "Float" && right.kind === "Float") ||
