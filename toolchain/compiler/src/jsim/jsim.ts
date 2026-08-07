@@ -565,9 +565,100 @@ function getCurrentRenameContext(ctx: JsimContext): Option<RenameCtx> {
  * alone would miss). Only computes the name - `bindLocalName` and
  * `reserveLocalName` decide how to register it.
  */
+/**
+ * Names a Hedge binding may not keep in the emitted JS. Two kinds, both of
+ * which the `$k` suffix already resolves:
+ *
+ * - JS reserved words, which are a syntax error as a binding and so produce
+ *   output that will not parse (`fn f(default: i32)`).
+ * - Globals the emitted code itself calls. Shadowing one fails silently
+ *   rather than loudly: a local named `Symbol` makes a struct's disposer
+ *   attach under the key `undefined`, so the value is simply never disposed.
+ *
+ * Hedge's own grammar permits all of these, so they are renamed rather than
+ * rejected - hiding backend naming rules is what this pass is for.
+ */
+const JS_UNUSABLE_NAMES: ReadonlySet<string> = new Set([
+  // Reserved words.
+  "break",
+  "case",
+  "catch",
+  "class",
+  "const",
+  "continue",
+  "debugger",
+  "default",
+  "delete",
+  "do",
+  "else",
+  "enum",
+  "export",
+  "extends",
+  "false",
+  "finally",
+  "for",
+  "function",
+  "if",
+  "import",
+  "in",
+  "instanceof",
+  "new",
+  "null",
+  "return",
+  "super",
+  "switch",
+  "this",
+  "throw",
+  "true",
+  "try",
+  "typeof",
+  "var",
+  "void",
+  "while",
+  "with",
+  // Reserved in strict mode, which module output always is.
+  "implements",
+  "interface",
+  "let",
+  "package",
+  "private",
+  "protected",
+  "public",
+  "static",
+  "yield",
+  "await",
+  "eval",
+  "arguments",
+  // Globals the emitted code depends on.
+  "Array",
+  "BigInt",
+  "BigInt64Array",
+  "BigUint64Array",
+  "Error",
+  "Float32Array",
+  "Float64Array",
+  "Int8Array",
+  "Int16Array",
+  "Int32Array",
+  "JSON",
+  "Math",
+  "Number",
+  "Proxy",
+  "RangeError",
+  "String",
+  "Symbol",
+  "Uint8Array",
+  "Uint16Array",
+  "Uint32Array",
+]);
+
 function probeFreeName(renameCtx: RenameCtx, base: string): string {
   const visible = renameCtx.frames.some((f) => f.has(base));
-  if (!visible && !renameCtx.emittedNames.has(base)) {
+  if (
+    !visible &&
+    !renameCtx.emittedNames.has(base) &&
+    !JS_UNUSABLE_NAMES.has(base)
+  ) {
     return base;
   }
   let k = (renameCtx.counters.get(base) ?? 0) + 1;

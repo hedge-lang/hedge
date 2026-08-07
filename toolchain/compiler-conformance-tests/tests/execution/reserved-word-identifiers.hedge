@@ -1,0 +1,14 @@
+struct Boxed {
+  value: i32,
+}
+
+fn twice(default: i32) -> i32 {
+  default + default
+}
+
+fn main() {
+  let class = 7;
+  let Symbol = twice(class);
+  let b = Boxed { value: Symbol };
+  print(b.value);
+}
