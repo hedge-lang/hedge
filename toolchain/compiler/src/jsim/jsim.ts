@@ -1,5 +1,5 @@
 import { isSome, mapSome, none, type Option, some } from "../option.js";
-import type { Token } from "../lexer/token.js";
+import type { Span, Token } from "../lexer/token.js";
 import {
   declarationsOf,
   type BindingId,
@@ -357,7 +357,7 @@ function dropFlagName(ctx: JsimContext, declaration: Declaration): string {
 function dropFlagDeclareStatement(
   ctx: JsimContext,
   declaration: Declaration,
-  span: JSIM.LetStatement["span"],
+  span: Span,
 ): JSIM.LetStatement {
   return {
     kind: "LetStatement",
@@ -1149,7 +1149,7 @@ function parseFunctionBody(
     statements.push(...dropCheckStatements(ctx, fn.body.tokenId));
   }
 
-  const scope: JSIM.FunctionDecl["scope"] = mapSome(
+  const scope: Option<"public" | "package"> = mapSome(
     fn.visibility,
     (visibility) =>
       isSome(visibility.scope) && visibility.scope.value === "package"

@@ -1,8 +1,8 @@
 import type { Diagnostic } from "../diagnostics.js";
-import type { Token } from "../lexer/token.js";
+import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { isErr } from "../result.js";
-import type { Program } from "./ast.js";
+import type { Item, Program } from "./ast.js";
 import { collectInnerAttributes } from "./attribute.js";
 import { parseItem } from "./item.js";
 import { elideLifetimes } from "./lifetime-elision.js";
@@ -28,7 +28,7 @@ import { kindAt, skipToItemStartKeyword, tokenAt } from "./parse-utils.js";
  */
 function missingItemNameIndex(
   tokens: readonly Token[],
-  errorSpan: Diagnostic["span"],
+  errorSpan: Option<Span>,
 ): number | undefined {
   if (!isSome(errorSpan)) {
     return undefined;
@@ -81,7 +81,7 @@ export function parse(tokens: readonly Token[]): ParseResult {
   const attributes = innerResult.value.attributes;
   cursor = innerResult.value.next;
 
-  const items: Program["items"] = [];
+  const items: Item[] = [];
   for (;;) {
     const peekResult = tokenAt(tokens, cursor);
     if (isErr(peekResult)) {

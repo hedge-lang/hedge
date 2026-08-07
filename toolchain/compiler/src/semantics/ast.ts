@@ -119,6 +119,37 @@ export type Expression =
   | MatchExpression
   | Block;
 
+/**
+ * Every {@link Expression} discriminant. Spelled out rather than derived so
+ * it ports directly to a Hedge enum.
+ */
+export type ExpressionKind =
+  | "StringLiteral"
+  | "IntLiteral"
+  | "FloatLiteral"
+  | "BoolLiteral"
+  | "CharLiteral"
+  | "PathExpression"
+  | "CallExpression"
+  | "ReferenceExpression"
+  | "DereferenceExpression"
+  | "BinaryExpression"
+  | "UnaryExpression"
+  | "AssignExpression"
+  | "CompoundAssignExpression"
+  | "FieldAccessExpression"
+  | "MethodCallExpression"
+  | "IndexExpression"
+  | "TupleExpression"
+  | "ArrayExpression"
+  | "ArrayRepeatExpression"
+  | "RangeExpression"
+  | "StructExpression"
+  | "IfExpression"
+  | "LetExpression"
+  | "MatchExpression"
+  | "Block";
+
 interface Visibility {
   readonly kind: "Visibility";
   /** `none()` for bare `pub`; `some("package")` for `pub(package)`, etc. */
@@ -469,7 +500,18 @@ export type PrimitiveType =
   | PrimitiveCharType
   | PrimitiveStringType;
 
-export type PrimitiveIntegerType = PrimitiveUintType | PrimitiveIntType;
+/** Every integer-primitive discriminant, spelled out. */
+export type PrimitiveIntegerTypeKind =
+  | "PrimitiveI8Type"
+  | "PrimitiveI16Type"
+  | "PrimitiveI32Type"
+  | "PrimitiveI64Type"
+  | "PrimitiveIsizeType"
+  | "PrimitiveU8Type"
+  | "PrimitiveU16Type"
+  | "PrimitiveU32Type"
+  | "PrimitiveU64Type"
+  | "PrimitiveUsizeType";
 type PrimitiveUintType =
   | PrimitiveU8Type
   | PrimitiveU16Type

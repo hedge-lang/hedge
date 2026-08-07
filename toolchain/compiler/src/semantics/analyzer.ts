@@ -2317,7 +2317,7 @@ function checkOrPatternReachability(
  * separately - so that case stays assume-best-case (`true`), unlike the
  * real check below it. */
 function isSliceArityIrrefutable(
-  elements: Semantics.SlicePattern["elements"],
+  elements: readonly (Semantics.Pattern | Semantics.RestPattern)[],
   type: Semantics.Type,
 ): boolean {
   if (type.kind !== "ArrayType") return false;
@@ -3550,7 +3550,7 @@ function isIntegerType(type: Semantics.Type): boolean {
  * `AssignExpression`, `CompoundAssignExpression`, `IfExpression`, ...) is
  * genuine and must be compared normally.
  */
-const AMBIGUOUS_UNIT_EXPR_KINDS: ReadonlySet<Semantics.Expression["kind"]> =
+const AMBIGUOUS_UNIT_EXPR_KINDS: ReadonlySet<Semantics.ExpressionKind> =
   new Set([
     "PathExpression",
     "FieldAccessExpression",

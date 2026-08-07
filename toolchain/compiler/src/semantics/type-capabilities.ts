@@ -11,7 +11,7 @@ const INTEGER_CAPS: ReadonlySet<TypeCapability> = new Set([
   "copy",
 ]);
 
-const INTEGER_KINDS: readonly Semantics.PrimitiveIntegerType["kind"][] = [
+const INTEGER_KINDS: readonly Semantics.PrimitiveIntegerTypeKind[] = [
   "PrimitiveI8Type",
   "PrimitiveI16Type",
   "PrimitiveI32Type",

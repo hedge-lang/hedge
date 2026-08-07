@@ -9,6 +9,7 @@ import type {
   ArrayRepeatExpression,
   BinaryExpression,
   BinaryOperator,
+  Block,
   CompoundAssignOperator,
   DereferenceExpression,
   Expression,
@@ -680,7 +681,7 @@ function parseIfExpression(
   if (isErr(thenResult)) return thenResult;
 
   let cursor = thenResult.value.next;
-  let elseBranch: IfExpression["elseBranch"] = none();
+  let elseBranch: Option<IfExpression | Block> = none();
 
   const elseToken = tokens[cursor];
   if (elseToken?.kind === "keyword" && elseToken.text === "else") {
@@ -781,7 +782,7 @@ function parseMatchArm(
   if (isErr(patternResult)) return patternResult;
   let cursor = patternResult.value.next;
 
-  let guard: MatchArm["guard"] = none();
+  let guard: Option<Expression> = none();
   const guardTok = tokens[cursor];
   if (guardTok?.kind === "keyword" && guardTok.text === "if") {
     const guardResult = parseExpressionWithBindingPower(
@@ -919,7 +920,7 @@ function parseStructExpression(
   let cursor = pos + 1; // skip `{`
 
   const fields: FieldInit[] = [];
-  let base: StructExpression["base"] = none();
+  let base: Option<Expression> = none();
 
   while (
     tokens[cursor]?.kind !== "rbrace" &&
@@ -968,7 +969,7 @@ function parseStructExpression(
     if (isErr(nameResult)) return nameResult;
     cursor = nameResult.value.next;
 
-    let fieldValue: FieldInit["value"] = none();
+    let fieldValue: Option<Expression> = none();
     if (tokens[cursor]?.kind === "colon") {
       cursor += 1;
       const valResult = parseExpressionWithBindingPower(

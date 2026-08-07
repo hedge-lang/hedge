@@ -115,8 +115,69 @@ export type Token =
   | { readonly kind: "dot_dot"; readonly span: Span } // ".."
   | { readonly kind: "dot_dot_eq"; readonly span: Span }; // "..="
 
-/** Every token category. Named once here so call sites refer to it directly. */
-export type TokenKind = Token["kind"];
+/**
+ * Every token category. Spelled out rather than derived from {@link Token}
+ * so it ports directly to a Hedge enum. `tokenKindAt` returns a token's own
+ * `kind` as this type, so `tsc` rejects the union drifting from the variants.
+ */
+export type TokenKind =
+  | "ident"
+  | "char"
+  | "string"
+  | "lifetime"
+  | "error"
+  | "eof"
+  | "lparen"
+  | "rparen"
+  | "lbrace"
+  | "rbrace"
+  | "lbracket"
+  | "rbracket"
+  | "comma"
+  | "semi"
+  | "colon"
+  | "dot"
+  | "hash"
+  | "at"
+  | "question"
+  | "plus"
+  | "minus"
+  | "star"
+  | "slash"
+  | "percent"
+  | "amp"
+  | "pipe"
+  | "caret"
+  | "bang"
+  | "lt"
+  | "gt"
+  | "eq"
+  | "eq_eq"
+  | "bang_eq"
+  | "lt_eq"
+  | "gt_eq"
+  | "amp_amp"
+  | "pipe_pipe"
+  | "lt_lt"
+  | "gt_gt"
+  | "lt_lt_eq"
+  | "gt_gt_eq"
+  | "plus_eq"
+  | "minus_eq"
+  | "star_eq"
+  | "slash_eq"
+  | "percent_eq"
+  | "amp_eq"
+  | "pipe_eq"
+  | "caret_eq"
+  | "arrow"
+  | "fat_arrow"
+  | "dot_dot"
+  | "dot_dot_eq"
+  | "keyword"
+  | "int"
+  | "float"
+  | "path_sep";
 
 function escapeText(text: string): string {
   return text
