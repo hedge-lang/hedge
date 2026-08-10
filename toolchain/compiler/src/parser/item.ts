@@ -12,6 +12,7 @@ import {
   type Item,
   type NamedFieldsBody,
   type Param,
+  type Receiver,
   type StaticDecl,
   type StructBody,
   type StructDecl,
@@ -145,16 +146,96 @@ function parseParam(tokens: readonly Token[], pos: number): PR<Parsed<Param>> {
   });
 }
 
+/**
+ * Recognizes a method receiver at `pos` - the grammar's own leading
+ * alternative in `Params`, distinct from an ordinary `Param`:
+ *
+ * ```text
+ * Receiver ::= "&"? "mut"? "self"
+ * ```
+ *
+ * Requires the literal `self` keyword to actually follow any `&`/`mut`
+ * prefix - `mut x: i32` and `&mut x: i32` are ordinary parameters, not
+ * receivers, and must fall through to `parseParam` unchanged.
+ */
+function parseReceiver(
+  tokens: readonly Token[],
+  pos: number,
+): Option<Parsed<Receiver>> {
+  const byRef = tokens[pos]?.kind === "amp";
+  const afterAmp = byRef ? pos + 1 : pos;
+
+  const mutToken = tokens[afterAmp];
+  const mutable = mutToken?.kind === "keyword" && mutToken.text === "mut";
+  const afterMut = mutable ? afterAmp + 1 : afterAmp;
+
+  const selfToken = tokens[afterMut];
+  if (selfToken?.kind !== "keyword" || selfToken.text !== "self") {
+    return none();
+  }
+
+  return some({
+    node: { kind: "Receiver", tokenId: pos, byRef, mutable },
+    next: afterMut + 1,
+  });
+}
+
+interface ParamsResult {
+  readonly receiver: Option<Receiver>;
+  readonly params: readonly Param[];
+}
+
+interface LeadingReceiverResult {
+  readonly receiver: Option<Receiver>;
+  readonly next: number;
+}
+
+/**
+ * Consumes a leading receiver, if present, along with the comma that must
+ * separate it from any following `Param`. Split out of `parseParams` to keep
+ * that function under ESLint's complexity ceiling.
+ */
+function parseLeadingReceiver(
+  tokens: readonly Token[],
+  pos: number,
+): PR<LeadingReceiverResult> {
+  const receiverResult = parseReceiver(tokens, pos);
+  if (!isSome(receiverResult)) {
+    return ok({ receiver: none(), next: pos });
+  }
+  const { node: receiver, next } = receiverResult.value;
+  if (kindAt(tokens, next) === "rparen" || kindAt(tokens, next) === "eof") {
+    return ok({ receiver: some(receiver), next });
+  }
+  if (kindAt(tokens, next) === "comma") {
+    return ok({ receiver: some(receiver), next: next + 1 });
+  }
+  return err(
+    errorDiagnostic(
+      "HEDGE-PARSE-001",
+      "expected ',' or ')' after receiver",
+      spanAt(tokens, next),
+    ),
+  );
+}
+
 function parseParams(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
   pos: number,
-): PR<Parsed<readonly Param[]>> {
+): PR<Parsed<ParamsResult>> {
   const afterOpen = expect(tokens, pos, "lparen");
   if (isErr(afterOpen)) {
     return afterOpen;
   }
-  let cursor = afterOpen.value;
+
+  const leadingReceiver = parseLeadingReceiver(tokens, afterOpen.value);
+  if (isErr(leadingReceiver)) {
+    return leadingReceiver;
+  }
+  const { receiver, next: leadingNext } = leadingReceiver.value;
+  let cursor = leadingNext;
+
   const params: Param[] = [];
 
   for (;;) {
@@ -198,7 +279,7 @@ function parseParams(
   if (isErr(afterClose)) {
     return afterClose;
   }
-  return ok({ node: params, next: afterClose.value });
+  return ok({ node: { receiver, params }, next: afterClose.value });
 }
 
 interface DeclarationGenericsResult {
@@ -669,7 +750,8 @@ function parseFunction(
     visibility,
     name: nameResult.value.node,
     generics: genericsResult.generics,
-    params: paramsResult.value.node,
+    receiver: paramsResult.value.node.receiver,
+    params: paramsResult.value.node.params,
     returnType,
     whereClause: whereResult.whereClause,
     attributes,

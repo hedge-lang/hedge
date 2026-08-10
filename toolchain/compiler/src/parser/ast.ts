@@ -114,11 +114,24 @@ export interface Param extends AstNode {
   readonly type: Type;
 }
 
+/**
+ * A method receiver (`self` / `mut self` / `&self` / `&mut self`) - the
+ * grammar's own `Receiver` production, distinct from `Param` since it has no
+ * `Pattern`/`Type` of its own. `byRef` is true for `&self`/`&mut self`;
+ * `mutable` is true for `mut self`/`&mut self`.
+ */
+export interface Receiver extends AstNode {
+  readonly kind: "Receiver";
+  readonly byRef: boolean;
+  readonly mutable: boolean;
+}
+
 export interface FunctionDecl extends AstNode {
   readonly kind: "Function";
   readonly visibility: Option<Visibility>;
   readonly name: Identifier;
   readonly generics: readonly GenericParam[];
+  readonly receiver: Option<Receiver>;
   readonly params: readonly Param[];
   readonly returnType: Option<Type>;
   readonly whereClause: Option<WhereClause>;
