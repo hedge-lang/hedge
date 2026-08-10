@@ -805,6 +805,10 @@ describe("execution tests", (): void => {
     it("does not cascade an annotation-mismatch diagnostic when a `Self`-annotated `let` has an initializer", (): void => {
       assertNoCascade(`fn main() { let x: Self = 1; print(x); }`);
     });
+
+    it("does not cascade a return-type-mismatch diagnostic when a `&Self` return type has a mismatched body", (): void => {
+      assertNoCascade(`fn f(x: &i32) -> &Self { x }`);
+    });
   });
 
   describe("Self as a type - deferred resolution", (): void => {

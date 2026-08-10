@@ -439,14 +439,17 @@ function foldArrayLength(
 }
 
 /**
- * True for a bare `Self` named type - used to suppress a second,
- * downstream type-mismatch diagnostic against `validateSlice1Type`'s
- * `UnitType` error-recovery placeholder for `Self` (the placeholder is
- * indistinguishable from a genuine unit type once resolved, so a non-unit
- * body/initializer would otherwise cascade a spurious mismatch on top of
- * `HEDGE-NAME-006`).
+ * True for `Self`, or `Self` under any number of `&`/`&mut` wrappers - used
+ * to suppress a second, downstream type-mismatch diagnostic against
+ * `validateSlice1Type`'s `UnitType` error-recovery placeholder for `Self`
+ * (the placeholder is indistinguishable from a genuine unit type once
+ * resolved, so a non-unit body/initializer would otherwise cascade a
+ * spurious mismatch on top of `HEDGE-NAME-006`).
  */
 function isSelfType(type: Parser.Type): boolean {
+  if (type.kind === "ReferenceType") {
+    return isSelfType(type.referent);
+  }
   return (
     type.kind === "NamedType" &&
     type.path.segments.length === 1 &&
