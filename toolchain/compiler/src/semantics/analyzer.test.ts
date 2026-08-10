@@ -3444,3 +3444,12 @@ describe("array types", (): void => {
     expect(result.diagnostics[0].message).toContain("immutable");
   });
 });
+
+describe("Self as a type", (): void => {
+  it("rejects `Self::Item` with the generic Slice 1 type diagnostic, not the Self-specific one", (): void => {
+    const result = diagnose("fn f() -> Self::Item { }");
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toContain("not supported in Slice 1");
+  });
+});

@@ -16,16 +16,19 @@ import {
 /**
  * Parses a path (absolute or relative, one or more `::` separated segments).
  *
- * Grammar:
- *
  * ```text
  * Path ::= "::"? PathSegment ("::" PathSegment)*
  * ```
+ *
+ * `allowSelfHead` permits a leading `Self` instead of guardrail-rejecting it:
+ * spec 0025's `Type` production allows `Self`, and `Self::Item` is just a
+ * `Path` headed by the `Self` segment. `self`/`super` stay rejected either way.
  */
 // eslint-disable-next-line complexity -- Result-threading adds an isErr branch per step; extracting helpers would obscure the grammar structure.
-export function parsePathSegments(
+function parsePathSegmentsWithSelfHead(
   tokens: readonly Token[],
   pos: number,
+  allowSelfHead: boolean,
 ): PR<Parsed<Path>> {
   let cursor = pos;
   let absolute = false;
@@ -42,22 +45,30 @@ export function parsePathSegments(
 
   const firstKeyword = pathKeywordAt(tokens, cursor);
   if (isSome(firstKeyword)) {
-    return err(
-      errorDiagnostic(
-        "HEDGE-PARSE-004",
-        unsupportedPathKeywordMessage(firstKeyword.value.text),
-        some(firstKeyword.value.span),
-      ),
-    );
+    const selfHeadAllowed = allowSelfHead && firstKeyword.value.text === "Self";
+    if (!selfHeadAllowed) {
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-004",
+          unsupportedPathKeywordMessage(firstKeyword.value.text),
+          some(firstKeyword.value.span),
+        ),
+      );
+    }
   }
 
-  const nextResult = parseIdentifier(tokens, cursor);
-  if (isErr(nextResult)) {
-    return nextResult;
+  const segments: string[] = [];
+  if (isSome(firstKeyword)) {
+    segments.push(firstKeyword.value.text);
+    cursor += 1;
+  } else {
+    const nextResult = parseIdentifier(tokens, cursor);
+    if (isErr(nextResult)) {
+      return nextResult;
+    }
+    segments.push(nextResult.value.node.text);
+    cursor = nextResult.value.next;
   }
-  const first = nextResult.value;
-  const segments: string[] = [first.node.text];
-  cursor = first.next;
 
   for (;;) {
     if (tokens[cursor]?.kind !== "path_sep") {
@@ -112,6 +123,25 @@ export function parsePathSegments(
   }
 
   return ok({ node: { absolute, segments }, next: cursor });
+}
+
+/**
+ * Parses a path, rejecting `self`/`super`/`Self` as a leading segment. See
+ * `parseTypePathSegments` for the type-position variant that allows `Self`.
+ */
+export function parsePathSegments(
+  tokens: readonly Token[],
+  pos: number,
+): PR<Parsed<Path>> {
+  return parsePathSegmentsWithSelfHead(tokens, pos, false);
+}
+
+/** Like `parsePathSegments`, but allows a leading `Self`. Only `type.ts` calls this. */
+export function parseTypePathSegments(
+  tokens: readonly Token[],
+  pos: number,
+): PR<Parsed<Path>> {
+  return parsePathSegmentsWithSelfHead(tokens, pos, true);
 }
 
 /**

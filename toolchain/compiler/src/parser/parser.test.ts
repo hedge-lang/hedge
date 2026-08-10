@@ -288,12 +288,16 @@ describe("self/super/Self path segment diagnostics", (): void => {
     assertSlice7Error("let x: self::Foo;", "self");
   });
 
-  it("produces a Slice 7 diagnostic for bare `Self` in type position", (): void => {
-    assertSlice7Error("let x: Self;", "Self");
-  });
-
   it("produces a Slice 7 diagnostic for bare `self` in struct-construction position", (): void => {
     assertSlice7Error("self::Foo {}", "self");
+  });
+
+  it("produces a Slice 7 diagnostic for bare `super` in type position", (): void => {
+    assertSlice7Error("let x: super;", "super");
+  });
+
+  it("produces a Slice 7 diagnostic for `self` as the second segment of a `Self`-headed type path", (): void => {
+    assertSlice7Error("let x: Self::self;", "self");
   });
 });
 
@@ -3574,6 +3578,139 @@ describe("method receivers", (): void => {
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].severity).toBe("error");
     expect(diagnostics[0].message).toContain("receiver");
+  });
+});
+
+describe("Self as a type", (): void => {
+  function parseCleanly(source: string): Program {
+    const { tokens } = tokenize(source);
+    const { program, diagnostics } = parse(tokens);
+    expect(diagnostics).toEqual([]);
+    assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+    return program.value;
+  }
+
+  it("parses a bare `Self` as a function return type", (): void => {
+    const ast = parseCleanly("fn f() -> Self {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          returnType: some({
+            kind: "NamedType",
+            path: { absolute: false, segments: ["Self"] },
+          }),
+        },
+      ],
+    });
+  });
+
+  it("parses a bare `Self` as a function parameter type", (): void => {
+    const ast = parseCleanly("fn f(x: Self) {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          params: [
+            {
+              kind: "Param",
+              type: {
+                kind: "NamedType",
+                path: { absolute: false, segments: ["Self"] },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses `Self` in a `let` type annotation", (): void => {
+    const ast = parseCleanly("let mut x: Self;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "LetStatement",
+          type: some({
+            kind: "NamedType",
+            path: { absolute: false, segments: ["Self"] },
+          }),
+        },
+      ],
+    });
+  });
+
+  it("parses an absolute-path `::Self` the same as bare `Self`", (): void => {
+    const ast = parseCleanly("let mut x: ::Self;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "LetStatement",
+          type: some({
+            kind: "NamedType",
+            path: { absolute: true, segments: ["Self"] },
+          }),
+        },
+      ],
+    });
+  });
+
+  it("parses `Self::Item` as a function return type", (): void => {
+    const ast = parseCleanly("fn f() -> Self::Item {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          returnType: some({
+            kind: "NamedType",
+            path: { absolute: false, segments: ["Self", "Item"] },
+          }),
+        },
+      ],
+    });
+  });
+
+  it("parses `&Self` as a function parameter type", (): void => {
+    const ast = parseCleanly("fn f(x: &Self) {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          params: [
+            {
+              kind: "Param",
+              type: {
+                kind: "ReferenceType",
+                mutable: false,
+                referent: {
+                  kind: "NamedType",
+                  path: { absolute: false, segments: ["Self"] },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses `&mut Self` as a function return type", (): void => {
+    const ast = parseCleanly("fn f(x: &Self) -> &mut Self {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          returnType: some({
+            kind: "ReferenceType",
+            mutable: true,
+            referent: {
+              kind: "NamedType",
+              path: { absolute: false, segments: ["Self"] },
+            },
+          }),
+        },
+      ],
+    });
   });
 });
 

@@ -438,6 +438,25 @@ function foldArrayLength(
   return some(Number(outcome.value.value));
 }
 
+/**
+ * True for `Self`, or `Self` under any number of `&`/`&mut` wrappers - used
+ * to suppress a second, downstream type-mismatch diagnostic against
+ * `validateSlice1Type`'s `UnitType` error-recovery placeholder for `Self`
+ * (the placeholder is indistinguishable from a genuine unit type once
+ * resolved, so a non-unit body/initializer would otherwise cascade a
+ * spurious mismatch on top of `HEDGE-NAME-006`).
+ */
+function isSelfType(type: Parser.Type): boolean {
+  if (type.kind === "ReferenceType") {
+    return isSelfType(type.referent);
+  }
+  return (
+    type.kind === "NamedType" &&
+    type.path.segments.length === 1 &&
+    type.path.segments[0] === "Self"
+  );
+}
+
 function validateSlice1Type(
   ctx: AnalysisContext,
   type: Parser.Type,
@@ -448,6 +467,15 @@ function validateSlice1Type(
       if (type.path.segments.length === 1) {
         const name = type.path.segments[0];
         assert(name !== undefined, "Name segment missing");
+        if (name === "Self") {
+          emitError(
+            ctx,
+            "`Self` can only be used inside a trait or impl block",
+            tokenId,
+            "HEDGE-NAME-006",
+          );
+          return { kind: "UnitType", tokenId };
+        }
         const prim = namedTypeToPrimitive(name);
         if (isSome(prim)) {
           return prim.value;
@@ -3087,6 +3115,7 @@ function checkFunctionReturnType(
   ctx: AnalysisContext,
   body: Semantics.Block,
   expectedReturnType: Semantics.Type,
+  suppressMismatch: boolean,
 ): Semantics.Block {
   if (!isSome(body.trailingExpression)) {
     if (expectedReturnType.kind !== "UnitType") {
@@ -3111,12 +3140,14 @@ function checkFunctionReturnType(
     checkPosLiteralRange(ctx, expr, expectedReturnType);
   }
   if (mismatch) {
-    emitError(
-      ctx,
-      `return type mismatch: expected \`${describeType(expectedReturnType)}\`, found \`${describeType(getType(expr))}\``,
-      trailing.tokenId,
-      "HEDGE-TYPE-001",
-    );
+    if (!suppressMismatch) {
+      emitError(
+        ctx,
+        `return type mismatch: expected \`${describeType(expectedReturnType)}\`, found \`${describeType(getType(expr))}\``,
+        trailing.tokenId,
+        "HEDGE-TYPE-001",
+      );
+    }
   } else {
     checkEscapingReference(ctx, expr);
   }
@@ -3158,10 +3189,13 @@ function analyzeFunctionDecl(
     kind: "UnitType",
     tokenId: decl.tokenId,
   });
+  const suppressReturnTypeMismatch =
+    isSome(decl.returnType) && isSelfType(decl.returnType.value);
   const body = checkFunctionReturnType(
     ctx,
     analyzeBlock(ctx, decl.body),
     expectedReturnType,
+    suppressReturnTypeMismatch,
   );
   const result: Semantics.FunctionDecl = {
     ...decl,
@@ -3284,7 +3318,7 @@ function analyzeLetStatement(
         statement.tokenId,
       );
       coercedInitializer = some(expr);
-      if (mismatch) {
+      if (mismatch && !isSelfType(statement.type.value)) {
         emitError(
           ctx,
           "type mismatch: explicit annotation does not match initializer type",
