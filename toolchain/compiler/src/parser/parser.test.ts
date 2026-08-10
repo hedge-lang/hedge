@@ -3431,6 +3431,152 @@ describe("function parameters", (): void => {
   });
 });
 
+describe("method receivers", (): void => {
+  function parseCleanly(source: string): Program {
+    const { tokens } = tokenize(source);
+    const { program, diagnostics } = parse(tokens);
+    expect(diagnostics).toEqual([]);
+    assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+    return program.value;
+  }
+
+  it("parses a by-value self receiver", (): void => {
+    const ast = parseCleanly("fn draw(self) {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          receiver: some({ kind: "Receiver", byRef: false, mutable: false }),
+          params: [],
+        },
+      ],
+    });
+  });
+
+  it("parses a mutable by-value self receiver", (): void => {
+    const ast = parseCleanly("fn draw(mut self) {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          receiver: some({ kind: "Receiver", byRef: false, mutable: true }),
+          params: [],
+        },
+      ],
+    });
+  });
+
+  it("parses a shared-borrow self receiver", (): void => {
+    const ast = parseCleanly("fn draw(&self) {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          receiver: some({ kind: "Receiver", byRef: true, mutable: false }),
+          params: [],
+        },
+      ],
+    });
+  });
+
+  it("parses a mutable-borrow self receiver", (): void => {
+    const ast = parseCleanly("fn draw(&mut self) {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          receiver: some({ kind: "Receiver", byRef: true, mutable: true }),
+          params: [],
+        },
+      ],
+    });
+  });
+
+  it("parses a receiver followed by ordinary trailing parameters", (): void => {
+    const ast = parseCleanly("fn draw(&mut self, dx: i32, dy: i32) {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          receiver: some({ kind: "Receiver", byRef: true, mutable: true }),
+          params: [
+            { kind: "Param", pattern: { name: { text: "dx" } } },
+            { kind: "Param", pattern: { name: { text: "dy" } } },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("accepts a trailing comma after a solo receiver", (): void => {
+    const ast = parseCleanly("fn draw(self,) {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          receiver: some({ kind: "Receiver", byRef: false, mutable: false }),
+          params: [],
+        },
+      ],
+    });
+  });
+
+  it("records no receiver on an ordinary free function's parameter list", (): void => {
+    const ast = parseCleanly("fn add(x: i32, y: i32) -> i32 { x }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          receiver: none(),
+          params: [
+            { kind: "Param", pattern: { name: { text: "x" } } },
+            { kind: "Param", pattern: { name: { text: "y" } } },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("does not misdetect a plain mut-prefixed parameter as a receiver", (): void => {
+    const ast = parseCleanly("fn f(mut x: i32) -> i32 { x }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          receiver: none(),
+          params: [{ kind: "Param", pattern: { name: { text: "x" } } }],
+        },
+      ],
+    });
+  });
+
+  it("rejects a self receiver appearing after another parameter instead of first", (): void => {
+    const { tokens } = tokenize("fn f(x: i32, self) {}");
+    const { diagnostics } = parse(tokens);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toContain(
+      'Expected an identifier, found keyword "self"',
+    );
+  });
+
+  it("rejects a &mut self receiver appearing after another parameter instead of first", (): void => {
+    const { tokens } = tokenize("fn f(x: i32, &mut self) {}");
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].severity).toBe("error");
+  });
+
+  it("rejects a first-position receiver not followed by a comma or closing paren", (): void => {
+    const { tokens } = tokenize("fn f(self x: i32) {}");
+    const { diagnostics } = parse(tokens);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toContain("receiver");
+  });
+});
+
 describe("unsupported item keywords", (): void => {
   it.each(["export", "extern", "impl", "trait"])(
     "rejects `%s` with a Slice 1 diagnostic",
