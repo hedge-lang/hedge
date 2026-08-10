@@ -797,6 +797,14 @@ describe("execution tests", (): void => {
     it("does not cascade a second diagnostic when `Self` is rejected outside a trait or impl", (): void => {
       assertNoCascade(`fn f() -> Self { }`);
     });
+
+    it("does not cascade a return-type-mismatch diagnostic when a `Self` return type has a non-unit body", (): void => {
+      assertNoCascade(`fn f() -> Self { 1 }`);
+    });
+
+    it("does not cascade an annotation-mismatch diagnostic when a `Self`-annotated `let` has an initializer", (): void => {
+      assertNoCascade(`fn main() { let x: Self = 1; print(x); }`);
+    });
   });
 
   describe("Self as a type - deferred resolution", (): void => {
