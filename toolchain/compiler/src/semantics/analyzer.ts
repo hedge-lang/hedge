@@ -448,6 +448,15 @@ function validateSlice1Type(
       if (type.path.segments.length === 1) {
         const name = type.path.segments[0];
         assert(name !== undefined, "Name segment missing");
+        if (name === "Self") {
+          emitError(
+            ctx,
+            "`Self` can only be used inside a trait or impl block",
+            tokenId,
+            "HEDGE-NAME-006",
+          );
+          return { kind: "UnitType", tokenId };
+        }
         const prim = namedTypeToPrimitive(name);
         if (isSome(prim)) {
           return prim.value;

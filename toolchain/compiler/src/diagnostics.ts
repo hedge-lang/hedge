@@ -39,6 +39,7 @@ export type DiagnosticCode =
   | "HEDGE-NAME-003" // no such field
   | "HEDGE-NAME-004" // no such variant
   | "HEDGE-NAME-005" // field given more than once in one initializer
+  | "HEDGE-NAME-006" // `Self` used outside a trait/impl block
   // Typing.
   | "HEDGE-TYPE-001" // type mismatch
   | "HEDGE-TYPE-002" // operand type invalid for this operator

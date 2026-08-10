@@ -24,7 +24,7 @@ import {
   type GenericsCursor,
   type PR,
 } from "./parse-utils.js";
-import { parsePathSegments } from "./path.js";
+import { parseTypePathSegments } from "./path.js";
 
 /**
  * Parses a type.
@@ -92,7 +92,7 @@ export function parseType(
     token.kind === "path_sep" ||
     isSome(pathKeywordAt(tokens, pos))
   ) {
-    const pathResult = parsePathSegments(tokens, pos);
+    const pathResult = parseTypePathSegments(tokens, pos);
     if (isErr(pathResult)) {
       return pathResult;
     }

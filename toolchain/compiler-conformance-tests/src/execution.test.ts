@@ -7,6 +7,7 @@ import {
   assertCompilesClean,
   assertRejectsWithMessage,
   assertRejects,
+  assertNoCascade,
 } from "./test-harness.js";
 
 describe("execution tests", (): void => {
@@ -771,6 +772,79 @@ describe("execution tests", (): void => {
         "if expression branches have incompatible types",
       );
     });
+
+    it("rejects `Self` as a return type used outside any trait or impl", (): void => {
+      assertRejectsWithMessage(
+        `fn f() -> Self { }`,
+        "can only be used inside a trait or impl block",
+      );
+    });
+
+    it("rejects `Self` as a parameter type used outside any trait or impl", (): void => {
+      assertRejectsWithMessage(
+        `fn f(x: Self) { }`,
+        "can only be used inside a trait or impl block",
+      );
+    });
+
+    it("rejects `&Self` used outside any trait or impl", (): void => {
+      assertRejectsWithMessage(
+        `fn f(x: &Self) { }`,
+        "can only be used inside a trait or impl block",
+      );
+    });
+
+    it("does not cascade a second diagnostic when `Self` is rejected outside a trait or impl", (): void => {
+      assertNoCascade(`fn f() -> Self { }`);
+    });
+  });
+
+  describe("Self as a type - deferred resolution", (): void => {
+    // TODO(Hedge-51): resolve Self to the enclosing impl's own type once
+    // impl blocks parse.
+    it.fails(
+      "resolves `Self` to the enclosing impl's own type and compiles cleanly",
+      (): void => {
+        assertRunsTo(
+          `
+          struct Foo { x: i32 }
+          impl Foo {
+            fn make() -> Self { Foo { x: 1 } }
+          }
+          fn main() {
+            let f = Foo::make();
+            print(f.x);
+          }
+          `,
+          ["1"],
+        );
+      },
+    );
+
+    // TODO(Hedge-54): resolve Self::Item to the trait's real associated type.
+    it.fails(
+      "resolves `Self::Item` to the trait's own associated type and compiles cleanly",
+      (): void => {
+        assertRunsTo(
+          `
+          trait Container {
+            type Item;
+            fn get(&self) -> Self::Item;
+          }
+          struct IntBox { value: i32 }
+          impl Container for IntBox {
+            type Item = i32;
+            fn get(&self) -> Self::Item { self.value }
+          }
+          fn main() {
+            let b = IntBox { value: 42 };
+            print(b.get());
+          }
+          `,
+          ["42"],
+        );
+      },
+    );
   });
 
   describe("array types", (): void => {

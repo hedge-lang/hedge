@@ -615,6 +615,24 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     ],
   },
   {
+    id: "SELF-TYPE-SCOPE",
+    description:
+      "`Self` in type position resolves against its enclosing trait/impl, and is rejected (no cascade) outside one",
+    specRefs: ["0015-generics-and-traits.md", "0025-grammar.md"],
+    testIds: [
+      "rejects `Self` as a return type used outside any trait or impl",
+      "rejects `Self` as a parameter type used outside any trait or impl",
+      "rejects `&Self` used outside any trait or impl",
+      "does not cascade a second diagnostic when `Self` is rejected outside a trait or impl",
+      "resolves `Self` to the enclosing impl's own type and compiles cleanly",
+      "resolves `Self::Item` to the trait's own associated type and compiles cleanly",
+    ],
+    expectedFailTestIds: [
+      "resolves `Self` to the enclosing impl's own type and compiles cleanly",
+      "resolves `Self::Item` to the trait's own associated type and compiles cleanly",
+    ],
+  },
+  {
     id: "SKIP-BUDGET-GOVERNANCE",
     description:
       "Skip and skipIf usage remains within explicit conformance governance budget",
