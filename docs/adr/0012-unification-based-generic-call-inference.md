@@ -5,74 +5,79 @@
 
 ## Context
 
-Call sites check concrete-vs-concrete only: `analyzer.ts`'s
-`checkPositionalCallArgs` (shared by calls and struct/enum-variant
-construction) runs each argument through `typesEqual`, with no type
-variable, substitution, or solving. Generic parameters parse, but
-`analyzer.ts` never reads `genericParams`: a name matching a declared
-generic parameter is not yet recognized as a valid type anywhere a
-signature is checked, so a bare generic-named parameter (`x: T`), one
-reference hop to it (`&T`), and a declared generic in a compound type
-position (`Vec<T>`, `&[T]`) are all rejected today. This design assumes a
-bare generic-named parameter and a single reference hop to one resolve as
-ordinary types by the time it is implemented — a separate, already-scoped
-prerequisite — and covers unification once both a call's argument and its
-callee's declared parameter type are resolvable. Compound generic
-positions stay out of scope regardless. No prior art in this repo.
+Call sites check argument types against declared parameter types by
+structural equality, with no type variable, substitution, or solving; the same
+check backs both ordinary calls and struct/enum-variant construction. Generic
+parameters parse but are never recognized as valid types during signature
+checking, so a bare generic-named parameter (`x: T`), a single reference hop to
+one (`&T`), and a compound generic type position (`Vec<T>`, `&[T]`) are all
+rejected.
+
+This design assumes two prerequisites:
+
+1. The bare and single-hop shapes resolve as ordinary types; and
+2. A callee's declared generic-parameter names stay visible at its call sites
+   (compound positions stay out of scope regardless).
+
+It covers unification both ways: a call's arguments against the callee's
+parameter types, and, where the call itself sits in a position with an
+already-known expected type (a `let` binding's annotation, or the enclosing
+function's return type), that expected type against the callee's return type.
+Both directions cover only the same shapes.
 
 ## Decision
 
-**Representation**: type variables stay internal to a new
-`toolchain/compiler/src/semantics/infer.ts` (`InferType = Semantics.Type |
-TypeVariable`, `Substitution = Map<number, Semantics.Type>`) rather than
-joining the exported `Semantics.Type` union, so downstream exhaustive
-switches (`typesEqual`, `describeType`, `jsim.ts`, `TYPE_CAPABILITIES`)
-need no case for it. One variable per generic-parameter name per call
-site, shared across all its occurrences.
+**Representation**: a type variable is an internal bookkeeping device for
+this pass — it never joins Hedge's type system, so nothing downstream of
+inference needs a case for one. One variable is created per
+generic-parameter name per call site, shared across every occurrence of
+that name.
 
-**Collection**: `collectCallConstraints`, called from
-`checkPositionalCallArgs` when `genericParams` is non-empty, handles only
-the parameter shapes described above. Turbofish arguments (arity must
-match exactly, no `_` placeholder exists) seed the substitution first;
-each argument's constraint is then unified in.
+**Collection**: constraint collection runs for a callee with declared
+generic parameters, restricted to the parameter shapes described above.
+An explicit turbofish type-argument list, when present, must match the
+callee's generic-parameter count exactly and seeds its bindings first. An
+expected type already known from the call's position — a `let` binding's
+annotation, or the enclosing function's return type — seeds next,
+unifying against the callee's return type. Each argument's constraint
+then unifies in, left to right.
 
-**Solving**: Robinson `unify`, online rather than batch-collect-then-solve
-— each constraint unifies into a single running `Substitution`
-left-to-right, so a later disagreement (argument or turbofish) is
-reported as the conflict, matching rustc's blame convention. Includes an
-occurs-check (see Consequences). `resolveInferredType` substitutes any
-remaining variable back to a concrete type once solving completes.
+**Solving**: classical Robinson-style unification, run online rather than
+batch-collect-then-solve — each constraint folds into a single running
+set of bindings in the seeding order above, so a later disagreement (from
+turbofish, from an expected return type, or from an argument) is reported
+as the conflict, matching rustc's blame convention. Includes an
+occurs-check (see Consequences). Once solving completes, any variable
+still standing in for a parameter's or return type resolves back to the
+concrete type it was bound to.
 
 **Diagnostics**: an unsolved variable reuses the existing "type cannot be
-inferred" diagnostic (same class as an unannotated empty array literal
-today); a conflicting binding is a different class and gets a new
-diagnostic code, with `relatedSpans` pointing at the original binding
-site.
+inferred" diagnostic (the same class already used for an unannotated
+empty array literal); a conflicting binding is a distinct class and gets
+a new diagnostic code, with a secondary note pointing back at the
+original binding site.
 
 ## Alternatives considered
 
-- **`TypeVariable` as a `Semantics.Type` variant** — rejected:
-  pollutes every downstream switch with a case that can never reach
-  codegen.
-- **Batch collect-then-solve** — rejected: buys nothing for a
-  single-call-site problem and muddies blame attribution.
-- **A `_` turbofish placeholder now** — rejected: no grammar support
-  exists yet.
-- **Solving nested generic positions (`Vec<T>`) now** — rejected: still
-  blocked on the existing type-position generics guardrail.
+- **Making a type variable a member of the language's type system** pollutes
+  every downstream switch over that type with a case that can never
+  legitimately reach codegen.
+- **Batch collect-then-solve** buys nothing for a single-call-site problem and
+  muddies blame attribution.
+- **A `_` turbofish placeholder** currently lacks grammar support.
+- **Solving nested generic positions (`Vec<T>`)** is still blocked on the
+  existing type-position generics guardrail.
 
 ## Consequences
 
-- This design takes for granted that a bare generic-named parameter and a
-  single reference hop to one resolve as ordinary types before its own
-  implementation begins. If that prerequisite lands with a different
-  scope boundary (for example, if it also covers a compound generic
-  position), this ADR's own scope boundary needs revisiting alongside it.
-- `TypeVariable` never leaks past `infer.ts` — not compiler-enforced, so
-  flag it in review when the implementation lands.
-- No spec changes; this is implementation-only.
-- The occurs-check is dead code until type-position generics land; a
-  future change touching that should revisit this ADR rather than drift
-  from it.
-- Struct/enum-variant construction shares this pass with calls, so a
-  future change to one needs to consider the other.
+- If either prerequisite above lands with a different scope boundary (e.g., if
+  type resolution also covers a compound generic position), this ADR's scope
+  boundary needs revisiting alongside it.
+- The internal type-variable representation must never leak outside this
+  inference pass (e.g., into a diagnostic or codegen) but nothing about this
+  design forces that structurally, so it's worth flagging when the
+  implementation lands.
+- The occurs-check is dead code until type-position generics land; a future
+  change touching that should revisit this ADR rather than drift from it.
+- Struct/enum-variant construction shares this pass with calls, so a future
+  change to one needs to consider the other.
