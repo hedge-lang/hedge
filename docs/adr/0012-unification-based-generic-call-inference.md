@@ -6,12 +6,13 @@
 ## Context
 
 Call sites check argument types against declared parameter types by
-structural equality, with no type variable, substitution, or solving; the same
-check backs both ordinary calls and struct/enum-variant construction. Generic
-parameters parse but are never recognized as valid types during signature
-checking, so a bare generic-named parameter (`x: T`), a single reference hop to
-one (`&T`), and a compound generic type position (`Vec<T>`, `&[T]`) are all
-rejected.
+structural equality, with no type variable, substitution, or solving. Ordinary
+calls and positional (tuple-shaped) construction share one check; a separate
+check handles named-field construction, matching by field name instead of
+position, but just as concretely. Generic parameters parse, but signature
+checking never recognizes them as valid types, so it rejects a bare
+generic-named parameter (`x: T`), a single reference hop to one (`&T`), and a
+compound generic type position (`Vec<T>`, `&[T]`) outright.
 
 This design assumes two prerequisites:
 
@@ -28,34 +29,36 @@ Both directions cover only the same shapes.
 ## Decision
 
 **Representation**: a type variable is an internal bookkeeping device for
-this pass — it never joins Hedge's type system, so nothing downstream of
-inference needs a case for one. One variable is created per
+this pass that never joins Hedge's type system, so nothing downstream of
+inference needs a case for one. This pass creates one variable per
 generic-parameter name per call site, shared across every occurrence of
 that name.
 
 **Collection**: constraint collection runs for a callee with declared
-generic parameters, restricted to the parameter shapes described above.
+generic parameters and covers only the parameter shapes described above.
 An explicit turbofish type-argument list, when present, must match the
 callee's generic-parameter count exactly and seeds its bindings first. An
 expected type already known from the call's position — a `let` binding's
 annotation, or the enclosing function's return type — seeds next,
 unifying against the callee's return type. Each argument's constraint
-then unifies in, left to right.
+then unifies in, left to right; for named-field construction, each
+field's constraint unifies the same way, matching by field name instead
+of position.
 
-**Solving**: classical Robinson-style unification, run online rather than
-batch-collect-then-solve — each constraint folds into a single running
-set of bindings in the seeding order above, so a later disagreement (from
-turbofish, from an expected return type, or from an argument) is reported
-as the conflict, matching rustc's blame convention. Includes an
-occurs-check (see Consequences). Once solving completes, any variable
-still standing in for a parameter's or return type resolves back to the
-concrete type it was bound to.
+**Solving**: this pass runs classical Robinson-style unification online
+rather than batch-collect-then-solve — each constraint folds into a
+single running set of bindings in the seeding order above, so it reports
+a later disagreement (from turbofish, from an expected return type, or
+from an argument) as the conflict, matching rustc's blame convention. It
+includes an occurs-check (see Consequences). Once solving completes, any
+variable still standing in for a parameter's or return type resolves to
+its bound concrete type.
 
 **Diagnostics**: an unsolved variable reuses the existing "type cannot be
-inferred" diagnostic (the same class already used for an unannotated
-empty array literal); a conflicting binding is a distinct class and gets
-a new diagnostic code, with a secondary note pointing back at the
-original binding site.
+inferred" diagnostic, the same class an unannotated empty array literal
+already triggers; a conflicting binding gets a new, distinct diagnostic
+code instead, with a secondary note pointing back at the original
+binding site.
 
 ## Alternatives considered
 
@@ -65,8 +68,8 @@ original binding site.
 - **Batch collect-then-solve** buys nothing for a single-call-site problem and
   muddies blame attribution.
 - **A `_` turbofish placeholder** currently lacks grammar support.
-- **Solving nested generic positions (`Vec<T>`)** is still blocked on the
-  existing type-position generics guardrail.
+- **Solving nested generic positions (`Vec<T>`) now**: the existing
+  type-position generics guardrail still blocks it.
 
 ## Consequences
 
@@ -82,5 +85,6 @@ original binding site.
   arise. Firing it once nested positions land needs a representation
   that can nest a variable, which this ADR does not provide; a future
   change should not assume otherwise.
-- Struct/enum-variant construction shares this pass with calls, so a future
-  change to one needs to consider the other.
+- Both positional and named-field struct/enum-variant construction share
+  this pass with ordinary calls, so a future change to any one path
+  needs to consider the others.
