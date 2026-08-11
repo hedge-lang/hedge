@@ -1055,9 +1055,12 @@ function parseStructExpression(
  * generic-argument list.
  *
  * Delegates the actual `<...>` body to `parseTypeArgumentList`, shared with
- * a trait bound's own arguments - discarding its `pendingCloseHalf`, since
- * a generic turbofish argument (`first::<Vec<i32>>`) hits the Type-position
- * guardrail before any closing `>>` could matter here.
+ * a trait bound's own arguments and a `NamedType`'s own arguments in type
+ * position. Unlike those callers, a turbofish has no enclosing `<...>` list
+ * of its own to hand a leftover `pendingCloseHalf` off to - a generic
+ * turbofish argument (`first::<Vec<Bar<Baz>>>`) can end exactly on a
+ * half-spent `gt_gt`, so any owed half is resolved here by spending it
+ * outright rather than propagated further.
  *
  * Grammar:
  *
@@ -1077,9 +1080,16 @@ function parseTurbofishTypeArguments(
   if (isErr(argsResult)) {
     return argsResult;
   }
+  // `tryCloseAngleList`'s pendingCloseHalf:true branch always advances by
+  // exactly one token regardless of its kind (it trusts the caller that
+  // this position holds the owed half); inlined here since there is no
+  // further enclosing list to route through the shared helper for.
+  const next = argsResult.value.cursor.pendingCloseHalf
+    ? argsResult.value.cursor.next + 1
+    : argsResult.value.cursor.next;
   return ok({
     node: argsResult.value.typeArguments,
-    next: argsResult.value.cursor.next,
+    next,
   });
 }
 

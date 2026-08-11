@@ -83,26 +83,38 @@ function declaredLifetimeNames(generics: readonly GenericParam[]): string[] {
     .map((param) => param.lifetime.name);
 }
 
-/** Collects every explicit lifetime name reachable from `type`, recursing
- * through `referent` chains - the full set a synthesizer must avoid. */
+/** Collects every explicit lifetime name reachable from `type` - the full
+ * set a synthesizer must avoid. */
 function collectTypeLifetimeNames(type: Type, names: Set<string>): void {
-  if (type.kind !== "ReferenceType") {
-    return;
+  switch (type.kind) {
+    case "ReferenceType":
+      if (isSome(type.lifetime)) {
+        names.add(type.lifetime.value.name);
+      }
+      collectTypeLifetimeNames(type.referent, names);
+      return;
+    case "NamedType":
+      for (const typeArgument of type.typeArguments) {
+        collectTypeLifetimeNames(typeArgument, names);
+      }
+      return;
+    case "ArrayType":
+      collectTypeLifetimeNames(type.elementType, names);
+      return;
+    case "UnitType":
+      return;
+    default:
+      assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
-  if (isSome(type.lifetime)) {
-    names.add(type.lifetime.value.name);
-  }
-  collectTypeLifetimeNames(type.referent, names);
 }
 
 /**
  * Resolves every `ReferenceType` reachable from `type`, including `type`
  * itself. None of these positions have an elision rule - the spec's three
  * rules only speak to a function's own top-level parameter/return
- * positions - so any elided reference found here (a struct field, a `let`
- * annotation, or a reference nested inside another reference) is rejected
- * with a diagnostic and given a synthesized placeholder lifetime, keeping
- * the invariant that every `ReferenceType` in the returned `Program` has a
+ * positions - so any elided reference found here is rejected with a
+ * diagnostic and given a synthesized placeholder lifetime, keeping the
+ * invariant that every `ReferenceType` in the returned `Program` has a
  * resolved (`some(...)`) lifetime.
  */
 function resolveNestedReferenceTypes(
@@ -111,26 +123,48 @@ function resolveNestedReferenceTypes(
   diagnostics: Diagnostic[],
   synth: (anchorTokenId: number) => Lifetime,
 ): Type {
-  if (type.kind !== "ReferenceType") {
-    return type;
+  switch (type.kind) {
+    case "ReferenceType": {
+      const referent = resolveNestedReferenceTypes(
+        type.referent,
+        tokens,
+        diagnostics,
+        synth,
+      );
+      if (isSome(type.lifetime)) {
+        return { ...type, referent };
+      }
+      diagnostics.push(
+        errorDiagnostic(
+          "HEDGE-LIFETIME-001",
+          NO_ELISION_RULE_MESSAGE,
+          spanOf(tokens, type.tokenId),
+        ),
+      );
+      return { ...type, lifetime: some(synth(type.tokenId)), referent };
+    }
+    case "NamedType":
+      return {
+        ...type,
+        typeArguments: type.typeArguments.map((typeArgument) =>
+          resolveNestedReferenceTypes(typeArgument, tokens, diagnostics, synth),
+        ),
+      };
+    case "ArrayType":
+      return {
+        ...type,
+        elementType: resolveNestedReferenceTypes(
+          type.elementType,
+          tokens,
+          diagnostics,
+          synth,
+        ),
+      };
+    case "UnitType":
+      return type;
+    default:
+      return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
-  const referent = resolveNestedReferenceTypes(
-    type.referent,
-    tokens,
-    diagnostics,
-    synth,
-  );
-  if (isSome(type.lifetime)) {
-    return { ...type, referent };
-  }
-  diagnostics.push(
-    errorDiagnostic(
-      "HEDGE-LIFETIME-001",
-      NO_ELISION_RULE_MESSAGE,
-      spanOf(tokens, type.tokenId),
-    ),
-  );
-  return { ...type, lifetime: some(synth(type.tokenId)), referent };
 }
 
 /**
@@ -292,7 +326,16 @@ function elideFunctionDecl(
   // rather than counting via a mutable outer variable from inside the map.
   const newParams = decl.params.map((param: Param): Param => {
     if (param.type.kind !== "ReferenceType") {
-      return param;
+      // Rule 1 doesn't reach a reference nested here (Vec<&T>, [&T; 3]).
+      return {
+        ...param,
+        type: resolveNestedReferenceTypes(
+          param.type,
+          tokens,
+          diagnostics,
+          synth,
+        ),
+      };
     }
     const lifetime = isSome(param.type.lifetime)
       ? param.type.lifetime.value
@@ -317,36 +360,44 @@ function elideFunctionDecl(
   const soleReferenceParamLifetime = referenceParamLifetimes[0];
 
   let newReturnType = decl.returnType;
-  if (
-    isSome(decl.returnType) &&
-    decl.returnType.value.kind === "ReferenceType"
-  ) {
-    const returnRef = decl.returnType.value;
-    let lifetime: Lifetime;
-    if (isSome(returnRef.lifetime)) {
-      lifetime = returnRef.lifetime.value;
-    } else if (
-      referenceParamCount === 1 &&
-      soleReferenceParamLifetime !== undefined
-    ) {
-      lifetime = soleReferenceParamLifetime;
-    } else {
-      diagnostics.push(
-        errorDiagnostic(
-          "HEDGE-LIFETIME-001",
-          ambiguousReturnLifetimeMessage(referenceParamCount),
-          spanOf(tokens, returnRef.tokenId),
-        ),
+  if (isSome(decl.returnType)) {
+    const returnType = decl.returnType.value;
+    if (returnType.kind !== "ReferenceType") {
+      // Rule 2 doesn't reach a reference nested here (Vec<&T>, [&T; 3]).
+      newReturnType = some(
+        resolveNestedReferenceTypes(returnType, tokens, diagnostics, synth),
       );
-      lifetime = synth(returnRef.tokenId);
+    } else {
+      let lifetime: Lifetime;
+      if (isSome(returnType.lifetime)) {
+        lifetime = returnType.lifetime.value;
+      } else if (
+        referenceParamCount === 1 &&
+        soleReferenceParamLifetime !== undefined
+      ) {
+        lifetime = soleReferenceParamLifetime;
+      } else {
+        diagnostics.push(
+          errorDiagnostic(
+            "HEDGE-LIFETIME-001",
+            ambiguousReturnLifetimeMessage(referenceParamCount),
+            spanOf(tokens, returnType.tokenId),
+          ),
+        );
+        lifetime = synth(returnType.tokenId);
+      }
+      const referent = resolveNestedReferenceTypes(
+        returnType.referent,
+        tokens,
+        diagnostics,
+        synth,
+      );
+      newReturnType = some({
+        ...returnType,
+        lifetime: some(lifetime),
+        referent,
+      });
     }
-    const referent = resolveNestedReferenceTypes(
-      returnRef.referent,
-      tokens,
-      diagnostics,
-      synth,
-    );
-    newReturnType = some({ ...returnRef, lifetime: some(lifetime), referent });
   }
 
   const newBody = elideBlockStatements(decl.body, tokens, diagnostics, names);

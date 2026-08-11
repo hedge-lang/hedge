@@ -27,6 +27,15 @@ import {
 import { parseTypePathSegments } from "./path.js";
 
 /**
+ * Result of `parseTypeWithCloseState`: a parsed `Type` plus whether it ended
+ * on a `gt_gt` token that only had its first `>` spent - see that function's
+ * own doc comment.
+ */
+interface TypeParseResult extends Parsed<Type> {
+  readonly pendingCloseHalf: boolean;
+}
+
+/**
  * Parses a type.
  *
  * Slice-1 supports named types (path types) and the unit type `()`. Slice-2
@@ -42,17 +51,42 @@ import { parseTypePathSegments } from "./path.js";
  * Grammar:
  *
  * ```text
- * Type ::= "()" | Path | "&" Lifetime? "mut"? Type
+ * Type ::= "()" | Path Generics? | "&" Lifetime? "mut"? Type
  * ```
  *
  * `(Type)` (tuple syntax) is recognized and produces a guardrail diagnostic;
  * tuple types are not supported in Slice 1.
  */
-// eslint-disable-next-line complexity -- Guardrail cluster; each unsupported-syntax branch is a necessary, independent case.
 export function parseType(
   tokens: readonly Token[],
   pos: number,
 ): PR<Parsed<Type>> {
+  const result = parseTypeWithCloseState(tokens, pos);
+  if (isErr(result)) {
+    return result;
+  }
+  return ok({ node: result.value.node, next: result.value.next });
+}
+
+/**
+ * Real implementation behind `parseType`, additionally reporting whether the
+ * parsed type ended by spending only the first half of a `gt_gt` token (see
+ * `tryCloseAngleList`). A bare top-level `parseType` call never needs this -
+ * it always fully resolves internally, since there is no enclosing `<...>`
+ * list to hand a leftover half off to. It matters only when a `Type` is
+ * itself a generic argument (`parseTypeArgumentList`'s own loop): `Foo<Foo<T>>`'s
+ * inner `Foo<T>` spends the first `>` of the shared `>>`, and the outer
+ * `Foo<...>` list must close using the second half rather than re-reading the
+ * same `gt_gt` as fresh. `ReferenceType`'s own referent recursion propagates
+ * this too, since a referent can itself be the argument left half-closed
+ * (`Container<&Foo<T>>`); `ArrayType`'s element recursion never needs to,
+ * since its own close is the unambiguous `]`, never a shared `>`.
+ */
+// eslint-disable-next-line complexity -- Guardrail cluster; each unsupported-syntax branch is a necessary, independent case.
+function parseTypeWithCloseState(
+  tokens: readonly Token[],
+  pos: number,
+): PR<TypeParseResult> {
   const tokenResult = tokenAt(tokens, pos);
   if (isErr(tokenResult)) {
     return tokenResult;
@@ -67,7 +101,7 @@ export function parseType(
     const next = nextResult.value;
     if (next.kind === "rparen") {
       const unit: UnitType = { kind: "UnitType", tokenId: pos };
-      return ok({ node: unit, next: pos + 2 });
+      return ok({ node: unit, next: pos + 2, pendingCloseHalf: false });
     }
     if (next.kind === "eof") {
       return err(
@@ -98,12 +132,30 @@ export function parseType(
     }
     const genericToken = tokens[pathResult.value.next];
     if (genericToken?.kind === "lt") {
-      const message = isLifetimeGenericsStart(tokens, pathResult.value.next)
-        ? unsupportedLifetimeMessage("lifetime arguments")
-        : unsupportedGenericsMessage("generic type arguments");
-      return err(
-        errorDiagnostic("HEDGE-PARSE-004", message, some(genericToken.span)),
-      );
+      if (isLifetimeGenericsStart(tokens, pathResult.value.next)) {
+        return err(
+          errorDiagnostic(
+            "HEDGE-PARSE-004",
+            unsupportedLifetimeMessage("lifetime arguments"),
+            some(genericToken.span),
+          ),
+        );
+      }
+      const argsResult = parseTypeArgumentList(tokens, pathResult.value.next);
+      if (isErr(argsResult)) {
+        return argsResult;
+      }
+      const named: NamedType = {
+        kind: "NamedType",
+        tokenId: pos,
+        path: pathResult.value.node,
+        typeArguments: argsResult.value.typeArguments,
+      };
+      return ok({
+        node: named,
+        next: argsResult.value.cursor.next,
+        pendingCloseHalf: argsResult.value.cursor.pendingCloseHalf,
+      });
     }
     const pathSepMatch = pathSepBeforeLt(tokens, pathResult.value.next);
     if (isSome(pathSepMatch)) {
@@ -122,8 +174,13 @@ export function parseType(
       kind: "NamedType",
       tokenId: pos,
       path: pathResult.value.node,
+      typeArguments: [],
     };
-    return ok({ node: named, next: pathResult.value.next });
+    return ok({
+      node: named,
+      next: pathResult.value.next,
+      pendingCloseHalf: false,
+    });
   }
 
   if (token.kind === "lt") {
@@ -154,7 +211,7 @@ export function parseType(
       mutable = true;
       cursor += 1;
     }
-    const referentResult = parseType(tokens, cursor);
+    const referentResult = parseTypeWithCloseState(tokens, cursor);
     if (isErr(referentResult)) {
       return referentResult;
     }
@@ -165,7 +222,11 @@ export function parseType(
       lifetime,
       referent: referentResult.value.node,
     };
-    return ok({ node: reference, next: referentResult.value.next });
+    return ok({
+      node: reference,
+      next: referentResult.value.next,
+      pendingCloseHalf: referentResult.value.pendingCloseHalf,
+    });
   }
 
   if (token.kind === "lbracket") {
@@ -218,7 +279,11 @@ export function parseType(
       elementType: elementResult.value.node,
       length: lengthResult.value.node,
     };
-    return ok({ node: array, next: closeResult.value });
+    return ok({
+      node: array,
+      next: closeResult.value,
+      pendingCloseHalf: false,
+    });
   }
 
   if (token.kind === "bang") {
@@ -258,12 +323,22 @@ export interface TypeArgumentListResult {
 /**
  * Parses a `<...>` type-argument list, `ltPos` at the opening `<` (the
  * caller has already confirmed it's there). Shared by a turbofish
- * (`first::<i32>`) and a trait bound's own arguments (`Foo<Bar>`) - both are
- * a plain comma-separated `Type` list closed by `>`, differing only in how
- * the caller detects the opening `<` and whether it needs the returned
- * `pendingCloseHalf` (a turbofish argument that's itself generic hits the
- * Type-position guardrail before any `>>`-splitting could matter, so a
- * turbofish caller can safely discard it).
+ * (`first::<i32>`), a trait bound's own arguments (`Foo<Bar>`), and a
+ * `NamedType`'s own arguments in type position (`Vec<T>`) - all three are a
+ * plain comma-separated `Type` list closed by `>`, differing only in how the
+ * caller detects the opening `<` and what it does with the returned
+ * `pendingCloseHalf`: a trait bound's caller (`item.ts`'s
+ * `parseGenericParamList`/`parseTraitBound` family) is already
+ * `GenericsCursor`-aware throughout and threads it on unchanged, while a
+ * turbofish has no enclosing `<...>` list of its own to hand a leftover half
+ * off to, so its caller (`expression.ts`'s `parseTurbofishTypeArguments`)
+ * must resolve it immediately instead.
+ *
+ * Each argument is parsed via `parseTypeWithCloseState` rather than the
+ * public `parseType`, since a `Type` argument can itself be a generic
+ * `NamedType` (`Foo<Bar<Baz>>`) ending on a `gt_gt` it only half-closed -
+ * that `pendingCloseHalf` is threaded into this list's own close checks
+ * below instead of being re-treated as a fresh, unclaimed `gt_gt`.
  */
 export function parseTypeArgumentList(
   tokens: readonly Token[],
@@ -279,14 +354,16 @@ export function parseTypeArgumentList(
     return ok({ typeArguments: [], cursor: immediateClose.cursor });
   }
   const typeArguments: Type[] = [];
+  let pendingCloseHalf = false;
   for (;;) {
-    const typeResult = parseType(tokens, cursor);
+    const typeResult = parseTypeWithCloseState(tokens, cursor);
     if (isErr(typeResult)) {
       return typeResult;
     }
     typeArguments.push(typeResult.value.node);
     cursor = typeResult.value.next;
-    if (tokens[cursor]?.kind === "comma") {
+    pendingCloseHalf = typeResult.value.pendingCloseHalf;
+    if (!pendingCloseHalf && tokens[cursor]?.kind === "comma") {
       cursor += 1;
       const closeAfterComma = tryCloseAngleList(tokens, cursor, false);
       if (closeAfterComma.closed) {
@@ -296,7 +373,7 @@ export function parseTypeArgumentList(
     }
     break;
   }
-  const closeResult = tryCloseAngleList(tokens, cursor, false);
+  const closeResult = tryCloseAngleList(tokens, cursor, pendingCloseHalf);
   if (closeResult.closed) {
     return ok({ typeArguments, cursor: closeResult.cursor });
   }

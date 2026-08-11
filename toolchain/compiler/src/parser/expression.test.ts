@@ -3536,6 +3536,33 @@ describe("turbofish", (): void => {
     });
   });
 
+  it("parses a turbofish argument that is itself generic, splitting the shared trailing >> (first::<Vec<T>>(x))", (): void => {
+    const ast = parseProgram("first::<Vec<T>>(x);");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "CallExpression",
+            callee: {
+              kind: "PathExpression",
+              typeArguments: [
+                {
+                  kind: "NamedType",
+                  path: { segments: ["Vec"] },
+                  typeArguments: [
+                    { kind: "NamedType", path: { segments: ["T"] } },
+                  ],
+                },
+              ],
+            },
+            arguments: [{ kind: "PathExpression", path: { segments: ["x"] } }],
+          },
+        },
+      ],
+    });
+  });
+
   it("parses a turbofish type-argument list with a trailing comma (first::<T,>(x))", (): void => {
     const ast = parseProgram("first::<T,>(x);");
     expect(ast).toMatchObject({
