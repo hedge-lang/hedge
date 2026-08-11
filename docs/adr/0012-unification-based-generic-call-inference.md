@@ -77,7 +77,10 @@ original binding site.
   inference pass (e.g., into a diagnostic or codegen) but nothing about this
   design forces that structurally, so it's worth flagging when the
   implementation lands.
-- The occurs-check is dead code until type-position generics land; a future
-  change touching that should revisit this ADR rather than drift from it.
+- The occurs-check cannot fire under this design's scope; every binding
+  comes from an already-concrete type, so nothing self-referential can
+  arise. Firing it once nested positions land needs a representation
+  that can nest a variable, which this ADR does not provide; a future
+  change should not assume otherwise.
 - Struct/enum-variant construction shares this pass with calls, so a future
   change to one needs to consider the other.
