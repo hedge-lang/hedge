@@ -3456,27 +3456,38 @@ describe("Self as a type", (): void => {
 
 describe("generic parameter shadowing an outer type of the same name", (): void => {
   it("resolves a function's own type parameter over an outer struct of the same name, with a warning", (): void => {
-    const result = diagnose("struct T {} fn f<T>(x: T) -> T { x }");
+    const result = diagnose("struct T {} fn f<T>(x: T) {}");
     const errors = result.diagnostics.filter((d) => d.severity === "error");
     const warnings = result.diagnostics.filter((d) => d.severity === "warning");
     expect(errors).toHaveLength(0);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.code).toBe("HEDGE-LINT-002");
-    const fn = result.program.items.find((item) => item.kind === "Function");
+    const fn = result.program.items.find(
+      (item) => item.kind === "Function" && item.name.text === "f",
+    );
     assert(fn?.kind === "Function", "expected a Function item");
     expect(fn.params[0]?.type.kind).toBe("NamedType");
   });
 
   it("resolves a function's own type parameter over an outer enum of the same name, with a warning", (): void => {
-    const result = diagnose("enum T {} fn f<T>(x: T) -> T { x }");
+    const result = diagnose("enum T {} fn f<T>(x: T) {}");
     const errors = result.diagnostics.filter((d) => d.severity === "error");
     const warnings = result.diagnostics.filter((d) => d.severity === "warning");
     expect(errors).toHaveLength(0);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.code).toBe("HEDGE-LINT-002");
-    const fn = result.program.items.find((item) => item.kind === "Function");
+    const fn = result.program.items.find(
+      (item) => item.kind === "Function" && item.name.text === "f",
+    );
     assert(fn?.kind === "Function", "expected a Function item");
     expect(fn.params[0]?.type.kind).toBe("NamedType");
+  });
+
+  it("warns once per occurrence when a shadowing type parameter is used more than once in a signature", (): void => {
+    const result = diagnose("struct T {} fn f<T>(x: T) -> T { x }");
+    const warnings = result.diagnostics.filter((d) => d.severity === "warning");
+    expect(warnings).toHaveLength(2);
+    expect(warnings.every((w) => w.code === "HEDGE-LINT-002")).toBe(true);
   });
 
   it("resolves a struct's own type parameter over an outer struct of the same name, with a warning", (): void => {
@@ -3486,7 +3497,9 @@ describe("generic parameter shadowing an outer type of the same name", (): void 
     expect(errors).toHaveLength(0);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.code).toBe("HEDGE-LINT-002");
-    const pair = result.program.items.find((item) => item.kind === "Struct");
+    const pair = result.program.items.find(
+      (item) => item.kind === "Struct" && item.name.text === "Pair",
+    );
     assert(pair?.kind === "Struct", "expected a Struct item");
     assert(pair.body.kind === "NamedFields", "expected named fields");
     expect(pair.body.fields[0]?.type.kind).toBe("NamedType");
