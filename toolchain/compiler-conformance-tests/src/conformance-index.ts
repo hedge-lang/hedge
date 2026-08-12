@@ -650,6 +650,12 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "coexists with an explicit lifetime parameter declared alongside the type parameter",
       "resolves a two-hop reference to a generic type parameter",
       "still rejects an undeclared name under a reference to it",
+      "resolves a struct's own type parameter used as a field type",
+      "resolves an enum's own type parameter used in a tuple variant",
+      "resolves an enum's own type parameter used in a named-fields variant",
+      "does not cascade a second diagnostic when only one of a struct's fields uses an undeclared name",
+      "does not let one generic struct's type parameter leak into an unrelated sibling struct",
+      "does not let an enclosing generic function's type parameter leak into a struct declared inside its body",
     ],
   },
   {

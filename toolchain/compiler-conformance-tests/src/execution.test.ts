@@ -915,6 +915,38 @@ describe("execution tests", (): void => {
         "type is not supported in Slice 1",
       );
     });
+
+    it("resolves a struct's own type parameter used as a field type", (): void => {
+      assertCompilesClean(`struct Pair<T> { a: T, b: T }`);
+    });
+
+    it("resolves an enum's own type parameter used in a tuple variant", (): void => {
+      assertCompilesClean(`enum Container<T> { Full(T), Empty }`);
+    });
+
+    it("resolves an enum's own type parameter used in a named-fields variant", (): void => {
+      assertCompilesClean(`enum Wrapper<T> { Item { value: T } }`);
+    });
+
+    it("does not cascade a second diagnostic when only one of a struct's fields uses an undeclared name", (): void => {
+      assertNoCascade(`struct Pair<T> { a: T, b: U }`);
+    });
+
+    it("does not let one generic struct's type parameter leak into an unrelated sibling struct", (): void => {
+      const result = compileHedgeCode(
+        `struct A<T> { a: T } struct B { b: T }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-UNSUPPORTED-001");
+    });
+
+    it("does not let an enclosing generic function's type parameter leak into a struct declared inside its body", (): void => {
+      assertRejectsWithMessage(
+        `fn outer<T>(x: T) { struct Inner { y: T } }`,
+        "type is not supported in Slice 1",
+      );
+    });
   });
 
   describe("array types", (): void => {
