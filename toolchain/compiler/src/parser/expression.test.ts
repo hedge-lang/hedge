@@ -3623,6 +3623,17 @@ describe("turbofish", (): void => {
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].message).toContain("generic arguments");
   });
+
+  it("rejects a stray extra > merged into the closing >> token (first::<T>>(x)), rather than silently consuming it", (): void => {
+    const { tokens } = tokenize("first::<T>>(x);");
+    const gtGt = tokens.find((t) => t.kind === "gt_gt");
+    assert(gtGt !== undefined, "Expected to find a gt_gt token");
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("unexpected extra");
+    expect(diagnostics[0].span).toEqual(some(gtGt.span));
+  });
 });
 
 describe("comparison expressions unaffected by turbofish guardrail", (): void => {

@@ -1080,16 +1080,24 @@ function parseTurbofishTypeArguments(
   if (isErr(argsResult)) {
     return argsResult;
   }
-  // `tryCloseAngleList`'s pendingCloseHalf:true branch always advances by
-  // exactly one token regardless of its kind (it trusts the caller that
-  // this position holds the owed half); inlined here since there is no
-  // further enclosing list to route through the shared helper for.
-  const next = argsResult.value.cursor.pendingCloseHalf
-    ? argsResult.value.cursor.next + 1
-    : argsResult.value.cursor.next;
+  // A turbofish has no enclosing `<...>` list to hand a half-spent `gt_gt`
+  // off to, unlike a trait bound or a `NamedType`'s own nested arguments -
+  // `pendingCloseHalf` here can only mean a genuine stray extra `>`
+  // (`first::<T>>()`), the same class of malformed input
+  // `parseDeclarationGenerics`/`parseWherePredicate` (`item.ts`) reject.
+  if (argsResult.value.cursor.pendingCloseHalf) {
+    const strayToken = tokens[argsResult.value.cursor.next];
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-005",
+        "unexpected extra '>' after turbofish type argument list",
+        strayToken !== undefined ? some(strayToken.span) : none(),
+      ),
+    );
+  }
   return ok({
     node: argsResult.value.typeArguments,
-    next,
+    next: argsResult.value.cursor.next,
   });
 }
 
