@@ -973,6 +973,13 @@ describe("execution tests", (): void => {
         );
       },
     );
+
+    it("still rejects an undeclared name that is not a primitive, struct, or enum, with no generics involved at all", (): void => {
+      assertRejectsWithMessage(
+        `fn f(x: Bogus) {}`,
+        "type is not supported in Slice 1",
+      );
+    });
   });
 
   describe("array types", (): void => {

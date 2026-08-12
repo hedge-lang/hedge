@@ -658,6 +658,7 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "does not let an enclosing generic function's type parameter leak into a struct declared inside its body",
       "still rejects a generic type parameter used as a fixed-size array's element type",
       "still rejects a generic type parameter used as an array element type behind a reference",
+      "still rejects an undeclared name that is not a primitive, struct, or enum, with no generics involved at all",
     ],
     expectedFailTestIds: [
       "still rejects a generic type parameter used as a fixed-size array's element type",
