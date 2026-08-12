@@ -882,6 +882,39 @@ describe("execution tests", (): void => {
     it("rejects a return type that names a different declared type parameter than the argument", (): void => {
       assertRejects(`fn f<T, U>(x: T) -> U { x }`);
     });
+
+    it("resolves a shared reference to a generic type parameter as a parameter type", (): void => {
+      assertCompilesClean(`fn borrow<T>(x: &T) {}`);
+    });
+
+    it("resolves a mutable reference to a generic type parameter as a parameter type", (): void => {
+      assertCompilesClean(`fn borrow_mut<T>(x: &mut T) {}`);
+    });
+
+    it("resolves a shared reference to a generic type parameter as a return type", (): void => {
+      assertCompilesClean(`fn borrow_ret<T>(x: &T) -> &T { x }`);
+    });
+
+    it("resolves a mutable reference to a generic type parameter as a return type", (): void => {
+      assertCompilesClean(`fn borrow_mut_ret<T>(x: &mut T) -> &mut T { x }`);
+    });
+
+    it("coexists with an explicit lifetime parameter declared alongside the type parameter", (): void => {
+      assertCompilesClean(`fn borrow<'a, T>(x: &'a T) -> &'a T { x }`);
+    });
+
+    it("resolves a two-hop reference to a generic type parameter", (): void => {
+      assertCompilesClean(
+        `fn double_ref<'a, T>(x: &'a mut &'a T) -> &'a mut &'a T { x }`,
+      );
+    });
+
+    it("still rejects an undeclared name under a reference to it", (): void => {
+      assertRejectsWithMessage(
+        `fn borrow<T>(x: &U) {}`,
+        "type is not supported in Slice 1",
+      );
+    });
   });
 
   describe("array types", (): void => {
