@@ -947,6 +947,32 @@ describe("execution tests", (): void => {
         "type is not supported in Slice 1",
       );
     });
+
+    // TODO(Hedge-268): a generic parameter in an array's element-type
+    // position resolves today only as a side effect of the surrounding
+    // recursive type resolution, not by deliberate design - array-of-generic
+    // has no considered construction/copy/move/codegen story yet. These pin
+    // the rejection that gap calls for until the position gets real
+    // semantics.
+    it.fails(
+      "still rejects a generic type parameter used as a fixed-size array's element type",
+      (): void => {
+        assertRejectsWithMessage(
+          `struct Foo<T> { a: [T; 3] }`,
+          "type is not supported in Slice 1",
+        );
+      },
+    );
+
+    it.fails(
+      "still rejects a generic type parameter used as an array element type behind a reference",
+      (): void => {
+        assertRejectsWithMessage(
+          `fn f<T>(x: &[T; 3]) {}`,
+          "type is not supported in Slice 1",
+        );
+      },
+    );
   });
 
   describe("array types", (): void => {
