@@ -1055,9 +1055,12 @@ function parseStructExpression(
  * generic-argument list.
  *
  * Delegates the actual `<...>` body to `parseTypeArgumentList`, shared with
- * a trait bound's own arguments - discarding its `pendingCloseHalf`, since
- * a generic turbofish argument (`first::<Vec<i32>>`) hits the Type-position
- * guardrail before any closing `>>` could matter here.
+ * a trait bound's own arguments and a `NamedType`'s own arguments in type
+ * position. Unlike those callers, a turbofish has no enclosing `<...>` list
+ * of its own to hand a leftover `pendingCloseHalf` off to - a generic
+ * turbofish argument (`first::<Vec<Bar<Baz>>>`) can end exactly on a
+ * half-spent `gt_gt`, so any owed half is resolved here by spending it
+ * outright rather than propagated further.
  *
  * Grammar:
  *
@@ -1076,6 +1079,21 @@ function parseTurbofishTypeArguments(
   const argsResult = parseTypeArgumentList(tokens, pos + 1);
   if (isErr(argsResult)) {
     return argsResult;
+  }
+  // A turbofish has no enclosing `<...>` list to hand a half-spent `gt_gt`
+  // off to, unlike a trait bound or a `NamedType`'s own nested arguments -
+  // `pendingCloseHalf` here can only mean a genuine stray extra `>`
+  // (`first::<T>>()`), the same class of malformed input
+  // `parseDeclarationGenerics`/`parseWherePredicate` (`item.ts`) reject.
+  if (argsResult.value.cursor.pendingCloseHalf) {
+    const strayToken = tokens[argsResult.value.cursor.next];
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-005",
+        "unexpected extra '>' after turbofish type argument list",
+        strayToken !== undefined ? some(strayToken.span) : none(),
+      ),
+    );
   }
   return ok({
     node: argsResult.value.typeArguments,

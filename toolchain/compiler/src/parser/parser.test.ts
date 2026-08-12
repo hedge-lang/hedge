@@ -533,46 +533,110 @@ describe("type annotation error diagnostics", (): void => {
   });
 });
 
-describe("generics guardrail - type position", (): void => {
-  it("produces an error diagnostic for a generic type on a let binding", (): void => {
-    const { tokens } = tokenize("let x: Vec<T>;");
-    const lt = tokens.find((t) => t.kind === "lt");
-    assert(lt !== undefined, "Expected to find a lt token");
+describe("generic type arguments - type position", (): void => {
+  it("parses Vec<T> as a named type with one type argument in a function parameter position", (): void => {
+    const { tokens } = tokenize("fn foo(x: Vec<T>) {}");
     const { diagnostics, program } = parse(tokens);
-    expect(program).toEqual(none());
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].severity).toBe("error");
-    expect(diagnostics[0].message).toContain("Slice 1");
-    expect(diagnostics[0].message).toContain("generic");
-    expect(diagnostics[0].span).toEqual(some(lt.span));
+    expect(diagnostics).toHaveLength(0);
+    assert(isSome(program), "Expected a program to come back");
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        params: [
+          {
+            type: {
+              kind: "NamedType",
+              path: { segments: ["Vec"] },
+              typeArguments: [{ kind: "NamedType", path: { segments: ["T"] } }],
+            },
+          },
+        ],
+      },
+    ]);
   });
 
-  it("produces an error diagnostic for a generic return type", (): void => {
+  it("parses Vec<T> as a named type with one type argument on a let binding", (): void => {
+    const { tokens } = tokenize("let mut x: Vec<T>;");
+    const { diagnostics, program } = parse(tokens);
+    expect(diagnostics).toHaveLength(0);
+    assert(isSome(program), "Expected a program to come back");
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "LetStatement",
+        type: some({
+          kind: "NamedType",
+          path: { segments: ["Vec"] },
+          typeArguments: [{ kind: "NamedType", path: { segments: ["T"] } }],
+        }),
+      },
+    ]);
+  });
+
+  it("parses Vec<T> as a generic return type", (): void => {
     const { tokens } = tokenize("fn f() -> Vec<T> {}");
     const { diagnostics, program } = parse(tokens);
-    expect(program).toEqual(none());
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 1");
-    expect(diagnostics[0].message).toContain("generic");
+    expect(diagnostics).toHaveLength(0);
+    assert(isSome(program), "Expected a program to come back");
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        returnType: some({
+          kind: "NamedType",
+          path: { segments: ["Vec"] },
+          typeArguments: [{ kind: "NamedType", path: { segments: ["T"] } }],
+        }),
+      },
+    ]);
   });
 
-  it("produces an error diagnostic for a generic struct field type", (): void => {
+  it("parses Vec<T> as a generic struct field type", (): void => {
     const { tokens } = tokenize("struct S { x: Vec<T> }");
     const { diagnostics, program } = parse(tokens);
-    expect(program).toEqual(none());
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 1");
-    expect(diagnostics[0].message).toContain("generic");
+    expect(diagnostics).toHaveLength(0);
+    assert(isSome(program), "Expected a program to come back");
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Struct",
+        body: {
+          kind: "NamedFields",
+          fields: [
+            {
+              name: { text: "x" },
+              type: {
+                kind: "NamedType",
+                path: { segments: ["Vec"] },
+                typeArguments: [
+                  { kind: "NamedType", path: { segments: ["T"] } },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    ]);
   });
 
-  it("produces an error diagnostic for a nested generic type", (): void => {
-    const { tokens } = tokenize("let x: Vec<Vec<T>>;");
+  it("parses Vec<Vec<T>> as a nested generic type, splitting the trailing >>", (): void => {
+    const { tokens } = tokenize("let mut x: Vec<Vec<T>>;");
     const { diagnostics, program } = parse(tokens);
-    expect(program).toEqual(none());
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 1");
-    expect(diagnostics[0].message).toContain("generic");
-    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics).toHaveLength(0);
+    assert(isSome(program), "Expected a program to come back");
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "LetStatement",
+        type: some({
+          kind: "NamedType",
+          path: { segments: ["Vec"] },
+          typeArguments: [
+            {
+              kind: "NamedType",
+              path: { segments: ["Vec"] },
+              typeArguments: [{ kind: "NamedType", path: { segments: ["T"] } }],
+            },
+          ],
+        }),
+      },
+    ]);
   });
 
   it("produces an error diagnostic for a turbofish-shaped generic type (Vec::<T>)", (): void => {
@@ -603,15 +667,36 @@ describe("generics guardrail - type position", (): void => {
     expect(diagnostics[0].span).toEqual(some(lt.span));
   });
 
-  it("still rejects a user-declared generic struct used (nested) as a type, even though the struct's own generic parameter declares cleanly", (): void => {
+  it("parses a user-declared generic struct nested as a type in a function parameter position (Foo<Foo<T>>)", (): void => {
     const { tokens } = tokenize(
       "struct Foo<T>(T); fn foo<T>(t: Foo<Foo<T>>) {}",
     );
     const { program, diagnostics } = parse(tokens);
-    expect(program).toEqual(none());
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 1");
-    expect(diagnostics[0].message).toContain("generic");
+    expect(diagnostics).toHaveLength(0);
+    assert(isSome(program), "Expected a program to come back");
+    expect(program.value.items).toMatchObject([
+      { kind: "Struct" },
+      {
+        kind: "Function",
+        params: [
+          {
+            type: {
+              kind: "NamedType",
+              path: { segments: ["Foo"] },
+              typeArguments: [
+                {
+                  kind: "NamedType",
+                  path: { segments: ["Foo"] },
+                  typeArguments: [
+                    { kind: "NamedType", path: { segments: ["T"] } },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ]);
   });
 });
 
@@ -653,13 +738,11 @@ describe("lifetime guardrail - generic type argument position", (): void => {
     expect(diagnostics[0].span).toEqual(some(pathSep.span));
   });
 
-  it("still produces the generic-Slice-4 diagnostic for Vec<T> (regression)", (): void => {
-    const { tokens } = tokenize("let x: Vec<T>;");
+  it("no longer produces the generic-Slice-4 diagnostic for Vec<T>, now that type-position generics parse (regression)", (): void => {
+    const { tokens } = tokenize("let mut x: Vec<T>;");
     const { diagnostics, program } = parse(tokens);
-    expect(program).toEqual(none());
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 4");
-    expect(diagnostics[0].message).not.toContain("lifetime");
+    expect(diagnostics).toHaveLength(0);
+    expect(isSome(program)).toBe(true);
   });
 });
 
@@ -1544,13 +1627,35 @@ describe("enum declarations", (): void => {
     expect(diagnostics[1]?.message).toContain("rbrace");
   });
 
-  it("a guardrail-violating type inside a variant's tuple field (Vec<T>) bubbles straight out unrecovered, matching the same guardrail on a plain struct field", (): void => {
+  it("parses a generic type inside a variant's tuple field (Vec<T>), matching the same behavior on a plain struct field", (): void => {
     const { tokens } = tokenize("enum Foo { Bad(Vec<T>) }");
     const { program, diagnostics } = parse(tokens);
-    assert(isNone(program), "Expected no program to come back");
-    expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Slice 1");
-    expect(diagnostics[0]?.message).toContain("generic");
+    expect(diagnostics).toHaveLength(0);
+    assert(isSome(program), "Expected a program to come back");
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Enum",
+        variants: [
+          {
+            name: { text: "Bad" },
+            body: some({
+              kind: "TupleFields",
+              fields: [
+                {
+                  type: {
+                    kind: "NamedType",
+                    path: { segments: ["Vec"] },
+                    typeArguments: [
+                      { kind: "NamedType", path: { segments: ["T"] } },
+                    ],
+                  },
+                },
+              ],
+            }),
+          },
+        ],
+      },
+    ]);
   });
 });
 
@@ -4692,15 +4797,38 @@ describe("generic parameters: declaration position", (): void => {
   });
 
   // biome-ignore lint/security/noSecrets: false positive - generic syntax test string, not a secret
-  it("still hits the type-position guardrail past a compound bound argument (fn foo<T: Foo<Bar<Baz>>>() {})", (): void => {
+  it("parses a compound bound argument, splitting the doubly-nested closing >>> across all three levels (fn foo<T: Foo<Bar<Baz>>>() {})", (): void => {
     // biome-ignore lint/security/noSecrets: false positive - generic syntax test string, not a secret
     const { tokens } = tokenize("fn foo<T: Foo<Bar<Baz>>>() {}");
     const { program, diagnostics } = parse(tokens);
+    expect(diagnostics).toHaveLength(0);
     assert(isSome(program), "Expected a program to come back");
-    assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 4");
     expect(program.value.items).toMatchObject([
-      { kind: "Function", generics: [], params: [] },
+      {
+        kind: "Function",
+        generics: [
+          {
+            kind: "TypeParam",
+            name: { text: "T" },
+            bounds: [
+              {
+                kind: "PathTraitBound",
+                path: { segments: ["Foo"] },
+                typeArguments: [
+                  {
+                    kind: "NamedType",
+                    path: { segments: ["Bar"] },
+                    typeArguments: [
+                      { kind: "NamedType", path: { segments: ["Baz"] } },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        params: [],
+      },
     ]);
   });
 
@@ -4803,23 +4931,31 @@ describe("lifetime + reference type interactions", (): void => {
 });
 
 describe("lifetime guardrail - nested and reversed-order generics", (): void => {
-  it("let x: Vec<Vec<'a>>; diagnoses only the outer generic (inner lifetime never reached)", (): void => {
+  it("let x: Vec<Vec<'a>>; now reaches and diagnoses the inner lifetime, since the outer generic actually recurses into it", (): void => {
     const { tokens } = tokenize("let x: Vec<Vec<'a>>;");
+    const innerLt = tokens.filter((t) => t.kind === "lt")[1];
+    assert(innerLt !== undefined, "Expected to find the inner lt token");
     const { program, diagnostics } = parse(tokens);
     expect(program).toEqual(none());
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("Slice 4");
-    expect(diagnostics[0].message).not.toContain("lifetime");
+    expect(diagnostics[0].message).toContain("Slice 2");
+    expect(diagnostics[0].message).toContain("lifetime");
+    expect(diagnostics[0].message).not.toContain("Slice 4");
+    expect(diagnostics[0].span).toEqual(some(innerLt.span));
   });
 
-  it("let x: Vec<T, 'a>; falls back to the generic Slice-4 diagnostic (lifetime not listed first)", (): void => {
+  it("let x: Vec<T, 'a>; now diagnoses the lifetime directly, since a non-first argument is reached too (lifetime not listed first)", (): void => {
     const { tokens } = tokenize("let x: Vec<T, 'a>;");
+    const lifetime = tokens.find((t) => t.kind === "lifetime");
+    assert(lifetime !== undefined, "Expected to find the lifetime token");
     const { program, diagnostics } = parse(tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("Slice 4");
-    expect(diagnostics[0].message).not.toContain("lifetime");
+    expect(diagnostics[0].message).toContain("Slice 2");
+    expect(diagnostics[0].message).toContain("lifetime");
+    expect(diagnostics[0].message).not.toContain("Slice 4");
+    expect(diagnostics[0].span).toEqual(some(lifetime.span));
   });
 });
 

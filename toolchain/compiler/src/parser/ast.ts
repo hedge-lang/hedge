@@ -508,6 +508,7 @@ export type Type = NamedType | UnitType | ReferenceType | ArrayType;
 export interface NamedType extends AstNode {
   readonly kind: "NamedType";
   readonly path: Path;
+  readonly typeArguments: readonly Type[];
 }
 
 export interface UnitType extends AstNode {

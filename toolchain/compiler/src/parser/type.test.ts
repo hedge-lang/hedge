@@ -117,3 +117,170 @@ describe("parseType - array types", (): void => {
     });
   });
 });
+
+describe("parseType - generic type arguments", (): void => {
+  it("parses Vec<T> as a named type with one type argument", (): void => {
+    const { tokens } = tokenize("Vec<T>");
+    const result = parseType(tokens, 0);
+    assert(!isErr(result), "Expected a successful parse");
+    expect(result.value.node).toMatchObject({
+      kind: "NamedType",
+      path: { segments: ["Vec"] },
+      typeArguments: [{ kind: "NamedType", path: { segments: ["T"] } }],
+    });
+    expect(result.value.next).toBe(tokens.length - 1);
+  });
+
+  it("parses Foo<Foo<T>>, splitting the trailing >> across both nesting levels", (): void => {
+    const { tokens } = tokenize("Foo<Foo<T>>");
+    const result = parseType(tokens, 0);
+    assert(!isErr(result), "Expected a successful parse");
+    expect(result.value.node).toMatchObject({
+      kind: "NamedType",
+      path: { segments: ["Foo"] },
+      typeArguments: [
+        {
+          kind: "NamedType",
+          path: { segments: ["Foo"] },
+          typeArguments: [{ kind: "NamedType", path: { segments: ["T"] } }],
+        },
+      ],
+    });
+    expect(result.value.next).toBe(tokens.length - 1);
+  });
+
+  it("parses Foo<T, U> as a multi-argument type-argument list", (): void => {
+    const { tokens } = tokenize("Foo<T, U>");
+    const result = parseType(tokens, 0);
+    assert(!isErr(result), "Expected a successful parse");
+    expect(result.value.node).toMatchObject({
+      kind: "NamedType",
+      path: { segments: ["Foo"] },
+      typeArguments: [
+        { kind: "NamedType", path: { segments: ["T"] } },
+        { kind: "NamedType", path: { segments: ["U"] } },
+      ],
+    });
+    expect(result.value.next).toBe(tokens.length - 1);
+  });
+
+  it("still produces the existing lifetime guardrail diagnostic for Ref<'a, T>, unchanged", (): void => {
+    const { tokens } = tokenize("Ref<'a, T>");
+    const lt = tokens.find((t) => t.kind === "lt");
+    assert(lt !== undefined, "Expected to find a lt token");
+    const result = parseType(tokens, 0);
+    assert(isErr(result), "Expected an error result");
+    expect(result.error.message).toContain("Slice 2");
+    expect(result.error.message).toContain("lifetime");
+    expect(result.error.span).toEqual(some(lt.span));
+  });
+
+  it("parses Foo<Bar<Baz<T>>>, splitting the trailing >>> across all three nesting levels", (): void => {
+    const { tokens } = tokenize("Foo<Bar<Baz<T>>>");
+    const result = parseType(tokens, 0);
+    assert(!isErr(result), "Expected a successful parse");
+    expect(result.value.node).toMatchObject({
+      kind: "NamedType",
+      path: { segments: ["Foo"] },
+      typeArguments: [
+        {
+          kind: "NamedType",
+          path: { segments: ["Bar"] },
+          typeArguments: [
+            {
+              kind: "NamedType",
+              path: { segments: ["Baz"] },
+              typeArguments: [{ kind: "NamedType", path: { segments: ["T"] } }],
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.value.next).toBe(tokens.length - 1);
+  });
+
+  it("parses Foo<> as a named type with zero type arguments", (): void => {
+    const { tokens } = tokenize("Foo<>");
+    const result = parseType(tokens, 0);
+    assert(!isErr(result), "Expected a successful parse");
+    expect(result.value.node).toMatchObject({
+      kind: "NamedType",
+      path: { segments: ["Foo"] },
+      typeArguments: [],
+    });
+    expect(result.value.next).toBe(tokens.length - 1);
+  });
+
+  it("parses Foo<T, U,> with a trailing comma before the close", (): void => {
+    const { tokens } = tokenize("Foo<T, U,>");
+    const result = parseType(tokens, 0);
+    assert(!isErr(result), "Expected a successful parse");
+    expect(result.value.node).toMatchObject({
+      kind: "NamedType",
+      path: { segments: ["Foo"] },
+      typeArguments: [
+        { kind: "NamedType", path: { segments: ["T"] } },
+        { kind: "NamedType", path: { segments: ["U"] } },
+      ],
+    });
+    expect(result.value.next).toBe(tokens.length - 1);
+  });
+
+  it("fails fast without hanging on an unterminated type-argument list (Foo<T)", (): void => {
+    const { tokens } = tokenize("Foo<T");
+    const result = parseType(tokens, 0);
+    assert(isErr(result), "Expected an error result");
+  });
+
+  it("parses &Vec<T>, propagating type arguments through a reference type", (): void => {
+    const { tokens } = tokenize("&Vec<T>");
+    const result = parseType(tokens, 0);
+    assert(!isErr(result), "Expected a successful parse");
+    expect(result.value.node).toMatchObject({
+      kind: "ReferenceType",
+      referent: {
+        kind: "NamedType",
+        path: { segments: ["Vec"] },
+        typeArguments: [{ kind: "NamedType", path: { segments: ["T"] } }],
+      },
+    });
+    expect(result.value.next).toBe(tokens.length - 1);
+  });
+
+  it("parses [Vec<T>; 3], propagating type arguments through an array element type", (): void => {
+    const { tokens } = tokenize("[Vec<T>; 3]");
+    const result = parseType(tokens, 0);
+    assert(!isErr(result), "Expected a successful parse");
+    expect(result.value.node).toMatchObject({
+      kind: "ArrayType",
+      elementType: {
+        kind: "NamedType",
+        path: { segments: ["Vec"] },
+        typeArguments: [{ kind: "NamedType", path: { segments: ["T"] } }],
+      },
+      length: { kind: "IntLiteral", value: "3" },
+    });
+    expect(result.value.next).toBe(tokens.length - 1);
+  });
+
+  it("correctly splits a shared >> when a reference-typed argument is itself nested inside an enclosing generic list (Container<&Foo<T>>)", (): void => {
+    const { tokens } = tokenize("Container<&Foo<T>>");
+    const result = parseType(tokens, 0);
+    assert(!isErr(result), "Expected a successful parse");
+    expect(result.value.node).toMatchObject({
+      kind: "NamedType",
+      path: { segments: ["Container"] },
+      typeArguments: [
+        {
+          kind: "ReferenceType",
+          referent: {
+            kind: "NamedType",
+            path: { segments: ["Foo"] },
+            typeArguments: [{ kind: "NamedType", path: { segments: ["T"] } }],
+          },
+        },
+      ],
+    });
+    expect(result.value.next).toBe(tokens.length - 1);
+  });
+});

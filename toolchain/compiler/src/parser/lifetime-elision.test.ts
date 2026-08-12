@@ -251,6 +251,56 @@ describe("lifetime elision - nested references", (): void => {
       diagnostics.some((d) => d.message.includes("missing lifetime specifier")),
     ).toBe(true);
   });
+
+  it("rejects an elided reference nested inside a generic type argument (Vec<&T>), resolving it to a synthesized placeholder rather than leaving it none()", (): void => {
+    const { tokens } = tokenize("fn f(x: Vec<&T>) {}");
+    const { program, diagnostics } = parse(tokens);
+    expect(
+      diagnostics.some((d) => d.message.includes("missing lifetime specifier")),
+    ).toBe(true);
+    assert(isSome(program), "Expected a program to come back");
+    const fn = program.value.items[0];
+    assert(fn?.kind === "Function", "Expected a Function item");
+    const paramType = fn.params[0]?.type;
+    assert(paramType?.kind === "NamedType", "Expected a named param type");
+    const nestedRef = paramType.typeArguments[0];
+    assert(
+      nestedRef?.kind === "ReferenceType",
+      "Expected the nested type argument to be a reference type",
+    );
+    assert(
+      isSome(nestedRef.lifetime),
+      "Expected the nested reference's lifetime to be resolved, not left none()",
+    );
+  });
+
+  it("passes a fully explicit reference nested inside a generic type argument through clean, and collects its name to avoid a synthesizer collision (Vec<&'a T>)", (): void => {
+    const { tokens } = tokenize("fn f<'a>(x: Vec<&'a T>) {}");
+    const { diagnostics } = parse(tokens);
+    expect(diagnostics).toHaveLength(0);
+  });
+
+  it("rejects an elided reference nested inside an array element type ([&T; 3]), resolving it to a synthesized placeholder rather than leaving it none()", (): void => {
+    const { tokens } = tokenize("fn f(x: [&T; 3]) {}");
+    const { program, diagnostics } = parse(tokens);
+    expect(
+      diagnostics.some((d) => d.message.includes("missing lifetime specifier")),
+    ).toBe(true);
+    assert(isSome(program), "Expected a program to come back");
+    const fn = program.value.items[0];
+    assert(fn?.kind === "Function", "Expected a Function item");
+    const paramType = fn.params[0]?.type;
+    assert(paramType?.kind === "ArrayType", "Expected an array param type");
+    const nestedRef = paramType.elementType;
+    assert(
+      nestedRef.kind === "ReferenceType",
+      "Expected the array element type to be a reference type",
+    );
+    assert(
+      isSome(nestedRef.lifetime),
+      "Expected the nested reference's lifetime to be resolved, not left none()",
+    );
+  });
 });
 
 describe("lifetime elision - no rule outside a function signature", (): void => {

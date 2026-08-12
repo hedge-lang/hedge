@@ -3536,6 +3536,33 @@ describe("turbofish", (): void => {
     });
   });
 
+  it("parses a turbofish argument that is itself generic, splitting the shared trailing >> (first::<Vec<T>>(x))", (): void => {
+    const ast = parseProgram("first::<Vec<T>>(x);");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "ExpressionStatement",
+          expression: {
+            kind: "CallExpression",
+            callee: {
+              kind: "PathExpression",
+              typeArguments: [
+                {
+                  kind: "NamedType",
+                  path: { segments: ["Vec"] },
+                  typeArguments: [
+                    { kind: "NamedType", path: { segments: ["T"] } },
+                  ],
+                },
+              ],
+            },
+            arguments: [{ kind: "PathExpression", path: { segments: ["x"] } }],
+          },
+        },
+      ],
+    });
+  });
+
   it("parses a turbofish type-argument list with a trailing comma (first::<T,>(x))", (): void => {
     const ast = parseProgram("first::<T,>(x);");
     expect(ast).toMatchObject({
@@ -3595,6 +3622,17 @@ describe("turbofish", (): void => {
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].message).toContain("generic arguments");
+  });
+
+  it("rejects a stray extra > merged into the closing >> token (first::<T>>(x)), rather than silently consuming it", (): void => {
+    const { tokens } = tokenize("first::<T>>(x);");
+    const gtGt = tokens.find((t) => t.kind === "gt_gt");
+    assert(gtGt !== undefined, "Expected to find a gt_gt token");
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("unexpected extra");
+    expect(diagnostics[0].span).toEqual(some(gtGt.span));
   });
 });
 
