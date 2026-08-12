@@ -874,6 +874,14 @@ describe("execution tests", (): void => {
     it("compiles cleanly when only one of several declared type parameters is used", (): void => {
       assertCompilesClean(`fn take<T, U>(x: T) {}`);
     });
+
+    it("resolves a generic function's own type parameter used as a return type", (): void => {
+      assertCompilesClean(`fn identity<T>(x: T) -> T { x }`);
+    });
+
+    it("rejects a return type that names a different declared type parameter than the argument", (): void => {
+      assertRejects(`fn f<T, U>(x: T) -> U { x }`);
+    });
   });
 
   describe("array types", (): void => {

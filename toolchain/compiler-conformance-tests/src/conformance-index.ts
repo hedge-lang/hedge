@@ -641,6 +641,8 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "resolves a generic function's own type parameter used as a parameter type",
       "still rejects a name that matches no declared generic parameter as unsupported",
       "compiles cleanly when only one of several declared type parameters is used",
+      "resolves a generic function's own type parameter used as a return type",
+      "rejects a return type that names a different declared type parameter than the argument",
     ],
   },
   {
