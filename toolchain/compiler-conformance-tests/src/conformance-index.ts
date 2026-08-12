@@ -633,6 +633,15 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     ],
   },
   {
+    id: "GENERIC-PARAM-TYPE-POSITION",
+    description:
+      "A declared generic parameter resolves as a valid type in its own signature/field positions, distinct from an unresolved name",
+    specRefs: ["0015-generics-and-traits.md", "0025-grammar.md"],
+    testIds: [
+      "resolves a generic function's own type parameter used as a parameter type",
+    ],
+  },
+  {
     id: "SKIP-BUDGET-GOVERNANCE",
     description:
       "Skip and skipIf usage remains within explicit conformance governance budget",

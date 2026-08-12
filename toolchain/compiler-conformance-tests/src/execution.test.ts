@@ -859,6 +859,12 @@ describe("execution tests", (): void => {
     );
   });
 
+  describe("generic parameters in type position", (): void => {
+    it("resolves a generic function's own type parameter used as a parameter type", (): void => {
+      assertCompilesClean(`fn take<T>(x: T) {}`);
+    });
+  });
+
   describe("array types", (): void => {
     it("reads back the correct element for a literal in-range index", (): void => {
       assertRunsTo(
