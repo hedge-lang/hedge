@@ -666,6 +666,20 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     ],
   },
   {
+    id: "GENERIC-PARAM-UNUSED",
+    description:
+      "A struct or enum's own declared type parameter must appear in at least one field/variant, matching Rust's E0392; a function's own type parameter is exempt",
+    specRefs: ["0015-generics-and-traits.md"],
+    testIds: [
+      "rejects a struct's own type parameter that appears in none of its fields",
+      "reports each unused type parameter separately",
+      "does not reject a type parameter used more than once",
+      "rejects an enum's own type parameter that appears in none of its variants",
+      "does not reject a type parameter used only as an array element type",
+      "rejects a type parameter used only in a trait bound, since a bound alone does not count as usage",
+    ],
+  },
+  {
     id: "SKIP-BUDGET-GOVERNANCE",
     description:
       "Skip and skipIf usage remains within explicit conformance governance budget",

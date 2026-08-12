@@ -982,6 +982,47 @@ describe("execution tests", (): void => {
     });
   });
 
+  describe("unused generic type parameters on a struct or enum", (): void => {
+    it("rejects a struct's own type parameter that appears in none of its fields", (): void => {
+      assertRejectsWithMessage(
+        `struct Triple<A, B, C> { a: A, c: C }`,
+        "never used",
+      );
+    });
+
+    it("reports each unused type parameter separately", (): void => {
+      const result = compileHedgeCode(`struct Foo<X, Y> {}`);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(2);
+    });
+
+    it("does not reject a type parameter used more than once", (): void => {
+      assertCompilesClean(`struct Pair<T> { a: T, b: T }`);
+    });
+
+    it("rejects an enum's own type parameter that appears in none of its variants", (): void => {
+      assertRejectsWithMessage(
+        `enum Container<T, U> { Full(T), Empty }`,
+        "never used",
+      );
+    });
+
+    it("does not reject a type parameter used only as an array element type", (): void => {
+      const result = compileHedgeCode(`struct Foo<T> { a: [T; 3] }`);
+      const unusedErrors = result.diagnostics.filter((d) =>
+        d.message.includes("never used"),
+      );
+      expect(unusedErrors).toEqual([]);
+    });
+
+    it("rejects a type parameter used only in a trait bound, since a bound alone does not count as usage", (): void => {
+      assertRejectsWithMessage(
+        `struct Foo<T: Draw> { x: i32 }`,
+        "never used",
+      );
+    });
+  });
+
   describe("array types", (): void => {
     it("reads back the correct element for a literal in-range index", (): void => {
       assertRunsTo(
