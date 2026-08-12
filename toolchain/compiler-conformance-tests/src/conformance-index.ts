@@ -639,6 +639,8 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     specRefs: ["0015-generics-and-traits.md", "0025-grammar.md"],
     testIds: [
       "resolves a generic function's own type parameter used as a parameter type",
+      "still rejects a name that matches no declared generic parameter as unsupported",
+      "compiles cleanly when only one of several declared type parameters is used",
     ],
   },
   {

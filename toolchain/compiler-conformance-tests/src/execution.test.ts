@@ -863,6 +863,17 @@ describe("execution tests", (): void => {
     it("resolves a generic function's own type parameter used as a parameter type", (): void => {
       assertCompilesClean(`fn take<T>(x: T) {}`);
     });
+
+    it("still rejects a name that matches no declared generic parameter as unsupported", (): void => {
+      assertRejectsWithMessage(
+        `fn take<T>(x: U) {}`,
+        "type is not supported in Slice 1",
+      );
+    });
+
+    it("compiles cleanly when only one of several declared type parameters is used", (): void => {
+      assertCompilesClean(`fn take<T, U>(x: T) {}`);
+    });
   });
 
   describe("array types", (): void => {
