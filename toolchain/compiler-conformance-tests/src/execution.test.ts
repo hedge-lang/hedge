@@ -933,9 +933,7 @@ describe("execution tests", (): void => {
     });
 
     it("does not let one generic struct's type parameter leak into an unrelated sibling struct", (): void => {
-      const result = compileHedgeCode(
-        `struct A<T> { a: T } struct B { b: T }`,
-      );
+      const result = compileHedgeCode(`struct A<T> { a: T } struct B { b: T }`);
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-UNSUPPORTED-001");
@@ -1014,7 +1012,9 @@ describe("execution tests", (): void => {
     });
 
     it("rejects an enum's own type parameter that appears in none of its variants", (): void => {
-      const result = compileHedgeCode(`enum Container<T, U> { Full(T), Empty }`);
+      const result = compileHedgeCode(
+        `enum Container<T, U> { Full(T), Empty }`,
+      );
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.message).toBe(

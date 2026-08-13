@@ -127,7 +127,10 @@ function resolveDeclaredGenericParam(
   tokenId: number,
   path: Parser.Path,
 ): Semantics.Type {
-  if (lookupStruct(ctx, name) !== undefined || lookupEnum(ctx, name) !== undefined) {
+  if (
+    lookupStruct(ctx, name) !== undefined ||
+    lookupEnum(ctx, name) !== undefined
+  ) {
     emitWarning(
       ctx,
       `generic parameter \`${name}\` shadows an existing type of the same name`,
@@ -3073,7 +3076,11 @@ function resolveSlice1Type(
         const name = type.path.segments[0];
         assert(name !== undefined, "Name segment missing");
         if (isDeclaredGenericParam(ctx, name)) {
-          return { kind: "NamedType", tokenId: fallbackTokenId, path: type.path };
+          return {
+            kind: "NamedType",
+            tokenId: fallbackTokenId,
+            path: type.path,
+          };
         }
         const prim = namedTypeToPrimitive(name);
         if (isSome(prim)) return prim.value;
