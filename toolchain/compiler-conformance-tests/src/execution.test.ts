@@ -992,10 +992,11 @@ describe("execution tests", (): void => {
 
   describe("unused generic type parameters on a struct or enum", (): void => {
     it("rejects a struct's own type parameter that appears in none of its fields", (): void => {
-      assertRejectsWithMessage(
-        `struct Triple<A, B, C> { a: A, c: C }`,
-        "never used",
-      );
+      const result = compileHedgeCode(`struct Triple<A, B, C> { a: A, c: C }`);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.message).toContain("never used");
+      expect(errors[0]?.message).toContain("B");
     });
 
     it("reports each unused type parameter separately", (): void => {
@@ -1009,10 +1010,11 @@ describe("execution tests", (): void => {
     });
 
     it("rejects an enum's own type parameter that appears in none of its variants", (): void => {
-      assertRejectsWithMessage(
-        `enum Container<T, U> { Full(T), Empty }`,
-        "never used",
-      );
+      const result = compileHedgeCode(`enum Container<T, U> { Full(T), Empty }`);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.message).toContain("never used");
+      expect(errors[0]?.message).toContain("U");
     });
 
     it("does not reject a type parameter used only as an array element type", (): void => {

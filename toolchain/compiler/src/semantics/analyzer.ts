@@ -118,6 +118,26 @@ function isDeclaredGenericParam(ctx: AnalysisContext, name: string): boolean {
   return innermost?.has(name) ?? false;
 }
 
+/** Warns when a generic parameter's name collides with an outer struct or
+ * enum - the parameter still wins (matching Rust's own shadowing rules),
+ * this only flags the ambiguity for the reader. */
+function resolveDeclaredGenericParam(
+  ctx: AnalysisContext,
+  name: string,
+  tokenId: number,
+  path: Parser.Path,
+): Semantics.Type {
+  if (lookupStruct(ctx, name) !== undefined || lookupEnum(ctx, name) !== undefined) {
+    emitWarning(
+      ctx,
+      `generic parameter \`${name}\` shadows an existing type of the same name`,
+      tokenId,
+      "HEDGE-LINT-002",
+    );
+  }
+  return { kind: "NamedType", tokenId, path };
+}
+
 /**
  * Syntactic, not semantic: walks every named-type mention in a field's own
  * declared type, regardless of whether that position type-checks. A generic
@@ -175,10 +195,11 @@ function enumVariantUsedNames(
 }
 
 /**
- * Struct/enum only, matching Rust's E0392 - a function's own type parameter
- * is exempt (see `TypeParam.bounds` note below). A bound alone (`T: Draw`)
- * does not count as usage, since only `usedNames` (collected from real
- * field/variant types) is consulted here, never `param.bounds`.
+ * Struct/enum only, matching Rust's E0392 - never called from
+ * `analyzeFunctionDecl`, so a function's own type parameter is exempt. A
+ * bound alone (`T: Draw`) does not count as usage, since only `usedNames`
+ * (collected from real field/variant types) is consulted here, never
+ * `param.bounds`.
  */
 function checkUnusedGenericParams(
   ctx: AnalysisContext,
@@ -601,15 +622,7 @@ function validateSlice1Type(
           return { kind: "UnitType", tokenId };
         }
         if (isDeclaredGenericParam(ctx, name)) {
-          if (lookupStruct(ctx, name) !== undefined || lookupEnum(ctx, name) !== undefined) {
-            emitWarning(
-              ctx,
-              `generic parameter \`${name}\` shadows an existing type of the same name`,
-              tokenId,
-              "HEDGE-LINT-002",
-            );
-          }
-          return { kind: "NamedType", tokenId, path: type.path };
+          return resolveDeclaredGenericParam(ctx, name, tokenId, type.path);
         }
         const prim = namedTypeToPrimitive(name);
         if (isSome(prim)) {
@@ -3751,6 +3764,7 @@ function checkCoercedLiteralRange(
   }
 }
 
+// eslint-disable-next-line complexity -- Routing function over the full Type union
 function typesEqual(a: Semantics.Type, b: Semantics.Type): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === "StructType" && b.kind === "StructType")
