@@ -112,17 +112,17 @@ function popGenericParams(ctx: AnalysisContext): void {
   ctx.genericParamStack.pop();
 }
 
-/** Only the innermost open item's own type parameters are visible - see
- * `AnalysisContext.genericParamStack`'s doc comment. */
+/** Only the innermost open item's own type parameters are visible. */
 function isDeclaredGenericParam(ctx: AnalysisContext, name: string): boolean {
   const innermost = ctx.genericParamStack[ctx.genericParamStack.length - 1];
   return innermost?.has(name) ?? false;
 }
 
-/** Warns when a generic parameter's name collides with an outer struct or
- * enum - the parameter still wins, the same as a more-local declaration
- * shadows a less-local one everywhere else in this resolver; this only
- * flags the ambiguity for the reader. */
+/**
+ * Warns when a generic parameter's name collides with an outer struct or
+ * enum - the parameter still wins; this only flags the ambiguity for
+ * the reader.
+ */
 function resolveDeclaredGenericParam(
   ctx: AnalysisContext,
   name: string,
