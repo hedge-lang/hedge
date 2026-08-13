@@ -995,14 +995,18 @@ describe("execution tests", (): void => {
       const result = compileHedgeCode(`struct Triple<A, B, C> { a: A, c: C }`);
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
-      expect(errors[0]?.message).toContain("never used");
-      expect(errors[0]?.message).toContain("B");
+      expect(errors[0]?.message).toBe(
+        "type parameter `B` is declared but never used",
+      );
     });
 
     it("reports each unused type parameter separately", (): void => {
       const result = compileHedgeCode(`struct Foo<X, Y> {}`);
       const errors = result.diagnostics.filter((d) => d.severity === "error");
-      expect(errors).toHaveLength(2);
+      expect(errors.map((e) => e.message)).toEqual([
+        "type parameter `X` is declared but never used",
+        "type parameter `Y` is declared but never used",
+      ]);
     });
 
     it("does not reject a type parameter used more than once", (): void => {
@@ -1013,8 +1017,9 @@ describe("execution tests", (): void => {
       const result = compileHedgeCode(`enum Container<T, U> { Full(T), Empty }`);
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
-      expect(errors[0]?.message).toContain("never used");
-      expect(errors[0]?.message).toContain("U");
+      expect(errors[0]?.message).toBe(
+        "type parameter `U` is declared but never used",
+      );
     });
 
     it("does not reject a type parameter used only as an array element type", (): void => {
@@ -1028,7 +1033,7 @@ describe("execution tests", (): void => {
     it("rejects a type parameter used only in a trait bound, since a bound alone does not count as usage", (): void => {
       assertRejectsWithMessage(
         `struct Foo<T: Draw> { x: i32 }`,
-        "never used",
+        "type parameter `T` is declared but never used",
       );
     });
   });
