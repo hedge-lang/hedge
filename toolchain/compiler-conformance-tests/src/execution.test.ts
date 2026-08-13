@@ -986,6 +986,19 @@ describe("execution tests", (): void => {
     it("resolves a type parameter whose name collides with a primitive type's name", (): void => {
       assertCompilesClean(`fn f<i32>(x: i32) {}`);
     });
+
+    // TODO(Hedge-270): today this still falls through to the generic
+    // Slice-numbered "not supported" fallback rather than a message naming
+    // the actual reason for rejection.
+    it.fails(
+      "rejects a generic type parameter used with a type-argument list, since a bare type parameter takes none",
+      (): void => {
+        assertRejectsWithMessage(
+          `fn f<T>(x: T<i32>) {}`,
+          "generic type parameter `T` does not accept type arguments",
+        );
+      },
+    );
   });
 
   describe("unused generic type parameters on a struct or enum", (): void => {

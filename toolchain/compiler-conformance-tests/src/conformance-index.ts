@@ -661,10 +661,12 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "still rejects an undeclared name that is not a primitive, struct, or enum, with no generics involved at all",
       "resolves a type parameter carrying an inline trait bound, even though the bound itself is not checked yet",
       "resolves a type parameter whose name collides with a primitive type's name",
+      "rejects a generic type parameter used with a type-argument list, since a bare type parameter takes none",
     ],
     expectedFailTestIds: [
       "still rejects a generic type parameter used as a fixed-size array's element type",
       "still rejects a generic type parameter used as an array element type behind a reference",
+      "rejects a generic type parameter used with a type-argument list, since a bare type parameter takes none",
     ],
   },
   {

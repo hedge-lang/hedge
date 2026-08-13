@@ -624,7 +624,7 @@ function validateSlice1Type(
           );
           return { kind: "UnitType", tokenId };
         }
-        if (isDeclaredGenericParam(ctx, name)) {
+        if (isDeclaredGenericParam(ctx, name) && type.typeArguments.length === 0) {
           return resolveDeclaredGenericParam(ctx, name, tokenId, type.path);
         }
         const prim = namedTypeToPrimitive(name);
@@ -3075,7 +3075,7 @@ function resolveSlice1Type(
       if (type.path.segments.length === 1) {
         const name = type.path.segments[0];
         assert(name !== undefined, "Name segment missing");
-        if (isDeclaredGenericParam(ctx, name)) {
+        if (isDeclaredGenericParam(ctx, name) && type.typeArguments.length === 0) {
           return {
             kind: "NamedType",
             tokenId: fallbackTokenId,
