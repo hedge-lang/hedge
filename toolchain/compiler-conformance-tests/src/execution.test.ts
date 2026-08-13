@@ -980,6 +980,14 @@ describe("execution tests", (): void => {
         "type is not supported in Slice 1",
       );
     });
+
+    it("resolves a type parameter carrying an inline trait bound, even though the bound itself is not checked yet", (): void => {
+      assertCompilesClean(`fn f<T: Draw>(x: T) -> T { x }`);
+    });
+
+    it("resolves a type parameter whose name collides with a primitive type's name", (): void => {
+      assertCompilesClean(`fn f<i32>(x: i32) {}`);
+    });
   });
 
   describe("unused generic type parameters on a struct or enum", (): void => {

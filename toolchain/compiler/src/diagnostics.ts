@@ -49,6 +49,7 @@ export type DiagnosticCode =
   | "HEDGE-TYPE-006" // type cannot be inferred
   | "HEDGE-TYPE-007" // operation invalid for this type
   | "HEDGE-TYPE-008" // construction does not match the type's shape
+  | "HEDGE-TYPE-009" // struct/enum type parameter declared but never used
   // Patterns.
   | "HEDGE-PATTERN-001" // refutable pattern in an irrefutable position
   | "HEDGE-PATTERN-002" // non-exhaustive match
@@ -77,6 +78,7 @@ export type DiagnosticCode =
   | "HEDGE-MOVE-004" // value is dropped conditionally (warning)
   // Lints (warnings).
   | "HEDGE-LINT-001" // binding can never be used
+  | "HEDGE-LINT-002" // generic parameter shadows an outer type of the same name
   // Items and slice gating.
   | "HEDGE-ITEM-001" // item not permitted in this position
   | "HEDGE-UNSUPPORTED-001"; // construct not yet supported by the analyzer
