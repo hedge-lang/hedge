@@ -65,7 +65,8 @@ interface AnalysisContext {
   /**
    * The currently-open item's own type-parameter names, pushed/popped per
    * `fn`/`struct`/`enum`. Only the top is ever consulted - a nested local
-   * item doesn't inherit an enclosing item's generics, matching Rust.
+   * item is its own independent scope, not a closure, so it no more
+   * inherits an enclosing item's generics than it would its locals.
    */
   readonly genericParamStack: ReadonlySet<string>[];
 }
@@ -119,8 +120,9 @@ function isDeclaredGenericParam(ctx: AnalysisContext, name: string): boolean {
 }
 
 /** Warns when a generic parameter's name collides with an outer struct or
- * enum - the parameter still wins (matching Rust's own shadowing rules),
- * this only flags the ambiguity for the reader. */
+ * enum - the parameter still wins, the same as a more-local declaration
+ * shadows a less-local one everywhere else in this resolver; this only
+ * flags the ambiguity for the reader. */
 function resolveDeclaredGenericParam(
   ctx: AnalysisContext,
   name: string,
@@ -198,11 +200,12 @@ function enumVariantUsedNames(
 }
 
 /**
- * Struct/enum only, matching Rust's E0392 - never called from
- * `analyzeFunctionDecl`, so a function's own type parameter is exempt. A
- * bound alone (`T: Draw`) does not count as usage, since only `usedNames`
- * (collected from real field/variant types) is consulted here, never
- * `param.bounds`.
+ * Struct/enum only - a function's own type parameter is exempt (never
+ * called from `analyzeFunctionDecl`), since a function has no type-identity
+ * concern an unused parameter could leave unresolved, unlike a struct or
+ * enum field. A bound alone (`T: Draw`) does not count as usage, since only
+ * `usedNames` (collected from real field/variant types) is consulted here,
+ * never `param.bounds`.
  */
 function checkUnusedGenericParams(
   ctx: AnalysisContext,

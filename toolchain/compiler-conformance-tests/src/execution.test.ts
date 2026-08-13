@@ -883,6 +883,14 @@ describe("execution tests", (): void => {
       assertRejects(`fn f<T, U>(x: T) -> U { x }`);
     });
 
+    it("compiles cleanly when a nested function's own generic parameter accepts an enclosing function's same-spelled one", (): void => {
+      assertCompilesClean(`fn outer<T>(x: T) { fn inner<T>(y: T) {} inner(x); }`);
+    });
+
+    it("compiles cleanly when a sibling function's own generic parameter accepts another function's same-spelled one", (): void => {
+      assertCompilesClean(`fn a<T>(x: T) {} fn b<T>(y: T) { a(y); }`);
+    });
+
     it("resolves a shared reference to a generic type parameter as a parameter type", (): void => {
       assertCompilesClean(`fn borrow<T>(x: &T) {}`);
     });

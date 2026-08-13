@@ -643,6 +643,8 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "compiles cleanly when only one of several declared type parameters is used",
       "resolves a generic function's own type parameter used as a return type",
       "rejects a return type that names a different declared type parameter than the argument",
+      "compiles cleanly when a nested function's own generic parameter accepts an enclosing function's same-spelled one",
+      "compiles cleanly when a sibling function's own generic parameter accepts another function's same-spelled one",
       "resolves a shared reference to a generic type parameter as a parameter type",
       "resolves a mutable reference to a generic type parameter as a parameter type",
       "resolves a shared reference to a generic type parameter as a return type",
