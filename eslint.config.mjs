@@ -182,6 +182,7 @@ export default defineConfig([
       // Golden JS snapshots are raw compiler output pinned byte-for-byte;
       // the runtime shim is a plain Node script outside the TS source tree.
       "**/compiler-conformance-tests/tests/**/*.{js,cjs}",
+      ".*/**",
     ],
   },
 

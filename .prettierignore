@@ -1,3 +1,5 @@
 examples/**/*.js
 toolchain/compiler-conformance-tests/tests/**/*.js
 toolchain/compiler-conformance-tests/tests/**/*.cjs
+.*/**/*
+!.github/**/*
