@@ -3632,4 +3632,14 @@ describe("declared generic parameter names survive onto a resolved signature", (
     assert(pair?.kind === "Function", "expected a Function item");
     expect(pair.generics).toEqual(["T", "U"]);
   });
+
+  it("lists a generic parameter only ever used through a reference hop", (): void => {
+    const result = diagnose("fn f<T>(x: &T) {}");
+    expect(result.diagnostics).toEqual([]);
+    const f = result.program.items.find(
+      (item) => item.kind === "Function" && item.name.text === "f",
+    );
+    assert(f?.kind === "Function", "expected a Function item");
+    expect(f.generics).toEqual(["T"]);
+  });
 });
