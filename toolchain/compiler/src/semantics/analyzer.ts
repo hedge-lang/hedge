@@ -916,7 +916,12 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
     `resolveConstDecl found no decl for \`${name}\` in its own frame`,
   );
 
+  // A local const is its own item, not a closure - it doesn't inherit an
+  // enclosing function's generics any more than a nested fn/struct/enum
+  // does (see genericParamStack's own doc comment).
+  pushGenericParams(ctx, []);
   const declaredType = validateSlice1Type(ctx, decl.type, decl.type.tokenId);
+  popGenericParams(ctx);
   const width = foldWidthOf(declaredType);
   ctx.constResolving.add(name);
   const outcome = foldConstExpression(
@@ -1286,11 +1291,15 @@ function registerConstsAndStatics(
             "HEDGE-ITEM-001",
           );
         }
+        // A local static is its own item, not a closure - see the matching
+        // barrier around a local const's own type resolution.
+        pushGenericParams(ctx, []);
         const declaredType = validateSlice1Type(
           ctx,
           item.type,
           item.type.tokenId,
         );
+        popGenericParams(ctx);
         staticFrame.set(item.name.text, declaredType);
         bind(ctx, item.name.text, { type: declaredType, mutable: false });
       }

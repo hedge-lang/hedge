@@ -954,6 +954,20 @@ describe("execution tests", (): void => {
       );
     });
 
+    // TODO(Hedge-270): today this still falls through to the generic
+    // Slice-numbered "not supported" fallback rather than a message naming
+    // the actual reason for rejection.
+    it.fails(
+      "does not let an enclosing generic function's type parameter leak into a local const's declared type",
+      (): void => {
+        assertRejectsWithMessage(
+          `fn outer<T>() { const C: T = 1; }`,
+          "generic type parameter `T` is not visible here",
+        );
+      },
+    );
+
+
     // TODO(Hedge-268): a generic parameter in an array's element-type
     // position resolves today only as a side effect of the surrounding
     // recursive type resolution, not by deliberate design - array-of-generic

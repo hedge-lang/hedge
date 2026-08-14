@@ -658,6 +658,7 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "does not cascade a second diagnostic when only one of a struct's fields uses an undeclared name",
       "does not let one generic struct's type parameter leak into an unrelated sibling struct",
       "does not let an enclosing generic function's type parameter leak into a struct declared inside its body",
+      "does not let an enclosing generic function's type parameter leak into a local const's declared type",
       "still rejects a generic type parameter used as a fixed-size array's element type",
       "still rejects a generic type parameter used as an array element type behind a reference",
       "still rejects an undeclared name that is not a primitive, struct, or enum, with no generics involved at all",
@@ -669,6 +670,7 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "still rejects a generic type parameter used as a fixed-size array's element type",
       "still rejects a generic type parameter used as an array element type behind a reference",
       "rejects a generic type parameter used with a type-argument list, since a bare type parameter takes none",
+      "does not let an enclosing generic function's type parameter leak into a local const's declared type",
     ],
   },
   {
