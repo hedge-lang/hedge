@@ -3593,4 +3593,14 @@ describe("declared generic parameter names survive onto a resolved signature", (
     assert(wrapper?.kind === "Struct", "expected a Struct item");
     expect(wrapper.generics).toEqual(["T"]);
   });
+
+  it("carries a generic enum's declared type-parameter name onto its own EnumDecl", (): void => {
+    const result = diagnose("enum Container<T> { Has(T), Empty }");
+    expect(result.diagnostics).toEqual([]);
+    const container = result.program.items.find(
+      (item) => item.kind === "Enum" && item.name.text === "Container",
+    );
+    assert(container?.kind === "Enum", "expected an Enum item");
+    expect(container.generics).toEqual(["T"]);
+  });
 });
