@@ -3545,4 +3545,14 @@ describe("declared generic parameter names survive onto a resolved signature", (
     assert(initType.kind === "FunctionType", "expected a FunctionType");
     expect(initType.genericParams).toEqual(["T"]);
   });
+
+  it("carries a generic function's declared type-parameter name onto its own FunctionDecl", (): void => {
+    const result = diagnose("fn identity<T>(x: T) -> T { x }");
+    expect(result.diagnostics).toEqual([]);
+    const identity = result.program.items.find(
+      (item) => item.kind === "Function" && item.name.text === "identity",
+    );
+    assert(identity?.kind === "Function", "expected a Function item");
+    expect(identity.generics).toEqual(["T"]);
+  });
 });
