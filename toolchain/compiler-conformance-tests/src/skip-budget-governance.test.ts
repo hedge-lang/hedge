@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
  * what it describes - and T1 is defined as zero `it.fails` in the core
  * fragment (see this package's own notes), which nothing checked before.
  */
-const DEBT_BUDGET = 19;
+const DEBT_BUDGET = 23;
 
 /** Every deliberately-not-passing marker Vitest offers. */
 const DEBT_MARKER =

@@ -1,6 +1,7 @@
 import { assert, assertNever } from "../assert.js";
 import {
   errorDiagnostic,
+  warningDiagnostic,
   type Diagnostic,
   type DiagnosticCode,
 } from "../diagnostics.js";
@@ -61,6 +62,13 @@ interface AnalysisContext {
    * yet).
    */
   readonly constResolving: Set<string>;
+  /**
+   * The currently-open item's own type-parameter names, pushed/popped per
+   * `fn`/`struct`/`enum`. Only the top is ever consulted - a nested local
+   * item is its own independent scope, not a closure, so it no more
+   * inherits an enclosing item's generics than it would its locals.
+   */
+  readonly genericParamStack: ReadonlySet<string>[];
 }
 
 function newScopeFrame(): ScopeFrame {
@@ -87,6 +95,133 @@ function currentFrame(ctx: AnalysisContext): ScopeFrame {
   const frame = ctx.frames[ctx.frames.length - 1];
   assert(frame !== undefined, "no active scope frame");
   return frame;
+}
+
+function pushGenericParams(
+  ctx: AnalysisContext,
+  generics: readonly Parser.GenericParam[],
+): void {
+  const names = new Set<string>();
+  for (const param of generics) {
+    if (param.kind === "TypeParam") names.add(param.name.text);
+  }
+  ctx.genericParamStack.push(names);
+}
+
+function popGenericParams(ctx: AnalysisContext): void {
+  ctx.genericParamStack.pop();
+}
+
+/** Only the innermost open item's own type parameters are visible. */
+function isDeclaredGenericParam(ctx: AnalysisContext, name: string): boolean {
+  const innermost = ctx.genericParamStack[ctx.genericParamStack.length - 1];
+  return innermost?.has(name) ?? false;
+}
+
+/**
+ * Warns when a generic parameter's name collides with an outer struct or
+ * enum - the parameter still wins; this only flags the ambiguity for
+ * the reader.
+ */
+function resolveDeclaredGenericParam(
+  ctx: AnalysisContext,
+  name: string,
+  tokenId: number,
+  path: Parser.Path,
+): Semantics.Type {
+  if (
+    lookupStruct(ctx, name) !== undefined ||
+    lookupEnum(ctx, name) !== undefined
+  ) {
+    emitWarning(
+      ctx,
+      `generic parameter \`${name}\` shadows an existing type of the same name`,
+      tokenId,
+      "HEDGE-LINT-002",
+    );
+  }
+  return { kind: "NamedType", tokenId, path };
+}
+
+/**
+ * Syntactic, not semantic: walks every named-type mention in a field's own
+ * declared type, regardless of whether that position type-checks. A generic
+ * parameter mentioned only inside an array's element type or another type's
+ * argument list still counts as used, so a position that isn't resolvable
+ * yet (see `NamedType`'s own resolution above) doesn't also get flagged as
+ * an unused-parameter error on top of its own rejection.
+ */
+function collectNamedTypeMentions(type: Parser.Type, names: Set<string>): void {
+  switch (type.kind) {
+    case "NamedType": {
+      if (type.path.segments.length === 1) {
+        const name = type.path.segments[0];
+        if (name !== undefined) names.add(name);
+      }
+      for (const arg of type.typeArguments) {
+        collectNamedTypeMentions(arg, names);
+      }
+      return;
+    }
+    case "ReferenceType":
+      collectNamedTypeMentions(type.referent, names);
+      return;
+    case "ArrayType":
+      collectNamedTypeMentions(type.elementType, names);
+      return;
+    case "UnitType":
+      return;
+    default:
+      assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
+  }
+}
+
+function structFieldUsedNames(body: Parser.StructBody): Set<string> {
+  const names = new Set<string>();
+  if (body.kind === "NamedFields" || body.kind === "TupleFields") {
+    for (const field of body.fields) {
+      collectNamedTypeMentions(field.type, names);
+    }
+  }
+  return names;
+}
+
+function enumVariantUsedNames(
+  variants: readonly Parser.Variant[],
+): Set<string> {
+  const names = new Set<string>();
+  for (const variant of variants) {
+    if (!isSome(variant.body)) continue;
+    for (const field of variant.body.value.fields) {
+      collectNamedTypeMentions(field.type, names);
+    }
+  }
+  return names;
+}
+
+/**
+ * Struct/enum only - a function's own type parameter is exempt (never
+ * called from `analyzeFunctionDecl`), since a function has no type-identity
+ * concern an unused parameter could leave unresolved, unlike a struct or
+ * enum field. A bound alone (`T: Draw`) does not count as usage, since only
+ * `usedNames` (collected from real field/variant types) is consulted here,
+ * never `param.bounds`.
+ */
+function checkUnusedGenericParams(
+  ctx: AnalysisContext,
+  generics: readonly Parser.GenericParam[],
+  usedNames: ReadonlySet<string>,
+): void {
+  for (const param of generics) {
+    if (param.kind !== "TypeParam") continue;
+    if (usedNames.has(param.name.text)) continue;
+    emitError(
+      ctx,
+      `type parameter \`${param.name.text}\` is declared but never used`,
+      param.tokenId,
+      "HEDGE-TYPE-009",
+    );
+  }
 }
 
 /** Innermost frame index whose `select`ed map declares `name`, or -1. */
@@ -264,6 +399,22 @@ function emitError(
   const token = ctx.tokens[tokenId];
   ctx.diagnostics.push(
     errorDiagnostic(
+      code,
+      message,
+      token !== undefined ? some(token.span) : none(),
+    ),
+  );
+}
+
+function emitWarning(
+  ctx: AnalysisContext,
+  message: string,
+  tokenId: number,
+  code: DiagnosticCode,
+): void {
+  const token = ctx.tokens[tokenId];
+  ctx.diagnostics.push(
+    warningDiagnostic(
       code,
       message,
       token !== undefined ? some(token.span) : none(),
@@ -457,6 +608,42 @@ function isSelfType(type: Parser.Type): boolean {
   );
 }
 
+function validateNamedType(
+  ctx: AnalysisContext,
+  type: Parser.NamedType,
+  tokenId: number,
+): Option<Semantics.Type> {
+  if (type.path.segments.length === 1) {
+    const name = type.path.segments[0];
+    assert(name !== undefined, "Name segment missing");
+    if (name === "Self") {
+      emitError(
+        ctx,
+        "`Self` can only be used inside a trait or impl block",
+        tokenId,
+        "HEDGE-NAME-006",
+      );
+      return some({ kind: "UnitType", tokenId });
+    }
+    if (isDeclaredGenericParam(ctx, name) && type.typeArguments.length === 0) {
+      return some(resolveDeclaredGenericParam(ctx, name, tokenId, type.path));
+    }
+    const prim = namedTypeToPrimitive(name);
+    if (isSome(prim)) {
+      return some(prim.value);
+    }
+    const structDecl = lookupStruct(ctx, name);
+    if (structDecl !== undefined) {
+      return some(structDecl.type);
+    }
+    const enumDecl = lookupEnum(ctx, name);
+    if (enumDecl !== undefined) {
+      return some(enumDecl.type);
+    }
+  }
+  return none();
+}
+
 function validateSlice1Type(
   ctx: AnalysisContext,
   type: Parser.Type,
@@ -464,32 +651,8 @@ function validateSlice1Type(
 ): Semantics.Type {
   switch (type.kind) {
     case "NamedType": {
-      if (type.path.segments.length === 1) {
-        const name = type.path.segments[0];
-        assert(name !== undefined, "Name segment missing");
-        if (name === "Self") {
-          emitError(
-            ctx,
-            "`Self` can only be used inside a trait or impl block",
-            tokenId,
-            "HEDGE-NAME-006",
-          );
-          return { kind: "UnitType", tokenId };
-        }
-        const prim = namedTypeToPrimitive(name);
-        if (isSome(prim)) {
-          return prim.value;
-        }
-        const structDecl = lookupStruct(ctx, name);
-        if (structDecl !== undefined) {
-          return structDecl.type;
-        }
-        const enumDecl = lookupEnum(ctx, name);
-        if (enumDecl !== undefined) {
-          return enumDecl.type;
-        }
-      }
-      break;
+      const validated = validateNamedType(ctx, type, tokenId);
+      return unwrapSomeOr(validated, { kind: "UnitType", tokenId });
     }
     case "UnitType":
       return type;
@@ -762,7 +925,12 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
     `resolveConstDecl found no decl for \`${name}\` in its own frame`,
   );
 
+  // A local const is its own item, not a closure - it doesn't inherit an
+  // enclosing function's generics any more than a nested fn/struct/enum
+  // does (see genericParamStack's own doc comment).
+  pushGenericParams(ctx, []);
   const declaredType = validateSlice1Type(ctx, decl.type, decl.type.tokenId);
+  popGenericParams(ctx);
   const width = foldWidthOf(declaredType);
   ctx.constResolving.add(name);
   const outcome = foldConstExpression(
@@ -1132,11 +1300,15 @@ function registerConstsAndStatics(
             "HEDGE-ITEM-001",
           );
         }
+        // A local static is its own item, not a closure - see the matching
+        // barrier around a local const's own type resolution.
+        pushGenericParams(ctx, []);
         const declaredType = validateSlice1Type(
           ctx,
           item.type,
           item.type.tokenId,
         );
+        popGenericParams(ctx);
         staticFrame.set(item.name.text, declaredType);
         bind(ctx, item.name.text, { type: declaredType, mutable: false });
       }
@@ -1230,14 +1402,22 @@ function analyzeEnum(
     }
     seenVariantNames.add(variant.name.text);
   }
+  checkUnusedGenericParams(
+    ctx,
+    item.generics,
+    enumVariantUsedNames(item.variants),
+  );
+  pushGenericParams(ctx, item.generics);
+  const variants = item.variants.map((variant) =>
+    analyzeVariant(ctx, variant, enumType),
+  );
+  popGenericParams(ctx);
   return {
     ...item,
     name: { ...item.name, type: enumType },
     generics: [],
     attributes: item.attributes.map((attr) => analyzeAttribute(ctx, attr)),
-    variants: item.variants.map((variant) =>
-      analyzeVariant(ctx, variant, enumType),
-    ),
+    variants,
     type: enumType,
   };
 }
@@ -2761,11 +2941,15 @@ function analyzeStruct(
   item: Parser.StructDecl,
 ): Semantics.StructDecl {
   const scopedName = `scoped(${ctx.frames.length})::${item.name.text}`;
+  checkUnusedGenericParams(ctx, item.generics, structFieldUsedNames(item.body));
+  pushGenericParams(ctx, item.generics);
+  const body = analyzeStructBody(ctx, item.body);
+  popGenericParams(ctx);
   return {
     ...item,
     name: { ...item.name, type: { kind: "StructType", name: scopedName } },
     attributes: item.attributes.map((attr) => analyzeAttribute(ctx, attr)),
-    body: analyzeStructBody(ctx, item.body),
+    body,
     type: {
       kind: "StructType",
       name: scopedName,
@@ -2912,6 +3096,16 @@ function resolveSlice1Type(
       if (type.path.segments.length === 1) {
         const name = type.path.segments[0];
         assert(name !== undefined, "Name segment missing");
+        if (
+          isDeclaredGenericParam(ctx, name) &&
+          type.typeArguments.length === 0
+        ) {
+          return {
+            kind: "NamedType",
+            tokenId: fallbackTokenId,
+            path: type.path,
+          };
+        }
         const prim = namedTypeToPrimitive(name);
         if (isSome(prim)) return prim.value;
         const structDecl = lookupStruct(ctx, name);
@@ -2959,7 +3153,8 @@ function fnSignatureType(
   ctx: AnalysisContext,
   fn: Parser.FunctionDecl,
 ): Semantics.FunctionType {
-  return {
+  pushGenericParams(ctx, fn.generics);
+  const type: Semantics.FunctionType = {
     kind: "FunctionType",
     params: fn.params.map((p) =>
       resolveSlice1Type(ctx, p.type, p.type.tokenId),
@@ -2969,6 +3164,8 @@ function fnSignatureType(
       : { kind: "UnitType", tokenId: fn.tokenId },
     paramsArePlaceholder: false,
   };
+  popGenericParams(ctx);
+  return type;
 }
 
 /**
@@ -3168,6 +3365,7 @@ function analyzeFunctionDecl(
   // `scopes` and these stacks, which only lines up if every `scopes` push
   // has a matching push here, everywhere, not just in `analyzeBlock`.
   pushFrame(ctx);
+  pushGenericParams(ctx, decl.generics);
   const analyzedParams = decl.params.map(
     (param: Parser.Param): Semantics.Param => {
       const paramType = validateSlice1Type(ctx, param.type, param.type.tokenId);
@@ -3210,6 +3408,7 @@ function analyzeFunctionDecl(
     returnType,
     body,
   };
+  popGenericParams(ctx);
   popFrame(ctx);
   return result;
 }
@@ -3596,6 +3795,7 @@ function checkCoercedLiteralRange(
   }
 }
 
+// eslint-disable-next-line complexity -- Routing function over the full Type union
 function typesEqual(a: Semantics.Type, b: Semantics.Type): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === "StructType" && b.kind === "StructType")
@@ -3605,6 +3805,8 @@ function typesEqual(a: Semantics.Type, b: Semantics.Type): boolean {
     return a.mutable === b.mutable && typesEqual(a.referent, b.referent);
   if (a.kind === "ArrayType" && b.kind === "ArrayType")
     return a.length === b.length && typesEqual(a.elementType, b.elementType);
+  if (a.kind === "NamedType" && b.kind === "NamedType")
+    return a.path.segments.join("::") === b.path.segments.join("::");
   return true;
 }
 
@@ -5346,6 +5548,7 @@ export function analyze(
     diagnostics: [],
     tokens,
     constResolving: new Set(),
+    genericParamStack: [],
   };
   // Before functions, so a signature can name any declared type.
   registerTypeDecls(ctx, program.items);

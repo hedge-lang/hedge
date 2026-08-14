@@ -859,6 +859,221 @@ describe("execution tests", (): void => {
     );
   });
 
+  describe("generic parameters in type position", (): void => {
+    it("resolves a generic function's own type parameter used as a parameter type", (): void => {
+      assertCompilesClean(`fn take<T>(x: T) {}`);
+    });
+
+    it("still rejects a name that matches no declared generic parameter as unsupported", (): void => {
+      assertRejectsWithMessage(
+        `fn take<T>(x: U) {}`,
+        "type is not supported in Slice 1",
+      );
+    });
+
+    it("compiles cleanly when only one of several declared type parameters is used", (): void => {
+      assertCompilesClean(`fn take<T, U>(x: T) {}`);
+    });
+
+    it("resolves a generic function's own type parameter used as a return type", (): void => {
+      assertCompilesClean(`fn identity<T>(x: T) -> T { x }`);
+    });
+
+    it("rejects a return type that names a different declared type parameter than the argument", (): void => {
+      assertRejects(`fn f<T, U>(x: T) -> U { x }`);
+    });
+
+    it("compiles cleanly when a nested function's own generic parameter accepts an enclosing function's same-spelled one", (): void => {
+      assertCompilesClean(
+        `fn outer<T>(x: T) { fn inner<T>(y: T) {} inner(x); }`,
+      );
+    });
+
+    it("compiles cleanly when a sibling function's own generic parameter accepts another function's same-spelled one", (): void => {
+      assertCompilesClean(`fn a<T>(x: T) {} fn b<T>(y: T) { a(y); }`);
+    });
+
+    it("resolves a shared reference to a generic type parameter as a parameter type", (): void => {
+      assertCompilesClean(`fn borrow<T>(x: &T) {}`);
+    });
+
+    it("resolves a mutable reference to a generic type parameter as a parameter type", (): void => {
+      assertCompilesClean(`fn borrow_mut<T>(x: &mut T) {}`);
+    });
+
+    it("resolves a shared reference to a generic type parameter as a return type", (): void => {
+      assertCompilesClean(`fn borrow_ret<T>(x: &T) -> &T { x }`);
+    });
+
+    it("resolves a mutable reference to a generic type parameter as a return type", (): void => {
+      assertCompilesClean(`fn borrow_mut_ret<T>(x: &mut T) -> &mut T { x }`);
+    });
+
+    it("coexists with an explicit lifetime parameter declared alongside the type parameter", (): void => {
+      assertCompilesClean(`fn borrow<'a, T>(x: &'a T) -> &'a T { x }`);
+    });
+
+    it("resolves a two-hop reference to a generic type parameter", (): void => {
+      assertCompilesClean(
+        `fn double_ref<'a, T>(x: &'a mut &'a T) -> &'a mut &'a T { x }`,
+      );
+    });
+
+    it("still rejects an undeclared name under a reference to it", (): void => {
+      assertRejectsWithMessage(
+        `fn borrow<T>(x: &U) {}`,
+        "type is not supported in Slice 1",
+      );
+    });
+
+    it("resolves a struct's own type parameter used as a field type", (): void => {
+      assertCompilesClean(`struct Pair<T> { a: T, b: T }`);
+    });
+
+    it("resolves an enum's own type parameter used in a tuple variant", (): void => {
+      assertCompilesClean(`enum Container<T> { Full(T), Empty }`);
+    });
+
+    it("resolves an enum's own type parameter used in a named-fields variant", (): void => {
+      assertCompilesClean(`enum Wrapper<T> { Item { value: T } }`);
+    });
+
+    it("does not cascade a second diagnostic when only one of a struct's fields uses an undeclared name", (): void => {
+      assertNoCascade(`struct Pair<T> { a: T, b: U }`);
+    });
+
+    it("does not let one generic struct's type parameter leak into an unrelated sibling struct", (): void => {
+      const result = compileHedgeCode(`struct A<T> { a: T } struct B { b: T }`);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-UNSUPPORTED-001");
+    });
+
+    it("does not let an enclosing generic function's type parameter leak into a struct declared inside its body", (): void => {
+      assertRejectsWithMessage(
+        `fn outer<T>(x: T) { struct Inner { y: T } }`,
+        "type is not supported in Slice 1",
+      );
+    });
+
+    // TODO(Hedge-270): today this still falls through to the generic
+    // Slice-numbered "not supported" fallback rather than a message naming
+    // the actual reason for rejection.
+    it.fails(
+      "does not let an enclosing generic function's type parameter leak into a local const's declared type",
+      (): void => {
+        assertRejectsWithMessage(
+          `fn outer<T>() { const C: T = 1; }`,
+          "generic type parameter `T` is not visible here",
+        );
+      },
+    );
+
+    // TODO(Hedge-268): a generic parameter in an array's element-type
+    // position resolves today only as a side effect of the surrounding
+    // recursive type resolution, not by deliberate design - array-of-generic
+    // has no considered construction/copy/move/codegen story yet. These pin
+    // the rejection that gap calls for until the position gets real
+    // semantics.
+    it.fails(
+      "still rejects a generic type parameter used as a fixed-size array's element type",
+      (): void => {
+        assertRejectsWithMessage(
+          `struct Foo<T> { a: [T; 3] }`,
+          "type is not supported in Slice 1",
+        );
+      },
+    );
+
+    it.fails(
+      "still rejects a generic type parameter used as an array element type behind a reference",
+      (): void => {
+        assertRejectsWithMessage(
+          `fn f<T>(x: &[T; 3]) {}`,
+          "type is not supported in Slice 1",
+        );
+      },
+    );
+
+    it("still rejects an undeclared name that is not a primitive, struct, or enum, with no generics involved at all", (): void => {
+      assertRejectsWithMessage(
+        `fn f(x: Bogus) {}`,
+        "type is not supported in Slice 1",
+      );
+    });
+
+    it("resolves a type parameter carrying an inline trait bound, even though the bound itself is not checked yet", (): void => {
+      assertCompilesClean(`fn f<T: Draw>(x: T) -> T { x }`);
+    });
+
+    it("resolves a type parameter whose name collides with a primitive type's name", (): void => {
+      assertCompilesClean(`fn f<i32>(x: i32) {}`);
+    });
+
+    // TODO(Hedge-270): today this still falls through to the generic
+    // Slice-numbered "not supported" fallback rather than a message naming
+    // the actual reason for rejection.
+    it.fails(
+      "rejects a generic type parameter used with a type-argument list, since a bare type parameter takes none",
+      (): void => {
+        assertRejectsWithMessage(
+          `fn f<T>(x: T<i32>) {}`,
+          "generic type parameter `T` does not accept type arguments",
+        );
+      },
+    );
+  });
+
+  describe("unused generic type parameters on a struct or enum", (): void => {
+    it("rejects a struct's own type parameter that appears in none of its fields", (): void => {
+      const result = compileHedgeCode(`struct Triple<A, B, C> { a: A, c: C }`);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.message).toBe(
+        "type parameter `B` is declared but never used",
+      );
+    });
+
+    it("reports each unused type parameter separately", (): void => {
+      const result = compileHedgeCode(`struct Foo<X, Y> {}`);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors.map((e) => e.message)).toEqual([
+        "type parameter `X` is declared but never used",
+        "type parameter `Y` is declared but never used",
+      ]);
+    });
+
+    it("does not reject a type parameter used more than once", (): void => {
+      assertCompilesClean(`struct Pair<T> { a: T, b: T }`);
+    });
+
+    it("rejects an enum's own type parameter that appears in none of its variants", (): void => {
+      const result = compileHedgeCode(
+        `enum Container<T, U> { Full(T), Empty }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.message).toBe(
+        "type parameter `U` is declared but never used",
+      );
+    });
+
+    it("does not reject a type parameter used only as an array element type", (): void => {
+      const result = compileHedgeCode(`struct Foo<T> { a: [T; 3] }`);
+      const unusedErrors = result.diagnostics.filter((d) =>
+        d.message.includes("never used"),
+      );
+      expect(unusedErrors).toEqual([]);
+    });
+
+    it("rejects a type parameter used only in a trait bound, since a bound alone does not count as usage", (): void => {
+      assertRejectsWithMessage(
+        `struct Foo<T: Draw> { x: i32 }`,
+        "type parameter `T` is declared but never used",
+      );
+    });
+  });
+
   describe("array types", (): void => {
     it("reads back the correct element for a literal in-range index", (): void => {
       assertRunsTo(
