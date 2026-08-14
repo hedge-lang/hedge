@@ -3555,4 +3555,32 @@ describe("declared generic parameter names survive onto a resolved signature", (
     assert(identity?.kind === "Function", "expected a Function item");
     expect(identity.generics).toEqual(["T"]);
   });
+
+  it("leaves generics empty for a non-generic function's FunctionDecl and resolved FunctionType", (): void => {
+    const result = diagnose(`
+      fn f(x: i32) -> i32 { x }
+      fn main() {
+        let g = f;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    const fDecl = result.program.items.find(
+      (item) => item.kind === "Function" && item.name.text === "f",
+    );
+    assert(fDecl?.kind === "Function", "expected a Function item");
+    expect(fDecl.generics).toEqual([]);
+
+    const mainFn = result.program.items.find(
+      (item) => item.kind === "Function" && item.name.text === "main",
+    );
+    assert(mainFn?.kind === "Function", "expected a Function item");
+    const letStatement = mainFn.body.statements.find(
+      (s) => s.kind === "LetStatement",
+    );
+    assert(letStatement?.kind === "LetStatement", "expected a LetStatement");
+    assert(isSome(letStatement.initializer), "expected an initializer");
+    const initType = letStatement.initializer.value.type;
+    assert(initType.kind === "FunctionType", "expected a FunctionType");
+    expect(initType.genericParams).toEqual([]);
+  });
 });
