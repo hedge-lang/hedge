@@ -3583,4 +3583,14 @@ describe("declared generic parameter names survive onto a resolved signature", (
     assert(initType.kind === "FunctionType", "expected a FunctionType");
     expect(initType.genericParams).toEqual([]);
   });
+
+  it("carries a generic struct's declared type-parameter name onto its own StructDecl", (): void => {
+    const result = diagnose("struct Wrapper<T> { value: T }");
+    expect(result.diagnostics).toEqual([]);
+    const wrapper = result.program.items.find(
+      (item) => item.kind === "Struct" && item.name.text === "Wrapper",
+    );
+    assert(wrapper?.kind === "Struct", "expected a Struct item");
+    expect(wrapper.generics).toEqual(["T"]);
+  });
 });
