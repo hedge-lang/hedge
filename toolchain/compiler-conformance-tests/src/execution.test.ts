@@ -884,7 +884,9 @@ describe("execution tests", (): void => {
     });
 
     it("compiles cleanly when a nested function's own generic parameter accepts an enclosing function's same-spelled one", (): void => {
-      assertCompilesClean(`fn outer<T>(x: T) { fn inner<T>(y: T) {} inner(x); }`);
+      assertCompilesClean(
+        `fn outer<T>(x: T) { fn inner<T>(y: T) {} inner(x); }`,
+      );
     });
 
     it("compiles cleanly when a sibling function's own generic parameter accepts another function's same-spelled one", (): void => {
@@ -966,7 +968,6 @@ describe("execution tests", (): void => {
         );
       },
     );
-
 
     // TODO(Hedge-268): a generic parameter in an array's element-type
     // position resolves today only as a side effect of the surrounding
