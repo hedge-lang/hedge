@@ -399,18 +399,18 @@ describe("must-fail corpus - rejection tests", (): void => {
     });
   });
 
-  describe("slice 1 restrictions", (): void => {
-    it("rejects generic types (not in Slice 1)", (): void => {
+  describe("unsupported/undeclared type restrictions", (): void => {
+    it("rejects a generic type naming an undeclared type", (): void => {
       assertRejectsWithMessage(
         `fn main() { let x: Vec<i32> = Vec::new(); }`,
-        "not supported in Slice 1",
+        "cannot find type `Vec` in this scope",
       );
     });
 
-    it("rejects non-primitive parameter type in function signature (Slice 1)", (): void => {
+    it("rejects a non-primitive parameter type naming an undeclared struct", (): void => {
       assertRejectsWithMessage(
         `fn foo(x: MyStruct) {} fn main() {}`,
-        "not supported",
+        "cannot find type `MyStruct` in this scope",
       );
     });
   });

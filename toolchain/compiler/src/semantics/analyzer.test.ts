@@ -514,7 +514,9 @@ describe("semantic analysis", (): void => {
         "enum Message { Move(i32, UnknownType) } fn main() {}",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("Slice 1");
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find type `UnknownType` in this scope",
+      );
     });
 
     it("rejects an unsupported field type inside a struct variant", () => {
@@ -522,7 +524,9 @@ describe("semantic analysis", (): void => {
         "enum Message { Write { text: UnknownType } } fn main() {}",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("Slice 1");
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find type `UnknownType` in this scope",
+      );
     });
 
     it("accepts an enum type as a function parameter type", () => {
@@ -1940,18 +1944,22 @@ describe("semantic analysis", (): void => {
     expect(result.diagnostics).toEqual([]);
   });
 
-  it("rejects an unsupported param type with a Slice 1 diagnostic", (): void => {
+  it("rejects an unsupported param type naming an undeclared type", (): void => {
     const result = diagnose("fn f(x: UnknownType) {}");
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+    expect(result.diagnostics[0]?.message).toBe(
+      "cannot find type `UnknownType` in this scope",
+    );
   });
 
-  it("rejects a qualified type in a param position with a Slice 1 diagnostic", (): void => {
+  it("rejects a qualified type in a param position as not yet supported", (): void => {
     const result = diagnose("fn f(x: i32::Foo) {}");
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+    expect(result.diagnostics[0]?.message).toBe(
+      "qualified type paths are not supported yet",
+    );
   });
 
   it("unsupported param type diagnostic span points at the type token", (): void => {
@@ -2060,7 +2068,9 @@ describe("semantic analysis", (): void => {
   it("emits exactly one diagnostic for an unsupported param type on a block-local fn", (): void => {
     const result = diagnose("fn main() { fn f(x: unknownType) {} }");
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+    expect(result.diagnostics[0]?.message).toBe(
+      "cannot find type `unknownType` in this scope",
+    );
   });
 
   it("struct defined in one function body does not leak into a sibling function", (): void => {
@@ -3446,11 +3456,13 @@ describe("array types", (): void => {
 });
 
 describe("Self as a type", (): void => {
-  it("rejects `Self::Item` with the generic Slice 1 type diagnostic, not the Self-specific one", (): void => {
+  it("rejects `Self::Item` as an unsupported qualified path", (): void => {
     const result = diagnose("fn f() -> Self::Item { }");
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("not supported in Slice 1");
+    expect(result.diagnostics[0].message).toBe(
+      "qualified type paths are not supported yet",
+    );
   });
 });
 

@@ -864,10 +864,10 @@ describe("execution tests", (): void => {
       assertCompilesClean(`fn take<T>(x: T) {}`);
     });
 
-    it("still rejects a name that matches no declared generic parameter as unsupported", (): void => {
+    it("still rejects a name that matches no declared generic parameter", (): void => {
       assertRejectsWithMessage(
         `fn take<T>(x: U) {}`,
-        "type is not supported in Slice 1",
+        "cannot find type `U` in this scope",
       );
     });
 
@@ -922,7 +922,7 @@ describe("execution tests", (): void => {
     it("still rejects an undeclared name under a reference to it", (): void => {
       assertRejectsWithMessage(
         `fn borrow<T>(x: &U) {}`,
-        "type is not supported in Slice 1",
+        "cannot find type `U` in this scope",
       );
     });
 
@@ -946,28 +946,22 @@ describe("execution tests", (): void => {
       const result = compileHedgeCode(`struct A<T> { a: T } struct B { b: T }`);
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
-      expect(errors[0]?.code).toBe("HEDGE-UNSUPPORTED-001");
+      expect(errors[0]?.code).toBe("HEDGE-NAME-001");
     });
 
     it("does not let an enclosing generic function's type parameter leak into a struct declared inside its body", (): void => {
       assertRejectsWithMessage(
         `fn outer<T>(x: T) { struct Inner { y: T } }`,
-        "type is not supported in Slice 1",
+        "cannot find type `T` in this scope",
       );
     });
 
-    // TODO(Hedge-270): today this still falls through to the generic
-    // Slice-numbered "not supported" fallback rather than a message naming
-    // the actual reason for rejection.
-    it.fails(
-      "does not let an enclosing generic function's type parameter leak into a local const's declared type",
-      (): void => {
-        assertRejectsWithMessage(
-          `fn outer<T>() { const C: T = 1; }`,
-          "generic type parameter `T` is not visible here",
-        );
-      },
-    );
+    it("does not let an enclosing generic function's type parameter leak into a local const's declared type", (): void => {
+      assertRejectsWithMessage(
+        `fn outer<T>() { const C: T = 1; }`,
+        "cannot find type `T` in this scope",
+      );
+    });
 
     // TODO(Hedge-268): a generic parameter in an array's element-type
     // position resolves today only as a side effect of the surrounding
@@ -980,7 +974,7 @@ describe("execution tests", (): void => {
       (): void => {
         assertRejectsWithMessage(
           `struct Foo<T> { a: [T; 3] }`,
-          "type is not supported in Slice 1",
+          "generic type parameter `T` is not supported as an array element type",
         );
       },
     );
@@ -990,7 +984,7 @@ describe("execution tests", (): void => {
       (): void => {
         assertRejectsWithMessage(
           `fn f<T>(x: &[T; 3]) {}`,
-          "type is not supported in Slice 1",
+          "generic type parameter `T` is not supported as an array element type",
         );
       },
     );
@@ -998,7 +992,7 @@ describe("execution tests", (): void => {
     it("still rejects an undeclared name that is not a primitive, struct, or enum, with no generics involved at all", (): void => {
       assertRejectsWithMessage(
         `fn f(x: Bogus) {}`,
-        "type is not supported in Slice 1",
+        "cannot find type `Bogus` in this scope",
       );
     });
 
@@ -1010,18 +1004,12 @@ describe("execution tests", (): void => {
       assertCompilesClean(`fn f<i32>(x: i32) {}`);
     });
 
-    // TODO(Hedge-270): today this still falls through to the generic
-    // Slice-numbered "not supported" fallback rather than a message naming
-    // the actual reason for rejection.
-    it.fails(
-      "rejects a generic type parameter used with a type-argument list, since a bare type parameter takes none",
-      (): void => {
-        assertRejectsWithMessage(
-          `fn f<T>(x: T<i32>) {}`,
-          "generic type parameter `T` does not accept type arguments",
-        );
-      },
-    );
+    it("rejects a generic type parameter used with a type-argument list, since a bare type parameter takes none", (): void => {
+      assertRejectsWithMessage(
+        `fn f<T>(x: T<i32>) {}`,
+        "generic type parameter `T` does not accept type arguments",
+      );
+    });
   });
 
   describe("unused generic type parameters on a struct or enum", (): void => {

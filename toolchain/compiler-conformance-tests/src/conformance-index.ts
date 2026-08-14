@@ -669,8 +669,6 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     expectedFailTestIds: [
       "still rejects a generic type parameter used as a fixed-size array's element type",
       "still rejects a generic type parameter used as an array element type behind a reference",
-      "rejects a generic type parameter used with a type-argument list, since a bare type parameter takes none",
-      "does not let an enclosing generic function's type parameter leak into a local const's declared type",
     ],
   },
   {

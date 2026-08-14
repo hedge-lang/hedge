@@ -612,36 +612,58 @@ function validateNamedType(
   ctx: AnalysisContext,
   type: Parser.NamedType,
   tokenId: number,
-): Option<Semantics.Type> {
-  if (type.path.segments.length === 1) {
-    const name = type.path.segments[0];
-    assert(name !== undefined, "Name segment missing");
-    if (name === "Self") {
+): Semantics.Type {
+  if (type.path.segments.length !== 1) {
+    emitError(
+      ctx,
+      "qualified type paths are not supported yet",
+      tokenId,
+      "HEDGE-UNSUPPORTED-001",
+    );
+    return { kind: "UnitType", tokenId };
+  }
+  const name = type.path.segments[0];
+  assert(name !== undefined, "Name segment missing");
+  if (name === "Self") {
+    emitError(
+      ctx,
+      "`Self` can only be used inside a trait or impl block",
+      tokenId,
+      "HEDGE-NAME-006",
+    );
+    return { kind: "UnitType", tokenId };
+  }
+  if (isDeclaredGenericParam(ctx, name)) {
+    if (type.typeArguments.length > 0) {
       emitError(
         ctx,
-        "`Self` can only be used inside a trait or impl block",
+        `generic type parameter \`${name}\` does not accept type arguments`,
         tokenId,
-        "HEDGE-NAME-006",
+        "HEDGE-UNSUPPORTED-001",
       );
-      return some({ kind: "UnitType", tokenId });
+      return { kind: "UnitType", tokenId };
     }
-    if (isDeclaredGenericParam(ctx, name) && type.typeArguments.length === 0) {
-      return some(resolveDeclaredGenericParam(ctx, name, tokenId, type.path));
-    }
-    const prim = namedTypeToPrimitive(name);
-    if (isSome(prim)) {
-      return some(prim.value);
-    }
-    const structDecl = lookupStruct(ctx, name);
-    if (structDecl !== undefined) {
-      return some(structDecl.type);
-    }
-    const enumDecl = lookupEnum(ctx, name);
-    if (enumDecl !== undefined) {
-      return some(enumDecl.type);
-    }
+    return resolveDeclaredGenericParam(ctx, name, tokenId, type.path);
   }
-  return none();
+  const prim = namedTypeToPrimitive(name);
+  if (isSome(prim)) {
+    return prim.value;
+  }
+  const structDecl = lookupStruct(ctx, name);
+  if (structDecl !== undefined) {
+    return structDecl.type;
+  }
+  const enumDecl = lookupEnum(ctx, name);
+  if (enumDecl !== undefined) {
+    return enumDecl.type;
+  }
+  emitError(
+    ctx,
+    `cannot find type \`${name}\` in this scope`,
+    tokenId,
+    "HEDGE-NAME-001",
+  );
+  return { kind: "UnitType", tokenId };
 }
 
 function validateSlice1Type(
@@ -650,10 +672,8 @@ function validateSlice1Type(
   tokenId: number,
 ): Semantics.Type {
   switch (type.kind) {
-    case "NamedType": {
-      const validated = validateNamedType(ctx, type, tokenId);
-      return unwrapSomeOr(validated, { kind: "UnitType", tokenId });
-    }
+    case "NamedType":
+      return validateNamedType(ctx, type, tokenId);
     case "UnitType":
       return type;
     case "ReferenceType":
@@ -677,13 +697,6 @@ function validateSlice1Type(
     default:
       assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
-  emitError(
-    ctx,
-    "type is not supported in Slice 1",
-    tokenId,
-    "HEDGE-UNSUPPORTED-001",
-  );
-  return { kind: "UnitType", tokenId };
 }
 
 /** Maps a resolved declared type to the width const-folding wraps/rounds at; `none()` for a non-numeric type. */
