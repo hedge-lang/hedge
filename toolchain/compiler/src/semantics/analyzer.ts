@@ -97,15 +97,21 @@ function currentFrame(ctx: AnalysisContext): ScopeFrame {
   return frame;
 }
 
+/** `TypeParam` names only, in declaration order - a `LifetimeParam` carries
+ * no type identity a signature or field type could ever reference. */
+function genericParamNames(
+  generics: readonly Parser.GenericParam[],
+): readonly string[] {
+  return generics
+    .filter((param): param is Parser.TypeParam => param.kind === "TypeParam")
+    .map((param) => param.name.text);
+}
+
 function pushGenericParams(
   ctx: AnalysisContext,
   generics: readonly Parser.GenericParam[],
 ): void {
-  const names = new Set<string>();
-  for (const param of generics) {
-    if (param.kind === "TypeParam") names.add(param.name.text);
-  }
-  ctx.genericParamStack.push(names);
+  ctx.genericParamStack.push(new Set(genericParamNames(generics)));
 }
 
 function popGenericParams(ctx: AnalysisContext): void {
@@ -300,6 +306,7 @@ const BUILTIN_SCOPE: [string, ScopedVariable][] = [
         params: [{ kind: "PrimitiveStringType" }],
         returnType: UNIT,
         paramsArePlaceholder: true,
+        genericParams: [],
       },
       mutable: false,
     },
@@ -1146,6 +1153,7 @@ function declareStructName(
   frame.types.set(item.name.text, {
     ...item,
     name: { ...item.name, type },
+    generics: genericParamNames(item.generics),
     attributes: [],
     body: { kind: "Unit" },
     type,
@@ -1173,7 +1181,7 @@ function declareEnumName(
   frame.enums.set(item.name.text, {
     ...item,
     name: { ...item.name, type },
-    generics: [],
+    generics: genericParamNames(item.generics),
     variants: [],
     attributes: [],
     type,
@@ -1428,7 +1436,7 @@ function analyzeEnum(
   return {
     ...item,
     name: { ...item.name, type: enumType },
-    generics: [],
+    generics: genericParamNames(item.generics),
     attributes: item.attributes.map((attr) => analyzeAttribute(ctx, attr)),
     variants,
     type: enumType,
@@ -2961,6 +2969,7 @@ function analyzeStruct(
   return {
     ...item,
     name: { ...item.name, type: { kind: "StructType", name: scopedName } },
+    generics: genericParamNames(item.generics),
     attributes: item.attributes.map((attr) => analyzeAttribute(ctx, attr)),
     body,
     type: {
@@ -3176,6 +3185,7 @@ function fnSignatureType(
       ? resolveSlice1Type(ctx, fn.returnType.value, fn.returnType.value.tokenId)
       : { kind: "UnitType", tokenId: fn.tokenId },
     paramsArePlaceholder: false,
+    genericParams: genericParamNames(fn.generics),
   };
   popGenericParams(ctx);
   return type;
@@ -3415,7 +3425,7 @@ function analyzeFunctionDecl(
       type: { kind: "UnitType", tokenId: decl.name.tokenId },
     },
     attributes: decl.attributes.map((attr) => analyzeAttribute(ctx, attr)),
-    generics: [],
+    generics: genericParamNames(decl.generics),
     whereClause: none(),
     params: analyzedParams,
     returnType,

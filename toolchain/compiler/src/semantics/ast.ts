@@ -166,7 +166,7 @@ export interface FunctionDecl extends AstNode {
   readonly kind: "Function";
   readonly visibility: Option<Visibility>;
   readonly name: Identifier;
-  readonly generics: readonly never[];
+  readonly generics: readonly string[];
   readonly params: readonly Param[];
   readonly returnType: Option<Type>;
   readonly whereClause: Option<never>;
@@ -178,6 +178,7 @@ export interface StructDecl extends DecoratedAstNode {
   readonly kind: "Struct";
   readonly visibility: Option<Visibility>;
   readonly name: Identifier;
+  readonly generics: readonly string[];
   readonly body: StructBody;
   readonly attributes: readonly Attribute[];
 }
@@ -186,7 +187,7 @@ export interface EnumDecl extends DecoratedAstNode {
   readonly kind: "Enum";
   readonly visibility: Option<Visibility>;
   readonly name: Identifier;
-  readonly generics: readonly never[];
+  readonly generics: readonly string[];
   readonly variants: readonly Variant[];
   readonly attributes: readonly Attribute[];
 }
@@ -478,6 +479,7 @@ export interface FunctionType {
    * user-declared function is `false`. See `BUILTIN_SCOPE` in `analyzer.ts`.
    */
   readonly paramsArePlaceholder: boolean;
+  readonly genericParams: readonly string[];
 }
 
 /**
