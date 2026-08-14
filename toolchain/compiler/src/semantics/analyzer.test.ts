@@ -3642,4 +3642,14 @@ describe("declared generic parameter names survive onto a resolved signature", (
     assert(f?.kind === "Function", "expected a Function item");
     expect(f.generics).toEqual(["T"]);
   });
+
+  it("leaves generics empty for a lifetime-only parameter list", (): void => {
+    const result = diagnose("fn f<'a>(x: &'a i32) -> &'a i32 { x }");
+    expect(result.diagnostics).toEqual([]);
+    const f = result.program.items.find(
+      (item) => item.kind === "Function" && item.name.text === "f",
+    );
+    assert(f?.kind === "Function", "expected a Function item");
+    expect(f.generics).toEqual([]);
+  });
 });
