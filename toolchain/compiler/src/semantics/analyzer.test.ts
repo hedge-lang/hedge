@@ -3522,3 +3522,27 @@ describe("generic parameter shadowing an outer type of the same name", (): void 
     expect(result.diagnostics).toEqual([]);
   });
 });
+
+describe("declared generic parameter names survive onto a resolved signature", (): void => {
+  it("carries a generic function's declared type-parameter name onto its resolved FunctionType", (): void => {
+    const result = diagnose(`
+      fn identity<T>(x: T) -> T { x }
+      fn main() {
+        let f = identity;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    const mainFn = result.program.items.find(
+      (item) => item.kind === "Function" && item.name.text === "main",
+    );
+    assert(mainFn?.kind === "Function", "expected a Function item");
+    const letStatement = mainFn.body.statements.find(
+      (s) => s.kind === "LetStatement",
+    );
+    assert(letStatement?.kind === "LetStatement", "expected a LetStatement");
+    assert(isSome(letStatement.initializer), "expected an initializer");
+    const initType = letStatement.initializer.value.type;
+    assert(initType.kind === "FunctionType", "expected a FunctionType");
+    expect(initType.genericParams).toEqual(["T"]);
+  });
+});
