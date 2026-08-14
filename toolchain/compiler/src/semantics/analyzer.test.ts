@@ -3603,4 +3603,23 @@ describe("declared generic parameter names survive onto a resolved signature", (
     assert(container?.kind === "Enum", "expected an Enum item");
     expect(container.generics).toEqual(["T"]);
   });
+
+  it("leaves generics empty for a non-generic struct and enum", (): void => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      enum Color { Red, Green, Blue }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    const point = result.program.items.find(
+      (item) => item.kind === "Struct" && item.name.text === "Point",
+    );
+    assert(point?.kind === "Struct", "expected a Struct item");
+    expect(point.generics).toEqual([]);
+
+    const color = result.program.items.find(
+      (item) => item.kind === "Enum" && item.name.text === "Color",
+    );
+    assert(color?.kind === "Enum", "expected an Enum item");
+    expect(color.generics).toEqual([]);
+  });
 });
