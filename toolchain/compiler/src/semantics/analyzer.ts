@@ -608,6 +608,42 @@ function isSelfType(type: Parser.Type): boolean {
   );
 }
 
+function validateNamedType(
+  ctx: AnalysisContext,
+  type: Parser.NamedType,
+  tokenId: number,
+): Option<Semantics.Type> {
+  if (type.path.segments.length === 1) {
+    const name = type.path.segments[0];
+    assert(name !== undefined, "Name segment missing");
+    if (name === "Self") {
+      emitError(
+        ctx,
+        "`Self` can only be used inside a trait or impl block",
+        tokenId,
+        "HEDGE-NAME-006",
+      );
+      return some({ kind: "UnitType", tokenId });
+    }
+    if (isDeclaredGenericParam(ctx, name) && type.typeArguments.length === 0) {
+      return some(resolveDeclaredGenericParam(ctx, name, tokenId, type.path));
+    }
+    const prim = namedTypeToPrimitive(name);
+    if (isSome(prim)) {
+      return some(prim.value);
+    }
+    const structDecl = lookupStruct(ctx, name);
+    if (structDecl !== undefined) {
+      return some(structDecl.type);
+    }
+    const enumDecl = lookupEnum(ctx, name);
+    if (enumDecl !== undefined) {
+      return some(enumDecl.type);
+    }
+  }
+  return none();
+}
+
 function validateSlice1Type(
   ctx: AnalysisContext,
   type: Parser.Type,
@@ -615,38 +651,8 @@ function validateSlice1Type(
 ): Semantics.Type {
   switch (type.kind) {
     case "NamedType": {
-      if (type.path.segments.length === 1) {
-        const name = type.path.segments[0];
-        assert(name !== undefined, "Name segment missing");
-        if (name === "Self") {
-          emitError(
-            ctx,
-            "`Self` can only be used inside a trait or impl block",
-            tokenId,
-            "HEDGE-NAME-006",
-          );
-          return { kind: "UnitType", tokenId };
-        }
-        if (
-          isDeclaredGenericParam(ctx, name) &&
-          type.typeArguments.length === 0
-        ) {
-          return resolveDeclaredGenericParam(ctx, name, tokenId, type.path);
-        }
-        const prim = namedTypeToPrimitive(name);
-        if (isSome(prim)) {
-          return prim.value;
-        }
-        const structDecl = lookupStruct(ctx, name);
-        if (structDecl !== undefined) {
-          return structDecl.type;
-        }
-        const enumDecl = lookupEnum(ctx, name);
-        if (enumDecl !== undefined) {
-          return enumDecl.type;
-        }
-      }
-      break;
+      const validated = validateNamedType(ctx, type, tokenId);
+      return unwrapSomeOr(validated, { kind: "UnitType", tokenId });
     }
     case "UnitType":
       return type;
