@@ -3622,4 +3622,14 @@ describe("declared generic parameter names survive onto a resolved signature", (
     assert(color?.kind === "Enum", "expected an Enum item");
     expect(color.generics).toEqual([]);
   });
+
+  it("preserves declaration order for multiple generic parameters", (): void => {
+    const result = diagnose("fn pair<T, U>(a: T, b: U) -> T { a }");
+    expect(result.diagnostics).toEqual([]);
+    const pair = result.program.items.find(
+      (item) => item.kind === "Function" && item.name.text === "pair",
+    );
+    assert(pair?.kind === "Function", "expected a Function item");
+    expect(pair.generics).toEqual(["T", "U"]);
+  });
 });
