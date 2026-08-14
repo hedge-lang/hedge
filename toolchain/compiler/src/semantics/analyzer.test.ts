@@ -3522,3 +3522,134 @@ describe("generic parameter shadowing an outer type of the same name", (): void 
     expect(result.diagnostics).toEqual([]);
   });
 });
+
+describe("declared generic parameter names survive onto a resolved signature", (): void => {
+  it("carries a generic function's declared type-parameter name onto its resolved FunctionType", (): void => {
+    const result = diagnose(`
+      fn identity<T>(x: T) -> T { x }
+      fn main() {
+        let f = identity;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    const mainFn = result.program.items.find(
+      (item) => item.kind === "Function" && item.name.text === "main",
+    );
+    assert(mainFn?.kind === "Function", "expected a Function item");
+    const letStatement = mainFn.body.statements.find(
+      (s) => s.kind === "LetStatement",
+    );
+    assert(letStatement?.kind === "LetStatement", "expected a LetStatement");
+    assert(isSome(letStatement.initializer), "expected an initializer");
+    const initType = letStatement.initializer.value.type;
+    assert(initType.kind === "FunctionType", "expected a FunctionType");
+    expect(initType.genericParams).toEqual(["T"]);
+  });
+
+  it("carries a generic function's declared type-parameter name onto its own FunctionDecl", (): void => {
+    const result = diagnose("fn identity<T>(x: T) -> T { x }");
+    expect(result.diagnostics).toEqual([]);
+    const identity = result.program.items.find(
+      (item) => item.kind === "Function" && item.name.text === "identity",
+    );
+    assert(identity?.kind === "Function", "expected a Function item");
+    expect(identity.generics).toEqual(["T"]);
+  });
+
+  it("leaves generics empty for a non-generic function's FunctionDecl and resolved FunctionType", (): void => {
+    const result = diagnose(`
+      fn f(x: i32) -> i32 { x }
+      fn main() {
+        let g = f;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    const fDecl = result.program.items.find(
+      (item) => item.kind === "Function" && item.name.text === "f",
+    );
+    assert(fDecl?.kind === "Function", "expected a Function item");
+    expect(fDecl.generics).toEqual([]);
+
+    const mainFn = result.program.items.find(
+      (item) => item.kind === "Function" && item.name.text === "main",
+    );
+    assert(mainFn?.kind === "Function", "expected a Function item");
+    const letStatement = mainFn.body.statements.find(
+      (s) => s.kind === "LetStatement",
+    );
+    assert(letStatement?.kind === "LetStatement", "expected a LetStatement");
+    assert(isSome(letStatement.initializer), "expected an initializer");
+    const initType = letStatement.initializer.value.type;
+    assert(initType.kind === "FunctionType", "expected a FunctionType");
+    expect(initType.genericParams).toEqual([]);
+  });
+
+  it("carries a generic struct's declared type-parameter name onto its own StructDecl", (): void => {
+    const result = diagnose("struct Wrapper<T> { value: T }");
+    expect(result.diagnostics).toEqual([]);
+    const wrapper = result.program.items.find(
+      (item) => item.kind === "Struct" && item.name.text === "Wrapper",
+    );
+    assert(wrapper?.kind === "Struct", "expected a Struct item");
+    expect(wrapper.generics).toEqual(["T"]);
+  });
+
+  it("carries a generic enum's declared type-parameter name onto its own EnumDecl", (): void => {
+    const result = diagnose("enum Container<T> { Has(T), Empty }");
+    expect(result.diagnostics).toEqual([]);
+    const container = result.program.items.find(
+      (item) => item.kind === "Enum" && item.name.text === "Container",
+    );
+    assert(container?.kind === "Enum", "expected an Enum item");
+    expect(container.generics).toEqual(["T"]);
+  });
+
+  it("leaves generics empty for a non-generic struct and enum", (): void => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      enum Color { Red, Green, Blue }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    const point = result.program.items.find(
+      (item) => item.kind === "Struct" && item.name.text === "Point",
+    );
+    assert(point?.kind === "Struct", "expected a Struct item");
+    expect(point.generics).toEqual([]);
+
+    const color = result.program.items.find(
+      (item) => item.kind === "Enum" && item.name.text === "Color",
+    );
+    assert(color?.kind === "Enum", "expected an Enum item");
+    expect(color.generics).toEqual([]);
+  });
+
+  it("preserves declaration order for multiple generic parameters", (): void => {
+    const result = diagnose("fn pair<T, U>(a: T, b: U) -> T { a }");
+    expect(result.diagnostics).toEqual([]);
+    const pair = result.program.items.find(
+      (item) => item.kind === "Function" && item.name.text === "pair",
+    );
+    assert(pair?.kind === "Function", "expected a Function item");
+    expect(pair.generics).toEqual(["T", "U"]);
+  });
+
+  it("lists a generic parameter only ever used through a reference hop", (): void => {
+    const result = diagnose("fn f<T>(x: &T) {}");
+    expect(result.diagnostics).toEqual([]);
+    const f = result.program.items.find(
+      (item) => item.kind === "Function" && item.name.text === "f",
+    );
+    assert(f?.kind === "Function", "expected a Function item");
+    expect(f.generics).toEqual(["T"]);
+  });
+
+  it("leaves generics empty for a lifetime-only parameter list", (): void => {
+    const result = diagnose("fn f<'a>(x: &'a i32) -> &'a i32 { x }");
+    expect(result.diagnostics).toEqual([]);
+    const f = result.program.items.find(
+      (item) => item.kind === "Function" && item.name.text === "f",
+    );
+    assert(f?.kind === "Function", "expected a Function item");
+    expect(f.generics).toEqual([]);
+  });
+});
