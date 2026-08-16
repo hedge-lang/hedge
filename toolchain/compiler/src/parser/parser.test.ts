@@ -167,6 +167,48 @@ describe("parser", (): void => {
   });
 });
 
+describe("bodiless function signatures", (): void => {
+  it("parses a semicolon-terminated function signature with no body", (): void => {
+    const ast = parseProgram("fn f(&self) -> i32;");
+    expect(ast).toMatchObject({
+      kind: "Program",
+      items: [
+        {
+          kind: "Function",
+          name: {
+            kind: "Identifier",
+            text: "f",
+          },
+          body: none(),
+        },
+      ],
+    });
+  });
+
+  it("still parses a function with a block body exactly as before", (): void => {
+    const ast = parseProgram("fn f(&self) -> i32 { 1 }");
+    expect(ast).toMatchObject({
+      kind: "Program",
+      items: [
+        {
+          kind: "Function",
+          name: {
+            kind: "Identifier",
+            text: "f",
+          },
+          body: some({
+            kind: "Block",
+            statements: [],
+            trailingExpression: some({
+              kind: "IntLiteral",
+            }),
+          }),
+        },
+      ],
+    });
+  });
+});
+
 describe("path expressions", (): void => {
   it("parses a single-segment path", (): void => {
     const ast = parseProgram("foo;");
