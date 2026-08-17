@@ -1169,6 +1169,9 @@ function ambientFunctionDecl(
     name: fn.name.text,
     params,
     returnType,
+    // Degenerate (zero-width) span: neither JS emission (skipped, no body
+    // to emit) nor .d.ts emission (emitDtsFunction never reads .span) reads
+    // this today. Not a real source range - don't trust it as one.
     span: resolveSpan(ctx.tokens, fn.tokenId, fn.tokenId),
     body: [],
     hasBody: false,
