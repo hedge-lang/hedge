@@ -3700,4 +3700,13 @@ describe("bodiless function signatures", (): void => {
       "missing return value: expected `i32`",
     );
   });
+
+  it("reports both the position restriction (once per declaration) and the duplicate-name diagnostic for two same-named bodiless signatures", (): void => {
+    const result = diagnose("fn f(); fn f();");
+    expect(result.diagnostics.map((d) => d.message)).toEqual([
+      "function `f` is defined more than once",
+      "a function signature with no body is not allowed as a top-level item",
+      "a function signature with no body is not allowed as a top-level item",
+    ]);
+  });
 });
