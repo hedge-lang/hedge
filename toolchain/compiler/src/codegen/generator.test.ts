@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { assert } from "../assert.js";
 
+import { tokenize } from "../lexer/lexer.js";
 import { toJsim } from "../jsim/jsim.js";
 import { analyzeOwnership } from "../ownership/move-check.js";
 import { isSome, none } from "../option.js";
+import { parse } from "../parser/parser.js";
+import { analyze } from "../semantics/analyzer.js";
 import { analyzeSource } from "../testing/analyze-source.js";
 import { jsimSource } from "../testing/jsim-source.js";
 import { generate } from "./generator.js";
@@ -11,6 +14,20 @@ import type { Code } from "./output.js";
 
 function gen(source: string): Code {
   return generate(jsimSource(source));
+}
+
+/**
+ * Like `gen`, but doesn't assert semantic analysis is diagnostic-free -
+ * for fixtures (a bodiless top-level function, currently always rejected
+ * since extern/trait don't parse yet) that isolate JSIM/codegen's own
+ * lowering shape from whether the program would actually be accepted.
+ */
+function genLoose(source: string): Code {
+  const { tokens } = tokenize(source);
+  const { program, diagnostics } = parse(tokens);
+  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  const analysis = analyze(program.value, tokens);
+  return generate(toJsim(analysis.program, tokens));
 }
 
 /**
@@ -173,6 +190,18 @@ describe("generator", (): void => {
     expect(dts(gen("pub fn f(x: ()) {}"))).toBe(
       "export declare function f(x: undefined): void;\n",
     );
+  });
+
+  it("emits neither JS nor .d.ts for a bodiless function signature - no implementation, nothing to declare as usable", (): void => {
+    const code = genLoose("pub fn f();");
+    expect(js(code)).toBe(null);
+    expect(dts(code)).toBe(null);
+  });
+
+  it("emits JS and .d.ts only for the bodied function, when a bodiless signature and a bodied function coexist", (): void => {
+    const code = genLoose("pub fn f(); pub fn g() {}");
+    expect(js(code)).toBe("export function g() {}\n");
+    expect(dts(code)).toBe("export declare function g(): void;\n");
   });
 
   it("generates code with comments", () => {

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { assert } from "../assert.js";
+import { tokenize } from "../lexer/lexer.js";
 import { isSome } from "../option.js";
+import { parse } from "../parser/parser.js";
+import { analyze } from "../semantics/analyzer.js";
 import { analyzeSource } from "../testing/analyze-source.js";
 import type { OwnershipCheckResult } from "./move-check.js";
 import { analyzeOwnership, conditionalDropFlagWarning } from "./move-check.js";
@@ -12,6 +15,20 @@ function check(
 ): OwnershipCheckResult {
   const { tokens, program } = analyzeSource(source);
   return analyzeOwnership(program, tokens, options);
+}
+
+/**
+ * Like `check`, but doesn't assert semantic analysis is diagnostic-free -
+ * for fixtures (a bodiless top-level function, currently always rejected
+ * since extern/trait don't parse yet) that isolate move-check's own
+ * per-item skip from whether the program would actually be accepted.
+ */
+function checkLoose(source: string): OwnershipCheckResult {
+  const { tokens } = tokenize(source);
+  const { program, diagnostics } = parse(tokens);
+  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  const analysis = analyze(program.value, tokens);
+  return analyzeOwnership(analysis.program, tokens);
 }
 
 const BOXED = "struct Boxed { value: i32 }\n";
@@ -1045,5 +1062,10 @@ describe("move-check", (): void => {
       assert(diagnostics[0] !== undefined, "Expected a diagnostic");
       expect(diagnostics[0].message).toBe("use of moved value `p`");
     });
+  });
+
+  it("does not crash on a bodiless function signature with a &mut reference parameter", (): void => {
+    const { diagnostics } = checkLoose("fn f(x: &mut i32); fn main() {}");
+    expect(diagnostics).toEqual([]);
   });
 });

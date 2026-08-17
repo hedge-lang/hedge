@@ -880,7 +880,7 @@ function emitDtsItem(item: Item): string | null {
       : null;
   }
   if (item.kind === "EnumDecl") return emitDtsEnum(item);
-  if (item.kind !== "FunctionDecl" || !isSome(item.scope)) {
+  if (item.kind !== "FunctionDecl" || !isSome(item.scope) || !item.hasBody) {
     return null;
   }
   return emitDtsFunction(item, item.scope.value);

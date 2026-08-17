@@ -358,3 +358,33 @@ describe("lifetime elision - no rule outside a function signature", (): void => 
     expect(diagnostics[0].message).toContain("missing lifetime specifier");
   });
 });
+
+describe("lifetime elision on a bodiless function signature", (): void => {
+  it("still applies rule 2 to a bodiless signature's params/return type, with zero diagnostics (fn first(s: &str) -> &str;)", (): void => {
+    const { tokens } = tokenize("fn first(s: &str) -> &str;");
+    const { program, diagnostics } = parse(tokens);
+    expect(diagnostics).toHaveLength(0);
+    assert(isSome(program), "Expected a program to come back");
+    const fn = program.value.items[0];
+    assert(
+      fn?.kind === "FunctionSignature",
+      "Expected a FunctionSignature item",
+    );
+    const paramType = fn.params[0]?.type;
+    assert(paramType?.kind === "ReferenceType", "Expected a reference param");
+    assert(
+      isSome(paramType.lifetime),
+      "Expected the param lifetime to be resolved",
+    );
+    const returnType = isSome(fn.returnType) ? fn.returnType.value : undefined;
+    assert(
+      returnType?.kind === "ReferenceType",
+      "Expected a reference return type",
+    );
+    assert(
+      isSome(returnType.lifetime),
+      "Expected the return lifetime to be resolved",
+    );
+    expect(returnType.lifetime.value.name).toBe(paramType.lifetime.value.name);
+  });
+});

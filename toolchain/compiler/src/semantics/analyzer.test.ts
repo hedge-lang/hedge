@@ -3654,3 +3654,50 @@ describe("declared generic parameter names survive onto a resolved signature", (
     expect(f.signature.generics).toEqual([]);
   });
 });
+
+describe("bodiless function signatures", (): void => {
+  it("rejects a top-level bodiless function signature, since extern/trait are its only legal containers and neither parses yet", (): void => {
+    const result = diagnose("fn f();");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "a function signature with no body is not allowed as a top-level item",
+    );
+    expect(result.diagnostics[0]?.code).toBe("HEDGE-ITEM-001");
+  });
+
+  it("rejects a block-local bodiless function signature the same way, with context-specific wording", (): void => {
+    const result = diagnose("fn main() { fn f(); }");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "a function signature with no body is not allowed inside a block",
+    );
+    expect(result.diagnostics[0]?.code).toBe("HEDGE-ITEM-001");
+  });
+
+  it("still reports a bad parameter type on a bodiless signature, alongside the position restriction", (): void => {
+    const result = diagnose("fn f(x: NotAType);");
+    expect(result.diagnostics).toHaveLength(2);
+    expect(result.diagnostics[0]?.message).toBe(
+      "a function signature with no body is not allowed as a top-level item",
+    );
+    expect(result.diagnostics[1]?.message).toBe(
+      "cannot find type `NotAType` in this scope",
+    );
+  });
+
+  it("still skips the missing-return-value check for a bodiless signature with a non-unit return type, alongside the position restriction", (): void => {
+    const result = diagnose("fn f() -> i32;");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "a function signature with no body is not allowed as a top-level item",
+    );
+  });
+
+  it("still rejects the equivalent bodied function for missing return value, unaffected", (): void => {
+    const result = diagnose("fn f() -> i32 {}");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "missing return value: expected `i32`",
+    );
+  });
+});

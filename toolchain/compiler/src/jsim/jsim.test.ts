@@ -87,6 +87,22 @@ describe("toJsim", () => {
           params: [],
           returnType: none(),
           body: [],
+          hasBody: true,
+        },
+      ],
+    });
+  });
+
+  it("lowers a bodiless function signature to a JSIM FunctionDecl with hasBody: false and no statements", () => {
+    const program = jsimSource("fn f();");
+    expect(program).toMatchObject({
+      kind: "Program",
+      items: [
+        {
+          kind: "FunctionDecl",
+          name: "f",
+          body: [],
+          hasBody: false,
         },
       ],
     });

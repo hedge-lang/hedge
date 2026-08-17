@@ -351,3 +351,23 @@ describe("driver", (): void => {
     });
   });
 });
+
+describe("bodiless function signatures", (): void => {
+  it("rejects a program containing only a top-level bodiless function, without crashing the compiler", (): void => {
+    const result = compile("fn f(x: i32) -> i32;");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "a function signature with no body is not allowed as a top-level item",
+    );
+    expect(isNone(result.code)).toBe(true);
+  });
+
+  it("rejects a bodiless main the same way, without crashing the compiler - so the auto-generated main() call never reaches codegen at all", (): void => {
+    const result = compile("fn main();");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "a function signature with no body is not allowed as a top-level item",
+    );
+    expect(isNone(result.code)).toBe(true);
+  });
+});

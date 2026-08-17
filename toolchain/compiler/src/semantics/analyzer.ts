@@ -2888,6 +2888,12 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
     case "Function":
       return analyzeFunction(ctx, item);
     case "FunctionSignature":
+      emitError(
+        ctx,
+        "a function signature with no body is not allowed as a top-level item",
+        item.tokenId,
+        "HEDGE-ITEM-001",
+      );
       return analyzeFunctionSignature(ctx, item);
     case "Struct": {
       const cached = lookupStruct(ctx, item.name.text);
@@ -3533,6 +3539,12 @@ function analyzeStatement(
       return analyzeFunction(ctx, statement);
     }
     case "FunctionSignature": {
+      emitError(
+        ctx,
+        "a function signature with no body is not allowed inside a block",
+        statement.tokenId,
+        "HEDGE-ITEM-001",
+      );
       bind(ctx, statement.name.text, {
         type: fnSignatureType(ctx, statement),
         mutable: false,
