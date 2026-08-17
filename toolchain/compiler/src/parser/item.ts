@@ -7,7 +7,8 @@ import {
   type Attribute,
   type ConstDecl,
   type EnumDecl,
-  type FunctionDecl,
+  type Function,
+  type FunctionSignature,
   type GenericParam,
   type Item,
   type NamedFieldsBody,
@@ -693,7 +694,7 @@ function checkWhereClause(
  * Grammar:
  *
  * ```text
- * FunctionDecl ::= Visibility? "fn" Identifier "(" Params? ")" ("->" Type)? Block
+ * FunctionDecl ::= Visibility? "fn" Identifier "(" Params? ")" ("->" Type)? (Block | ";")
  * ```
  */
 function parseFunction(
@@ -702,7 +703,7 @@ function parseFunction(
   pos: number,
   attributes: readonly Attribute[] = [],
   visibility: Option<Visibility> = none(),
-): PR<Parsed<FunctionDecl>> {
+): PR<Parsed<Function | FunctionSignature>> {
   const start = pos;
   const afterFn = expectKeyword(tokens, pos, "fn");
   if (isErr(afterFn)) {
@@ -739,13 +740,8 @@ function parseFunction(
     cursor,
     skipToFunctionBody,
   );
-  const bodyResult = parseBlock(tokens, diagnostics, whereResult.next);
-  if (isErr(bodyResult)) {
-    return bodyResult;
-  }
-  const body = bodyResult.value;
-  const fn: FunctionDecl = {
-    kind: "Function",
+  const signature: FunctionSignature = {
+    kind: "FunctionSignature",
     tokenId: start,
     visibility,
     name: nameResult.value.node,
@@ -755,9 +751,21 @@ function parseFunction(
     returnType,
     whereClause: whereResult.whereClause,
     attributes,
-    body: body.node,
   };
-  return ok({ node: fn, next: body.next });
+  if (tokens[whereResult.next]?.kind === "semi") {
+    return ok({ node: signature, next: whereResult.next + 1 });
+  }
+  const bodyResult = parseBlock(tokens, diagnostics, whereResult.next);
+  if (isErr(bodyResult)) {
+    return bodyResult;
+  }
+  const fn: Function = {
+    kind: "Function",
+    tokenId: start,
+    signature,
+    body: bodyResult.value.node,
+  };
+  return ok({ node: fn, next: bodyResult.value.next });
 }
 
 /**

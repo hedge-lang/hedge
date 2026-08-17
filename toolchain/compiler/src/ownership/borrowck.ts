@@ -425,6 +425,7 @@ function walkStatementForBorrowBases(
       );
       return;
     case "Function":
+    case "FunctionSignature":
     case "Struct":
     case "Enum":
     case "Const":
@@ -527,12 +528,12 @@ function walkScopeForBorrowBases(
  * ultimately names.
  */
 function resolveBorrowBases(
-  fn: Semantics.FunctionDecl,
+  fn: Semantics.Function,
 ): ReadonlyMap<BorrowSite, BindingId> {
   const resolved = new Map<BorrowSite, BindingId>();
   const aliases = new Map<BindingId, BindingId>();
   const scopeStack: ScopeStack = [new Map<string, BindingId>()];
-  for (const param of fn.params) {
+  for (const param of fn.signature.params) {
     for (const declaration of declarationsOf(param.pattern)) {
       registerScopedName(scopeStack, declaration.name, declaration.id);
     }
@@ -678,6 +679,7 @@ function statementUses(statement: Semantics.Statement, out: Set<string>): void {
       collectUses(statement.expression, out);
       return;
     case "Function":
+    case "FunctionSignature":
     case "Struct":
     case "Enum":
     case "Const":
@@ -1260,7 +1262,7 @@ function checkExclusivity(
 }
 
 function checkFunction(
-  fn: Semantics.FunctionDecl,
+  fn: Semantics.Function,
   diagnostics: Diagnostic[],
   tokens: readonly Token[],
 ): void {

@@ -7,7 +7,8 @@ import type {
   Block,
   ConstDecl,
   EnumDecl,
-  FunctionDecl,
+  Function,
+  FunctionSignature,
   GenericParam,
   Item,
   LetStatement,
@@ -53,7 +54,7 @@ function spanOf(tokens: readonly Token[], tokenId: number): Option<Span> {
  * avoidance in JSIM.
  *
  * Mutates `usedNames` in place as it synthesizes, rather than cloning it,
- * so a caller holding the same set reference (e.g. `elideFunctionDecl`'s
+ * so a caller holding the same set reference (e.g. `elideFunction`'s
  * `names`, threaded down to nested `let` statements as `outerNames`) sees
  * every synthesized name too - not just the explicit ones the set started
  * with. Without this, two independent placeholders synthesized from the
@@ -305,11 +306,18 @@ function elideStructDecl(
   };
 }
 
-function elideFunctionDecl(
-  decl: FunctionDecl,
+/**
+ * Elides rules 1/2 across a signature's params/return type, shared by both a
+ * bodiless `FunctionSignature` and a bodied `Function`'s own signature. The
+ * returned `names` set (declared generics plus every lifetime name already
+ * used in the signature) is what a bodied function's body elision must also
+ * avoid colliding with.
+ */
+function elideFunctionSignature(
+  decl: FunctionSignature,
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
-): FunctionDecl {
+): { signature: FunctionSignature; names: Set<string> } {
   const names = new Set<string>(declaredLifetimeNames(decl.generics));
   for (const param of decl.params) {
     collectTypeLifetimeNames(param.type, names);
@@ -400,13 +408,34 @@ function elideFunctionDecl(
     }
   }
 
-  const newBody = elideBlockStatements(decl.body, tokens, diagnostics, names);
+  return {
+    signature: { ...decl, params: newParams, returnType: newReturnType },
+    names,
+  };
+}
 
+function elideFunctionSignatureItem(
+  decl: FunctionSignature,
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+): FunctionSignature {
+  return elideFunctionSignature(decl, tokens, diagnostics).signature;
+}
+
+function elideFunction(
+  decl: Function,
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+): Function {
+  const { signature, names } = elideFunctionSignature(
+    decl.signature,
+    tokens,
+    diagnostics,
+  );
   return {
     ...decl,
-    params: newParams,
-    returnType: newReturnType,
-    body: newBody,
+    signature,
+    body: elideBlockStatements(decl.body, tokens, diagnostics, names),
   };
 }
 
@@ -525,7 +554,9 @@ function elideStatement(
     case "ExpressionStatement":
       return stmt;
     case "Function":
-      return elideFunctionDecl(stmt, tokens, diagnostics);
+      return elideFunction(stmt, tokens, diagnostics);
+    case "FunctionSignature":
+      return elideFunctionSignatureItem(stmt, tokens, diagnostics);
     case "Struct":
       return elideStructDecl(stmt, tokens, diagnostics);
     case "Enum":
@@ -539,8 +570,8 @@ function elideStatement(
 }
 
 /**
- * Only `FunctionDecl`/`StructDecl`/`EnumDecl`/`LetStatement`/`ConstDecl`/
- * `StaticDecl` carry `Type` fields that can hold a `ReferenceType` - every
+ * Only `Function`/`FunctionSignature`/`StructDecl`/`EnumDecl`/`LetStatement`/
+ * `ConstDecl`/`StaticDecl` carry `Type` fields that can hold a `ReferenceType` - every
  * other `Item` kind is a bare expression or `ExpressionStatement`, neither
  * of which does. Narrowing to
  * this subset up front (rather than giving `elideStatement` a
@@ -560,9 +591,16 @@ function elideStatement(
 function isTypeBearingItem(
   item: Item,
 ): item is
-  FunctionDecl | StructDecl | EnumDecl | LetStatement | ConstDecl | StaticDecl {
+  | Function
+  | FunctionSignature
+  | StructDecl
+  | EnumDecl
+  | LetStatement
+  | ConstDecl
+  | StaticDecl {
   return (
     item.kind === "Function" ||
+    item.kind === "FunctionSignature" ||
     item.kind === "Struct" ||
     item.kind === "Enum" ||
     item.kind === "LetStatement" ||

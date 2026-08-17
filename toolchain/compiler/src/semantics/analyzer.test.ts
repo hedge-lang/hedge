@@ -3475,10 +3475,10 @@ describe("generic parameter shadowing an outer type of the same name", (): void 
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.code).toBe("HEDGE-LINT-002");
     const fn = result.program.items.find(
-      (item) => item.kind === "Function" && item.name.text === "f",
+      (item) => item.kind === "Function" && item.signature.name.text === "f",
     );
     assert(fn?.kind === "Function", "expected a Function item");
-    expect(fn.params[0]?.type.kind).toBe("NamedType");
+    expect(fn.signature.params[0]?.type.kind).toBe("NamedType");
   });
 
   it("resolves a function's own type parameter over an outer enum of the same name, with a warning", (): void => {
@@ -3489,10 +3489,10 @@ describe("generic parameter shadowing an outer type of the same name", (): void 
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.code).toBe("HEDGE-LINT-002");
     const fn = result.program.items.find(
-      (item) => item.kind === "Function" && item.name.text === "f",
+      (item) => item.kind === "Function" && item.signature.name.text === "f",
     );
     assert(fn?.kind === "Function", "expected a Function item");
-    expect(fn.params[0]?.type.kind).toBe("NamedType");
+    expect(fn.signature.params[0]?.type.kind).toBe("NamedType");
   });
 
   it("warns once per occurrence when a shadowing type parameter is used more than once in a signature", (): void => {
@@ -3533,7 +3533,7 @@ describe("declared generic parameter names survive onto a resolved signature", (
     `);
     expect(result.diagnostics).toEqual([]);
     const mainFn = result.program.items.find(
-      (item) => item.kind === "Function" && item.name.text === "main",
+      (item) => item.kind === "Function" && item.signature.name.text === "main",
     );
     assert(mainFn?.kind === "Function", "expected a Function item");
     const letStatement = mainFn.body.statements.find(
@@ -3550,10 +3550,11 @@ describe("declared generic parameter names survive onto a resolved signature", (
     const result = diagnose("fn identity<T>(x: T) -> T { x }");
     expect(result.diagnostics).toEqual([]);
     const identity = result.program.items.find(
-      (item) => item.kind === "Function" && item.name.text === "identity",
+      (item) =>
+        item.kind === "Function" && item.signature.name.text === "identity",
     );
     assert(identity?.kind === "Function", "expected a Function item");
-    expect(identity.generics).toEqual(["T"]);
+    expect(identity.signature.generics).toEqual(["T"]);
   });
 
   it("leaves generics empty for a non-generic function's FunctionDecl and resolved FunctionType", (): void => {
@@ -3565,13 +3566,13 @@ describe("declared generic parameter names survive onto a resolved signature", (
     `);
     expect(result.diagnostics).toEqual([]);
     const fDecl = result.program.items.find(
-      (item) => item.kind === "Function" && item.name.text === "f",
+      (item) => item.kind === "Function" && item.signature.name.text === "f",
     );
     assert(fDecl?.kind === "Function", "expected a Function item");
-    expect(fDecl.generics).toEqual([]);
+    expect(fDecl.signature.generics).toEqual([]);
 
     const mainFn = result.program.items.find(
-      (item) => item.kind === "Function" && item.name.text === "main",
+      (item) => item.kind === "Function" && item.signature.name.text === "main",
     );
     assert(mainFn?.kind === "Function", "expected a Function item");
     const letStatement = mainFn.body.statements.find(
@@ -3627,29 +3628,29 @@ describe("declared generic parameter names survive onto a resolved signature", (
     const result = diagnose("fn pair<T, U>(a: T, b: U) -> T { a }");
     expect(result.diagnostics).toEqual([]);
     const pair = result.program.items.find(
-      (item) => item.kind === "Function" && item.name.text === "pair",
+      (item) => item.kind === "Function" && item.signature.name.text === "pair",
     );
     assert(pair?.kind === "Function", "expected a Function item");
-    expect(pair.generics).toEqual(["T", "U"]);
+    expect(pair.signature.generics).toEqual(["T", "U"]);
   });
 
   it("lists a generic parameter only ever used through a reference hop", (): void => {
     const result = diagnose("fn f<T>(x: &T) {}");
     expect(result.diagnostics).toEqual([]);
     const f = result.program.items.find(
-      (item) => item.kind === "Function" && item.name.text === "f",
+      (item) => item.kind === "Function" && item.signature.name.text === "f",
     );
     assert(f?.kind === "Function", "expected a Function item");
-    expect(f.generics).toEqual(["T"]);
+    expect(f.signature.generics).toEqual(["T"]);
   });
 
   it("leaves generics empty for a lifetime-only parameter list", (): void => {
     const result = diagnose("fn f<'a>(x: &'a i32) -> &'a i32 { x }");
     expect(result.diagnostics).toEqual([]);
     const f = result.program.items.find(
-      (item) => item.kind === "Function" && item.name.text === "f",
+      (item) => item.kind === "Function" && item.signature.name.text === "f",
     );
     assert(f?.kind === "Function", "expected a Function item");
-    expect(f.generics).toEqual([]);
+    expect(f.signature.generics).toEqual([]);
   });
 });

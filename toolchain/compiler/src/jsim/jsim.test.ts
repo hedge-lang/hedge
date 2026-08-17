@@ -1127,8 +1127,8 @@ describe("conditional-drop-flag codegen (synthetic ownership)", () => {
     );
 
     const mainFn = analysis.program.items.find(
-      (item): item is Semantics.FunctionDecl =>
-        item.kind === "Function" && item.name.text === "main",
+      (item): item is Semantics.Function =>
+        item.kind === "Function" && item.signature.name.text === "main",
     );
     assert(mainFn !== undefined, "Expected a main function");
 

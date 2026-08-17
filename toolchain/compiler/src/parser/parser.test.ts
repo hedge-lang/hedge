@@ -87,9 +87,11 @@ describe("parser", (): void => {
       items: [
         {
           kind: "Function",
-          name: {
-            kind: "Identifier",
-            text: "main",
+          signature: {
+            name: {
+              kind: "Identifier",
+              text: "main",
+            },
           },
         },
       ],
@@ -109,14 +111,16 @@ describe("parser", (): void => {
       items: [
         {
           kind: "Function",
-          name: {
-            kind: "Identifier",
-            text: "main",
+          signature: {
+            name: {
+              kind: "Identifier",
+              text: "main",
+            },
+            generics: [],
+            params: [],
+            returnType: none(),
+            whereClause: none(),
           },
-          generics: [],
-          params: [],
-          returnType: none(),
-          whereClause: none(),
           body: {
             kind: "Block",
             statements: [
@@ -174,12 +178,11 @@ describe("bodiless function signatures", (): void => {
       kind: "Program",
       items: [
         {
-          kind: "Function",
+          kind: "FunctionSignature",
           name: {
             kind: "Identifier",
             text: "f",
           },
-          body: none(),
         },
       ],
     });
@@ -192,20 +195,113 @@ describe("bodiless function signatures", (): void => {
       items: [
         {
           kind: "Function",
-          name: {
-            kind: "Identifier",
-            text: "f",
+          signature: {
+            name: {
+              kind: "Identifier",
+              text: "f",
+            },
           },
-          body: some({
+          body: {
             kind: "Block",
             statements: [],
             trailingExpression: some({
               kind: "IntLiteral",
             }),
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses a bodiless function with no params and no return type", (): void => {
+    const ast = parseProgram("fn f();");
+    expect(ast).toMatchObject({
+      kind: "Program",
+      items: [
+        {
+          kind: "FunctionSignature",
+          name: { kind: "Identifier", text: "f" },
+          params: [],
+          returnType: none(),
+        },
+      ],
+    });
+  });
+
+  it("parses a bodiless function with a generic parameter", (): void => {
+    const ast = parseProgram("fn f<T>(x: T) -> T;");
+    expect(ast).toMatchObject({
+      kind: "Program",
+      items: [
+        {
+          kind: "FunctionSignature",
+          name: { kind: "Identifier", text: "f" },
+          generics: [{ kind: "TypeParam", name: { text: "T" } }],
+        },
+      ],
+    });
+  });
+
+  it("parses a bodiless function with a where clause", (): void => {
+    const ast = parseProgram("fn f<T>(x: T) -> T where T: Copy;");
+    expect(ast).toMatchObject({
+      kind: "Program",
+      items: [
+        {
+          kind: "FunctionSignature",
+          name: { kind: "Identifier", text: "f" },
+          whereClause: some({
+            kind: "WhereClause",
+            predicates: [
+              {
+                type: { kind: "NamedType", path: { segments: ["T"] } },
+                bounds: [{ path: { segments: ["Copy"] } }],
+              },
+            ],
           }),
         },
       ],
     });
+  });
+
+  it("still fails fast without hanging when a function is truncated at EOF with neither a body brace nor a semicolon", (): void => {
+    const { tokens } = tokenize("fn f()");
+    const { program, diagnostics } = parse(tokens);
+    expect(isNone(program)).toBe(true);
+    expect(diagnostics).toHaveLength(1);
+  });
+
+  it("treats a stray extra semicolon after a bodiless function as an empty top-level statement, not a cascade", (): void => {
+    const { tokens } = tokenize("fn f() -> i32;;");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "FunctionSignature",
+        name: { text: "f" },
+      },
+    ]);
+  });
+
+  it("parses a bodied sibling function cleanly right after a bodiless one, with no cascading diagnostic", (): void => {
+    const { tokens } = tokenize("fn f() -> i32; fn g() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "FunctionSignature",
+        name: { text: "f" },
+      },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "g" },
+        },
+        body: {},
+      },
+    ]);
   });
 });
 
@@ -442,10 +538,12 @@ describe("type annotations", (): void => {
       items: [
         {
           kind: "Function",
-          returnType: some({
-            kind: "NamedType",
-            path: { absolute: false, segments: ["i32"] },
-          }),
+          signature: {
+            returnType: some({
+              kind: "NamedType",
+              path: { absolute: false, segments: ["i32"] },
+            }),
+          },
         },
       ],
     });
@@ -457,7 +555,9 @@ describe("type annotations", (): void => {
       items: [
         {
           kind: "Function",
-          returnType: some({ kind: "UnitType" }),
+          signature: {
+            returnType: some({ kind: "UnitType" }),
+          },
         },
       ],
     });
@@ -466,7 +566,14 @@ describe("type annotations", (): void => {
   it("records no return type when the arrow is absent", (): void => {
     const ast = parseProgram("fn f() {}");
     expect(ast).toMatchObject({
-      items: [{ kind: "Function", returnType: none() }],
+      items: [
+        {
+          kind: "Function",
+          signature: {
+            returnType: none(),
+          },
+        },
+      ],
     });
   });
 
@@ -510,16 +617,21 @@ describe("type annotation error diagnostics", (): void => {
         items: [
           {
             kind: "Function",
-            params: [
-              {
-                type: {
-                  kind: "ReferenceType",
-                  mutable: false,
-                  lifetime: some({ kind: "Lifetime", name: "a" }),
-                  referent: { kind: "NamedType", path: { segments: ["i32"] } },
+            signature: {
+              params: [
+                {
+                  type: {
+                    kind: "ReferenceType",
+                    mutable: false,
+                    lifetime: some({ kind: "Lifetime", name: "a" }),
+                    referent: {
+                      kind: "NamedType",
+                      path: { segments: ["i32"] },
+                    },
+                  },
                 },
-              },
-            ],
+              ],
+            },
           },
         ],
       }),
@@ -536,12 +648,14 @@ describe("type annotation error diagnostics", (): void => {
         items: [
           {
             kind: "Function",
-            returnType: some({
-              kind: "ReferenceType",
-              mutable: false,
-              lifetime: some({ kind: "Lifetime", name: "a" }),
-              referent: { kind: "NamedType", path: { segments: ["i32"] } },
-            }),
+            signature: {
+              returnType: some({
+                kind: "ReferenceType",
+                mutable: false,
+                lifetime: some({ kind: "Lifetime", name: "a" }),
+                referent: { kind: "NamedType", path: { segments: ["i32"] } },
+              }),
+            },
           },
         ],
       }),
@@ -558,16 +672,21 @@ describe("type annotation error diagnostics", (): void => {
         items: [
           {
             kind: "Function",
-            params: [
-              {
-                type: {
-                  kind: "ReferenceType",
-                  mutable: true,
-                  lifetime: some({ kind: "Lifetime", name: "a" }),
-                  referent: { kind: "NamedType", path: { segments: ["i32"] } },
+            signature: {
+              params: [
+                {
+                  type: {
+                    kind: "ReferenceType",
+                    mutable: true,
+                    lifetime: some({ kind: "Lifetime", name: "a" }),
+                    referent: {
+                      kind: "NamedType",
+                      path: { segments: ["i32"] },
+                    },
+                  },
                 },
-              },
-            ],
+              ],
+            },
           },
         ],
       }),
@@ -584,15 +703,19 @@ describe("generic type arguments - type position", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        params: [
-          {
-            type: {
-              kind: "NamedType",
-              path: { segments: ["Vec"] },
-              typeArguments: [{ kind: "NamedType", path: { segments: ["T"] } }],
+        signature: {
+          params: [
+            {
+              type: {
+                kind: "NamedType",
+                path: { segments: ["Vec"] },
+                typeArguments: [
+                  { kind: "NamedType", path: { segments: ["T"] } },
+                ],
+              },
             },
-          },
-        ],
+          ],
+        },
       },
     ]);
   });
@@ -622,11 +745,13 @@ describe("generic type arguments - type position", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        returnType: some({
-          kind: "NamedType",
-          path: { segments: ["Vec"] },
-          typeArguments: [{ kind: "NamedType", path: { segments: ["T"] } }],
-        }),
+        signature: {
+          returnType: some({
+            kind: "NamedType",
+            path: { segments: ["Vec"] },
+            typeArguments: [{ kind: "NamedType", path: { segments: ["T"] } }],
+          }),
+        },
       },
     ]);
   });
@@ -720,23 +845,25 @@ describe("generic type arguments - type position", (): void => {
       { kind: "Struct" },
       {
         kind: "Function",
-        params: [
-          {
-            type: {
-              kind: "NamedType",
-              path: { segments: ["Foo"] },
-              typeArguments: [
-                {
-                  kind: "NamedType",
-                  path: { segments: ["Foo"] },
-                  typeArguments: [
-                    { kind: "NamedType", path: { segments: ["T"] } },
-                  ],
-                },
-              ],
+        signature: {
+          params: [
+            {
+              type: {
+                kind: "NamedType",
+                path: { segments: ["Foo"] },
+                typeArguments: [
+                  {
+                    kind: "NamedType",
+                    path: { segments: ["Foo"] },
+                    typeArguments: [
+                      { kind: "NamedType", path: { segments: ["T"] } },
+                    ],
+                  },
+                ],
+              },
             },
-          },
-        ],
+          ],
+        },
       },
     ]);
   });
@@ -1569,7 +1696,12 @@ describe("enum declarations", (): void => {
         name: { text: "Foo" },
         variants: [{ name: { text: "Quit" } }],
       },
-      { kind: "Function", name: { text: "bar" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "bar" },
+        },
+      },
     ]);
   });
 
@@ -1852,15 +1984,19 @@ describe("attribute int literal arguments", (): void => {
       items: [
         {
           kind: "Function",
-          attributes: [
-            {
-              kind: "Attribute",
-              name: { kind: "Identifier", text: "align" },
-              arguments: some([
-                { literal: some({ kind: "IntLiteral", value: "8", base: 10 }) },
-              ]),
-            },
-          ],
+          signature: {
+            attributes: [
+              {
+                kind: "Attribute",
+                name: { kind: "Identifier", text: "align" },
+                arguments: some([
+                  {
+                    literal: some({ kind: "IntLiteral", value: "8", base: 10 }),
+                  },
+                ]),
+              },
+            ],
+          },
         },
       ],
     });
@@ -1945,7 +2081,12 @@ describe("identifiers", (): void => {
       const ast = parseProgram("fn fn_helper() {}");
       expect(ast).toMatchObject({
         items: [
-          { kind: "Function", name: { kind: "Identifier", text: "fn_helper" } },
+          {
+            kind: "Function",
+            signature: {
+              name: { kind: "Identifier", text: "fn_helper" },
+            },
+          },
         ],
       });
     });
@@ -1954,7 +2095,12 @@ describe("identifiers", (): void => {
       const ast = parseProgram("fn let_count() {}");
       expect(ast).toMatchObject({
         items: [
-          { kind: "Function", name: { kind: "Identifier", text: "let_count" } },
+          {
+            kind: "Function",
+            signature: {
+              name: { kind: "Identifier", text: "let_count" },
+            },
+          },
         ],
       });
     });
@@ -2053,7 +2199,14 @@ describe("identifiers", (): void => {
     it("accepts r#fn as a function name", (): void => {
       const ast = parseProgram("fn r#fn() {}");
       expect(ast).toMatchObject({
-        items: [{ kind: "Function", name: { kind: "Identifier", text: "fn" } }],
+        items: [
+          {
+            kind: "Function",
+            signature: {
+              name: { kind: "Identifier", text: "fn" },
+            },
+          },
+        ],
       });
     });
 
@@ -2124,7 +2277,7 @@ describe("identifiers", (): void => {
       assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
       const fn_ = program.value.items[0];
       assert(fn_?.kind === "Function", "expected Function");
-      const { tokenId } = fn_.name;
+      const { tokenId } = fn_.signature.name;
       expect(tokens[tokenId]).toMatchObject({
         kind: "ident",
         text: "foo",
@@ -2423,7 +2576,9 @@ describe("core patterns", (): void => {
       items: [
         {
           kind: "Function",
-          params: [{ kind: "Param", pattern: { kind: "WildcardPattern" } }],
+          signature: {
+            params: [{ kind: "Param", pattern: { kind: "WildcardPattern" } }],
+          },
         },
       ],
     });
@@ -2468,12 +2623,17 @@ describe("core patterns", (): void => {
       items: [
         {
           kind: "Function",
-          params: [
-            {
-              kind: "Param",
-              pattern: { kind: "StructPattern", path: { segments: ["Point"] } },
-            },
-          ],
+          signature: {
+            params: [
+              {
+                kind: "Param",
+                pattern: {
+                  kind: "StructPattern",
+                  path: { segments: ["Point"] },
+                },
+              },
+            ],
+          },
         },
       ],
     });
@@ -2485,16 +2645,18 @@ describe("core patterns", (): void => {
       items: [
         {
           kind: "Function",
-          params: [
-            {
-              kind: "Param",
-              pattern: {
-                kind: "StructPattern",
-                mutable: true,
-                path: { segments: ["Point"] },
+          signature: {
+            params: [
+              {
+                kind: "Param",
+                pattern: {
+                  kind: "StructPattern",
+                  mutable: true,
+                  path: { segments: ["Point"] },
+                },
               },
-            },
-          ],
+            ],
+          },
         },
       ],
     });
@@ -2954,9 +3116,18 @@ describe("item declarations inside blocks", (): void => {
       items: [
         {
           kind: "Function",
-          name: { text: "f" },
+          signature: {
+            name: { text: "f" },
+          },
           body: {
-            statements: [{ kind: "Function", name: { text: "g" } }],
+            statements: [
+              {
+                kind: "Function",
+                signature: {
+                  name: { text: "g" },
+                },
+              },
+            ],
             trailingExpression: some({ kind: "CallExpression" }),
           },
         },
@@ -2989,8 +3160,10 @@ describe("item declarations inside blocks", (): void => {
             statements: [
               {
                 kind: "Function",
-                name: { text: "g" },
-                visibility: some({ scope: none() }),
+                signature: {
+                  name: { text: "g" },
+                  visibility: some({ scope: none() }),
+                },
               },
             ],
           },
@@ -3008,7 +3181,14 @@ describe("item declarations inside blocks", (): void => {
         {
           kind: "Function",
           body: {
-            statements: [{ kind: "Function", name: { text: "double" } }],
+            statements: [
+              {
+                kind: "Function",
+                signature: {
+                  name: { text: "double" },
+                },
+              },
+            ],
             trailingExpression: some({ kind: "CallExpression" }),
           },
         },
@@ -3038,8 +3218,10 @@ describe("visibility on function declarations", (): void => {
       items: [
         {
           kind: "Function",
-          visibility: some({ scope: none() }),
-          name: { text: "f" },
+          signature: {
+            visibility: some({ scope: none() }),
+            name: { text: "f" },
+          },
         },
       ],
     });
@@ -3051,8 +3233,10 @@ describe("visibility on function declarations", (): void => {
       items: [
         {
           kind: "Function",
-          visibility: some({ scope: some("package") }),
-          name: { text: "f" },
+          signature: {
+            visibility: some({ scope: some("package") }),
+            name: { text: "f" },
+          },
         },
       ],
     });
@@ -3146,8 +3330,8 @@ describe("parse errors - missing tokens", (): void => {
     expect(result.diagnostics[0]?.message).toContain("identifier");
   });
 
-  it("errors on a function declaration with no body brace", (): void => {
-    const result = parse(tokenize("fn f();").tokens);
+  it("errors on a function declaration truncated at EOF with neither a body brace nor a semicolon", (): void => {
+    const result = parse(tokenize("fn f()").tokens);
     expect(result.program).toEqual(none());
   });
 
@@ -3189,7 +3373,9 @@ describe("multiple attributes", (): void => {
       items: [
         {
           kind: "Function",
-          attributes: [{ name: { text: "a" } }, { name: { text: "b" } }],
+          signature: {
+            attributes: [{ name: { text: "a" } }, { name: { text: "b" } }],
+          },
         },
       ],
     });
@@ -3240,12 +3426,14 @@ describe("unsupported type syntax in additional positions", (): void => {
       items: [
         {
           kind: "Function",
-          returnType: some({
-            kind: "ReferenceType",
-            mutable: false,
-            lifetime: some({ kind: "Lifetime", name: "a" }),
-            referent: { kind: "NamedType", path: { segments: ["i32"] } },
-          }),
+          signature: {
+            returnType: some({
+              kind: "ReferenceType",
+              mutable: false,
+              lifetime: some({ kind: "Lifetime", name: "a" }),
+              referent: { kind: "NamedType", path: { segments: ["i32"] } },
+            }),
+          },
         },
       ],
     });
@@ -3410,7 +3598,14 @@ describe("keyword edge cases", (): void => {
     (kw) => {
       const ast = parseProgram(`fn ${kw}() {}`);
       expect(ast).toMatchObject({
-        items: [{ kind: "Function", name: { kind: "Identifier", text: kw } }],
+        items: [
+          {
+            kind: "Function",
+            signature: {
+              name: { kind: "Identifier", text: kw },
+            },
+          },
+        ],
       });
     },
   );
@@ -3426,7 +3621,14 @@ describe("keyword edge cases", (): void => {
   it("accepts r#mut as a function name", (): void => {
     const ast = parseProgram("fn r#mut() {}");
     expect(ast).toMatchObject({
-      items: [{ kind: "Function", name: { kind: "Identifier", text: "mut" } }],
+      items: [
+        {
+          kind: "Function",
+          signature: {
+            name: { kind: "Identifier", text: "mut" },
+          },
+        },
+      ],
     });
   });
 
@@ -3488,7 +3690,14 @@ describe("function parameters", (): void => {
   it("zero parameters produce an empty params list", (): void => {
     const ast = parseProgram("fn f() {}");
     expect(ast).toMatchObject({
-      items: [{ kind: "Function", params: [] }],
+      items: [
+        {
+          kind: "Function",
+          signature: {
+            params: [],
+          },
+        },
+      ],
     });
   });
 
@@ -3498,21 +3707,26 @@ describe("function parameters", (): void => {
       items: [
         {
           kind: "Function",
-          name: { text: "add" },
-          params: [
-            {
-              kind: "Param",
-              pattern: {
-                kind: "BindingPattern",
-                name: { kind: "Identifier", text: "x" },
+          signature: {
+            name: { text: "add" },
+            params: [
+              {
+                kind: "Param",
+                pattern: {
+                  kind: "BindingPattern",
+                  name: { kind: "Identifier", text: "x" },
+                },
+                type: {
+                  kind: "NamedType",
+                  path: { absolute: false, segments: ["i32"] },
+                },
               },
-              type: {
-                kind: "NamedType",
-                path: { absolute: false, segments: ["i32"] },
-              },
-            },
-          ],
-          returnType: some({ kind: "NamedType", path: { segments: ["i32"] } }),
+            ],
+            returnType: some({
+              kind: "NamedType",
+              path: { segments: ["i32"] },
+            }),
+          },
         },
       ],
     });
@@ -3524,16 +3738,18 @@ describe("function parameters", (): void => {
       items: [
         {
           kind: "Function",
-          params: [
-            {
-              kind: "Param",
-              pattern: { name: { text: "x" } },
-            },
-            {
-              kind: "Param",
-              pattern: { name: { text: "y" } },
-            },
-          ],
+          signature: {
+            params: [
+              {
+                kind: "Param",
+                pattern: { name: { text: "x" } },
+              },
+              {
+                kind: "Param",
+                pattern: { name: { text: "y" } },
+              },
+            ],
+          },
         },
       ],
     });
@@ -3545,7 +3761,9 @@ describe("function parameters", (): void => {
       items: [
         {
           kind: "Function",
-          params: [{ kind: "Param", pattern: { name: { text: "x" } } }],
+          signature: {
+            params: [{ kind: "Param", pattern: { name: { text: "x" } } }],
+          },
         },
       ],
     });
@@ -3556,15 +3774,17 @@ describe("function parameters", (): void => {
     expect(ast).toMatchObject({
       items: [
         {
-          params: [
-            {
-              kind: "Param",
-              type: {
-                kind: "NamedType",
-                path: { segments: ["std", "Vec"] },
+          signature: {
+            params: [
+              {
+                kind: "Param",
+                type: {
+                  kind: "NamedType",
+                  path: { segments: ["std", "Vec"] },
+                },
               },
-            },
-          ],
+            ],
+          },
         },
       ],
     });
@@ -3575,7 +3795,9 @@ describe("function parameters", (): void => {
     expect(ast).toMatchObject({
       items: [
         {
-          params: [{ kind: "Param", type: { kind: "UnitType" } }],
+          signature: {
+            params: [{ kind: "Param", type: { kind: "UnitType" } }],
+          },
         },
       ],
     });
@@ -3597,8 +3819,10 @@ describe("method receivers", (): void => {
       items: [
         {
           kind: "Function",
-          receiver: some({ kind: "Receiver", byRef: false, mutable: false }),
-          params: [],
+          signature: {
+            receiver: some({ kind: "Receiver", byRef: false, mutable: false }),
+            params: [],
+          },
         },
       ],
     });
@@ -3610,8 +3834,10 @@ describe("method receivers", (): void => {
       items: [
         {
           kind: "Function",
-          receiver: some({ kind: "Receiver", byRef: false, mutable: true }),
-          params: [],
+          signature: {
+            receiver: some({ kind: "Receiver", byRef: false, mutable: true }),
+            params: [],
+          },
         },
       ],
     });
@@ -3623,8 +3849,10 @@ describe("method receivers", (): void => {
       items: [
         {
           kind: "Function",
-          receiver: some({ kind: "Receiver", byRef: true, mutable: false }),
-          params: [],
+          signature: {
+            receiver: some({ kind: "Receiver", byRef: true, mutable: false }),
+            params: [],
+          },
         },
       ],
     });
@@ -3636,8 +3864,10 @@ describe("method receivers", (): void => {
       items: [
         {
           kind: "Function",
-          receiver: some({ kind: "Receiver", byRef: true, mutable: true }),
-          params: [],
+          signature: {
+            receiver: some({ kind: "Receiver", byRef: true, mutable: true }),
+            params: [],
+          },
         },
       ],
     });
@@ -3649,11 +3879,13 @@ describe("method receivers", (): void => {
       items: [
         {
           kind: "Function",
-          receiver: some({ kind: "Receiver", byRef: true, mutable: true }),
-          params: [
-            { kind: "Param", pattern: { name: { text: "dx" } } },
-            { kind: "Param", pattern: { name: { text: "dy" } } },
-          ],
+          signature: {
+            receiver: some({ kind: "Receiver", byRef: true, mutable: true }),
+            params: [
+              { kind: "Param", pattern: { name: { text: "dx" } } },
+              { kind: "Param", pattern: { name: { text: "dy" } } },
+            ],
+          },
         },
       ],
     });
@@ -3665,8 +3897,10 @@ describe("method receivers", (): void => {
       items: [
         {
           kind: "Function",
-          receiver: some({ kind: "Receiver", byRef: false, mutable: false }),
-          params: [],
+          signature: {
+            receiver: some({ kind: "Receiver", byRef: false, mutable: false }),
+            params: [],
+          },
         },
       ],
     });
@@ -3678,11 +3912,13 @@ describe("method receivers", (): void => {
       items: [
         {
           kind: "Function",
-          receiver: none(),
-          params: [
-            { kind: "Param", pattern: { name: { text: "x" } } },
-            { kind: "Param", pattern: { name: { text: "y" } } },
-          ],
+          signature: {
+            receiver: none(),
+            params: [
+              { kind: "Param", pattern: { name: { text: "x" } } },
+              { kind: "Param", pattern: { name: { text: "y" } } },
+            ],
+          },
         },
       ],
     });
@@ -3694,8 +3930,10 @@ describe("method receivers", (): void => {
       items: [
         {
           kind: "Function",
-          receiver: none(),
-          params: [{ kind: "Param", pattern: { name: { text: "x" } } }],
+          signature: {
+            receiver: none(),
+            params: [{ kind: "Param", pattern: { name: { text: "x" } } }],
+          },
         },
       ],
     });
@@ -3743,10 +3981,12 @@ describe("Self as a type", (): void => {
       items: [
         {
           kind: "Function",
-          returnType: some({
-            kind: "NamedType",
-            path: { absolute: false, segments: ["Self"] },
-          }),
+          signature: {
+            returnType: some({
+              kind: "NamedType",
+              path: { absolute: false, segments: ["Self"] },
+            }),
+          },
         },
       ],
     });
@@ -3758,15 +3998,17 @@ describe("Self as a type", (): void => {
       items: [
         {
           kind: "Function",
-          params: [
-            {
-              kind: "Param",
-              type: {
-                kind: "NamedType",
-                path: { absolute: false, segments: ["Self"] },
+          signature: {
+            params: [
+              {
+                kind: "Param",
+                type: {
+                  kind: "NamedType",
+                  path: { absolute: false, segments: ["Self"] },
+                },
               },
-            },
-          ],
+            ],
+          },
         },
       ],
     });
@@ -3808,10 +4050,12 @@ describe("Self as a type", (): void => {
       items: [
         {
           kind: "Function",
-          returnType: some({
-            kind: "NamedType",
-            path: { absolute: false, segments: ["Self", "Item"] },
-          }),
+          signature: {
+            returnType: some({
+              kind: "NamedType",
+              path: { absolute: false, segments: ["Self", "Item"] },
+            }),
+          },
         },
       ],
     });
@@ -3823,19 +4067,21 @@ describe("Self as a type", (): void => {
       items: [
         {
           kind: "Function",
-          params: [
-            {
-              kind: "Param",
-              type: {
-                kind: "ReferenceType",
-                mutable: false,
-                referent: {
-                  kind: "NamedType",
-                  path: { absolute: false, segments: ["Self"] },
+          signature: {
+            params: [
+              {
+                kind: "Param",
+                type: {
+                  kind: "ReferenceType",
+                  mutable: false,
+                  referent: {
+                    kind: "NamedType",
+                    path: { absolute: false, segments: ["Self"] },
+                  },
                 },
               },
-            },
-          ],
+            ],
+          },
         },
       ],
     });
@@ -3847,14 +4093,16 @@ describe("Self as a type", (): void => {
       items: [
         {
           kind: "Function",
-          returnType: some({
-            kind: "ReferenceType",
-            mutable: true,
-            referent: {
-              kind: "NamedType",
-              path: { absolute: false, segments: ["Self"] },
-            },
-          }),
+          signature: {
+            returnType: some({
+              kind: "ReferenceType",
+              mutable: true,
+              referent: {
+                kind: "NamedType",
+                path: { absolute: false, segments: ["Self"] },
+              },
+            }),
+          },
         },
       ],
     });
@@ -3893,7 +4141,12 @@ describe("unsupported item keywords", (): void => {
       expect(diagnostics[0]?.message).toContain("Slice 1");
       expect(diagnostics[0]?.message).toContain(keyword);
       expect(program.value.items).toMatchObject([
-        { kind: "Function", name: { text: "bar" } },
+        {
+          kind: "Function",
+          signature: {
+            name: { text: "bar" },
+          },
+        },
       ]);
     },
   );
@@ -3908,7 +4161,12 @@ describe("unsupported item keywords", (): void => {
     expect(diagnostics[0]?.message).toContain("async");
     expect(diagnostics[0]?.message).not.toContain("Expected an expression");
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "bar" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "bar" },
+        },
+      },
     ]);
   });
 
@@ -3924,7 +4182,12 @@ describe("unsupported item keywords", (): void => {
       expect(diagnostics[0]?.message).toContain(keyword);
       expect(diagnostics[0]?.message).not.toContain("Expected an expression");
       expect(program.value.items).toMatchObject([
-        { kind: "Function", name: { text: "bar" } },
+        {
+          kind: "Function",
+          signature: {
+            name: { text: "bar" },
+          },
+        },
       ]);
     },
   );
@@ -3961,7 +4224,12 @@ describe("unsupported item keywords", (): void => {
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0]?.message).toContain("Slice 1");
       expect(program.value.items).toMatchObject([
-        { kind: "Function", name: { text: "bar" } },
+        {
+          kind: "Function",
+          signature: {
+            name: { text: "bar" },
+          },
+        },
       ]);
     },
   );
@@ -3973,7 +4241,12 @@ describe("unsupported item keywords", (): void => {
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.message).toContain("Slice 1");
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "bar" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "bar" },
+        },
+      },
     ]);
   });
 });
@@ -3988,7 +4261,13 @@ describe("item error recovery", (): void => {
     expect(diagnostics[0].severity).toBe("error");
     expect(diagnostics[0].message).toContain(":");
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "f" }, params: [] },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "f" },
+          params: [],
+        },
+      },
     ]);
   });
 
@@ -4002,7 +4281,13 @@ describe("item error recovery", (): void => {
     expect(diagnostics[0].message).toContain("identifier");
     expect(diagnostics[0].message).toContain("colon");
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "f" }, params: [] },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "f" },
+          params: [],
+        },
+      },
     ]);
   });
 
@@ -4014,7 +4299,9 @@ describe("item error recovery", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        params: [{ kind: "Param", pattern: { name: { text: "y" } } }],
+        signature: {
+          params: [{ kind: "Param", pattern: { name: { text: "y" } } }],
+        },
       },
     ]);
   });
@@ -4027,10 +4314,12 @@ describe("item error recovery", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        params: [
-          { pattern: { name: { text: "a" } } },
-          { pattern: { name: { text: "b" } } },
-        ],
+        signature: {
+          params: [
+            { pattern: { name: { text: "a" } } },
+            { pattern: { name: { text: "b" } } },
+          ],
+        },
       },
     ]);
   });
@@ -4043,7 +4332,9 @@ describe("item error recovery", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        params: [{ pattern: { name: { text: "a" } } }],
+        signature: {
+          params: [{ pattern: { name: { text: "a" } } }],
+        },
       },
     ]);
   });
@@ -4054,7 +4345,12 @@ describe("item error recovery", (): void => {
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(3);
     expect(program.value.items).toMatchObject([
-      { kind: "Function", params: [] },
+      {
+        kind: "Function",
+        signature: {
+          params: [],
+        },
+      },
     ]);
   });
 
@@ -4073,7 +4369,9 @@ describe("item error recovery", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        params: [{ pattern: { name: { text: "x" } } }],
+        signature: {
+          params: [{ pattern: { name: { text: "x" } } }],
+        },
       },
     ]);
   });
@@ -4092,7 +4390,9 @@ describe("item error recovery", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        params: [{ pattern: { name: { text: "y" } } }],
+        signature: {
+          params: [{ pattern: { name: { text: "y" } } }],
+        },
       },
     ]);
   });
@@ -4110,8 +4410,19 @@ describe("item error recovery", (): void => {
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "f" }, params: [] },
-      { kind: "Function", name: { text: "g" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "f" },
+          params: [],
+        },
+      },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "g" },
+        },
+      },
     ]);
   });
 
@@ -4122,7 +4433,12 @@ describe("item error recovery", (): void => {
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.severity).toBe("error");
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "g" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "g" },
+        },
+      },
     ]);
   });
 
@@ -4134,8 +4450,10 @@ describe("item error recovery", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        name: { text: "bar" },
-        visibility: some({ scope: none() }),
+        signature: {
+          name: { text: "bar" },
+          visibility: some({ scope: none() }),
+        },
       },
     ]);
   });
@@ -4146,7 +4464,12 @@ describe("item error recovery", (): void => {
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "bar" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "bar" },
+        },
+      },
     ]);
   });
 
@@ -4156,7 +4479,12 @@ describe("item error recovery", (): void => {
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "bar" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "bar" },
+        },
+      },
     ]);
   });
 
@@ -4168,7 +4496,12 @@ describe("item error recovery", (): void => {
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(2);
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "g" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "g" },
+        },
+      },
     ]);
   });
 
@@ -4185,7 +4518,12 @@ describe("item error recovery", (): void => {
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "bar" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "bar" },
+        },
+      },
     ]);
   });
 
@@ -4276,7 +4614,12 @@ describe("item error recovery", (): void => {
     expect(diagnostics).toHaveLength(1);
     expect(program.value.items).toMatchObject([
       { kind: "Struct", body: { fields: [] } },
-      { kind: "Function", name: { text: "g" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "g" },
+        },
+      },
     ]);
   });
 
@@ -4342,7 +4685,12 @@ describe("item error recovery", (): void => {
     expect(diagnostics).toHaveLength(1);
     expect(program.value.items).toMatchObject([
       { kind: "Struct", body: { fields: [] } },
-      { kind: "Function", name: { text: "g" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "g" },
+        },
+      },
     ]);
   });
 });
@@ -4356,9 +4704,11 @@ describe("generic parameters: declaration position", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        name: { text: "foo" },
-        generics: [{ kind: "TypeParam", name: { text: "T" }, bounds: [] }],
-        params: [],
+        signature: {
+          name: { text: "foo" },
+          generics: [{ kind: "TypeParam", name: { text: "T" }, bounds: [] }],
+          params: [],
+        },
       },
     ]);
   });
@@ -4371,16 +4721,18 @@ describe("generic parameters: declaration position", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        name: { text: "first" },
-        generics: [{ kind: "TypeParam", name: { text: "T" }, bounds: [] }],
-        params: [
-          {
-            kind: "Param",
-            pattern: { name: { text: "x" } },
-            type: { kind: "NamedType", path: { segments: ["T"] } },
-          },
-        ],
-        returnType: some({ kind: "NamedType", path: { segments: ["T"] } }),
+        signature: {
+          name: { text: "first" },
+          generics: [{ kind: "TypeParam", name: { text: "T" }, bounds: [] }],
+          params: [
+            {
+              kind: "Param",
+              pattern: { name: { text: "x" } },
+              type: { kind: "NamedType", path: { segments: ["T"] } },
+            },
+          ],
+          returnType: some({ kind: "NamedType", path: { segments: ["T"] } }),
+        },
       },
     ]);
   });
@@ -4393,17 +4745,19 @@ describe("generic parameters: declaration position", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        generics: [
-          { kind: "TypeParam", name: { text: "T" }, bounds: [] },
-          { kind: "TypeParam", name: { text: "U" }, bounds: [] },
-        ],
-        params: [
-          {
-            kind: "Param",
-            pattern: { name: { text: "x" } },
-            type: { kind: "NamedType", path: { segments: ["T"] } },
-          },
-        ],
+        signature: {
+          generics: [
+            { kind: "TypeParam", name: { text: "T" }, bounds: [] },
+            { kind: "TypeParam", name: { text: "U" }, bounds: [] },
+          ],
+          params: [
+            {
+              kind: "Param",
+              pattern: { name: { text: "x" } },
+              type: { kind: "NamedType", path: { segments: ["T"] } },
+            },
+          ],
+        },
       },
     ]);
   });
@@ -4416,20 +4770,22 @@ describe("generic parameters: declaration position", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        name: { text: "draw_all" },
-        generics: [
-          {
-            kind: "TypeParam",
-            name: { text: "T" },
-            bounds: [
-              {
-                kind: "PathTraitBound",
-                path: { segments: ["Draw"] },
-                typeArguments: [],
-              },
-            ],
-          },
-        ],
+        signature: {
+          name: { text: "draw_all" },
+          generics: [
+            {
+              kind: "TypeParam",
+              name: { text: "T" },
+              bounds: [
+                {
+                  kind: "PathTraitBound",
+                  path: { segments: ["Draw"] },
+                  typeArguments: [],
+                },
+              ],
+            },
+          ],
+        },
       },
     ]);
   });
@@ -4442,16 +4798,18 @@ describe("generic parameters: declaration position", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        generics: [
-          {
-            kind: "TypeParam",
-            name: { text: "T" },
-            bounds: [
-              { kind: "PathTraitBound", path: { segments: ["A"] } },
-              { kind: "PathTraitBound", path: { segments: ["B"] } },
-            ],
-          },
-        ],
+        signature: {
+          generics: [
+            {
+              kind: "TypeParam",
+              name: { text: "T" },
+              bounds: [
+                { kind: "PathTraitBound", path: { segments: ["A"] } },
+                { kind: "PathTraitBound", path: { segments: ["B"] } },
+              ],
+            },
+          ],
+        },
       },
     ]);
   });
@@ -4464,17 +4822,19 @@ describe("generic parameters: declaration position", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        generics: [
-          {
-            kind: "TypeParam",
-            name: { text: "T" },
-            bounds: [
-              { kind: "PathTraitBound", path: { segments: ["A"] } },
-              { kind: "PathTraitBound", path: { segments: ["B"] } },
-              { kind: "PathTraitBound", path: { segments: ["C"] } },
-            ],
-          },
-        ],
+        signature: {
+          generics: [
+            {
+              kind: "TypeParam",
+              name: { text: "T" },
+              bounds: [
+                { kind: "PathTraitBound", path: { segments: ["A"] } },
+                { kind: "PathTraitBound", path: { segments: ["B"] } },
+                { kind: "PathTraitBound", path: { segments: ["C"] } },
+              ],
+            },
+          ],
+        },
       },
     ]);
   });
@@ -4487,18 +4847,20 @@ describe("generic parameters: declaration position", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        generics: [
-          {
-            kind: "TypeParam",
-            name: { text: "T" },
-            bounds: [
-              {
-                kind: "LifetimeTraitBound",
-                lifetime: { kind: "Lifetime", name: "a" },
-              },
-            ],
-          },
-        ],
+        signature: {
+          generics: [
+            {
+              kind: "TypeParam",
+              name: { text: "T" },
+              bounds: [
+                {
+                  kind: "LifetimeTraitBound",
+                  lifetime: { kind: "Lifetime", name: "a" },
+                },
+              ],
+            },
+          ],
+        },
       },
     ]);
   });
@@ -4511,21 +4873,23 @@ describe("generic parameters: declaration position", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        generics: [
-          {
-            kind: "TypeParam",
-            name: { text: "T" },
-            bounds: [
-              {
-                kind: "PathTraitBound",
-                path: { segments: ["From"] },
-                typeArguments: [
-                  { kind: "NamedType", path: { segments: ["U"] } },
-                ],
-              },
-            ],
-          },
-        ],
+        signature: {
+          generics: [
+            {
+              kind: "TypeParam",
+              name: { text: "T" },
+              bounds: [
+                {
+                  kind: "PathTraitBound",
+                  path: { segments: ["From"] },
+                  typeArguments: [
+                    { kind: "NamedType", path: { segments: ["U"] } },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
       },
     ]);
   });
@@ -4538,21 +4902,23 @@ describe("generic parameters: declaration position", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        generics: [
-          {
-            kind: "TypeParam",
-            name: { text: "T" },
-            bounds: [
-              {
-                kind: "PathTraitBound",
-                path: { segments: ["Foo"] },
-                typeArguments: [
-                  { kind: "NamedType", path: { segments: ["Bar"] } },
-                ],
-              },
-            ],
-          },
-        ],
+        signature: {
+          generics: [
+            {
+              kind: "TypeParam",
+              name: { text: "T" },
+              bounds: [
+                {
+                  kind: "PathTraitBound",
+                  path: { segments: ["Foo"] },
+                  typeArguments: [
+                    { kind: "NamedType", path: { segments: ["Bar"] } },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
       },
     ]);
   });
@@ -4565,19 +4931,21 @@ describe("generic parameters: declaration position", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        generics: [
-          {
-            kind: "TypeParam",
-            name: { text: "T" },
-            bounds: [
-              {
-                kind: "PathTraitBound",
-                path: { segments: ["Foo"] },
-                typeArguments: [],
-              },
-            ],
-          },
-        ],
+        signature: {
+          generics: [
+            {
+              kind: "TypeParam",
+              name: { text: "T" },
+              bounds: [
+                {
+                  kind: "PathTraitBound",
+                  path: { segments: ["Foo"] },
+                  typeArguments: [],
+                },
+              ],
+            },
+          ],
+        },
       },
     ]);
   });
@@ -4590,9 +4958,14 @@ describe("generic parameters: declaration position", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        generics: [
-          { kind: "LifetimeParam", lifetime: { kind: "Lifetime", name: "a" } },
-        ],
+        signature: {
+          generics: [
+            {
+              kind: "LifetimeParam",
+              lifetime: { kind: "Lifetime", name: "a" },
+            },
+          ],
+        },
       },
     ]);
   });
@@ -4605,10 +4978,18 @@ describe("generic parameters: declaration position", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        generics: [
-          { kind: "LifetimeParam", lifetime: { kind: "Lifetime", name: "a" } },
-          { kind: "LifetimeParam", lifetime: { kind: "Lifetime", name: "b" } },
-        ],
+        signature: {
+          generics: [
+            {
+              kind: "LifetimeParam",
+              lifetime: { kind: "Lifetime", name: "a" },
+            },
+            {
+              kind: "LifetimeParam",
+              lifetime: { kind: "Lifetime", name: "b" },
+            },
+          ],
+        },
       },
     ]);
   });
@@ -4621,9 +5002,14 @@ describe("generic parameters: declaration position", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        generics: [
-          { kind: "LifetimeParam", lifetime: { kind: "Lifetime", name: "a" } },
-        ],
+        signature: {
+          generics: [
+            {
+              kind: "LifetimeParam",
+              lifetime: { kind: "Lifetime", name: "a" },
+            },
+          ],
+        },
       },
     ]);
   });
@@ -4636,17 +5022,22 @@ describe("generic parameters: declaration position", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        generics: [
-          { kind: "LifetimeParam", lifetime: { kind: "Lifetime", name: "a" } },
-          { kind: "TypeParam", name: { text: "T" }, bounds: [] },
-        ],
-        params: [
-          {
-            kind: "Param",
-            pattern: { name: { text: "x" } },
-            type: { kind: "NamedType", path: { segments: ["T"] } },
-          },
-        ],
+        signature: {
+          generics: [
+            {
+              kind: "LifetimeParam",
+              lifetime: { kind: "Lifetime", name: "a" },
+            },
+            { kind: "TypeParam", name: { text: "T" }, bounds: [] },
+          ],
+          params: [
+            {
+              kind: "Param",
+              pattern: { name: { text: "x" } },
+              type: { kind: "NamedType", path: { segments: ["T"] } },
+            },
+          ],
+        },
       },
     ]);
   });
@@ -4659,10 +5050,15 @@ describe("generic parameters: declaration position", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        generics: [
-          { kind: "TypeParam", name: { text: "T" }, bounds: [] },
-          { kind: "LifetimeParam", lifetime: { kind: "Lifetime", name: "a" } },
-        ],
+        signature: {
+          generics: [
+            { kind: "TypeParam", name: { text: "T" }, bounds: [] },
+            {
+              kind: "LifetimeParam",
+              lifetime: { kind: "Lifetime", name: "a" },
+            },
+          ],
+        },
       },
     ]);
   });
@@ -4699,8 +5095,18 @@ describe("generic parameters: declaration position", (): void => {
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(0);
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "foo" } },
-      { kind: "Function", name: { text: "bar" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "foo" },
+        },
+      },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "bar" },
+        },
+      },
     ]);
   });
 
@@ -4796,8 +5202,18 @@ describe("generic parameters: declaration position", (): void => {
     assert(isSome(program), "Expected a program to come back");
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "broken" } },
-      { kind: "Function", name: { text: "ok" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "broken" },
+        },
+      },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "ok" },
+        },
+      },
     ]);
   });
 
@@ -4848,28 +5264,30 @@ describe("generic parameters: declaration position", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        generics: [
-          {
-            kind: "TypeParam",
-            name: { text: "T" },
-            bounds: [
-              {
-                kind: "PathTraitBound",
-                path: { segments: ["Foo"] },
-                typeArguments: [
-                  {
-                    kind: "NamedType",
-                    path: { segments: ["Bar"] },
-                    typeArguments: [
-                      { kind: "NamedType", path: { segments: ["Baz"] } },
-                    ],
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-        params: [],
+        signature: {
+          generics: [
+            {
+              kind: "TypeParam",
+              name: { text: "T" },
+              bounds: [
+                {
+                  kind: "PathTraitBound",
+                  path: { segments: ["Foo"] },
+                  typeArguments: [
+                    {
+                      kind: "NamedType",
+                      path: { segments: ["Bar"] },
+                      typeArguments: [
+                        { kind: "NamedType", path: { segments: ["Baz"] } },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+          params: [],
+        },
       },
     ]);
   });
@@ -4884,8 +5302,10 @@ describe("generic parameters: declaration position", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        generics: [{ kind: "TypeParam", name: { text: "T" }, bounds: [] }],
-        params: [],
+        signature: {
+          generics: [{ kind: "TypeParam", name: { text: "T" }, bounds: [] }],
+          params: [],
+        },
       },
     ]);
   });
@@ -4897,7 +5317,13 @@ describe("generic parameters: declaration position", (): void => {
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
     expect(diagnostics[0].message).toContain("identifier");
     expect(program.value.items).toMatchObject([
-      { kind: "Function", generics: [], params: [] },
+      {
+        kind: "Function",
+        signature: {
+          generics: [],
+          params: [],
+        },
+      },
     ]);
   });
 });
@@ -4912,22 +5338,27 @@ describe("lifetime + reference type interactions", (): void => {
         items: [
           {
             kind: "Function",
-            generics: [
-              {
-                kind: "LifetimeParam",
-                lifetime: { kind: "Lifetime", name: "a" },
-              },
-            ],
-            params: [
-              {
-                type: {
-                  kind: "ReferenceType",
-                  mutable: false,
-                  lifetime: some({ kind: "Lifetime", name: "a" }),
-                  referent: { kind: "NamedType", path: { segments: ["i32"] } },
+            signature: {
+              generics: [
+                {
+                  kind: "LifetimeParam",
+                  lifetime: { kind: "Lifetime", name: "a" },
                 },
-              },
-            ],
+              ],
+              params: [
+                {
+                  type: {
+                    kind: "ReferenceType",
+                    mutable: false,
+                    lifetime: some({ kind: "Lifetime", name: "a" }),
+                    referent: {
+                      kind: "NamedType",
+                      path: { segments: ["i32"] },
+                    },
+                  },
+                },
+              ],
+            },
           },
         ],
       }),
@@ -5010,22 +5441,24 @@ describe("where clauses: function declarations", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        name: { text: "f" },
-        whereClause: some({
-          kind: "WhereClause",
-          predicates: [
-            {
-              type: { kind: "NamedType", path: { segments: ["T"] } },
-              bounds: [
-                {
-                  kind: "PathTraitBound",
-                  path: { segments: ["Draw"] },
-                  typeArguments: [],
-                },
-              ],
-            },
-          ],
-        }),
+        signature: {
+          name: { text: "f" },
+          whereClause: some({
+            kind: "WhereClause",
+            predicates: [
+              {
+                type: { kind: "NamedType", path: { segments: ["T"] } },
+                bounds: [
+                  {
+                    kind: "PathTraitBound",
+                    path: { segments: ["Draw"] },
+                    typeArguments: [],
+                  },
+                ],
+              },
+            ],
+          }),
+        },
         body: { statements: [] },
       },
     ]);
@@ -5039,11 +5472,13 @@ describe("where clauses: function declarations", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        generics: [{ kind: "TypeParam", name: { text: "T" }, bounds: [] }],
-        whereClause: some({
-          kind: "WhereClause",
-          predicates: [{ type: { path: { segments: ["T"] } } }],
-        }),
+        signature: {
+          generics: [{ kind: "TypeParam", name: { text: "T" }, bounds: [] }],
+          whereClause: some({
+            kind: "WhereClause",
+            predicates: [{ type: { path: { segments: ["T"] } } }],
+          }),
+        },
       },
     ]);
   });
@@ -5056,19 +5491,21 @@ describe("where clauses: function declarations", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        whereClause: some({
-          kind: "WhereClause",
-          predicates: [
-            {
-              type: { path: { segments: ["T"] } },
-              bounds: [{ path: { segments: ["Draw"] } }],
-            },
-            {
-              type: { path: { segments: ["U"] } },
-              bounds: [{ path: { segments: ["Clone"] } }],
-            },
-          ],
-        }),
+        signature: {
+          whereClause: some({
+            kind: "WhereClause",
+            predicates: [
+              {
+                type: { path: { segments: ["T"] } },
+                bounds: [{ path: { segments: ["Draw"] } }],
+              },
+              {
+                type: { path: { segments: ["U"] } },
+                bounds: [{ path: { segments: ["Clone"] } }],
+              },
+            ],
+          }),
+        },
       },
     ]);
   });
@@ -5081,18 +5518,20 @@ describe("where clauses: function declarations", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        whereClause: some({
-          kind: "WhereClause",
-          predicates: [
-            {
-              type: { path: { segments: ["T"] } },
-              bounds: [
-                { kind: "PathTraitBound", path: { segments: ["A"] } },
-                { kind: "PathTraitBound", path: { segments: ["B"] } },
-              ],
-            },
-          ],
-        }),
+        signature: {
+          whereClause: some({
+            kind: "WhereClause",
+            predicates: [
+              {
+                type: { path: { segments: ["T"] } },
+                bounds: [
+                  { kind: "PathTraitBound", path: { segments: ["A"] } },
+                  { kind: "PathTraitBound", path: { segments: ["B"] } },
+                ],
+              },
+            ],
+          }),
+        },
       },
     ]);
   });
@@ -5105,10 +5544,12 @@ describe("where clauses: function declarations", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        whereClause: some({
-          kind: "WhereClause",
-          predicates: [{ type: { path: { segments: ["T"] } } }],
-        }),
+        signature: {
+          whereClause: some({
+            kind: "WhereClause",
+            predicates: [{ type: { path: { segments: ["T"] } } }],
+          }),
+        },
       },
     ]);
   });
@@ -5121,20 +5562,22 @@ describe("where clauses: function declarations", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        whereClause: some({
-          kind: "WhereClause",
-          predicates: [
-            {
-              type: { path: { segments: ["T"] } },
-              bounds: [
-                {
-                  kind: "LifetimeTraitBound",
-                  lifetime: { kind: "Lifetime", name: "a" },
-                },
-              ],
-            },
-          ],
-        }),
+        signature: {
+          whereClause: some({
+            kind: "WhereClause",
+            predicates: [
+              {
+                type: { path: { segments: ["T"] } },
+                bounds: [
+                  {
+                    kind: "LifetimeTraitBound",
+                    lifetime: { kind: "Lifetime", name: "a" },
+                  },
+                ],
+              },
+            ],
+          }),
+        },
       },
     ]);
   });
@@ -5147,23 +5590,25 @@ describe("where clauses: function declarations", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        whereClause: some({
-          kind: "WhereClause",
-          predicates: [
-            {
-              type: { path: { segments: ["T"] } },
-              bounds: [
-                {
-                  kind: "PathTraitBound",
-                  path: { segments: ["Foo"] },
-                  typeArguments: [
-                    { kind: "NamedType", path: { segments: ["Bar"] } },
-                  ],
-                },
-              ],
-            },
-          ],
-        }),
+        signature: {
+          whereClause: some({
+            kind: "WhereClause",
+            predicates: [
+              {
+                type: { path: { segments: ["T"] } },
+                bounds: [
+                  {
+                    kind: "PathTraitBound",
+                    path: { segments: ["Foo"] },
+                    typeArguments: [
+                      { kind: "NamedType", path: { segments: ["Bar"] } },
+                    ],
+                  },
+                ],
+              },
+            ],
+          }),
+        },
       },
     ]);
   });
@@ -5176,7 +5621,13 @@ describe("where clauses: function declarations", (): void => {
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].message).toContain("lifetime");
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "f" }, whereClause: none() },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "f" },
+          whereClause: none(),
+        },
+      },
     ]);
   });
 
@@ -5190,23 +5641,25 @@ describe("where clauses: function declarations", (): void => {
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
-        whereClause: some({
-          kind: "WhereClause",
-          predicates: [
-            {
-              type: { path: { segments: ["T"] } },
-              bounds: [
-                {
-                  kind: "PathTraitBound",
-                  path: { segments: ["Foo"] },
-                  typeArguments: [
-                    { kind: "NamedType", path: { segments: ["Bar"] } },
-                  ],
-                },
-              ],
-            },
-          ],
-        }),
+        signature: {
+          whereClause: some({
+            kind: "WhereClause",
+            predicates: [
+              {
+                type: { path: { segments: ["T"] } },
+                bounds: [
+                  {
+                    kind: "PathTraitBound",
+                    path: { segments: ["Foo"] },
+                    typeArguments: [
+                      { kind: "NamedType", path: { segments: ["Bar"] } },
+                    ],
+                  },
+                ],
+              },
+            ],
+          }),
+        },
       },
     ]);
   });
@@ -5224,8 +5677,18 @@ describe("where clauses: function declarations", (): void => {
     assert(isSome(program), "Expected a program to come back");
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "f" } },
-      { kind: "Function", name: { text: "g" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "f" },
+        },
+      },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "g" },
+        },
+      },
     ]);
   });
 
@@ -5371,8 +5834,19 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
       expect(diagnostics[0]?.message).toContain("Slice 1");
       expect(diagnostics[0]?.message).toContain(keyword);
       expect(program.value.items).toMatchObject([
-        { kind: "Function", name: { text: "f" }, body: { statements: [] } },
-        { kind: "Function", name: { text: "g" } },
+        {
+          kind: "Function",
+          signature: {
+            name: { text: "f" },
+          },
+          body: { statements: [] },
+        },
+        {
+          kind: "Function",
+          signature: {
+            name: { text: "g" },
+          },
+        },
       ]);
     },
   );
@@ -5394,8 +5868,19 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
       expect(diagnostics[0].message).toContain(keyword);
       assert(isSome(program), "Expected a program to come back");
       expect(program.value.items).toMatchObject([
-        { kind: "Function", name: { text: "f" }, body: { statements: [] } },
-        { kind: "Function", name: { text: "g" } },
+        {
+          kind: "Function",
+          signature: {
+            name: { text: "f" },
+          },
+          body: { statements: [] },
+        },
+        {
+          kind: "Function",
+          signature: {
+            name: { text: "g" },
+          },
+        },
       ]);
     },
   );
@@ -5442,8 +5927,18 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     expect(diagnostics[0].message).toContain("loop");
     assert(isSome(program), "Expected a program to come back");
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "f" } },
-      { kind: "Function", name: { text: "g" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "f" },
+        },
+      },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "g" },
+        },
+      },
     ]);
   });
 
@@ -5454,8 +5949,18 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     expect(diagnostics).toHaveLength(1);
     assert(isSome(program), "Expected a program to come back");
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "f" } },
-      { kind: "Function", name: { text: "g" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "f" },
+        },
+      },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "g" },
+        },
+      },
     ]);
   });
 
@@ -5473,8 +5978,18 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     assert(isSome(program), "Expected program to come back");
     expect(diagnostics).toHaveLength(1);
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "f" } },
-      { kind: "Function", name: { text: "g" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "f" },
+        },
+      },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "g" },
+        },
+      },
     ]);
   });
 
@@ -5509,7 +6024,12 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
           }),
         },
       },
-      { kind: "Function", name: { text: "g" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "g" },
+        },
+      },
     ]);
   });
 
@@ -5570,8 +6090,18 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
     expect(diagnostics[0].message).toContain("while");
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "f" } },
-      { kind: "Function", name: { text: "g" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "f" },
+        },
+      },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "g" },
+        },
+      },
     ]);
   });
 });

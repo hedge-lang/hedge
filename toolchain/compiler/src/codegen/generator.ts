@@ -897,6 +897,7 @@ function emitItemParts(program: Program): EmittedPart[] {
   const parts: EmittedPart[] = [];
   for (const item of program.items) {
     if (item.kind === "FunctionDecl") {
+      if (!item.hasBody) continue;
       const part = emitFunctionPart(item);
       if (part.text.length > 0) parts.push(part);
       continue;

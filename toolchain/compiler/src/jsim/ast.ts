@@ -72,6 +72,8 @@ export interface FunctionDecl {
   readonly params: readonly FunctionParam[];
   readonly returnType: Option<Type>;
   readonly body: readonly Statement[];
+  /** false for a semicolon-terminated signature with no implementation. */
+  readonly hasBody: boolean;
   readonly docComment: Option<DocComment>;
   readonly span: Span;
 }

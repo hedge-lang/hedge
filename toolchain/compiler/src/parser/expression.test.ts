@@ -2868,8 +2868,19 @@ describe("bare `while`/`loop`/`for` regression after while-let support", (): voi
     expect(diagnostics[0]?.message).toContain("Slice 1");
     expect(diagnostics[0]?.message).toContain("while");
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "f" }, body: { statements: [] } },
-      { kind: "Function", name: { text: "g" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "f" },
+        },
+        body: { statements: [] },
+      },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "g" },
+        },
+      },
     ]);
   });
 
@@ -2882,8 +2893,18 @@ describe("bare `while`/`loop`/`for` regression after while-let support", (): voi
     expect(diagnostics[0]?.message).toContain("Slice 1");
     expect(diagnostics[0]?.message).toContain("while");
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "f" } },
-      { kind: "Function", name: { text: "g" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "f" },
+        },
+      },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "g" },
+        },
+      },
     ]);
   });
 
@@ -2893,8 +2914,18 @@ describe("bare `while`/`loop`/`for` regression after while-let support", (): voi
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics[0]?.message).toContain("loop");
     expect(program.value.items).toMatchObject([
-      { kind: "Function", name: { text: "f" } },
-      { kind: "Function", name: { text: "g" } },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "f" },
+        },
+      },
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "g" },
+        },
+      },
     ]);
   });
 });

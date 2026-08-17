@@ -30,7 +30,8 @@ export interface Attribute {
 
 /** A top-level entry. Slice 1 is lenient and also accepts bare statements. */
 export type Item =
-  | FunctionDecl
+  | Function
+  | FunctionSignature
   | StructDecl
   | EnumDecl
   | ConstDecl
@@ -54,7 +55,8 @@ export type ConstValue =
 export type Statement =
   | LetStatement
   | ExpressionStatement
-  | FunctionDecl
+  | Function
+  | FunctionSignature
   | StructDecl
   | EnumDecl
   | ConstDecl
@@ -162,8 +164,9 @@ export interface Param extends DecoratedAstNode {
   readonly type: Type;
 }
 
-export interface FunctionDecl extends AstNode {
-  readonly kind: "Function";
+/** A function signature with no implementation - `fn f(&self) -> i32;`. */
+export interface FunctionSignature extends AstNode {
+  readonly kind: "FunctionSignature";
   readonly visibility: Option<Visibility>;
   readonly name: Identifier;
   readonly generics: readonly string[];
@@ -171,6 +174,11 @@ export interface FunctionDecl extends AstNode {
   readonly returnType: Option<Type>;
   readonly whereClause: Option<never>;
   readonly attributes: readonly Attribute[];
+}
+
+export interface Function extends AstNode {
+  readonly kind: "Function";
+  readonly signature: FunctionSignature;
   readonly body: Block;
 }
 
