@@ -194,8 +194,8 @@ describe("generator", (): void => {
 
   it("emits neither JS nor .d.ts for a bodiless function signature - no implementation, nothing to declare as usable", (): void => {
     const code = genLoose("pub fn f();");
-    expect(js(code)).toBe(null);
-    expect(dts(code)).toBe(null);
+    expect(js(code)).toBeNull();
+    expect(dts(code)).toBeNull();
   });
 
   it("emits JS and .d.ts only for the bodied function, when a bodiless signature and a bodied function coexist", (): void => {
