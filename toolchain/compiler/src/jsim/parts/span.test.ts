@@ -15,8 +15,8 @@ import {
 function trailingBinaryExpression(source: string): Semantics.BinaryExpression {
   const { program } = analyzeSource(source);
   const main = program.items.find(
-    (item): item is Semantics.FunctionDecl =>
-      item.kind === "Function" && item.name.text === "main",
+    (item): item is Semantics.FunctionDef =>
+      item.kind === "Function" && item.signature.name.text === "main",
   );
   assert(main !== undefined, "Expected a main function");
   const trailing = main.body.trailingExpression;

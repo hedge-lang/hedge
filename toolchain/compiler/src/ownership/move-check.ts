@@ -4,7 +4,7 @@
  * Move/use-before-init checking and scope-end drop-point computation
  *
  * This is a second, independent recursive walk over the same
- * Semantics.FunctionDecl that buildControlFlowGraph() lowers. Merging
+ * Semantics.FunctionDef that buildControlFlowGraph() lowers. Merging
  * state at an `if`/`else` join requires knowing which block is the matching
  * join for a given fork; reconstructing that from a flat successors[] array
  * is fiddly, whereas recursing over the AST's own branch structure gets it
@@ -1262,6 +1262,7 @@ function walkStatement(
       return;
     }
     case "Function":
+    case "FunctionSignature":
     case "Struct":
     case "Enum":
     case "Const":
@@ -1450,11 +1451,11 @@ function walkScope(
  * interference. Parameters are always seeded `Owned` (never `Uninitialized`):
  * a function can't be called without its arguments already existing.
  */
-function walkFunction(ctx: Ctx, fn: Semantics.FunctionDecl): void {
+function walkFunction(ctx: Ctx, fn: Semantics.FunctionDef): void {
   const state: StateMap = new Map();
   const scopeStack: ScopeStack = [new Map<string, BindingId>()];
   const paramDeclarations: Declaration[] = [];
-  for (const param of fn.params) {
+  for (const param of fn.signature.params) {
     for (const { identifier, mutable } of collectPatternDeclarations(
       param.pattern,
     )) {
@@ -1506,7 +1507,7 @@ export function analyzeOwnership(
       currentStatementTokenId: item.tokenId,
     };
     walkFunction(ctx, item);
-    functions.set(item.name.text, {
+    functions.set(item.signature.name.text, {
       graph,
       drops,
       conditionalDrops,

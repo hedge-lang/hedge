@@ -58,11 +58,15 @@ types, selective monomorphization. **Design the witness/dyn/closure ABI here.**
 Generic enums (`Option<T>`) follow once this lands.
 Spec: `0013-generics-and-traits` (renumbered `0015`).
 
-### Slice 5 — Collections, strings, the intrinsic floor
+### Slice 5 — Collections, strings
 
-The trusted `extern "js"` intrinsic layer (array/string/Map/Math). `Vec`, slices,
-fixed arrays; `str` + `${}` interpolation (`Display`). **std-in-Hedge begins** —
-`Option`, `Result`, `Iterator` adapters written in Hedge.
+`Vec`, slices, fixed arrays, `str` + `${}` interpolation (`Display`) —
+all lowered natively by the compiler, not through extern bindings (mirrors
+the existing `[T; N]`/slice-view codegen; `StringBuilder` follows the same
+native treatment as `Vec`). No dependency on the `extern "js"` intrinsic
+layer, which moved to Slice 9 alongside `ExternBlock` parsing.
+**std-in-Hedge begins** — `Option`, `Result`, `Iterator` adapters written in
+Hedge.
 Spec: `0011-strings`, `0012-collections`, `0015-iterators` (renumbered `0017`).
 
 ### Slice 6 — Error handling & control flow

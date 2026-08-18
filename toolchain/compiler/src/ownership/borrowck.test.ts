@@ -688,4 +688,9 @@ describe("pattern-derived &/&mut sub-bindings", (): void => {
     `);
     expect(diagnostics).toEqual([]);
   });
+
+  it("does not crash on a bodiless function signature with a &mut reference parameter", (): void => {
+    const diagnostics = check("fn f(x: &mut i32); fn main() {}");
+    expect(diagnostics).toEqual([]);
+  });
 });

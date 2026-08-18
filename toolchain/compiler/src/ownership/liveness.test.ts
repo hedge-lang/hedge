@@ -14,8 +14,8 @@ import { computeLiveness, dumpLiveness } from "./liveness.js";
 function mainGraph(source: string): ControlFlowGraph {
   const { program } = analyzeSource(source);
   const main = program.items.find(
-    (item): item is Semantics.FunctionDecl =>
-      item.kind === "Function" && item.name.text === "main",
+    (item): item is Semantics.FunctionDef =>
+      item.kind === "Function" && item.signature.name.text === "main",
   );
   assert(main !== undefined, "Expected a main function");
   return buildControlFlowGraph(main);

@@ -764,7 +764,7 @@ export function toJsim(
   const topLevelNames = new Set<string>();
   for (const item of program.items) {
     if (item.kind === "Function") {
-      topLevelNames.add(item.name.text);
+      topLevelNames.add(item.signature.name.text);
     } else if (item.kind === "Const" && isSome(item.visibility)) {
       // A pub const's own name becomes a real top-level JS binding too
       // (see `emitConstPart`), same as a function's - a static's mangled
@@ -891,6 +891,8 @@ function parseItem(
   item: Semantics.Item,
 ): JSIM.Item | JSIM.Item[] {
   if (item.kind === "Function") return parseFunction(ctx, item);
+  if (item.kind === "FunctionSignature")
+    return parseFunctionSignature(ctx, item);
   if (item.kind === "LetStatement" || item.kind === "ExpressionStatement")
     return parseStatement(ctx, item);
   if (item.kind === "Struct") return parseStruct(item);
@@ -989,30 +991,47 @@ function jsimEnumDecl(enumDecl: Semantics.EnumDecl): JSIM.EnumDecl {
   };
 }
 
+// Pre-bind params so inner `let` with the same name gets a unique suffix.
+// Capture the emitted name so the function declaration stays in sync with
+// whatever the rename context assigns (defensive: currently always identity
+// since params are the first things bound in a fresh function scope). A
+// destructuring param gets a synthesized plain JS name; `destructureFunctionParams`
+// unpacks it into its own bound names.
+function emitFunctionParams(
+  ctx: JsimContext,
+  params: readonly Semantics.Param[],
+): ReadonlyArray<{ param: Semantics.Param; emittedName: string }> {
+  return params.map((p) => {
+    if (!isSimpleBindingPattern(p.pattern)) {
+      return {
+        param: p,
+        emittedName: reserveLocalName(ctx, "paramDestructure"),
+      };
+    }
+    const identity = simpleBindingIdentity(p.pattern);
+    const emittedName = bindLocalName(ctx, identity.text);
+    recordEmittedName(ctx, identity.tokenId, emittedName);
+    return { param: p, emittedName };
+  });
+}
+
 function parseFunction(
   ctx: JsimContext,
-  fn: Semantics.FunctionDecl,
-): JSIM.FunctionDecl {
-  return withFunctionCtx(ctx, fn.name.text, () => {
-    // Pre-bind params so inner `let` with the same name gets a unique suffix.
-    // Capture the emitted name so the function declaration stays in sync with
-    // whatever the rename context assigns (defensive: currently always identity
-    // since params are the first things bound in a fresh function scope). A
-    // destructuring param gets a synthesized plain JS name;
-    // `destructureFunctionParams` unpacks it into its own bound names.
-    const emittedParams = fn.params.map((p) => {
-      if (!isSimpleBindingPattern(p.pattern)) {
-        return {
-          param: p,
-          emittedName: reserveLocalName(ctx, "paramDestructure"),
-        };
-      }
-      const identity = simpleBindingIdentity(p.pattern);
-      const emittedName = bindLocalName(ctx, identity.text);
-      recordEmittedName(ctx, identity.tokenId, emittedName);
-      return { param: p, emittedName };
-    });
+  fn: Semantics.FunctionDef,
+): JSIM.FunctionDef {
+  return withFunctionCtx(ctx, fn.signature.name.text, () => {
+    const emittedParams = emitFunctionParams(ctx, fn.signature.params);
     return parseFunctionBody(ctx, fn, emittedParams);
+  });
+}
+
+function parseFunctionSignature(
+  ctx: JsimContext,
+  fn: Semantics.FunctionSignature,
+): JSIM.FunctionSignature {
+  return withFunctionCtx(ctx, fn.name.text, () => {
+    const emittedParams = emitFunctionParams(ctx, fn.params);
+    return ambientFunctionSignature(ctx, fn, emittedParams);
   });
 }
 
@@ -1093,38 +1112,98 @@ function destructureFunctionParams(
   });
 }
 
-function parseFunctionBody(
-  ctx: JsimContext,
-  fn: Semantics.FunctionDecl,
+function signatureFields(
+  signature: Semantics.FunctionSignature,
   emittedParams: ReadonlyArray<{
     param: Semantics.Param;
     emittedName: string;
   }>,
-): JSIM.FunctionDecl {
-  const innerDoc = toDocComment(fn.body.innerAttributes);
-  const outerDoc = toDocComment(fn.attributes);
-  const docComment = isSome(innerDoc) ? innerDoc : outerDoc;
-
+): {
+  scope: Option<"public" | "package">;
+  params: readonly JSIM.FunctionParam[];
+  declaredReturnType: Option<Semantics.Type>;
+  returnType: Option<JSIM.PrimitiveType>;
+} {
   // A declared, non-unit return type. When Some, Gap-A's return-type-mismatch
   // check (checkFunctionReturnType in analyzer.ts) already guarantees
   // fn.body.trailingExpression is Some and its type matches - no defensive
   // handling needed here for "declared return type but missing/wrong trailing
   // expression."
   const declaredReturnType: Option<Semantics.Type> =
-    isSome(fn.returnType) && fn.returnType.value.kind !== "UnitType"
-      ? fn.returnType
+    isSome(signature.returnType) &&
+    signature.returnType.value.kind !== "UnitType"
+      ? signature.returnType
       : none();
+  const scope: Option<"public" | "package"> = mapSome(
+    signature.visibility,
+    (visibility) =>
+      isSome(visibility.scope) && visibility.scope.value === "package"
+        ? "package"
+        : "public",
+  );
+  const params = emittedParams.map(
+    ({ param: p, emittedName }): JSIM.FunctionParam => ({
+      kind: "FunctionParam",
+      name: emittedName,
+      type: semanticTypeToJsPrimitive(p.type),
+    }),
+  );
+  const returnType: Option<JSIM.PrimitiveType> = isSome(declaredReturnType)
+    ? semanticTypeToJsPrimitive(declaredReturnType.value)
+    : none();
+  return { scope, params, declaredReturnType, returnType };
+}
+
+function ambientFunctionSignature(
+  ctx: JsimContext,
+  fn: Semantics.FunctionSignature,
+  emittedParams: ReadonlyArray<{
+    param: Semantics.Param;
+    emittedName: string;
+  }>,
+): JSIM.FunctionSignature {
+  const { scope, params, returnType } = signatureFields(fn, emittedParams);
+  return {
+    kind: "FunctionSignature",
+    scope,
+    name: fn.name.text,
+    params,
+    returnType,
+    // Placeholder span covering just the `fn` keyword token, not a real
+    // source range - a FunctionSignature produces nothing in either output
+    // (see jsim/ast.ts's own doc comment), so nothing reads this today.
+    span: resolveSpan(ctx.tokens, fn.tokenId, fn.tokenId),
+    docComment: toDocComment(fn.attributes),
+  };
+}
+
+function parseFunctionBody(
+  ctx: JsimContext,
+  fn: Semantics.FunctionDef,
+  emittedParams: ReadonlyArray<{
+    param: Semantics.Param;
+    emittedName: string;
+  }>,
+): JSIM.FunctionDef {
+  const { scope, params, declaredReturnType, returnType } = signatureFields(
+    fn.signature,
+    emittedParams,
+  );
+  const block = fn.body;
+  const innerDoc = toDocComment(block.innerAttributes);
+  const outerDoc = toDocComment(fn.signature.attributes);
+  const docComment = isSome(innerDoc) ? innerDoc : outerDoc;
 
   // Param shadows must be computed (and their `bindLocalName` side effects
   // applied) before the body is lowered, so `lookupLocalName` inside the
   // body resolves references to the shadow, not the original parameter.
-  const rootDrops = scopeDrops(ctx, fn.body.tokenId);
+  const rootDrops = scopeDrops(ctx, block.tokenId);
   const paramDestructures = destructureFunctionParams(ctx, emittedParams);
   const paramShadows = dropParamShadows(ctx, emittedParams, rootDrops);
   const statements: JSIM.Statement[] = [
     ...paramDestructures,
     ...paramShadows,
-    ...lowerStatementsWithDropFlags(ctx, fn.body.statements, rootDrops),
+    ...lowerStatementsWithDropFlags(ctx, block.statements, rootDrops),
   ];
   // The guard-check must run before any `return` the trailing expression
   // produces, or it would be dead code -- but after everything else, so it
@@ -1132,49 +1211,33 @@ function parseFunctionBody(
   // trailing expression into a real `return` (via jsimTailStatements), so
   // the guard goes immediately before it; otherwise the trailing expression
   // is just evaluated in place and the guard can safely follow it.
-  if (isSome(fn.body.trailingExpression)) {
-    const trailing = fn.body.trailingExpression.value;
+  if (isSome(block.trailingExpression)) {
+    const trailing = block.trailingExpression.value;
     if (isSome(declaredReturnType)) {
       statements.push(
-        ...dropCheckStatements(ctx, fn.body.tokenId),
+        ...dropCheckStatements(ctx, block.tokenId),
         ...jsimTailStatements(ctx, trailing),
       );
     } else {
       statements.push(
         parseExpression(ctx, trailing),
-        ...dropCheckStatements(ctx, fn.body.tokenId),
+        ...dropCheckStatements(ctx, block.tokenId),
       );
     }
   } else {
-    statements.push(...dropCheckStatements(ctx, fn.body.tokenId));
+    statements.push(...dropCheckStatements(ctx, block.tokenId));
   }
 
-  const scope: Option<"public" | "package"> = mapSome(
-    fn.visibility,
-    (visibility) =>
-      isSome(visibility.scope) && visibility.scope.value === "package"
-        ? "package"
-        : "public",
-  );
-
   return {
-    kind: "FunctionDecl",
+    kind: "Function",
     scope,
-    name: fn.name.text,
-    params: emittedParams.map(
-      ({ param: p, emittedName }): JSIM.FunctionParam => ({
-        kind: "FunctionParam",
-        name: emittedName,
-        type: semanticTypeToJsPrimitive(p.type),
-      }),
-    ),
-    returnType: isSome(declaredReturnType)
-      ? semanticTypeToJsPrimitive(declaredReturnType.value)
-      : none(),
+    name: fn.signature.name.text,
+    params,
+    returnType,
     span: resolveSpan(
       ctx.tokens,
       fn.tokenId,
-      findMatchingCloseBraceTokenId(ctx.tokens, fn.body.tokenId),
+      findMatchingCloseBraceTokenId(ctx.tokens, block.tokenId),
     ),
     body: statements,
     docComment,
@@ -1242,6 +1305,8 @@ function parseStatement(
       return [parseExpression(ctx, statement.expression)];
     case "Function":
       return [parseFunction(ctx, statement)];
+    case "FunctionSignature":
+      return [parseFunctionSignature(ctx, statement)];
     case "Struct":
       // Struct declarations are type-only - no JS runtime representation.
       return [{ kind: "BlockStatement", body: [] }];

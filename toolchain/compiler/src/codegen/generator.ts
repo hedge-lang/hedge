@@ -12,7 +12,7 @@ import type {
   EnumDecl,
   EnumDeclVariant,
   Expression,
-  FunctionDecl,
+  FunctionDef,
   IfStatement,
   Item,
   LetStatement,
@@ -604,8 +604,10 @@ function emitStatement(statement: Statement): string {
       return emitThrowStatement(statement);
     case "DisposeCallStatement":
       return emitDisposeCall(statement);
-    case "FunctionDecl":
+    case "Function":
       return emitFunction(statement);
+    case "FunctionSignature":
+      return "";
     case "BooleanLiteral":
     case "StringLiteral":
     case "NumberLiteral":
@@ -653,7 +655,7 @@ interface EmittedPart {
  * pushed before the coarse whole-function mapping so a first-match lookup
  * prefers the tightest covering entry.
  */
-function emitFunctionPart(decl: FunctionDecl): EmittedPart {
+function emitFunctionPart(decl: FunctionDef): EmittedPart {
   const bodyEntries = decl.body
     .map((stmt) => ({ stmt, text: emitStatement(stmt) }))
     .filter((entry) => entry.text.length > 0);
@@ -716,7 +718,7 @@ function emitFunctionPart(decl: FunctionDecl): EmittedPart {
   return { text, mappings };
 }
 
-function emitFunction(decl: FunctionDecl): string {
+function emitFunction(decl: FunctionDef): string {
   return emitFunctionPart(decl).text;
 }
 
@@ -768,8 +770,10 @@ function emitConstPart(decl: ConstDecl): EmittedPart {
 // eslint-disable-next-line complexity -- Routing function over the full union
 function emitItem(item: Item): string {
   switch (item.kind) {
-    case "FunctionDecl":
+    case "Function":
       return emitFunction(item);
+    case "FunctionSignature":
+      return "";
     case "StaticDecl":
       return emitStaticPart(item).text;
     case "ConstDecl":
@@ -822,7 +826,7 @@ function emitItem(item: Item): string {
 }
 
 function emitDtsFunction(
-  decl: FunctionDecl,
+  decl: FunctionDef,
   scope: "public" | "package",
 ): string {
   const params = decl.params
@@ -880,7 +884,7 @@ function emitDtsItem(item: Item): string | null {
       : null;
   }
   if (item.kind === "EnumDecl") return emitDtsEnum(item);
-  if (item.kind !== "FunctionDecl" || !isSome(item.scope)) {
+  if (item.kind !== "Function" || !isSome(item.scope)) {
     return null;
   }
   return emitDtsFunction(item, item.scope.value);
@@ -888,15 +892,14 @@ function emitDtsItem(item: Item): string | null {
 
 function hasMain(program: Program): boolean {
   return program.items.some(
-    (item: Item): boolean =>
-      item.kind === "FunctionDecl" && item.name === "main",
+    (item: Item): boolean => item.kind === "Function" && item.name === "main",
   );
 }
 
 function emitItemParts(program: Program): EmittedPart[] {
   const parts: EmittedPart[] = [];
   for (const item of program.items) {
-    if (item.kind === "FunctionDecl") {
+    if (item.kind === "Function") {
       const part = emitFunctionPart(item);
       if (part.text.length > 0) parts.push(part);
       continue;
@@ -919,8 +922,8 @@ function mainEntryPointParts(
   program: Program,
 ): readonly [shebang: EmittedPart, mainCall: EmittedPart] {
   const mainDecl = program.items.find(
-    (item): item is FunctionDecl =>
-      item.kind === "FunctionDecl" && item.name === "main",
+    (item): item is FunctionDef =>
+      item.kind === "Function" && item.name === "main",
   );
   const mainCallText = "main();";
   return [

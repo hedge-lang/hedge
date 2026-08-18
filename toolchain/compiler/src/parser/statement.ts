@@ -303,6 +303,7 @@ export function parseBlock(
       }
       if (
         item.value.kind !== "Function" &&
+        item.value.kind !== "FunctionSignature" &&
         item.value.kind !== "Struct" &&
         item.value.kind !== "Enum" &&
         item.value.kind !== "Const"

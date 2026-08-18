@@ -62,10 +62,10 @@ function jsimSourceWithOwnership(source: string): JSIM.Program {
  *
  * @return The main function declaration object if found.
  */
-function mainFunction(program: JSIM.Program): JSIM.FunctionDecl {
+function mainFunction(program: JSIM.Program): JSIM.FunctionDef {
   const main = program.items.find(
-    (item): item is JSIM.FunctionDecl =>
-      item.kind === "FunctionDecl" && item.name === "main",
+    (item): item is JSIM.FunctionDef =>
+      item.kind === "Function" && item.name === "main",
   );
   assert(main !== undefined, "Expected a main function");
   return main;
@@ -82,11 +82,24 @@ describe("toJsim", () => {
       kind: "Program",
       items: [
         {
-          kind: "FunctionDecl",
+          kind: "Function",
           name: "test_fn",
           params: [],
           returnType: none(),
           body: [],
+        },
+      ],
+    });
+  });
+
+  it("lowers a bodiless function signature to its own JSIM FunctionSignature node, distinct from Function", () => {
+    const program = jsimSource("fn f();");
+    expect(program).toMatchObject({
+      kind: "Program",
+      items: [
+        {
+          kind: "FunctionSignature",
+          name: "f",
         },
       ],
     });
@@ -97,7 +110,7 @@ describe("toJsim", () => {
     expect(program).toMatchObject({
       items: [
         {
-          kind: "FunctionDecl",
+          kind: "Function",
           params: [
             {
               kind: "FunctionParam",
@@ -120,7 +133,7 @@ describe("toJsim", () => {
     expect(program).toMatchObject({
       items: [
         {
-          kind: "FunctionDecl",
+          kind: "Function",
           returnType: { value: { kind: "PrimitiveType", value: "boolean" } },
         },
       ],
@@ -147,7 +160,7 @@ describe("toJsim", () => {
   it("maps a unit return type to none()", () => {
     const program = jsimSource("fn f() -> () {}");
     expect(program).toMatchObject({
-      items: [{ kind: "FunctionDecl", returnType: none() }],
+      items: [{ kind: "Function", returnType: none() }],
     });
   });
 
@@ -156,7 +169,7 @@ describe("toJsim", () => {
     expect(program).toMatchObject({
       items: [
         {
-          kind: "FunctionDecl",
+          kind: "Function",
           params: [
             {
               kind: "FunctionParam",
@@ -174,8 +187,8 @@ describe("toJsim", () => {
     const program = jsimSourceWithOwnership(
       "fn longest<'a>(a: &'a str, b: &'a str) -> &'a str { a }",
     );
-    const fn = program.items.find((item): item is JSIM.FunctionDecl => {
-      return item.kind === "FunctionDecl" && item.name === "longest";
+    const fn = program.items.find((item): item is JSIM.FunctionDef => {
+      return item.kind === "Function" && item.name === "longest";
     });
     assert(fn !== undefined, "Expected a longest function");
     expect(fn.params).toHaveLength(2);
@@ -192,7 +205,7 @@ describe("toJsim", () => {
     expect(program).toMatchObject({
       items: [
         {
-          kind: "FunctionDecl",
+          kind: "Function",
           params: [
             {
               kind: "FunctionParam",
@@ -215,7 +228,7 @@ describe("toJsim", () => {
     expect(program).toMatchObject({
       items: [
         {
-          kind: "FunctionDecl",
+          kind: "Function",
           params: [
             {
               kind: "FunctionParam",
@@ -302,7 +315,7 @@ describe("toJsim", () => {
     it("an identifier inside a range's start participates in alpha-rename normally", () => {
       const program = jsimSource("fn main() { let x = 1; let x = x..10; }");
       const functionDecl = program.items.find(
-        (item) => item.kind === "FunctionDecl",
+        (item) => item.kind === "Function",
       );
       assert(
         functionDecl !== undefined,
@@ -461,7 +474,7 @@ describe("toJsim", () => {
       expect(program).toMatchObject({
         items: [
           {
-            kind: "FunctionDecl",
+            kind: "Function",
             body: [{ kind: "BlockStatement", body: [] }],
           },
         ],
@@ -473,7 +486,7 @@ describe("toJsim", () => {
       expect(program).toMatchObject({
         items: [
           {
-            kind: "FunctionDecl",
+            kind: "Function",
             body: [
               {
                 kind: "BlockStatement",
@@ -490,7 +503,7 @@ describe("toJsim", () => {
       expect(program).toMatchObject({
         items: [
           {
-            kind: "FunctionDecl",
+            kind: "Function",
             body: [
               {
                 kind: "LetStatement",
@@ -515,7 +528,7 @@ describe("toJsim", () => {
     it("if with no result in any branch lowers to bare IfStatement (no IIFE)", () => {
       const program = jsimSource("fn _() { if cond { }; }");
       expect(program).toMatchObject({
-        items: [{ kind: "FunctionDecl", body: [{ kind: "IfStatement" }] }],
+        items: [{ kind: "Function", body: [{ kind: "IfStatement" }] }],
       });
     });
 
@@ -526,7 +539,7 @@ describe("toJsim", () => {
       expect(program).toMatchObject({
         items: [
           {
-            kind: "FunctionDecl",
+            kind: "Function",
             body: [
               {
                 kind: "LetStatement",
@@ -548,7 +561,7 @@ describe("toJsim", () => {
       expect(program).toMatchObject({
         items: [
           {
-            kind: "FunctionDecl",
+            kind: "Function",
             body: [
               {
                 kind: "IfStatement",
@@ -569,7 +582,7 @@ describe("toJsim", () => {
       expect(program).toMatchObject({
         items: [
           {
-            kind: "FunctionDecl",
+            kind: "Function",
             body: [
               {
                 kind: "ReturnStatement",
@@ -624,7 +637,7 @@ describe("toJsim", () => {
       expect(program).toMatchObject({
         items: [
           {
-            kind: "FunctionDecl",
+            kind: "Function",
             body: [
               {
                 kind: "ReturnStatement",
@@ -643,7 +656,7 @@ describe("toJsim", () => {
       expect(program).toMatchObject({
         items: [
           {
-            kind: "FunctionDecl",
+            kind: "Function",
             body: [
               {
                 kind: "IfStatement",
@@ -663,7 +676,7 @@ describe("toJsim", () => {
       expect(program).toMatchObject({
         items: [
           {
-            kind: "FunctionDecl",
+            kind: "Function",
             body: [
               {
                 kind: "IfStatement",
@@ -689,7 +702,7 @@ describe("toJsim", () => {
       expect(program).toMatchObject({
         items: [
           {
-            kind: "FunctionDecl",
+            kind: "Function",
             body: [{ kind: "CallExpression" }],
           },
         ],
@@ -701,7 +714,7 @@ describe("toJsim", () => {
       expect(program).toMatchObject({
         items: [
           {
-            kind: "FunctionDecl",
+            kind: "Function",
             body: [
               {
                 kind: "ReturnStatement",
@@ -720,7 +733,7 @@ describe("toJsim", () => {
       expect(program).toMatchObject({
         items: [
           {
-            kind: "FunctionDecl",
+            kind: "Function",
             body: [
               {
                 kind: "ReturnStatement",
@@ -744,7 +757,7 @@ describe("toJsim", () => {
       expect(program).toMatchObject({
         items: [
           {
-            kind: "FunctionDecl",
+            kind: "Function",
             body: [{ kind: "LetStatement", name: "default$1" }],
           },
         ],
@@ -756,7 +769,7 @@ describe("toJsim", () => {
       expect(program).toMatchObject({
         items: [
           {
-            kind: "FunctionDecl",
+            kind: "Function",
             body: [{ kind: "LetStatement", name: "Symbol$1" }],
           },
         ],
@@ -768,7 +781,7 @@ describe("toJsim", () => {
       expect(program).toMatchObject({
         items: [
           {
-            kind: "FunctionDecl",
+            kind: "Function",
             body: [{ kind: "LetStatement", name: "constructor" }],
           },
         ],
@@ -784,7 +797,7 @@ describe("toJsim", () => {
       expect(program).toMatchObject({
         items: [
           {
-            kind: "FunctionDecl",
+            kind: "Function",
             body: [
               { kind: "LetStatement", name: "x" },
               { kind: "LetStatement", name: "x$1" },
@@ -800,7 +813,7 @@ describe("toJsim", () => {
       expect(program).toMatchObject({
         items: [
           {
-            kind: "FunctionDecl",
+            kind: "Function",
             params: [{ kind: "FunctionParam", name: "n" }],
             body: [{ kind: "LetStatement", name: "n$1" }],
           },
@@ -813,7 +826,7 @@ describe("toJsim", () => {
         "fn main() { let x = 1; let x$1 = 50; let x = 2; }",
       );
       const functionDecl = program.items.find(
-        (item) => item.kind === "FunctionDecl",
+        (item) => item.kind === "Function",
       );
       assert(
         functionDecl !== undefined,
@@ -834,7 +847,7 @@ describe("toJsim", () => {
         "fn main() { let x = 1; let x = 2; let x$1 = 99; }",
       );
       const functionDecl = program.items.find(
-        (item) => item.kind === "FunctionDecl",
+        (item) => item.kind === "Function",
       );
       assert(
         functionDecl !== undefined,
@@ -855,7 +868,7 @@ describe("toJsim", () => {
         "struct Pt { x: i32 } fn main() { let x = 1; let x = 2; let p = Pt { x }; }",
       );
       const functionDecl = program.items.find(
-        (item) => item.kind === "FunctionDecl",
+        (item) => item.kind === "Function",
       );
       assert(
         functionDecl !== undefined,
@@ -892,7 +905,7 @@ describe("toJsim", () => {
     it("lowers a `&mut name` override to an immutable JS binding, since the local slot is never separately reassignable", () => {
       const program = jsimSource("fn f(mut x: i32) { let &mut bx = x; }");
       const functionDecl = program.items.find(
-        (item) => item.kind === "FunctionDecl",
+        (item) => item.kind === "Function",
       );
       assert(
         functionDecl !== undefined,
@@ -906,7 +919,7 @@ describe("toJsim", () => {
     it("still lowers a plain `mut name` binding to a mutable JS binding", () => {
       const program = jsimSource("fn f() { let mut x = 5; }");
       const functionDecl = program.items.find(
-        (item) => item.kind === "FunctionDecl",
+        (item) => item.kind === "Function",
       );
       assert(
         functionDecl !== undefined,
@@ -940,7 +953,7 @@ describe("const and static lowering", () => {
   it("erases a function-local const to an empty block statement, and inlines its trailing-expression reference", () => {
     const program = jsimSource("fn f() -> i32 { const N: i32 = 3; N }");
     const fn = program.items[0];
-    assert(fn?.kind === "FunctionDecl", "expected a FunctionDecl item");
+    assert(fn?.kind === "Function", "expected a Function item");
     expect(fn.body).toMatchObject([
       { kind: "BlockStatement", body: [] },
       {
@@ -952,8 +965,8 @@ describe("const and static lowering", () => {
 
   it("inlines a const's folded value at its reference site, not a name lookup", () => {
     const program = jsimSource("const MAX: i32 = 100; fn f() -> i32 { MAX }");
-    const fn = program.items.find((item) => item.kind === "FunctionDecl");
-    assert(fn?.kind === "FunctionDecl", "expected a FunctionDecl item");
+    const fn = program.items.find((item) => item.kind === "Function");
+    assert(fn?.kind === "Function", "expected a Function item");
     expect(fn.body).toMatchObject([
       {
         kind: "ReturnStatement",
@@ -1001,8 +1014,8 @@ describe("const and static lowering", () => {
     const program = jsimSource(
       "static COUNT: i32 = 0; fn f() -> i32 { COUNT }",
     );
-    const fn = program.items.find((item) => item.kind === "FunctionDecl");
-    assert(fn?.kind === "FunctionDecl", "expected a FunctionDecl item");
+    const fn = program.items.find((item) => item.kind === "Function");
+    assert(fn?.kind === "Function", "expected a Function item");
     expect(fn.body).toMatchObject([
       {
         kind: "ReturnStatement",
@@ -1063,8 +1076,8 @@ describe("scope-end drop", () => {
       "struct R { id: i32 } fn f(p: R) { print(p.id); }",
     );
     const f = program.items.find(
-      (item): item is JSIM.FunctionDecl =>
-        item.kind === "FunctionDecl" && item.name === "f",
+      (item): item is JSIM.FunctionDef =>
+        item.kind === "Function" && item.name === "f",
     );
     assert(f !== undefined, "Expected function f");
     // The signature keeps the original param name...
@@ -1092,8 +1105,8 @@ describe("scope-end drop", () => {
       "struct R { id: i32 } fn f(mut p: R) { print(p.id); }",
     );
     const f = program.items.find(
-      (item): item is JSIM.FunctionDecl =>
-        item.kind === "FunctionDecl" && item.name === "f",
+      (item): item is JSIM.FunctionDef =>
+        item.kind === "Function" && item.name === "f",
     );
     assert(f !== undefined, "Expected function f");
     expect(f.body.some((s) => s.kind === "LetStatement")).toBe(false);
@@ -1127,8 +1140,8 @@ describe("conditional-drop-flag codegen (synthetic ownership)", () => {
     );
 
     const mainFn = analysis.program.items.find(
-      (item): item is Semantics.FunctionDecl =>
-        item.kind === "Function" && item.name.text === "main",
+      (item): item is Semantics.FunctionDef =>
+        item.kind === "Function" && item.signature.name.text === "main",
     );
     assert(mainFn !== undefined, "Expected a main function");
 

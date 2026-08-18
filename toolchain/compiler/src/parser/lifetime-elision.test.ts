@@ -12,13 +12,15 @@ describe("lifetime elision - rule 2 (single reference parameter)", (): void => {
     assert(isSome(program), "Expected a program to come back");
     const fn = program.value.items[0];
     assert(fn?.kind === "Function", "Expected a Function item");
-    const paramType = fn.params[0]?.type;
+    const paramType = fn.signature.params[0]?.type;
     assert(paramType?.kind === "ReferenceType", "Expected a reference param");
     assert(
       isSome(paramType.lifetime),
       "Expected the param lifetime to be resolved",
     );
-    const returnType = isSome(fn.returnType) ? fn.returnType.value : undefined;
+    const returnType = isSome(fn.signature.returnType)
+      ? fn.signature.returnType.value
+      : undefined;
     assert(
       returnType?.kind === "ReferenceType",
       "Expected a reference return type",
@@ -78,7 +80,9 @@ describe("lifetime elision - ambiguity rejection", (): void => {
     );
     const fn = program.value.items[0];
     assert(fn?.kind === "Function", "Expected a Function item");
-    const returnType = isSome(fn.returnType) ? fn.returnType.value : undefined;
+    const returnType = isSome(fn.signature.returnType)
+      ? fn.signature.returnType.value
+      : undefined;
     assert(
       returnType?.kind === "ReferenceType",
       "Expected a reference return type",
@@ -97,7 +101,7 @@ describe("lifetime elision - fully explicit signatures are untouched", (): void 
     assert(isSome(program), "Expected a program to come back");
     const fn = program.value.items[0];
     assert(fn?.kind === "Function", "Expected a Function item");
-    for (const param of fn.params) {
+    for (const param of fn.signature.params) {
       assert(param.type.kind === "ReferenceType", "Expected a reference param");
       assert(
         isSome(param.type.lifetime),
@@ -121,7 +125,7 @@ describe("lifetime elision - synthesized-name collision avoidance", (): void => 
     assert(isSome(program), "Expected a program to come back");
     const fn = program.value.items[0];
     assert(fn?.kind === "Function", "Expected a Function item");
-    const bType = fn.params[1]?.type;
+    const bType = fn.signature.params[1]?.type;
     assert(bType?.kind === "ReferenceType", "Expected a reference param");
     assert(isSome(bType.lifetime), "Expected b's lifetime to be resolved");
     expect(bType.lifetime.value.name).not.toBe("_0");
@@ -166,7 +170,7 @@ describe("lifetime elision - synthesized-name collision avoidance", (): void => 
     );
     const fn = program.value.items[0];
     assert(fn?.kind === "Function", "Expected a Function item");
-    const paramType = fn.params[0]?.type;
+    const paramType = fn.signature.params[0]?.type;
     assert(paramType?.kind === "ReferenceType", "Expected a reference param");
     assert(
       isSome(paramType.lifetime),
@@ -261,7 +265,7 @@ describe("lifetime elision - nested references", (): void => {
     assert(isSome(program), "Expected a program to come back");
     const fn = program.value.items[0];
     assert(fn?.kind === "Function", "Expected a Function item");
-    const paramType = fn.params[0]?.type;
+    const paramType = fn.signature.params[0]?.type;
     assert(paramType?.kind === "NamedType", "Expected a named param type");
     const nestedRef = paramType.typeArguments[0];
     assert(
@@ -289,7 +293,7 @@ describe("lifetime elision - nested references", (): void => {
     assert(isSome(program), "Expected a program to come back");
     const fn = program.value.items[0];
     assert(fn?.kind === "Function", "Expected a Function item");
-    const paramType = fn.params[0]?.type;
+    const paramType = fn.signature.params[0]?.type;
     assert(paramType?.kind === "ArrayType", "Expected an array param type");
     const nestedRef = paramType.elementType;
     assert(
@@ -352,5 +356,35 @@ describe("lifetime elision - no rule outside a function signature", (): void => 
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].message).toContain("missing lifetime specifier");
+  });
+});
+
+describe("lifetime elision on a bodiless function signature", (): void => {
+  it("still applies rule 2 to a bodiless signature's params/return type, with zero diagnostics (fn first(s: &str) -> &str;)", (): void => {
+    const { tokens } = tokenize("fn first(s: &str) -> &str;");
+    const { program, diagnostics } = parse(tokens);
+    expect(diagnostics).toHaveLength(0);
+    assert(isSome(program), "Expected a program to come back");
+    const fn = program.value.items[0];
+    assert(
+      fn?.kind === "FunctionSignature",
+      "Expected a FunctionSignature item",
+    );
+    const paramType = fn.params[0]?.type;
+    assert(paramType?.kind === "ReferenceType", "Expected a reference param");
+    assert(
+      isSome(paramType.lifetime),
+      "Expected the param lifetime to be resolved",
+    );
+    const returnType = isSome(fn.returnType) ? fn.returnType.value : undefined;
+    assert(
+      returnType?.kind === "ReferenceType",
+      "Expected a reference return type",
+    );
+    assert(
+      isSome(returnType.lifetime),
+      "Expected the return lifetime to be resolved",
+    );
+    expect(returnType.lifetime.value.name).toBe(paramType.lifetime.value.name);
   });
 });

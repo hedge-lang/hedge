@@ -7,7 +7,13 @@ export interface Program {
   readonly docComment: Option<DocComment>;
 }
 
-export type Item = FunctionDecl | StaticDecl | ConstDecl | EnumDecl | Statement;
+export type Item =
+  | FunctionDef
+  | FunctionSignature
+  | StaticDecl
+  | ConstDecl
+  | EnumDecl
+  | Statement;
 
 /**
  * Contributes nothing to emitted JS - a variant's tagged object already
@@ -61,8 +67,25 @@ export interface DocComment {
   readonly text: string;
 }
 
-export interface FunctionDecl {
-  readonly kind: "FunctionDecl";
+/**
+ * A semicolon-terminated Hedge signature with no implementation.
+ */
+export interface FunctionSignature {
+  readonly kind: "FunctionSignature";
+  /**
+   * `none()` = module-private; `some("public")` = `pub`;
+   * `some("package")` = `pub(package)`.
+   */
+  readonly scope: Option<"public" | "package">;
+  readonly name: string;
+  readonly params: readonly FunctionParam[];
+  readonly returnType: Option<Type>;
+  readonly docComment: Option<DocComment>;
+  readonly span: Span;
+}
+
+export interface FunctionDef {
+  readonly kind: "Function";
   /**
    * `none()` = module-private; `some("public")` = `pub`;
    * `some("package")` = `pub(package)`.
@@ -85,7 +108,8 @@ export type Statement =
   | ThrowStatement
   | DisposeCallStatement
   | Expression
-  | FunctionDecl;
+  | FunctionDef
+  | FunctionSignature;
 
 /**
  * A `static` lowers to a module-private backing variable plus a
@@ -94,7 +118,7 @@ export type Statement =
  * `semantics/analyzer.ts`'s `analyzeStaticReference`), not a plain
  * `Identifier` read, so `backingName`/`initFlagName` are only ever touched
  * by this node's own codegen. `pub static` is rejected in semantic
- * analysis, so there is no `scope` field here (unlike `FunctionDecl`) - a
+ * analysis, so there is no `scope` field here (unlike `FunctionDef`) - a
  * `StaticDecl` reaching codegen is always module-private.
  *
  * Laziness is tracked by `initFlagName`, a separate boolean - not by

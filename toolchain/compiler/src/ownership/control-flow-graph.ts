@@ -422,6 +422,7 @@ function recordConfinedStatement(
       recordExpressionUses(target, scopeStack, statement.expression);
       return;
     case "Function":
+    case "FunctionSignature":
     case "Struct":
     case "Enum":
     case "Const":
@@ -685,6 +686,7 @@ function lowerStatements(
         );
         break;
       case "Function":
+      case "FunctionSignature":
       case "Struct":
       case "Enum":
       case "Const":
@@ -827,12 +829,12 @@ function lowerIf(
  * sufficient - no fixpoint iteration is needed.
  */
 export function buildControlFlowGraph(
-  fn: Semantics.FunctionDecl,
+  fn: Semantics.FunctionDef,
 ): ControlFlowGraph {
   const blocks: MutableBlock[] = [];
   const entry = pushBlock(blocks);
   const scopeStack: ScopeStack = [new Map<string, BindingId>()];
-  const paramDecls = paramDeclarations(fn.params);
+  const paramDecls = paramDeclarations(fn.signature.params);
   for (const declaration of paramDecls) {
     registerScopeName(scopeStack, declaration.name, declaration.id);
   }

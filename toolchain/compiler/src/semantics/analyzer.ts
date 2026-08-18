@@ -2886,7 +2886,15 @@ function analyzeMatchExpression(
 function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
   switch (item.kind) {
     case "Function":
-      return analyzeFunctionDecl(ctx, item);
+      return analyzeFunction(ctx, item);
+    case "FunctionSignature":
+      emitError(
+        ctx,
+        "a function signature with no body is not allowed as a top-level item",
+        item.tokenId,
+        "HEDGE-ITEM-001",
+      );
+      return analyzeFunctionSignature(ctx, item);
     case "Struct": {
       const cached = lookupStruct(ctx, item.name.text);
       return cached !== undefined && cached.tokenId === item.tokenId
@@ -3173,19 +3181,23 @@ function resolveSlice1Type(
 
 function fnSignatureType(
   ctx: AnalysisContext,
-  fn: Parser.FunctionDecl,
+  signature: Parser.FunctionSignature,
 ): Semantics.FunctionType {
-  pushGenericParams(ctx, fn.generics);
+  pushGenericParams(ctx, signature.generics);
   const type: Semantics.FunctionType = {
     kind: "FunctionType",
-    params: fn.params.map((p) =>
+    params: signature.params.map((p) =>
       resolveSlice1Type(ctx, p.type, p.type.tokenId),
     ),
-    returnType: isSome(fn.returnType)
-      ? resolveSlice1Type(ctx, fn.returnType.value, fn.returnType.value.tokenId)
-      : { kind: "UnitType", tokenId: fn.tokenId },
+    returnType: isSome(signature.returnType)
+      ? resolveSlice1Type(
+          ctx,
+          signature.returnType.value,
+          signature.returnType.value.tokenId,
+        )
+      : { kind: "UnitType", tokenId: signature.tokenId },
     paramsArePlaceholder: false,
-    genericParams: genericParamNames(fn.generics),
+    genericParams: genericParamNames(signature.generics),
   };
   popGenericParams(ctx);
   return type;
@@ -3377,18 +3389,21 @@ function checkFunctionReturnType(
     : { ...body, trailingExpression: some(expr), type: getType(expr) };
 }
 
-function analyzeFunctionDecl(
+/**
+ * Analyzes everything a signature owns (params, return type, name,
+ * attributes, generics) - shared by a bodiless `FunctionSignature` and a
+ * bodied `FunctionDef`'s own signature. Caller owns `pushFrame`/
+ * `pushGenericParams` and their `pop` counterparts, since a bodied
+ * function's body analysis must still run inside that same scope.
+ */
+function buildFunctionSignature(
   ctx: AnalysisContext,
-  decl: Parser.FunctionDecl,
-): Semantics.FunctionDecl {
-  // Pushed in lockstep with `scopes` (matching `analyzeBlock`'s own
-  // invariant) even though a const/static can never actually be declared
-  // in param position - `resolvedNameIsStatic` and the const-shadowing
-  // check in `analyzeConstReference` both compare frame *indices* across
-  // `scopes` and these stacks, which only lines up if every `scopes` push
-  // has a matching push here, everywhere, not just in `analyzeBlock`.
-  pushFrame(ctx);
-  pushGenericParams(ctx, decl.generics);
+  decl: Parser.FunctionSignature,
+): {
+  signature: Semantics.FunctionSignature;
+  expectedReturnType: Semantics.Type;
+  suppressReturnTypeMismatch: boolean;
+} {
   const analyzedParams = decl.params.map(
     (param: Parser.Param): Semantics.Param => {
       const paramType = validateSlice1Type(ctx, param.type, param.type.tokenId);
@@ -3412,14 +3427,10 @@ function analyzeFunctionDecl(
   });
   const suppressReturnTypeMismatch =
     isSome(decl.returnType) && isSelfType(decl.returnType.value);
-  const body = checkFunctionReturnType(
-    ctx,
-    analyzeBlock(ctx, decl.body),
-    expectedReturnType,
-    suppressReturnTypeMismatch,
-  );
-  const result: Semantics.FunctionDecl = {
-    ...decl,
+  const signature: Semantics.FunctionSignature = {
+    kind: "FunctionSignature",
+    tokenId: decl.tokenId,
+    visibility: decl.visibility,
     name: {
       ...decl.name,
       type: { kind: "UnitType", tokenId: decl.name.tokenId },
@@ -3429,6 +3440,46 @@ function analyzeFunctionDecl(
     whereClause: none(),
     params: analyzedParams,
     returnType,
+  };
+  return { signature, expectedReturnType, suppressReturnTypeMismatch };
+}
+
+function analyzeFunctionSignature(
+  ctx: AnalysisContext,
+  decl: Parser.FunctionSignature,
+): Semantics.FunctionSignature {
+  // Pushed in lockstep with `scopes` (matching `analyzeBlock`'s own
+  // invariant) even though a const/static can never actually be declared
+  // in param position - `resolvedNameIsStatic` and the const-shadowing
+  // check in `analyzeConstReference` both compare frame *indices* across
+  // `scopes` and these stacks, which only lines up if every `scopes` push
+  // has a matching push here, everywhere, not just in `analyzeBlock`.
+  pushFrame(ctx);
+  pushGenericParams(ctx, decl.generics);
+  const { signature } = buildFunctionSignature(ctx, decl);
+  popGenericParams(ctx);
+  popFrame(ctx);
+  return signature;
+}
+
+function analyzeFunction(
+  ctx: AnalysisContext,
+  decl: Parser.FunctionDef,
+): Semantics.FunctionDef {
+  pushFrame(ctx);
+  pushGenericParams(ctx, decl.signature.generics);
+  const { signature, expectedReturnType, suppressReturnTypeMismatch } =
+    buildFunctionSignature(ctx, decl.signature);
+  const body = checkFunctionReturnType(
+    ctx,
+    analyzeBlock(ctx, decl.body),
+    expectedReturnType,
+    suppressReturnTypeMismatch,
+  );
+  const result: Semantics.FunctionDef = {
+    kind: "Function",
+    tokenId: decl.tokenId,
+    signature,
     body,
   };
   popGenericParams(ctx);
@@ -3481,11 +3532,24 @@ function analyzeStatement(
     case "Function": {
       // Bind the function name into the current scope before analyzing the body
       // so the function is callable from subsequent statements in the same block.
+      bind(ctx, statement.signature.name.text, {
+        type: fnSignatureType(ctx, statement.signature),
+        mutable: false,
+      });
+      return analyzeFunction(ctx, statement);
+    }
+    case "FunctionSignature": {
+      emitError(
+        ctx,
+        "a function signature with no body is not allowed inside a block",
+        statement.tokenId,
+        "HEDGE-ITEM-001",
+      );
       bind(ctx, statement.name.text, {
         type: fnSignatureType(ctx, statement),
         mutable: false,
       });
-      return analyzeFunctionDecl(ctx, statement);
+      return analyzeFunctionSignature(ctx, statement);
     }
     case "Struct": {
       const analyzed = lookupStruct(ctx, statement.name.text);
@@ -5577,21 +5641,23 @@ export function analyze(
   registerTypeDecls(ctx, program.items);
   const topLevelFunctionNames = new Set<string>();
   for (const item of program.items) {
-    if (item.kind === "Function") {
-      if (topLevelFunctionNames.has(item.name.text)) {
-        emitError(
-          ctx,
-          `function \`${item.name.text}\` is defined more than once`,
-          item.name.tokenId,
-          "HEDGE-NAME-002",
-        );
-      } else {
-        topLevelFunctionNames.add(item.name.text);
-        bind(ctx, item.name.text, {
-          type: fnSignatureType(ctx, item),
-          mutable: false,
-        });
-      }
+    if (item.kind !== "Function" && item.kind !== "FunctionSignature") {
+      continue;
+    }
+    const signature = item.kind === "Function" ? item.signature : item;
+    if (topLevelFunctionNames.has(signature.name.text)) {
+      emitError(
+        ctx,
+        `function \`${signature.name.text}\` is defined more than once`,
+        signature.name.tokenId,
+        "HEDGE-NAME-002",
+      );
+    } else {
+      topLevelFunctionNames.add(signature.name.text);
+      bind(ctx, signature.name.text, {
+        type: fnSignatureType(ctx, signature),
+        mutable: false,
+      });
     }
   }
   // A tuple struct's name shares the value namespace with functions -

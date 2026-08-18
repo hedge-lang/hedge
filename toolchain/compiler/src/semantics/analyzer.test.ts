@@ -3475,10 +3475,10 @@ describe("generic parameter shadowing an outer type of the same name", (): void 
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.code).toBe("HEDGE-LINT-002");
     const fn = result.program.items.find(
-      (item) => item.kind === "Function" && item.name.text === "f",
+      (item) => item.kind === "Function" && item.signature.name.text === "f",
     );
     assert(fn?.kind === "Function", "expected a Function item");
-    expect(fn.params[0]?.type.kind).toBe("NamedType");
+    expect(fn.signature.params[0]?.type.kind).toBe("NamedType");
   });
 
   it("resolves a function's own type parameter over an outer enum of the same name, with a warning", (): void => {
@@ -3489,10 +3489,10 @@ describe("generic parameter shadowing an outer type of the same name", (): void 
     expect(warnings).toHaveLength(1);
     expect(warnings[0]?.code).toBe("HEDGE-LINT-002");
     const fn = result.program.items.find(
-      (item) => item.kind === "Function" && item.name.text === "f",
+      (item) => item.kind === "Function" && item.signature.name.text === "f",
     );
     assert(fn?.kind === "Function", "expected a Function item");
-    expect(fn.params[0]?.type.kind).toBe("NamedType");
+    expect(fn.signature.params[0]?.type.kind).toBe("NamedType");
   });
 
   it("warns once per occurrence when a shadowing type parameter is used more than once in a signature", (): void => {
@@ -3533,7 +3533,7 @@ describe("declared generic parameter names survive onto a resolved signature", (
     `);
     expect(result.diagnostics).toEqual([]);
     const mainFn = result.program.items.find(
-      (item) => item.kind === "Function" && item.name.text === "main",
+      (item) => item.kind === "Function" && item.signature.name.text === "main",
     );
     assert(mainFn?.kind === "Function", "expected a Function item");
     const letStatement = mainFn.body.statements.find(
@@ -3550,10 +3550,11 @@ describe("declared generic parameter names survive onto a resolved signature", (
     const result = diagnose("fn identity<T>(x: T) -> T { x }");
     expect(result.diagnostics).toEqual([]);
     const identity = result.program.items.find(
-      (item) => item.kind === "Function" && item.name.text === "identity",
+      (item) =>
+        item.kind === "Function" && item.signature.name.text === "identity",
     );
     assert(identity?.kind === "Function", "expected a Function item");
-    expect(identity.generics).toEqual(["T"]);
+    expect(identity.signature.generics).toEqual(["T"]);
   });
 
   it("leaves generics empty for a non-generic function's FunctionDecl and resolved FunctionType", (): void => {
@@ -3565,13 +3566,13 @@ describe("declared generic parameter names survive onto a resolved signature", (
     `);
     expect(result.diagnostics).toEqual([]);
     const fDecl = result.program.items.find(
-      (item) => item.kind === "Function" && item.name.text === "f",
+      (item) => item.kind === "Function" && item.signature.name.text === "f",
     );
     assert(fDecl?.kind === "Function", "expected a Function item");
-    expect(fDecl.generics).toEqual([]);
+    expect(fDecl.signature.generics).toEqual([]);
 
     const mainFn = result.program.items.find(
-      (item) => item.kind === "Function" && item.name.text === "main",
+      (item) => item.kind === "Function" && item.signature.name.text === "main",
     );
     assert(mainFn?.kind === "Function", "expected a Function item");
     const letStatement = mainFn.body.statements.find(
@@ -3627,29 +3628,85 @@ describe("declared generic parameter names survive onto a resolved signature", (
     const result = diagnose("fn pair<T, U>(a: T, b: U) -> T { a }");
     expect(result.diagnostics).toEqual([]);
     const pair = result.program.items.find(
-      (item) => item.kind === "Function" && item.name.text === "pair",
+      (item) => item.kind === "Function" && item.signature.name.text === "pair",
     );
     assert(pair?.kind === "Function", "expected a Function item");
-    expect(pair.generics).toEqual(["T", "U"]);
+    expect(pair.signature.generics).toEqual(["T", "U"]);
   });
 
   it("lists a generic parameter only ever used through a reference hop", (): void => {
     const result = diagnose("fn f<T>(x: &T) {}");
     expect(result.diagnostics).toEqual([]);
     const f = result.program.items.find(
-      (item) => item.kind === "Function" && item.name.text === "f",
+      (item) => item.kind === "Function" && item.signature.name.text === "f",
     );
     assert(f?.kind === "Function", "expected a Function item");
-    expect(f.generics).toEqual(["T"]);
+    expect(f.signature.generics).toEqual(["T"]);
   });
 
   it("leaves generics empty for a lifetime-only parameter list", (): void => {
     const result = diagnose("fn f<'a>(x: &'a i32) -> &'a i32 { x }");
     expect(result.diagnostics).toEqual([]);
     const f = result.program.items.find(
-      (item) => item.kind === "Function" && item.name.text === "f",
+      (item) => item.kind === "Function" && item.signature.name.text === "f",
     );
     assert(f?.kind === "Function", "expected a Function item");
-    expect(f.generics).toEqual([]);
+    expect(f.signature.generics).toEqual([]);
+  });
+});
+
+describe("bodiless function signatures", (): void => {
+  it("rejects a top-level bodiless function signature, since extern/trait are its only legal containers and neither parses yet", (): void => {
+    const result = diagnose("fn f();");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "a function signature with no body is not allowed as a top-level item",
+    );
+    expect(result.diagnostics[0]?.code).toBe("HEDGE-ITEM-001");
+  });
+
+  it("rejects a block-local bodiless function signature the same way, with context-specific wording", (): void => {
+    const result = diagnose("fn main() { fn f(); }");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "a function signature with no body is not allowed inside a block",
+    );
+    expect(result.diagnostics[0]?.code).toBe("HEDGE-ITEM-001");
+  });
+
+  it("still reports a bad parameter type on a bodiless signature, alongside the position restriction", (): void => {
+    const result = diagnose("fn f(x: NotAType);");
+    expect(result.diagnostics).toHaveLength(2);
+    expect(result.diagnostics[0]?.message).toBe(
+      "a function signature with no body is not allowed as a top-level item",
+    );
+    expect(result.diagnostics[1]?.message).toBe(
+      "cannot find type `NotAType` in this scope",
+    );
+  });
+
+  it("still skips the missing-return-value check for a bodiless signature with a non-unit return type, alongside the position restriction", (): void => {
+    const result = diagnose("fn f() -> i32;");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "a function signature with no body is not allowed as a top-level item",
+    );
+  });
+
+  it("still rejects the equivalent bodied function for missing return value, unaffected", (): void => {
+    const result = diagnose("fn f() -> i32 {}");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "missing return value: expected `i32`",
+    );
+  });
+
+  it("reports both the position restriction (once per declaration) and the duplicate-name diagnostic for two same-named bodiless signatures", (): void => {
+    const result = diagnose("fn f(); fn f();");
+    expect(result.diagnostics.map((d) => d.message)).toEqual([
+      "function `f` is defined more than once",
+      "a function signature with no body is not allowed as a top-level item",
+      "a function signature with no body is not allowed as a top-level item",
+    ]);
   });
 });
