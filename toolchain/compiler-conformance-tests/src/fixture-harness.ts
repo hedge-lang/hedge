@@ -48,7 +48,7 @@ function discoverFixtures(
   return readdirSync(categoryDir)
     .filter((f) => f.endsWith(".hedge"))
     .map((f) => basename(f, ".hedge"))
-    .sort()
+    .sort((a, b) => a.localeCompare(b))
     .map((name) => ({
       name,
       sourcePath: join(categoryDir, `${name}.hedge`),
