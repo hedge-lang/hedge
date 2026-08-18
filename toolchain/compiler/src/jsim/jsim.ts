@@ -1018,7 +1018,7 @@ function emitFunctionParams(
 function parseFunction(
   ctx: JsimContext,
   fn: Semantics.Function,
-): JSIM.FunctionDecl {
+): JSIM.Function {
   return withFunctionCtx(ctx, fn.signature.name.text, () => {
     const emittedParams = emitFunctionParams(ctx, fn.signature.params);
     return parseFunctionBody(ctx, fn, emittedParams);
@@ -1028,10 +1028,10 @@ function parseFunction(
 function parseFunctionSignature(
   ctx: JsimContext,
   fn: Semantics.FunctionSignature,
-): JSIM.FunctionDecl {
+): JSIM.FunctionSignature {
   return withFunctionCtx(ctx, fn.name.text, () => {
     const emittedParams = emitFunctionParams(ctx, fn.params);
-    return ambientFunctionDecl(ctx, fn, emittedParams);
+    return ambientFunctionSignature(ctx, fn, emittedParams);
   });
 }
 
@@ -1154,27 +1154,25 @@ function signatureFields(
   return { scope, params, declaredReturnType, returnType };
 }
 
-function ambientFunctionDecl(
+function ambientFunctionSignature(
   ctx: JsimContext,
   fn: Semantics.FunctionSignature,
   emittedParams: ReadonlyArray<{
     param: Semantics.Param;
     emittedName: string;
   }>,
-): JSIM.FunctionDecl {
+): JSIM.FunctionSignature {
   const { scope, params, returnType } = signatureFields(fn, emittedParams);
   return {
-    kind: "FunctionDecl",
+    kind: "FunctionSignature",
     scope,
     name: fn.name.text,
     params,
     returnType,
-    // Degenerate (zero-width) span: neither JS emission (skipped, no body
-    // to emit) nor .d.ts emission (emitDtsFunction never reads .span) reads
+    // Degenerate (zero-width) span: a FunctionSignature produces nothing in
+    // either output (see jsim/ast.ts's own doc comment), so nothing reads
     // this today. Not a real source range - don't trust it as one.
     span: resolveSpan(ctx.tokens, fn.tokenId, fn.tokenId),
-    body: [],
-    hasBody: false,
     docComment: toDocComment(fn.attributes),
   };
 }
@@ -1186,7 +1184,7 @@ function parseFunctionBody(
     param: Semantics.Param;
     emittedName: string;
   }>,
-): JSIM.FunctionDecl {
+): JSIM.Function {
   const { scope, params, declaredReturnType, returnType } = signatureFields(
     fn.signature,
     emittedParams,
@@ -1231,7 +1229,7 @@ function parseFunctionBody(
   }
 
   return {
-    kind: "FunctionDecl",
+    kind: "Function",
     scope,
     name: fn.signature.name.text,
     params,
@@ -1242,7 +1240,6 @@ function parseFunctionBody(
       findMatchingCloseBraceTokenId(ctx.tokens, block.tokenId),
     ),
     body: statements,
-    hasBody: true,
     docComment,
   };
 }
