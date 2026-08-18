@@ -1169,9 +1169,9 @@ function ambientFunctionSignature(
     name: fn.name.text,
     params,
     returnType,
-    // Degenerate (zero-width) span: a FunctionSignature produces nothing in
-    // either output (see jsim/ast.ts's own doc comment), so nothing reads
-    // this today. Not a real source range - don't trust it as one.
+    // Placeholder span covering just the `fn` keyword token, not a real
+    // source range - a FunctionSignature produces nothing in either output
+    // (see jsim/ast.ts's own doc comment), so nothing reads this today.
     span: resolveSpan(ctx.tokens, fn.tokenId, fn.tokenId),
     docComment: toDocComment(fn.attributes),
   };
