@@ -8,7 +8,12 @@ export interface Program {
 }
 
 export type Item =
-  Function | FunctionSignature | StaticDecl | ConstDecl | EnumDecl | Statement;
+  | FunctionDef
+  | FunctionSignature
+  | StaticDecl
+  | ConstDecl
+  | EnumDecl
+  | Statement;
 
 /**
  * Contributes nothing to emitted JS - a variant's tagged object already
@@ -79,7 +84,7 @@ export interface FunctionSignature {
   readonly span: Span;
 }
 
-export interface Function {
+export interface FunctionDef {
   readonly kind: "Function";
   /**
    * `none()` = module-private; `some("public")` = `pub`;
@@ -103,7 +108,7 @@ export type Statement =
   | ThrowStatement
   | DisposeCallStatement
   | Expression
-  | Function
+  | FunctionDef
   | FunctionSignature;
 
 /**
@@ -113,7 +118,7 @@ export type Statement =
  * `semantics/analyzer.ts`'s `analyzeStaticReference`), not a plain
  * `Identifier` read, so `backingName`/`initFlagName` are only ever touched
  * by this node's own codegen. `pub static` is rejected in semantic
- * analysis, so there is no `scope` field here (unlike `Function`) - a
+ * analysis, so there is no `scope` field here (unlike `FunctionDef`) - a
  * `StaticDecl` reaching codegen is always module-private.
  *
  * Laziness is tracked by `initFlagName`, a separate boolean - not by

@@ -62,9 +62,9 @@ function jsimSourceWithOwnership(source: string): JSIM.Program {
  *
  * @return The main function declaration object if found.
  */
-function mainFunction(program: JSIM.Program): JSIM.Function {
+function mainFunction(program: JSIM.Program): JSIM.FunctionDef {
   const main = program.items.find(
-    (item): item is JSIM.Function =>
+    (item): item is JSIM.FunctionDef =>
       item.kind === "Function" && item.name === "main",
   );
   assert(main !== undefined, "Expected a main function");
@@ -187,7 +187,7 @@ describe("toJsim", () => {
     const program = jsimSourceWithOwnership(
       "fn longest<'a>(a: &'a str, b: &'a str) -> &'a str { a }",
     );
-    const fn = program.items.find((item): item is JSIM.Function => {
+    const fn = program.items.find((item): item is JSIM.FunctionDef => {
       return item.kind === "Function" && item.name === "longest";
     });
     assert(fn !== undefined, "Expected a longest function");
@@ -1076,7 +1076,7 @@ describe("scope-end drop", () => {
       "struct R { id: i32 } fn f(p: R) { print(p.id); }",
     );
     const f = program.items.find(
-      (item): item is JSIM.Function =>
+      (item): item is JSIM.FunctionDef =>
         item.kind === "Function" && item.name === "f",
     );
     assert(f !== undefined, "Expected function f");
@@ -1105,7 +1105,7 @@ describe("scope-end drop", () => {
       "struct R { id: i32 } fn f(mut p: R) { print(p.id); }",
     );
     const f = program.items.find(
-      (item): item is JSIM.Function =>
+      (item): item is JSIM.FunctionDef =>
         item.kind === "Function" && item.name === "f",
     );
     assert(f !== undefined, "Expected function f");
@@ -1140,7 +1140,7 @@ describe("conditional-drop-flag codegen (synthetic ownership)", () => {
     );
 
     const mainFn = analysis.program.items.find(
-      (item): item is Semantics.Function =>
+      (item): item is Semantics.FunctionDef =>
         item.kind === "Function" && item.signature.name.text === "main",
     );
     assert(mainFn !== undefined, "Expected a main function");

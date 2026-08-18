@@ -829,7 +829,7 @@ function lowerIf(
  * sufficient - no fixpoint iteration is needed.
  */
 export function buildControlFlowGraph(
-  fn: Semantics.Function,
+  fn: Semantics.FunctionDef,
 ): ControlFlowGraph {
   const blocks: MutableBlock[] = [];
   const entry = pushBlock(blocks);

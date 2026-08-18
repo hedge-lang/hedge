@@ -17,7 +17,7 @@ import {
 function mainGraph(source: string): ControlFlowGraph {
   const { program } = analyzeSource(source);
   const main = program.items.find(
-    (item): item is Semantics.Function =>
+    (item): item is Semantics.FunctionDef =>
       item.kind === "Function" && item.signature.name.text === "main",
   );
   assert(main !== undefined, "Expected a main function");

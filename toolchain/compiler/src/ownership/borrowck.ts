@@ -528,7 +528,7 @@ function walkScopeForBorrowBases(
  * ultimately names.
  */
 function resolveBorrowBases(
-  fn: Semantics.Function,
+  fn: Semantics.FunctionDef,
 ): ReadonlyMap<BorrowSite, BindingId> {
   const resolved = new Map<BorrowSite, BindingId>();
   const aliases = new Map<BindingId, BindingId>();
@@ -1262,7 +1262,7 @@ function checkExclusivity(
 }
 
 function checkFunction(
-  fn: Semantics.Function,
+  fn: Semantics.FunctionDef,
   diagnostics: Diagnostic[],
   tokens: readonly Token[],
 ): void {

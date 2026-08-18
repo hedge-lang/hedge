@@ -7,7 +7,7 @@ import type {
   Block,
   ConstDecl,
   EnumDecl,
-  Function,
+  FunctionDef,
   FunctionSignature,
   GenericParam,
   Item,
@@ -308,7 +308,7 @@ function elideStructDecl(
 
 /**
  * Elides rules 1/2 across a signature's params/return type, shared by both a
- * bodiless `FunctionSignature` and a bodied `Function`'s own signature. The
+ * bodiless `FunctionSignature` and a bodied `FunctionDef`'s own signature. The
  * returned `names` set (declared generics plus every lifetime name already
  * used in the signature) is what a bodied function's body elision must also
  * avoid colliding with.
@@ -423,10 +423,10 @@ function elideFunctionSignatureItem(
 }
 
 function elideFunction(
-  decl: Function,
+  decl: FunctionDef,
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
-): Function {
+): FunctionDef {
   const { signature, names } = elideFunctionSignature(
     decl.signature,
     tokens,
@@ -538,7 +538,7 @@ function elideConstOrStaticDecl<T extends { readonly type: Type }>(
 
 /**
  * `outerNames` is only ever consulted by the `LetStatement` case (see
- * `elideLetStatement`) - a nested `Function`/`Struct` builds its own,
+ * `elideLetStatement`) - a nested `FunctionDef`/`Struct` builds its own,
  * independent name scope and ignores it, matching Rust's own scoping rules
  * for a nested item declaration.
  */
@@ -570,7 +570,7 @@ function elideStatement(
 }
 
 /**
- * Only `Function`/`FunctionSignature`/`StructDecl`/`EnumDecl`/`LetStatement`/
+ * Only `FunctionDef`/`FunctionSignature`/`StructDecl`/`EnumDecl`/`LetStatement`/
  * `ConstDecl`/`StaticDecl` carry `Type` fields that can hold a `ReferenceType` - every
  * other `Item` kind is a bare expression or `ExpressionStatement`, neither
  * of which does. Narrowing to
@@ -591,7 +591,7 @@ function elideStatement(
 function isTypeBearingItem(
   item: Item,
 ): item is
-  | Function
+  | FunctionDef
   | FunctionSignature
   | StructDecl
   | EnumDecl

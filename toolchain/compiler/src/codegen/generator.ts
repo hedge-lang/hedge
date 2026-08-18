@@ -12,7 +12,7 @@ import type {
   EnumDecl,
   EnumDeclVariant,
   Expression,
-  Function,
+  FunctionDef,
   IfStatement,
   Item,
   LetStatement,
@@ -655,7 +655,7 @@ interface EmittedPart {
  * pushed before the coarse whole-function mapping so a first-match lookup
  * prefers the tightest covering entry.
  */
-function emitFunctionPart(decl: Function): EmittedPart {
+function emitFunctionPart(decl: FunctionDef): EmittedPart {
   const bodyEntries = decl.body
     .map((stmt) => ({ stmt, text: emitStatement(stmt) }))
     .filter((entry) => entry.text.length > 0);
@@ -718,7 +718,7 @@ function emitFunctionPart(decl: Function): EmittedPart {
   return { text, mappings };
 }
 
-function emitFunction(decl: Function): string {
+function emitFunction(decl: FunctionDef): string {
   return emitFunctionPart(decl).text;
 }
 
@@ -825,7 +825,10 @@ function emitItem(item: Item): string {
   }
 }
 
-function emitDtsFunction(decl: Function, scope: "public" | "package"): string {
+function emitDtsFunction(
+  decl: FunctionDef,
+  scope: "public" | "package",
+): string {
   const params = decl.params
     .map((p) => `${p.name}: ${isSome(p.type) ? p.type.value.value : "unknown"}`)
     .join(", ");
@@ -919,7 +922,7 @@ function mainEntryPointParts(
   program: Program,
 ): readonly [shebang: EmittedPart, mainCall: EmittedPart] {
   const mainDecl = program.items.find(
-    (item): item is Function =>
+    (item): item is FunctionDef =>
       item.kind === "Function" && item.name === "main",
   );
   const mainCallText = "main();";

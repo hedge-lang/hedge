@@ -24,7 +24,7 @@ export interface Attribute {
 
 /** A top-level entry. Slice 1 is lenient and also accepts bare statements. */
 export type Item =
-  | Function
+  | FunctionDef
   | FunctionSignature
   | StructDecl
   | EnumDecl
@@ -36,7 +36,7 @@ export type Item =
 export type Statement =
   | LetStatement
   | ExpressionStatement
-  | Function
+  | FunctionDef
   | FunctionSignature
   | StructDecl
   | EnumDecl
@@ -141,7 +141,7 @@ export interface FunctionSignature extends AstNode {
   readonly attributes: readonly Attribute[];
 }
 
-export interface Function extends AstNode {
+export interface FunctionDef extends AstNode {
   readonly kind: "Function";
   readonly signature: FunctionSignature;
   readonly body: Block;

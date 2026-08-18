@@ -1017,8 +1017,8 @@ function emitFunctionParams(
 
 function parseFunction(
   ctx: JsimContext,
-  fn: Semantics.Function,
-): JSIM.Function {
+  fn: Semantics.FunctionDef,
+): JSIM.FunctionDef {
   return withFunctionCtx(ctx, fn.signature.name.text, () => {
     const emittedParams = emitFunctionParams(ctx, fn.signature.params);
     return parseFunctionBody(ctx, fn, emittedParams);
@@ -1179,12 +1179,12 @@ function ambientFunctionSignature(
 
 function parseFunctionBody(
   ctx: JsimContext,
-  fn: Semantics.Function,
+  fn: Semantics.FunctionDef,
   emittedParams: ReadonlyArray<{
     param: Semantics.Param;
     emittedName: string;
   }>,
-): JSIM.Function {
+): JSIM.FunctionDef {
   const { scope, params, declaredReturnType, returnType } = signatureFields(
     fn.signature,
     emittedParams,

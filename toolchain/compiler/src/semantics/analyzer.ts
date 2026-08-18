@@ -3392,7 +3392,7 @@ function checkFunctionReturnType(
 /**
  * Analyzes everything a signature owns (params, return type, name,
  * attributes, generics) - shared by a bodiless `FunctionSignature` and a
- * bodied `Function`'s own signature. Caller owns `pushFrame`/
+ * bodied `FunctionDef`'s own signature. Caller owns `pushFrame`/
  * `pushGenericParams` and their `pop` counterparts, since a bodied
  * function's body analysis must still run inside that same scope.
  */
@@ -3464,8 +3464,8 @@ function analyzeFunctionSignature(
 
 function analyzeFunction(
   ctx: AnalysisContext,
-  decl: Parser.Function,
-): Semantics.Function {
+  decl: Parser.FunctionDef,
+): Semantics.FunctionDef {
   pushFrame(ctx);
   pushGenericParams(ctx, decl.signature.generics);
   const { signature, expectedReturnType, suppressReturnTypeMismatch } =
@@ -3476,7 +3476,7 @@ function analyzeFunction(
     expectedReturnType,
     suppressReturnTypeMismatch,
   );
-  const result: Semantics.Function = {
+  const result: Semantics.FunctionDef = {
     kind: "Function",
     tokenId: decl.tokenId,
     signature,

@@ -7,7 +7,7 @@ import {
   type Attribute,
   type ConstDecl,
   type EnumDecl,
-  type Function,
+  type FunctionDef,
   type FunctionSignature,
   type GenericParam,
   type Item,
@@ -703,7 +703,7 @@ function parseFunction(
   pos: number,
   attributes: readonly Attribute[] = [],
   visibility: Option<Visibility> = none(),
-): PR<Parsed<Function | FunctionSignature>> {
+): PR<Parsed<FunctionDef | FunctionSignature>> {
   const start = pos;
   const afterFn = expectKeyword(tokens, pos, "fn");
   if (isErr(afterFn)) {
@@ -759,7 +759,7 @@ function parseFunction(
   if (isErr(bodyResult)) {
     return bodyResult;
   }
-  const fn: Function = {
+  const fn: FunctionDef = {
     kind: "Function",
     tokenId: start,
     signature,
