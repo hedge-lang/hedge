@@ -1232,8 +1232,6 @@ function registerConstsAndStatics(
 ): void {
   const frame = currentFrame(ctx);
   const constFrame = frame.constDecls;
-  const staticFrame = frame.staticTypes;
-  const currentScope = frame.vars;
   // Pre-scanned up front, independent of registration order: a static gets
   // `bind()`-registered into `currentScope` as this loop runs (below), so a
   // same-frame const/static name collision would otherwise be order-
@@ -1245,94 +1243,12 @@ function registerConstsAndStatics(
   const constNamesInFrame = new Set(
     items.filter((item) => item.kind === "Const").map((item) => item.name.text),
   );
+
   for (const item of items) {
     if (item.kind === "Const") {
-      if (constFrame.has(item.name.text)) {
-        emitError(
-          ctx,
-          `const \`${item.name.text}\` is defined more than once`,
-          item.name.tokenId,
-          "HEDGE-NAME-002",
-        );
-      } else {
-        // A same-frame static collision is reported once, from the static
-        // branch below (via `constNamesInFrame`) - skip the function check
-        // here for a name that's actually a static, so a static processed
-        // earlier in this same loop (and thus already `bind()`-ed into
-        // `currentScope`) doesn't produce a second, mislabeled diagnostic.
-        if (
-          !staticFrame.has(item.name.text) &&
-          currentScope.has(item.name.text)
-        ) {
-          // A reference to this name would be ambiguous: `analyzeExpression`
-          // always tries `analyzeConstReference` first (see its
-          // "PathExpression" case), so `X()` against a same-named function
-          // would inline the const and try to call its literal value
-          // instead of calling the function - a real miscompile, not just
-          // shadowing. Still registers below so the const is still usable
-          // under its own name; the diagnostic already blocks codegen.
-          emitError(
-            ctx,
-            `const \`${item.name.text}\` collides with an existing function name`,
-            item.name.tokenId,
-            "HEDGE-NAME-002",
-          );
-        }
-        constFrame.set(item.name.text, item);
-      }
+      registerConst(ctx, item);
     } else if (item.kind === "Static") {
-      if (staticFrame.has(item.name.text)) {
-        emitError(
-          ctx,
-          `static \`${item.name.text}\` is defined more than once`,
-          item.name.tokenId,
-          "HEDGE-NAME-002",
-        );
-      } else {
-        if (constNamesInFrame.has(item.name.text)) {
-          // A static lowers to a real accessor function of its own name
-          // (see jsim.ts's StaticDecl lowering), but a reference to this
-          // name always tries the const first (`analyzeConstReference`),
-          // making the static unreachable/ambiguous either way.
-          emitError(
-            ctx,
-            `static \`${item.name.text}\` collides with a const of the same name`,
-            item.name.tokenId,
-            "HEDGE-NAME-002",
-          );
-        } else if (currentScope.has(item.name.text)) {
-          // A static lowers to a real top-level accessor function of its
-          // own name (see jsim.ts's StaticDecl lowering) - sharing a name
-          // with an existing function would collide at codegen, not just
-          // shadow. Still registers below so `analyzeStaticDecl` has an
-          // entry to resolve; the diagnostic already blocks codegen.
-          emitError(
-            ctx,
-            `static \`${item.name.text}\` collides with an existing function name`,
-            item.name.tokenId,
-            "HEDGE-NAME-002",
-          );
-        }
-        if (isSome(item.visibility)) {
-          emitError(
-            ctx,
-            "static items cannot be pub yet",
-            item.tokenId,
-            "HEDGE-ITEM-001",
-          );
-        }
-        // A local static is its own item, not a closure - see the matching
-        // barrier around a local const's own type resolution.
-        pushGenericParams(ctx, []);
-        const declaredType = validateSlice1Type(
-          ctx,
-          item.type,
-          item.type.tokenId,
-        );
-        popGenericParams(ctx);
-        staticFrame.set(item.name.text, declaredType);
-        bind(ctx, item.name.text, { type: declaredType, mutable: false });
-      }
+      registerStatic(ctx, constNamesInFrame, item);
     }
   }
   // Eagerly resolve every const in this frame, not just referenced ones - an
@@ -1343,6 +1259,103 @@ function registerConstsAndStatics(
   for (const name of constFrame.keys()) {
     resolveConstDecl(ctx, name);
   }
+}
+
+function registerConst(ctx: AnalysisContext, item: Parser.ConstDecl): void {
+  const frame = currentFrame(ctx);
+  const constFrame = frame.constDecls;
+  const staticFrame = frame.staticTypes;
+  const currentScope = frame.vars;
+
+  if (constFrame.has(item.name.text)) {
+    emitError(
+      ctx,
+      `const \`${item.name.text}\` is defined more than once`,
+      item.name.tokenId,
+      "HEDGE-NAME-002",
+    );
+  } else {
+    // A same-frame static collision is reported once, from the static
+    // branch below (via `constNamesInFrame`) - skip the function check
+    // here for a name that's actually a static, so a static processed
+    // earlier in this same loop (and thus already `bind()`-ed into
+    // `currentScope`) doesn't produce a second, mislabeled diagnostic.
+    if (!staticFrame.has(item.name.text) && currentScope.has(item.name.text)) {
+      // A reference to this name would be ambiguous: `analyzeExpression`
+      // always tries `analyzeConstReference` first (see its
+      // "PathExpression" case), so `X()` against a same-named function
+      // would inline the const and try to call its literal value
+      // instead of calling the function - a real miscompile, not just
+      // shadowing. Still registers below so the const is still usable
+      // under its own name; the diagnostic already blocks codegen.
+      emitError(
+        ctx,
+        `const \`${item.name.text}\` collides with an existing function name`,
+        item.name.tokenId,
+        "HEDGE-NAME-002",
+      );
+    }
+    constFrame.set(item.name.text, item);
+  }
+}
+
+function registerStatic(
+  ctx: AnalysisContext,
+  constNamesInFrame: ReadonlySet<string>,
+  item: Parser.StaticDecl,
+): void {
+  const frame = currentFrame(ctx);
+  const staticFrame = frame.staticTypes;
+  const currentScope = frame.vars;
+
+  if (staticFrame.has(item.name.text)) {
+    emitError(
+      ctx,
+      `static \`${item.name.text}\` is defined more than once`,
+      item.name.tokenId,
+      "HEDGE-NAME-002",
+    );
+    return;
+  }
+  if (constNamesInFrame.has(item.name.text)) {
+    // A static lowers to a real accessor function of its own name
+    // (see jsim.ts's StaticDecl lowering), but a reference to this
+    // name always tries the const first (`analyzeConstReference`),
+    // making the static unreachable/ambiguous either way.
+    emitError(
+      ctx,
+      `static \`${item.name.text}\` collides with a const of the same name`,
+      item.name.tokenId,
+      "HEDGE-NAME-002",
+    );
+  } else if (currentScope.has(item.name.text)) {
+    // A static lowers to a real top-level accessor function of its
+    // own name (see jsim.ts's StaticDecl lowering) - sharing a name
+    // with an existing function would collide at codegen, not just
+    // shadow. Still registers below so `analyzeStaticDecl` has an
+    // entry to resolve; the diagnostic already blocks codegen.
+    emitError(
+      ctx,
+      `static \`${item.name.text}\` collides with an existing function name`,
+      item.name.tokenId,
+      "HEDGE-NAME-002",
+    );
+  }
+  if (isSome(item.visibility)) {
+    emitError(
+      ctx,
+      "static items cannot be pub yet",
+      item.tokenId,
+      "HEDGE-ITEM-001",
+    );
+  }
+  // A local static is its own item, not a closure - see the matching
+  // barrier around a local const's own type resolution.
+  pushGenericParams(ctx, []);
+  const declaredType = validateSlice1Type(ctx, item.type, item.type.tokenId);
+  popGenericParams(ctx);
+  staticFrame.set(item.name.text, declaredType);
+  bind(ctx, item.name.text, { type: declaredType, mutable: false });
 }
 
 function analyzeStaticDecl(
