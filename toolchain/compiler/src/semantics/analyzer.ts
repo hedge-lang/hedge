@@ -120,7 +120,7 @@ function popGenericParams(ctx: AnalysisContext): void {
 
 /** Only the innermost open item's own type parameters are visible. */
 function isDeclaredGenericParam(ctx: AnalysisContext, name: string): boolean {
-  const innermost = ctx.genericParamStack[ctx.genericParamStack.length - 1];
+  const innermost = ctx.genericParamStack.at(-1);
   return innermost?.has(name) ?? false;
 }
 
