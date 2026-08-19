@@ -2028,138 +2028,29 @@ function analyzePattern(
   rootMutable: boolean,
 ): Semantics.Pattern {
   switch (pattern.kind) {
-    case "WildcardPattern": {
-      const result: Semantics.WildcardPattern = {
-        ...pattern,
-        type: scrutineeType,
-      };
-      return result;
-    }
-    case "BindingPattern": {
-      if (isSome(pattern.subpattern)) {
-        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
-      }
-      if (pattern.byRef && pattern.mutable) {
-        checkMutOverrideLegality(
-          ctx,
-          pattern.name.text,
-          defaultMode,
-          rootMutable,
-          pattern.tokenId,
-        );
-      }
-      const { type: boundType, localMutable } = effectiveBindingType(
-        scrutineeType,
-        defaultMode,
-        pattern.byRef,
-        pattern.mutable,
-        pattern.tokenId,
-      );
-      bind(ctx, pattern.name.text, { type: boundType, mutable: localMutable });
-      const result: Semantics.BindingPattern = {
-        ...pattern,
-        name: { ...pattern.name, type: boundType },
-        subpattern: none(),
-        type: boundType,
-      };
-      return result;
-    }
-    case "LiteralPattern": {
-      const literal = coercePatternLiteral(
-        analyzeLiteralValue(ctx, pattern.literal),
-        scrutineeType,
-      );
-      checkPatternLiteralType(
-        ctx,
-        literal.type,
-        scrutineeType,
-        pattern.tokenId,
-      );
-      if (literal.kind === "IntLiteral") {
-        checkPosLiteralRange(ctx, literal, literal.type);
-      }
-      const result: Semantics.LiteralPattern = {
-        ...pattern,
-        literal,
-        type: literal.type,
-      };
-      return result;
-    }
-    case "RangePattern": {
-      const start = coercePatternLiteral(
-        analyzeLiteralValue(ctx, pattern.start.literal),
-        scrutineeType,
-      );
-      const end = coercePatternLiteral(
-        analyzeLiteralValue(ctx, pattern.end.literal),
-        scrutineeType,
-      );
-      const startBound: Semantics.RangePatternBound = {
-        ...pattern.start,
-        literal: start,
-      };
-      const endBound: Semantics.RangePatternBound = {
-        ...pattern.end,
-        literal: end,
-      };
-      if (!typesEqual(start.type, end.type)) {
-        emitError(
-          ctx,
-          `range bounds must have the same type: \`${describeType(start.type)}\` and \`${describeType(end.type)}\``,
-          pattern.tokenId,
-          "HEDGE-PATTERN-006",
-        );
-      } else {
-        checkPatternLiteralType(
-          ctx,
-          start.type,
-          scrutineeType,
-          pattern.tokenId,
-        );
-      }
-      const low = rangeBoundValue(startBound);
-      const high = rangeBoundValue(endBound);
-      if (low !== undefined && high !== undefined && low > high) {
-        emitError(
-          ctx,
-          `lower range bound ${low} is greater than upper bound ${high}, so the range matches nothing`,
-          pattern.tokenId,
-          "HEDGE-PATTERN-006",
-        );
-      }
-      const result: Semantics.RangePattern = {
-        ...pattern,
-        start: startBound,
-        end: endBound,
-        type: start.type,
-      };
-      return result;
-    }
-    case "OrPattern": {
-      // Each alternative is analyzed independently, so `Foo(a) | Bar(b)`
-      // binds both `a` and `b` into the arm's scope regardless of which
-      // alternative actually matches at runtime - `checkOrPatternConsistency`
-      // (below) is what actually enforces spec 0016's requirement that every
-      // alternative bind the same names/types/modes, rather than this
-      // analysis step silently accepting the mismatch.
-      const alternatives = pattern.alternatives.map((alt) =>
-        analyzePattern(ctx, alt, scrutineeType, defaultMode, rootMutable),
-      );
-      const result: Semantics.OrPattern = {
-        ...pattern,
-        alternatives,
-        type: scrutineeType,
-      };
-      checkOrPatternConsistency(ctx, result);
-      checkOrPatternReachability(ctx, result);
-      return result;
-    }
+    case "WildcardPattern":
+      return analyzeWildcardPattern(pattern, scrutineeType);
+    case "BindingPattern":
+      return isSome(pattern.subpattern)
+        ? analyzePatternGuardrail(ctx, pattern, scrutineeType)
+        : analyzeBindingPattern(
+            ctx,
+            pattern,
+            scrutineeType,
+            defaultMode,
+            rootMutable,
+          );
+    case "LiteralPattern":
+      return analyzeLiteralPattern(ctx, pattern, scrutineeType);
+    case "RangePattern":
+      return analyzeRangePattern(ctx, pattern, scrutineeType);
+    case "OrPattern":
+      return orPattern(ctx, pattern, scrutineeType, defaultMode, rootMutable);
     case "PathPattern": {
       const enumDecl = resolveEnumDecl(ctx, scrutineeType);
-      if (!isSome(enumDecl)) {
-        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
-      }
-      return analyzePathPattern(ctx, pattern, scrutineeType, enumDecl.value);
+      return isSome(enumDecl)
+        ? analyzePathPattern(ctx, pattern, scrutineeType, enumDecl.value)
+        : analyzePatternGuardrail(ctx, pattern, scrutineeType);
     }
     case "TupleStructPattern": {
       const resolved = resolveTupleFieldsForPattern(
@@ -2167,17 +2058,17 @@ function analyzePattern(
         pattern,
         scrutineeType,
       );
-      if (!isSome(resolved)) {
-        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
-      }
-      return analyzeTupleStructPattern(
-        ctx,
-        pattern,
-        scrutineeType,
-        defaultMode,
-        rootMutable,
-        resolved.value,
-      );
+
+      return isSome(resolved)
+        ? analyzeTupleStructPattern(
+            ctx,
+            pattern,
+            scrutineeType,
+            defaultMode,
+            rootMutable,
+            resolved.value,
+          )
+        : analyzePatternGuardrail(ctx, pattern, scrutineeType);
     }
     case "StructPattern": {
       const resolved = resolveNamedFieldsForPattern(
@@ -2185,17 +2076,17 @@ function analyzePattern(
         pattern,
         scrutineeType,
       );
-      if (!isSome(resolved)) {
-        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
-      }
-      return analyzeStructPattern(
-        ctx,
-        pattern,
-        scrutineeType,
-        defaultMode,
-        rootMutable,
-        resolved.value,
-      );
+
+      return isSome(resolved)
+        ? analyzeStructPattern(
+            ctx,
+            pattern,
+            scrutineeType,
+            defaultMode,
+            rootMutable,
+            resolved.value,
+          )
+        : analyzePatternGuardrail(ctx, pattern, scrutineeType);
     }
     case "SlicePattern": {
       // A dynamic-length scrutinee has no real type to destructure against
@@ -2222,31 +2113,166 @@ function analyzePattern(
   }
 }
 
+function analyzeWildcardPattern(
+  pattern: Parser.WildcardPattern,
+  scrutineeType: Semantics.Type,
+): Semantics.WildcardPattern {
+  return {
+    ...pattern,
+    type: scrutineeType,
+  };
+}
+
+function analyzeBindingPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.BindingPattern,
+  scrutineeType: Semantics.Type,
+  defaultMode: PatternBindingMode,
+  rootMutable: boolean,
+): Semantics.BindingPattern {
+  if (pattern.byRef && pattern.mutable) {
+    checkMutOverrideLegality(
+      ctx,
+      pattern.name.text,
+      defaultMode,
+      rootMutable,
+      pattern.tokenId,
+    );
+  }
+  const { type: boundType, localMutable } = effectiveBindingType(
+    scrutineeType,
+    defaultMode,
+    pattern.byRef,
+    pattern.mutable,
+    pattern.tokenId,
+  );
+  bind(ctx, pattern.name.text, { type: boundType, mutable: localMutable });
+  return {
+    ...pattern,
+    name: { ...pattern.name, type: boundType },
+    subpattern: none(),
+    type: boundType,
+  };
+}
+
+function analyzeLiteralPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.LiteralPattern,
+  scrutineeType: Semantics.Type,
+): Semantics.LiteralPattern {
+  const literal = coercePatternLiteral(
+    analyzeLiteralValue(ctx, pattern.literal),
+    scrutineeType,
+  );
+  checkPatternLiteralType(ctx, literal.type, scrutineeType, pattern.tokenId);
+  if (literal.kind === "IntLiteral") {
+    checkPosLiteralRange(ctx, literal, literal.type);
+  }
+  return {
+    ...pattern,
+    literal,
+    type: literal.type,
+  };
+}
+
+function analyzeRangePattern(
+  ctx: AnalysisContext,
+  pattern: Parser.RangePattern,
+  scrutineeType: Semantics.Type,
+): Semantics.RangePattern {
+  const start = coercePatternLiteral(
+    analyzeLiteralValue(ctx, pattern.start.literal),
+    scrutineeType,
+  );
+  const end = coercePatternLiteral(
+    analyzeLiteralValue(ctx, pattern.end.literal),
+    scrutineeType,
+  );
+  const startBound: Semantics.RangePatternBound = {
+    ...pattern.start,
+    literal: start,
+  };
+  const endBound: Semantics.RangePatternBound = {
+    ...pattern.end,
+    literal: end,
+  };
+  if (!typesEqual(start.type, end.type)) {
+    emitError(
+      ctx,
+      `range bounds must have the same type: \`${describeType(start.type)}\` and \`${describeType(end.type)}\``,
+      pattern.tokenId,
+      "HEDGE-PATTERN-006",
+    );
+  } else {
+    checkPatternLiteralType(ctx, start.type, scrutineeType, pattern.tokenId);
+  }
+  const low = rangeBoundValue(startBound);
+  const high = rangeBoundValue(endBound);
+  if (low !== undefined && high !== undefined && low > high) {
+    emitError(
+      ctx,
+      `lower range bound ${low} is greater than upper bound ${high}, so the range matches nothing`,
+      pattern.tokenId,
+      "HEDGE-PATTERN-006",
+    );
+  }
+  return {
+    ...pattern,
+    start: startBound,
+    end: endBound,
+    type: start.type,
+  };
+}
+
+function orPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.OrPattern,
+  scrutineeType: Semantics.Type,
+  defaultMode: PatternBindingMode,
+  rootMutable: boolean,
+): Semantics.OrPattern {
+  // Each alternative is analyzed independently, so `Foo(a) | Bar(b)`
+  // binds both `a` and `b` into the arm's scope regardless of which
+  // alternative actually matches at runtime - `checkOrPatternConsistency`
+  // (below) is what actually enforces spec 0016's requirement that every
+  // alternative bind the same names/types/modes, rather than this
+  // analysis step silently accepting the mismatch.
+  const alternatives = pattern.alternatives.map((alt) =>
+    analyzePattern(ctx, alt, scrutineeType, defaultMode, rootMutable),
+  );
+  const result: Semantics.OrPattern = {
+    ...pattern,
+    alternatives,
+    type: scrutineeType,
+  };
+  checkOrPatternConsistency(ctx, result);
+  checkOrPatternReachability(ctx, result);
+  return result;
+}
+
 function analyzePathPattern(
-    ctx: AnalysisContext,
-    pattern: Parser.PathPattern,
-    scrutineeType: Semantics.Type,
-    enumDecl: Semantics.EnumDecl,
+  ctx: AnalysisContext,
+  pattern: Parser.PathPattern,
+  scrutineeType: Semantics.Type,
+  enumDecl: Semantics.EnumDecl,
 ): Semantics.PathPattern | Semantics.WildcardPattern {
   const variantName = lastPathSegment(pattern.path);
-  const variant = enumDecl.variants.find(
-      (v) => v.name.text === variantName,
-  );
+  const variant = enumDecl.variants.find((v) => v.name.text === variantName);
   if (variant === undefined) {
     emitError(
-        ctx,
-        `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
-        pattern.tokenId,
-        "HEDGE-NAME-004",
+      ctx,
+      `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
+      pattern.tokenId,
+      "HEDGE-NAME-004",
     );
     return analyzePatternGuardrail(ctx, pattern, scrutineeType);
   }
   if (isSome(variant.body)) {
     emitError(
-        ctx,
-        `variant \`${variantName}\` has fields; use \`${variantName}(...)\` or \`${variantName} { ... }\``,
-        pattern.tokenId,
-        "HEDGE-PATTERN-005",
+      ctx,
+      `variant \`${variantName}\` has fields; use \`${variantName}(...)\` or \`${variantName} { ... }\``,
+      pattern.tokenId,
+      "HEDGE-PATTERN-005",
     );
     return analyzePatternGuardrail(ctx, pattern, scrutineeType);
   }
