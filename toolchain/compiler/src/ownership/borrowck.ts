@@ -1250,6 +1250,56 @@ function checkCapabilities(
 }
 
 /**
+ * Whether `a` and `b` outright conflict: same base, at least one mutable,
+ * their places statically overlap, and their extents are simultaneously
+ * live. Each check below is a separate, independent reason two borrows of
+ * the same base can still coexist - see `borrowsOverlap` for the extent
+ * check's own intra-block/cross-block split.
+ */
+function borrowsConflict(
+  a: Borrow,
+  b: Borrow,
+  blockById: ReadonlyMap<number, BasicBlock>,
+  liveness: Liveness,
+  reachSets: ReadonlyMap<Borrow, ReadonlySet<number>>,
+): boolean {
+  if (!samePlaceBase(a.place, b.place)) {
+    return false;
+  }
+  if (!a.mutable && !b.mutable) {
+    return false; // any number of shared borrows may coexist
+  }
+  if (!placesOverlap(a.place, b.place)) {
+    return false; // statically distinct places (e.g. disjoint fields) never conflict
+  }
+  return borrowsOverlap(a, b, blockById, liveness, reachSets);
+}
+
+function buildConflictingBorrowsDiagnostic(
+  a: Borrow,
+  b: Borrow,
+  tokens: readonly Token[],
+): Diagnostic {
+  const firstBorrowSpan = spanOf(tokens, a.tokenId);
+  return {
+    ...errorDiagnostic(
+      "HEDGE-BORROW-CHECK-001",
+      `Conflicting borrows of "${describePlace(a.place)}": ${describeBorrow(a)} at offset ${String(offsetOf(tokens, a.tokenId))} ` +
+        `and ${describeBorrow(b)} at offset ${String(offsetOf(tokens, b.tokenId))} are both live.`,
+      spanOf(tokens, b.tokenId),
+    ),
+    relatedSpans: isSome(firstBorrowSpan)
+      ? [
+          {
+            span: firstBorrowSpan.value,
+            label: `${describeBorrow(a)} borrow here`,
+          },
+        ]
+      : [],
+  };
+}
+
+/**
  * Conflicts are checked pairwise, over every borrow anywhere in the function
  * (not just its entry block - see `collectBorrowsFromGraph`), using
  * `borrowsOverlap` to combine intra-block last-use with cross-block liveness
@@ -1270,35 +1320,12 @@ function checkExclusivity(
     }
     for (let j = i + 1; j < borrows.length; j += 1) {
       const b = borrows[j];
-      if (b === undefined || !samePlaceBase(a.place, b.place)) {
+      if (b === undefined) {
         continue;
       }
-      if (!a.mutable && !b.mutable) {
-        continue; // any number of shared borrows may coexist
+      if (borrowsConflict(a, b, blockById, liveness, reachSets)) {
+        diagnostics.push(buildConflictingBorrowsDiagnostic(a, b, tokens));
       }
-      if (!placesOverlap(a.place, b.place)) {
-        continue; // statically distinct places (e.g. disjoint fields) never conflict
-      }
-      if (!borrowsOverlap(a, b, blockById, liveness, reachSets)) {
-        continue; // the borrows are not simultaneously live
-      }
-      const firstBorrowSpan = spanOf(tokens, a.tokenId);
-      diagnostics.push({
-        ...errorDiagnostic(
-          "HEDGE-BORROW-CHECK-001",
-          `Conflicting borrows of "${describePlace(a.place)}": ${describeBorrow(a)} at offset ${String(offsetOf(tokens, a.tokenId))} ` +
-            `and ${describeBorrow(b)} at offset ${String(offsetOf(tokens, b.tokenId))} are both live.`,
-          spanOf(tokens, b.tokenId),
-        ),
-        relatedSpans: isSome(firstBorrowSpan)
-          ? [
-              {
-                span: firstBorrowSpan.value,
-                label: `${describeBorrow(a)} borrow here`,
-              },
-            ]
-          : [],
-      });
     }
   }
 }
