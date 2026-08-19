@@ -2159,30 +2159,7 @@ function analyzePattern(
       if (!isSome(enumDecl)) {
         return analyzePatternGuardrail(ctx, pattern, scrutineeType);
       }
-      const variantName = lastPathSegment(pattern.path);
-      const variant = enumDecl.value.variants.find(
-        (v) => v.name.text === variantName,
-      );
-      if (variant === undefined) {
-        emitError(
-          ctx,
-          `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
-          pattern.tokenId,
-          "HEDGE-NAME-004",
-        );
-        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
-      }
-      if (isSome(variant.body)) {
-        emitError(
-          ctx,
-          `variant \`${variantName}\` has fields; use \`${variantName}(...)\` or \`${variantName} { ... }\``,
-          pattern.tokenId,
-          "HEDGE-PATTERN-005",
-        );
-        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
-      }
-      const result: Semantics.PathPattern = { ...pattern, type: scrutineeType };
-      return result;
+      return analyzePathPattern(ctx, pattern, scrutineeType, enumDecl.value);
     }
     case "TupleStructPattern": {
       const resolved = resolveTupleFieldsForPattern(
@@ -2243,6 +2220,37 @@ function analyzePattern(
         `Unexpected pattern: ${JSON.stringify(pattern)}`,
       );
   }
+}
+
+function analyzePathPattern(
+    ctx: AnalysisContext,
+    pattern: Parser.PathPattern,
+    scrutineeType: Semantics.Type,
+    enumDecl: Semantics.EnumDecl,
+): Semantics.PathPattern | Semantics.WildcardPattern {
+  const variantName = lastPathSegment(pattern.path);
+  const variant = enumDecl.variants.find(
+      (v) => v.name.text === variantName,
+  );
+  if (variant === undefined) {
+    emitError(
+        ctx,
+        `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
+        pattern.tokenId,
+        "HEDGE-NAME-004",
+    );
+    return analyzePatternGuardrail(ctx, pattern, scrutineeType);
+  }
+  if (isSome(variant.body)) {
+    emitError(
+        ctx,
+        `variant \`${variantName}\` has fields; use \`${variantName}(...)\` or \`${variantName} { ... }\``,
+        pattern.tokenId,
+        "HEDGE-PATTERN-005",
+    );
+    return analyzePatternGuardrail(ctx, pattern, scrutineeType);
+  }
+  return { ...pattern, type: scrutineeType };
 }
 
 function analyzeTupleStructPattern(
