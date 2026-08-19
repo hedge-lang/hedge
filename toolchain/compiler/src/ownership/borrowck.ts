@@ -545,13 +545,88 @@ function resolveBorrowBases(
 }
 
 /**
+ * Uses in a block's own statements plus its trailing expression, if any -
+ * shared by the `Block` case below and an `IfExpression`'s `thenBranch`.
+ */
+function collectBlockUses(block: Semantics.Block, out: Set<string>): void {
+  for (const stmt of block.statements) statementUses(stmt, out);
+  if (isSome(block.trailingExpression)) {
+    collectUses(block.trailingExpression.value, out);
+  }
+}
+
+/**
+ * Uses in a call-like expression's callee/receiver and its arguments -
+ * shared by `CallExpression` and `MethodCallExpression`, which differ only
+ * in the field name holding the thing being called.
+ */
+function collectCallLikeUses(
+  target: Semantics.Expression,
+  args: readonly Semantics.Expression[],
+  out: Set<string>,
+): void {
+  collectUses(target, out);
+  for (const argument of args) collectUses(argument, out);
+}
+
+function collectRangeExpressionUses(
+  expression: Semantics.RangeExpression,
+  out: Set<string>,
+): void {
+  if (isSome(expression.start)) {
+    collectUses(expression.start.value, out);
+  }
+  if (isSome(expression.end)) {
+    collectUses(expression.end.value, out);
+  }
+}
+
+function collectStructExpressionUses(
+  expression: Semantics.StructExpression,
+  out: Set<string>,
+): void {
+  for (const field of expression.fields) {
+    if (isSome(field.value)) collectUses(field.value.value, out);
+  }
+  if (isSome(expression.base)) collectUses(expression.base.value, out);
+}
+
+function collectIfExpressionUses(
+  expression: Semantics.IfExpression,
+  out: Set<string>,
+): void {
+  collectUses(expression.condition, out);
+  collectBlockUses(expression.thenBranch, out);
+  if (isSome(expression.elseBranch))
+    collectUses(expression.elseBranch.value, out);
+}
+
+/**
+ * Same unscoped, name-only over-approximation this file already applies to
+ * a Block's own `let`-bound names (see `statementUses`'s `LetStatement`
+ * case) - a pattern-bound name referenced in a guard or body is collected
+ * the same as any other name, with no attempt to distinguish it from an
+ * outer binding of the same name.
+ */
+function collectMatchExpressionUses(
+  expression: Semantics.MatchExpression,
+  out: Set<string>,
+): void {
+  collectUses(expression.scrutinee, out);
+  for (const arm of expression.arms) {
+    if (isSome(arm.guard)) collectUses(arm.guard.value, out);
+    collectUses(arm.body, out);
+  }
+}
+
+/**
  * Collect the names of single-segment paths referenced in an expression.
  * Deliberately name-based, not `BindingId`-based: matching by resolved
  * binding identity is `collectDeclarations`' job for cross-scope capability
  * lookups, but a borrow's own last-use tracking only needs to know whether
  * its name is mentioned again later in the same block.
  */
-// eslint-disable-next-line complexity -- This is a routing function
+// eslint-disable-next-line complexity -- Routing function over the full Expression union
 function collectUses(expression: Semantics.Expression, out: Set<string>): void {
   switch (expression.kind) {
     case "PathExpression": {
@@ -563,10 +638,7 @@ function collectUses(expression: Semantics.Expression, out: Set<string>): void {
       return;
     }
     case "CallExpression":
-      collectUses(expression.callee, out);
-      for (const argument of expression.arguments) {
-        collectUses(argument, out);
-      }
+      collectCallLikeUses(expression.callee, expression.arguments, out);
       return;
     case "ReferenceExpression":
     case "DereferenceExpression":
@@ -588,16 +660,13 @@ function collectUses(expression: Semantics.Expression, out: Set<string>): void {
       collectUses(expression.object, out);
       return;
     case "MethodCallExpression":
-      collectUses(expression.receiver, out);
-      for (const argument of expression.arguments) collectUses(argument, out);
+      collectCallLikeUses(expression.receiver, expression.arguments, out);
       return;
     case "IndexExpression":
       collectUses(expression.object, out);
       collectUses(expression.index, out);
       return;
     case "TupleExpression":
-      for (const element of expression.elements) collectUses(element, out);
-      return;
     case "ArrayExpression":
       for (const element of expression.elements) collectUses(element, out);
       return;
@@ -605,28 +674,13 @@ function collectUses(expression: Semantics.Expression, out: Set<string>): void {
       collectUses(expression.value, out);
       return;
     case "RangeExpression":
-      if (isSome(expression.start)) {
-        collectUses(expression.start.value, out);
-      }
-      if (isSome(expression.end)) {
-        collectUses(expression.end.value, out);
-      }
+      collectRangeExpressionUses(expression, out);
       return;
     case "StructExpression":
-      for (const field of expression.fields) {
-        if (isSome(field.value)) collectUses(field.value.value, out);
-      }
-      if (isSome(expression.base)) collectUses(expression.base.value, out);
+      collectStructExpressionUses(expression, out);
       return;
     case "IfExpression":
-      collectUses(expression.condition, out);
-      for (const stmt of expression.thenBranch.statements)
-        statementUses(stmt, out);
-      if (isSome(expression.thenBranch.trailingExpression)) {
-        collectUses(expression.thenBranch.trailingExpression.value, out);
-      }
-      if (isSome(expression.elseBranch))
-        collectUses(expression.elseBranch.value, out);
+      collectIfExpressionUses(expression, out);
       return;
     case "LetExpression":
       // Same unscoped over-approximation as MatchExpression below - a
@@ -636,22 +690,10 @@ function collectUses(expression: Semantics.Expression, out: Set<string>): void {
       collectUses(expression.scrutinee, out);
       return;
     case "MatchExpression":
-      // Same unscoped, name-only over-approximation this file already
-      // applies to a Block's own `let`-bound names (see `statementUses`'s
-      // `LetStatement` case) - a pattern-bound name referenced in a guard
-      // or body is collected the same as any other name, with no attempt
-      // to distinguish it from an outer binding of the same name.
-      collectUses(expression.scrutinee, out);
-      for (const arm of expression.arms) {
-        if (isSome(arm.guard)) collectUses(arm.guard.value, out);
-        collectUses(arm.body, out);
-      }
+      collectMatchExpressionUses(expression, out);
       return;
     case "Block":
-      for (const stmt of expression.statements) statementUses(stmt, out);
-      if (isSome(expression.trailingExpression)) {
-        collectUses(expression.trailingExpression.value, out);
-      }
+      collectBlockUses(expression, out);
       return;
     case "StringLiteral":
     case "IntLiteral":
