@@ -2776,58 +2776,87 @@ function collectCoveredBoolValues(
 }
 
 /**
- * Reports an arm as unreachable when it is fully subsumed by the arms
- * before it, in source order. A guarded arm's own coverage is never added
- * to `coveredVariants`/`coveredBools` - a guard means "maybe matches", so
- * it can't unconditionally cover anything for arms after it. Only
- * enum-variant and bool coverage get real subsumption tracking (mirrors
- * `checkMatchExhaustiveness`'s own scope); every other scrutinee type only
- * ever hits the irrefutable-catch-all rule below.
+ * At most one of `enumDecl`/`isBool` is ever relevant for a given
+ * scrutinee - every other scrutinee type only hits the irrefutable
+ * catch-all rule, never real subsumption tracking.
  */
-// eslint-disable-next-line complexity -- Enum/bool/general-catch-all branches, each a simple check
+interface UnreachableArmsCoverage {
+  readonly enumDecl: Option<Semantics.EnumDecl>;
+  readonly isBool: boolean;
+  readonly coveredVariants: Set<string>;
+  readonly coveredBools: Set<boolean>;
+}
+
+function isArmUnreachable(
+  coverage: UnreachableArmsCoverage,
+  arm: Semantics.MatchArm,
+  hasCatchAllSoFar: boolean,
+): boolean {
+  if (hasCatchAllSoFar) return true;
+
+  if (isSome(coverage.enumDecl)) {
+    const thisArmVariants = new Set<string>();
+    collectCoveredVariantNames(arm.pattern, thisArmVariants);
+    return (
+      thisArmVariants.size > 0 &&
+      [...thisArmVariants].every((name) => coverage.coveredVariants.has(name))
+    );
+  }
+
+  if (coverage.isBool) {
+    const thisArmBools = new Set<boolean>();
+    collectCoveredBoolValues(arm.pattern, thisArmBools);
+    return (
+      thisArmBools.size > 0 &&
+      [...thisArmBools].every((v) => coverage.coveredBools.has(v))
+    );
+  }
+
+  return false;
+}
+
+/**
+ * A guarded arm never contributes coverage - a guard means "maybe
+ * matches", so it can't unconditionally cover anything for arms after it.
+ */
+function recordArmCoverage(
+  ctx: AnalysisContext,
+  coverage: UnreachableArmsCoverage,
+  arm: Semantics.MatchArm,
+): boolean {
+  if (isSome(arm.guard)) return false;
+  if (isIrrefutablePattern(ctx, arm.pattern)) return true;
+
+  if (isSome(coverage.enumDecl)) {
+    collectCoveredVariantNames(arm.pattern, coverage.coveredVariants);
+  } else if (coverage.isBool) {
+    collectCoveredBoolValues(arm.pattern, coverage.coveredBools);
+  }
+  return false;
+}
+
+/**
+ * Reports an arm as unreachable when it is fully subsumed by the arms
+ * before it, in source order.
+ */
 function checkUnreachableArms(
   ctx: AnalysisContext,
   arms: readonly Semantics.MatchArm[],
   scrutineeType: Semantics.Type,
 ): void {
-  const enumDecl = resolveEnumDecl(ctx, scrutineeType);
-  const isBool = scrutineeType.kind === "PrimitiveBooleanType";
-  const coveredVariants = new Set<string>();
-  const coveredBools = new Set<boolean>();
+  const coverage: UnreachableArmsCoverage = {
+    enumDecl: resolveEnumDecl(ctx, scrutineeType),
+    isBool: scrutineeType.kind === "PrimitiveBooleanType",
+    coveredVariants: new Set<string>(),
+    coveredBools: new Set<boolean>(),
+  };
   let hasCatchAll = false;
 
   for (const arm of arms) {
-    if (hasCatchAll) {
+    if (isArmUnreachable(coverage, arm, hasCatchAll)) {
       emitError(ctx, "unreachable pattern", arm.tokenId, "HEDGE-PATTERN-003");
-    } else if (isSome(enumDecl)) {
-      const thisArmVariants = new Set<string>();
-      collectCoveredVariantNames(arm.pattern, thisArmVariants);
-      if (
-        thisArmVariants.size > 0 &&
-        [...thisArmVariants].every((name) => coveredVariants.has(name))
-      ) {
-        emitError(ctx, "unreachable pattern", arm.tokenId, "HEDGE-PATTERN-003");
-      }
-    } else if (isBool) {
-      const thisArmBools = new Set<boolean>();
-      collectCoveredBoolValues(arm.pattern, thisArmBools);
-      if (
-        thisArmBools.size > 0 &&
-        [...thisArmBools].every((v) => coveredBools.has(v))
-      ) {
-        emitError(ctx, "unreachable pattern", arm.tokenId, "HEDGE-PATTERN-003");
-      }
     }
-
-    if (isNone(arm.guard)) {
-      if (isIrrefutablePattern(ctx, arm.pattern)) {
-        hasCatchAll = true;
-      } else if (isSome(enumDecl)) {
-        collectCoveredVariantNames(arm.pattern, coveredVariants);
-      } else if (isBool) {
-        collectCoveredBoolValues(arm.pattern, coveredBools);
-      }
-    }
+    hasCatchAll = hasCatchAll || recordArmCoverage(ctx, coverage, arm);
   }
 }
 
