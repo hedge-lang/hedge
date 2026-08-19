@@ -2294,94 +2294,15 @@ function analyzePattern(
       // yet (no `Vec`/slice type exists - Slice 5), so only a fixed-length
       // `ArrayType` is promoted to real semantics here; anything else still
       // falls to the generic guardrail, unchanged.
-      if (scrutineeType.kind !== "ArrayType") {
-        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
-      }
-      const { elementType, length } = scrutineeType;
-      const restCount = pattern.elements.filter(
-        (el) => el.kind === "RestPattern",
-      ).length;
-      const nonRestCount = pattern.elements.length - restCount;
-      const alreadyErrored = restCount > 1;
-      if (alreadyErrored) {
-        emitError(
-          ctx,
-          `a slice pattern can have at most one \`..\` rest, but this one has ${restCount}`,
-          pattern.tokenId,
-          "HEDGE-PATTERN-005",
-        );
-      } else {
-        const hasRest = restCount === 1;
-        const arityOk = hasRest
-          ? nonRestCount <= length
-          : nonRestCount === length;
-        if (!arityOk) {
-          emitError(
+      return scrutineeType.kind !== "ArrayType"
+        ? analyzePatternGuardrail(ctx, pattern, scrutineeType)
+        : analyzeSlicePattern(
             ctx,
-            hasRest
-              ? `array has ${length} element(s), but the pattern requires at least ${nonRestCount}`
-              : `array has ${length} element(s), but the pattern requires exactly ${nonRestCount}`,
-            pattern.tokenId,
-            "HEDGE-PATTERN-005",
-          );
-        }
-      }
-      // Only used when a rest is present; harmless otherwise. Clamped to 0
-      // since an array length is a `usize` (never negative) - it only goes
-      // negative when `!arityOk` above already diagnosed the mismatch.
-      const restLength = Math.max(0, length - nonRestCount);
-      const elements = pattern.elements.map(
-        (el): Semantics.Pattern | Semantics.RestPattern => {
-          if (el.kind !== "RestPattern") {
-            return analyzePattern(
-              ctx,
-              el,
-              elementType,
-              defaultMode,
-              rootMutable,
-            );
-          }
-          if (!isSome(el.name)) {
-            return { ...el, name: none() };
-          }
-          if (el.byRef && el.mutable) {
-            checkMutOverrideLegality(
-              ctx,
-              el.name.value.text,
-              defaultMode,
-              rootMutable,
-              el.tokenId,
-            );
-          }
-          const restArrayType: Semantics.Type = {
-            kind: "ArrayType",
-            elementType,
-            length: restLength,
-          };
-          const { type: boundType, localMutable } = effectiveBindingType(
-            restArrayType,
+            pattern,
+            scrutineeType,
             defaultMode,
-            el.byRef,
-            el.mutable,
-            el.tokenId,
+            rootMutable,
           );
-          bind(ctx, el.name.value.text, {
-            type: boundType,
-            mutable: localMutable,
-          });
-          const result: Semantics.RestPattern = {
-            ...el,
-            name: some({ ...el.name.value, type: boundType }),
-          };
-          return result;
-        },
-      );
-      const result: Semantics.SlicePattern = {
-        ...pattern,
-        elements,
-        type: scrutineeType,
-      };
-      return result;
     }
     case "TuplePattern":
       return analyzePatternGuardrail(ctx, pattern, scrutineeType);
@@ -2391,6 +2312,92 @@ function analyzePattern(
         `Unexpected pattern: ${JSON.stringify(pattern)}`,
       );
   }
+}
+
+function analyzeSlicePattern(
+  ctx: AnalysisContext,
+  pattern: Parser.SlicePattern,
+  scrutineeType: Semantics.ArrayType,
+  defaultMode: PatternBindingMode,
+  rootMutable: boolean,
+): Semantics.SlicePattern {
+  const { elementType, length } = scrutineeType;
+  const restCount = pattern.elements.filter(
+    (el) => el.kind === "RestPattern",
+  ).length;
+  const nonRestCount = pattern.elements.length - restCount;
+  const alreadyErrored = restCount > 1;
+  if (alreadyErrored) {
+    emitError(
+      ctx,
+      `a slice pattern can have at most one \`..\` rest, but this one has ${restCount}`,
+      pattern.tokenId,
+      "HEDGE-PATTERN-005",
+    );
+  } else {
+    const hasRest = restCount === 1;
+    const arityOk = hasRest ? nonRestCount <= length : nonRestCount === length;
+    if (!arityOk) {
+      emitError(
+        ctx,
+        hasRest
+          ? `array has ${length} element(s), but the pattern requires at least ${nonRestCount}`
+          : `array has ${length} element(s), but the pattern requires exactly ${nonRestCount}`,
+        pattern.tokenId,
+        "HEDGE-PATTERN-005",
+      );
+    }
+  }
+  // Only used when a rest is present; harmless otherwise. Clamped to 0
+  // since an array length is a `usize` (never negative) - it only goes
+  // negative when `!arityOk` above already diagnosed the mismatch.
+  const restLength = Math.max(0, length - nonRestCount);
+  const elements = pattern.elements.map(
+    (el): Semantics.Pattern | Semantics.RestPattern => {
+      if (el.kind !== "RestPattern") {
+        return analyzePattern(ctx, el, elementType, defaultMode, rootMutable);
+      }
+      if (!isSome(el.name)) {
+        return { ...el, name: none() };
+      }
+      if (el.byRef && el.mutable) {
+        checkMutOverrideLegality(
+          ctx,
+          el.name.value.text,
+          defaultMode,
+          rootMutable,
+          el.tokenId,
+        );
+      }
+      const restArrayType: Semantics.Type = {
+        kind: "ArrayType",
+        elementType,
+        length: restLength,
+      };
+      const { type: boundType, localMutable } = effectiveBindingType(
+        restArrayType,
+        defaultMode,
+        el.byRef,
+        el.mutable,
+        el.tokenId,
+      );
+      bind(ctx, el.name.value.text, {
+        type: boundType,
+        mutable: localMutable,
+      });
+      const result: Semantics.RestPattern = {
+        ...el,
+        name: some({ ...el.name.value, type: boundType }),
+      };
+      return result;
+    },
+  );
+  const result: Semantics.SlicePattern = {
+    ...pattern,
+    elements,
+    type: scrutineeType,
+  };
+  return result;
 }
 
 interface OrPatternBinding {

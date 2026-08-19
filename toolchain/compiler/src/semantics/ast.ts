@@ -470,7 +470,7 @@ export type Type =
  * integer (no const-evaluation exists yet), so by the time a program reaches
  * this layer there's nothing left to evaluate.
  */
-interface ArrayType {
+export interface ArrayType {
   readonly kind: "ArrayType";
   readonly elementType: Type;
   readonly length: number;
