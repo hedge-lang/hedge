@@ -23,7 +23,7 @@ import {
   type ConstFoldOutcome,
   type FoldWidth,
 } from "./const-eval.js";
-import { hasCapability } from "./type-capabilities.js";
+import { hasCapability, type TypeCapability } from "./type-capabilities.js";
 
 export interface AnalysisResult {
   readonly diagnostics: readonly Diagnostic[];
@@ -4147,7 +4147,181 @@ function reconcileExpressionType(
   return { expr: result, mismatch };
 }
 
-// eslint-disable-next-line complexity -- This is a routing function
+/**
+ * Shared shape for `Eq`/`Ne` and `Lt`/`Gt`/`Le`/`Ge`: a missing capability
+ * on either side is one error (`capabilityErrorMessage`); two individually
+ * valid but differently-typed operands is a second, shared error - this
+ * text is identical for both operator groups in the original code, not a
+ * coincidence being papered over here.
+ */
+function inferComparisonType(
+  ctx: AnalysisContext,
+  capability: TypeCapability,
+  capabilityErrorMessage: string,
+  leftType: Semantics.Type,
+  rightType: Semantics.Type,
+  isLeftTypeValid: boolean,
+  isRightTypeValid: boolean,
+  tokenId: number,
+): Semantics.Type {
+  const leftOk = !isLeftTypeValid || hasCapability(leftType, capability);
+  const rightOk = !isRightTypeValid || hasCapability(rightType, capability);
+  if (!leftOk || !rightOk) {
+    // TODO(Hedge-265): equality should fall through to a resolved
+    // PartialEq/Eq impl here instead of rejecting outright.
+    // TODO(Hedge-279): same gap for ordering (PartialOrd/Ord).
+    emitError(ctx, capabilityErrorMessage, tokenId, "HEDGE-TYPE-002");
+  } else if (
+    isLeftTypeValid &&
+    isRightTypeValid &&
+    !typesEqual(leftType, rightType)
+  ) {
+    emitError(
+      ctx,
+      "comparison operands must have the same type",
+      tokenId,
+      "HEDGE-TYPE-003",
+    );
+  }
+  return { kind: "PrimitiveBooleanType" };
+}
+
+function inferLogicalType(
+  ctx: AnalysisContext,
+  leftType: Semantics.Type,
+  rightType: Semantics.Type,
+  isLeftTypeValid: boolean,
+  isRightTypeValid: boolean,
+  tokenId: number,
+): Semantics.Type {
+  if (isLeftTypeValid && !hasCapability(leftType, "logical")) {
+    emitError(
+      ctx,
+      "logical operator operands must be `bool`",
+      tokenId,
+      "HEDGE-TYPE-002",
+    );
+  }
+  if (isRightTypeValid && !hasCapability(rightType, "logical")) {
+    emitError(
+      ctx,
+      "logical operator operands must be `bool`",
+      tokenId,
+      "HEDGE-TYPE-002",
+    );
+  }
+  return { kind: "PrimitiveBooleanType" };
+}
+
+function inferArithmeticType(
+  ctx: AnalysisContext,
+  leftType: Semantics.Type,
+  rightType: Semantics.Type,
+  isLeftTypeValid: boolean,
+  isRightTypeValid: boolean,
+  tokenId: number,
+): Semantics.Type {
+  // TODO(Hedge-280): no fallback to an Add/Sub/Mul/Div/Rem-style operator
+  // trait yet - a struct or enum operand is always rejected here.
+  if (isLeftTypeValid && !hasCapability(leftType, "arithmetic")) {
+    emitError(
+      ctx,
+      `arithmetic operands must be numeric; left-operand is type \`${describeType(leftType)}\``,
+      tokenId,
+      "HEDGE-TYPE-002",
+    );
+  }
+  if (isRightTypeValid && !hasCapability(rightType, "arithmetic")) {
+    emitError(
+      ctx,
+      `arithmetic operands must be numeric; right-operand is type \`${describeType(rightType)}\``,
+      tokenId,
+      "HEDGE-TYPE-002",
+    );
+  }
+  if (isLeftTypeValid && isRightTypeValid && !typesEqual(leftType, rightType)) {
+    emitError(
+      ctx,
+      "arithmetic operands must have the same type",
+      tokenId,
+      "HEDGE-TYPE-003",
+    );
+  }
+  return isLeftTypeValid ? leftType : rightType;
+}
+
+/**
+ * A shift amount is independent of the shifted value's type (matching
+ * Rust), unlike the other bitwise operators below, which combine two
+ * values of one type - so unlike `inferBitwiseType`, there is no
+ * same-type check here.
+ */
+function inferShiftType(
+  ctx: AnalysisContext,
+  leftType: Semantics.Type,
+  rightType: Semantics.Type,
+  isLeftTypeValid: boolean,
+  isRightTypeValid: boolean,
+  tokenId: number,
+): Semantics.Type {
+  // TODO(Hedge-280): no fallback to a Shl/Shr-style operator trait yet.
+  if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
+    emitError(
+      ctx,
+      "the shifted value must be an integer",
+      tokenId,
+      "HEDGE-TYPE-002",
+    );
+  }
+  if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
+    emitError(
+      ctx,
+      "the shift amount must be an integer",
+      tokenId,
+      "HEDGE-TYPE-002",
+    );
+  }
+  return isLeftTypeValid ? leftType : rightType;
+}
+
+function inferBitwiseType(
+  ctx: AnalysisContext,
+  leftType: Semantics.Type,
+  rightType: Semantics.Type,
+  isLeftTypeValid: boolean,
+  isRightTypeValid: boolean,
+  tokenId: number,
+): Semantics.Type {
+  // TODO(Hedge-280): no fallback to a BitAnd/BitOr/BitXor-style operator
+  // trait yet.
+  if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
+    emitError(
+      ctx,
+      "bitwise operations require integer operands",
+      tokenId,
+      "HEDGE-TYPE-002",
+    );
+  }
+  if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
+    emitError(
+      ctx,
+      "bitwise operations require integer operands",
+      tokenId,
+      "HEDGE-TYPE-002",
+    );
+  }
+  if (isLeftTypeValid && isRightTypeValid && !typesEqual(leftType, rightType)) {
+    emitError(
+      ctx,
+      "bitwise operands must have the same type",
+      tokenId,
+      "HEDGE-TYPE-003",
+    );
+  }
+  return isLeftTypeValid ? leftType : rightType;
+}
+
+// eslint-disable-next-line complexity -- Routing function; each case is one line dispatching to a named helper
 function inferBinaryType(
   ctx: AnalysisContext,
   op: Parser.BinaryOperator,
@@ -4155,8 +4329,6 @@ function inferBinaryType(
   right: Semantics.Expression,
   tokenId: number,
 ): Semantics.Type {
-  const bool: Semantics.Type = { kind: "PrimitiveBooleanType" };
-
   const leftType = getType(left);
   const rightType = getType(right);
 
@@ -4171,175 +4343,80 @@ function inferBinaryType(
 
   switch (op) {
     case "Eq":
-    case "Ne": {
-      const leftEq = !isLeftTypeValid || hasCapability(leftType, "equality");
-      const rightEq = !isRightTypeValid || hasCapability(rightType, "equality");
-      if (!leftEq || !rightEq) {
-        emitError(
-          ctx,
-          "type does not support equality comparison",
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      } else if (
-        isLeftTypeValid &&
-        isRightTypeValid &&
-        !typesEqual(leftType, rightType)
-      ) {
-        emitError(
-          ctx,
-          "comparison operands must have the same type",
-          tokenId,
-          "HEDGE-TYPE-003",
-        );
-      }
-      return bool;
-    }
-
+    case "Ne":
+      return inferComparisonType(
+        ctx,
+        "equality",
+        "type does not support equality comparison",
+        leftType,
+        rightType,
+        isLeftTypeValid,
+        isRightTypeValid,
+        tokenId,
+      );
     case "Lt":
     case "Gt":
     case "Le":
-    case "Ge": {
-      const leftOrd = !isLeftTypeValid || hasCapability(leftType, "ordering");
-      const rightOrd =
-        !isRightTypeValid || hasCapability(rightType, "ordering");
-      if (!leftOrd || !rightOrd) {
-        emitError(
-          ctx,
-          "type does not support ordering comparison",
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      } else if (
-        isLeftTypeValid &&
-        isRightTypeValid &&
-        !typesEqual(leftType, rightType)
-      ) {
-        emitError(
-          ctx,
-          "comparison operands must have the same type",
-          tokenId,
-          "HEDGE-TYPE-003",
-        );
-      }
-      return bool;
-    }
-
+    case "Ge":
+      return inferComparisonType(
+        ctx,
+        "ordering",
+        "type does not support ordering comparison",
+        leftType,
+        rightType,
+        isLeftTypeValid,
+        isRightTypeValid,
+        tokenId,
+      );
     case "And":
-    case "Or": {
-      if (isLeftTypeValid && !hasCapability(leftType, "logical")) {
-        emitError(
-          ctx,
-          "logical operator operands must be `bool`",
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      }
-      if (isRightTypeValid && !hasCapability(rightType, "logical")) {
-        emitError(
-          ctx,
-          "logical operator operands must be `bool`",
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      }
-      return bool;
-    }
-
+    case "Or":
+      return inferLogicalType(
+        ctx,
+        leftType,
+        rightType,
+        isLeftTypeValid,
+        isRightTypeValid,
+        tokenId,
+      );
     case "Add":
     case "Sub":
     case "Mul":
     case "Div":
-    case "Rem": {
-      if (isLeftTypeValid && !hasCapability(leftType, "arithmetic")) {
-        emitError(
-          ctx,
-          `arithmetic operands must be numeric; left-operand is type \`${describeType(leftType)}\``,
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      }
-      if (isRightTypeValid && !hasCapability(rightType, "arithmetic")) {
-        emitError(
-          ctx,
-          `arithmetic operands must be numeric; right-operand is type \`${describeType(rightType)}\``,
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      }
-      if (
-        isLeftTypeValid &&
-        isRightTypeValid &&
-        !typesEqual(leftType, rightType)
-      ) {
-        emitError(
-          ctx,
-          "arithmetic operands must have the same type",
-          tokenId,
-          "HEDGE-TYPE-003",
-        );
-      }
-      return isLeftTypeValid ? leftType : rightType;
-    }
-
+    case "Rem":
+      return inferArithmeticType(
+        ctx,
+        leftType,
+        rightType,
+        isLeftTypeValid,
+        isRightTypeValid,
+        tokenId,
+      );
     case "Shl":
-    case "Shr": {
-      // A shift amount is independent of the shifted value's type (matching
-      // Rust), unlike the other bitwise operators below, which combine two
-      // values of one type.
-      if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
-        emitError(
-          ctx,
-          "the shifted value must be an integer",
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      }
-      if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
-        emitError(
-          ctx,
-          "the shift amount must be an integer",
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      }
-      return isLeftTypeValid ? leftType : rightType;
-    }
+    case "Shr":
+      return inferShiftType(
+        ctx,
+        leftType,
+        rightType,
+        isLeftTypeValid,
+        isRightTypeValid,
+        tokenId,
+      );
     case "BitAnd":
     case "BitXor":
-    case "BitOr": {
-      if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
-        emitError(
-          ctx,
-          "bitwise operations require integer operands",
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      }
-      if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
-        emitError(
-          ctx,
-          "bitwise operations require integer operands",
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      }
-      if (
-        isLeftTypeValid &&
-        isRightTypeValid &&
-        !typesEqual(leftType, rightType)
-      ) {
-        emitError(
-          ctx,
-          "bitwise operands must have the same type",
-          tokenId,
-          "HEDGE-TYPE-003",
-        );
-      }
-      return isLeftTypeValid ? leftType : rightType;
-    }
+    case "BitOr":
+      return inferBitwiseType(
+        ctx,
+        leftType,
+        rightType,
+        isLeftTypeValid,
+        isRightTypeValid,
+        tokenId,
+      );
     default:
-      assertNever(op, `Unexpected binary operator: ${JSON.stringify(op)}`);
+      return assertNever(
+        op,
+        `Unexpected binary operator: ${JSON.stringify(op)}`,
+      );
   }
 }
 
@@ -4354,6 +4431,7 @@ function unaryNotResultType(
   tokenId: number,
 ): Semantics.Type {
   const operandType = getType(operand);
+  // TODO(Hedge-280): no fallback to a Not-style operator trait yet.
   if (
     hasCapability(operandType, "logical") ||
     hasCapability(operandType, "bitwise")

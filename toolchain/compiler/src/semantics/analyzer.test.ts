@@ -142,6 +142,101 @@ describe("semantic analysis", (): void => {
         "bitwise operands must have the same type",
       );
     });
+
+    it("rejects shifting a non-integer value", () => {
+      const result = diagnose("fn main() { let y = 1.5 << 2; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "the shifted value must be an integer",
+      );
+    });
+  });
+
+  describe("binary operator type checking", () => {
+    it("rejects an equality comparison on a struct type, which has no equality capability", () => {
+      const result = diagnose(`
+        struct P { x: i32 }
+        fn main() { let a: P = P { x: 1 }; let b: P = P { x: 2 }; let c = a == b; }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "type does not support equality comparison",
+      );
+    });
+
+    it("rejects an equality comparison between two individually-comparable but differently-typed operands", () => {
+      const result = diagnose('fn main() { let x = 1 == "a"; }');
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "comparison operands must have the same type",
+      );
+    });
+
+    it("rejects an ordering comparison between two individually-ordered but differently-typed operands", () => {
+      const result = diagnose("fn main() { let x = 'a' < 1; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "comparison operands must have the same type",
+      );
+    });
+
+    it("rejects a logical operator with a non-bool left operand", () => {
+      const result = diagnose("fn main() { let x = 1 && true; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "logical operator operands must be `bool`",
+      );
+    });
+
+    it("rejects a logical operator with a non-bool right operand", () => {
+      const result = diagnose("fn main() { let x = true && 1; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "logical operator operands must be `bool`",
+      );
+    });
+
+    it("reports both operands independently when neither side of a logical operator is bool", () => {
+      const result = diagnose('fn main() { let x = 1 && "a"; }');
+      expect(result.diagnostics).toHaveLength(2);
+      for (const diagnostic of result.diagnostics) {
+        expect(diagnostic.message).toBe(
+          "logical operator operands must be `bool`",
+        );
+      }
+    });
+
+    it("rejects arithmetic between two individually-numeric but differently-typed operands", () => {
+      const result = diagnose("fn main() { let x = 1 + 1.5; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "arithmetic operands must have the same type",
+      );
+    });
+
+    it("rejects a bitwise operator on a non-integer operand, alongside the resulting type mismatch", () => {
+      // The capability check and the same-type check are independent, not
+      // an if/else-if - both fire here since `f64`/`i32` are also
+      // different types, unlike the comparison operators above.
+      const result = diagnose("fn main() { let x = 1.5 & 2; }");
+      expect(result.diagnostics).toHaveLength(2);
+      expect(result.diagnostics[0]?.message).toBe(
+        "bitwise operations require integer operands",
+      );
+      expect(result.diagnostics[1]?.message).toBe(
+        "bitwise operands must have the same type",
+      );
+    });
+
+    it("rejects a bitwise operator on two same-typed non-integer operands, isolating the capability check", () => {
+      const result = diagnose("fn main() { let x = 1.5 & 2.5; }");
+      expect(result.diagnostics).toHaveLength(2);
+      for (const diagnostic of result.diagnostics) {
+        expect(diagnostic.message).toBe(
+          "bitwise operations require integer operands",
+        );
+      }
+    });
   });
 
   describe("array length bound", () => {
