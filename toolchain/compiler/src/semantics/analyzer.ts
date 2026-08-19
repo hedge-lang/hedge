@@ -4450,7 +4450,119 @@ function unaryNotResultType(
   return { kind: "PrimitiveBooleanType" };
 }
 
-// eslint-disable-next-line complexity -- This is a routing function
+function analyzePathExpression(
+  ctx: AnalysisContext,
+  expression: Parser.PathExpression,
+): Semantics.Expression {
+  const constRef = analyzeConstReference(ctx, expression);
+  if (isSome(constRef)) return constRef.value;
+  const staticRef = analyzeStaticReference(ctx, expression);
+  if (isSome(staticRef)) return staticRef.value;
+  return analyzePath(ctx, expression);
+}
+
+function analyzeBinaryExpression(
+  ctx: AnalysisContext,
+  expression: Parser.BinaryExpression,
+): Semantics.BinaryExpression {
+  let left = analyzeExpression(ctx, expression.left);
+  let right = analyzeExpression(ctx, expression.right);
+  const isLeftUnsuffixed = isUnsuffixedLiteralExpr(left);
+  const isRightUnsuffixed = isUnsuffixedLiteralExpr(right);
+  if (isLeftUnsuffixed && !isRightUnsuffixed) {
+    left = coerceToIntegerType(left, getType(right));
+    checkCoercedLiteralRange(ctx, left);
+  } else if (!isLeftUnsuffixed && isRightUnsuffixed) {
+    right = coerceToIntegerType(right, getType(left));
+    checkCoercedLiteralRange(ctx, right);
+  }
+  const type = inferBinaryType(
+    ctx,
+    expression.operator,
+    left,
+    right,
+    expression.tokenId,
+  );
+  return { ...expression, left, right, type };
+}
+
+function analyzeUnaryExpression(
+  ctx: AnalysisContext,
+  expression: Parser.UnaryExpression,
+): Semantics.UnaryExpression {
+  const operand =
+    expression.operator === "Neg" && expression.operand.kind === "IntLiteral"
+      ? analyzeIntLiteral(ctx, expression.operand, true)
+      : analyzeExpression(ctx, expression.operand);
+  const type: Semantics.Type =
+    expression.operator === "Not"
+      ? unaryNotResultType(ctx, operand, expression.tokenId)
+      : getType(operand);
+  if (
+    expression.operator === "Neg" &&
+    operand.kind === "IntLiteral" &&
+    isSome(operand.suffix)
+  ) {
+    const rangeError = checkNegLiteralRange(operand, type);
+    if (isSome(rangeError))
+      emitError(ctx, rangeError.value, operand.tokenId, "HEDGE-TYPE-005");
+  }
+  return { ...expression, operand, type };
+}
+
+function analyzeMethodCallExpression(
+  ctx: AnalysisContext,
+  expression: Parser.MethodCallExpression,
+): Semantics.MethodCallExpression {
+  const receiver = analyzeExpression(ctx, expression.receiver);
+  return {
+    ...expression,
+    receiver,
+    method: {
+      ...expression.method,
+      type: { kind: "UnitType", tokenId: expression.method.tokenId },
+    },
+    arguments: expression.arguments.map((arg) => analyzeExpression(ctx, arg)),
+    type: { kind: "UnitType", tokenId: expression.tokenId },
+  };
+}
+
+function analyzeTupleExpression(
+  ctx: AnalysisContext,
+  expression: Parser.TupleExpression,
+): Semantics.TupleExpression {
+  return {
+    ...expression,
+    elements: expression.elements.map((elem) => analyzeExpression(ctx, elem)),
+    type: { kind: "UnitType", tokenId: expression.tokenId },
+  };
+}
+
+function analyzeRangeExpression(
+  ctx: AnalysisContext,
+  expression: Parser.RangeExpression,
+): Semantics.RangeExpression {
+  return {
+    ...expression,
+    start: mapSome(expression.start, (expr) => analyzeExpression(ctx, expr)),
+    end: mapSome(expression.end, (expr) => analyzeExpression(ctx, expr)),
+    type: { kind: "UnitType", tokenId: expression.tokenId },
+  };
+}
+
+function analyzeIdentifierExpression(
+  ctx: AnalysisContext,
+  expression: Parser.Identifier,
+): Semantics.Expression {
+  return analyzePath(ctx, {
+    ...expression,
+    kind: "PathExpression",
+    path: { absolute: false, segments: [expression.text] },
+    typeArguments: [],
+  });
+}
+
+// eslint-disable-next-line complexity -- Routing function; each case is one line dispatching to a named helper
 function analyzeExpression(
   ctx: AnalysisContext,
   expression: Parser.Expression,
@@ -4466,105 +4578,36 @@ function analyzeExpression(
       return analyzeBoolLiteral(ctx, expression);
     case "CharLiteral":
       return analyzeCharLiteral(ctx, expression);
-    case "PathExpression": {
-      const constRef = analyzeConstReference(ctx, expression);
-      if (isSome(constRef)) return constRef.value;
-      const staticRef = analyzeStaticReference(ctx, expression);
-      if (isSome(staticRef)) return staticRef.value;
-      return analyzePath(ctx, expression);
-    }
+    case "PathExpression":
+      return analyzePathExpression(ctx, expression);
     case "CallExpression":
       return analyzeCall(ctx, expression);
     case "ReferenceExpression":
       return analyzeReferenceExpression(ctx, expression);
     case "DereferenceExpression":
       return analyzeDereferenceExpression(ctx, expression);
-    case "BinaryExpression": {
-      let left = analyzeExpression(ctx, expression.left);
-      let right = analyzeExpression(ctx, expression.right);
-      const isLeftUnsuffixed = isUnsuffixedLiteralExpr(left);
-      const isRightUnsuffixed = isUnsuffixedLiteralExpr(right);
-      if (isLeftUnsuffixed && !isRightUnsuffixed) {
-        left = coerceToIntegerType(left, getType(right));
-        checkCoercedLiteralRange(ctx, left);
-      } else if (!isLeftUnsuffixed && isRightUnsuffixed) {
-        right = coerceToIntegerType(right, getType(left));
-        checkCoercedLiteralRange(ctx, right);
-      }
-      const type = inferBinaryType(
-        ctx,
-        expression.operator,
-        left,
-        right,
-        expression.tokenId,
-      );
-      return { ...expression, left, right, type };
-    }
-    case "UnaryExpression": {
-      const operand =
-        expression.operator === "Neg" &&
-        expression.operand.kind === "IntLiteral"
-          ? analyzeIntLiteral(ctx, expression.operand, true)
-          : analyzeExpression(ctx, expression.operand);
-      const type: Semantics.Type =
-        expression.operator === "Not"
-          ? unaryNotResultType(ctx, operand, expression.tokenId)
-          : getType(operand);
-      if (
-        expression.operator === "Neg" &&
-        operand.kind === "IntLiteral" &&
-        isSome(operand.suffix)
-      ) {
-        const rangeError = checkNegLiteralRange(operand, type);
-        if (isSome(rangeError))
-          emitError(ctx, rangeError.value, operand.tokenId, "HEDGE-TYPE-005");
-      }
-      return { ...expression, operand, type };
-    }
+    case "BinaryExpression":
+      return analyzeBinaryExpression(ctx, expression);
+    case "UnaryExpression":
+      return analyzeUnaryExpression(ctx, expression);
     case "AssignExpression":
       return analyzeAssignmentExpression(ctx, expression);
     case "CompoundAssignExpression":
       return analyzeCompoundAssignmentExpression(ctx, expression);
     case "FieldAccessExpression":
       return analyzeFieldAccessExpression(ctx, expression);
-    case "MethodCallExpression": {
-      const receiver = analyzeExpression(ctx, expression.receiver);
-      return {
-        ...expression,
-        receiver,
-        method: {
-          ...expression.method,
-          type: { kind: "UnitType", tokenId: expression.method.tokenId },
-        },
-        arguments: expression.arguments.map((arg) =>
-          analyzeExpression(ctx, arg),
-        ),
-        type: { kind: "UnitType", tokenId: expression.tokenId },
-      };
-    }
+    case "MethodCallExpression":
+      return analyzeMethodCallExpression(ctx, expression);
     case "IndexExpression":
       return analyzeIndexExpression(ctx, expression);
     case "TupleExpression":
-      return {
-        ...expression,
-        elements: expression.elements.map((elem) =>
-          analyzeExpression(ctx, elem),
-        ),
-        type: { kind: "UnitType", tokenId: expression.tokenId },
-      };
+      return analyzeTupleExpression(ctx, expression);
     case "ArrayExpression":
       return analyzeArrayExpression(ctx, expression);
     case "ArrayRepeatExpression":
       return analyzeArrayRepeatExpression(ctx, expression);
     case "RangeExpression":
-      return {
-        ...expression,
-        start: mapSome(expression.start, (expr) =>
-          analyzeExpression(ctx, expr),
-        ),
-        end: mapSome(expression.end, (expr) => analyzeExpression(ctx, expr)),
-        type: { kind: "UnitType", tokenId: expression.tokenId },
-      };
+      return analyzeRangeExpression(ctx, expression);
     case "StructExpression":
       return analyzeStructExpression(ctx, expression);
     case "IfExpression":
@@ -4587,12 +4630,7 @@ function analyzeExpression(
     case "Block":
       return analyzeBlock(ctx, expression);
     case "Identifier":
-      return analyzePath(ctx, {
-        ...expression,
-        kind: "PathExpression",
-        path: { absolute: false, segments: [expression.text] },
-        typeArguments: [],
-      });
+      return analyzeIdentifierExpression(ctx, expression);
     default:
       assertNever(
         expression,

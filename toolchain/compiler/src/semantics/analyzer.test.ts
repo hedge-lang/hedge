@@ -239,6 +239,36 @@ describe("semantic analysis", (): void => {
     });
   });
 
+  describe("method call and tuple expressions (Slice 1 placeholders)", () => {
+    it("still resolves an undeclared name inside a method call's receiver", () => {
+      const result = diagnose("fn main() { missing.foo(); }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        'Cannot find name "missing" in this scope.',
+      );
+    });
+
+    it("still resolves an undeclared name inside a method call's arguments", () => {
+      const result = diagnose(
+        "fn main() { let x: i32 = 1; x.foo(missing_arg); }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        'Cannot find name "missing_arg" in this scope.',
+      );
+    });
+
+    it("accepts a method call with no diagnostics when receiver and arguments are well-formed", () => {
+      const result = diagnose("fn main() { let x: i32 = 1; x.foo(); }");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("accepts a non-empty tuple literal with no diagnostics, since tuple types aren't checked yet", () => {
+      const result = diagnose("fn main() { let x = (1, 2); }");
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
   describe("array length bound", () => {
     it("accepts an array length equal to the maximum a usize index can hold", () => {
       const result = diagnose("fn f(arr: [i32; 4294967295]) { }");
