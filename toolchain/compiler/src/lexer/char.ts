@@ -7,6 +7,88 @@ import { scanLifetime } from "./lifetime.js";
 import type { Token } from "./token.js";
 
 /**
+ * `scanEscapeSeq` already pushed its own diagnostic and error token before
+ * returning `null`, so this only finds a safe point to resume lexing from -
+ * scanning forward from that error token's own end, since its span doesn't
+ * necessarily reach the literal's real closing quote.
+ */
+function recoverFromInvalidEscape(
+  tokens: Token[],
+  diagnostics: Diagnostic[],
+  source: string,
+  start: number,
+): number {
+  const lastToken = tokens.at(-1);
+  if (lastToken === undefined) {
+    diagnostics.push(
+      errorDiagnostic(
+        "HEDGE-LEX-002",
+        `unterminated char literal at offset ${start}`,
+        some({ start, end: source.length }),
+      ),
+    );
+    tokens.push({
+      kind: "error",
+      span: { start, end: source.length },
+      text: source.slice(start),
+    });
+    return source.length;
+  }
+  let j = lastToken.span.end;
+  while (j < source.length && source[j] !== "'") j++;
+  return j < source.length ? j + 1 : j;
+}
+
+function scanEscapedCharLiteral(
+  tokens: Token[],
+  diagnostics: Diagnostic[],
+  source: string,
+  start: number,
+): number {
+  const escEnd = scanEscapeSeq(tokens, diagnostics, source, start, start + 1);
+  if (escEnd === null) {
+    return recoverFromInvalidEscape(tokens, diagnostics, source, start);
+  }
+  if (source[escEnd] !== "'") {
+    diagnostics.push(
+      errorDiagnostic(
+        "HEDGE-LEX-002",
+        `unterminated char literal at offset ${start}`,
+        some({ start, end: escEnd }),
+      ),
+    );
+    tokens.push({
+      kind: "error",
+      span: { start, end: escEnd },
+      text: source.slice(start, escEnd),
+    });
+    return escEnd;
+  }
+  const end = escEnd + 1;
+  tokens.push({
+    kind: "char",
+    span: { start, end },
+    text: source.slice(start + 1, escEnd),
+  });
+  return end;
+}
+
+function scanSimpleCharLiteral(
+  tokens: Token[],
+  source: string,
+  start: number,
+): number {
+  const cpLen = (source.codePointAt(start + 1) ?? 0) > 0xffff ? 2 : 1;
+  const end = start + 1 + cpLen + 1; // ' + char + '
+  tokens.push({
+    kind: "char",
+    span: { start, end },
+    text: source.slice(start + 1, start + 1 + cpLen),
+  });
+  return end;
+}
+
+/**
  * Scans a char literal starting at `start` (the `'`).
  *
  * @param tokens The token list to append to.
@@ -23,60 +105,9 @@ function scanCharLiteral(
   start: number,
 ): number {
   const ch = source[start + 1] ?? "";
-  if (ch === "\\") {
-    const escEnd = scanEscapeSeq(tokens, diagnostics, source, start, start + 1);
-    if (escEnd === null) {
-      const lastToken = tokens.at(-1);
-      if (lastToken === undefined) {
-        diagnostics.push(
-          errorDiagnostic(
-            "HEDGE-LEX-002",
-            `unterminated char literal at offset ${start}`,
-            some({ start, end: source.length }),
-          ),
-        );
-        tokens.push({
-          kind: "error",
-          span: { start, end: source.length },
-          text: source.slice(start),
-        });
-        return source.length;
-      }
-      let j = lastToken.span.end;
-      while (j < source.length && source[j] !== "'") j++;
-      return j < source.length ? j + 1 : j;
-    }
-    if (source[escEnd] !== "'") {
-      diagnostics.push(
-        errorDiagnostic(
-          "HEDGE-LEX-002",
-          `unterminated char literal at offset ${start}`,
-          some({ start, end: escEnd }),
-        ),
-      );
-      tokens.push({
-        kind: "error",
-        span: { start, end: escEnd },
-        text: source.slice(start, escEnd),
-      });
-      return escEnd;
-    }
-    const end = escEnd + 1;
-    tokens.push({
-      kind: "char",
-      span: { start, end },
-      text: source.slice(start + 1, escEnd),
-    });
-    return end;
-  }
-  const cpLen = (source.codePointAt(start + 1) ?? 0) > 0xffff ? 2 : 1;
-  const end = start + 1 + cpLen + 1; // ' + char + '
-  tokens.push({
-    kind: "char",
-    span: { start, end },
-    text: source.slice(start + 1, start + 1 + cpLen),
-  });
-  return end;
+  return ch === "\\"
+    ? scanEscapedCharLiteral(tokens, diagnostics, source, start)
+    : scanSimpleCharLiteral(tokens, source, start);
 }
 
 /**

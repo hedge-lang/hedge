@@ -1649,6 +1649,43 @@ describe("char literals", () => {
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
 
+    it("reports an unterminated char literal when a valid escape has no closing quote", () => {
+      const { tokens, diagnostics } = tokenize("'\\n");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.message).toBe(
+        "unterminated char literal at offset 0",
+      );
+      expect(tokens).toMatchObject([
+        { kind: "error", span: { start: 0, end: 3 }, text: "'\\n" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("resumes lexing after the real closing quote once a bad escape's own error span falls short of it", () => {
+      const { tokens, diagnostics } = tokenize("'\\x1qq' 42");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.message).toBe(
+        "hex escape \\x needs exactly 2 hex digits at offset 1",
+      );
+      expect(tokens).toMatchObject([
+        { kind: "error", span: { start: 0, end: 5 }, text: "'\\x1q" },
+        { kind: "int", text: "42" },
+        { kind: "eof" },
+      ]);
+    });
+
+    it("recovers to end of source when a bad escape is never followed by a closing quote", () => {
+      const { tokens, diagnostics } = tokenize("'\\qabc");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.message).toBe(
+        "unknown escape sequence '\\q' at offset 1",
+      );
+      expect(tokens).toMatchObject([
+        { kind: "error", span: { start: 0, end: 3 }, text: "'\\q" },
+        { kind: "eof", span: { start: 6, end: 6 } },
+      ]);
+    });
+
     it("astral-plane char '🦔' (U+1F994, 2 UTF-16 units) is a single char token", () => {
       const { tokens } = tokenize("'🦔'");
       expect(tokens).toMatchObject([
