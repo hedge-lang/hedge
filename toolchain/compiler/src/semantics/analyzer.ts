@@ -3236,10 +3236,34 @@ function analyzeCharLiteral(
 }
 
 /**
- * Resolves a declared type without emitting, for building a signature before
- * the declaration is analyzed; emitting here would double-report. Must
- * resolve user-declared names too, not just primitives, or every struct and
- * enum in a signature becomes `()` and call-site checking silently passes.
+ * Must resolve user-declared names too, not just primitives, or every
+ * struct and enum in a signature becomes `()` and call-site checking
+ * silently passes. Non-emitting counterpart to `validateNamedType`.
+ */
+function resolveNamedType(
+  ctx: AnalysisContext,
+  type: Parser.NamedType,
+  fallbackTokenId: number,
+): Semantics.Type {
+  if (type.path.segments.length === 1) {
+    const name = type.path.segments[0];
+    assert(name !== undefined, "Name segment missing");
+    if (isDeclaredGenericParam(ctx, name) && type.typeArguments.length === 0) {
+      return { kind: "NamedType", tokenId: fallbackTokenId, path: type.path };
+    }
+    const prim = namedTypeToPrimitive(name);
+    if (isSome(prim)) return prim.value;
+    const structDecl = lookupStruct(ctx, name);
+    if (structDecl !== undefined) return structDecl.type;
+    const enumDecl = lookupEnum(ctx, name);
+    if (enumDecl !== undefined) return enumDecl.type;
+  }
+  return { kind: "UnitType", tokenId: fallbackTokenId };
+}
+
+/**
+ * Resolves a declared type without emitting, for building a signature
+ * before the declaration is analyzed - emitting here would double-report.
  */
 function resolveSlice1Type(
   ctx: AnalysisContext,
@@ -3247,29 +3271,8 @@ function resolveSlice1Type(
   fallbackTokenId: number,
 ): Semantics.Type {
   switch (type.kind) {
-    case "NamedType": {
-      if (type.path.segments.length === 1) {
-        const name = type.path.segments[0];
-        assert(name !== undefined, "Name segment missing");
-        if (
-          isDeclaredGenericParam(ctx, name) &&
-          type.typeArguments.length === 0
-        ) {
-          return {
-            kind: "NamedType",
-            tokenId: fallbackTokenId,
-            path: type.path,
-          };
-        }
-        const prim = namedTypeToPrimitive(name);
-        if (isSome(prim)) return prim.value;
-        const structDecl = lookupStruct(ctx, name);
-        if (structDecl !== undefined) return structDecl.type;
-        const enumDecl = lookupEnum(ctx, name);
-        if (enumDecl !== undefined) return enumDecl.type;
-      }
-      return { kind: "UnitType", tokenId: fallbackTokenId };
-    }
+    case "NamedType":
+      return resolveNamedType(ctx, type, fallbackTokenId);
     case "UnitType":
       return type;
     case "ReferenceType":
