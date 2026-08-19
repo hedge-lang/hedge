@@ -2193,36 +2193,14 @@ function analyzePattern(
       if (!isSome(resolved)) {
         return analyzePatternGuardrail(ctx, pattern, scrutineeType);
       }
-      const { fields, label, alreadyErrored } = resolved.value;
-      if (!alreadyErrored && fields.length !== pattern.elements.length) {
-        emitError(
-          ctx,
-          `${label} has ${fields.length} field(s), but the pattern has ${pattern.elements.length}`,
-          pattern.tokenId,
-          "HEDGE-PATTERN-005",
-        );
-      }
-      // A `mut` sigil on this whole tuple-struct pattern treats
-      // the destructured value as mutable for every field reached through
-      // it, regardless of the ambient `rootMutable` - it never demotes an
-      // already-mutable ambient context back to immutable, only ever adds
-      // mutability.
-      const effectiveRootMutable = pattern.mutable || rootMutable;
-      const elements = pattern.elements.map((el, i) =>
-        analyzePattern(
-          ctx,
-          el,
-          fields[i]?.type ?? UNIT,
-          defaultMode,
-          effectiveRootMutable,
-        ),
+      return analyzeTupleStructPattern(
+        ctx,
+        pattern,
+        scrutineeType,
+        defaultMode,
+        rootMutable,
+        resolved.value,
       );
-      const result: Semantics.TupleStructPattern = {
-        ...pattern,
-        elements,
-        type: scrutineeType,
-      };
-      return result;
     }
     case "StructPattern": {
       const resolved = resolveNamedFieldsForPattern(
@@ -2265,6 +2243,45 @@ function analyzePattern(
         `Unexpected pattern: ${JSON.stringify(pattern)}`,
       );
   }
+}
+
+function analyzeTupleStructPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.TupleStructPattern,
+  scrutineeType: Semantics.Type,
+  defaultMode: PatternBindingMode,
+  rootMutable: boolean,
+  resolved: ResolvedPatternFields<Semantics.TupleField>,
+): Semantics.TupleStructPattern {
+  const { fields, label, alreadyErrored } = resolved;
+  if (!alreadyErrored && fields.length !== pattern.elements.length) {
+    emitError(
+      ctx,
+      `${label} has ${fields.length} field(s), but the pattern has ${pattern.elements.length}`,
+      pattern.tokenId,
+      "HEDGE-PATTERN-005",
+    );
+  }
+  // A `mut` sigil on this whole tuple-struct pattern treats
+  // the destructured value as mutable for every field reached through
+  // it, regardless of the ambient `rootMutable` - it never demotes an
+  // already-mutable ambient context back to immutable, only ever adds
+  // mutability.
+  const effectiveRootMutable = pattern.mutable || rootMutable;
+  const elements = pattern.elements.map((el, i) =>
+    analyzePattern(
+      ctx,
+      el,
+      fields[i]?.type ?? UNIT,
+      defaultMode,
+      effectiveRootMutable,
+    ),
+  );
+  return {
+    ...pattern,
+    elements,
+    type: scrutineeType,
+  };
 }
 
 function analyzeStructPattern(
