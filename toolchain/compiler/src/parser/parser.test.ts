@@ -2003,6 +2003,32 @@ describe("attribute int literal arguments", (): void => {
   });
 });
 
+describe("attribute multiple arguments", (): void => {
+  it("parses a comma-separated attribute argument list of mixed kinds", (): void => {
+    const ast = parseProgram('#[attr(1, "two", three)] fn f() {}');
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          signature: {
+            attributes: [
+              {
+                kind: "Attribute",
+                name: { kind: "Identifier", text: "attr" },
+                arguments: some([
+                  { literal: some({ kind: "IntLiteral", value: "1" }) },
+                  { literal: some({ kind: "StringLiteral", value: "two" }) },
+                  { path: some({ segments: ["three"] }) },
+                ]),
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+});
+
 describe("attribute parsing guardrails", (): void => {
   it("returns an error for an attribute arg that is neither string, int, nor path", (): void => {
     const result = parse(tokenize("#[attr(1.5)] fn f() {}").tokens);

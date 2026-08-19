@@ -88,18 +88,13 @@ function parseAttributeArg(
 }
 
 /**
- * Parses a complete attribute token sequence.
- *
- * Outer form: `#[name(arg, arg)]`
- * Inner form: `#![name(arg, arg)]`
- *
- * @returns The parsed Attribute and whether it was an inner attribute.
+ * Skips an attribute's leading `#`/`#!` sigil and `[`, returning the
+ * position of the first token inside the brackets.
  */
-// eslint-disable-next-line complexity -- Attribute parsing requires delimiter validation that adds necessary branches.
-function parseAttribute(
+function skipAttributeSigil(
   tokens: readonly Token[],
   pos: number,
-): PR<{ node: Attribute; isInner: boolean; next: number }> {
+): { cursor: number; isInner: boolean } {
   let cursor = pos + 1; // skip `#`
   let isInner = false;
   if (tokens[cursor]?.kind === "bang") {
@@ -107,55 +102,90 @@ function parseAttribute(
     cursor += 1; // skip `!`
   }
   cursor += 1; // skip `[`
-  const nameResult = parseIdentifier(tokens, cursor);
+  return { cursor, isInner };
+}
+
+/**
+ * Parses a parenthesized, comma-separated attribute argument list starting
+ * at `pos`, which must point at the opening `(`. Fail-fast, matching this
+ * file's style: a malformed argument or an unterminated list aborts
+ * immediately rather than recovering (contrast `item.ts`'s comma lists,
+ * which accumulate diagnostics and resync).
+ */
+function parseAttributeArgList(
+  tokens: readonly Token[],
+  pos: number,
+): PR<Parsed<AttributeArg[]>> {
+  const lparenSpan = tokens[pos]?.span;
+  let cursor = pos + 1; // skip `(`
+  const args: AttributeArg[] = [];
+  while (tokens[cursor]?.kind !== "rparen") {
+    if (tokens[cursor]?.kind === "eof") {
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-002",
+          "unterminated attribute argument list",
+          lparenSpan !== undefined ? some(lparenSpan) : none(),
+        ),
+      );
+    }
+    const argResult = parseAttributeArg(tokens, cursor);
+    if (isErr(argResult)) {
+      return argResult;
+    }
+    args.push(argResult.value.node);
+    cursor = argResult.value.next;
+    if (tokens[cursor]?.kind === "comma") {
+      cursor += 1;
+    }
+  }
+  const afterRparen = expect(tokens, cursor, "rparen");
+  if (isErr(afterRparen)) {
+    return afterRparen;
+  }
+  return ok({ node: args, next: afterRparen.value });
+}
+
+/**
+ * Parses a complete attribute token sequence.
+ *
+ * Outer form: `#[name(arg, arg)]`
+ * Inner form: `#![name(arg, arg)]`
+ *
+ * @returns The parsed Attribute and whether it was an inner attribute.
+ */
+function parseAttribute(
+  tokens: readonly Token[],
+  pos: number,
+): PR<{ node: Attribute; isInner: boolean; next: number }> {
+  const { cursor: afterSigil, isInner } = skipAttributeSigil(tokens, pos);
+  const nameResult = parseIdentifier(tokens, afterSigil);
   if (isErr(nameResult)) {
     return nameResult;
   }
   const name = nameResult.value;
-  cursor = name.next;
+  let cursor = name.next;
 
-  const args: AttributeArg[] = [];
+  let args: AttributeArg[] = [];
   if (tokens[cursor]?.kind === "lparen") {
-    const lparenSpan = tokens[cursor]?.span;
-    cursor += 1; // skip `(`
-    while (tokens[cursor]?.kind !== "rparen") {
-      if (tokens[cursor]?.kind === "eof") {
-        return err(
-          errorDiagnostic(
-            "HEDGE-PARSE-002",
-            "unterminated attribute argument list",
-            lparenSpan !== undefined ? some(lparenSpan) : none(),
-          ),
-        );
-      }
-      const argResult = parseAttributeArg(tokens, cursor);
-      if (isErr(argResult)) {
-        return argResult;
-      }
-      args.push(argResult.value.node);
-      cursor = argResult.value.next;
-      if (tokens[cursor]?.kind === "comma") {
-        cursor += 1;
-      }
+    const argsResult = parseAttributeArgList(tokens, cursor);
+    if (isErr(argsResult)) {
+      return argsResult;
     }
-    const afterRparen = expect(tokens, cursor, "rparen");
-    if (isErr(afterRparen)) {
-      return afterRparen;
-    }
-    cursor = afterRparen.value;
+    args = argsResult.value.node;
+    cursor = argsResult.value.next;
   }
   const afterRbracket = expect(tokens, cursor, "rbracket");
   if (isErr(afterRbracket)) {
     return afterRbracket;
   }
-  cursor = afterRbracket.value;
 
   const attr: Attribute = {
     kind: "Attribute",
     name: name.node,
     arguments: args.length > 0 ? some(args) : none(),
   };
-  return ok({ node: attr, isInner, next: cursor });
+  return ok({ node: attr, isInner, next: afterRbracket.value });
 }
 
 /**
