@@ -2233,61 +2233,14 @@ function analyzePattern(
       if (!isSome(resolved)) {
         return analyzePatternGuardrail(ctx, pattern, scrutineeType);
       }
-      const { fields: declaredFields, label, alreadyErrored } = resolved.value;
-      // See the identical note in the `TupleStructPattern` case above.
-      const effectiveRootMutable = pattern.mutable || rootMutable;
-      const fields = pattern.fields.map((field): Semantics.FieldPattern => {
-        const declared = declaredFields.find(
-          (f) => f.name.text === field.name.text,
-        );
-        const fieldType = declared?.type ?? UNIT;
-        if (declared === undefined && !alreadyErrored) {
-          emitError(
-            ctx,
-            `no field \`${field.name.text}\` on ${label}`,
-            field.name.tokenId,
-            "HEDGE-NAME-003",
-          );
-        }
-        if (isSome(field.pattern)) {
-          return {
-            ...field,
-            name: { ...field.name, type: fieldType },
-            pattern: some(
-              analyzePattern(
-                ctx,
-                field.pattern.value,
-                fieldType,
-                defaultMode,
-                effectiveRootMutable,
-              ),
-            ),
-          };
-        }
-        // Shorthand (`Point { x }`) has no sigil position of its own - it
-        // always inherits `defaultMode` unconditionally (byRef=false,
-        // mutable=false), matching a bare `name` binding pattern with no
-        // sigil at all.
-        const { type: boundType, localMutable } = effectiveBindingType(
-          fieldType,
-          defaultMode,
-          false,
-          false,
-          field.name.tokenId,
-        );
-        bind(ctx, field.name.text, { type: boundType, mutable: localMutable });
-        return {
-          ...field,
-          name: { ...field.name, type: boundType },
-          pattern: none<Semantics.Pattern>(),
-        };
-      });
-      const result: Semantics.StructPattern = {
-        ...pattern,
-        fields,
-        type: scrutineeType,
-      };
-      return result;
+      return analyzeStructPattern(
+        ctx,
+        pattern,
+        scrutineeType,
+        defaultMode,
+        rootMutable,
+        resolved.value,
+      );
     }
     case "SlicePattern": {
       // A dynamic-length scrutinee has no real type to destructure against
@@ -2312,6 +2265,71 @@ function analyzePattern(
         `Unexpected pattern: ${JSON.stringify(pattern)}`,
       );
   }
+}
+
+function analyzeStructPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.StructPattern,
+  scrutineeType: Semantics.Type,
+  defaultMode: PatternBindingMode,
+  rootMutable: boolean,
+  resolved: ResolvedPatternFields<Semantics.StructField>,
+): Semantics.StructPattern {
+  const { fields: declaredFields, label, alreadyErrored } = resolved;
+  // See the identical note in the `TupleStructPattern` case above.
+  const effectiveRootMutable = pattern.mutable || rootMutable;
+  const fields = pattern.fields.map((field): Semantics.FieldPattern => {
+    const declared = declaredFields.find(
+      (f) => f.name.text === field.name.text,
+    );
+    const fieldType = declared?.type ?? UNIT;
+    if (declared === undefined && !alreadyErrored) {
+      emitError(
+        ctx,
+        `no field \`${field.name.text}\` on ${label}`,
+        field.name.tokenId,
+        "HEDGE-NAME-003",
+      );
+    }
+    if (isSome(field.pattern)) {
+      return {
+        ...field,
+        name: { ...field.name, type: fieldType },
+        pattern: some(
+          analyzePattern(
+            ctx,
+            field.pattern.value,
+            fieldType,
+            defaultMode,
+            effectiveRootMutable,
+          ),
+        ),
+      };
+    }
+    // Shorthand (`Point { x }`) has no sigil position of its own - it
+    // always inherits `defaultMode` unconditionally (byRef=false,
+    // mutable=false), matching a bare `name` binding pattern with no
+    // sigil at all.
+    const { type: boundType, localMutable } = effectiveBindingType(
+      fieldType,
+      defaultMode,
+      false,
+      false,
+      field.name.tokenId,
+    );
+    bind(ctx, field.name.text, { type: boundType, mutable: localMutable });
+    return {
+      ...field,
+      name: { ...field.name, type: boundType },
+      pattern: none<Semantics.Pattern>(),
+    };
+  });
+  const result: Semantics.StructPattern = {
+    ...pattern,
+    fields,
+    type: scrutineeType,
+  };
+  return result;
 }
 
 function analyzeSlicePattern(
