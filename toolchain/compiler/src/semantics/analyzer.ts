@@ -2860,6 +2860,49 @@ function checkUnreachableArms(
   }
 }
 
+function missingEnumVariants(
+  arms: readonly Semantics.MatchArm[],
+  enumDecl: Semantics.EnumDecl,
+): readonly string[] {
+  const covered = new Set<string>();
+  for (const arm of arms) {
+    if (isNone(arm.guard)) collectCoveredVariantNames(arm.pattern, covered);
+  }
+  return enumDecl.variants
+    .map((v) => v.name.text)
+    .filter((name) => !covered.has(name));
+}
+
+function missingBoolValues(
+  arms: readonly Semantics.MatchArm[],
+): readonly string[] {
+  const covered = new Set<boolean>();
+  for (const arm of arms) {
+    if (isNone(arm.guard)) collectCoveredBoolValues(arm.pattern, covered);
+  }
+  const missing: string[] = [];
+  if (!covered.has(true)) missing.push("true");
+  if (!covered.has(false)) missing.push("false");
+  return missing;
+}
+
+/**
+ * Only enum-variant and bool coverage get real per-value tracking (mirrors
+ * `UnreachableArmsCoverage`) - every other scrutinee type falls to the
+ * "`_` covers everything" fallback.
+ */
+function missingPatternNames(
+  ctx: AnalysisContext,
+  arms: readonly Semantics.MatchArm[],
+  scrutineeType: Semantics.Type,
+): readonly string[] {
+  const enumDecl = resolveEnumDecl(ctx, scrutineeType);
+  if (isSome(enumDecl)) return missingEnumVariants(arms, enumDecl.value);
+  if (scrutineeType.kind === "PrimitiveBooleanType")
+    return missingBoolValues(arms);
+  return ["_"];
+}
+
 function checkMatchExhaustiveness(
   ctx: AnalysisContext,
   matchExpr: Parser.MatchExpression,
@@ -2871,48 +2914,12 @@ function checkMatchExhaustiveness(
   );
   if (hasCatchAll) return;
 
-  const enumDecl = resolveEnumDecl(ctx, scrutineeType);
-  if (isSome(enumDecl)) {
-    const covered = new Set<string>();
-    for (const arm of arms) {
-      if (isNone(arm.guard)) collectCoveredVariantNames(arm.pattern, covered);
-    }
-    const missing = enumDecl.value.variants
-      .map((v) => v.name.text)
-      .filter((name) => !covered.has(name));
-    if (missing.length > 0) {
-      emitError(
-        ctx,
-        `non-exhaustive patterns: \`${missing.join("`, `")}\` not covered`,
-        matchExpr.tokenId,
-        "HEDGE-PATTERN-002",
-      );
-    }
-    return;
-  }
-
-  if (scrutineeType.kind === "PrimitiveBooleanType") {
-    const covered = new Set<boolean>();
-    for (const arm of arms) {
-      if (isNone(arm.guard)) collectCoveredBoolValues(arm.pattern, covered);
-    }
-    const missing: string[] = [];
-    if (!covered.has(true)) missing.push("true");
-    if (!covered.has(false)) missing.push("false");
-    if (missing.length > 0) {
-      emitError(
-        ctx,
-        `non-exhaustive patterns: \`${missing.join("`, `")}\` not covered`,
-        matchExpr.tokenId,
-        "HEDGE-PATTERN-002",
-      );
-    }
-    return;
-  }
+  const missing = missingPatternNames(ctx, arms, scrutineeType);
+  if (missing.length === 0) return;
 
   emitError(
     ctx,
-    "non-exhaustive patterns: `_` not covered",
+    `non-exhaustive patterns: \`${missing.join("`, `")}\` not covered`,
     matchExpr.tokenId,
     "HEDGE-PATTERN-002",
   );
