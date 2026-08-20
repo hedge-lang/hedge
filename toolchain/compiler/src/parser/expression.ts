@@ -989,8 +989,85 @@ function parseMatchExpression(
   return ok({ node, next: cursor + 1 });
 }
 
+/**
+ * Parses a struct-update spread `..expr`, `pos` positioned at the `..`.
+ * Must be the struct expression's last field - warns (semantic analysis
+ * doesn't support it yet) and confirms the closing `}` immediately follows.
+ */
+function parseStructUpdateSpread(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<Expression>> {
+  const spreadTok = tokens[pos];
+  assert(spreadTok !== undefined, "Expected spread token to be defined");
+  let cursor = pos + 1;
+  const baseResult = parseExpressionWithBindingPower(
+    tokens,
+    diagnostics,
+    cursor,
+    0,
+    true,
+  );
+  if (isErr(baseResult)) return baseResult;
+  cursor = baseResult.value.next;
+  diagnostics.push(
+    warningDiagnostic(
+      "HEDGE-UNSUPPORTED-001",
+      "struct update expression (`..base`) is not yet supported in semantic analysis",
+      some(spreadTok.span),
+    ),
+  );
+  if (tokens[cursor]?.kind === "comma") cursor += 1; // trailing comma after spread
+  if (tokens[cursor]?.kind !== "rbrace") {
+    const tok = tokens[cursor];
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `Expected '}' after struct update expression; spread must be last`,
+        tok !== undefined ? some(tok.span) : none(),
+      ),
+    );
+  }
+  return ok({ node: baseResult.value.node, next: cursor });
+}
+
+/** Parses one `Identifier (":" Expression)?` struct field init. */
+function parseFieldInit(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<FieldInit>> {
+  const nameResult = parseIdentifier(tokens, pos);
+  if (isErr(nameResult)) return nameResult;
+  let cursor = nameResult.value.next;
+
+  let fieldValue: Option<Expression> = none();
+  if (tokens[cursor]?.kind === "colon") {
+    cursor += 1;
+    const valResult = parseExpressionWithBindingPower(
+      tokens,
+      diagnostics,
+      cursor,
+      0,
+      true,
+    );
+    if (isErr(valResult)) return valResult;
+    fieldValue = some(valResult.value.node);
+    cursor = valResult.value.next;
+  }
+
+  const fieldInit: FieldInit = {
+    kind: "FieldInit",
+    tokenId: nameResult.value.node.tokenId,
+    name: nameResult.value.node,
+    value: fieldValue,
+  };
+  return ok({ node: fieldInit, next: cursor });
+}
+
 /** Parses `Path "{" FieldInits? (".." Expression)? "}"`. */
-// eslint-disable-next-line complexity
+// eslint-disable-next-line complexity -- Loop combines spread-vs-field dispatch with comma/close handling
 function parseStructExpression(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -1009,67 +1086,17 @@ function parseStructExpression(
   ) {
     // Struct update spread: `..expr`
     if (tokens[cursor]?.kind === "dot_dot") {
-      const spreadTok = tokens[cursor];
-      assert(spreadTok !== undefined, "Expected spread token to be defined");
-      cursor += 1;
-      const baseResult = parseExpressionWithBindingPower(
-        tokens,
-        diagnostics,
-        cursor,
-        0,
-        true,
-      );
-      if (isErr(baseResult)) return baseResult;
-      base = some(baseResult.value.node);
-      cursor = baseResult.value.next;
-      diagnostics.push(
-        warningDiagnostic(
-          "HEDGE-UNSUPPORTED-001",
-          "struct update expression (`..base`) is not yet supported in semantic analysis",
-          some(spreadTok.span),
-        ),
-      );
-      if (tokens[cursor]?.kind === "comma") cursor += 1; // trailing comma after spread
-      if (tokens[cursor]?.kind !== "rbrace") {
-        const tok = tokens[cursor];
-        return err(
-          errorDiagnostic(
-            "HEDGE-PARSE-001",
-            `Expected '}' after struct update expression; spread must be last`,
-            tok !== undefined ? some(tok.span) : none(),
-          ),
-        );
-      }
+      const spreadResult = parseStructUpdateSpread(tokens, diagnostics, cursor);
+      if (isErr(spreadResult)) return spreadResult;
+      base = some(spreadResult.value.node);
+      cursor = spreadResult.value.next;
       break;
     }
 
-    // Field init: Identifier (":" Expression)?
-    const nameResult = parseIdentifier(tokens, cursor);
-    if (isErr(nameResult)) return nameResult;
-    cursor = nameResult.value.next;
-
-    let fieldValue: Option<Expression> = none();
-    if (tokens[cursor]?.kind === "colon") {
-      cursor += 1;
-      const valResult = parseExpressionWithBindingPower(
-        tokens,
-        diagnostics,
-        cursor,
-        0,
-        true,
-      );
-      if (isErr(valResult)) return valResult;
-      fieldValue = some(valResult.value.node);
-      cursor = valResult.value.next;
-    }
-
-    const fieldInit: FieldInit = {
-      kind: "FieldInit",
-      tokenId: nameResult.value.node.tokenId,
-      name: nameResult.value.node,
-      value: fieldValue,
-    };
-    fields.push(fieldInit);
+    const fieldResult = parseFieldInit(tokens, diagnostics, cursor);
+    if (isErr(fieldResult)) return fieldResult;
+    fields.push(fieldResult.value.node);
+    cursor = fieldResult.value.next;
 
     if (tokens[cursor]?.kind === "comma") {
       cursor += 1;
