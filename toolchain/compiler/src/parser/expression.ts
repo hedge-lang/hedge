@@ -1179,6 +1179,79 @@ function parseTurbofishTypeArguments(
   });
 }
 
+/** Parses a path, then a struct expression if a `{` follows and `allowStruct` permits it. */
+function parsePathOrStructExpression(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  allowStruct: boolean,
+): PR<Parsed<Expression>> {
+  const pathResult = parsePath(tokens, pos);
+  if (isErr(pathResult)) return pathResult;
+  const afterPath = pathResult.value.next;
+  const turbofishResult = parseTurbofishTypeArguments(tokens, afterPath);
+  if (isErr(turbofishResult)) {
+    return turbofishResult;
+  }
+  const pathNode: PathExpression = {
+    ...pathResult.value.node,
+    typeArguments: turbofishResult.value.node,
+  };
+  const afterTurbofish = turbofishResult.value.next;
+  if (allowStruct && tokens[afterTurbofish]?.kind === "lbrace") {
+    return parseStructExpression(tokens, diagnostics, afterTurbofish, pathNode);
+  }
+  return ok({ node: pathNode, next: afterTurbofish });
+}
+
+/** Parses a `-`/`!` prefix unary expression, `pos` at the operator token. */
+function parsePrefixUnary(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  operator: "Neg" | "Not",
+  allowStruct: boolean,
+): PR<Parsed<UnaryExpression>> {
+  const operandResult = parseExpressionWithBindingPower(
+    tokens,
+    diagnostics,
+    pos + 1,
+    24,
+    allowStruct,
+  );
+  if (isErr(operandResult)) return operandResult;
+  const unary: UnaryExpression = {
+    kind: "UnaryExpression",
+    tokenId: pos,
+    operator,
+    operand: operandResult.value.node,
+  };
+  return ok({ node: unary, next: operandResult.value.next });
+}
+
+/** Parses a `*` prefix dereference expression, `pos` at the `*` token. */
+function parsePrefixDereference(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  allowStruct: boolean,
+): PR<Parsed<DereferenceExpression>> {
+  const operandResult = parseExpressionWithBindingPower(
+    tokens,
+    diagnostics,
+    pos + 1,
+    24,
+    allowStruct,
+  );
+  if (isErr(operandResult)) return operandResult;
+  const deref: DereferenceExpression = {
+    kind: "DereferenceExpression",
+    tokenId: pos,
+    operand: operandResult.value.node,
+  };
+  return ok({ node: deref, next: operandResult.value.next });
+}
+
 /**
  * Parses a primary expression.
  *
@@ -1275,27 +1348,7 @@ function parsePrimary(
     token.kind === "path_sep" ||
     isSome(pathKeywordAt(tokens, pos))
   ) {
-    const pathResult = parsePath(tokens, pos);
-    if (isErr(pathResult)) return pathResult;
-    const afterPath = pathResult.value.next;
-    const turbofishResult = parseTurbofishTypeArguments(tokens, afterPath);
-    if (isErr(turbofishResult)) {
-      return turbofishResult;
-    }
-    const pathNode: PathExpression = {
-      ...pathResult.value.node,
-      typeArguments: turbofishResult.value.node,
-    };
-    const afterTurbofish = turbofishResult.value.next;
-    if (allowStruct && tokens[afterTurbofish]?.kind === "lbrace") {
-      return parseStructExpression(
-        tokens,
-        diagnostics,
-        afterTurbofish,
-        pathNode,
-      );
-    }
-    return ok({ node: pathNode, next: afterTurbofish });
+    return parsePathOrStructExpression(tokens, diagnostics, pos, allowStruct);
   }
 
   if (token.kind === "amp")
@@ -1303,38 +1356,10 @@ function parsePrimary(
 
   // Prefix unary: - and !
   if (token.kind === "minus") {
-    const operandResult = parseExpressionWithBindingPower(
-      tokens,
-      diagnostics,
-      pos + 1,
-      24,
-      allowStruct,
-    );
-    if (isErr(operandResult)) return operandResult;
-    const unary: UnaryExpression = {
-      kind: "UnaryExpression",
-      tokenId: pos,
-      operator: "Neg",
-      operand: operandResult.value.node,
-    };
-    return ok({ node: unary, next: operandResult.value.next });
+    return parsePrefixUnary(tokens, diagnostics, pos, "Neg", allowStruct);
   }
   if (token.kind === "bang") {
-    const operandResult = parseExpressionWithBindingPower(
-      tokens,
-      diagnostics,
-      pos + 1,
-      24,
-      allowStruct,
-    );
-    if (isErr(operandResult)) return operandResult;
-    const unary: UnaryExpression = {
-      kind: "UnaryExpression",
-      tokenId: pos,
-      operator: "Not",
-      operand: operandResult.value.node,
-    };
-    return ok({ node: unary, next: operandResult.value.next });
+    return parsePrefixUnary(tokens, diagnostics, pos, "Not", allowStruct);
   }
 
   // Tuple, grouping, or unit
@@ -1360,20 +1385,7 @@ function parsePrimary(
   }
 
   if (token.kind === "star") {
-    const operandResult = parseExpressionWithBindingPower(
-      tokens,
-      diagnostics,
-      pos + 1,
-      24,
-      allowStruct,
-    );
-    if (isErr(operandResult)) return operandResult;
-    const deref: DereferenceExpression = {
-      kind: "DereferenceExpression",
-      tokenId: pos,
-      operand: operandResult.value.node,
-    };
-    return ok({ node: deref, next: operandResult.value.next });
+    return parsePrefixDereference(tokens, diagnostics, pos, allowStruct);
   }
 
   return err(
