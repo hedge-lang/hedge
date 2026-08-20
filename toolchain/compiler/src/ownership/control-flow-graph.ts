@@ -131,7 +131,7 @@ function registerScopeName(
   name: string,
   id: BindingId,
 ): void {
-  const frame = scopeStack[scopeStack.length - 1];
+  const frame = scopeStack.at(-1);
   if (frame === undefined) {
     throw new Error("No active scope frame");
   }

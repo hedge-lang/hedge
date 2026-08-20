@@ -830,7 +830,7 @@ function parseWhileExpression(
   if (isErr(condResult)) return condResult;
 
   const bodyTok = tokens[condResult.value.next];
-  if (bodyTok === undefined || bodyTok.kind !== "lbrace") {
+  if (bodyTok?.kind !== "lbrace") {
     return err(
       errorDiagnostic(
         "HEDGE-PARSE-001",
@@ -878,7 +878,7 @@ function parseMatchArm(
   }
 
   const arrowTok = tokens[cursor];
-  if (arrowTok === undefined || arrowTok.kind !== "fat_arrow") {
+  if (arrowTok?.kind !== "fat_arrow") {
     return err(
       errorDiagnostic(
         "HEDGE-PARSE-001",
@@ -1106,7 +1106,7 @@ function parseStructExpression(
   }
 
   const closeTok = tokens[cursor];
-  if (closeTok === undefined || closeTok.kind !== "rbrace") {
+  if (closeTok?.kind !== "rbrace") {
     return err(
       errorDiagnostic(
         "HEDGE-PARSE-001",

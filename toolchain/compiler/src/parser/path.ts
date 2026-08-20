@@ -81,7 +81,7 @@ function parsePathSegmentsWithSelfHead(
     }
     cursor += 1; // skip `::`
     const nextToken = tokens[cursor];
-    if (nextToken === undefined || nextToken.kind !== "ident") {
+    if (nextToken?.kind !== "ident") {
       if (nextToken?.kind === "keyword" && nextToken.text === "mut") {
         return err(
           errorDiagnostic("HEDGE-PARSE-004", MUT_MESSAGE, some(nextToken.span)),

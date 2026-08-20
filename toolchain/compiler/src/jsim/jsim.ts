@@ -471,8 +471,7 @@ function lowerStatementWithDropFlags(
 
   if (
     statement.kind === "LetStatement" &&
-    first !== undefined &&
-    first.kind === "LetStatement"
+    first?.kind === "LetStatement"
   ) {
     const conditional = allConditionalDrops(ctx).find(
       (c) =>
@@ -1713,8 +1712,7 @@ function jsimIfLetStatement(
     const first = withElse[0];
     if (
       withElse.length === 1 &&
-      first !== undefined &&
-      first.kind === "IfStatement"
+      first?.kind === "IfStatement"
     ) {
       return [scrutineeDecl, first];
     }

@@ -419,7 +419,7 @@ describe("property: alpha-renaming preserves diagnostics", (): void => {
     const renamed = assertCompilesClean(
       `fn main() { let alpha = 1; let beta = 2; alpha + beta; }`,
     );
-    expect(original.diagnostics.length).toBe(renamed.diagnostics.length);
+    expect(original.diagnostics).toHaveLength(renamed.diagnostics.length);
     expect(original.diagnostics.map((d) => d.severity)).toEqual(
       renamed.diagnostics.map((d) => d.severity),
     );
@@ -435,7 +435,7 @@ describe("property: alpha-renaming preserves diagnostics", (): void => {
       );
       const r1 = compile(source);
       const r2 = compile(renamed);
-      expect(r1.diagnostics.length).toBe(r2.diagnostics.length);
+      expect(r1.diagnostics).toHaveLength(r2.diagnostics.length);
       expect(r1.diagnostics.map((d) => d.severity)).toEqual(
         r2.diagnostics.map((d) => d.severity),
       );

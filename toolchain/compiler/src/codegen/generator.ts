@@ -125,7 +125,7 @@ const PREC_LEVELS: ReadonlyArray<readonly PrecKey[]> = [
 ];
 
 function levelOf(key: PrecKey): number {
-  const idx = PREC_LEVELS.findIndex((group) => group.some((k) => k === key));
+  const idx = PREC_LEVELS.findIndex((group) => group.includes(key));
   return idx === -1 ? PREC_LEVELS.length : idx;
 }
 
@@ -278,7 +278,7 @@ const ARRAY_DISPOSE_HELPER = `function ${ARRAY_DISPOSE_HELPER_NAME}(arr) {
  * never `target` - otherwise disposing the view would clobber the original.
  */
 const ARRAY_SLICE_VIEW_HELPER_NAME = "__hedgeArraySliceView";
-const ARRAY_SLICE_VIEW_HELPER = `function ${ARRAY_SLICE_VIEW_HELPER_NAME}(target, start, len) {
+const ARRAY_SLICE_VIEW_HELPER = String.raw`function ${ARRAY_SLICE_VIEW_HELPER_NAME}(target, start, len) {
   const extras = {};
   return new Proxy(extras, {
     get(_, prop) {
@@ -288,14 +288,14 @@ const ARRAY_SLICE_VIEW_HELPER = `function ${ARRAY_SLICE_VIEW_HELPER_NAME}(target
           for (let i = 0; i < len; i++) yield target[start + i];
         };
       }
-      if (typeof prop === "string" && /^\\d+$/.test(prop)) {
+      if (typeof prop === "string" && /^\d+$/.test(prop)) {
         const i = Number(prop);
         return i < len ? target[start + i] : undefined;
       }
       return extras[prop];
     },
     set(_, prop, value) {
-      if (typeof prop === "string" && /^\\d+$/.test(prop)) {
+      if (typeof prop === "string" && /^\d+$/.test(prop)) {
         const i = Number(prop);
         if (i < len) {
           target[start + i] = value;

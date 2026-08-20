@@ -270,7 +270,7 @@ describe("const and static codegen", (): void => {
   });
 
   it("emits nothing in .d.ts for a non-pub const", () => {
-    expect(dts(gen("const N: i32 = 3;"))).toBe(null);
+    expect(dts(gen("const N: i32 = 3;"))).toBeNull();
   });
 
   it("emits a negative pub const's exported JS value with the same i32 wrap as any other unary neg", () => {
@@ -322,7 +322,7 @@ describe("const and static codegen", (): void => {
   });
 
   it("emits no .d.ts entry for a static, since pub static is rejected in semantic analysis", () => {
-    expect(dts(gen("static COUNT: i32 = 0;"))).toBe(null);
+    expect(dts(gen("static COUNT: i32 = 0;"))).toBeNull();
   });
 });
 
@@ -349,7 +349,7 @@ describe("enum declaration codegen", () => {
 
   it("emits a .d.ts entry for a non-pub enum, unlike a non-pub fn or const", () => {
     const code = gen("enum Message { Quit } fn helper() {}");
-    expect(dts(code)).not.toBe(null);
+    expect(dts(code)).not.toBeNull();
   });
 
   it("emits no JS at all for an enum declaration - only the tagged construction sites carry runtime shape", () => {

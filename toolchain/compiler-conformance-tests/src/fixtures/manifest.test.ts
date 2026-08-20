@@ -8,7 +8,7 @@ describe("conformance fixture manifest", (): void => {
   });
 
   it("has stable fuzz seed/count and key lengths", (): void => {
-    expect(CONFORMANCE_FIXTURE_MANIFEST.fuzz.seeds.length).toBe(80);
+    expect(CONFORMANCE_FIXTURE_MANIFEST.fuzz.seeds).toHaveLength(80);
     expect(CONFORMANCE_FIXTURE_MANIFEST.fuzz.seeds[0]).toBe(1);
     expect(CONFORMANCE_FIXTURE_MANIFEST.fuzz.seeds.at(-1)).toBe(80);
     expect(CONFORMANCE_FIXTURE_MANIFEST.fuzz.smokeLength).toBe(120);

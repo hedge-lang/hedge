@@ -20,7 +20,7 @@ describe("diagnostic stability", (): void => {
   it("single unresolved name does not cascade into many errors", (): void => {
     const result = compile(`fn main() { let x = missing + 1; }`);
     const errors = result.diagnostics.filter((d) => d.severity === "error");
-    expect(errors.length).toBe(1);
+    expect(errors).toHaveLength(1);
     expect(errors[0]?.message).toContain("missing");
   });
 
@@ -51,7 +51,7 @@ describe("diagnostic stability", (): void => {
     const source = `fn main() { let x = missing + 1; }`;
     const first = compile(source);
     const second = compile(source);
-    expect(first.diagnostics.length).toBe(second.diagnostics.length);
+    expect(first.diagnostics).toHaveLength(second.diagnostics.length);
     expect(first.diagnostics[0]?.severity).toBe(
       second.diagnostics[0]?.severity,
     );

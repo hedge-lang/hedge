@@ -249,7 +249,7 @@ function registerBinding(
   if (identifier.text === "_") {
     return;
   }
-  const frame = scopeStack[scopeStack.length - 1];
+  const frame = scopeStack.at(-1);
   if (frame === undefined) {
     throw new Error("No active scope frame");
   }

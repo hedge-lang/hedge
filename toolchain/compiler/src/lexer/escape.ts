@@ -39,7 +39,7 @@ function scanHexEscape(
       source,
       tokenStart,
       pos + 4,
-      `hex escape \\x needs exactly 2 hex digits at offset ${pos}`,
+      String.raw`hex escape \x needs exactly 2 hex digits at offset ${pos}`,
     );
   }
   return pos + 4;
@@ -59,7 +59,7 @@ function scanUnicodeEscape(
       source,
       tokenStart,
       pos + 3,
-      `unicode escape \\u must be followed by '{' at offset ${pos}`,
+        String.raw`unicode escape \u must be followed by '{' at offset ${pos}`,
     );
   }
   let j = pos + 3;

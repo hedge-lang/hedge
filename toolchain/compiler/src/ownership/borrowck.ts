@@ -318,7 +318,7 @@ function registerScopedName(
   name: string,
   id: BindingId,
 ): void {
-  const frame = scopeStack[scopeStack.length - 1];
+  const frame = scopeStack.at(-1);
   if (frame === undefined) {
     throw new Error("No active scope frame");
   }
@@ -1167,7 +1167,7 @@ function collectBorrowsFromGraph(
     }
     for (let index = 0; index < block.statements.length; index += 1) {
       const statement = block.statements[index];
-      if (statement === undefined || statement.kind !== "LetStatement") {
+      if (statement?.kind !== "LetStatement") {
         continue;
       }
       pushExplicitReferenceBorrow(borrows, statement, block, index, baseIds);

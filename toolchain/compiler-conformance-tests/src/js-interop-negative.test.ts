@@ -78,7 +78,7 @@ describe("JS interop boundary negative suite", (): void => {
     `;
     const result = compile(source);
     const errors = result.diagnostics.filter((d) => d.severity === "error");
-    expect(errors.length).toBe(0);
+    expect(errors).toHaveLength(0);
   });
 
   it("rejects crossing shared references over JS boundary", (): void => {

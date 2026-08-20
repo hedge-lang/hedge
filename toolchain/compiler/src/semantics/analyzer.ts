@@ -92,7 +92,7 @@ function popFrame(ctx: AnalysisContext): void {
 
 /** The innermost frame. An empty stack is an internal invariant violation. */
 function currentFrame(ctx: AnalysisContext): ScopeFrame {
-  const frame = ctx.frames[ctx.frames.length - 1];
+  const frame = ctx.frames.at(-1);
   assert(frame !== undefined, "no active scope frame");
   return frame;
 }
@@ -3021,13 +3021,13 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
       return analyzeFunctionSignature(ctx, item);
     case "Struct": {
       const cached = lookupStruct(ctx, item.name.text);
-      return cached !== undefined && cached.tokenId === item.tokenId
+      return cached?.tokenId === item.tokenId
         ? cached
         : analyzeStruct(ctx, item);
     }
     case "Enum": {
       const cached = lookupEnum(ctx, item.name.text);
-      return cached !== undefined && cached.tokenId === item.tokenId
+      return cached?.tokenId === item.tokenId
         ? cached
         : analyzeEnum(ctx, item);
     }
