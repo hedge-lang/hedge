@@ -126,61 +126,7 @@ function parseTypeWithCloseState(
     token.kind === "path_sep" ||
     isSome(pathKeywordAt(tokens, pos))
   ) {
-    const pathResult = parseTypePathSegments(tokens, pos);
-    if (isErr(pathResult)) {
-      return pathResult;
-    }
-    const genericToken = tokens[pathResult.value.next];
-    if (genericToken?.kind === "lt") {
-      if (isLifetimeGenericsStart(tokens, pathResult.value.next)) {
-        return err(
-          errorDiagnostic(
-            "HEDGE-PARSE-004",
-            unsupportedLifetimeMessage("lifetime arguments"),
-            some(genericToken.span),
-          ),
-        );
-      }
-      const argsResult = parseTypeArgumentList(tokens, pathResult.value.next);
-      if (isErr(argsResult)) {
-        return argsResult;
-      }
-      const named: NamedType = {
-        kind: "NamedType",
-        tokenId: pos,
-        path: pathResult.value.node,
-        typeArguments: argsResult.value.typeArguments,
-      };
-      return ok({
-        node: named,
-        next: argsResult.value.cursor.next,
-        pendingCloseHalf: argsResult.value.cursor.pendingCloseHalf,
-      });
-    }
-    const pathSepMatch = pathSepBeforeLt(tokens, pathResult.value.next);
-    if (isSome(pathSepMatch)) {
-      const message = isLifetimeGenericsStart(tokens, pathResult.value.next + 1)
-        ? unsupportedLifetimeMessage("lifetime arguments")
-        : unsupportedGenericsMessage("generic type arguments");
-      return err(
-        errorDiagnostic(
-          "HEDGE-PARSE-004",
-          message,
-          some(pathSepMatch.value.span),
-        ),
-      );
-    }
-    const named: NamedType = {
-      kind: "NamedType",
-      tokenId: pos,
-      path: pathResult.value.node,
-      typeArguments: [],
-    };
-    return ok({
-      node: named,
-      next: pathResult.value.next,
-      pendingCloseHalf: false,
-    });
+    return parseNamedTypeWithCloseState(tokens, pos);
   }
 
   if (token.kind === "lt") {
@@ -194,96 +140,11 @@ function parseTypeWithCloseState(
   }
 
   if (token.kind === "amp") {
-    let cursor = pos + 1;
-    let lifetime: Option<Lifetime> = none();
-    const lifetimeToken = tokens[cursor];
-    if (lifetimeToken?.kind === "lifetime") {
-      lifetime = some({
-        kind: "Lifetime",
-        tokenId: cursor,
-        name: lifetimeToken.text,
-      });
-      cursor += 1;
-    }
-    let mutable = false;
-    const mutToken = tokens[cursor];
-    if (mutToken?.kind === "keyword" && mutToken.text === "mut") {
-      mutable = true;
-      cursor += 1;
-    }
-    const referentResult = parseTypeWithCloseState(tokens, cursor);
-    if (isErr(referentResult)) {
-      return referentResult;
-    }
-    const reference: ReferenceType = {
-      kind: "ReferenceType",
-      tokenId: pos,
-      mutable,
-      lifetime,
-      referent: referentResult.value.node,
-    };
-    return ok({
-      node: reference,
-      next: referentResult.value.next,
-      pendingCloseHalf: referentResult.value.pendingCloseHalf,
-    });
+    return parseReferenceTypeWithCloseState(tokens, pos);
   }
 
   if (token.kind === "lbracket") {
-    const elementResult = parseType(tokens, pos + 1);
-    if (isErr(elementResult)) {
-      return elementResult;
-    }
-    const afterElement = elementResult.value.next;
-    const afterElementToken = tokens[afterElement];
-    if (afterElementToken?.kind === "rbracket") {
-      return err(
-        errorDiagnostic(
-          "HEDGE-PARSE-004",
-          "slice types ([T]) are not supported in Slice 1",
-          some(token.span),
-        ),
-      );
-    }
-    if (afterElementToken?.kind !== "semi") {
-      return err(
-        errorDiagnostic(
-          "HEDGE-PARSE-001",
-          `expected ';' or ']' in array type, found "${afterElementToken?.kind ?? "eof"}"`,
-          afterElementToken !== undefined
-            ? some(afterElementToken.span)
-            : some(token.span),
-        ),
-      );
-    }
-    const lengthPos = afterElement + 1;
-    // Any expression is accepted syntactically here - semantic analysis
-    // (`validateSlice1Type`'s `ArrayType` case) requires it to const-fold to
-    // a known integer, but that is a semantic property, not a grammar one.
-    // A malformed length still fails fast, matching the rest of type
-    // position; recovery diagnostics from a construct like a rejected
-    // `loop`/`while` inside the length position are discarded rather than
-    // propagated, since recovering mid-type would leave the enclosing
-    // declaration in an inconsistent state.
-    const lengthResult = parseExpression(tokens, [], lengthPos);
-    if (isErr(lengthResult)) {
-      return lengthResult;
-    }
-    const closeResult = expect(tokens, lengthResult.value.next, "rbracket");
-    if (isErr(closeResult)) {
-      return closeResult;
-    }
-    const array: ArrayType = {
-      kind: "ArrayType",
-      tokenId: pos,
-      elementType: elementResult.value.node,
-      length: lengthResult.value.node,
-    };
-    return ok({
-      node: array,
-      next: closeResult.value,
-      pendingCloseHalf: false,
-    });
+    return parseArrayType(tokens, pos, token);
   }
 
   if (token.kind === "bang") {
@@ -313,6 +174,184 @@ function parseTypeWithCloseState(
       some(token.span),
     ),
   );
+}
+
+/**
+ * Parses a path-rooted type at `pos` (an `ident`/`path_sep`/path-keyword
+ * token already confirmed by the caller): a bare `NamedType`, one with a
+ * `<...>` type-argument list, or a guardrail rejection for `::<...>`/`<...>`
+ * lifetime arguments.
+ */
+function parseNamedTypeWithCloseState(
+  tokens: readonly Token[],
+  pos: number,
+): PR<TypeParseResult> {
+  const pathResult = parseTypePathSegments(tokens, pos);
+  if (isErr(pathResult)) {
+    return pathResult;
+  }
+  const genericToken = tokens[pathResult.value.next];
+  if (genericToken?.kind === "lt") {
+    if (isLifetimeGenericsStart(tokens, pathResult.value.next)) {
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-004",
+          unsupportedLifetimeMessage("lifetime arguments"),
+          some(genericToken.span),
+        ),
+      );
+    }
+    const argsResult = parseTypeArgumentList(tokens, pathResult.value.next);
+    if (isErr(argsResult)) {
+      return argsResult;
+    }
+    const named: NamedType = {
+      kind: "NamedType",
+      tokenId: pos,
+      path: pathResult.value.node,
+      typeArguments: argsResult.value.typeArguments,
+    };
+    return ok({
+      node: named,
+      next: argsResult.value.cursor.next,
+      pendingCloseHalf: argsResult.value.cursor.pendingCloseHalf,
+    });
+  }
+  const pathSepMatch = pathSepBeforeLt(tokens, pathResult.value.next);
+  if (isSome(pathSepMatch)) {
+    const message = isLifetimeGenericsStart(tokens, pathResult.value.next + 1)
+      ? unsupportedLifetimeMessage("lifetime arguments")
+      : unsupportedGenericsMessage("generic type arguments");
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-004",
+        message,
+        some(pathSepMatch.value.span),
+      ),
+    );
+  }
+  const named: NamedType = {
+    kind: "NamedType",
+    tokenId: pos,
+    path: pathResult.value.node,
+    typeArguments: [],
+  };
+  return ok({
+    node: named,
+    next: pathResult.value.next,
+    pendingCloseHalf: false,
+  });
+}
+
+/**
+ * Parses a reference type at `pos` (the `&` token already confirmed by the
+ * caller): an optional lifetime, an optional `mut`, then the referent type
+ * via a recursive `parseTypeWithCloseState` call.
+ */
+function parseReferenceTypeWithCloseState(
+  tokens: readonly Token[],
+  pos: number,
+): PR<TypeParseResult> {
+  let cursor = pos + 1;
+  let lifetime: Option<Lifetime> = none();
+  const lifetimeToken = tokens[cursor];
+  if (lifetimeToken?.kind === "lifetime") {
+    lifetime = some({
+      kind: "Lifetime",
+      tokenId: cursor,
+      name: lifetimeToken.text,
+    });
+    cursor += 1;
+  }
+  let mutable = false;
+  const mutToken = tokens[cursor];
+  if (mutToken?.kind === "keyword" && mutToken.text === "mut") {
+    mutable = true;
+    cursor += 1;
+  }
+  const referentResult = parseTypeWithCloseState(tokens, cursor);
+  if (isErr(referentResult)) {
+    return referentResult;
+  }
+  const reference: ReferenceType = {
+    kind: "ReferenceType",
+    tokenId: pos,
+    mutable,
+    lifetime,
+    referent: referentResult.value.node,
+  };
+  return ok({
+    node: reference,
+    next: referentResult.value.next,
+    pendingCloseHalf: referentResult.value.pendingCloseHalf,
+  });
+}
+
+/**
+ * Parses an array type at `pos` (the `[` token already confirmed by the
+ * caller, also passed as `openBracket` for its span): element type, `;`,
+ * length expression, closing `]`. A bare `[T]` (no `;`) is the still-rejected
+ * slice-type guardrail, not a parse error.
+ */
+function parseArrayType(
+  tokens: readonly Token[],
+  pos: number,
+  openBracket: Token,
+): PR<TypeParseResult> {
+  const elementResult = parseType(tokens, pos + 1);
+  if (isErr(elementResult)) {
+    return elementResult;
+  }
+  const afterElement = elementResult.value.next;
+  const afterElementToken = tokens[afterElement];
+  if (afterElementToken?.kind === "rbracket") {
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-004",
+        "slice types ([T]) are not supported in Slice 1",
+        some(openBracket.span),
+      ),
+    );
+  }
+  if (afterElementToken?.kind !== "semi") {
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `expected ';' or ']' in array type, found "${afterElementToken?.kind ?? "eof"}"`,
+        afterElementToken !== undefined
+          ? some(afterElementToken.span)
+          : some(openBracket.span),
+      ),
+    );
+  }
+  const lengthPos = afterElement + 1;
+  // Any expression is accepted syntactically here - semantic analysis
+  // (`validateSlice1Type`'s `ArrayType` case) requires it to const-fold to
+  // a known integer, but that is a semantic property, not a grammar one.
+  // A malformed length still fails fast, matching the rest of type
+  // position; recovery diagnostics from a construct like a rejected
+  // `loop`/`while` inside the length position are discarded rather than
+  // propagated, since recovering mid-type would leave the enclosing
+  // declaration in an inconsistent state.
+  const lengthResult = parseExpression(tokens, [], lengthPos);
+  if (isErr(lengthResult)) {
+    return lengthResult;
+  }
+  const closeResult = expect(tokens, lengthResult.value.next, "rbracket");
+  if (isErr(closeResult)) {
+    return closeResult;
+  }
+  const array: ArrayType = {
+    kind: "ArrayType",
+    tokenId: pos,
+    elementType: elementResult.value.node,
+    length: lengthResult.value.node,
+  };
+  return ok({
+    node: array,
+    next: closeResult.value,
+    pendingCloseHalf: false,
+  });
 }
 
 export interface TypeArgumentListResult {
