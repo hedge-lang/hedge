@@ -458,7 +458,7 @@ export function parseBlock(
     innerAttributes,
   };
   const closeTok = tokens[cursor];
-  if (closeTok === undefined || closeTok.kind !== "rbrace") {
+  if (closeTok?.kind !== "rbrace") {
     return err(
       errorDiagnostic(
         "HEDGE-PARSE-001",
