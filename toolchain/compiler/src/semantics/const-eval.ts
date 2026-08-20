@@ -14,6 +14,17 @@ import { isSome, type Option } from "../option.js";
 import type * as Parser from "../parser/ast.js";
 import type { ConstValue } from "./ast.js";
 
+function getBasePrefix(base: 2 | 8 | 10 | 16): "0b" | "0o" | "0x" | "" {
+  switch (base) {
+    case 2: return "0b";
+    case 8: return "0o";
+    case 16: return "0x";
+    case 10: return "";
+    default:
+      assertNever(base);
+  }
+}
+
 /**
  * Base-prefix-aware `IntLiteral` string-to-`bigint` conversion. Shared with
  * `analyzer.ts`, which needs the same conversion for array-length/range-check
@@ -23,14 +34,7 @@ export function intLiteralValue(literal: {
   readonly base: 2 | 8 | 10 | 16;
   readonly value: string;
 }): bigint {
-  const prefix =
-    literal.base === 16
-      ? "0x"
-      : literal.base === 8
-        ? "0o"
-        : literal.base === 2
-          ? "0b"
-          : "";
+  const prefix = getBasePrefix(literal.base);
   return BigInt(prefix + literal.value);
 }
 
