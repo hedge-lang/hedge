@@ -958,6 +958,30 @@ describe("struct declarations", (): void => {
     });
   });
 
+  it("rejects a struct with no body at all", (): void => {
+    const result = parse(tokenize("struct Foo").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toBe(
+      'expected struct body (`{`, `(`, or `;`), found "eof"',
+    );
+  });
+
+  it("rejects a struct whose body starts with an unexpected token", (): void => {
+    const result = parse(tokenize("struct Foo = 1;").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toBe(
+      'expected struct body (`{`, `(`, or `;`), found "eq"',
+    );
+  });
+
+  it("rejects a tuple struct missing its trailing semicolon", (): void => {
+    const result = parse(tokenize("struct Foo(i32)").tokens);
+    expect(result.program).toEqual(none());
+    expect(result.diagnostics[0]?.message).toBe(
+      'Expected semi, found "eof" at offset 15',
+    );
+  });
+
   it("parses a struct with two named fields", (): void => {
     const ast = parseProgram("struct Point { x: i32, y: i32 }");
     expect(ast).toMatchObject({
