@@ -96,7 +96,7 @@ function scanUnicodeEscape(
       `unicode escape has too many digits at offset ${pos}`,
     );
   }
-  const codePoint = parseInt(hexStr, 16);
+  const codePoint = Number.parseInt(hexStr, 16);
   if (codePoint > 0x10ffff) {
     return escapeError(
       tokens,
@@ -142,9 +142,9 @@ export function resolveEscape(raw: string): string {
       case "$":
         return "$";
       case "x":
-        return String.fromCodePoint(parseInt(raw.slice(2), 16));
+        return String.fromCodePoint(Number.parseInt(raw.slice(2), 16));
       case "u":
-        return String.fromCodePoint(parseInt(raw.slice(3, -1), 16));
+        return String.fromCodePoint(Number.parseInt(raw.slice(3, -1), 16));
     }
   }
   return raw;

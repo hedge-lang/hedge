@@ -242,7 +242,8 @@ function structDisposer(disposableFields: readonly string[]): string {
   const body = disposableFields
     .map((name, i) => `using _d${String(i)} = ${ownFieldAccess(name)};`)
     .join(" ");
-  return `[Symbol.dispose]() {${body === "" ? "" : ` ${body} `}}`;
+  const disposeBody = body === "" ? "" : ` ${body} `;
+  return `[Symbol.dispose]() {${disposeBody}}`;
 }
 
 /**
@@ -622,7 +623,10 @@ function emitReturn(stmt: ReturnStatement): string {
 }
 
 function letKeyword(statement: LetStatement): string {
-  return statement.dispose ? "using" : statement.mutable ? "let" : "const";
+  if (statement.dispose) {
+    return "using";
+  }
+  return statement.mutable ? "let" : "const";
 }
 
 function emitLet(statement: LetStatement): string {
@@ -906,8 +910,10 @@ function emitDtsEnumVariant(variant: EnumDeclVariant): string {
       return `{ tag: ${tag} }`;
     case "TupleVariant":
       return `{ tag: ${tag}; data: [${variant.dataTypes.join(", ")}] }`;
-    case "StructVariant":
-      return `{ tag: ${tag}; data: { ${variant.dataFields.map((f) => `${f.name}: ${f.type}`).join("; ")} } }`;
+    case "StructVariant": {
+      const variantDataFields = variant.dataFields.map((f) => `${f.name}: ${f.type}`).join("; ");
+      return `{ tag: ${tag}; data: { ${variantDataFields} } }`;
+    }
     default:
       return assertNever(
         variant,

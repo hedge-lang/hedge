@@ -1638,9 +1638,12 @@ function jsimElseBranch(
     ifExpr.tokenId,
     "else",
   );
-  return isSome(ifExpr.elseBranch)
-    ? some([...elseShadows, ...jsimBranchElse(ctx, ifExpr.elseBranch.value)])
-    : elseShadows.length > 0
+
+  if (isSome(ifExpr.elseBranch)) {
+    return some([...elseShadows, ...jsimBranchElse(ctx, ifExpr.elseBranch.value)]);
+  }
+
+  return elseShadows.length > 0
       ? some(elseShadows)
       : none();
 }
@@ -2895,13 +2898,23 @@ function jsimIfExpression(
   };
 }
 
+function getBasePrefix(base: 2 | 8 | 10 | 16): "0b" | "0o" | "0x" | "" {
+  switch (base) {
+    case 2: return "0b";
+    case 8: return "0o";
+    case 16: return "0x";
+    case 10: return "";
+    default:
+      assertNever(base);
+  }
+}
+
 function jsimIntLiteral({
   base,
   value,
   type,
 }: Semantics.IntLiteral): JSIM.Expression {
-  const basePrefix =
-    base === 2 ? "0b" : base === 8 ? "0o" : base === 16 ? "0x" : "";
+  const basePrefix = getBasePrefix(base);
   const isBigInt =
     type.kind === "PrimitiveI64Type" || type.kind === "PrimitiveU64Type";
   const numStr = String(BigInt(basePrefix + value));
