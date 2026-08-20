@@ -5,6 +5,7 @@ import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import type {
   FieldPattern,
+  Identifier,
   Path,
   Pattern,
   RangePatternBound,
@@ -190,25 +191,24 @@ function parsePatternNoAlt(
   return parseIdentifierRootedPattern(tokens, pos);
 }
 
+interface BindingHead {
+  readonly byRef: boolean;
+  readonly isMut: boolean;
+  readonly afterMut: number;
+  readonly ident: Identifier;
+}
+
 /**
- * Parses every `PatternNoAlt` alternative that starts with an optional
- * `&`/`&mut`/`mut` sigil followed by an identifier: a plain binding, the
- * wildcard `_`, an `@`-subpattern, or (when the sigil is absent and the
- * identifier turns out to be a `Path` - single- or multi-segment) a
- * struct/tuple-struct/bare-unit-variant pattern. Split out of
- * `parsePatternNoAlt` to keep that function's own dispatch (tuple/slice/
- * range/literal vs. this identifier-rooted case) below the complexity
- * limit - this one function covers a lot of `PatternNoAlt` grammar on its
- * own precisely because a leading identifier is so ambiguous between all
- * of these forms until enough lookahead resolves it (see grill-me Q3 in
- * the ticket record for why a bare single-segment identifier always wins
- * as a plain binding).
+ * Parses the optional `&`/`mut` sigils and required identifier every
+ * `PatternNoAlt` identifier-rooted form starts with. `afterMut` is returned
+ * alongside the already-parsed `ident` because a multi-segment path re-parses
+ * from there via `parsePathSegments` rather than reusing this single-token
+ * lookahead.
  */
-// eslint-disable-next-line complexity -- Identifier-rooted dispatch covering BindingPat/wildcard/@-subpattern/Path-rooted forms; see doc comment above.
-function parseIdentifierRootedPattern(
+function parseBindingHead(
   tokens: readonly Token[],
   pos: number,
-): PR<Parsed<Pattern>> {
+): PR<Parsed<BindingHead>> {
   const byRef = tokens[pos]?.kind === "amp";
   const afterAmp = byRef ? pos + 1 : pos;
 
@@ -237,6 +237,32 @@ function parseIdentifierRootedPattern(
     return identResult;
   }
   const { node: ident, next } = identResult.value;
+  return ok({ node: { byRef, isMut, afterMut, ident }, next });
+}
+
+/**
+ * Parses every `PatternNoAlt` alternative that starts with an optional
+ * `&`/`&mut`/`mut` sigil followed by an identifier: a plain binding, the
+ * wildcard `_`, an `@`-subpattern, or (when the sigil is absent and the
+ * identifier turns out to be a `Path` - single- or multi-segment) a
+ * struct/tuple-struct/bare-unit-variant pattern. Split out of
+ * `parsePatternNoAlt` to keep that function's own dispatch (tuple/slice/
+ * range/literal vs. this identifier-rooted case) below the complexity
+ * limit - this one function covers a lot of `PatternNoAlt` grammar on its
+ * own precisely because a leading identifier is so ambiguous between all
+ * of these forms until enough lookahead resolves it (see grill-me Q3 in
+ * the ticket record for why a bare single-segment identifier always wins
+ * as a plain binding).
+ */
+// eslint-disable-next-line complexity -- Identifier-rooted dispatch covering BindingPat/wildcard/@-subpattern/Path-rooted forms; see doc comment above.
+function parseIdentifierRootedPattern(
+  tokens: readonly Token[],
+  pos: number,
+): PR<Parsed<Pattern>> {
+  const headResult = parseBindingHead(tokens, pos);
+  if (isErr(headResult)) return headResult;
+  const { byRef, isMut, afterMut, ident } = headResult.value.node;
+  const next = headResult.value.next;
 
   // A multi-segment path (`A::B`) is only reachable without a `byRef` sigil
   // - `&A::B` isn't valid pattern grammar, since `&`/`&mut` apply only to a
