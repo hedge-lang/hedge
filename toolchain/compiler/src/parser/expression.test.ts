@@ -3258,6 +3258,21 @@ describe("array expressions", (): void => {
     const result = parse(tokenize("[1 2]").tokens);
     expect(result.program).toEqual(none());
   });
+
+  it("[1; with no count expression is an error", (): void => {
+    const result = parse(tokenize("[1;").tokens);
+    expect(result.program).toEqual(none());
+  });
+
+  it("[1;] is an error", (): void => {
+    const result = parse(tokenize("[1;]").tokens);
+    expect(result.program).toEqual(none());
+  });
+
+  it("[1; 5 with no closing bracket is an error", (): void => {
+    const result = parse(tokenize("[1; 5").tokens);
+    expect(result.program).toEqual(none());
+  });
 });
 
 describe("index expressions", (): void => {

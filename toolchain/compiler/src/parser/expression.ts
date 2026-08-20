@@ -551,8 +551,81 @@ function parseTupleOrGroup(
   return ok({ node: tuple, next: closeResult.value });
 }
 
+/** Parses the `[value; count]` repeat form, `pos` positioned right after the `;`. */
+function parseArrayRepeatForm(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  start: number,
+  value: Expression,
+): PR<Parsed<Expression>> {
+  const countResult = parseExpressionWithBindingPower(
+    tokens,
+    diagnostics,
+    pos,
+    0,
+    true,
+  );
+  if (isErr(countResult)) return countResult;
+  const closeResult = expect(tokens, countResult.value.next, "rbracket");
+  if (isErr(closeResult)) return closeResult;
+  const repeat: ArrayRepeatExpression = {
+    kind: "ArrayRepeatExpression",
+    tokenId: start,
+    value,
+    count: countResult.value.node,
+  };
+  return ok({ node: repeat, next: closeResult.value });
+}
+
+/** Parses the `[a, b, ...]` list form, `pos` positioned right after the first element. */
+function parseArrayListForm(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  start: number,
+  firstElement: Expression,
+): PR<Parsed<Expression>> {
+  let cursor = pos;
+  if (tokens[cursor]?.kind !== "comma" && tokens[cursor]?.kind !== "rbracket") {
+    const tok = tokens[cursor];
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `Expected ',', ';', or ']' after expression in array literal`,
+        tok !== undefined ? some(tok.span) : none(),
+      ),
+    );
+  }
+
+  const elements: Expression[] = [firstElement];
+  while (tokens[cursor]?.kind === "comma") {
+    cursor += 1; // skip comma
+    if (tokens[cursor]?.kind === "rbracket") break; // trailing comma
+    const elemResult = parseExpressionWithBindingPower(
+      tokens,
+      diagnostics,
+      cursor,
+      0,
+      true,
+    );
+    if (isErr(elemResult)) return elemResult;
+    elements.push(elemResult.value.node);
+    cursor = elemResult.value.next;
+  }
+
+  const closeResult = expect(tokens, cursor, "rbracket");
+  if (isErr(closeResult)) return closeResult;
+
+  const array: ArrayExpression = {
+    kind: "ArrayExpression",
+    tokenId: start,
+    elements,
+  };
+  return ok({ node: array, next: closeResult.value });
+}
+
 /** Parses `[]` (empty), `[a, b, ...]` (list form), or `[value; count]` (repeat form). */
-// eslint-disable-next-line complexity
 function parseArrayLiteral(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -583,63 +656,22 @@ function parseArrayLiteral(
 
   // Repeat form: [value; count]
   if (tokens[cursor]?.kind === "semi") {
-    cursor += 1; // skip `;`
-    const countResult = parseExpressionWithBindingPower(
+    return parseArrayRepeatForm(
       tokens,
       diagnostics,
-      cursor,
-      0,
-      true,
-    );
-    if (isErr(countResult)) return countResult;
-    const closeResult = expect(tokens, countResult.value.next, "rbracket");
-    if (isErr(closeResult)) return closeResult;
-    const repeat: ArrayRepeatExpression = {
-      kind: "ArrayRepeatExpression",
-      tokenId: start,
-      value: firstResult.value.node,
-      count: countResult.value.node,
-    };
-    return ok({ node: repeat, next: closeResult.value });
-  }
-
-  if (tokens[cursor]?.kind !== "comma" && tokens[cursor]?.kind !== "rbracket") {
-    const tok = tokens[cursor];
-    return err(
-      errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `Expected ',', ';', or ']' after expression in array literal`,
-        tok !== undefined ? some(tok.span) : none(),
-      ),
+      cursor + 1, // skip `;`
+      start,
+      firstResult.value.node,
     );
   }
 
-  // Collect remaining list elements
-  const elements: Expression[] = [firstResult.value.node];
-  while (tokens[cursor]?.kind === "comma") {
-    cursor += 1; // skip comma
-    if (tokens[cursor]?.kind === "rbracket") break; // trailing comma
-    const elemResult = parseExpressionWithBindingPower(
-      tokens,
-      diagnostics,
-      cursor,
-      0,
-      true,
-    );
-    if (isErr(elemResult)) return elemResult;
-    elements.push(elemResult.value.node);
-    cursor = elemResult.value.next;
-  }
-
-  const closeResult = expect(tokens, cursor, "rbracket");
-  if (isErr(closeResult)) return closeResult;
-
-  const array: ArrayExpression = {
-    kind: "ArrayExpression",
-    tokenId: start,
-    elements,
-  };
-  return ok({ node: array, next: closeResult.value });
+  return parseArrayListForm(
+    tokens,
+    diagnostics,
+    cursor,
+    start,
+    firstResult.value.node,
+  );
 }
 
 /**
