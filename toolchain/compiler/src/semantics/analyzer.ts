@@ -1710,9 +1710,9 @@ function effectiveBindingType(
   tokenId: number,
 ): { readonly type: Semantics.Type; readonly localMutable: boolean } {
   const mode: PatternBindingMode = byRef
-    ? mutable
+    ? (mutable
       ? "mut"
-      : "shared"
+      : "shared")
     : defaultMode;
   const type: Semantics.Type =
     mode === "owned"
@@ -3879,7 +3879,7 @@ function checkNegLiteralRange(
       return some(`out of range for ${typeName}`);
     }
   } else if (operand.kind === "FloatLiteral") {
-    const val = parseFloat(operand.value);
+    const val = Number.parseFloat(operand.value);
     const max = NEG_FLOAT_MAX.get(annotationType.kind);
     if (max === undefined) {
       return some(`unexpected float-literal range check for type ${typeName}`);
