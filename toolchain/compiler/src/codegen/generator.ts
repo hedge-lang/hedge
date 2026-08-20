@@ -1,9 +1,21 @@
 import { assert, assertNever } from "../assert.js";
 import { isSome, mapSome, none, some, unwrapSomeOr } from "../option.js";
 import type {
+  AssignExpression,
   AssignOperator,
+  ArrayExpression,
+  ArrayRepeatExpression,
+  ArraySliceViewExpression,
+  ArrowFunctionExpression,
+  BinaryExpression,
   BinaryOperator,
+  CallExpression,
+  IndexExpression,
   NumericKind,
+  RangeExpression,
+  RefCellExpression,
+  StructExpression,
+  UnaryExpression,
   UnaryOperator,
   BlockStatement,
   ConstDecl,
@@ -343,6 +355,151 @@ function typedArrayConstructor(nk: NumericKind): string {
   }
 }
 
+/** `(0, a.b)(c)` detaches `this` so the callee runs without an implicit receiver, distinguishing it from MethodCallExpression in JS semantics. */
+function emitCallExpression(expression: CallExpression): string {
+  const args = expression.arguments.map(emitExpression).join(", ");
+  const k = expression.callee.kind;
+  const callee =
+    k === "FieldAccessExpression" || k === "IndexExpression"
+      ? `(0, ${emitExpression(expression.callee)})`
+      : needsAtLeast(expression.callee, "CallExpression");
+  return `${callee}(${args})`;
+}
+
+function emitBinaryExpression(expression: BinaryExpression): string {
+  const { operator: op, left, right, numericKind } = expression;
+  const l = needsAtLeast(left, op);
+  const r = needsStrictlyAbove(right, op);
+  if (isSome(numericKind)) {
+    return emitNumericBinaryOp(numericKind.value, op, l, r);
+  }
+  return `${l} ${BINARY_OPS[op]} ${r}`;
+}
+
+function emitUnaryExpression(expression: UnaryExpression): string {
+  const operand = needsAtLeast(expression.operand, "UnaryExpression");
+  const inner = `${UNARY_OPS[expression.operator]}${operand}`;
+  if (isSome(expression.numericKind)) {
+    return emitNumericUnaryOp(expression.numericKind.value, inner);
+  }
+  return `(${inner})`;
+}
+
+function emitAssignExpression(expression: AssignExpression): string {
+  if (
+    expression.lhs.kind === "IndexExpression" &&
+    expression.lhs.isArrayIndex
+  ) {
+    const object = emitExpression(expression.lhs.object);
+    const index = emitExpression(expression.lhs.index);
+    const rhs = emitExpression(expression.rhs);
+    const op = ASSIGN_OPS[expression.operator];
+    return indexBoundsCheck(object, index, `_arr[_i] ${op} ${rhs}`);
+  }
+  return `${emitExpression(expression.lhs)} ${ASSIGN_OPS[expression.operator]} ${emitExpression(expression.rhs)}`;
+}
+
+function emitArrowFunctionExpression(
+  expression: ArrowFunctionExpression,
+): string {
+  const params = expression.params.join(", ");
+  const lines = expression.body.map(emitStatement).filter((s) => s.length > 0);
+  const body =
+    lines.length === 0 ? "{}" : `{\n${lines.map(indent).join("\n")}\n}`;
+  return `(${params}) => ${body}`;
+}
+
+function emitIndexExpression(expression: IndexExpression): string {
+  const object = needsAtLeast(expression.object, "IndexExpression");
+  const index = emitExpression(expression.index);
+  return expression.isArrayIndex
+    ? indexBoundsCheck(object, index, "_arr[_i]")
+    : `${object}[${index}]`;
+}
+
+function emitArrayExpression(expression: ArrayExpression): string {
+  const elements = `[${expression.elements.map(emitExpression).join(", ")}]`;
+  const value = isSome(expression.numericKind)
+    ? `new ${typedArrayConstructor(expression.numericKind.value)}(${elements})`
+    : elements;
+  return `${ARRAY_DISPOSE_HELPER_NAME}(${value})`;
+}
+
+function emitArrayRepeatExpression(expression: ArrayRepeatExpression): string {
+  const ctor = isSome(expression.numericKind)
+    ? typedArrayConstructor(expression.numericKind.value)
+    : "Array";
+  const value = `new ${ctor}(${String(expression.count)}).fill(${emitExpression(expression.value)})`;
+  return `${ARRAY_DISPOSE_HELPER_NAME}(${value})`;
+}
+
+function emitArraySliceViewExpression(
+  expression: ArraySliceViewExpression,
+): string {
+  const source = needsAtLeast(expression.source, "ArraySliceViewExpression");
+  const { start, length } = expression;
+  const value = isSome(expression.numericKind)
+    ? `${source}.subarray(${String(start)}, ${String(start + length)})`
+    : `${ARRAY_SLICE_VIEW_HELPER_NAME}(${source}, ${String(start)}, ${String(length)})`;
+  return `${ARRAY_DISPOSE_HELPER_NAME}(${value})`;
+}
+
+/**
+ * Every struct value carries a disposer so any binding for it can uniformly
+ * lower to `using`; it releases the struct's own non-`Copy` fields,
+ * mirroring what the array helper does for elements. Slice 1 has no
+ * trait/`impl` support, so a user-written `Drop` body will join it here
+ * later.
+ */
+function emitStructExpression(expression: StructExpression): string {
+  const fields = expression.fields.map((f) =>
+    f.kind === "SpreadExpression"
+      ? `...${emitExpression(f.expression)}`
+      : unwrapSomeOr(
+          mapSome(f.value, (fValue) => {
+            const fName = f.name;
+            const emittedExpression = emitExpression(fValue);
+            return emittedExpression === fName
+              ? fName
+              : `${fName}: ${emittedExpression}`;
+          }),
+          f.name,
+        ),
+  );
+  return `({${[...fields, structDisposer(expression.disposableFields)].join(", ")}})`;
+}
+
+/**
+ * A dynamic array-index place's emitted text is a bounds-check call
+ * expression, not an assignable target, so reusing it as `${place} = nv`
+ * crashes. Capturing `arr`/`i` once in a wrapping IIFE fixes that and pins
+ * the reference to the index's value at borrow time, instead of
+ * re-evaluating `i` on every access.
+ */
+function emitRefCellExpression(expression: RefCellExpression): string {
+  const place = expression.place;
+  if (place.kind === "IndexExpression" && place.isArrayIndex) {
+    const object = emitExpression(place.object);
+    const index = emitExpression(place.index);
+    return `((_arr, _i) => { if (${ARRAY_INDEX_OUT_OF_RANGE_CONDITION}) { ${ARRAY_INDEX_OUT_OF_RANGE_THROW}; } return { get v() { return _arr[_i]; }, set v(nv) { _arr[_i] = nv; } }; })(${object}, ${index})`;
+  }
+  const placeText = emitExpression(place);
+  return `({ get v() { return ${placeText}; }, set v(nv) { ${placeText} = nv; } })`;
+}
+
+function emitRangeExpression(expression: RangeExpression): string {
+  const parts = [
+    ...(isSome(expression.start)
+      ? [`start: ${emitExpression(expression.start.value)}`]
+      : []),
+    ...(isSome(expression.end)
+      ? [`end: ${emitExpression(expression.end.value)}`]
+      : []),
+    `inclusive: ${expression.inclusive}`,
+  ];
+  return `({${parts.join(", ")}})`;
+}
+
 // eslint-disable-next-line complexity -- This is a routing function
 function emitExpression(expression: Expression): string {
   switch (expression.kind) {
@@ -356,67 +513,22 @@ function emitExpression(expression: Expression): string {
       return expression.value;
     case "PathExpression":
       return expression.path.join(".");
-    case "CallExpression": {
-      const args = expression.arguments.map(emitExpression).join(", ");
-      // `(0, a.b)(c)` detaches `this` so the callee runs without an implicit
-      // receiver, distinguishing it from MethodCallExpression in JS semantics.
-      const k = expression.callee.kind;
-      const callee =
-        k === "FieldAccessExpression" || k === "IndexExpression"
-          ? `(0, ${emitExpression(expression.callee)})`
-          : needsAtLeast(expression.callee, "CallExpression");
-      return `${callee}(${args})`;
-    }
-    case "BinaryExpression": {
-      const { operator: op, left, right, numericKind } = expression;
-      const l = needsAtLeast(left, op);
-      const r = needsStrictlyAbove(right, op);
-      if (isSome(numericKind)) {
-        return emitNumericBinaryOp(numericKind.value, op, l, r);
-      }
-      return `${l} ${BINARY_OPS[op]} ${r}`;
-    }
-    case "UnaryExpression": {
-      const operand = needsAtLeast(expression.operand, "UnaryExpression");
-      const inner = `${UNARY_OPS[expression.operator]}${operand}`;
-      if (isSome(expression.numericKind)) {
-        return emitNumericUnaryOp(expression.numericKind.value, inner);
-      }
-      return `(${inner})`;
-    }
-    case "AssignExpression": {
-      if (
-        expression.lhs.kind === "IndexExpression" &&
-        expression.lhs.isArrayIndex
-      ) {
-        const object = emitExpression(expression.lhs.object);
-        const index = emitExpression(expression.lhs.index);
-        const rhs = emitExpression(expression.rhs);
-        const op = ASSIGN_OPS[expression.operator];
-        return indexBoundsCheck(object, index, `_arr[_i] ${op} ${rhs}`);
-      }
-      return `${emitExpression(expression.lhs)} ${ASSIGN_OPS[expression.operator]} ${emitExpression(expression.rhs)}`;
-    }
+    case "CallExpression":
+      return emitCallExpression(expression);
+    case "BinaryExpression":
+      return emitBinaryExpression(expression);
+    case "UnaryExpression":
+      return emitUnaryExpression(expression);
+    case "AssignExpression":
+      return emitAssignExpression(expression);
     case "FieldAccessExpression":
       return `${needsAtLeast(expression.object, "FieldAccessExpression")}.${expression.field}`;
     case "MethodCallExpression":
       return `${needsAtLeast(expression.receiver, "MethodCallExpression")}.${expression.method}(${expression.arguments.map(emitExpression).join(", ")})`;
-    case "ArrowFunctionExpression": {
-      const params = expression.params.join(", ");
-      const lines = expression.body
-        .map(emitStatement)
-        .filter((s) => s.length > 0);
-      const body =
-        lines.length === 0 ? "{}" : `{\n${lines.map(indent).join("\n")}\n}`;
-      return `(${params}) => ${body}`;
-    }
-    case "IndexExpression": {
-      const object = needsAtLeast(expression.object, "IndexExpression");
-      const index = emitExpression(expression.index);
-      return expression.isArrayIndex
-        ? indexBoundsCheck(object, index, "_arr[_i]")
-        : `${object}[${index}]`;
-    }
+    case "ArrowFunctionExpression":
+      return emitArrowFunctionExpression(expression);
+    case "IndexExpression":
+      return emitIndexExpression(expression);
     case "TupleExpression":
       // Unit (`()`) has no fields to carry - representing it as an array is
       // misleading (a truthy, non-nullish value where none was intended) and
@@ -426,80 +538,18 @@ function emitExpression(expression: Expression): string {
       return expression.elements.length === 0
         ? "void 0"
         : `[${expression.elements.map(emitExpression).join(", ")}]`;
-    case "ArrayExpression": {
-      const elements = `[${expression.elements.map(emitExpression).join(", ")}]`;
-      const value = isSome(expression.numericKind)
-        ? `new ${typedArrayConstructor(expression.numericKind.value)}(${elements})`
-        : elements;
-      return `${ARRAY_DISPOSE_HELPER_NAME}(${value})`;
-    }
-    case "ArrayRepeatExpression": {
-      const ctor = isSome(expression.numericKind)
-        ? typedArrayConstructor(expression.numericKind.value)
-        : "Array";
-      const value = `new ${ctor}(${String(expression.count)}).fill(${emitExpression(expression.value)})`;
-      return `${ARRAY_DISPOSE_HELPER_NAME}(${value})`;
-    }
-    case "ArraySliceViewExpression": {
-      const source = needsAtLeast(
-        expression.source,
-        "ArraySliceViewExpression",
-      );
-      const { start, length } = expression;
-      const value = isSome(expression.numericKind)
-        ? `${source}.subarray(${String(start)}, ${String(start + length)})`
-        : `${ARRAY_SLICE_VIEW_HELPER_NAME}(${source}, ${String(start)}, ${String(length)})`;
-      return `${ARRAY_DISPOSE_HELPER_NAME}(${value})`;
-    }
-    case "StructExpression": {
-      const fields = expression.fields.map((f) =>
-        f.kind === "SpreadExpression"
-          ? `...${emitExpression(f.expression)}`
-          : unwrapSomeOr(
-              mapSome(f.value, (fValue) => {
-                const fName = f.name;
-                const emittedExpression = emitExpression(fValue);
-                return emittedExpression === fName
-                  ? fName
-                  : `${fName}: ${emittedExpression}`;
-              }),
-              f.name,
-            ),
-      );
-      // Every struct value carries a disposer so any binding for it can
-      // uniformly lower to `using`; it releases the struct's own non-`Copy`
-      // fields, mirroring what the array helper does for elements. Slice 1
-      // has no trait/`impl` support, so a user-written `Drop` body will join
-      // it here later.
-      return `({${[...fields, structDisposer(expression.disposableFields)].join(", ")}})`;
-    }
-    case "RefCellExpression": {
-      const place = expression.place;
-      // A dynamic array-index place's emitted text is a bounds-check call
-      // expression, not an assignable target, so reusing it as
-      // `${place} = nv` crashes. Capturing `arr`/`i` once in a wrapping IIFE
-      // fixes that and pins the reference to the index's value at borrow
-      // time, instead of re-evaluating `i` on every access.
-      if (place.kind === "IndexExpression" && place.isArrayIndex) {
-        const object = emitExpression(place.object);
-        const index = emitExpression(place.index);
-        return `((_arr, _i) => { if (${ARRAY_INDEX_OUT_OF_RANGE_CONDITION}) { ${ARRAY_INDEX_OUT_OF_RANGE_THROW}; } return { get v() { return _arr[_i]; }, set v(nv) { _arr[_i] = nv; } }; })(${object}, ${index})`;
-      }
-      const placeText = emitExpression(place);
-      return `({ get v() { return ${placeText}; }, set v(nv) { ${placeText} = nv; } })`;
-    }
-    case "RangeExpression": {
-      const parts = [
-        ...(isSome(expression.start)
-          ? [`start: ${emitExpression(expression.start.value)}`]
-          : []),
-        ...(isSome(expression.end)
-          ? [`end: ${emitExpression(expression.end.value)}`]
-          : []),
-        `inclusive: ${expression.inclusive}`,
-      ];
-      return `({${parts.join(", ")}})`;
-    }
+    case "ArrayExpression":
+      return emitArrayExpression(expression);
+    case "ArrayRepeatExpression":
+      return emitArrayRepeatExpression(expression);
+    case "ArraySliceViewExpression":
+      return emitArraySliceViewExpression(expression);
+    case "StructExpression":
+      return emitStructExpression(expression);
+    case "RefCellExpression":
+      return emitRefCellExpression(expression);
+    case "RangeExpression":
+      return emitRangeExpression(expression);
     default:
       assertNever(
         expression,

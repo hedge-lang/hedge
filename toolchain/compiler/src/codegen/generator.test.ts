@@ -526,6 +526,19 @@ describe("assign expression codegen", () => {
   ])("%s emits correct JS operator", (_, source, expected) => {
     expect(stmts(gen(`fn _(mut x: ()) { ${source} }`))).toBe(`${expected};`);
   });
+
+  it("bounds-checks an assignment through a genuine fixed-array index", () => {
+    // The array-disposer helper is a second top-level function, breaking
+    // stmts()'s single-function assumption - see the array-literal codegen
+    // tests for why this uses js()/.toContain() instead.
+    const code = js(
+      gen("fn _() { let mut arr: [i32; 3] = [1, 2, 3]; arr[0] = 5; }"),
+    );
+    assert(code !== null, "Expected JS output");
+    expect(code).toContain(
+      '((_arr, _i) => _i < 0 || _i >= _arr.length ? (() => { throw new RangeError("index out of bounds"); })() : (_arr[_i] = 5))(arr, 0);',
+    );
+  });
 });
 
 describe("field access expression codegen", () => {
