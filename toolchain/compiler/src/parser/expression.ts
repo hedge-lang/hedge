@@ -714,8 +714,48 @@ function parseCondition(
   return parseExpressionWithBindingPower(tokens, diagnostics, pos, 0, false);
 }
 
+/**
+ * Parses an optional `else (if ... | { ... })` clause starting at `pos` (the
+ * token right after the then-block). No `else` at all is `none()`, `pos`
+ * unchanged.
+ */
+function parseElseClause(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<Option<IfExpression | Block>>> {
+  const elseToken = tokens[pos];
+  if (elseToken?.kind !== "keyword" || elseToken.text !== "else") {
+    return ok({ node: none(), next: pos });
+  }
+  const afterElsePos = pos + 1; // skip `else`
+  const afterElse = tokens[afterElsePos];
+  if (afterElse?.kind === "keyword" && afterElse.text === "if") {
+    const elseIfResult = parseIfExpression(tokens, diagnostics, afterElsePos);
+    if (isErr(elseIfResult)) return elseIfResult;
+    return ok({
+      node: some(elseIfResult.value.node),
+      next: elseIfResult.value.next,
+    });
+  }
+  if (afterElse?.kind === "lbrace") {
+    const elseBlockResult = parseBlock(tokens, diagnostics, afterElsePos);
+    if (isErr(elseBlockResult)) return elseBlockResult;
+    return ok({
+      node: some(elseBlockResult.value.node),
+      next: elseBlockResult.value.next,
+    });
+  }
+  return err(
+    errorDiagnostic(
+      "HEDGE-PARSE-001",
+      `Expected 'if' or '{' after 'else'`,
+      afterElse !== undefined ? some(afterElse.span) : none(),
+    ),
+  );
+}
+
 /** Parses `if cond { then } (else (if ... | { else }))?`. */
-// eslint-disable-next-line complexity -- This is mostly a routing function
 function parseIfExpression(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -741,42 +781,21 @@ function parseIfExpression(
   const thenResult = parseBlock(tokens, diagnostics, condResult.value.next);
   if (isErr(thenResult)) return thenResult;
 
-  let cursor = thenResult.value.next;
-  let elseBranch: Option<IfExpression | Block> = none();
-
-  const elseToken = tokens[cursor];
-  if (elseToken?.kind === "keyword" && elseToken.text === "else") {
-    cursor += 1; // skip `else`
-    const afterElse = tokens[cursor];
-    if (afterElse?.kind === "keyword" && afterElse.text === "if") {
-      const elseIfResult = parseIfExpression(tokens, diagnostics, cursor);
-      if (isErr(elseIfResult)) return elseIfResult;
-      elseBranch = some(elseIfResult.value.node);
-      cursor = elseIfResult.value.next;
-    } else if (afterElse?.kind === "lbrace") {
-      const elseBlockResult = parseBlock(tokens, diagnostics, cursor);
-      if (isErr(elseBlockResult)) return elseBlockResult;
-      elseBranch = some(elseBlockResult.value.node);
-      cursor = elseBlockResult.value.next;
-    } else {
-      return err(
-        errorDiagnostic(
-          "HEDGE-PARSE-001",
-          `Expected 'if' or '{' after 'else'`,
-          afterElse !== undefined ? some(afterElse.span) : none(),
-        ),
-      );
-    }
-  }
+  const elseResult = parseElseClause(
+    tokens,
+    diagnostics,
+    thenResult.value.next,
+  );
+  if (isErr(elseResult)) return elseResult;
 
   const node: IfExpression = {
     kind: "IfExpression",
     tokenId: start,
     condition: condResult.value.node,
     thenBranch: thenResult.value.node,
-    elseBranch,
+    elseBranch: elseResult.value.node,
   };
-  return ok({ node, next: cursor });
+  return ok({ node, next: elseResult.value.next });
 }
 
 /**
