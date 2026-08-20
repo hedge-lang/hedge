@@ -398,6 +398,38 @@ function recordExpressionUses(
  * `WildcardPattern` for it (see `analyzePatternGuardrail`), so that one case
  * alone stays unreached.
  */
+function registerStructPatternBindings(
+  scopeStack: ScopeStack,
+  pattern: Semantics.StructPattern,
+): void {
+  for (const field of pattern.fields) {
+    if (isSome(field.pattern)) {
+      registerPatternBindings(scopeStack, field.pattern.value);
+    } else {
+      registerScopeName(scopeStack, field.name.text, field.name.tokenId);
+    }
+  }
+}
+
+function registerSlicePatternBindings(
+  scopeStack: ScopeStack,
+  pattern: Semantics.SlicePattern,
+): void {
+  for (const element of pattern.elements) {
+    if (element.kind === "RestPattern") {
+      if (isSome(element.name)) {
+        registerScopeName(
+          scopeStack,
+          element.name.value.text,
+          element.name.value.tokenId,
+        );
+      }
+    } else {
+      registerPatternBindings(scopeStack, element);
+    }
+  }
+}
+
 // eslint-disable-next-line complexity -- Routing function over the full Pattern union
 function registerPatternBindings(
   scopeStack: ScopeStack,
@@ -429,28 +461,10 @@ function registerPatternBindings(
       }
       return;
     case "StructPattern":
-      for (const field of pattern.fields) {
-        if (isSome(field.pattern)) {
-          registerPatternBindings(scopeStack, field.pattern.value);
-        } else {
-          registerScopeName(scopeStack, field.name.text, field.name.tokenId);
-        }
-      }
+      registerStructPatternBindings(scopeStack, pattern);
       return;
     case "SlicePattern":
-      for (const element of pattern.elements) {
-        if (element.kind === "RestPattern") {
-          if (isSome(element.name)) {
-            registerScopeName(
-              scopeStack,
-              element.name.value.text,
-              element.name.value.tokenId,
-            );
-          }
-        } else {
-          registerPatternBindings(scopeStack, element);
-        }
-      }
+      registerSlicePatternBindings(scopeStack, pattern);
       return;
     default:
       assertNever(pattern, `Unexpected pattern: ${JSON.stringify(pattern)}`);

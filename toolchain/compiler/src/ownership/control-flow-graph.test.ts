@@ -504,5 +504,35 @@ describe("buildControlFlowGraph", (): void => {
       assert(block !== undefined);
       expect(block.uses.has(idNamed(graph, "b"))).toBe(true);
     });
+
+    it("does not leak a match arm's struct-pattern-bound name into an outer binding of the same name", (): void => {
+      const graph = mainGraph(`
+        struct Point { x: i32, y: i32 }
+        fn main() {
+          let y = 999;
+          let p = Point { x: 1, y: 2 };
+          match p {
+            Point { x: renamed, y } => { print(renamed); print(y); }
+          }
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined, "Expected a block");
+      expect(block.uses.has(idNamed(graph, "y"))).toBe(false);
+    });
+
+    it("does not leak a match arm's slice-rest-bound name into an outer binding of the same name", (): void => {
+      const graph = mainGraph(`
+        fn main(arr: [i32; 3]) {
+          let tail = 999;
+          match arr {
+            [first, ..tail] => { print(first); print(tail); }
+          }
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined, "Expected a block");
+      expect(block.uses.has(idNamed(graph, "tail"))).toBe(false);
+    });
   });
 });
