@@ -1707,6 +1707,16 @@ describe("semantic analysis", (): void => {
         ['const N: bool = "a" == "a";'],
         ['const N: bool = "a" != "b";'],
         ['const N: bool = "a" < "b";'],
+        ["const N: f64 = 1.5 + 2.5;"],
+        ["const N: f64 = 5.5 - 2.5;"],
+        ["const N: f64 = 2.0 * 3.5;"],
+        ["const N: f64 = 7.0 % 2.0;"],
+        ["const N: bool = 1.5 < 2.5;"],
+        ["const N: bool = 2.5 > 1.5;"],
+        ["const N: bool = 1.5 == 1.5;"],
+        ["const N: bool = 'a' < 'b';"],
+        ["const N: bool = 'a' == 'a';"],
+        ["const N: bool = 'b' != 'a';"],
       ])("folds %s with no diagnostics", (source) => {
         const result = diagnose(source);
         expect(result.diagnostics).toEqual([]);

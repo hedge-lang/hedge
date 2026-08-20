@@ -125,35 +125,9 @@ function requireFloatWidth(width: Option<FoldWidth>): { bits: 32 | 64 } {
     : { bits: 64 };
 }
 
-const ARITHMETIC_OPS: ReadonlySet<Parser.BinaryOperator> = new Set([
-  "Add",
-  "Sub",
-  "Mul",
-  "Div",
-  "Rem",
-]);
-const BITWISE_OPS: ReadonlySet<Parser.BinaryOperator> = new Set([
-  "Shl",
-  "Shr",
-  "BitAnd",
-  "BitXor",
-  "BitOr",
-]);
+type ArithmeticOperator = "Add" | "Sub" | "Mul" | "Div" | "Rem";
+type BitwiseOperator = "Shl" | "Shr" | "BitAnd" | "BitXor" | "BitOr";
 type ComparisonOperator = "Eq" | "Ne" | "Lt" | "Gt" | "Le" | "Ge";
-
-function isComparisonOp(op: Parser.BinaryOperator): op is ComparisonOperator {
-  switch (op) {
-    case "Eq":
-    case "Ne":
-    case "Lt":
-    case "Gt":
-    case "Le":
-    case "Ge":
-      return true;
-    default:
-      return false;
-  }
-}
 
 function compare(op: ComparisonOperator, order: -1 | 0 | 1): boolean {
   switch (op) {
@@ -174,7 +148,191 @@ function compare(op: ComparisonOperator, order: -1 | 0 | 1): boolean {
   }
 }
 
-// eslint-disable-next-line complexity -- Binary-operator dispatch over a fixed, exhaustively-checked operator set.
+/**
+ * `Shl`/`Shr`/`BitAnd`/`BitXor`/`BitOr` on two folded ints. The shift
+ * variants bound-check the amount against the resolved width's own bit
+ * count first: a runtime (non-const) shift on an 8/16/32-bit value lowers
+ * to JS's native `<<`/`>>` (see codegen/generator.ts), which masks the
+ * shift count to 5 bits (mod 32) - a full-precision BigInt fold that only
+ * rejects >=64 would silently disagree with that for any amount in
+ * [width, 64).
+ */
+function applyIntBitwiseOp(
+  op: BitwiseOperator,
+  left: bigint,
+  right: bigint,
+  width: Option<FoldWidth>,
+  tokenId: number,
+): ConstFoldOutcome {
+  const intWidth = requireIntWidth(width);
+  if (op === "Shl" || op === "Shr") {
+    const maxShift =
+      intWidth.kind === "signed" || intWidth.kind === "unsigned"
+        ? BigInt(intWidth.bits)
+        : 64n; // bigint (i64/u64) and unbounded (array-length context)
+    if (right < 0n || right >= maxShift) {
+      return { kind: "InvalidShift", tokenId };
+    }
+  }
+  let raw: bigint;
+  switch (op) {
+    case "Shl":
+      raw = left << right;
+      break;
+    case "Shr":
+      raw = left >> right;
+      break;
+    case "BitAnd":
+      raw = left & right;
+      break;
+    case "BitXor":
+      raw = left ^ right;
+      break;
+    case "BitOr":
+      raw = left | right;
+      break;
+    default:
+      return assertNever(op, `Unexpected bitwise operator: ${String(op)}`);
+  }
+  return { kind: "Ok", value: { kind: "Int", value: wrapInt(raw, intWidth) } };
+}
+
+function applyIntArithmeticOp(
+  op: ArithmeticOperator,
+  left: bigint,
+  right: bigint,
+  width: Option<FoldWidth>,
+  tokenId: number,
+): ConstFoldOutcome {
+  if ((op === "Div" || op === "Rem") && right === 0n) {
+    return { kind: "DivideByZero", tokenId };
+  }
+  let raw: bigint;
+  switch (op) {
+    case "Add":
+      raw = left + right;
+      break;
+    case "Sub":
+      raw = left - right;
+      break;
+    case "Mul":
+      raw = left * right;
+      break;
+    case "Div":
+      raw = left / right; // BigInt division truncates toward zero
+      break;
+    case "Rem":
+      raw = left % right;
+      break;
+    default:
+      return assertNever(op, `Unexpected arithmetic operator: ${String(op)}`);
+  }
+  return {
+    kind: "Ok",
+    value: { kind: "Int", value: wrapInt(raw, requireIntWidth(width)) },
+  };
+}
+
+function applyFloatArithmeticOp(
+  op: ArithmeticOperator,
+  left: number,
+  right: number,
+  width: Option<FoldWidth>,
+): ConstFoldOutcome {
+  let raw: number;
+  switch (op) {
+    case "Add":
+      raw = left + right;
+      break;
+    case "Sub":
+      raw = left - right;
+      break;
+    case "Mul":
+      raw = left * right;
+      break;
+    case "Div":
+      raw = left / right; // IEEE 754 - no zero-guard
+      break;
+    case "Rem":
+      raw = left % right;
+      break;
+    default:
+      return assertNever(op, `Unexpected arithmetic operator: ${String(op)}`);
+  }
+  return {
+    kind: "Ok",
+    value: { kind: "Float", value: wrapFloat(raw, requireFloatWidth(width)) },
+  };
+}
+
+function applyArithmeticOp(
+  op: ArithmeticOperator,
+  left: ConstValue,
+  right: ConstValue,
+  width: Option<FoldWidth>,
+  tokenId: number,
+): ConstFoldOutcome {
+  if (left.kind === "Int" && right.kind === "Int") {
+    return applyIntArithmeticOp(op, left.value, right.value, width, tokenId);
+  }
+  if (left.kind === "Float" && right.kind === "Float") {
+    return applyFloatArithmeticOp(op, left.value, right.value, width);
+  }
+  return { kind: "NotFoldable", tokenId };
+}
+
+function applyBitwiseOp(
+  op: BitwiseOperator,
+  left: ConstValue,
+  right: ConstValue,
+  width: Option<FoldWidth>,
+  tokenId: number,
+): ConstFoldOutcome {
+  if (left.kind === "Int" && right.kind === "Int") {
+    return applyIntBitwiseOp(op, left.value, right.value, width, tokenId);
+  }
+  return { kind: "NotFoldable", tokenId };
+}
+
+// eslint-disable-next-line complexity -- Four orderable-kind checks plus the separate Bool case
+function applyComparisonOp(
+  op: ComparisonOperator,
+  left: ConstValue,
+  right: ConstValue,
+  tokenId: number,
+): ConstFoldOutcome {
+  if (
+    (left.kind === "Int" && right.kind === "Int") ||
+    (left.kind === "Float" && right.kind === "Float") ||
+    (left.kind === "Char" && right.kind === "Char") ||
+    (left.kind === "Str" && right.kind === "Str")
+  ) {
+    const order =
+      left.value < right.value ? -1 : left.value > right.value ? 1 : 0;
+    return { kind: "Ok", value: { kind: "Bool", value: compare(op, order) } };
+  }
+  if (left.kind === "Bool" && right.kind === "Bool") {
+    const order = left.value === right.value ? 0 : left.value ? 1 : -1;
+    return { kind: "Ok", value: { kind: "Bool", value: compare(op, order) } };
+  }
+  return { kind: "NotFoldable", tokenId };
+}
+
+function applyLogicalOp(
+  op: "And" | "Or",
+  left: ConstValue,
+  right: ConstValue,
+  tokenId: number,
+): ConstFoldOutcome {
+  if (left.kind === "Bool" && right.kind === "Bool") {
+    const value =
+      op === "And" ? left.value && right.value : left.value || right.value;
+    return { kind: "Ok", value: { kind: "Bool", value } };
+  }
+  return { kind: "NotFoldable", tokenId };
+}
+
+// eslint-disable-next-line complexity -- Routing function; each case is one line dispatching to a named helper
 function applyBinaryOp(
   op: Parser.BinaryOperator,
   left: ConstValue,
@@ -182,107 +340,32 @@ function applyBinaryOp(
   width: Option<FoldWidth>,
   tokenId: number,
 ): ConstFoldOutcome {
-  if (ARITHMETIC_OPS.has(op) || BITWISE_OPS.has(op)) {
-    if (left.kind === "Int" && right.kind === "Int") {
-      if (BITWISE_OPS.has(op)) {
-        const intWidth = requireIntWidth(width);
-        if (op === "Shl" || op === "Shr") {
-          // The bound must track the resolved width's own bit count, not a
-          // flat 64: a runtime (non-const) shift on an 8/16/32-bit value
-          // lowers to JS's native `<<`/`>>` (see codegen/generator.ts),
-          // which masks the shift count to 5 bits (mod 32) - a full-
-          // precision BigInt fold that only rejects >=64 would silently
-          // disagree with that for any shift amount in [width, 64).
-          const maxShift =
-            intWidth.kind === "signed" || intWidth.kind === "unsigned"
-              ? BigInt(intWidth.bits)
-              : 64n; // bigint (i64/u64) and unbounded (array-length context)
-          if (right.value < 0n || right.value >= maxShift) {
-            return { kind: "InvalidShift", tokenId };
-          }
-        }
-        const raw =
-          op === "Shl"
-            ? left.value << right.value
-            : op === "Shr"
-              ? left.value >> right.value
-              : op === "BitAnd"
-                ? left.value & right.value
-                : op === "BitXor"
-                  ? left.value ^ right.value
-                  : left.value | right.value;
-        return {
-          kind: "Ok",
-          value: { kind: "Int", value: wrapInt(raw, intWidth) },
-        };
-      }
-      if ((op === "Div" || op === "Rem") && right.value === 0n) {
-        return { kind: "DivideByZero", tokenId };
-      }
-      const raw =
-        op === "Add"
-          ? left.value + right.value
-          : op === "Sub"
-            ? left.value - right.value
-            : op === "Mul"
-              ? left.value * right.value
-              : op === "Div"
-                ? left.value / right.value // BigInt division truncates toward zero
-                : left.value % right.value;
-      return {
-        kind: "Ok",
-        value: { kind: "Int", value: wrapInt(raw, requireIntWidth(width)) },
-      };
-    }
-    if (
-      left.kind === "Float" &&
-      right.kind === "Float" &&
-      ARITHMETIC_OPS.has(op)
-    ) {
-      const raw =
-        op === "Add"
-          ? left.value + right.value
-          : op === "Sub"
-            ? left.value - right.value
-            : op === "Mul"
-              ? left.value * right.value
-              : op === "Div"
-                ? left.value / right.value // IEEE 754 - no zero-guard
-                : left.value % right.value;
-      return {
-        kind: "Ok",
-        value: {
-          kind: "Float",
-          value: wrapFloat(raw, requireFloatWidth(width)),
-        },
-      };
-    }
-    return { kind: "NotFoldable", tokenId };
+  switch (op) {
+    case "Add":
+    case "Sub":
+    case "Mul":
+    case "Div":
+    case "Rem":
+      return applyArithmeticOp(op, left, right, width, tokenId);
+    case "Shl":
+    case "Shr":
+    case "BitAnd":
+    case "BitXor":
+    case "BitOr":
+      return applyBitwiseOp(op, left, right, width, tokenId);
+    case "Eq":
+    case "Ne":
+    case "Lt":
+    case "Gt":
+    case "Le":
+    case "Ge":
+      return applyComparisonOp(op, left, right, tokenId);
+    case "And":
+    case "Or":
+      return applyLogicalOp(op, left, right, tokenId);
+    default:
+      return assertNever(op, `Unexpected binary operator: ${String(op)}`);
   }
-  if (isComparisonOp(op)) {
-    if (
-      (left.kind === "Int" && right.kind === "Int") ||
-      (left.kind === "Float" && right.kind === "Float") ||
-      (left.kind === "Char" && right.kind === "Char") ||
-      (left.kind === "Str" && right.kind === "Str")
-    ) {
-      const order =
-        left.value < right.value ? -1 : left.value > right.value ? 1 : 0;
-      return { kind: "Ok", value: { kind: "Bool", value: compare(op, order) } };
-    }
-    if (left.kind === "Bool" && right.kind === "Bool") {
-      const order = left.value === right.value ? 0 : left.value ? 1 : -1;
-      return { kind: "Ok", value: { kind: "Bool", value: compare(op, order) } };
-    }
-    return { kind: "NotFoldable", tokenId };
-  }
-  // "And" / "Or"
-  if (left.kind === "Bool" && right.kind === "Bool") {
-    const value =
-      op === "And" ? left.value && right.value : left.value || right.value;
-    return { kind: "Ok", value: { kind: "Bool", value } };
-  }
-  return { kind: "NotFoldable", tokenId };
 }
 
 function applyUnaryOp(
