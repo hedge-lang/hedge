@@ -15,25 +15,29 @@ export function shellSplit(cmd: string): string[] {
       } else {
         current += ch;
       }
-    } else if (state === "double") {
+      continue;
+    }
+
+    if (state === "double") {
       if (ch === '"') {
         state = "normal";
       } else {
         current += ch;
       }
-    } else {
-      if (ch === "'") {
-        state = "single";
-      } else if (ch === '"') {
-        state = "double";
-      } else if (ch === " " || ch === "\t") {
-        if (current.length > 0) {
-          tokens.push(current);
-          current = "";
-        }
-      } else {
-        current += ch;
+      continue;
+    }
+
+    if (ch === "'") {
+      state = "single";
+    } else if (ch === '"') {
+      state = "double";
+    } else if (ch === " " || ch === "\t") {
+      if (current.length > 0) {
+        tokens.push(current);
+        current = "";
       }
+    } else {
+      current += ch;
     }
   }
 
