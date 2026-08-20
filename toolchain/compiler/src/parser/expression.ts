@@ -1654,6 +1654,66 @@ function isRangeEndTerminator(
 }
 
 /**
+ * Determines a range's `end`: `none()` for the omissible-end forms (`a..`,
+ * bare `..`), or the parsed expression otherwise. `..=` has no open-ended
+ * form, so an omitted end there is a real error, not `none()`.
+ */
+function parseRangeEnd(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  cursor: number,
+  inclusive: boolean,
+  allowStruct: boolean,
+): PR<Parsed<Option<Expression>>> {
+  const afterOp = tokens[cursor];
+
+  if (isRangeEndTerminator(afterOp, allowStruct)) {
+    if (inclusive) {
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-001",
+          "Expected an expression after '..='",
+          afterOp !== undefined && afterOp.kind !== "eof"
+            ? some(afterOp.span)
+            : none(),
+        ),
+      );
+    }
+    return ok({ node: none(), next: cursor });
+  }
+
+  const endResult = parseExpressionWithBindingPower(
+    tokens,
+    diagnostics,
+    cursor,
+    5,
+    allowStruct,
+  );
+  if (isErr(endResult)) return endResult;
+  return ok({ node: some(endResult.value.node), next: endResult.value.next });
+}
+
+/** Rejects a range immediately followed by another range operator (`a....b`), which can't associate. */
+function checkNoChainedRange(
+  tokens: readonly Token[],
+  next: number,
+  inclusive: boolean,
+): PR<void> {
+  const peek = tokens[next];
+  if (peek === undefined) return ok(undefined);
+  const nextInfix = infixOp(peek);
+  if (nextInfix === null || nextInfix.kind !== "range") return ok(undefined);
+  const sigil = inclusive ? "..=" : "..";
+  return err(
+    errorDiagnostic(
+      "HEDGE-PARSE-003",
+      `cannot chain '${sigil}' with '${nextInfix.sigil}'`,
+      some(peek.span),
+    ),
+  );
+}
+
+/**
  * Parses the `..`/`..=` tail of a range expression (the tokens after the
  * operator), given an already-parsed `start` operand (`none()` for the
  * prefix forms `..b`, `..=b`, bare `..`). Shared by both the infix
@@ -1668,64 +1728,30 @@ function parseRangeTail(
   start: Option<Expression>,
   allowStruct: boolean,
 ): PR<Parsed<RangeExpression>> {
-  const cursor = dotDotPos + 1;
-  const afterOp = tokens[cursor];
+  const endResult = parseRangeEnd(
+    tokens,
+    diagnostics,
+    dotDotPos + 1,
+    inclusive,
+    allowStruct,
+  );
+  if (isErr(endResult)) return endResult;
 
-  let end: Option<Expression>;
-  let next: number;
-
-  if (isRangeEndTerminator(afterOp, allowStruct)) {
-    if (inclusive) {
-      return err(
-        errorDiagnostic(
-          "HEDGE-PARSE-001",
-          "Expected an expression after '..='",
-          afterOp !== undefined && afterOp.kind !== "eof"
-            ? some(afterOp.span)
-            : none(),
-        ),
-      );
-    }
-    end = none();
-    next = cursor;
-  } else {
-    const endResult = parseExpressionWithBindingPower(
-      tokens,
-      diagnostics,
-      cursor,
-      5,
-      allowStruct,
-    );
-    if (isErr(endResult)) return endResult;
-    end = some(endResult.value.node);
-    next = endResult.value.next;
-  }
+  const chainResult = checkNoChainedRange(
+    tokens,
+    endResult.value.next,
+    inclusive,
+  );
+  if (isErr(chainResult)) return chainResult;
 
   const node: RangeExpression = {
     kind: "RangeExpression",
     tokenId: dotDotPos,
     start,
-    end,
+    end: endResult.value.node,
     inclusive,
   };
-  const result: Parsed<RangeExpression> = { node, next };
-
-  const peek = tokens[next];
-  if (peek !== undefined) {
-    const nextInfix = infixOp(peek);
-    if (nextInfix !== null && nextInfix.kind === "range") {
-      const sigil = inclusive ? "..=" : "..";
-      return err(
-        errorDiagnostic(
-          "HEDGE-PARSE-003",
-          `cannot chain '${sigil}' with '${nextInfix.sigil}'`,
-          some(peek.span),
-        ),
-      );
-    }
-  }
-
-  return ok(result);
+  return ok({ node, next: endResult.value.next });
 }
 
 function parseInfixAssign(
