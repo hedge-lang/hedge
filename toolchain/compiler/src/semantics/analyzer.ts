@@ -4145,34 +4145,41 @@ function reconcileExpressionType(
   return { expr: result, mismatch };
 }
 
+interface ComparisonOperand {
+  readonly type: Semantics.Type;
+  readonly isValid: boolean;
+}
+
+interface ComparisonSpec {
+  readonly capability: TypeCapability;
+  readonly errorMessage: string;
+}
+
 /**
  * Shared shape for `Eq`/`Ne` and `Lt`/`Gt`/`Le`/`Ge`: a missing capability
- * on either side is one error (`capabilityErrorMessage`); two individually
- * valid but differently-typed operands is a second, shared error - this
- * text is identical for both operator groups in the original code, not a
+ * on either side is one error (`spec.errorMessage`); two individually valid
+ * but differently-typed operands is a second, shared error - this text is
+ * identical for both operator groups in the original code, not a
  * coincidence being papered over here.
  */
 function inferComparisonType(
   ctx: AnalysisContext,
-  capability: TypeCapability,
-  capabilityErrorMessage: string,
-  leftType: Semantics.Type,
-  rightType: Semantics.Type,
-  isLeftTypeValid: boolean,
-  isRightTypeValid: boolean,
+  spec: ComparisonSpec,
+  left: ComparisonOperand,
+  right: ComparisonOperand,
   tokenId: number,
 ): Semantics.Type {
-  const leftOk = !isLeftTypeValid || hasCapability(leftType, capability);
-  const rightOk = !isRightTypeValid || hasCapability(rightType, capability);
+  const leftOk = !left.isValid || hasCapability(left.type, spec.capability);
+  const rightOk = !right.isValid || hasCapability(right.type, spec.capability);
   if (!leftOk || !rightOk) {
     // TODO(Hedge-265): equality should fall through to a resolved
     // PartialEq/Eq impl here instead of rejecting outright.
     // TODO(Hedge-279): same gap for ordering (PartialOrd/Ord).
-    emitError(ctx, capabilityErrorMessage, tokenId, "HEDGE-TYPE-002");
+    emitError(ctx, spec.errorMessage, tokenId, "HEDGE-TYPE-002");
   } else if (
-    isLeftTypeValid &&
-    isRightTypeValid &&
-    !typesEqual(leftType, rightType)
+    left.isValid &&
+    right.isValid &&
+    !typesEqual(left.type, right.type)
   ) {
     emitError(
       ctx,
@@ -4344,12 +4351,12 @@ function inferBinaryType(
     case "Ne":
       return inferComparisonType(
         ctx,
-        "equality",
-        "type does not support equality comparison",
-        leftType,
-        rightType,
-        isLeftTypeValid,
-        isRightTypeValid,
+        {
+          capability: "equality",
+          errorMessage: "type does not support equality comparison",
+        },
+        { type: leftType, isValid: isLeftTypeValid },
+        { type: rightType, isValid: isRightTypeValid },
         tokenId,
       );
     case "Lt":
@@ -4358,12 +4365,12 @@ function inferBinaryType(
     case "Ge":
       return inferComparisonType(
         ctx,
-        "ordering",
-        "type does not support ordering comparison",
-        leftType,
-        rightType,
-        isLeftTypeValid,
-        isRightTypeValid,
+        {
+          capability: "ordering",
+          errorMessage: "type does not support ordering comparison",
+        },
+        { type: leftType, isValid: isLeftTypeValid },
+        { type: rightType, isValid: isRightTypeValid },
         tokenId,
       );
     case "And":

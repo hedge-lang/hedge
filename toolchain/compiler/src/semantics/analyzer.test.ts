@@ -180,6 +180,14 @@ describe("semantic analysis", (): void => {
       );
     });
 
+    it("does not cascade a capability diagnostic when a comparison operand is an unresolved name", () => {
+      const result = diagnose("fn main() { let x = missing_name == 1; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        'Cannot find name "missing_name" in this scope.',
+      );
+    });
+
     it("rejects a logical operator with a non-bool left operand", () => {
       const result = diagnose("fn main() { let x = 1 && true; }");
       expect(result.diagnostics).toHaveLength(1);
