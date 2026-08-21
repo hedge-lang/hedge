@@ -2019,6 +2019,7 @@ function resolveNamedFieldsForPattern(
   return resolveStructForPattern(ctx, pattern, scrutineeType);
 }
 
+// eslint-disable-next-line complexity -- Routing function
 function analyzePattern(
   ctx: AnalysisContext,
   pattern: Parser.Pattern,
