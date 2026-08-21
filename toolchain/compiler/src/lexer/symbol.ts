@@ -12,11 +12,7 @@ function push(tokens: Token[], token: Token): number {
   return token.span.end;
 }
 
-function tokenizeEqSymbol(
-    tokens: Token[],
-    n1: string,
-    start: number
-): number {
+function tokenizeEqSymbol(tokens: Token[], n1: string, start: number): number {
   if (n1 === "=")
     return push(tokens, {
       kind: "eq_eq",
@@ -33,7 +29,11 @@ function tokenizeEqSymbol(
   });
 }
 
-function tokenizeBangSymbol(tokens: Token[], n1: string, start: number): number {
+function tokenizeBangSymbol(
+  tokens: Token[],
+  n1: string,
+  start: number,
+): number {
   if (n1 === "=")
     return push(tokens, {
       kind: "bang_eq",
@@ -45,7 +45,12 @@ function tokenizeBangSymbol(tokens: Token[], n1: string, start: number): number 
   });
 }
 
-function tokenizeLtSymbol(tokens: Token[], n1: string, n2: string, start: number): number {
+function tokenizeLtSymbol(
+  tokens: Token[],
+  n1: string,
+  n2: string,
+  start: number,
+): number {
   if (n1 === "<") {
     if (n2 === "=")
       return push(tokens, {
@@ -68,7 +73,12 @@ function tokenizeLtSymbol(tokens: Token[], n1: string, n2: string, start: number
   });
 }
 
-function tokenizeGtSymbol(tokens: Token[], n1: string, n2: string, start: number): number {
+function tokenizeGtSymbol(
+  tokens: Token[],
+  n1: string,
+  n2: string,
+  start: number,
+): number {
   if (n1 === ">") {
     if (n2 === "=")
       return push(tokens, {
@@ -108,7 +118,11 @@ function tokenizeAmpSymbol(tokens: Token[], n1: string, start: number): number {
   });
 }
 
-function tokenizePipeSymbol(tokens: Token[], n1: string, start: number): number {
+function tokenizePipeSymbol(
+  tokens: Token[],
+  n1: string,
+  start: number,
+): number {
   if (n1 === "|")
     return push(tokens, {
       kind: "pipe_pipe",
@@ -125,7 +139,11 @@ function tokenizePipeSymbol(tokens: Token[], n1: string, start: number): number 
   });
 }
 
-function tokenizePlusSymbol(tokens: Token[], n1: string, start: number): number {
+function tokenizePlusSymbol(
+  tokens: Token[],
+  n1: string,
+  start: number,
+): number {
   if (n1 === "=")
     return push(tokens, {
       kind: "plus_eq",
@@ -137,7 +155,11 @@ function tokenizePlusSymbol(tokens: Token[], n1: string, start: number): number 
   });
 }
 
-function tokenizeMinusSymbol(tokens: Token[], n1: string, start: number): number {
+function tokenizeMinusSymbol(
+  tokens: Token[],
+  n1: string,
+  start: number,
+): number {
   if (n1 === ">")
     return push(tokens, {
       kind: "arrow",
@@ -154,7 +176,11 @@ function tokenizeMinusSymbol(tokens: Token[], n1: string, start: number): number
   });
 }
 
-function tokenizeStarSymbol(tokens: Token[], n1: string, start: number): number {
+function tokenizeStarSymbol(
+  tokens: Token[],
+  n1: string,
+  start: number,
+): number {
   if (n1 === "=")
     return push(tokens, {
       kind: "star_eq",
@@ -166,7 +192,11 @@ function tokenizeStarSymbol(tokens: Token[], n1: string, start: number): number 
   });
 }
 
-function tokenizeSlashSymbol(tokens: Token[], n1: string, start: number): number {
+function tokenizeSlashSymbol(
+  tokens: Token[],
+  n1: string,
+  start: number,
+): number {
   if (n1 === "=")
     return push(tokens, {
       kind: "slash_eq",
@@ -178,7 +208,11 @@ function tokenizeSlashSymbol(tokens: Token[], n1: string, start: number): number
   });
 }
 
-function tokenizePercentSymbol(tokens: Token[], n1: string, start: number): number {
+function tokenizePercentSymbol(
+  tokens: Token[],
+  n1: string,
+  start: number,
+): number {
   if (n1 === "=")
     return push(tokens, {
       kind: "percent_eq",
@@ -190,7 +224,11 @@ function tokenizePercentSymbol(tokens: Token[], n1: string, start: number): numb
   });
 }
 
-function tokenizeCaretSymbol(tokens: Token[], n1: string, start: number): number {
+function tokenizeCaretSymbol(
+  tokens: Token[],
+  n1: string,
+  start: number,
+): number {
   if (n1 === "=")
     return push(tokens, {
       kind: "caret_eq",
@@ -202,7 +240,11 @@ function tokenizeCaretSymbol(tokens: Token[], n1: string, start: number): number
   });
 }
 
-function tokenizeColonSymbol(tokens: Token[], n1: string, start: number): number {
+function tokenizeColonSymbol(
+  tokens: Token[],
+  n1: string,
+  start: number,
+): number {
   if (n1 === ":")
     return push(tokens, {
       kind: "path_sep",
@@ -214,7 +256,12 @@ function tokenizeColonSymbol(tokens: Token[], n1: string, start: number): number
   });
 }
 
-function tokenizeDotSymbol(tokens: Token[], n1: string, n2: string, start: number): number {
+function tokenizeDotSymbol(
+  tokens: Token[],
+  n1: string,
+  n2: string,
+  start: number,
+): number {
   if (n1 === ".") {
     if (n2 === "=")
       return push(tokens, {
