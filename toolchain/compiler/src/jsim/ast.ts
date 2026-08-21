@@ -249,7 +249,7 @@ interface PathExpression {
   readonly path: readonly string[];
 }
 
-interface CallExpression {
+export interface CallExpression {
   readonly kind: "CallExpression";
   readonly callee: Expression;
   readonly arguments: readonly Expression[];
@@ -302,7 +302,7 @@ export type NumericKind =
   | { readonly kind: "bigint"; readonly signed: boolean }
   | { readonly kind: "float"; readonly bits: 32 | 64 };
 
-interface BinaryExpression {
+export interface BinaryExpression {
   readonly kind: "BinaryExpression";
   readonly operator: BinaryOperator;
   readonly left: Expression;
@@ -318,7 +318,7 @@ interface BinaryExpression {
 /** Hedge's single `!` splits here: JS spells logical and bitwise negation
  * differently, so lowering picks one by the operand's type. */
 export type UnaryOperator = "Neg" | "Not" | "BitNot";
-interface UnaryExpression {
+export interface UnaryExpression {
   readonly kind: "UnaryExpression";
   readonly operator: UnaryOperator;
   readonly operand: Expression;
@@ -374,7 +374,7 @@ interface MethodCallExpression {
   readonly arguments: readonly Expression[];
 }
 
-interface ArrowFunctionExpression {
+export interface ArrowFunctionExpression {
   readonly kind: "ArrowFunctionExpression";
   readonly params: readonly string[];
   readonly body: readonly Statement[];
@@ -387,7 +387,7 @@ interface ArrowFunctionExpression {
  * runtime bounds check only wraps a genuine array access, never a
  * generic/not-yet-typed indexable value.
  */
-interface IndexExpression {
+export interface IndexExpression {
   readonly kind: "IndexExpression";
   readonly object: Expression;
   readonly index: Expression;
@@ -405,13 +405,13 @@ interface TupleExpression {
  * other element type - see `codegen/generator.ts`'s own
  * constructor-selection logic).
  */
-interface ArrayExpression {
+export interface ArrayExpression {
   readonly kind: "ArrayExpression";
   readonly elements: readonly Expression[];
   readonly numericKind: Option<NumericKind>;
 }
 
-interface ArrayRepeatExpression {
+export interface ArrayRepeatExpression {
   readonly kind: "ArrayRepeatExpression";
   readonly value: Expression;
   readonly count: number;
@@ -424,7 +424,7 @@ interface ArrayRepeatExpression {
  * {@link ArrayExpression}: `some(...)` for a real `subarray` view, `none()`
  * for the `Proxy`-based helper (no `TypedArray` to slice otherwise).
  */
-interface ArraySliceViewExpression {
+export interface ArraySliceViewExpression {
   readonly kind: "ArraySliceViewExpression";
   readonly source: Expression;
   readonly start: number;
@@ -432,14 +432,14 @@ interface ArraySliceViewExpression {
   readonly numericKind: Option<NumericKind>;
 }
 
-interface RangeExpression {
+export interface RangeExpression {
   readonly kind: "RangeExpression";
   readonly start: Option<Expression>;
   readonly end: Option<Expression>;
   readonly inclusive: boolean;
 }
 
-interface StructExpression {
+export interface StructExpression {
   readonly kind: "StructExpression";
   readonly fields: readonly StructExpressionField[];
   /**
@@ -463,7 +463,7 @@ interface StructExpression {
  * source text either way - see `codegen/generator.ts`'s
  * {@link RefCellExpression} case.
  */
-interface RefCellExpression {
+export interface RefCellExpression {
   readonly kind: "RefCellExpression";
   readonly place: Expression;
 }

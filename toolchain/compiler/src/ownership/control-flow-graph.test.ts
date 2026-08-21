@@ -333,6 +333,80 @@ describe("buildControlFlowGraph", (): void => {
       expect(block.uses.has(idNamed(graph, "b"))).toBe(true);
     });
 
+    it("records a call's arguments as uses", (): void => {
+      const graph = mainGraph(`
+        fn main(p: i32) {
+          print(p);
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined, "Expected a block");
+      expect(block.uses.has(idNamed(graph, "p"))).toBe(true);
+    });
+
+    it("records a method call's receiver and arguments as uses", (): void => {
+      const graph = mainGraph(`
+        fn main(p: i32, q: i32) {
+          let r = p.foo(q);
+          print(r);
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined, "Expected a block");
+      expect(block.uses.has(idNamed(graph, "p"))).toBe(true);
+      expect(block.uses.has(idNamed(graph, "q"))).toBe(true);
+    });
+
+    it("records a tuple literal's elements as uses", (): void => {
+      const graph = mainGraph(`
+        fn main(p: i32) {
+          let t = (p, 2);
+          print(t);
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined, "Expected a block");
+      expect(block.uses.has(idNamed(graph, "p"))).toBe(true);
+    });
+
+    it("records an array literal's elements as uses", (): void => {
+      const graph = mainGraph(`
+        fn main(p: i32) {
+          let a = [p, p];
+          print(a);
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined, "Expected a block");
+      expect(block.uses.has(idNamed(graph, "p"))).toBe(true);
+    });
+
+    it("records a range expression's start and end as uses", (): void => {
+      const graph = mainGraph(`
+        fn main(p: i32, q: i32) {
+          let r = p..q;
+          print(r);
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined, "Expected a block");
+      expect(block.uses.has(idNamed(graph, "p"))).toBe(true);
+      expect(block.uses.has(idNamed(graph, "q"))).toBe(true);
+    });
+
+    it("records a struct literal's field values as uses", (): void => {
+      const graph = mainGraph(`
+        struct Wrapper { inner: i32 }
+        fn main(p: i32) {
+          let w = Wrapper { inner: p };
+          print(w);
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined, "Expected a block");
+      expect(block.uses.has(idNamed(graph, "p"))).toBe(true);
+    });
+
     it("records the if condition's uses on the forking block, not the then-branch", (): void => {
       const graph = mainGraph(`
         fn main(cond: bool) {
@@ -429,6 +503,36 @@ describe("buildControlFlowGraph", (): void => {
       const block = graph.blocks[0];
       assert(block !== undefined);
       expect(block.uses.has(idNamed(graph, "b"))).toBe(true);
+    });
+
+    it("does not leak a match arm's struct-pattern-bound name into an outer binding of the same name", (): void => {
+      const graph = mainGraph(`
+        struct Point { x: i32, y: i32 }
+        fn main() {
+          let y = 999;
+          let p = Point { x: 1, y: 2 };
+          match p {
+            Point { x: renamed, y } => { print(renamed); print(y); }
+          }
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined, "Expected a block");
+      expect(block.uses.has(idNamed(graph, "y"))).toBe(false);
+    });
+
+    it("does not leak a match arm's slice-rest-bound name into an outer binding of the same name", (): void => {
+      const graph = mainGraph(`
+        fn main(arr: [i32; 3]) {
+          let tail = 999;
+          match arr {
+            [first, ..tail] => { print(first); print(tail); }
+          }
+        }
+      `);
+      const block = graph.blocks[0];
+      assert(block !== undefined, "Expected a block");
+      expect(block.uses.has(idNamed(graph, "tail"))).toBe(false);
     });
   });
 });

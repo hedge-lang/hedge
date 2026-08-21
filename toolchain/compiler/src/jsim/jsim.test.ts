@@ -629,6 +629,74 @@ describe("toJsim", () => {
         ],
       });
     });
+
+    it("lowers an inclusive range pattern arm to an And-combined Ge/Le guard", () => {
+      const program = jsimSource(
+        "fn f(x: i32) -> i32 { match x { 1..=5 => 10, _ => 0 } }",
+      );
+      expect(program).toMatchObject({
+        items: [
+          {
+            kind: "Function",
+            body: [
+              {
+                kind: "ReturnStatement",
+                value: {
+                  value: {
+                    kind: "CallExpression",
+                    callee: {
+                      kind: "ArrowFunctionExpression",
+                      body: [
+                        { kind: "LetStatement", name: "matchScrutinee" },
+                        {
+                          kind: "IfStatement",
+                          condition: {
+                            kind: "BinaryExpression",
+                            operator: "And",
+                            left: {
+                              kind: "BinaryExpression",
+                              operator: "Ge",
+                              left: {
+                                kind: "Identifier",
+                                value: "matchScrutinee",
+                              },
+                              right: { kind: "NumberLiteral", value: "1" },
+                            },
+                            right: {
+                              kind: "BinaryExpression",
+                              operator: "Le",
+                              left: {
+                                kind: "Identifier",
+                                value: "matchScrutinee",
+                              },
+                              right: { kind: "NumberLiteral", value: "5" },
+                            },
+                          },
+                          thenBranch: [
+                            {
+                              kind: "ReturnStatement",
+                              value: {
+                                value: { kind: "NumberLiteral", value: "10" },
+                              },
+                            },
+                          ],
+                        },
+                        {
+                          kind: "ReturnStatement",
+                          value: {
+                            value: { kind: "NumberLiteral", value: "0" },
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      });
+    });
   });
 
   describe("function trailing-expression lowering (tail-position return)", () => {

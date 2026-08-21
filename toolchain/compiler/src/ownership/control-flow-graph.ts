@@ -131,7 +131,7 @@ function registerScopeName(
   name: string,
   id: BindingId,
 ): void {
-  const frame = scopeStack[scopeStack.length - 1];
+  const frame = scopeStack.at(-1);
   if (frame === undefined) {
     throw new Error("No active scope frame");
   }
@@ -162,12 +162,130 @@ function recordDef(block: MutableBlock, id: BindingId): void {
   block.defs.add(id);
 }
 
+/** Uses in a call-like expression's callee/receiver and its arguments - shared by `CallExpression` and `MethodCallExpression`. */
+function recordCallLikeUses(
+  target: MutableBlock,
+  scopeStack: ScopeStack,
+  callee: Semantics.Expression,
+  args: readonly Semantics.Expression[],
+): void {
+  recordExpressionUses(target, scopeStack, callee);
+  for (const argument of args) {
+    recordExpressionUses(target, scopeStack, argument);
+  }
+}
+
+function recordAssignExpressionUses(
+  target: MutableBlock,
+  scopeStack: ScopeStack,
+  expression: Semantics.AssignExpression,
+): void {
+  // A bare-path lhs is a def only (mirrors move-check.ts's `reassign`);
+  // anything else (e.g. a field target) is an ordinary read.
+  recordExpressionUses(target, scopeStack, expression.rhs);
+  if (expression.lhs.kind === "PathExpression") {
+    const id = resolvePathExpression(expression.lhs, scopeStack);
+    if (id !== undefined) {
+      recordDef(target, id);
+    }
+  } else {
+    recordExpressionUses(target, scopeStack, expression.lhs);
+  }
+}
+
+function recordCompoundAssignExpressionUses(
+  target: MutableBlock,
+  scopeStack: ScopeStack,
+  expression: Semantics.CompoundAssignExpression,
+): void {
+  // `x += expr` reads then writes `x`; the use must land before the def.
+  recordExpressionUses(target, scopeStack, expression.rhs);
+  if (expression.lhs.kind === "PathExpression") {
+    const id = resolvePathExpression(expression.lhs, scopeStack);
+    if (id !== undefined) {
+      recordUse(target, id);
+      recordDef(target, id);
+    }
+  } else {
+    recordExpressionUses(target, scopeStack, expression.lhs);
+  }
+}
+
+function recordRangeExpressionUses(
+  target: MutableBlock,
+  scopeStack: ScopeStack,
+  expression: Semantics.RangeExpression,
+): void {
+  if (isSome(expression.start)) {
+    recordExpressionUses(target, scopeStack, expression.start.value);
+  }
+  if (isSome(expression.end)) {
+    recordExpressionUses(target, scopeStack, expression.end.value);
+  }
+}
+
+function recordStructExpressionUses(
+  target: MutableBlock,
+  scopeStack: ScopeStack,
+  expression: Semantics.StructExpression,
+): void {
+  for (const field of expression.fields) {
+    if (isSome(field.value)) {
+      recordExpressionUses(target, scopeStack, field.value.value);
+    }
+  }
+  if (isSome(expression.base)) {
+    recordExpressionUses(target, scopeStack, expression.base.value);
+  }
+}
+
+function recordIfExpressionUses(
+  target: MutableBlock,
+  scopeStack: ScopeStack,
+  expression: Semantics.IfExpression,
+): void {
+  recordExpressionUses(target, scopeStack, expression.condition);
+  if (expression.condition.kind === "LetExpression") {
+    scopeStack.push(new Map());
+    registerPatternBindings(scopeStack, expression.condition.pattern);
+    recordConfinedScope(target, scopeStack, expression.thenBranch);
+    scopeStack.pop();
+  } else {
+    recordConfinedScope(target, scopeStack, expression.thenBranch);
+  }
+  if (isSome(expression.elseBranch)) {
+    const elseBranch = expression.elseBranch.value;
+    if (elseBranch.kind === "Block") {
+      recordConfinedScope(target, scopeStack, elseBranch);
+    } else {
+      recordExpressionUses(target, scopeStack, elseBranch);
+    }
+  }
+}
+
+function recordMatchExpressionUses(
+  target: MutableBlock,
+  scopeStack: ScopeStack,
+  expression: Semantics.MatchExpression,
+): void {
+  recordExpressionUses(target, scopeStack, expression.scrutinee);
+  for (const arm of expression.arms) {
+    scopeStack.push(new Map());
+    registerPatternBindings(scopeStack, arm.pattern);
+    if (isSome(arm.guard)) {
+      recordExpressionUses(target, scopeStack, arm.guard.value);
+    }
+    recordExpressionUses(target, scopeStack, arm.body);
+    scopeStack.pop();
+  }
+}
+
 /**
  * Record every place-use reachable from `expression` onto `target`, without
  * creating any new BasicBlock. A value-position `if`/`Block` is handled here
  * too, via `recordConfinedScope`.
  */
-// eslint-disable-next-line complexity -- routing function, mirrors move-check.ts's walkExpression
+// eslint-disable-next-line complexity -- routing function
 function recordExpressionUses(
   target: MutableBlock,
   scopeStack: ScopeStack,
@@ -182,10 +300,12 @@ function recordExpressionUses(
       return;
     }
     case "CallExpression":
-      recordExpressionUses(target, scopeStack, expression.callee);
-      for (const argument of expression.arguments) {
-        recordExpressionUses(target, scopeStack, argument);
-      }
+      recordCallLikeUses(
+        target,
+        scopeStack,
+        expression.callee,
+        expression.arguments,
+      );
       return;
     case "ReferenceExpression":
     case "DereferenceExpression":
@@ -199,30 +319,10 @@ function recordExpressionUses(
       recordExpressionUses(target, scopeStack, expression.operand);
       return;
     case "AssignExpression":
-      // A bare-path lhs is a def only (mirrors move-check.ts's `reassign`);
-      // anything else (e.g. a field target) is an ordinary read.
-      recordExpressionUses(target, scopeStack, expression.rhs);
-      if (expression.lhs.kind === "PathExpression") {
-        const id = resolvePathExpression(expression.lhs, scopeStack);
-        if (id !== undefined) {
-          recordDef(target, id);
-        }
-      } else {
-        recordExpressionUses(target, scopeStack, expression.lhs);
-      }
+      recordAssignExpressionUses(target, scopeStack, expression);
       return;
     case "CompoundAssignExpression":
-      // `x += expr` reads then writes `x`; the use must land before the def.
-      recordExpressionUses(target, scopeStack, expression.rhs);
-      if (expression.lhs.kind === "PathExpression") {
-        const id = resolvePathExpression(expression.lhs, scopeStack);
-        if (id !== undefined) {
-          recordUse(target, id);
-          recordDef(target, id);
-        }
-      } else {
-        recordExpressionUses(target, scopeStack, expression.lhs);
-      }
+      recordCompoundAssignExpressionUses(target, scopeStack, expression);
       return;
     case "FieldAccessExpression":
       // The object is a use, not a def - Slice 1/2 don't track field-level
@@ -230,20 +330,18 @@ function recordExpressionUses(
       recordExpressionUses(target, scopeStack, expression.object);
       return;
     case "MethodCallExpression":
-      recordExpressionUses(target, scopeStack, expression.receiver);
-      for (const argument of expression.arguments) {
-        recordExpressionUses(target, scopeStack, argument);
-      }
+      recordCallLikeUses(
+        target,
+        scopeStack,
+        expression.receiver,
+        expression.arguments,
+      );
       return;
     case "IndexExpression":
       recordExpressionUses(target, scopeStack, expression.object);
       recordExpressionUses(target, scopeStack, expression.index);
       return;
     case "TupleExpression":
-      for (const element of expression.elements) {
-        recordExpressionUses(target, scopeStack, element);
-      }
-      return;
     case "ArrayExpression":
       for (const element of expression.elements) {
         recordExpressionUses(target, scopeStack, element);
@@ -253,41 +351,13 @@ function recordExpressionUses(
       recordExpressionUses(target, scopeStack, expression.value);
       return;
     case "RangeExpression":
-      if (isSome(expression.start)) {
-        recordExpressionUses(target, scopeStack, expression.start.value);
-      }
-      if (isSome(expression.end)) {
-        recordExpressionUses(target, scopeStack, expression.end.value);
-      }
+      recordRangeExpressionUses(target, scopeStack, expression);
       return;
     case "StructExpression":
-      for (const field of expression.fields) {
-        if (isSome(field.value)) {
-          recordExpressionUses(target, scopeStack, field.value.value);
-        }
-      }
-      if (isSome(expression.base)) {
-        recordExpressionUses(target, scopeStack, expression.base.value);
-      }
+      recordStructExpressionUses(target, scopeStack, expression);
       return;
     case "IfExpression":
-      recordExpressionUses(target, scopeStack, expression.condition);
-      if (expression.condition.kind === "LetExpression") {
-        scopeStack.push(new Map());
-        registerPatternBindings(scopeStack, expression.condition.pattern);
-        recordConfinedScope(target, scopeStack, expression.thenBranch);
-        scopeStack.pop();
-      } else {
-        recordConfinedScope(target, scopeStack, expression.thenBranch);
-      }
-      if (isSome(expression.elseBranch)) {
-        const elseBranch = expression.elseBranch.value;
-        if (elseBranch.kind === "Block") {
-          recordConfinedScope(target, scopeStack, elseBranch);
-        } else {
-          recordExpressionUses(target, scopeStack, elseBranch);
-        }
-      }
+      recordIfExpressionUses(target, scopeStack, expression);
       return;
     case "LetExpression":
       // Only the scrutinee's uses are recorded here - the pattern's names
@@ -295,16 +365,7 @@ function recordExpressionUses(
       recordExpressionUses(target, scopeStack, expression.scrutinee);
       return;
     case "MatchExpression":
-      recordExpressionUses(target, scopeStack, expression.scrutinee);
-      for (const arm of expression.arms) {
-        scopeStack.push(new Map());
-        registerPatternBindings(scopeStack, arm.pattern);
-        if (isSome(arm.guard)) {
-          recordExpressionUses(target, scopeStack, arm.guard.value);
-        }
-        recordExpressionUses(target, scopeStack, arm.body);
-        scopeStack.pop();
-      }
+      recordMatchExpressionUses(target, scopeStack, expression);
       return;
     case "Block":
       recordConfinedScope(target, scopeStack, expression);
@@ -337,6 +398,38 @@ function recordExpressionUses(
  * `WildcardPattern` for it (see `analyzePatternGuardrail`), so that one case
  * alone stays unreached.
  */
+function registerStructPatternBindings(
+  scopeStack: ScopeStack,
+  pattern: Semantics.StructPattern,
+): void {
+  for (const field of pattern.fields) {
+    if (isSome(field.pattern)) {
+      registerPatternBindings(scopeStack, field.pattern.value);
+    } else {
+      registerScopeName(scopeStack, field.name.text, field.name.tokenId);
+    }
+  }
+}
+
+function registerSlicePatternBindings(
+  scopeStack: ScopeStack,
+  pattern: Semantics.SlicePattern,
+): void {
+  for (const element of pattern.elements) {
+    if (element.kind === "RestPattern") {
+      if (isSome(element.name)) {
+        registerScopeName(
+          scopeStack,
+          element.name.value.text,
+          element.name.value.tokenId,
+        );
+      }
+    } else {
+      registerPatternBindings(scopeStack, element);
+    }
+  }
+}
+
 // eslint-disable-next-line complexity -- Routing function over the full Pattern union
 function registerPatternBindings(
   scopeStack: ScopeStack,
@@ -368,28 +461,10 @@ function registerPatternBindings(
       }
       return;
     case "StructPattern":
-      for (const field of pattern.fields) {
-        if (isSome(field.pattern)) {
-          registerPatternBindings(scopeStack, field.pattern.value);
-        } else {
-          registerScopeName(scopeStack, field.name.text, field.name.tokenId);
-        }
-      }
+      registerStructPatternBindings(scopeStack, pattern);
       return;
     case "SlicePattern":
-      for (const element of pattern.elements) {
-        if (element.kind === "RestPattern") {
-          if (isSome(element.name)) {
-            registerScopeName(
-              scopeStack,
-              element.name.value.text,
-              element.name.value.tokenId,
-            );
-          }
-        } else {
-          registerPatternBindings(scopeStack, element);
-        }
-      }
+      registerSlicePatternBindings(scopeStack, pattern);
       return;
     default:
       assertNever(pattern, `Unexpected pattern: ${JSON.stringify(pattern)}`);

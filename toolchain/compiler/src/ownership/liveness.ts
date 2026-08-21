@@ -147,7 +147,7 @@ function formatSet(
 ): string {
   return `{${[...set]
     .map((id) => nameOf(names, id))
-    .sort()
+    .sort((a, b) => a.localeCompare(b))
     .join(", ")}}`;
 }
 

@@ -23,7 +23,7 @@ import {
   type ConstFoldOutcome,
   type FoldWidth,
 } from "./const-eval.js";
-import { hasCapability } from "./type-capabilities.js";
+import { hasCapability, type TypeCapability } from "./type-capabilities.js";
 
 export interface AnalysisResult {
   readonly diagnostics: readonly Diagnostic[];
@@ -92,7 +92,7 @@ function popFrame(ctx: AnalysisContext): void {
 
 /** The innermost frame. An empty stack is an internal invariant violation. */
 function currentFrame(ctx: AnalysisContext): ScopeFrame {
-  const frame = ctx.frames[ctx.frames.length - 1];
+  const frame = ctx.frames.at(-1);
   assert(frame !== undefined, "no active scope frame");
   return frame;
 }
@@ -120,7 +120,7 @@ function popGenericParams(ctx: AnalysisContext): void {
 
 /** Only the innermost open item's own type parameters are visible. */
 function isDeclaredGenericParam(ctx: AnalysisContext, name: string): boolean {
-  const innermost = ctx.genericParamStack[ctx.genericParamStack.length - 1];
+  const innermost = ctx.genericParamStack.at(-1);
   return innermost?.has(name) ?? false;
 }
 
@@ -1232,8 +1232,6 @@ function registerConstsAndStatics(
 ): void {
   const frame = currentFrame(ctx);
   const constFrame = frame.constDecls;
-  const staticFrame = frame.staticTypes;
-  const currentScope = frame.vars;
   // Pre-scanned up front, independent of registration order: a static gets
   // `bind()`-registered into `currentScope` as this loop runs (below), so a
   // same-frame const/static name collision would otherwise be order-
@@ -1245,94 +1243,12 @@ function registerConstsAndStatics(
   const constNamesInFrame = new Set(
     items.filter((item) => item.kind === "Const").map((item) => item.name.text),
   );
+
   for (const item of items) {
     if (item.kind === "Const") {
-      if (constFrame.has(item.name.text)) {
-        emitError(
-          ctx,
-          `const \`${item.name.text}\` is defined more than once`,
-          item.name.tokenId,
-          "HEDGE-NAME-002",
-        );
-      } else {
-        // A same-frame static collision is reported once, from the static
-        // branch below (via `constNamesInFrame`) - skip the function check
-        // here for a name that's actually a static, so a static processed
-        // earlier in this same loop (and thus already `bind()`-ed into
-        // `currentScope`) doesn't produce a second, mislabeled diagnostic.
-        if (
-          !staticFrame.has(item.name.text) &&
-          currentScope.has(item.name.text)
-        ) {
-          // A reference to this name would be ambiguous: `analyzeExpression`
-          // always tries `analyzeConstReference` first (see its
-          // "PathExpression" case), so `X()` against a same-named function
-          // would inline the const and try to call its literal value
-          // instead of calling the function - a real miscompile, not just
-          // shadowing. Still registers below so the const is still usable
-          // under its own name; the diagnostic already blocks codegen.
-          emitError(
-            ctx,
-            `const \`${item.name.text}\` collides with an existing function name`,
-            item.name.tokenId,
-            "HEDGE-NAME-002",
-          );
-        }
-        constFrame.set(item.name.text, item);
-      }
+      registerConst(ctx, item);
     } else if (item.kind === "Static") {
-      if (staticFrame.has(item.name.text)) {
-        emitError(
-          ctx,
-          `static \`${item.name.text}\` is defined more than once`,
-          item.name.tokenId,
-          "HEDGE-NAME-002",
-        );
-      } else {
-        if (constNamesInFrame.has(item.name.text)) {
-          // A static lowers to a real accessor function of its own name
-          // (see jsim.ts's StaticDecl lowering), but a reference to this
-          // name always tries the const first (`analyzeConstReference`),
-          // making the static unreachable/ambiguous either way.
-          emitError(
-            ctx,
-            `static \`${item.name.text}\` collides with a const of the same name`,
-            item.name.tokenId,
-            "HEDGE-NAME-002",
-          );
-        } else if (currentScope.has(item.name.text)) {
-          // A static lowers to a real top-level accessor function of its
-          // own name (see jsim.ts's StaticDecl lowering) - sharing a name
-          // with an existing function would collide at codegen, not just
-          // shadow. Still registers below so `analyzeStaticDecl` has an
-          // entry to resolve; the diagnostic already blocks codegen.
-          emitError(
-            ctx,
-            `static \`${item.name.text}\` collides with an existing function name`,
-            item.name.tokenId,
-            "HEDGE-NAME-002",
-          );
-        }
-        if (isSome(item.visibility)) {
-          emitError(
-            ctx,
-            "static items cannot be pub yet",
-            item.tokenId,
-            "HEDGE-ITEM-001",
-          );
-        }
-        // A local static is its own item, not a closure - see the matching
-        // barrier around a local const's own type resolution.
-        pushGenericParams(ctx, []);
-        const declaredType = validateSlice1Type(
-          ctx,
-          item.type,
-          item.type.tokenId,
-        );
-        popGenericParams(ctx);
-        staticFrame.set(item.name.text, declaredType);
-        bind(ctx, item.name.text, { type: declaredType, mutable: false });
-      }
+      registerStatic(ctx, constNamesInFrame, item);
     }
   }
   // Eagerly resolve every const in this frame, not just referenced ones - an
@@ -1343,6 +1259,103 @@ function registerConstsAndStatics(
   for (const name of constFrame.keys()) {
     resolveConstDecl(ctx, name);
   }
+}
+
+function registerConst(ctx: AnalysisContext, item: Parser.ConstDecl): void {
+  const frame = currentFrame(ctx);
+  const constFrame = frame.constDecls;
+  const staticFrame = frame.staticTypes;
+  const currentScope = frame.vars;
+
+  if (constFrame.has(item.name.text)) {
+    emitError(
+      ctx,
+      `const \`${item.name.text}\` is defined more than once`,
+      item.name.tokenId,
+      "HEDGE-NAME-002",
+    );
+  } else {
+    // A same-frame static collision is reported once, from the static
+    // branch below (via `constNamesInFrame`) - skip the function check
+    // here for a name that's actually a static, so a static processed
+    // earlier in this same loop (and thus already `bind()`-ed into
+    // `currentScope`) doesn't produce a second, mislabeled diagnostic.
+    if (!staticFrame.has(item.name.text) && currentScope.has(item.name.text)) {
+      // A reference to this name would be ambiguous: `analyzeExpression`
+      // always tries `analyzeConstReference` first (see its
+      // "PathExpression" case), so `X()` against a same-named function
+      // would inline the const and try to call its literal value
+      // instead of calling the function - a real miscompile, not just
+      // shadowing. Still registers below so the const is still usable
+      // under its own name; the diagnostic already blocks codegen.
+      emitError(
+        ctx,
+        `const \`${item.name.text}\` collides with an existing function name`,
+        item.name.tokenId,
+        "HEDGE-NAME-002",
+      );
+    }
+    constFrame.set(item.name.text, item);
+  }
+}
+
+function registerStatic(
+  ctx: AnalysisContext,
+  constNamesInFrame: ReadonlySet<string>,
+  item: Parser.StaticDecl,
+): void {
+  const frame = currentFrame(ctx);
+  const staticFrame = frame.staticTypes;
+  const currentScope = frame.vars;
+
+  if (staticFrame.has(item.name.text)) {
+    emitError(
+      ctx,
+      `static \`${item.name.text}\` is defined more than once`,
+      item.name.tokenId,
+      "HEDGE-NAME-002",
+    );
+    return;
+  }
+  if (constNamesInFrame.has(item.name.text)) {
+    // A static lowers to a real accessor function of its own name
+    // (see jsim.ts's StaticDecl lowering), but a reference to this
+    // name always tries the const first (`analyzeConstReference`),
+    // making the static unreachable/ambiguous either way.
+    emitError(
+      ctx,
+      `static \`${item.name.text}\` collides with a const of the same name`,
+      item.name.tokenId,
+      "HEDGE-NAME-002",
+    );
+  } else if (currentScope.has(item.name.text)) {
+    // A static lowers to a real top-level accessor function of its
+    // own name (see jsim.ts's StaticDecl lowering) - sharing a name
+    // with an existing function would collide at codegen, not just
+    // shadow. Still registers below so `analyzeStaticDecl` has an
+    // entry to resolve; the diagnostic already blocks codegen.
+    emitError(
+      ctx,
+      `static \`${item.name.text}\` collides with an existing function name`,
+      item.name.tokenId,
+      "HEDGE-NAME-002",
+    );
+  }
+  if (isSome(item.visibility)) {
+    emitError(
+      ctx,
+      "static items cannot be pub yet",
+      item.tokenId,
+      "HEDGE-ITEM-001",
+    );
+  }
+  // A local static is its own item, not a closure - see the matching
+  // barrier around a local const's own type resolution.
+  pushGenericParams(ctx, []);
+  const declaredType = validateSlice1Type(ctx, item.type, item.type.tokenId);
+  popGenericParams(ctx);
+  staticFrame.set(item.name.text, declaredType);
+  bind(ctx, item.name.text, { type: declaredType, mutable: false });
 }
 
 function analyzeStaticDecl(
@@ -2006,7 +2019,7 @@ function resolveNamedFieldsForPattern(
   return resolveStructForPattern(ctx, pattern, scrutineeType);
 }
 
-// eslint-disable-next-line complexity -- Routing function over the full Pattern union
+// eslint-disable-next-line complexity -- Routing function
 function analyzePattern(
   ctx: AnalysisContext,
   pattern: Parser.Pattern,
@@ -2015,161 +2028,29 @@ function analyzePattern(
   rootMutable: boolean,
 ): Semantics.Pattern {
   switch (pattern.kind) {
-    case "WildcardPattern": {
-      const result: Semantics.WildcardPattern = {
-        ...pattern,
-        type: scrutineeType,
-      };
-      return result;
-    }
-    case "BindingPattern": {
-      if (isSome(pattern.subpattern)) {
-        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
-      }
-      if (pattern.byRef && pattern.mutable) {
-        checkMutOverrideLegality(
-          ctx,
-          pattern.name.text,
-          defaultMode,
-          rootMutable,
-          pattern.tokenId,
-        );
-      }
-      const { type: boundType, localMutable } = effectiveBindingType(
-        scrutineeType,
-        defaultMode,
-        pattern.byRef,
-        pattern.mutable,
-        pattern.tokenId,
-      );
-      bind(ctx, pattern.name.text, { type: boundType, mutable: localMutable });
-      const result: Semantics.BindingPattern = {
-        ...pattern,
-        name: { ...pattern.name, type: boundType },
-        subpattern: none(),
-        type: boundType,
-      };
-      return result;
-    }
-    case "LiteralPattern": {
-      const literal = coercePatternLiteral(
-        analyzeLiteralValue(ctx, pattern.literal),
-        scrutineeType,
-      );
-      checkPatternLiteralType(
-        ctx,
-        literal.type,
-        scrutineeType,
-        pattern.tokenId,
-      );
-      if (literal.kind === "IntLiteral") {
-        checkPosLiteralRange(ctx, literal, literal.type);
-      }
-      const result: Semantics.LiteralPattern = {
-        ...pattern,
-        literal,
-        type: literal.type,
-      };
-      return result;
-    }
-    case "RangePattern": {
-      const start = coercePatternLiteral(
-        analyzeLiteralValue(ctx, pattern.start.literal),
-        scrutineeType,
-      );
-      const end = coercePatternLiteral(
-        analyzeLiteralValue(ctx, pattern.end.literal),
-        scrutineeType,
-      );
-      const startBound: Semantics.RangePatternBound = {
-        ...pattern.start,
-        literal: start,
-      };
-      const endBound: Semantics.RangePatternBound = {
-        ...pattern.end,
-        literal: end,
-      };
-      if (!typesEqual(start.type, end.type)) {
-        emitError(
-          ctx,
-          `range bounds must have the same type: \`${describeType(start.type)}\` and \`${describeType(end.type)}\``,
-          pattern.tokenId,
-          "HEDGE-PATTERN-006",
-        );
-      } else {
-        checkPatternLiteralType(
-          ctx,
-          start.type,
-          scrutineeType,
-          pattern.tokenId,
-        );
-      }
-      const low = rangeBoundValue(startBound);
-      const high = rangeBoundValue(endBound);
-      if (low !== undefined && high !== undefined && low > high) {
-        emitError(
-          ctx,
-          `lower range bound ${low} is greater than upper bound ${high}, so the range matches nothing`,
-          pattern.tokenId,
-          "HEDGE-PATTERN-006",
-        );
-      }
-      const result: Semantics.RangePattern = {
-        ...pattern,
-        start: startBound,
-        end: endBound,
-        type: start.type,
-      };
-      return result;
-    }
-    case "OrPattern": {
-      // Each alternative is analyzed independently, so `Foo(a) | Bar(b)`
-      // binds both `a` and `b` into the arm's scope regardless of which
-      // alternative actually matches at runtime - `checkOrPatternConsistency`
-      // (below) is what actually enforces spec 0016's requirement that every
-      // alternative bind the same names/types/modes, rather than this
-      // analysis step silently accepting the mismatch.
-      const alternatives = pattern.alternatives.map((alt) =>
-        analyzePattern(ctx, alt, scrutineeType, defaultMode, rootMutable),
-      );
-      const result: Semantics.OrPattern = {
-        ...pattern,
-        alternatives,
-        type: scrutineeType,
-      };
-      checkOrPatternConsistency(ctx, result);
-      checkOrPatternReachability(ctx, result);
-      return result;
-    }
+    case "WildcardPattern":
+      return analyzeWildcardPattern(pattern, scrutineeType);
+    case "BindingPattern":
+      return isSome(pattern.subpattern)
+        ? analyzePatternGuardrail(ctx, pattern, scrutineeType)
+        : analyzeBindingPattern(
+            ctx,
+            pattern,
+            scrutineeType,
+            defaultMode,
+            rootMutable,
+          );
+    case "LiteralPattern":
+      return analyzeLiteralPattern(ctx, pattern, scrutineeType);
+    case "RangePattern":
+      return analyzeRangePattern(ctx, pattern, scrutineeType);
+    case "OrPattern":
+      return orPattern(ctx, pattern, scrutineeType, defaultMode, rootMutable);
     case "PathPattern": {
       const enumDecl = resolveEnumDecl(ctx, scrutineeType);
-      if (!isSome(enumDecl)) {
-        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
-      }
-      const variantName = lastPathSegment(pattern.path);
-      const variant = enumDecl.value.variants.find(
-        (v) => v.name.text === variantName,
-      );
-      if (variant === undefined) {
-        emitError(
-          ctx,
-          `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
-          pattern.tokenId,
-          "HEDGE-NAME-004",
-        );
-        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
-      }
-      if (isSome(variant.body)) {
-        emitError(
-          ctx,
-          `variant \`${variantName}\` has fields; use \`${variantName}(...)\` or \`${variantName} { ... }\``,
-          pattern.tokenId,
-          "HEDGE-PATTERN-005",
-        );
-        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
-      }
-      const result: Semantics.PathPattern = { ...pattern, type: scrutineeType };
-      return result;
+      return isSome(enumDecl)
+        ? analyzePathPattern(ctx, pattern, scrutineeType, enumDecl.value)
+        : analyzePatternGuardrail(ctx, pattern, scrutineeType);
     }
     case "TupleStructPattern": {
       const resolved = resolveTupleFieldsForPattern(
@@ -2177,39 +2058,17 @@ function analyzePattern(
         pattern,
         scrutineeType,
       );
-      if (!isSome(resolved)) {
-        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
-      }
-      const { fields, label, alreadyErrored } = resolved.value;
-      if (!alreadyErrored && fields.length !== pattern.elements.length) {
-        emitError(
-          ctx,
-          `${label} has ${fields.length} field(s), but the pattern has ${pattern.elements.length}`,
-          pattern.tokenId,
-          "HEDGE-PATTERN-005",
-        );
-      }
-      // A `mut` sigil on this whole tuple-struct pattern treats
-      // the destructured value as mutable for every field reached through
-      // it, regardless of the ambient `rootMutable` - it never demotes an
-      // already-mutable ambient context back to immutable, only ever adds
-      // mutability.
-      const effectiveRootMutable = pattern.mutable || rootMutable;
-      const elements = pattern.elements.map((el, i) =>
-        analyzePattern(
-          ctx,
-          el,
-          fields[i]?.type ?? UNIT,
-          defaultMode,
-          effectiveRootMutable,
-        ),
-      );
-      const result: Semantics.TupleStructPattern = {
-        ...pattern,
-        elements,
-        type: scrutineeType,
-      };
-      return result;
+
+      return isSome(resolved)
+        ? analyzeTupleStructPattern(
+            ctx,
+            pattern,
+            scrutineeType,
+            defaultMode,
+            rootMutable,
+            resolved.value,
+          )
+        : analyzePatternGuardrail(ctx, pattern, scrutineeType);
     }
     case "StructPattern": {
       const resolved = resolveNamedFieldsForPattern(
@@ -2217,158 +2076,32 @@ function analyzePattern(
         pattern,
         scrutineeType,
       );
-      if (!isSome(resolved)) {
-        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
-      }
-      const { fields: declaredFields, label, alreadyErrored } = resolved.value;
-      // See the identical note in the `TupleStructPattern` case above.
-      const effectiveRootMutable = pattern.mutable || rootMutable;
-      const fields = pattern.fields.map((field): Semantics.FieldPattern => {
-        const declared = declaredFields.find(
-          (f) => f.name.text === field.name.text,
-        );
-        const fieldType = declared?.type ?? UNIT;
-        if (declared === undefined && !alreadyErrored) {
-          emitError(
+
+      return isSome(resolved)
+        ? analyzeStructPattern(
             ctx,
-            `no field \`${field.name.text}\` on ${label}`,
-            field.name.tokenId,
-            "HEDGE-NAME-003",
-          );
-        }
-        if (isSome(field.pattern)) {
-          return {
-            ...field,
-            name: { ...field.name, type: fieldType },
-            pattern: some(
-              analyzePattern(
-                ctx,
-                field.pattern.value,
-                fieldType,
-                defaultMode,
-                effectiveRootMutable,
-              ),
-            ),
-          };
-        }
-        // Shorthand (`Point { x }`) has no sigil position of its own - it
-        // always inherits `defaultMode` unconditionally (byRef=false,
-        // mutable=false), matching a bare `name` binding pattern with no
-        // sigil at all.
-        const { type: boundType, localMutable } = effectiveBindingType(
-          fieldType,
-          defaultMode,
-          false,
-          false,
-          field.name.tokenId,
-        );
-        bind(ctx, field.name.text, { type: boundType, mutable: localMutable });
-        return {
-          ...field,
-          name: { ...field.name, type: boundType },
-          pattern: none<Semantics.Pattern>(),
-        };
-      });
-      const result: Semantics.StructPattern = {
-        ...pattern,
-        fields,
-        type: scrutineeType,
-      };
-      return result;
+            pattern,
+            scrutineeType,
+            defaultMode,
+            rootMutable,
+            resolved.value,
+          )
+        : analyzePatternGuardrail(ctx, pattern, scrutineeType);
     }
     case "SlicePattern": {
       // A dynamic-length scrutinee has no real type to destructure against
       // yet (no `Vec`/slice type exists - Slice 5), so only a fixed-length
       // `ArrayType` is promoted to real semantics here; anything else still
       // falls to the generic guardrail, unchanged.
-      if (scrutineeType.kind !== "ArrayType") {
-        return analyzePatternGuardrail(ctx, pattern, scrutineeType);
-      }
-      const { elementType, length } = scrutineeType;
-      const restCount = pattern.elements.filter(
-        (el) => el.kind === "RestPattern",
-      ).length;
-      const nonRestCount = pattern.elements.length - restCount;
-      const alreadyErrored = restCount > 1;
-      if (alreadyErrored) {
-        emitError(
-          ctx,
-          `a slice pattern can have at most one \`..\` rest, but this one has ${restCount}`,
-          pattern.tokenId,
-          "HEDGE-PATTERN-005",
-        );
-      } else {
-        const hasRest = restCount === 1;
-        const arityOk = hasRest
-          ? nonRestCount <= length
-          : nonRestCount === length;
-        if (!arityOk) {
-          emitError(
+      return scrutineeType.kind !== "ArrayType"
+        ? analyzePatternGuardrail(ctx, pattern, scrutineeType)
+        : analyzeSlicePattern(
             ctx,
-            hasRest
-              ? `array has ${length} element(s), but the pattern requires at least ${nonRestCount}`
-              : `array has ${length} element(s), but the pattern requires exactly ${nonRestCount}`,
-            pattern.tokenId,
-            "HEDGE-PATTERN-005",
-          );
-        }
-      }
-      // Only used when a rest is present; harmless otherwise. Clamped to 0
-      // since an array length is a `usize` (never negative) - it only goes
-      // negative when `!arityOk` above already diagnosed the mismatch.
-      const restLength = Math.max(0, length - nonRestCount);
-      const elements = pattern.elements.map(
-        (el): Semantics.Pattern | Semantics.RestPattern => {
-          if (el.kind !== "RestPattern") {
-            return analyzePattern(
-              ctx,
-              el,
-              elementType,
-              defaultMode,
-              rootMutable,
-            );
-          }
-          if (!isSome(el.name)) {
-            return { ...el, name: none() };
-          }
-          if (el.byRef && el.mutable) {
-            checkMutOverrideLegality(
-              ctx,
-              el.name.value.text,
-              defaultMode,
-              rootMutable,
-              el.tokenId,
-            );
-          }
-          const restArrayType: Semantics.Type = {
-            kind: "ArrayType",
-            elementType,
-            length: restLength,
-          };
-          const { type: boundType, localMutable } = effectiveBindingType(
-            restArrayType,
+            pattern,
+            scrutineeType,
             defaultMode,
-            el.byRef,
-            el.mutable,
-            el.tokenId,
+            rootMutable,
           );
-          bind(ctx, el.name.value.text, {
-            type: boundType,
-            mutable: localMutable,
-          });
-          const result: Semantics.RestPattern = {
-            ...el,
-            name: some({ ...el.name.value, type: boundType }),
-          };
-          return result;
-        },
-      );
-      const result: Semantics.SlicePattern = {
-        ...pattern,
-        elements,
-        type: scrutineeType,
-      };
-      return result;
     }
     case "TuplePattern":
       return analyzePatternGuardrail(ctx, pattern, scrutineeType);
@@ -2378,6 +2111,362 @@ function analyzePattern(
         `Unexpected pattern: ${JSON.stringify(pattern)}`,
       );
   }
+}
+
+function analyzeWildcardPattern(
+  pattern: Parser.WildcardPattern,
+  scrutineeType: Semantics.Type,
+): Semantics.WildcardPattern {
+  return {
+    ...pattern,
+    type: scrutineeType,
+  };
+}
+
+function analyzeBindingPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.BindingPattern,
+  scrutineeType: Semantics.Type,
+  defaultMode: PatternBindingMode,
+  rootMutable: boolean,
+): Semantics.BindingPattern {
+  if (pattern.byRef && pattern.mutable) {
+    checkMutOverrideLegality(
+      ctx,
+      pattern.name.text,
+      defaultMode,
+      rootMutable,
+      pattern.tokenId,
+    );
+  }
+  const { type: boundType, localMutable } = effectiveBindingType(
+    scrutineeType,
+    defaultMode,
+    pattern.byRef,
+    pattern.mutable,
+    pattern.tokenId,
+  );
+  bind(ctx, pattern.name.text, { type: boundType, mutable: localMutable });
+  return {
+    ...pattern,
+    name: { ...pattern.name, type: boundType },
+    subpattern: none(),
+    type: boundType,
+  };
+}
+
+function analyzeLiteralPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.LiteralPattern,
+  scrutineeType: Semantics.Type,
+): Semantics.LiteralPattern {
+  const literal = coercePatternLiteral(
+    analyzeLiteralValue(ctx, pattern.literal),
+    scrutineeType,
+  );
+  checkPatternLiteralType(ctx, literal.type, scrutineeType, pattern.tokenId);
+  if (literal.kind === "IntLiteral") {
+    checkPosLiteralRange(ctx, literal, literal.type);
+  }
+  return {
+    ...pattern,
+    literal,
+    type: literal.type,
+  };
+}
+
+function analyzeRangePattern(
+  ctx: AnalysisContext,
+  pattern: Parser.RangePattern,
+  scrutineeType: Semantics.Type,
+): Semantics.RangePattern {
+  const start = coercePatternLiteral(
+    analyzeLiteralValue(ctx, pattern.start.literal),
+    scrutineeType,
+  );
+  const end = coercePatternLiteral(
+    analyzeLiteralValue(ctx, pattern.end.literal),
+    scrutineeType,
+  );
+  const startBound: Semantics.RangePatternBound = {
+    ...pattern.start,
+    literal: start,
+  };
+  const endBound: Semantics.RangePatternBound = {
+    ...pattern.end,
+    literal: end,
+  };
+  if (!typesEqual(start.type, end.type)) {
+    emitError(
+      ctx,
+      `range bounds must have the same type: \`${describeType(start.type)}\` and \`${describeType(end.type)}\``,
+      pattern.tokenId,
+      "HEDGE-PATTERN-006",
+    );
+  } else {
+    checkPatternLiteralType(ctx, start.type, scrutineeType, pattern.tokenId);
+  }
+  const low = rangeBoundValue(startBound);
+  const high = rangeBoundValue(endBound);
+  if (low !== undefined && high !== undefined && low > high) {
+    emitError(
+      ctx,
+      `lower range bound ${low} is greater than upper bound ${high}, so the range matches nothing`,
+      pattern.tokenId,
+      "HEDGE-PATTERN-006",
+    );
+  }
+  return {
+    ...pattern,
+    start: startBound,
+    end: endBound,
+    type: start.type,
+  };
+}
+
+function orPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.OrPattern,
+  scrutineeType: Semantics.Type,
+  defaultMode: PatternBindingMode,
+  rootMutable: boolean,
+): Semantics.OrPattern {
+  // Each alternative is analyzed independently, so `Foo(a) | Bar(b)`
+  // binds both `a` and `b` into the arm's scope regardless of which
+  // alternative actually matches at runtime - `checkOrPatternConsistency`
+  // (below) is what actually enforces spec 0016's requirement that every
+  // alternative bind the same names/types/modes, rather than this
+  // analysis step silently accepting the mismatch.
+  const alternatives = pattern.alternatives.map((alt) =>
+    analyzePattern(ctx, alt, scrutineeType, defaultMode, rootMutable),
+  );
+  const result: Semantics.OrPattern = {
+    ...pattern,
+    alternatives,
+    type: scrutineeType,
+  };
+  checkOrPatternConsistency(ctx, result);
+  checkOrPatternReachability(ctx, result);
+  return result;
+}
+
+function analyzePathPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.PathPattern,
+  scrutineeType: Semantics.Type,
+  enumDecl: Semantics.EnumDecl,
+): Semantics.PathPattern | Semantics.WildcardPattern {
+  const variantName = lastPathSegment(pattern.path);
+  const variant = enumDecl.variants.find((v) => v.name.text === variantName);
+  if (variant === undefined) {
+    emitError(
+      ctx,
+      `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
+      pattern.tokenId,
+      "HEDGE-NAME-004",
+    );
+    return analyzePatternGuardrail(ctx, pattern, scrutineeType);
+  }
+  if (isSome(variant.body)) {
+    emitError(
+      ctx,
+      `variant \`${variantName}\` has fields; use \`${variantName}(...)\` or \`${variantName} { ... }\``,
+      pattern.tokenId,
+      "HEDGE-PATTERN-005",
+    );
+    return analyzePatternGuardrail(ctx, pattern, scrutineeType);
+  }
+  return { ...pattern, type: scrutineeType };
+}
+
+function analyzeTupleStructPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.TupleStructPattern,
+  scrutineeType: Semantics.Type,
+  defaultMode: PatternBindingMode,
+  rootMutable: boolean,
+  resolved: ResolvedPatternFields<Semantics.TupleField>,
+): Semantics.TupleStructPattern {
+  const { fields, label, alreadyErrored } = resolved;
+  if (!alreadyErrored && fields.length !== pattern.elements.length) {
+    emitError(
+      ctx,
+      `${label} has ${fields.length} field(s), but the pattern has ${pattern.elements.length}`,
+      pattern.tokenId,
+      "HEDGE-PATTERN-005",
+    );
+  }
+  // A `mut` sigil on this whole tuple-struct pattern treats
+  // the destructured value as mutable for every field reached through
+  // it, regardless of the ambient `rootMutable` - it never demotes an
+  // already-mutable ambient context back to immutable, only ever adds
+  // mutability.
+  const effectiveRootMutable = pattern.mutable || rootMutable;
+  const elements = pattern.elements.map((el, i) =>
+    analyzePattern(
+      ctx,
+      el,
+      fields[i]?.type ?? UNIT,
+      defaultMode,
+      effectiveRootMutable,
+    ),
+  );
+  return {
+    ...pattern,
+    elements,
+    type: scrutineeType,
+  };
+}
+
+function analyzeStructPattern(
+  ctx: AnalysisContext,
+  pattern: Parser.StructPattern,
+  scrutineeType: Semantics.Type,
+  defaultMode: PatternBindingMode,
+  rootMutable: boolean,
+  resolved: ResolvedPatternFields<Semantics.StructField>,
+): Semantics.StructPattern {
+  const { fields: declaredFields, label, alreadyErrored } = resolved;
+  // See the identical note in the `TupleStructPattern` case above.
+  const effectiveRootMutable = pattern.mutable || rootMutable;
+  const fields = pattern.fields.map((field): Semantics.FieldPattern => {
+    const declared = declaredFields.find(
+      (f) => f.name.text === field.name.text,
+    );
+    const fieldType = declared?.type ?? UNIT;
+    if (declared === undefined && !alreadyErrored) {
+      emitError(
+        ctx,
+        `no field \`${field.name.text}\` on ${label}`,
+        field.name.tokenId,
+        "HEDGE-NAME-003",
+      );
+    }
+    if (isSome(field.pattern)) {
+      return {
+        ...field,
+        name: { ...field.name, type: fieldType },
+        pattern: some(
+          analyzePattern(
+            ctx,
+            field.pattern.value,
+            fieldType,
+            defaultMode,
+            effectiveRootMutable,
+          ),
+        ),
+      };
+    }
+    // Shorthand (`Point { x }`) has no sigil position of its own - it
+    // always inherits `defaultMode` unconditionally (byRef=false,
+    // mutable=false), matching a bare `name` binding pattern with no
+    // sigil at all.
+    const { type: boundType, localMutable } = effectiveBindingType(
+      fieldType,
+      defaultMode,
+      false,
+      false,
+      field.name.tokenId,
+    );
+    bind(ctx, field.name.text, { type: boundType, mutable: localMutable });
+    return {
+      ...field,
+      name: { ...field.name, type: boundType },
+      pattern: none<Semantics.Pattern>(),
+    };
+  });
+  const result: Semantics.StructPattern = {
+    ...pattern,
+    fields,
+    type: scrutineeType,
+  };
+  return result;
+}
+
+function analyzeSlicePattern(
+  ctx: AnalysisContext,
+  pattern: Parser.SlicePattern,
+  scrutineeType: Semantics.ArrayType,
+  defaultMode: PatternBindingMode,
+  rootMutable: boolean,
+): Semantics.SlicePattern {
+  const { elementType, length } = scrutineeType;
+  const restCount = pattern.elements.filter(
+    (el) => el.kind === "RestPattern",
+  ).length;
+  const nonRestCount = pattern.elements.length - restCount;
+  const alreadyErrored = restCount > 1;
+  if (alreadyErrored) {
+    emitError(
+      ctx,
+      `a slice pattern can have at most one \`..\` rest, but this one has ${restCount}`,
+      pattern.tokenId,
+      "HEDGE-PATTERN-005",
+    );
+  } else {
+    const hasRest = restCount === 1;
+    const arityOk = hasRest ? nonRestCount <= length : nonRestCount === length;
+    if (!arityOk) {
+      emitError(
+        ctx,
+        hasRest
+          ? `array has ${length} element(s), but the pattern requires at least ${nonRestCount}`
+          : `array has ${length} element(s), but the pattern requires exactly ${nonRestCount}`,
+        pattern.tokenId,
+        "HEDGE-PATTERN-005",
+      );
+    }
+  }
+  // Only used when a rest is present; harmless otherwise. Clamped to 0
+  // since an array length is a `usize` (never negative) - it only goes
+  // negative when `!arityOk` above already diagnosed the mismatch.
+  const restLength = Math.max(0, length - nonRestCount);
+  const elements = pattern.elements.map(
+    (el): Semantics.Pattern | Semantics.RestPattern => {
+      if (el.kind !== "RestPattern") {
+        return analyzePattern(ctx, el, elementType, defaultMode, rootMutable);
+      }
+      if (!isSome(el.name)) {
+        return { ...el, name: none() };
+      }
+      if (el.byRef && el.mutable) {
+        checkMutOverrideLegality(
+          ctx,
+          el.name.value.text,
+          defaultMode,
+          rootMutable,
+          el.tokenId,
+        );
+      }
+      const restArrayType: Semantics.Type = {
+        kind: "ArrayType",
+        elementType,
+        length: restLength,
+      };
+      const { type: boundType, localMutable } = effectiveBindingType(
+        restArrayType,
+        defaultMode,
+        el.byRef,
+        el.mutable,
+        el.tokenId,
+      );
+      bind(ctx, el.name.value.text, {
+        type: boundType,
+        mutable: localMutable,
+      });
+      const result: Semantics.RestPattern = {
+        ...el,
+        name: some({ ...el.name.value, type: boundType }),
+      };
+      return result;
+    },
+  );
+  const result: Semantics.SlicePattern = {
+    ...pattern,
+    elements,
+    type: scrutineeType,
+  };
+  return result;
 }
 
 interface OrPatternBinding {
@@ -2687,59 +2776,131 @@ function collectCoveredBoolValues(
 }
 
 /**
- * Reports an arm as unreachable when it is fully subsumed by the arms
- * before it, in source order. A guarded arm's own coverage is never added
- * to `coveredVariants`/`coveredBools` - a guard means "maybe matches", so
- * it can't unconditionally cover anything for arms after it. Only
- * enum-variant and bool coverage get real subsumption tracking (mirrors
- * `checkMatchExhaustiveness`'s own scope); every other scrutinee type only
- * ever hits the irrefutable-catch-all rule below.
+ * At most one of `enumDecl`/`isBool` is ever relevant for a given
+ * scrutinee - every other scrutinee type only hits the irrefutable
+ * catch-all rule, never real subsumption tracking.
  */
-// eslint-disable-next-line complexity -- Enum/bool/general-catch-all branches, each a simple check
+interface UnreachableArmsCoverage {
+  readonly enumDecl: Option<Semantics.EnumDecl>;
+  readonly isBool: boolean;
+  readonly coveredVariants: Set<string>;
+  readonly coveredBools: Set<boolean>;
+}
+
+function isArmUnreachable(
+  coverage: UnreachableArmsCoverage,
+  arm: Semantics.MatchArm,
+  hasCatchAllSoFar: boolean,
+): boolean {
+  if (hasCatchAllSoFar) return true;
+
+  if (isSome(coverage.enumDecl)) {
+    const thisArmVariants = new Set<string>();
+    collectCoveredVariantNames(arm.pattern, thisArmVariants);
+    return (
+      thisArmVariants.size > 0 &&
+      [...thisArmVariants].every((name) => coverage.coveredVariants.has(name))
+    );
+  }
+
+  if (coverage.isBool) {
+    const thisArmBools = new Set<boolean>();
+    collectCoveredBoolValues(arm.pattern, thisArmBools);
+    return (
+      thisArmBools.size > 0 &&
+      [...thisArmBools].every((v) => coverage.coveredBools.has(v))
+    );
+  }
+
+  return false;
+}
+
+/**
+ * A guarded arm never contributes coverage - a guard means "maybe
+ * matches", so it can't unconditionally cover anything for arms after it.
+ */
+function recordArmCoverage(
+  ctx: AnalysisContext,
+  coverage: UnreachableArmsCoverage,
+  arm: Semantics.MatchArm,
+): boolean {
+  if (isSome(arm.guard)) return false;
+  if (isIrrefutablePattern(ctx, arm.pattern)) return true;
+
+  if (isSome(coverage.enumDecl)) {
+    collectCoveredVariantNames(arm.pattern, coverage.coveredVariants);
+  } else if (coverage.isBool) {
+    collectCoveredBoolValues(arm.pattern, coverage.coveredBools);
+  }
+  return false;
+}
+
+/**
+ * Reports an arm as unreachable when it is fully subsumed by the arms
+ * before it, in source order.
+ */
 function checkUnreachableArms(
   ctx: AnalysisContext,
   arms: readonly Semantics.MatchArm[],
   scrutineeType: Semantics.Type,
 ): void {
-  const enumDecl = resolveEnumDecl(ctx, scrutineeType);
-  const isBool = scrutineeType.kind === "PrimitiveBooleanType";
-  const coveredVariants = new Set<string>();
-  const coveredBools = new Set<boolean>();
+  const coverage: UnreachableArmsCoverage = {
+    enumDecl: resolveEnumDecl(ctx, scrutineeType),
+    isBool: scrutineeType.kind === "PrimitiveBooleanType",
+    coveredVariants: new Set<string>(),
+    coveredBools: new Set<boolean>(),
+  };
   let hasCatchAll = false;
 
   for (const arm of arms) {
-    if (hasCatchAll) {
+    if (isArmUnreachable(coverage, arm, hasCatchAll)) {
       emitError(ctx, "unreachable pattern", arm.tokenId, "HEDGE-PATTERN-003");
-    } else if (isSome(enumDecl)) {
-      const thisArmVariants = new Set<string>();
-      collectCoveredVariantNames(arm.pattern, thisArmVariants);
-      if (
-        thisArmVariants.size > 0 &&
-        [...thisArmVariants].every((name) => coveredVariants.has(name))
-      ) {
-        emitError(ctx, "unreachable pattern", arm.tokenId, "HEDGE-PATTERN-003");
-      }
-    } else if (isBool) {
-      const thisArmBools = new Set<boolean>();
-      collectCoveredBoolValues(arm.pattern, thisArmBools);
-      if (
-        thisArmBools.size > 0 &&
-        [...thisArmBools].every((v) => coveredBools.has(v))
-      ) {
-        emitError(ctx, "unreachable pattern", arm.tokenId, "HEDGE-PATTERN-003");
-      }
     }
-
-    if (isNone(arm.guard)) {
-      if (isIrrefutablePattern(ctx, arm.pattern)) {
-        hasCatchAll = true;
-      } else if (isSome(enumDecl)) {
-        collectCoveredVariantNames(arm.pattern, coveredVariants);
-      } else if (isBool) {
-        collectCoveredBoolValues(arm.pattern, coveredBools);
-      }
-    }
+    hasCatchAll = hasCatchAll || recordArmCoverage(ctx, coverage, arm);
   }
+}
+
+function missingEnumVariants(
+  arms: readonly Semantics.MatchArm[],
+  enumDecl: Semantics.EnumDecl,
+): readonly string[] {
+  const covered = new Set<string>();
+  for (const arm of arms) {
+    if (isNone(arm.guard)) collectCoveredVariantNames(arm.pattern, covered);
+  }
+  return enumDecl.variants
+    .map((v) => v.name.text)
+    .filter((name) => !covered.has(name));
+}
+
+function missingBoolValues(
+  arms: readonly Semantics.MatchArm[],
+): readonly string[] {
+  const covered = new Set<boolean>();
+  for (const arm of arms) {
+    if (isNone(arm.guard)) collectCoveredBoolValues(arm.pattern, covered);
+  }
+  const missing: string[] = [];
+  if (!covered.has(true)) missing.push("true");
+  if (!covered.has(false)) missing.push("false");
+  return missing;
+}
+
+/**
+ * Only enum-variant and bool coverage get real per-value tracking (mirrors
+ * `UnreachableArmsCoverage`) - every other scrutinee type falls to the
+ * "`_` covers everything" fallback.
+ */
+function missingPatternNames(
+  ctx: AnalysisContext,
+  arms: readonly Semantics.MatchArm[],
+  scrutineeType: Semantics.Type,
+): readonly string[] {
+  const enumDecl = resolveEnumDecl(ctx, scrutineeType);
+  if (isSome(enumDecl)) return missingEnumVariants(arms, enumDecl.value);
+  if (scrutineeType.kind === "PrimitiveBooleanType")
+    return missingBoolValues(arms);
+  return ["_"];
 }
 
 function checkMatchExhaustiveness(
@@ -2753,48 +2914,12 @@ function checkMatchExhaustiveness(
   );
   if (hasCatchAll) return;
 
-  const enumDecl = resolveEnumDecl(ctx, scrutineeType);
-  if (isSome(enumDecl)) {
-    const covered = new Set<string>();
-    for (const arm of arms) {
-      if (isNone(arm.guard)) collectCoveredVariantNames(arm.pattern, covered);
-    }
-    const missing = enumDecl.value.variants
-      .map((v) => v.name.text)
-      .filter((name) => !covered.has(name));
-    if (missing.length > 0) {
-      emitError(
-        ctx,
-        `non-exhaustive patterns: \`${missing.join("`, `")}\` not covered`,
-        matchExpr.tokenId,
-        "HEDGE-PATTERN-002",
-      );
-    }
-    return;
-  }
-
-  if (scrutineeType.kind === "PrimitiveBooleanType") {
-    const covered = new Set<boolean>();
-    for (const arm of arms) {
-      if (isNone(arm.guard)) collectCoveredBoolValues(arm.pattern, covered);
-    }
-    const missing: string[] = [];
-    if (!covered.has(true)) missing.push("true");
-    if (!covered.has(false)) missing.push("false");
-    if (missing.length > 0) {
-      emitError(
-        ctx,
-        `non-exhaustive patterns: \`${missing.join("`, `")}\` not covered`,
-        matchExpr.tokenId,
-        "HEDGE-PATTERN-002",
-      );
-    }
-    return;
-  }
+  const missing = missingPatternNames(ctx, arms, scrutineeType);
+  if (missing.length === 0) return;
 
   emitError(
     ctx,
-    "non-exhaustive patterns: `_` not covered",
+    `non-exhaustive patterns: \`${missing.join("`, `")}\` not covered`,
     matchExpr.tokenId,
     "HEDGE-PATTERN-002",
   );
@@ -2897,15 +3022,13 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
       return analyzeFunctionSignature(ctx, item);
     case "Struct": {
       const cached = lookupStruct(ctx, item.name.text);
-      return cached !== undefined && cached.tokenId === item.tokenId
+      return cached?.tokenId === item.tokenId
         ? cached
         : analyzeStruct(ctx, item);
     }
     case "Enum": {
       const cached = lookupEnum(ctx, item.name.text);
-      return cached !== undefined && cached.tokenId === item.tokenId
-        ? cached
-        : analyzeEnum(ctx, item);
+      return cached?.tokenId === item.tokenId ? cached : analyzeEnum(ctx, item);
     }
     case "Const":
       return analyzeConstStatement(ctx, item);
@@ -3111,10 +3234,34 @@ function analyzeCharLiteral(
 }
 
 /**
- * Resolves a declared type without emitting, for building a signature before
- * the declaration is analyzed; emitting here would double-report. Must
- * resolve user-declared names too, not just primitives, or every struct and
- * enum in a signature becomes `()` and call-site checking silently passes.
+ * Must resolve user-declared names too, not just primitives, or every
+ * struct and enum in a signature becomes `()` and call-site checking
+ * silently passes. Non-emitting counterpart to `validateNamedType`.
+ */
+function resolveNamedType(
+  ctx: AnalysisContext,
+  type: Parser.NamedType,
+  fallbackTokenId: number,
+): Semantics.Type {
+  if (type.path.segments.length === 1) {
+    const name = type.path.segments[0];
+    assert(name !== undefined, "Name segment missing");
+    if (isDeclaredGenericParam(ctx, name) && type.typeArguments.length === 0) {
+      return { kind: "NamedType", tokenId: fallbackTokenId, path: type.path };
+    }
+    const prim = namedTypeToPrimitive(name);
+    if (isSome(prim)) return prim.value;
+    const structDecl = lookupStruct(ctx, name);
+    if (structDecl !== undefined) return structDecl.type;
+    const enumDecl = lookupEnum(ctx, name);
+    if (enumDecl !== undefined) return enumDecl.type;
+  }
+  return { kind: "UnitType", tokenId: fallbackTokenId };
+}
+
+/**
+ * Resolves a declared type without emitting, for building a signature
+ * before the declaration is analyzed - emitting here would double-report.
  */
 function resolveSlice1Type(
   ctx: AnalysisContext,
@@ -3122,29 +3269,8 @@ function resolveSlice1Type(
   fallbackTokenId: number,
 ): Semantics.Type {
   switch (type.kind) {
-    case "NamedType": {
-      if (type.path.segments.length === 1) {
-        const name = type.path.segments[0];
-        assert(name !== undefined, "Name segment missing");
-        if (
-          isDeclaredGenericParam(ctx, name) &&
-          type.typeArguments.length === 0
-        ) {
-          return {
-            kind: "NamedType",
-            tokenId: fallbackTokenId,
-            path: type.path,
-          };
-        }
-        const prim = namedTypeToPrimitive(name);
-        if (isSome(prim)) return prim.value;
-        const structDecl = lookupStruct(ctx, name);
-        if (structDecl !== undefined) return structDecl.type;
-        const enumDecl = lookupEnum(ctx, name);
-        if (enumDecl !== undefined) return enumDecl.type;
-      }
-      return { kind: "UnitType", tokenId: fallbackTokenId };
-    }
+    case "NamedType":
+      return resolveNamedType(ctx, type, fallbackTokenId);
     case "UnitType":
       return type;
     case "ReferenceType":
@@ -3752,7 +3878,7 @@ function checkNegLiteralRange(
       return some(`out of range for ${typeName}`);
     }
   } else if (operand.kind === "FloatLiteral") {
-    const val = parseFloat(operand.value);
+    const val = Number.parseFloat(operand.value);
     const max = NEG_FLOAT_MAX.get(annotationType.kind);
     if (max === undefined) {
       return some(`unexpected float-literal range check for type ${typeName}`);
@@ -4019,7 +4145,188 @@ function reconcileExpressionType(
   return { expr: result, mismatch };
 }
 
-// eslint-disable-next-line complexity -- This is a routing function
+interface ComparisonOperand {
+  readonly type: Semantics.Type;
+  readonly isValid: boolean;
+}
+
+interface ComparisonSpec {
+  readonly capability: TypeCapability;
+  readonly errorMessage: string;
+}
+
+/**
+ * Shared shape for `Eq`/`Ne` and `Lt`/`Gt`/`Le`/`Ge`: a missing capability
+ * on either side is one error (`spec.errorMessage`); two individually valid
+ * but differently-typed operands is a second, shared error - this text is
+ * identical for both operator groups in the original code, not a
+ * coincidence being papered over here.
+ */
+function inferComparisonType(
+  ctx: AnalysisContext,
+  spec: ComparisonSpec,
+  left: ComparisonOperand,
+  right: ComparisonOperand,
+  tokenId: number,
+): Semantics.Type {
+  const leftOk = !left.isValid || hasCapability(left.type, spec.capability);
+  const rightOk = !right.isValid || hasCapability(right.type, spec.capability);
+  if (!leftOk || !rightOk) {
+    // TODO(Hedge-265): equality should fall through to a resolved
+    // PartialEq/Eq impl here instead of rejecting outright.
+    // TODO(Hedge-279): same gap for ordering (PartialOrd/Ord).
+    emitError(ctx, spec.errorMessage, tokenId, "HEDGE-TYPE-002");
+  } else if (
+    left.isValid &&
+    right.isValid &&
+    !typesEqual(left.type, right.type)
+  ) {
+    emitError(
+      ctx,
+      "comparison operands must have the same type",
+      tokenId,
+      "HEDGE-TYPE-003",
+    );
+  }
+  return { kind: "PrimitiveBooleanType" };
+}
+
+function inferLogicalType(
+  ctx: AnalysisContext,
+  leftType: Semantics.Type,
+  rightType: Semantics.Type,
+  isLeftTypeValid: boolean,
+  isRightTypeValid: boolean,
+  tokenId: number,
+): Semantics.Type {
+  if (isLeftTypeValid && !hasCapability(leftType, "logical")) {
+    emitError(
+      ctx,
+      "logical operator operands must be `bool`",
+      tokenId,
+      "HEDGE-TYPE-002",
+    );
+  }
+  if (isRightTypeValid && !hasCapability(rightType, "logical")) {
+    emitError(
+      ctx,
+      "logical operator operands must be `bool`",
+      tokenId,
+      "HEDGE-TYPE-002",
+    );
+  }
+  return { kind: "PrimitiveBooleanType" };
+}
+
+function inferArithmeticType(
+  ctx: AnalysisContext,
+  leftType: Semantics.Type,
+  rightType: Semantics.Type,
+  isLeftTypeValid: boolean,
+  isRightTypeValid: boolean,
+  tokenId: number,
+): Semantics.Type {
+  // TODO(Hedge-280): no fallback to an Add/Sub/Mul/Div/Rem-style operator
+  // trait yet - a struct or enum operand is always rejected here.
+  if (isLeftTypeValid && !hasCapability(leftType, "arithmetic")) {
+    emitError(
+      ctx,
+      `arithmetic operands must be numeric; left-operand is type \`${describeType(leftType)}\``,
+      tokenId,
+      "HEDGE-TYPE-002",
+    );
+  }
+  if (isRightTypeValid && !hasCapability(rightType, "arithmetic")) {
+    emitError(
+      ctx,
+      `arithmetic operands must be numeric; right-operand is type \`${describeType(rightType)}\``,
+      tokenId,
+      "HEDGE-TYPE-002",
+    );
+  }
+  if (isLeftTypeValid && isRightTypeValid && !typesEqual(leftType, rightType)) {
+    emitError(
+      ctx,
+      "arithmetic operands must have the same type",
+      tokenId,
+      "HEDGE-TYPE-003",
+    );
+  }
+  return isLeftTypeValid ? leftType : rightType;
+}
+
+/**
+ * A shift amount is independent of the shifted value's type (matching
+ * Rust), unlike the other bitwise operators below, which combine two
+ * values of one type - so unlike `inferBitwiseType`, there is no
+ * same-type check here.
+ */
+function inferShiftType(
+  ctx: AnalysisContext,
+  leftType: Semantics.Type,
+  rightType: Semantics.Type,
+  isLeftTypeValid: boolean,
+  isRightTypeValid: boolean,
+  tokenId: number,
+): Semantics.Type {
+  // TODO(Hedge-280): no fallback to a Shl/Shr-style operator trait yet.
+  if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
+    emitError(
+      ctx,
+      "the shifted value must be an integer",
+      tokenId,
+      "HEDGE-TYPE-002",
+    );
+  }
+  if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
+    emitError(
+      ctx,
+      "the shift amount must be an integer",
+      tokenId,
+      "HEDGE-TYPE-002",
+    );
+  }
+  return isLeftTypeValid ? leftType : rightType;
+}
+
+function inferBitwiseType(
+  ctx: AnalysisContext,
+  leftType: Semantics.Type,
+  rightType: Semantics.Type,
+  isLeftTypeValid: boolean,
+  isRightTypeValid: boolean,
+  tokenId: number,
+): Semantics.Type {
+  // TODO(Hedge-280): no fallback to a BitAnd/BitOr/BitXor-style operator
+  // trait yet.
+  if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
+    emitError(
+      ctx,
+      "bitwise operations require integer operands",
+      tokenId,
+      "HEDGE-TYPE-002",
+    );
+  }
+  if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
+    emitError(
+      ctx,
+      "bitwise operations require integer operands",
+      tokenId,
+      "HEDGE-TYPE-002",
+    );
+  }
+  if (isLeftTypeValid && isRightTypeValid && !typesEqual(leftType, rightType)) {
+    emitError(
+      ctx,
+      "bitwise operands must have the same type",
+      tokenId,
+      "HEDGE-TYPE-003",
+    );
+  }
+  return isLeftTypeValid ? leftType : rightType;
+}
+
+// eslint-disable-next-line complexity -- Routing function; each case is one line dispatching to a named helper
 function inferBinaryType(
   ctx: AnalysisContext,
   op: Parser.BinaryOperator,
@@ -4027,8 +4334,6 @@ function inferBinaryType(
   right: Semantics.Expression,
   tokenId: number,
 ): Semantics.Type {
-  const bool: Semantics.Type = { kind: "PrimitiveBooleanType" };
-
   const leftType = getType(left);
   const rightType = getType(right);
 
@@ -4043,175 +4348,80 @@ function inferBinaryType(
 
   switch (op) {
     case "Eq":
-    case "Ne": {
-      const leftEq = !isLeftTypeValid || hasCapability(leftType, "equality");
-      const rightEq = !isRightTypeValid || hasCapability(rightType, "equality");
-      if (!leftEq || !rightEq) {
-        emitError(
-          ctx,
-          "type does not support equality comparison",
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      } else if (
-        isLeftTypeValid &&
-        isRightTypeValid &&
-        !typesEqual(leftType, rightType)
-      ) {
-        emitError(
-          ctx,
-          "comparison operands must have the same type",
-          tokenId,
-          "HEDGE-TYPE-003",
-        );
-      }
-      return bool;
-    }
-
+    case "Ne":
+      return inferComparisonType(
+        ctx,
+        {
+          capability: "equality",
+          errorMessage: "type does not support equality comparison",
+        },
+        { type: leftType, isValid: isLeftTypeValid },
+        { type: rightType, isValid: isRightTypeValid },
+        tokenId,
+      );
     case "Lt":
     case "Gt":
     case "Le":
-    case "Ge": {
-      const leftOrd = !isLeftTypeValid || hasCapability(leftType, "ordering");
-      const rightOrd =
-        !isRightTypeValid || hasCapability(rightType, "ordering");
-      if (!leftOrd || !rightOrd) {
-        emitError(
-          ctx,
-          "type does not support ordering comparison",
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      } else if (
-        isLeftTypeValid &&
-        isRightTypeValid &&
-        !typesEqual(leftType, rightType)
-      ) {
-        emitError(
-          ctx,
-          "comparison operands must have the same type",
-          tokenId,
-          "HEDGE-TYPE-003",
-        );
-      }
-      return bool;
-    }
-
+    case "Ge":
+      return inferComparisonType(
+        ctx,
+        {
+          capability: "ordering",
+          errorMessage: "type does not support ordering comparison",
+        },
+        { type: leftType, isValid: isLeftTypeValid },
+        { type: rightType, isValid: isRightTypeValid },
+        tokenId,
+      );
     case "And":
-    case "Or": {
-      if (isLeftTypeValid && !hasCapability(leftType, "logical")) {
-        emitError(
-          ctx,
-          "logical operator operands must be `bool`",
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      }
-      if (isRightTypeValid && !hasCapability(rightType, "logical")) {
-        emitError(
-          ctx,
-          "logical operator operands must be `bool`",
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      }
-      return bool;
-    }
-
+    case "Or":
+      return inferLogicalType(
+        ctx,
+        leftType,
+        rightType,
+        isLeftTypeValid,
+        isRightTypeValid,
+        tokenId,
+      );
     case "Add":
     case "Sub":
     case "Mul":
     case "Div":
-    case "Rem": {
-      if (isLeftTypeValid && !hasCapability(leftType, "arithmetic")) {
-        emitError(
-          ctx,
-          `arithmetic operands must be numeric; left-operand is type \`${describeType(leftType)}\``,
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      }
-      if (isRightTypeValid && !hasCapability(rightType, "arithmetic")) {
-        emitError(
-          ctx,
-          `arithmetic operands must be numeric; right-operand is type \`${describeType(rightType)}\``,
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      }
-      if (
-        isLeftTypeValid &&
-        isRightTypeValid &&
-        !typesEqual(leftType, rightType)
-      ) {
-        emitError(
-          ctx,
-          "arithmetic operands must have the same type",
-          tokenId,
-          "HEDGE-TYPE-003",
-        );
-      }
-      return isLeftTypeValid ? leftType : rightType;
-    }
-
+    case "Rem":
+      return inferArithmeticType(
+        ctx,
+        leftType,
+        rightType,
+        isLeftTypeValid,
+        isRightTypeValid,
+        tokenId,
+      );
     case "Shl":
-    case "Shr": {
-      // A shift amount is independent of the shifted value's type (matching
-      // Rust), unlike the other bitwise operators below, which combine two
-      // values of one type.
-      if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
-        emitError(
-          ctx,
-          "the shifted value must be an integer",
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      }
-      if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
-        emitError(
-          ctx,
-          "the shift amount must be an integer",
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      }
-      return isLeftTypeValid ? leftType : rightType;
-    }
+    case "Shr":
+      return inferShiftType(
+        ctx,
+        leftType,
+        rightType,
+        isLeftTypeValid,
+        isRightTypeValid,
+        tokenId,
+      );
     case "BitAnd":
     case "BitXor":
-    case "BitOr": {
-      if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
-        emitError(
-          ctx,
-          "bitwise operations require integer operands",
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      }
-      if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
-        emitError(
-          ctx,
-          "bitwise operations require integer operands",
-          tokenId,
-          "HEDGE-TYPE-002",
-        );
-      }
-      if (
-        isLeftTypeValid &&
-        isRightTypeValid &&
-        !typesEqual(leftType, rightType)
-      ) {
-        emitError(
-          ctx,
-          "bitwise operands must have the same type",
-          tokenId,
-          "HEDGE-TYPE-003",
-        );
-      }
-      return isLeftTypeValid ? leftType : rightType;
-    }
+    case "BitOr":
+      return inferBitwiseType(
+        ctx,
+        leftType,
+        rightType,
+        isLeftTypeValid,
+        isRightTypeValid,
+        tokenId,
+      );
     default:
-      assertNever(op, `Unexpected binary operator: ${JSON.stringify(op)}`);
+      return assertNever(
+        op,
+        `Unexpected binary operator: ${JSON.stringify(op)}`,
+      );
   }
 }
 
@@ -4226,6 +4436,7 @@ function unaryNotResultType(
   tokenId: number,
 ): Semantics.Type {
   const operandType = getType(operand);
+  // TODO(Hedge-280): no fallback to a Not-style operator trait yet.
   if (
     hasCapability(operandType, "logical") ||
     hasCapability(operandType, "bitwise")
@@ -4244,7 +4455,119 @@ function unaryNotResultType(
   return { kind: "PrimitiveBooleanType" };
 }
 
-// eslint-disable-next-line complexity -- This is a routing function
+function analyzePathExpression(
+  ctx: AnalysisContext,
+  expression: Parser.PathExpression,
+): Semantics.Expression {
+  const constRef = analyzeConstReference(ctx, expression);
+  if (isSome(constRef)) return constRef.value;
+  const staticRef = analyzeStaticReference(ctx, expression);
+  if (isSome(staticRef)) return staticRef.value;
+  return analyzePath(ctx, expression);
+}
+
+function analyzeBinaryExpression(
+  ctx: AnalysisContext,
+  expression: Parser.BinaryExpression,
+): Semantics.BinaryExpression {
+  let left = analyzeExpression(ctx, expression.left);
+  let right = analyzeExpression(ctx, expression.right);
+  const isLeftUnsuffixed = isUnsuffixedLiteralExpr(left);
+  const isRightUnsuffixed = isUnsuffixedLiteralExpr(right);
+  if (isLeftUnsuffixed && !isRightUnsuffixed) {
+    left = coerceToIntegerType(left, getType(right));
+    checkCoercedLiteralRange(ctx, left);
+  } else if (!isLeftUnsuffixed && isRightUnsuffixed) {
+    right = coerceToIntegerType(right, getType(left));
+    checkCoercedLiteralRange(ctx, right);
+  }
+  const type = inferBinaryType(
+    ctx,
+    expression.operator,
+    left,
+    right,
+    expression.tokenId,
+  );
+  return { ...expression, left, right, type };
+}
+
+function analyzeUnaryExpression(
+  ctx: AnalysisContext,
+  expression: Parser.UnaryExpression,
+): Semantics.UnaryExpression {
+  const operand =
+    expression.operator === "Neg" && expression.operand.kind === "IntLiteral"
+      ? analyzeIntLiteral(ctx, expression.operand, true)
+      : analyzeExpression(ctx, expression.operand);
+  const type: Semantics.Type =
+    expression.operator === "Not"
+      ? unaryNotResultType(ctx, operand, expression.tokenId)
+      : getType(operand);
+  if (
+    expression.operator === "Neg" &&
+    operand.kind === "IntLiteral" &&
+    isSome(operand.suffix)
+  ) {
+    const rangeError = checkNegLiteralRange(operand, type);
+    if (isSome(rangeError))
+      emitError(ctx, rangeError.value, operand.tokenId, "HEDGE-TYPE-005");
+  }
+  return { ...expression, operand, type };
+}
+
+function analyzeMethodCallExpression(
+  ctx: AnalysisContext,
+  expression: Parser.MethodCallExpression,
+): Semantics.MethodCallExpression {
+  const receiver = analyzeExpression(ctx, expression.receiver);
+  return {
+    ...expression,
+    receiver,
+    method: {
+      ...expression.method,
+      type: { kind: "UnitType", tokenId: expression.method.tokenId },
+    },
+    arguments: expression.arguments.map((arg) => analyzeExpression(ctx, arg)),
+    type: { kind: "UnitType", tokenId: expression.tokenId },
+  };
+}
+
+function analyzeTupleExpression(
+  ctx: AnalysisContext,
+  expression: Parser.TupleExpression,
+): Semantics.TupleExpression {
+  return {
+    ...expression,
+    elements: expression.elements.map((elem) => analyzeExpression(ctx, elem)),
+    type: { kind: "UnitType", tokenId: expression.tokenId },
+  };
+}
+
+function analyzeRangeExpression(
+  ctx: AnalysisContext,
+  expression: Parser.RangeExpression,
+): Semantics.RangeExpression {
+  return {
+    ...expression,
+    start: mapSome(expression.start, (expr) => analyzeExpression(ctx, expr)),
+    end: mapSome(expression.end, (expr) => analyzeExpression(ctx, expr)),
+    type: { kind: "UnitType", tokenId: expression.tokenId },
+  };
+}
+
+function analyzeIdentifierExpression(
+  ctx: AnalysisContext,
+  expression: Parser.Identifier,
+): Semantics.Expression {
+  return analyzePath(ctx, {
+    ...expression,
+    kind: "PathExpression",
+    path: { absolute: false, segments: [expression.text] },
+    typeArguments: [],
+  });
+}
+
+// eslint-disable-next-line complexity -- Routing function; each case is one line dispatching to a named helper
 function analyzeExpression(
   ctx: AnalysisContext,
   expression: Parser.Expression,
@@ -4260,105 +4583,36 @@ function analyzeExpression(
       return analyzeBoolLiteral(ctx, expression);
     case "CharLiteral":
       return analyzeCharLiteral(ctx, expression);
-    case "PathExpression": {
-      const constRef = analyzeConstReference(ctx, expression);
-      if (isSome(constRef)) return constRef.value;
-      const staticRef = analyzeStaticReference(ctx, expression);
-      if (isSome(staticRef)) return staticRef.value;
-      return analyzePath(ctx, expression);
-    }
+    case "PathExpression":
+      return analyzePathExpression(ctx, expression);
     case "CallExpression":
       return analyzeCall(ctx, expression);
     case "ReferenceExpression":
       return analyzeReferenceExpression(ctx, expression);
     case "DereferenceExpression":
       return analyzeDereferenceExpression(ctx, expression);
-    case "BinaryExpression": {
-      let left = analyzeExpression(ctx, expression.left);
-      let right = analyzeExpression(ctx, expression.right);
-      const isLeftUnsuffixed = isUnsuffixedLiteralExpr(left);
-      const isRightUnsuffixed = isUnsuffixedLiteralExpr(right);
-      if (isLeftUnsuffixed && !isRightUnsuffixed) {
-        left = coerceToIntegerType(left, getType(right));
-        checkCoercedLiteralRange(ctx, left);
-      } else if (!isLeftUnsuffixed && isRightUnsuffixed) {
-        right = coerceToIntegerType(right, getType(left));
-        checkCoercedLiteralRange(ctx, right);
-      }
-      const type = inferBinaryType(
-        ctx,
-        expression.operator,
-        left,
-        right,
-        expression.tokenId,
-      );
-      return { ...expression, left, right, type };
-    }
-    case "UnaryExpression": {
-      const operand =
-        expression.operator === "Neg" &&
-        expression.operand.kind === "IntLiteral"
-          ? analyzeIntLiteral(ctx, expression.operand, true)
-          : analyzeExpression(ctx, expression.operand);
-      const type: Semantics.Type =
-        expression.operator === "Not"
-          ? unaryNotResultType(ctx, operand, expression.tokenId)
-          : getType(operand);
-      if (
-        expression.operator === "Neg" &&
-        operand.kind === "IntLiteral" &&
-        isSome(operand.suffix)
-      ) {
-        const rangeError = checkNegLiteralRange(operand, type);
-        if (isSome(rangeError))
-          emitError(ctx, rangeError.value, operand.tokenId, "HEDGE-TYPE-005");
-      }
-      return { ...expression, operand, type };
-    }
+    case "BinaryExpression":
+      return analyzeBinaryExpression(ctx, expression);
+    case "UnaryExpression":
+      return analyzeUnaryExpression(ctx, expression);
     case "AssignExpression":
       return analyzeAssignmentExpression(ctx, expression);
     case "CompoundAssignExpression":
       return analyzeCompoundAssignmentExpression(ctx, expression);
     case "FieldAccessExpression":
       return analyzeFieldAccessExpression(ctx, expression);
-    case "MethodCallExpression": {
-      const receiver = analyzeExpression(ctx, expression.receiver);
-      return {
-        ...expression,
-        receiver,
-        method: {
-          ...expression.method,
-          type: { kind: "UnitType", tokenId: expression.method.tokenId },
-        },
-        arguments: expression.arguments.map((arg) =>
-          analyzeExpression(ctx, arg),
-        ),
-        type: { kind: "UnitType", tokenId: expression.tokenId },
-      };
-    }
+    case "MethodCallExpression":
+      return analyzeMethodCallExpression(ctx, expression);
     case "IndexExpression":
       return analyzeIndexExpression(ctx, expression);
     case "TupleExpression":
-      return {
-        ...expression,
-        elements: expression.elements.map((elem) =>
-          analyzeExpression(ctx, elem),
-        ),
-        type: { kind: "UnitType", tokenId: expression.tokenId },
-      };
+      return analyzeTupleExpression(ctx, expression);
     case "ArrayExpression":
       return analyzeArrayExpression(ctx, expression);
     case "ArrayRepeatExpression":
       return analyzeArrayRepeatExpression(ctx, expression);
     case "RangeExpression":
-      return {
-        ...expression,
-        start: mapSome(expression.start, (expr) =>
-          analyzeExpression(ctx, expr),
-        ),
-        end: mapSome(expression.end, (expr) => analyzeExpression(ctx, expr)),
-        type: { kind: "UnitType", tokenId: expression.tokenId },
-      };
+      return analyzeRangeExpression(ctx, expression);
     case "StructExpression":
       return analyzeStructExpression(ctx, expression);
     case "IfExpression":
@@ -4381,12 +4635,7 @@ function analyzeExpression(
     case "Block":
       return analyzeBlock(ctx, expression);
     case "Identifier":
-      return analyzePath(ctx, {
-        ...expression,
-        kind: "PathExpression",
-        path: { absolute: false, segments: [expression.text] },
-        typeArguments: [],
-      });
+      return analyzeIdentifierExpression(ctx, expression);
     default:
       assertNever(
         expression,

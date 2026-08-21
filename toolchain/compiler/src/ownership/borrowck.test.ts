@@ -61,6 +61,58 @@ describe("borrow checker", (): void => {
     expect(diagnostics[0]?.message).toContain("Conflicting borrows");
   });
 
+  describe("last use nested inside a container expression", (): void => {
+    it("still detects a conflicting borrow when one borrow's only use is inside a tuple literal", (): void => {
+      const diagnostics = check(
+        "fn main() { let mut x = 1; let r1 = &mut x; let r2 = &mut x; let t = (r1, 2); print(t); print(r2); }",
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.message).toBe(
+        'Conflicting borrows of "x": &mut at offset 36 and &mut at offset 53 are both live.',
+      );
+    });
+
+    it("still detects a conflicting borrow when one borrow's only use is inside an array literal", (): void => {
+      const diagnostics = check(
+        "fn main() { let mut x = 1; let r1 = &mut x; let r2 = &mut x; let arr = [r1]; print(arr); print(r2); }",
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.message).toBe(
+        'Conflicting borrows of "x": &mut at offset 36 and &mut at offset 53 are both live.',
+      );
+    });
+
+    it("still detects a conflicting borrow when one borrow's only use is a range endpoint", (): void => {
+      const diagnostics = check(
+        "fn main() { let mut x = 1; let r1 = &mut x; let r2 = &mut x; let range = r1..5; print(range); print(r2); }",
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.message).toBe(
+        'Conflicting borrows of "x": &mut at offset 36 and &mut at offset 53 are both live.',
+      );
+    });
+
+    it("still detects a conflicting borrow when one borrow's only use is a struct literal's field value", (): void => {
+      const diagnostics = check(
+        "struct Wrapper { inner: i32 } fn main() { let mut x = 1; let r1 = &mut x; let r2 = &mut x; let w = Wrapper { inner: r1 }; print(w); print(r2); }",
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.message).toBe(
+        'Conflicting borrows of "x": &mut at offset 66 and &mut at offset 83 are both live.',
+      );
+    });
+
+    it("still detects a conflicting borrow when one borrow's only use is a method call's receiver", (): void => {
+      const diagnostics = check(
+        "fn main() { let mut x = 1; let r1 = &mut x; let r2 = &mut x; let result = r1.foo(); print(result); print(r2); }",
+      );
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.message).toBe(
+        'Conflicting borrows of "x": &mut at offset 36 and &mut at offset 53 are both live.',
+      );
+    });
+  });
+
   it("tags a conflicting-borrows diagnostic with the HEDGE-BORROW-CHECK-001 code and names the first borrow's span as a related span", (): void => {
     const source =
       'fn main() { let mut x = "a"; let r1 = &mut x; let r2 = &mut x; print(r1); print(r2); }';

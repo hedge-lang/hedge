@@ -249,7 +249,7 @@ function registerBinding(
   if (identifier.text === "_") {
     return;
   }
-  const frame = scopeStack[scopeStack.length - 1];
+  const frame = scopeStack.at(-1);
   if (frame === undefined) {
     throw new Error("No active scope frame");
   }
@@ -455,24 +455,14 @@ function combineStates(av: MoveState, bv: MoveState): MoveState {
       }
     case "Unbound":
       switch (bv.kind) {
-        case "Owned":
-          return {
-            kind: "ConditionallyMoved",
-            moveSite: av.moveSite,
-            moveStatementTokenId: av.moveStatementTokenId,
-          };
         case "Uninitialized":
-          return {
-            kind: "Unbound",
-            moveSite: av.moveSite,
-            moveStatementTokenId: av.moveStatementTokenId,
-          };
         case "Unbound":
           return {
             kind: "Unbound",
             moveSite: av.moveSite,
             moveStatementTokenId: av.moveStatementTokenId,
           };
+        case "Owned":
         case "ConditionallyMoved":
           return {
             kind: "ConditionallyMoved",
@@ -491,23 +481,8 @@ function combineStates(av: MoveState, bv: MoveState): MoveState {
         case "Owned":
         case "Unbound":
         case "ConditionallyMoved":
-          return {
-            kind: "ConditionallyMoved",
-            moveSite: av.moveSite,
-            moveStatementTokenId: av.moveStatementTokenId,
-          };
         case "Uninitialized":
-          return {
-            kind: "ConditionallyMoved",
-            moveSite: av.moveSite,
-            moveStatementTokenId: av.moveStatementTokenId,
-          };
         case "PossiblyUninitialized":
-          // Compound ambiguity (moved on some path, uninitialized on
-          // another) - both are "may still be Owned somewhere"; picking
-          // ConditionallyMoved as the reported reason only affects
-          // diagnostic wording, not correctness (either way this is
-          // rejected, not silently resolved).
           return {
             kind: "ConditionallyMoved",
             moveSite: av.moveSite,
@@ -806,10 +781,6 @@ function walkExpression(
       walkExpression(ctx, expression.index, state, scopeStack);
       return;
     case "TupleExpression":
-      for (const element of expression.elements) {
-        walkExpression(ctx, element, state, scopeStack);
-      }
-      return;
     case "ArrayExpression":
       for (const element of expression.elements) {
         walkExpression(ctx, element, state, scopeStack);
@@ -935,18 +906,22 @@ function collectPatternDeclarations(
           : [{ identifier: field.name, mutable: false }],
       );
     case "SlicePattern":
-      return pattern.elements.flatMap((el) =>
-        el.kind === "RestPattern"
-          ? isSome(el.name)
-            ? [
-                {
-                  identifier: el.name.value,
-                  mutable: !el.byRef && el.mutable,
-                },
-              ]
-            : []
-          : collectPatternDeclarations(el),
-      );
+      return pattern.elements.flatMap((el) => {
+        if (el.kind !== "RestPattern") {
+          return collectPatternDeclarations(el);
+        }
+
+        if (isSome(el.name)) {
+          return [
+            {
+              identifier: el.name.value,
+              mutable: !el.byRef && el.mutable,
+            },
+          ];
+        }
+
+        return [];
+      });
     default:
       return assertNever(
         pattern,

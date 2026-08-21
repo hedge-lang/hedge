@@ -142,6 +142,139 @@ describe("semantic analysis", (): void => {
         "bitwise operands must have the same type",
       );
     });
+
+    it("rejects shifting a non-integer value", () => {
+      const result = diagnose("fn main() { let y = 1.5 << 2; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain(
+        "the shifted value must be an integer",
+      );
+    });
+  });
+
+  describe("binary operator type checking", () => {
+    it("rejects an equality comparison on a struct type, which has no equality capability", () => {
+      const result = diagnose(`
+        struct P { x: i32 }
+        fn main() { let a: P = P { x: 1 }; let b: P = P { x: 2 }; let c = a == b; }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "type does not support equality comparison",
+      );
+    });
+
+    it("rejects an equality comparison between two individually-comparable but differently-typed operands", () => {
+      const result = diagnose('fn main() { let x = 1 == "a"; }');
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "comparison operands must have the same type",
+      );
+    });
+
+    it("rejects an ordering comparison between two individually-ordered but differently-typed operands", () => {
+      const result = diagnose("fn main() { let x = 'a' < 1; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "comparison operands must have the same type",
+      );
+    });
+
+    it("does not cascade a capability diagnostic when a comparison operand is an unresolved name", () => {
+      const result = diagnose("fn main() { let x = missing_name == 1; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        'Cannot find name "missing_name" in this scope.',
+      );
+    });
+
+    it("rejects a logical operator with a non-bool left operand", () => {
+      const result = diagnose("fn main() { let x = 1 && true; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "logical operator operands must be `bool`",
+      );
+    });
+
+    it("rejects a logical operator with a non-bool right operand", () => {
+      const result = diagnose("fn main() { let x = true && 1; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "logical operator operands must be `bool`",
+      );
+    });
+
+    it("reports both operands independently when neither side of a logical operator is bool", () => {
+      const result = diagnose('fn main() { let x = 1 && "a"; }');
+      expect(result.diagnostics).toHaveLength(2);
+      for (const diagnostic of result.diagnostics) {
+        expect(diagnostic.message).toBe(
+          "logical operator operands must be `bool`",
+        );
+      }
+    });
+
+    it("rejects arithmetic between two individually-numeric but differently-typed operands", () => {
+      const result = diagnose("fn main() { let x = 1 + 1.5; }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "arithmetic operands must have the same type",
+      );
+    });
+
+    it("rejects a bitwise operator on a non-integer operand, alongside the resulting type mismatch", () => {
+      // The capability check and the same-type check are independent, not
+      // an if/else-if - both fire here since `f64`/`i32` are also
+      // different types, unlike the comparison operators above.
+      const result = diagnose("fn main() { let x = 1.5 & 2; }");
+      expect(result.diagnostics).toHaveLength(2);
+      expect(result.diagnostics[0]?.message).toBe(
+        "bitwise operations require integer operands",
+      );
+      expect(result.diagnostics[1]?.message).toBe(
+        "bitwise operands must have the same type",
+      );
+    });
+
+    it("rejects a bitwise operator on two same-typed non-integer operands, isolating the capability check", () => {
+      const result = diagnose("fn main() { let x = 1.5 & 2.5; }");
+      expect(result.diagnostics).toHaveLength(2);
+      for (const diagnostic of result.diagnostics) {
+        expect(diagnostic.message).toBe(
+          "bitwise operations require integer operands",
+        );
+      }
+    });
+  });
+
+  describe("method call and tuple expressions (Slice 1 placeholders)", () => {
+    it("still resolves an undeclared name inside a method call's receiver", () => {
+      const result = diagnose("fn main() { missing.foo(); }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        'Cannot find name "missing" in this scope.',
+      );
+    });
+
+    it("still resolves an undeclared name inside a method call's arguments", () => {
+      const result = diagnose(
+        "fn main() { let x: i32 = 1; x.foo(missing_arg); }",
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        'Cannot find name "missing_arg" in this scope.',
+      );
+    });
+
+    it("accepts a method call with no diagnostics when receiver and arguments are well-formed", () => {
+      const result = diagnose("fn main() { let x: i32 = 1; x.foo(); }");
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("accepts a non-empty tuple literal with no diagnostics, since tuple types aren't checked yet", () => {
+      const result = diagnose("fn main() { let x = (1, 2); }");
+      expect(result.diagnostics).toEqual([]);
+    });
   });
 
   describe("array length bound", () => {
@@ -1582,6 +1715,16 @@ describe("semantic analysis", (): void => {
         ['const N: bool = "a" == "a";'],
         ['const N: bool = "a" != "b";'],
         ['const N: bool = "a" < "b";'],
+        ["const N: f64 = 1.5 + 2.5;"],
+        ["const N: f64 = 5.5 - 2.5;"],
+        ["const N: f64 = 2.0 * 3.5;"],
+        ["const N: f64 = 7.0 % 2.0;"],
+        ["const N: bool = 1.5 < 2.5;"],
+        ["const N: bool = 2.5 > 1.5;"],
+        ["const N: bool = 1.5 == 1.5;"],
+        ["const N: bool = 'a' < 'b';"],
+        ["const N: bool = 'a' == 'a';"],
+        ["const N: bool = 'b' != 'a';"],
       ])("folds %s with no diagnostics", (source) => {
         const result = diagnose(source);
         expect(result.diagnostics).toEqual([]);

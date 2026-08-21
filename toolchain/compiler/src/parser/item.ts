@@ -989,6 +989,43 @@ function parseTupleFieldsBody(
 }
 
 /**
+ * Parses a struct's body: `;` (unit), `{...}` (named fields), or `(...)`
+ * followed by its own required trailing `;` (tuple fields -
+ * `parseTupleFieldsBody` only consumes through the closing `)`).
+ */
+function parseStructBody(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<StructBody>> {
+  const bodyToken = tokens[pos];
+  if (bodyToken?.kind === "semi") {
+    return ok({ node: { kind: "Unit" }, next: pos + 1 });
+  }
+  if (bodyToken?.kind === "lbrace") {
+    return parseNamedFieldsBody(tokens, diagnostics, pos);
+  }
+  if (bodyToken?.kind === "lparen") {
+    const bodyResult = parseTupleFieldsBody(tokens, diagnostics, pos);
+    if (isErr(bodyResult)) {
+      return bodyResult;
+    }
+    const afterSemi = expect(tokens, bodyResult.value.next, "semi");
+    if (isErr(afterSemi)) {
+      return afterSemi;
+    }
+    return ok({ node: bodyResult.value.node, next: afterSemi.value });
+  }
+  return err(
+    errorDiagnostic(
+      "HEDGE-PARSE-001",
+      `expected struct body (\`{\`, \`(\`, or \`;\`), found "${bodyToken?.kind ?? "end of input"}"`,
+      bodyToken !== undefined ? some(bodyToken.span) : none(),
+    ),
+  );
+}
+
+/**
  * Parses a struct declaration.
  *
  * Grammar:
@@ -997,7 +1034,6 @@ function parseTupleFieldsBody(
  * StructDecl ::= Visibility? "struct" Identifier (NamedFieldsBody | TupleFieldsBody ";" | ";")
  * ```
  */
-// eslint-disable-next-line complexity -- This is too difficult to split up
 function parseStruct(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -1025,41 +1061,10 @@ function parseStruct(
     genericsResult.next,
     skipToStructBody,
   );
-  let cursor = whereResult.next;
 
-  let body: StructBody;
-  const bodyToken = tokens[cursor];
-
-  if (bodyToken?.kind === "semi") {
-    body = { kind: "Unit" };
-    cursor += 1;
-  } else if (bodyToken?.kind === "lbrace") {
-    const bodyResult = parseNamedFieldsBody(tokens, diagnostics, cursor);
-    if (isErr(bodyResult)) {
-      return bodyResult;
-    }
-    body = bodyResult.value.node;
-    cursor = bodyResult.value.next;
-  } else if (bodyToken?.kind === "lparen") {
-    const bodyResult = parseTupleFieldsBody(tokens, diagnostics, cursor);
-    if (isErr(bodyResult)) {
-      return bodyResult;
-    }
-    body = bodyResult.value.node;
-    cursor = bodyResult.value.next;
-    const afterSemi = expect(tokens, cursor, "semi");
-    if (isErr(afterSemi)) {
-      return afterSemi;
-    }
-    cursor = afterSemi.value;
-  } else {
-    return err(
-      errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `expected struct body (\`{\`, \`(\`, or \`;\`), found "${bodyToken?.kind ?? "end of input"}"`,
-        bodyToken !== undefined ? some(bodyToken.span) : none(),
-      ),
-    );
+  const bodyResult = parseStructBody(tokens, diagnostics, whereResult.next);
+  if (isErr(bodyResult)) {
+    return bodyResult;
   }
 
   const decl: StructDecl = {
@@ -1069,10 +1074,10 @@ function parseStruct(
     name: nameResult.value.node,
     generics: genericsResult.generics,
     whereClause: whereResult.whereClause,
-    body,
+    body: bodyResult.value.node,
     attributes,
   };
-  return ok({ node: decl, next: cursor });
+  return ok({ node: decl, next: bodyResult.value.next });
 }
 
 /**
@@ -1355,6 +1360,14 @@ function unsupportedTopLevelKeywordMessage(keyword: string): Option<string> {
  * - Expression statements
  * - Bare expressions
  */
+/** Bubbles a per-element parse's own error, or wraps its success as the `Option<Item>` shape every branch below needs. */
+function wrapItemResult(result: PR<Parsed<Item>>): PR<Parsed<Option<Item>>> {
+  if (isErr(result)) {
+    return result;
+  }
+  return ok({ node: some(result.value.node), next: result.value.next });
+}
+
 // eslint-disable-next-line complexity -- Top-level item dispatch with visibility/attribute prefix; each item kind is a necessary branch.
 export function parseItem(
   tokens: readonly Token[],
@@ -1378,69 +1391,34 @@ export function parseItem(
   const afterVis = vis.next;
   const token = tokens[afterVis];
   if (token?.kind === "keyword" && token.text === "fn") {
-    const fnResult = parseFunction(
-      tokens,
-      diagnostics,
-      afterVis,
-      attributes,
-      vis.node,
+    return wrapItemResult(
+      parseFunction(tokens, diagnostics, afterVis, attributes, vis.node),
     );
-    if (isErr(fnResult)) {
-      return fnResult;
-    }
-    return ok({ node: some(fnResult.value.node), next: fnResult.value.next });
   }
   if (token?.kind === "keyword" && token.text === "struct") {
-    const structResult = parseStruct(
-      tokens,
-      diagnostics,
-      afterVis,
-      attributes,
-      vis.node,
+    return wrapItemResult(
+      parseStruct(tokens, diagnostics, afterVis, attributes, vis.node),
     );
-    if (isErr(structResult)) {
-      return structResult;
-    }
-    return ok({
-      node: some(structResult.value.node),
-      next: structResult.value.next,
-    });
   }
   if (token?.kind === "keyword" && token.text === "enum") {
-    const enumResult = parseEnum(
-      tokens,
-      diagnostics,
-      afterVis,
-      attributes,
-      vis.node,
+    return wrapItemResult(
+      parseEnum(tokens, diagnostics, afterVis, attributes, vis.node),
     );
-    if (isErr(enumResult)) {
-      return enumResult;
-    }
-    return ok({
-      node: some(enumResult.value.node),
-      next: enumResult.value.next,
-    });
   }
   if (
     token?.kind === "keyword" &&
     (token.text === "const" || token.text === "static")
   ) {
-    const constResult = parseConstOrStatic(
-      token.text === "const" ? "Const" : "Static",
-      tokens,
-      diagnostics,
-      afterVis,
-      attributes,
-      vis.node,
+    return wrapItemResult(
+      parseConstOrStatic(
+        token.text === "const" ? "Const" : "Static",
+        tokens,
+        diagnostics,
+        afterVis,
+        attributes,
+        vis.node,
+      ),
     );
-    if (isErr(constResult)) {
-      return constResult;
-    }
-    return ok({
-      node: some(constResult.value.node),
-      next: constResult.value.next,
-    });
   }
   if (token?.kind === "keyword" && token.text === "let") {
     if (afterVis > cursor) {
@@ -1453,19 +1431,9 @@ export function parseItem(
         ),
       );
     }
-    const letResult = parseLetStatement(
-      tokens,
-      diagnostics,
-      afterVis,
-      attributes,
+    return wrapItemResult(
+      parseLetStatement(tokens, diagnostics, afterVis, attributes),
     );
-    if (isErr(letResult)) {
-      return letResult;
-    }
-    return ok({
-      node: some(letResult.value.node),
-      next: letResult.value.next,
-    });
   }
   if (token?.kind === "keyword") {
     const message = unsupportedTopLevelKeywordMessage(token.text);

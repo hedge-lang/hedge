@@ -39,7 +39,7 @@ function scanHexEscape(
       source,
       tokenStart,
       pos + 4,
-      `hex escape \\x needs exactly 2 hex digits at offset ${pos}`,
+      String.raw`hex escape \x needs exactly 2 hex digits at offset ${pos}`,
     );
   }
   return pos + 4;
@@ -59,7 +59,7 @@ function scanUnicodeEscape(
       source,
       tokenStart,
       pos + 3,
-      `unicode escape \\u must be followed by '{' at offset ${pos}`,
+      String.raw`unicode escape \u must be followed by '{' at offset ${pos}`,
     );
   }
   let j = pos + 3;
@@ -96,7 +96,7 @@ function scanUnicodeEscape(
       `unicode escape has too many digits at offset ${pos}`,
     );
   }
-  const codePoint = parseInt(hexStr, 16);
+  const codePoint = Number.parseInt(hexStr, 16);
   if (codePoint > 0x10ffff) {
     return escapeError(
       tokens,
@@ -142,9 +142,9 @@ export function resolveEscape(raw: string): string {
       case "$":
         return "$";
       case "x":
-        return String.fromCodePoint(parseInt(raw.slice(2), 16));
+        return String.fromCodePoint(Number.parseInt(raw.slice(2), 16));
       case "u":
-        return String.fromCodePoint(parseInt(raw.slice(3, -1), 16));
+        return String.fromCodePoint(Number.parseInt(raw.slice(3, -1), 16));
     }
   }
   return raw;

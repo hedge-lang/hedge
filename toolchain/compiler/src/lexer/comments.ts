@@ -463,47 +463,25 @@ function isOuterDocComment(
 }
 
 /**
- * Parse an outer doc comment starting at `start` in `source`, appending it to `tokens`.
- *
- * Doc comments are lowered into a synthetic `#[doc("...")]` token sequence so
- * the parser assembles them into ordinary `doc` attributes (`///` is sugar for
- * `#[doc = "..."]`); see `parseAttribute` in the parser.
- *
- * @param tokens The token list to append to.
- * @param diagnostics The diagnostic list to append to.
- * @param source The source to scan.
- * @param start The index to start scanning at.
- *
- * @returns `Some(index)` with the index of the first character after the comment.
+ * Shared core of `tokenizeOuterDocComment`/`tokenizeInnerDocComment`: gathers
+ * every consecutive `///`/`//!`-marked line (skipping only whitespace between
+ * them) into one comma-separated `#[doc("...")]`/`#![doc("...")]` token
+ * sequence. `leadingTokens` supplies the marker-specific prefix (outer has no
+ * `bang`, inner does); `isMarker` distinguishes `///` from `//!` at each
+ * line's start.
  */
-// eslint-disable-next-line complexity -- This is easier to read than splitting it out
-function tokenizeOuterDocComment(
+// eslint-disable-next-line complexity -- Shared parse loop; deliberately not split further
+function tokenizeLineDocComment(
   tokens: Token[],
   diagnostics: Diagnostic[],
   source: string,
   start: number,
+  leadingTokens: readonly Token[],
+  isMarker: (source: string, index: number) => Result<boolean, Diagnostic>,
 ): Option<number> {
   const OFFSET_START = 3;
 
-  tokens.push(
-    {
-      kind: "hash",
-      span: { start, end: start },
-    },
-    {
-      kind: "lbracket",
-      span: { start, end: start },
-    },
-    {
-      kind: "ident",
-      text: "doc",
-      span: { start, end: start },
-    },
-    {
-      kind: "lparen",
-      span: { start, end: start },
-    },
-  );
+  tokens.push(...leadingTokens);
 
   const lines: string[] = [];
   let end = source.length;
@@ -522,12 +500,12 @@ function tokenizeOuterDocComment(
 
     if (i >= source.length) break;
 
-    const maybeIsOuter = isOuterDocComment(source, i);
-    if (isErr(maybeIsOuter)) {
-      diagnostics.push(maybeIsOuter.error);
+    const maybeIsMarker = isMarker(source, i);
+    if (isErr(maybeIsMarker)) {
+      diagnostics.push(maybeIsMarker.error);
       break;
     }
-    if (!maybeIsOuter.value) {
+    if (!maybeIsMarker.value) {
       break;
     }
 
@@ -568,6 +546,41 @@ function tokenizeOuterDocComment(
     },
   );
   return some(end);
+}
+
+/**
+ * Parse an outer doc comment starting at `start` in `source`, appending it to `tokens`.
+ *
+ * Doc comments are lowered into a synthetic `#[doc("...")]` token sequence so
+ * the parser assembles them into ordinary `doc` attributes (`///` is sugar for
+ * `#[doc = "..."]`); see `parseAttribute` in the parser.
+ *
+ * @param tokens The token list to append to.
+ * @param diagnostics The diagnostic list to append to.
+ * @param source The source to scan.
+ * @param start The index to start scanning at.
+ *
+ * @returns `Some(index)` with the index of the first character after the comment.
+ */
+function tokenizeOuterDocComment(
+  tokens: Token[],
+  diagnostics: Diagnostic[],
+  source: string,
+  start: number,
+): Option<number> {
+  return tokenizeLineDocComment(
+    tokens,
+    diagnostics,
+    source,
+    start,
+    [
+      { kind: "hash", span: { start, end: start } },
+      { kind: "lbracket", span: { start, end: start } },
+      { kind: "ident", text: "doc", span: { start, end: start } },
+      { kind: "lparen", span: { start, end: start } },
+    ],
+    isOuterDocComment,
+  );
 }
 
 /**
@@ -613,103 +626,26 @@ function isInnerDocComment(
  *
  * @returns `Some(index)` with the index of the first character after the comment.
  */
-// eslint-disable-next-line complexity -- This is easier to read than splitting it out
 function tokenizeInnerDocComment(
   tokens: Token[],
   diagnostics: Diagnostic[],
   source: string,
   start: number,
 ): Option<number> {
-  const OFFSET_START = 3;
-
-  tokens.push(
-    {
-      kind: "hash",
-      span: { start, end: start },
-    },
-    {
-      kind: "bang",
-      span: { start, end: start },
-    },
-    {
-      kind: "lbracket",
-      span: { start, end: start },
-    },
-    {
-      kind: "ident",
-      text: "doc",
-      span: { start, end: start },
-    },
-    {
-      kind: "lparen",
-      span: { start, end: start },
-    },
+  return tokenizeLineDocComment(
+    tokens,
+    diagnostics,
+    source,
+    start,
+    [
+      { kind: "hash", span: { start, end: start } },
+      { kind: "bang", span: { start, end: start } },
+      { kind: "lbracket", span: { start, end: start } },
+      { kind: "ident", text: "doc", span: { start, end: start } },
+      { kind: "lparen", span: { start, end: start } },
+    ],
+    isInnerDocComment,
   );
-
-  const lines: string[] = [];
-  let end = source.length;
-  for (let i = start; i < source.length;) {
-    while (i < source.length) {
-      const maybeWhitespace = isWhitespace(source, i);
-      if (isErr(maybeWhitespace)) {
-        diagnostics.push(maybeWhitespace.error);
-        break;
-      }
-      if (!maybeWhitespace.value) {
-        break;
-      }
-      i += 1;
-    }
-
-    if (i >= source.length) break;
-
-    const maybeIsInner = isInnerDocComment(source, i);
-    if (isErr(maybeIsInner)) {
-      diagnostics.push(maybeIsInner.error);
-      break;
-    }
-    if (!maybeIsInner.value) {
-      break;
-    }
-
-    let j = i + OFFSET_START;
-    const lastStart = j;
-    while (j < source.length && source[j] !== "\n") {
-      j += 1;
-    }
-    lines.push(source.slice(lastStart, j));
-    i = j + 1;
-    end = j;
-  }
-
-  const text = lines.join("\n");
-
-  const normalizedComments = normalizeComment(text);
-  for (let j = 0; j < normalizedComments.length; j++) {
-    if (j !== 0) {
-      tokens.push({
-        kind: "comma",
-        span: { start, end },
-      });
-    }
-    tokens.push({
-      kind: "string",
-      text: normalizedComments[j] ?? "",
-      span: { start, end },
-    });
-  }
-
-  tokens.push(
-    {
-      kind: "rparen",
-      span: { start: end, end },
-    },
-    {
-      kind: "rbracket",
-      span: { start: end, end },
-    },
-  );
-  return some(end);
 }
 
 /**

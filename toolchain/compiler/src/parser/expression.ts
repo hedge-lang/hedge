@@ -551,8 +551,81 @@ function parseTupleOrGroup(
   return ok({ node: tuple, next: closeResult.value });
 }
 
+/** Parses the `[value; count]` repeat form, `pos` positioned right after the `;`. */
+function parseArrayRepeatForm(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  start: number,
+  value: Expression,
+): PR<Parsed<Expression>> {
+  const countResult = parseExpressionWithBindingPower(
+    tokens,
+    diagnostics,
+    pos,
+    0,
+    true,
+  );
+  if (isErr(countResult)) return countResult;
+  const closeResult = expect(tokens, countResult.value.next, "rbracket");
+  if (isErr(closeResult)) return closeResult;
+  const repeat: ArrayRepeatExpression = {
+    kind: "ArrayRepeatExpression",
+    tokenId: start,
+    value,
+    count: countResult.value.node,
+  };
+  return ok({ node: repeat, next: closeResult.value });
+}
+
+/** Parses the `[a, b, ...]` list form, `pos` positioned right after the first element. */
+function parseArrayListForm(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  start: number,
+  firstElement: Expression,
+): PR<Parsed<Expression>> {
+  let cursor = pos;
+  if (tokens[cursor]?.kind !== "comma" && tokens[cursor]?.kind !== "rbracket") {
+    const tok = tokens[cursor];
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `Expected ',', ';', or ']' after expression in array literal`,
+        tok !== undefined ? some(tok.span) : none(),
+      ),
+    );
+  }
+
+  const elements: Expression[] = [firstElement];
+  while (tokens[cursor]?.kind === "comma") {
+    cursor += 1; // skip comma
+    if (tokens[cursor]?.kind === "rbracket") break; // trailing comma
+    const elemResult = parseExpressionWithBindingPower(
+      tokens,
+      diagnostics,
+      cursor,
+      0,
+      true,
+    );
+    if (isErr(elemResult)) return elemResult;
+    elements.push(elemResult.value.node);
+    cursor = elemResult.value.next;
+  }
+
+  const closeResult = expect(tokens, cursor, "rbracket");
+  if (isErr(closeResult)) return closeResult;
+
+  const array: ArrayExpression = {
+    kind: "ArrayExpression",
+    tokenId: start,
+    elements,
+  };
+  return ok({ node: array, next: closeResult.value });
+}
+
 /** Parses `[]` (empty), `[a, b, ...]` (list form), or `[value; count]` (repeat form). */
-// eslint-disable-next-line complexity
 function parseArrayLiteral(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -583,63 +656,22 @@ function parseArrayLiteral(
 
   // Repeat form: [value; count]
   if (tokens[cursor]?.kind === "semi") {
-    cursor += 1; // skip `;`
-    const countResult = parseExpressionWithBindingPower(
+    return parseArrayRepeatForm(
       tokens,
       diagnostics,
-      cursor,
-      0,
-      true,
-    );
-    if (isErr(countResult)) return countResult;
-    const closeResult = expect(tokens, countResult.value.next, "rbracket");
-    if (isErr(closeResult)) return closeResult;
-    const repeat: ArrayRepeatExpression = {
-      kind: "ArrayRepeatExpression",
-      tokenId: start,
-      value: firstResult.value.node,
-      count: countResult.value.node,
-    };
-    return ok({ node: repeat, next: closeResult.value });
-  }
-
-  if (tokens[cursor]?.kind !== "comma" && tokens[cursor]?.kind !== "rbracket") {
-    const tok = tokens[cursor];
-    return err(
-      errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `Expected ',', ';', or ']' after expression in array literal`,
-        tok !== undefined ? some(tok.span) : none(),
-      ),
+      cursor + 1, // skip `;`
+      start,
+      firstResult.value.node,
     );
   }
 
-  // Collect remaining list elements
-  const elements: Expression[] = [firstResult.value.node];
-  while (tokens[cursor]?.kind === "comma") {
-    cursor += 1; // skip comma
-    if (tokens[cursor]?.kind === "rbracket") break; // trailing comma
-    const elemResult = parseExpressionWithBindingPower(
-      tokens,
-      diagnostics,
-      cursor,
-      0,
-      true,
-    );
-    if (isErr(elemResult)) return elemResult;
-    elements.push(elemResult.value.node);
-    cursor = elemResult.value.next;
-  }
-
-  const closeResult = expect(tokens, cursor, "rbracket");
-  if (isErr(closeResult)) return closeResult;
-
-  const array: ArrayExpression = {
-    kind: "ArrayExpression",
-    tokenId: start,
-    elements,
-  };
-  return ok({ node: array, next: closeResult.value });
+  return parseArrayListForm(
+    tokens,
+    diagnostics,
+    cursor,
+    start,
+    firstResult.value.node,
+  );
 }
 
 /**
@@ -682,8 +714,48 @@ function parseCondition(
   return parseExpressionWithBindingPower(tokens, diagnostics, pos, 0, false);
 }
 
+/**
+ * Parses an optional `else (if ... | { ... })` clause starting at `pos` (the
+ * token right after the then-block). No `else` at all is `none()`, `pos`
+ * unchanged.
+ */
+function parseElseClause(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<Option<IfExpression | Block>>> {
+  const elseToken = tokens[pos];
+  if (elseToken?.kind !== "keyword" || elseToken.text !== "else") {
+    return ok({ node: none(), next: pos });
+  }
+  const afterElsePos = pos + 1; // skip `else`
+  const afterElse = tokens[afterElsePos];
+  if (afterElse?.kind === "keyword" && afterElse.text === "if") {
+    const elseIfResult = parseIfExpression(tokens, diagnostics, afterElsePos);
+    if (isErr(elseIfResult)) return elseIfResult;
+    return ok({
+      node: some(elseIfResult.value.node),
+      next: elseIfResult.value.next,
+    });
+  }
+  if (afterElse?.kind === "lbrace") {
+    const elseBlockResult = parseBlock(tokens, diagnostics, afterElsePos);
+    if (isErr(elseBlockResult)) return elseBlockResult;
+    return ok({
+      node: some(elseBlockResult.value.node),
+      next: elseBlockResult.value.next,
+    });
+  }
+  return err(
+    errorDiagnostic(
+      "HEDGE-PARSE-001",
+      `Expected 'if' or '{' after 'else'`,
+      afterElse !== undefined ? some(afterElse.span) : none(),
+    ),
+  );
+}
+
 /** Parses `if cond { then } (else (if ... | { else }))?`. */
-// eslint-disable-next-line complexity -- This is mostly a routing function
 function parseIfExpression(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -709,42 +781,21 @@ function parseIfExpression(
   const thenResult = parseBlock(tokens, diagnostics, condResult.value.next);
   if (isErr(thenResult)) return thenResult;
 
-  let cursor = thenResult.value.next;
-  let elseBranch: Option<IfExpression | Block> = none();
-
-  const elseToken = tokens[cursor];
-  if (elseToken?.kind === "keyword" && elseToken.text === "else") {
-    cursor += 1; // skip `else`
-    const afterElse = tokens[cursor];
-    if (afterElse?.kind === "keyword" && afterElse.text === "if") {
-      const elseIfResult = parseIfExpression(tokens, diagnostics, cursor);
-      if (isErr(elseIfResult)) return elseIfResult;
-      elseBranch = some(elseIfResult.value.node);
-      cursor = elseIfResult.value.next;
-    } else if (afterElse?.kind === "lbrace") {
-      const elseBlockResult = parseBlock(tokens, diagnostics, cursor);
-      if (isErr(elseBlockResult)) return elseBlockResult;
-      elseBranch = some(elseBlockResult.value.node);
-      cursor = elseBlockResult.value.next;
-    } else {
-      return err(
-        errorDiagnostic(
-          "HEDGE-PARSE-001",
-          `Expected 'if' or '{' after 'else'`,
-          afterElse !== undefined ? some(afterElse.span) : none(),
-        ),
-      );
-    }
-  }
+  const elseResult = parseElseClause(
+    tokens,
+    diagnostics,
+    thenResult.value.next,
+  );
+  if (isErr(elseResult)) return elseResult;
 
   const node: IfExpression = {
     kind: "IfExpression",
     tokenId: start,
     condition: condResult.value.node,
     thenBranch: thenResult.value.node,
-    elseBranch,
+    elseBranch: elseResult.value.node,
   };
-  return ok({ node, next: cursor });
+  return ok({ node, next: elseResult.value.next });
 }
 
 /**
@@ -779,7 +830,7 @@ function parseWhileExpression(
   if (isErr(condResult)) return condResult;
 
   const bodyTok = tokens[condResult.value.next];
-  if (bodyTok === undefined || bodyTok.kind !== "lbrace") {
+  if (bodyTok?.kind !== "lbrace") {
     return err(
       errorDiagnostic(
         "HEDGE-PARSE-001",
@@ -827,7 +878,7 @@ function parseMatchArm(
   }
 
   const arrowTok = tokens[cursor];
-  if (arrowTok === undefined || arrowTok.kind !== "fat_arrow") {
+  if (arrowTok?.kind !== "fat_arrow") {
     return err(
       errorDiagnostic(
         "HEDGE-PARSE-001",
@@ -938,8 +989,85 @@ function parseMatchExpression(
   return ok({ node, next: cursor + 1 });
 }
 
+/**
+ * Parses a struct-update spread `..expr`, `pos` positioned at the `..`.
+ * Must be the struct expression's last field - warns (semantic analysis
+ * doesn't support it yet) and confirms the closing `}` immediately follows.
+ */
+function parseStructUpdateSpread(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<Expression>> {
+  const spreadTok = tokens[pos];
+  assert(spreadTok !== undefined, "Expected spread token to be defined");
+  let cursor = pos + 1;
+  const baseResult = parseExpressionWithBindingPower(
+    tokens,
+    diagnostics,
+    cursor,
+    0,
+    true,
+  );
+  if (isErr(baseResult)) return baseResult;
+  cursor = baseResult.value.next;
+  diagnostics.push(
+    warningDiagnostic(
+      "HEDGE-UNSUPPORTED-001",
+      "struct update expression (`..base`) is not yet supported in semantic analysis",
+      some(spreadTok.span),
+    ),
+  );
+  if (tokens[cursor]?.kind === "comma") cursor += 1; // trailing comma after spread
+  if (tokens[cursor]?.kind !== "rbrace") {
+    const tok = tokens[cursor];
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-001",
+        `Expected '}' after struct update expression; spread must be last`,
+        tok !== undefined ? some(tok.span) : none(),
+      ),
+    );
+  }
+  return ok({ node: baseResult.value.node, next: cursor });
+}
+
+/** Parses one `Identifier (":" Expression)?` struct field init. */
+function parseFieldInit(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<FieldInit>> {
+  const nameResult = parseIdentifier(tokens, pos);
+  if (isErr(nameResult)) return nameResult;
+  let cursor = nameResult.value.next;
+
+  let fieldValue: Option<Expression> = none();
+  if (tokens[cursor]?.kind === "colon") {
+    cursor += 1;
+    const valResult = parseExpressionWithBindingPower(
+      tokens,
+      diagnostics,
+      cursor,
+      0,
+      true,
+    );
+    if (isErr(valResult)) return valResult;
+    fieldValue = some(valResult.value.node);
+    cursor = valResult.value.next;
+  }
+
+  const fieldInit: FieldInit = {
+    kind: "FieldInit",
+    tokenId: nameResult.value.node.tokenId,
+    name: nameResult.value.node,
+    value: fieldValue,
+  };
+  return ok({ node: fieldInit, next: cursor });
+}
+
 /** Parses `Path "{" FieldInits? (".." Expression)? "}"`. */
-// eslint-disable-next-line complexity
+// eslint-disable-next-line complexity -- Loop combines spread-vs-field dispatch with comma/close handling
 function parseStructExpression(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -958,67 +1086,17 @@ function parseStructExpression(
   ) {
     // Struct update spread: `..expr`
     if (tokens[cursor]?.kind === "dot_dot") {
-      const spreadTok = tokens[cursor];
-      assert(spreadTok !== undefined, "Expected spread token to be defined");
-      cursor += 1;
-      const baseResult = parseExpressionWithBindingPower(
-        tokens,
-        diagnostics,
-        cursor,
-        0,
-        true,
-      );
-      if (isErr(baseResult)) return baseResult;
-      base = some(baseResult.value.node);
-      cursor = baseResult.value.next;
-      diagnostics.push(
-        warningDiagnostic(
-          "HEDGE-UNSUPPORTED-001",
-          "struct update expression (`..base`) is not yet supported in semantic analysis",
-          some(spreadTok.span),
-        ),
-      );
-      if (tokens[cursor]?.kind === "comma") cursor += 1; // trailing comma after spread
-      if (tokens[cursor]?.kind !== "rbrace") {
-        const tok = tokens[cursor];
-        return err(
-          errorDiagnostic(
-            "HEDGE-PARSE-001",
-            `Expected '}' after struct update expression; spread must be last`,
-            tok !== undefined ? some(tok.span) : none(),
-          ),
-        );
-      }
+      const spreadResult = parseStructUpdateSpread(tokens, diagnostics, cursor);
+      if (isErr(spreadResult)) return spreadResult;
+      base = some(spreadResult.value.node);
+      cursor = spreadResult.value.next;
       break;
     }
 
-    // Field init: Identifier (":" Expression)?
-    const nameResult = parseIdentifier(tokens, cursor);
-    if (isErr(nameResult)) return nameResult;
-    cursor = nameResult.value.next;
-
-    let fieldValue: Option<Expression> = none();
-    if (tokens[cursor]?.kind === "colon") {
-      cursor += 1;
-      const valResult = parseExpressionWithBindingPower(
-        tokens,
-        diagnostics,
-        cursor,
-        0,
-        true,
-      );
-      if (isErr(valResult)) return valResult;
-      fieldValue = some(valResult.value.node);
-      cursor = valResult.value.next;
-    }
-
-    const fieldInit: FieldInit = {
-      kind: "FieldInit",
-      tokenId: nameResult.value.node.tokenId,
-      name: nameResult.value.node,
-      value: fieldValue,
-    };
-    fields.push(fieldInit);
+    const fieldResult = parseFieldInit(tokens, diagnostics, cursor);
+    if (isErr(fieldResult)) return fieldResult;
+    fields.push(fieldResult.value.node);
+    cursor = fieldResult.value.next;
 
     if (tokens[cursor]?.kind === "comma") {
       cursor += 1;
@@ -1028,7 +1106,7 @@ function parseStructExpression(
   }
 
   const closeTok = tokens[cursor];
-  if (closeTok === undefined || closeTok.kind !== "rbrace") {
+  if (closeTok?.kind !== "rbrace") {
     return err(
       errorDiagnostic(
         "HEDGE-PARSE-001",
@@ -1099,6 +1177,79 @@ function parseTurbofishTypeArguments(
     node: argsResult.value.typeArguments,
     next: argsResult.value.cursor.next,
   });
+}
+
+/** Parses a path, then a struct expression if a `{` follows and `allowStruct` permits it. */
+function parsePathOrStructExpression(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  allowStruct: boolean,
+): PR<Parsed<Expression>> {
+  const pathResult = parsePath(tokens, pos);
+  if (isErr(pathResult)) return pathResult;
+  const afterPath = pathResult.value.next;
+  const turbofishResult = parseTurbofishTypeArguments(tokens, afterPath);
+  if (isErr(turbofishResult)) {
+    return turbofishResult;
+  }
+  const pathNode: PathExpression = {
+    ...pathResult.value.node,
+    typeArguments: turbofishResult.value.node,
+  };
+  const afterTurbofish = turbofishResult.value.next;
+  if (allowStruct && tokens[afterTurbofish]?.kind === "lbrace") {
+    return parseStructExpression(tokens, diagnostics, afterTurbofish, pathNode);
+  }
+  return ok({ node: pathNode, next: afterTurbofish });
+}
+
+/** Parses a `-`/`!` prefix unary expression, `pos` at the operator token. */
+function parsePrefixUnary(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  operator: "Neg" | "Not",
+  allowStruct: boolean,
+): PR<Parsed<UnaryExpression>> {
+  const operandResult = parseExpressionWithBindingPower(
+    tokens,
+    diagnostics,
+    pos + 1,
+    24,
+    allowStruct,
+  );
+  if (isErr(operandResult)) return operandResult;
+  const unary: UnaryExpression = {
+    kind: "UnaryExpression",
+    tokenId: pos,
+    operator,
+    operand: operandResult.value.node,
+  };
+  return ok({ node: unary, next: operandResult.value.next });
+}
+
+/** Parses a `*` prefix dereference expression, `pos` at the `*` token. */
+function parsePrefixDereference(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  allowStruct: boolean,
+): PR<Parsed<DereferenceExpression>> {
+  const operandResult = parseExpressionWithBindingPower(
+    tokens,
+    diagnostics,
+    pos + 1,
+    24,
+    allowStruct,
+  );
+  if (isErr(operandResult)) return operandResult;
+  const deref: DereferenceExpression = {
+    kind: "DereferenceExpression",
+    tokenId: pos,
+    operand: operandResult.value.node,
+  };
+  return ok({ node: deref, next: operandResult.value.next });
 }
 
 /**
@@ -1197,27 +1348,7 @@ function parsePrimary(
     token.kind === "path_sep" ||
     isSome(pathKeywordAt(tokens, pos))
   ) {
-    const pathResult = parsePath(tokens, pos);
-    if (isErr(pathResult)) return pathResult;
-    const afterPath = pathResult.value.next;
-    const turbofishResult = parseTurbofishTypeArguments(tokens, afterPath);
-    if (isErr(turbofishResult)) {
-      return turbofishResult;
-    }
-    const pathNode: PathExpression = {
-      ...pathResult.value.node,
-      typeArguments: turbofishResult.value.node,
-    };
-    const afterTurbofish = turbofishResult.value.next;
-    if (allowStruct && tokens[afterTurbofish]?.kind === "lbrace") {
-      return parseStructExpression(
-        tokens,
-        diagnostics,
-        afterTurbofish,
-        pathNode,
-      );
-    }
-    return ok({ node: pathNode, next: afterTurbofish });
+    return parsePathOrStructExpression(tokens, diagnostics, pos, allowStruct);
   }
 
   if (token.kind === "amp")
@@ -1225,38 +1356,10 @@ function parsePrimary(
 
   // Prefix unary: - and !
   if (token.kind === "minus") {
-    const operandResult = parseExpressionWithBindingPower(
-      tokens,
-      diagnostics,
-      pos + 1,
-      24,
-      allowStruct,
-    );
-    if (isErr(operandResult)) return operandResult;
-    const unary: UnaryExpression = {
-      kind: "UnaryExpression",
-      tokenId: pos,
-      operator: "Neg",
-      operand: operandResult.value.node,
-    };
-    return ok({ node: unary, next: operandResult.value.next });
+    return parsePrefixUnary(tokens, diagnostics, pos, "Neg", allowStruct);
   }
   if (token.kind === "bang") {
-    const operandResult = parseExpressionWithBindingPower(
-      tokens,
-      diagnostics,
-      pos + 1,
-      24,
-      allowStruct,
-    );
-    if (isErr(operandResult)) return operandResult;
-    const unary: UnaryExpression = {
-      kind: "UnaryExpression",
-      tokenId: pos,
-      operator: "Not",
-      operand: operandResult.value.node,
-    };
-    return ok({ node: unary, next: operandResult.value.next });
+    return parsePrefixUnary(tokens, diagnostics, pos, "Not", allowStruct);
   }
 
   // Tuple, grouping, or unit
@@ -1282,20 +1385,7 @@ function parsePrimary(
   }
 
   if (token.kind === "star") {
-    const operandResult = parseExpressionWithBindingPower(
-      tokens,
-      diagnostics,
-      pos + 1,
-      24,
-      allowStruct,
-    );
-    if (isErr(operandResult)) return operandResult;
-    const deref: DereferenceExpression = {
-      kind: "DereferenceExpression",
-      tokenId: pos,
-      operand: operandResult.value.node,
-    };
-    return ok({ node: deref, next: operandResult.value.next });
+    return parsePrefixDereference(tokens, diagnostics, pos, allowStruct);
   }
 
   return err(
@@ -1564,6 +1654,66 @@ function isRangeEndTerminator(
 }
 
 /**
+ * Determines a range's `end`: `none()` for the omissible-end forms (`a..`,
+ * bare `..`), or the parsed expression otherwise. `..=` has no open-ended
+ * form, so an omitted end there is a real error, not `none()`.
+ */
+function parseRangeEnd(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  cursor: number,
+  inclusive: boolean,
+  allowStruct: boolean,
+): PR<Parsed<Option<Expression>>> {
+  const afterOp = tokens[cursor];
+
+  if (isRangeEndTerminator(afterOp, allowStruct)) {
+    if (inclusive) {
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-001",
+          "Expected an expression after '..='",
+          afterOp !== undefined && afterOp.kind !== "eof"
+            ? some(afterOp.span)
+            : none(),
+        ),
+      );
+    }
+    return ok({ node: none(), next: cursor });
+  }
+
+  const endResult = parseExpressionWithBindingPower(
+    tokens,
+    diagnostics,
+    cursor,
+    5,
+    allowStruct,
+  );
+  if (isErr(endResult)) return endResult;
+  return ok({ node: some(endResult.value.node), next: endResult.value.next });
+}
+
+/** Rejects a range immediately followed by another range operator (`a....b`), which can't associate. */
+function checkNoChainedRange(
+  tokens: readonly Token[],
+  next: number,
+  inclusive: boolean,
+): PR<void> {
+  const peek = tokens[next];
+  if (peek === undefined) return ok(undefined);
+  const nextInfix = infixOp(peek);
+  if (nextInfix?.kind !== "range") return ok(undefined);
+  const sigil = inclusive ? "..=" : "..";
+  return err(
+    errorDiagnostic(
+      "HEDGE-PARSE-003",
+      `cannot chain '${sigil}' with '${nextInfix.sigil}'`,
+      some(peek.span),
+    ),
+  );
+}
+
+/**
  * Parses the `..`/`..=` tail of a range expression (the tokens after the
  * operator), given an already-parsed `start` operand (`none()` for the
  * prefix forms `..b`, `..=b`, bare `..`). Shared by both the infix
@@ -1578,64 +1728,30 @@ function parseRangeTail(
   start: Option<Expression>,
   allowStruct: boolean,
 ): PR<Parsed<RangeExpression>> {
-  const cursor = dotDotPos + 1;
-  const afterOp = tokens[cursor];
+  const endResult = parseRangeEnd(
+    tokens,
+    diagnostics,
+    dotDotPos + 1,
+    inclusive,
+    allowStruct,
+  );
+  if (isErr(endResult)) return endResult;
 
-  let end: Option<Expression>;
-  let next: number;
-
-  if (isRangeEndTerminator(afterOp, allowStruct)) {
-    if (inclusive) {
-      return err(
-        errorDiagnostic(
-          "HEDGE-PARSE-001",
-          "Expected an expression after '..='",
-          afterOp !== undefined && afterOp.kind !== "eof"
-            ? some(afterOp.span)
-            : none(),
-        ),
-      );
-    }
-    end = none();
-    next = cursor;
-  } else {
-    const endResult = parseExpressionWithBindingPower(
-      tokens,
-      diagnostics,
-      cursor,
-      5,
-      allowStruct,
-    );
-    if (isErr(endResult)) return endResult;
-    end = some(endResult.value.node);
-    next = endResult.value.next;
-  }
+  const chainResult = checkNoChainedRange(
+    tokens,
+    endResult.value.next,
+    inclusive,
+  );
+  if (isErr(chainResult)) return chainResult;
 
   const node: RangeExpression = {
     kind: "RangeExpression",
     tokenId: dotDotPos,
     start,
-    end,
+    end: endResult.value.node,
     inclusive,
   };
-  const result: Parsed<RangeExpression> = { node, next };
-
-  const peek = tokens[next];
-  if (peek !== undefined) {
-    const nextInfix = infixOp(peek);
-    if (nextInfix !== null && nextInfix.kind === "range") {
-      const sigil = inclusive ? "..=" : "..";
-      return err(
-        errorDiagnostic(
-          "HEDGE-PARSE-003",
-          `cannot chain '${sigil}' with '${nextInfix.sigil}'`,
-          some(peek.span),
-        ),
-      );
-    }
-  }
-
-  return ok(result);
+  return ok({ node, next: endResult.value.next });
 }
 
 function parseInfixAssign(

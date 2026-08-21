@@ -193,6 +193,100 @@ export function parseLetStatement(
 }
 
 /**
+ * Parses an item declaration (fn, struct, const, static, or pub-prefixed
+ * variant) in block position, given the loop has already confirmed one
+ * starts at `pos`. `node: none()` means the item was discarded (an
+ * unsupported top-level kind `parseItem` itself already recovered from) -
+ * the caller should advance past it without pushing a statement. Kinds not
+ * yet valid in block position (`static` chief among them - see the caller's
+ * own comment on why a local `static` isn't supported) are rejected here.
+ */
+function parseBlockItemStatement(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<Option<Statement>>> {
+  const itemResult = parseItem(tokens, diagnostics, pos);
+  if (isErr(itemResult)) {
+    return itemResult;
+  }
+  const { next, node: item } = itemResult.value;
+  if (!isSome(item)) {
+    return ok({ node: none(), next });
+  }
+  if (
+    item.value.kind !== "Function" &&
+    item.value.kind !== "FunctionSignature" &&
+    item.value.kind !== "Struct" &&
+    item.value.kind !== "Enum" &&
+    item.value.kind !== "Const"
+  ) {
+    const token = tokens[item.value.tokenId];
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-006",
+        `unexpected item kind '${item.value.kind}' in block position`,
+        token === undefined ? none() : some(token.span),
+      ),
+    );
+  }
+  return ok({ node: some(item.value), next });
+}
+
+type ExpressionStatementResult =
+  | {
+      readonly kind: "statement";
+      readonly statement: Statement;
+      readonly next: number;
+    }
+  | {
+      readonly kind: "trailing";
+      readonly expression: Expression;
+      readonly next: number;
+    };
+
+/**
+ * Parses an expression in statement position and decides whether it becomes
+ * an ordinary statement or the block's own trailing expression: `;`-
+ * terminated, or an `ExpressionWithBlock` (`Block`/`IfExpression`/
+ * `MatchExpression`/`WhileExpression`) not immediately followed by the
+ * closing `}`, both need no semicolon and are statements; anything else is
+ * the trailing expression, and the caller stops the statement loop there.
+ */
+function parseExpressionStatementOrTrailing(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<ExpressionStatementResult> {
+  const exprResult = parseExpression(tokens, diagnostics, pos);
+  if (isErr(exprResult)) {
+    return exprResult;
+  }
+  const next = exprResult.value.next;
+  if (tokens[next]?.kind === "semi") {
+    return ok({
+      kind: "statement",
+      statement: expressionStatement(exprResult.value.node),
+      next: next + 1,
+    });
+  }
+  if (
+    (exprResult.value.node.kind === "Block" ||
+      exprResult.value.node.kind === "IfExpression" ||
+      exprResult.value.node.kind === "MatchExpression" ||
+      exprResult.value.node.kind === "WhileExpression") &&
+    tokens[next]?.kind !== "rbrace"
+  ) {
+    return ok({
+      kind: "statement",
+      statement: expressionStatement(exprResult.value.node),
+      next,
+    });
+  }
+  return ok({ kind: "trailing", expression: exprResult.value.node, next });
+}
+
+/**
  * Parses a block expression.
  *
  * A block may contain zero or more statements followed by an optional trailing
@@ -292,32 +386,18 @@ export function parseBlock(
         token.text === "static" ||
         token.text === "pub")
     ) {
-      const itemResult = parseItem(tokens, diagnostics, preAttrCursor);
-      if (isErr(itemResult)) {
-        return itemResult;
+      const itemStmtResult = parseBlockItemStatement(
+        tokens,
+        diagnostics,
+        preAttrCursor,
+      );
+      if (isErr(itemStmtResult)) {
+        return itemStmtResult;
       }
-      cursor = itemResult.value.next;
-      const item = itemResult.value.node;
-      if (!isSome(item)) {
-        continue;
+      cursor = itemStmtResult.value.next;
+      if (isSome(itemStmtResult.value.node)) {
+        statements.push(itemStmtResult.value.node.value);
       }
-      if (
-        item.value.kind !== "Function" &&
-        item.value.kind !== "FunctionSignature" &&
-        item.value.kind !== "Struct" &&
-        item.value.kind !== "Enum" &&
-        item.value.kind !== "Const"
-      ) {
-        const token = tokens[item.value.tokenId];
-        return err(
-          errorDiagnostic(
-            "HEDGE-PARSE-006",
-            `unexpected item kind '${item.value.kind}' in block position`,
-            token === undefined ? none() : some(token.span),
-          ),
-        );
-      }
-      statements.push(item.value);
       continue;
     }
     if (token?.kind === "keyword" && token.text === "let") {
@@ -355,32 +435,20 @@ export function parseBlock(
       cursor = skipResult.value.next;
       continue;
     }
-    const exprResult = parseExpression(tokens, diagnostics, cursor);
-    if (isErr(exprResult)) {
-      return exprResult;
+    const exprStmtResult = parseExpressionStatementOrTrailing(
+      tokens,
+      diagnostics,
+      cursor,
+    );
+    if (isErr(exprStmtResult)) {
+      return exprStmtResult;
     }
-    cursor = exprResult.value.next;
-    if (tokens[cursor]?.kind === "semi") {
-      statements.push(expressionStatement(exprResult.value.node));
-      cursor += 1;
-      continue;
+    cursor = exprStmtResult.value.next;
+    if (exprStmtResult.value.kind === "trailing") {
+      trailing = exprStmtResult.value.expression;
+      break;
     }
-    // ExpressionWithBlock does not require a semicolon in statement position.
-    // Block-like expressions (Block, IfExpression, MatchExpression,
-    // WhileExpression) used before the final position are statements
-    // without a trailing `;`.
-    if (
-      (exprResult.value.node.kind === "Block" ||
-        exprResult.value.node.kind === "IfExpression" ||
-        exprResult.value.node.kind === "MatchExpression" ||
-        exprResult.value.node.kind === "WhileExpression") &&
-      tokens[cursor]?.kind !== "rbrace"
-    ) {
-      statements.push(expressionStatement(exprResult.value.node));
-      continue;
-    }
-    trailing = exprResult.value.node;
-    break;
+    statements.push(exprStmtResult.value.statement);
   }
   const block: Block = {
     kind: "Block",
@@ -390,7 +458,7 @@ export function parseBlock(
     innerAttributes,
   };
   const closeTok = tokens[cursor];
-  if (closeTok === undefined || closeTok.kind !== "rbrace") {
+  if (closeTok?.kind !== "rbrace") {
     return err(
       errorDiagnostic(
         "HEDGE-PARSE-001",

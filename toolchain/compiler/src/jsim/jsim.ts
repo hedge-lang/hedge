@@ -469,11 +469,7 @@ function lowerStatementWithDropFlags(
   const result: JSIM.Statement[] = [...lowered];
   const first = lowered[0];
 
-  if (
-    statement.kind === "LetStatement" &&
-    first !== undefined &&
-    first.kind === "LetStatement"
-  ) {
+  if (statement.kind === "LetStatement" && first?.kind === "LetStatement") {
     const conditional = allConditionalDrops(ctx).find(
       (c) =>
         c.declaration.id === simpleBindingIdentity(statement.pattern).tokenId,
@@ -1638,11 +1634,15 @@ function jsimElseBranch(
     ifExpr.tokenId,
     "else",
   );
-  return isSome(ifExpr.elseBranch)
-    ? some([...elseShadows, ...jsimBranchElse(ctx, ifExpr.elseBranch.value)])
-    : elseShadows.length > 0
-      ? some(elseShadows)
-      : none();
+
+  if (isSome(ifExpr.elseBranch)) {
+    return some([
+      ...elseShadows,
+      ...jsimBranchElse(ctx, ifExpr.elseBranch.value),
+    ]);
+  }
+
+  return elseShadows.length > 0 ? some(elseShadows) : none();
 }
 
 /**
@@ -1708,11 +1708,7 @@ function jsimIfLetStatement(
     );
 
     const first = withElse[0];
-    if (
-      withElse.length === 1 &&
-      first !== undefined &&
-      first.kind === "IfStatement"
-    ) {
+    if (withElse.length === 1 && first?.kind === "IfStatement") {
       return [scrutineeDecl, first];
     }
     return [
@@ -2315,6 +2311,252 @@ function composeContinuations(
     );
 }
 
+function compileRangePatternInto(
+  ctx: JsimContext,
+  pattern: Semantics.RangePattern,
+  valueExpr: JSIM.Expression,
+): PatternContinuation {
+  const startExpr = literalPatternExpression(
+    ctx,
+    pattern.start.literal,
+    pattern.start.negative,
+  );
+  const endExpr = literalPatternExpression(
+    ctx,
+    pattern.end.literal,
+    pattern.end.negative,
+  );
+  const condition = jsimBinaryExpression(
+    ctx,
+    "And",
+    jsimBinaryExpression(ctx, "Ge", valueExpr, startExpr, pattern.tokenId),
+    jsimBinaryExpression(ctx, "Le", valueExpr, endExpr, pattern.tokenId),
+    pattern.tokenId,
+  );
+  return guardedBy(condition);
+}
+
+function compileTupleStructPatternInto(
+  ctx: JsimContext,
+  pattern: Semantics.TupleStructPattern,
+  valueExpr: JSIM.Expression,
+  ambientMutable: boolean,
+  includeOwnTag: boolean,
+  predecls?: JSIM.LetStatement[],
+): PatternContinuation {
+  const isEnumVariant = pattern.type.kind === "EnumType";
+  const effectiveMutable = pattern.mutable || ambientMutable;
+  const dataExpr = isEnumVariant
+    ? jsimFieldAccess(valueExpr, "data")
+    : valueExpr;
+  const elementsContinuation = composeContinuations(
+    pattern.elements.map((el, i) =>
+      compilePatternInto(
+        ctx,
+        el,
+        {
+          kind: "IndexExpression",
+          object: dataExpr,
+          index: { kind: "NumberLiteral", value: String(i) },
+          isArrayIndex: false,
+        },
+        effectiveMutable,
+        true,
+        predecls,
+      ),
+    ),
+  );
+  if (!isEnumVariant || !includeOwnTag) return elementsContinuation;
+  const tagCondition = variantTagCondition(
+    ctx,
+    valueExpr,
+    variantTagOf(pattern),
+    pattern.tokenId,
+  );
+  return (rest) => guardedBy(tagCondition)(elementsContinuation(rest));
+}
+
+function compileStructPatternInto(
+  ctx: JsimContext,
+  pattern: Semantics.StructPattern,
+  valueExpr: JSIM.Expression,
+  ambientMutable: boolean,
+  includeOwnTag: boolean,
+  predecls?: JSIM.LetStatement[],
+): PatternContinuation {
+  const isEnumVariant = pattern.type.kind === "EnumType";
+  const effectiveMutable = pattern.mutable || ambientMutable;
+  const dataExpr = isEnumVariant
+    ? jsimFieldAccess(valueExpr, "data")
+    : valueExpr;
+  const fieldsContinuation = composeContinuations(
+    pattern.fields.map((field): PatternContinuation => {
+      const fieldValueExpr = jsimFieldAccess(dataExpr, field.name.text);
+      if (isSome(field.pattern)) {
+        return compilePatternInto(
+          ctx,
+          field.pattern.value,
+          fieldValueExpr,
+          effectiveMutable,
+          true,
+          predecls,
+        );
+      }
+      const binding = bindPatternName(
+        ctx,
+        field.name,
+        fieldValueExpr,
+        effectiveMutable,
+        false,
+        predecls,
+      );
+      return (rest) => [binding, ...rest];
+    }),
+  );
+  if (!isEnumVariant || !includeOwnTag) return fieldsContinuation;
+  const tagCondition = variantTagCondition(
+    ctx,
+    valueExpr,
+    variantTagOf(pattern),
+    pattern.tokenId,
+  );
+  return (rest) => guardedBy(tagCondition)(fieldsContinuation(rest));
+}
+
+function compileOrPatternInto(
+  ctx: JsimContext,
+  pattern: Semantics.OrPattern,
+  valueExpr: JSIM.Expression,
+): PatternContinuation {
+  // Reachable for a nested or-pattern, and also top-level for a
+  // non-enum scrutinee (no tag to dispatch on there). Only binding-free
+  // alternatives are supported; a binding one would need a conditional
+  // merge this pass doesn't build.
+  const altResults = pattern.alternatives.map((alt) =>
+    patternCondition(alt, ctx, valueExpr),
+  );
+  if (altResults.some((r) => r.kind === "unsupported")) {
+    throw new Error(
+      "JSIM codegen for a nested or-pattern that binds names is not yet implemented",
+    );
+  }
+  // Any unconditional alternative makes the whole disjunction
+  // unconditional - mirrors `isIrrefutablePattern`'s `.some`, not
+  // `.every`.
+  if (altResults.some((r) => r.kind === "unconditional")) return (rest) => rest;
+  let disjunction: Option<JSIM.Expression> = none();
+  for (const r of altResults) {
+    if (r.kind !== "condition") continue;
+    disjunction = isSome(disjunction)
+      ? some(
+          jsimBinaryExpression(
+            ctx,
+            "Or",
+            disjunction.value,
+            r.expr,
+            pattern.tokenId,
+          ),
+        )
+      : some(r.expr);
+  }
+  return isSome(disjunction)
+    ? guardedBy(disjunction.value)
+    : (rest: readonly JSIM.Statement[]): readonly JSIM.Statement[] => rest;
+}
+
+function compileSlicePatternInto(
+  ctx: JsimContext,
+  pattern: Semantics.SlicePattern,
+  valueExpr: JSIM.Expression,
+  ambientMutable: boolean,
+  predecls?: JSIM.LetStatement[],
+): PatternContinuation {
+  // Always resolved against a same-length ArrayType, so it's
+  // statically irrefutable - no guard needed, unlike an enum variant.
+  assert(
+    pattern.type.kind === "ArrayType",
+    `Expected a SlicePattern to resolve to ArrayType, got "${pattern.type.kind}"`,
+  );
+  const { elementType, length: totalLength } = pattern.type;
+  const restIndex = pattern.elements.findIndex(
+    (el) => el.kind === "RestPattern",
+  );
+  const hasRest = restIndex !== -1;
+  const beforeCount = hasRest ? restIndex : pattern.elements.length;
+  const afterCount = hasRest ? pattern.elements.length - restIndex - 1 : 0;
+  const continuations = pattern.elements.map((el, i): PatternContinuation => {
+    if (el.kind !== "RestPattern") {
+      const index =
+        i < beforeCount ? i : totalLength - (pattern.elements.length - i);
+      return compilePatternInto(
+        ctx,
+        el,
+        {
+          kind: "IndexExpression",
+          object: valueExpr,
+          index: { kind: "NumberLiteral", value: String(index) },
+          isArrayIndex: true,
+        },
+        ambientMutable,
+        true,
+        predecls,
+      );
+    }
+    // Anonymous rest (`..`) - nothing to bind.
+    if (!isSome(el.name)) return (rest) => rest;
+    const restLength = totalLength - beforeCount - afterCount;
+    const viewExpr = jsimArraySliceView(
+      valueExpr,
+      elementType,
+      beforeCount,
+      restLength,
+    );
+    const restMutable = el.mutable || ambientMutable;
+    // Only a `&mut` rest binding's accessor cell needs a real lvalue
+    // to close over (the view expression itself isn't assignable) -
+    // every other rest binding can bind straight to the view.
+    if (!(el.byRef && restMutable)) {
+      const binding = bindPatternName(
+        ctx,
+        el.name.value,
+        viewExpr,
+        restMutable,
+        el.byRef,
+        predecls,
+      );
+      return (rest) => [binding, ...rest];
+    }
+    const viewTempName = reserveLocalName(ctx, "restView");
+    const viewDecl: JSIM.LetStatement = {
+      kind: "LetStatement",
+      name: viewTempName,
+      // Reached only for a `&mut` rest binding (see the branch above)
+      // - its accessor cell's setter reassigns this temp, so it must
+      // be a real JS `let`, not `const`.
+      mutable: true,
+      value: some(viewExpr),
+      docComment: none(),
+      span: resolveSpan(ctx.tokens, el.tokenId, el.tokenId),
+      dispose: false,
+    };
+    const viewIdent: JSIM.Expression = {
+      kind: "Identifier",
+      value: viewTempName,
+      type: none(),
+    };
+    const binding = bindPatternName(
+      ctx,
+      el.name.value,
+      viewIdent,
+      restMutable,
+      el.byRef,
+      predecls,
+    );
+    return (rest) => [viewDecl, binding, ...rest];
+  });
+  return composeContinuations(continuations);
+}
+
 /**
  * Recursively compiles a pattern against a lowered value expression -
  * shared by the top-level arm-chain builder and any nested sub-pattern.
@@ -2368,26 +2610,8 @@ function compilePatternInto(
         ),
       );
     }
-    case "RangePattern": {
-      const startExpr = literalPatternExpression(
-        ctx,
-        pattern.start.literal,
-        pattern.start.negative,
-      );
-      const endExpr = literalPatternExpression(
-        ctx,
-        pattern.end.literal,
-        pattern.end.negative,
-      );
-      const condition = jsimBinaryExpression(
-        ctx,
-        "And",
-        jsimBinaryExpression(ctx, "Ge", valueExpr, startExpr, pattern.tokenId),
-        jsimBinaryExpression(ctx, "Le", valueExpr, endExpr, pattern.tokenId),
-        pattern.tokenId,
-      );
-      return guardedBy(condition);
-    }
+    case "RangePattern":
+      return compileRangePatternInto(ctx, pattern, valueExpr);
     case "PathPattern":
       return includeOwnTag
         ? guardedBy(
@@ -2399,204 +2623,35 @@ function compilePatternInto(
             ),
           )
         : (rest: readonly JSIM.Statement[]): readonly JSIM.Statement[] => rest;
-    case "TupleStructPattern": {
-      const isEnumVariant = pattern.type.kind === "EnumType";
-      const effectiveMutable = pattern.mutable || ambientMutable;
-      const dataExpr = isEnumVariant
-        ? jsimFieldAccess(valueExpr, "data")
-        : valueExpr;
-      const elementsContinuation = composeContinuations(
-        pattern.elements.map((el, i) =>
-          compilePatternInto(
-            ctx,
-            el,
-            {
-              kind: "IndexExpression",
-              object: dataExpr,
-              index: { kind: "NumberLiteral", value: String(i) },
-              isArrayIndex: false,
-            },
-            effectiveMutable,
-            true,
-            predecls,
-          ),
-        ),
-      );
-      if (!isEnumVariant || !includeOwnTag) return elementsContinuation;
-      const tagCondition = variantTagCondition(
+    case "TupleStructPattern":
+      return compileTupleStructPatternInto(
         ctx,
+        pattern,
         valueExpr,
-        variantTagOf(pattern),
-        pattern.tokenId,
+        ambientMutable,
+        includeOwnTag,
+        predecls,
       );
-      return (rest) => guardedBy(tagCondition)(elementsContinuation(rest));
-    }
-    case "StructPattern": {
-      const isEnumVariant = pattern.type.kind === "EnumType";
-      const effectiveMutable = pattern.mutable || ambientMutable;
-      const dataExpr = isEnumVariant
-        ? jsimFieldAccess(valueExpr, "data")
-        : valueExpr;
-      const fieldsContinuation = composeContinuations(
-        pattern.fields.map((field): PatternContinuation => {
-          const fieldValueExpr = jsimFieldAccess(dataExpr, field.name.text);
-          if (isSome(field.pattern)) {
-            return compilePatternInto(
-              ctx,
-              field.pattern.value,
-              fieldValueExpr,
-              effectiveMutable,
-              true,
-              predecls,
-            );
-          }
-          const binding = bindPatternName(
-            ctx,
-            field.name,
-            fieldValueExpr,
-            effectiveMutable,
-            false,
-            predecls,
-          );
-          return (rest) => [binding, ...rest];
-        }),
-      );
-      if (!isEnumVariant || !includeOwnTag) return fieldsContinuation;
-      const tagCondition = variantTagCondition(
+    case "StructPattern":
+      return compileStructPatternInto(
         ctx,
+        pattern,
         valueExpr,
-        variantTagOf(pattern),
-        pattern.tokenId,
+        ambientMutable,
+        includeOwnTag,
+        predecls,
       );
-      return (rest) => guardedBy(tagCondition)(fieldsContinuation(rest));
-    }
-    case "OrPattern": {
-      // Reachable for a nested or-pattern, and also top-level for a
-      // non-enum scrutinee (no tag to dispatch on there). Only binding-free
-      // alternatives are supported; a binding one would need a conditional
-      // merge this pass doesn't build.
-      const altResults = pattern.alternatives.map((alt) =>
-        patternCondition(alt, ctx, valueExpr),
-      );
-      if (altResults.some((r) => r.kind === "unsupported")) {
-        throw new Error(
-          "JSIM codegen for a nested or-pattern that binds names is not yet implemented",
-        );
-      }
-      // Any unconditional alternative makes the whole disjunction
-      // unconditional - mirrors `isIrrefutablePattern`'s `.some`, not
-      // `.every`.
-      if (altResults.some((r) => r.kind === "unconditional"))
-        return (rest) => rest;
-      let disjunction: Option<JSIM.Expression> = none();
-      for (const r of altResults) {
-        if (r.kind !== "condition") continue;
-        disjunction = isSome(disjunction)
-          ? some(
-              jsimBinaryExpression(
-                ctx,
-                "Or",
-                disjunction.value,
-                r.expr,
-                pattern.tokenId,
-              ),
-            )
-          : some(r.expr);
-      }
-      return isSome(disjunction)
-        ? guardedBy(disjunction.value)
-        : (rest: readonly JSIM.Statement[]): readonly JSIM.Statement[] => rest;
-    }
-    case "SlicePattern": {
-      // Always resolved against a same-length ArrayType, so it's
-      // statically irrefutable - no guard needed, unlike an enum variant.
-      assert(
-        pattern.type.kind === "ArrayType",
-        `Expected a SlicePattern to resolve to ArrayType, got "${pattern.type.kind}"`,
-      );
-      const { elementType, length: totalLength } = pattern.type;
-      const restIndex = pattern.elements.findIndex(
-        (el) => el.kind === "RestPattern",
-      );
-      const hasRest = restIndex !== -1;
-      const beforeCount = hasRest ? restIndex : pattern.elements.length;
-      const afterCount = hasRest ? pattern.elements.length - restIndex - 1 : 0;
-      const continuations = pattern.elements.map(
-        (el, i): PatternContinuation => {
-          if (el.kind !== "RestPattern") {
-            const index =
-              i < beforeCount ? i : totalLength - (pattern.elements.length - i);
-            return compilePatternInto(
-              ctx,
-              el,
-              {
-                kind: "IndexExpression",
-                object: valueExpr,
-                index: { kind: "NumberLiteral", value: String(index) },
-                isArrayIndex: true,
-              },
-              ambientMutable,
-              true,
-              predecls,
-            );
-          }
-          // Anonymous rest (`..`) - nothing to bind.
-          if (!isSome(el.name)) return (rest) => rest;
-          const restLength = totalLength - beforeCount - afterCount;
-          const viewExpr = jsimArraySliceView(
-            valueExpr,
-            elementType,
-            beforeCount,
-            restLength,
-          );
-          const restMutable = el.mutable || ambientMutable;
-          // Only a `&mut` rest binding's accessor cell needs a real lvalue
-          // to close over (the view expression itself isn't assignable) -
-          // every other rest binding can bind straight to the view.
-          if (!(el.byRef && restMutable)) {
-            const binding = bindPatternName(
-              ctx,
-              el.name.value,
-              viewExpr,
-              restMutable,
-              el.byRef,
-              predecls,
-            );
-            return (rest) => [binding, ...rest];
-          }
-          const viewTempName = reserveLocalName(ctx, "restView");
-          const viewDecl: JSIM.LetStatement = {
-            kind: "LetStatement",
-            name: viewTempName,
-            // Reached only for a `&mut` rest binding (see the branch above)
-            // - its accessor cell's setter reassigns this temp, so it must
-            // be a real JS `let`, not `const`.
-            mutable: true,
-            value: some(viewExpr),
-            docComment: none(),
-            span: resolveSpan(ctx.tokens, el.tokenId, el.tokenId),
-            dispose: false,
-          };
-          const viewIdent: JSIM.Expression = {
-            kind: "Identifier",
-            value: viewTempName,
-            type: none(),
-          };
-          const binding = bindPatternName(
-            ctx,
-            el.name.value,
-            viewIdent,
-            restMutable,
-            el.byRef,
-            predecls,
-          );
-          return (rest) => [viewDecl, binding, ...rest];
-        },
-      );
-      return composeContinuations(continuations);
-    }
-    case "TuplePattern":
+    case "OrPattern":
+      return compileOrPatternInto(ctx, pattern, valueExpr);
     case "SlicePattern":
+      return compileSlicePatternInto(
+        ctx,
+        pattern,
+        valueExpr,
+        ambientMutable,
+        predecls,
+      );
+    case "TuplePattern":
       throw new Error(
         `JSIM codegen for enum-match pattern kind "${pattern.kind}" is not yet implemented`,
       );
@@ -2836,13 +2891,27 @@ function jsimIfExpression(
   };
 }
 
+function getBasePrefix(base: 2 | 8 | 10 | 16): "0b" | "0o" | "0x" | "" {
+  switch (base) {
+    case 2:
+      return "0b";
+    case 8:
+      return "0o";
+    case 16:
+      return "0x";
+    case 10:
+      return "";
+    default:
+      assertNever(base);
+  }
+}
+
 function jsimIntLiteral({
   base,
   value,
   type,
 }: Semantics.IntLiteral): JSIM.Expression {
-  const basePrefix =
-    base === 2 ? "0b" : base === 8 ? "0o" : base === 16 ? "0x" : "";
+  const basePrefix = getBasePrefix(base);
   const isBigInt =
     type.kind === "PrimitiveI64Type" || type.kind === "PrimitiveU64Type";
   const numStr = String(BigInt(basePrefix + value));

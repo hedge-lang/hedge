@@ -182,11 +182,11 @@ export type TokenKind =
 
 function escapeText(text: string): string {
   return text
-    .replaceAll("\\", "\\\\")
-    .replaceAll("\n", "\\n")
-    .replaceAll("\r", "\\r")
-    .replaceAll("\t", "\\t")
-    .replaceAll('"', '\\"');
+    .replaceAll("\\", String.raw`\\`)
+    .replaceAll("\n", String.raw`\n`)
+    .replaceAll("\r", String.raw`\r`)
+    .replaceAll("\t", String.raw`\t`)
+    .replaceAll('"', String.raw`\"`);
 }
 
 // eslint-disable-next-line complexity -- Routing function over the full Token union
