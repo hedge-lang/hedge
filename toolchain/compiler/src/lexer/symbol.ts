@@ -181,12 +181,12 @@ function tokenizeSlashSymbol(tokens: Token[], n1: string, start: number): number
 function tokenizePercentSymbol(tokens: Token[], n1: string, start: number): number {
   if (n1 === "=")
     return push(tokens, {
-      kind: "slash_eq",
-      span: { start, end: start + "/=".length },
+      kind: "percent_eq",
+      span: { start, end: start + "%=".length },
     });
   return push(tokens, {
-    kind: "slash",
-    span: { start, end: start + "/".length },
+    kind: "percent",
+    span: { start, end: start + "%".length },
   });
 }
 
