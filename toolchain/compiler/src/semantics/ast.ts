@@ -596,7 +596,7 @@ interface PrimitiveStringType {
   readonly kind: "PrimitiveStringType";
 }
 
-export interface StructType {
+interface StructType {
   readonly kind: "StructType";
   readonly name: string;
 }
