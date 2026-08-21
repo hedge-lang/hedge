@@ -1702,7 +1702,7 @@ function checkNoChainedRange(
   const peek = tokens[next];
   if (peek === undefined) return ok(undefined);
   const nextInfix = infixOp(peek);
-  if (nextInfix === null || nextInfix.kind !== "range") return ok(undefined);
+  if (nextInfix?.kind !== "range") return ok(undefined);
   const sigil = inclusive ? "..=" : "..";
   return err(
     errorDiagnostic(
