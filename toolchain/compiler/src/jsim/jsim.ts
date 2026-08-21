@@ -469,10 +469,7 @@ function lowerStatementWithDropFlags(
   const result: JSIM.Statement[] = [...lowered];
   const first = lowered[0];
 
-  if (
-    statement.kind === "LetStatement" &&
-    first?.kind === "LetStatement"
-  ) {
+  if (statement.kind === "LetStatement" && first?.kind === "LetStatement") {
     const conditional = allConditionalDrops(ctx).find(
       (c) =>
         c.declaration.id === simpleBindingIdentity(statement.pattern).tokenId,
@@ -1639,12 +1636,13 @@ function jsimElseBranch(
   );
 
   if (isSome(ifExpr.elseBranch)) {
-    return some([...elseShadows, ...jsimBranchElse(ctx, ifExpr.elseBranch.value)]);
+    return some([
+      ...elseShadows,
+      ...jsimBranchElse(ctx, ifExpr.elseBranch.value),
+    ]);
   }
 
-  return elseShadows.length > 0
-      ? some(elseShadows)
-      : none();
+  return elseShadows.length > 0 ? some(elseShadows) : none();
 }
 
 /**
@@ -1710,10 +1708,7 @@ function jsimIfLetStatement(
     );
 
     const first = withElse[0];
-    if (
-      withElse.length === 1 &&
-      first?.kind === "IfStatement"
-    ) {
+    if (withElse.length === 1 && first?.kind === "IfStatement") {
       return [scrutineeDecl, first];
     }
     return [
@@ -2898,10 +2893,14 @@ function jsimIfExpression(
 
 function getBasePrefix(base: 2 | 8 | 10 | 16): "0b" | "0o" | "0x" | "" {
   switch (base) {
-    case 2: return "0b";
-    case 8: return "0o";
-    case 16: return "0x";
-    case 10: return "";
+    case 2:
+      return "0b";
+    case 8:
+      return "0o";
+    case 16:
+      return "0x";
+    case 10:
+      return "";
     default:
       assertNever(base);
   }

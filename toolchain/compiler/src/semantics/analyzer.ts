@@ -1710,9 +1710,9 @@ function effectiveBindingType(
   tokenId: number,
 ): { readonly type: Semantics.Type; readonly localMutable: boolean } {
   const mode: PatternBindingMode = byRef
-    ? (mutable
+    ? mutable
       ? "mut"
-      : "shared")
+      : "shared"
     : defaultMode;
   const type: Semantics.Type =
     mode === "owned"
@@ -3027,9 +3027,7 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
     }
     case "Enum": {
       const cached = lookupEnum(ctx, item.name.text);
-      return cached?.tokenId === item.tokenId
-        ? cached
-        : analyzeEnum(ctx, item);
+      return cached?.tokenId === item.tokenId ? cached : analyzeEnum(ctx, item);
     }
     case "Const":
       return analyzeConstStatement(ctx, item);

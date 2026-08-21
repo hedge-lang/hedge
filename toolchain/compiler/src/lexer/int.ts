@@ -110,9 +110,9 @@ export function scanOctLiteral(
     const msg =
       ch === "_"
         ? `octal literal must begin with an octal digit, not '_' at offset ${start}`
-        : (isDigit(ch)
+        : isDigit(ch)
           ? `invalid octal digit '${ch}' at offset ${i}`
-          : `octal literal has no digits at offset ${start}`);
+          : `octal literal has no digits at offset ${start}`;
     const end = ch !== "" ? i + 1 : i;
     return numError(tokens, diagnostics, source, start, end, msg);
   }
@@ -140,9 +140,9 @@ export function scanBinLiteral(
     const msg =
       ch === "_"
         ? `binary literal must begin with a binary digit, not '_' at offset ${start}`
-        : (isDigit(ch)
+        : isDigit(ch)
           ? `invalid binary digit '${ch}' at offset ${i}`
-          : `binary literal has no digits at offset ${start}`);
+          : `binary literal has no digits at offset ${start}`;
     const end = ch !== "" ? i + 1 : i;
     return numError(tokens, diagnostics, source, start, end, msg);
   }

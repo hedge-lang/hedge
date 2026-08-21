@@ -59,7 +59,7 @@ function scanUnicodeEscape(
       source,
       tokenStart,
       pos + 3,
-        String.raw`unicode escape \u must be followed by '{' at offset ${pos}`,
+      String.raw`unicode escape \u must be followed by '{' at offset ${pos}`,
     );
   }
   let j = pos + 3;

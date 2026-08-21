@@ -16,10 +16,14 @@ import type { ConstValue } from "./ast.js";
 
 function getBasePrefix(base: 2 | 8 | 10 | 16): "0b" | "0o" | "0x" | "" {
   switch (base) {
-    case 2: return "0b";
-    case 8: return "0o";
-    case 16: return "0x";
-    case 10: return "";
+    case 2:
+      return "0b";
+    case 8:
+      return "0o";
+    case 16:
+      return "0x";
+    case 10:
+      return "";
     default:
       assertNever(base);
   }

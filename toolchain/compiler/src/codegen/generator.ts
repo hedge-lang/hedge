@@ -911,7 +911,9 @@ function emitDtsEnumVariant(variant: EnumDeclVariant): string {
     case "TupleVariant":
       return `{ tag: ${tag}; data: [${variant.dataTypes.join(", ")}] }`;
     case "StructVariant": {
-      const variantDataFields = variant.dataFields.map((f) => `${f.name}: ${f.type}`).join("; ");
+      const variantDataFields = variant.dataFields
+        .map((f) => `${f.name}: ${f.type}`)
+        .join("; ");
       return `{ tag: ${tag}; data: { ${variantDataFields} } }`;
     }
     default:
