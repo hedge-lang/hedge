@@ -12,6 +12,226 @@ function push(tokens: Token[], token: Token): number {
   return token.span.end;
 }
 
+function tokenizeEqSymbol(
+    tokens: Token[],
+    n1: string,
+    start: number
+): number {
+  if (n1 === "=")
+    return push(tokens, {
+      kind: "eq_eq",
+      span: { start, end: start + "==".length },
+    });
+  if (n1 === ">")
+    return push(tokens, {
+      kind: "fat_arrow",
+      span: { start, end: start + "=>".length },
+    });
+  return push(tokens, {
+    kind: "eq",
+    span: { start, end: start + "=".length },
+  });
+}
+
+function tokenizeBangSymbol(tokens: Token[], n1: string, start: number): number {
+  if (n1 === "=")
+    return push(tokens, {
+      kind: "bang_eq",
+      span: { start, end: start + "!=".length },
+    });
+  return push(tokens, {
+    kind: "bang",
+    span: { start, end: start + "!".length },
+  });
+}
+
+function tokenizeLtSymbol(tokens: Token[], n1: string, n2: string, start: number): number {
+  if (n1 === "<") {
+    if (n2 === "=")
+      return push(tokens, {
+        kind: "lt_lt_eq",
+        span: { start, end: start + "<<=".length },
+      });
+    return push(tokens, {
+      kind: "lt_lt",
+      span: { start, end: start + "<<".length },
+    });
+  }
+  if (n1 === "=")
+    return push(tokens, {
+      kind: "lt_eq",
+      span: { start, end: start + "<=".length },
+    });
+  return push(tokens, {
+    kind: "lt",
+    span: { start, end: start + "<".length },
+  });
+}
+
+function tokenizeGtSymbol(tokens: Token[], n1: string, n2: string, start: number): number {
+  if (n1 === ">") {
+    if (n2 === "=")
+      return push(tokens, {
+        kind: "gt_gt_eq",
+        span: { start, end: start + ">>=".length },
+      });
+    return push(tokens, {
+      kind: "gt_gt",
+      span: { start, end: start + ">>".length },
+    });
+  }
+  if (n1 === "=")
+    return push(tokens, {
+      kind: "gt_eq",
+      span: { start, end: start + ">=".length },
+    });
+  return push(tokens, {
+    kind: "gt",
+    span: { start, end: start + ">".length },
+  });
+}
+
+function tokenizeAmpSymbol(tokens: Token[], n1: string, start: number): number {
+  if (n1 === "&")
+    return push(tokens, {
+      kind: "amp_amp",
+      span: { start, end: start + "&&".length },
+    });
+  if (n1 === "=")
+    return push(tokens, {
+      kind: "amp_eq",
+      span: { start, end: start + "&=".length },
+    });
+  return push(tokens, {
+    kind: "amp",
+    span: { start, end: start + "&".length },
+  });
+}
+
+function tokenizePipeSymbol(tokens: Token[], n1: string, start: number): number {
+  if (n1 === "|")
+    return push(tokens, {
+      kind: "pipe_pipe",
+      span: { start, end: start + "||".length },
+    });
+  if (n1 === "=")
+    return push(tokens, {
+      kind: "pipe_eq",
+      span: { start, end: start + "|=".length },
+    });
+  return push(tokens, {
+    kind: "pipe",
+    span: { start, end: start + "|".length },
+  });
+}
+
+function tokenizePlusSymbol(tokens: Token[], n1: string, start: number): number {
+  if (n1 === "=")
+    return push(tokens, {
+      kind: "plus_eq",
+      span: { start, end: start + "+=".length },
+    });
+  return push(tokens, {
+    kind: "plus",
+    span: { start, end: start + "+".length },
+  });
+}
+
+function tokenizeMinusSymbol(tokens: Token[], n1: string, start: number): number {
+  if (n1 === ">")
+    return push(tokens, {
+      kind: "arrow",
+      span: { start, end: start + "->".length },
+    });
+  if (n1 === "=")
+    return push(tokens, {
+      kind: "minus_eq",
+      span: { start, end: start + "-=".length },
+    });
+  return push(tokens, {
+    kind: "minus",
+    span: { start, end: start + "-".length },
+  });
+}
+
+function tokenizeStarSymbol(tokens: Token[], n1: string, start: number): number {
+  if (n1 === "=")
+    return push(tokens, {
+      kind: "star_eq",
+      span: { start, end: start + "*=".length },
+    });
+  return push(tokens, {
+    kind: "star",
+    span: { start, end: start + "*".length },
+  });
+}
+
+function tokenizeSlashSymbol(tokens: Token[], n1: string, start: number): number {
+  if (n1 === "=")
+    return push(tokens, {
+      kind: "slash_eq",
+      span: { start, end: start + "/=".length },
+    });
+  return push(tokens, {
+    kind: "slash",
+    span: { start, end: start + "/".length },
+  });
+}
+
+function tokenizePercentSymbol(tokens: Token[], n1: string, start: number): number {
+  if (n1 === "=")
+    return push(tokens, {
+      kind: "slash_eq",
+      span: { start, end: start + "/=".length },
+    });
+  return push(tokens, {
+    kind: "slash",
+    span: { start, end: start + "/".length },
+  });
+}
+
+function tokenizeCaretSymbol(tokens: Token[], n1: string, start: number): number {
+  if (n1 === "=")
+    return push(tokens, {
+      kind: "caret_eq",
+      span: { start, end: start + "^=".length },
+    });
+  return push(tokens, {
+    kind: "caret",
+    span: { start, end: start + "^".length },
+  });
+}
+
+function tokenizeColonSymbol(tokens: Token[], n1: string, start: number): number {
+  if (n1 === ":")
+    return push(tokens, {
+      kind: "path_sep",
+      span: { start, end: start + "::".length },
+    });
+  return push(tokens, {
+    kind: "colon",
+    span: { start, end: start + ":".length },
+  });
+}
+
+function tokenizeDotSymbol(tokens: Token[], n1: string, n2: string, start: number): number {
+  if (n1 === ".") {
+    if (n2 === "=")
+      return push(tokens, {
+        kind: "dot_dot_eq",
+        span: { start, end: start + "..=".length },
+      });
+    return push(tokens, {
+      kind: "dot_dot",
+      span: { start, end: start + "..".length },
+    });
+  }
+  return push(tokens, {
+    kind: "dot",
+    span: { start, end: start + ".".length },
+  });
+}
+
 /**
  * Tokenize the next symbol token using a maximal-munch cascade grouped by
  * leading character. This is the catch-all tokenizer: it always emits a token
@@ -37,207 +257,33 @@ export function tokenizeSymbol(
 
   switch (ch) {
     case "=":
-      if (n1 === "=")
-        return push(tokens, {
-          kind: "eq_eq",
-          span: { start, end: start + "==".length },
-        });
-      if (n1 === ">")
-        return push(tokens, {
-          kind: "fat_arrow",
-          span: { start, end: start + "=>".length },
-        });
-      return push(tokens, {
-        kind: "eq",
-        span: { start, end: start + "=".length },
-      });
-
+      return tokenizeEqSymbol(tokens, n1, start);
     case "!":
-      if (n1 === "=")
-        return push(tokens, {
-          kind: "bang_eq",
-          span: { start, end: start + "!=".length },
-        });
-      return push(tokens, {
-        kind: "bang",
-        span: { start, end: start + "!".length },
-      });
-
+      return tokenizeBangSymbol(tokens, n1, start);
     case "<":
-      if (n1 === "<") {
-        if (n2 === "=")
-          return push(tokens, {
-            kind: "lt_lt_eq",
-            span: { start, end: start + "<<=".length },
-          });
-        return push(tokens, {
-          kind: "lt_lt",
-          span: { start, end: start + "<<".length },
-        });
-      }
-      if (n1 === "=")
-        return push(tokens, {
-          kind: "lt_eq",
-          span: { start, end: start + "<=".length },
-        });
-      return push(tokens, {
-        kind: "lt",
-        span: { start, end: start + "<".length },
-      });
-
+      return tokenizeLtSymbol(tokens, n1, n2, start);
     case ">":
-      if (n1 === ">") {
-        if (n2 === "=")
-          return push(tokens, {
-            kind: "gt_gt_eq",
-            span: { start, end: start + ">>=".length },
-          });
-        return push(tokens, {
-          kind: "gt_gt",
-          span: { start, end: start + ">>".length },
-        });
-      }
-      if (n1 === "=")
-        return push(tokens, {
-          kind: "gt_eq",
-          span: { start, end: start + ">=".length },
-        });
-      return push(tokens, {
-        kind: "gt",
-        span: { start, end: start + ">".length },
-      });
-
+      return tokenizeGtSymbol(tokens, n1, n2, start);
     case "&":
-      if (n1 === "&")
-        return push(tokens, {
-          kind: "amp_amp",
-          span: { start, end: start + "&&".length },
-        });
-      if (n1 === "=")
-        return push(tokens, {
-          kind: "amp_eq",
-          span: { start, end: start + "&=".length },
-        });
-      return push(tokens, {
-        kind: "amp",
-        span: { start, end: start + "&".length },
-      });
-
+      return tokenizeAmpSymbol(tokens, n1, start);
     case "|":
-      if (n1 === "|")
-        return push(tokens, {
-          kind: "pipe_pipe",
-          span: { start, end: start + "||".length },
-        });
-      if (n1 === "=")
-        return push(tokens, {
-          kind: "pipe_eq",
-          span: { start, end: start + "|=".length },
-        });
-      return push(tokens, {
-        kind: "pipe",
-        span: { start, end: start + "|".length },
-      });
-
+      return tokenizePipeSymbol(tokens, n1, start);
     case "+":
-      if (n1 === "=")
-        return push(tokens, {
-          kind: "plus_eq",
-          span: { start, end: start + "+=".length },
-        });
-      return push(tokens, {
-        kind: "plus",
-        span: { start, end: start + "+".length },
-      });
-
+      return tokenizePlusSymbol(tokens, n1, start);
     case "-":
-      if (n1 === ">")
-        return push(tokens, {
-          kind: "arrow",
-          span: { start, end: start + "->".length },
-        });
-      if (n1 === "=")
-        return push(tokens, {
-          kind: "minus_eq",
-          span: { start, end: start + "-=".length },
-        });
-      return push(tokens, {
-        kind: "minus",
-        span: { start, end: start + "-".length },
-      });
-
+      return tokenizeMinusSymbol(tokens, n1, start);
     case "*":
-      if (n1 === "=")
-        return push(tokens, {
-          kind: "star_eq",
-          span: { start, end: start + "*=".length },
-        });
-      return push(tokens, {
-        kind: "star",
-        span: { start, end: start + "*".length },
-      });
-
+      return tokenizeStarSymbol(tokens, n1, start);
     case "/":
-      if (n1 === "=")
-        return push(tokens, {
-          kind: "slash_eq",
-          span: { start, end: start + "/=".length },
-        });
-      return push(tokens, {
-        kind: "slash",
-        span: { start, end: start + "/".length },
-      });
-
+      return tokenizeSlashSymbol(tokens, n1, start);
     case "%":
-      if (n1 === "=")
-        return push(tokens, {
-          kind: "percent_eq",
-          span: { start, end: start + "%=".length },
-        });
-      return push(tokens, {
-        kind: "percent",
-        span: { start, end: start + "%".length },
-      });
-
+      return tokenizePercentSymbol(tokens, n1, start);
     case "^":
-      if (n1 === "=")
-        return push(tokens, {
-          kind: "caret_eq",
-          span: { start, end: start + "^=".length },
-        });
-      return push(tokens, {
-        kind: "caret",
-        span: { start, end: start + "^".length },
-      });
-
+      return tokenizeCaretSymbol(tokens, n1, start);
     case ":":
-      if (n1 === ":")
-        return push(tokens, {
-          kind: "path_sep",
-          span: { start, end: start + "::".length },
-        });
-      return push(tokens, {
-        kind: "colon",
-        span: { start, end: start + ":".length },
-      });
-
+      return tokenizeColonSymbol(tokens, n1, start);
     case ".":
-      if (n1 === ".") {
-        if (n2 === "=")
-          return push(tokens, {
-            kind: "dot_dot_eq",
-            span: { start, end: start + "..=".length },
-          });
-        return push(tokens, {
-          kind: "dot_dot",
-          span: { start, end: start + "..".length },
-        });
-      }
-      return push(tokens, {
-        kind: "dot",
-        span: { start, end: start + ".".length },
-      });
-
+      return tokenizeDotSymbol(tokens, n1, n2, start);
     case "(":
       return push(tokens, {
         kind: "lparen",
