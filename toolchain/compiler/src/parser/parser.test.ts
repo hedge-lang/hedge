@@ -6409,6 +6409,42 @@ describe("trait declarations", (): void => {
       ],
     });
   });
+
+  it("recovers so a sibling trait after a malformed generic trait still parses", (): void => {
+    const { tokens } = tokenize("trait Broken<T: > {} trait Ok {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(program.value.items).toMatchObject([
+      { kind: "Trait", name: { text: "Broken" } },
+      { kind: "Trait", name: { text: "Ok" } },
+    ]);
+  });
+
+  it("recovers so a sibling trait after a malformed where clause still parses", (): void => {
+    const { tokens } = tokenize("trait Foo<T> where T: {} trait Ok {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(program.value.items).toMatchObject([
+      { kind: "Trait", name: { text: "Foo" } },
+      { kind: "Trait", name: { text: "Ok" } },
+    ]);
+  });
+
+  it("parses a trait declared block-locally inside a function body", (): void => {
+    const ast = parseCleanly("fn f() { trait Local {} }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: {
+            statements: [{ kind: "Trait", name: { text: "Local" } }],
+          },
+        },
+      ],
+    });
+  });
 });
 
 describe("impl declarations", (): void => {
@@ -6611,6 +6647,44 @@ describe("impl declarations", (): void => {
       items: [
         { kind: "Impl" },
         { kind: "Function", signature: { name: { text: "bar" } } },
+      ],
+    });
+  });
+
+  it("recovers so a sibling impl after a malformed generic impl still parses", (): void => {
+    const { tokens } = tokenize("impl<T: > Broken {} impl Ok {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    assert(diagnostics[0] !== undefined, "Expected diagnostics");
+    expect(program.value.items).toMatchObject([
+      { kind: "Impl", type: { path: { segments: ["Broken"] } } },
+      { kind: "Impl", type: { path: { segments: ["Ok"] } } },
+    ]);
+  });
+
+  it("recovers so a sibling impl after a malformed where clause still parses", (): void => {
+    const { tokens } = tokenize("impl<T> Foo<T> where T: {} impl Ok {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(program.value.items).toMatchObject([
+      { kind: "Impl", type: { path: { segments: ["Foo"] } } },
+      { kind: "Impl", type: { path: { segments: ["Ok"] } } },
+    ]);
+  });
+
+  it("parses an impl declared block-locally inside a function body", (): void => {
+    const ast = parseCleanly("fn f() { impl Local {} }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          body: {
+            statements: [
+              { kind: "Impl", type: { path: { segments: ["Local"] } } },
+            ],
+          },
+        },
       ],
     });
   });
