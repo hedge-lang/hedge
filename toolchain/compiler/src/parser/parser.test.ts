@@ -6634,6 +6634,16 @@ describe("impl declarations", (): void => {
     );
   });
 
+  it("rejects `pub type`", (): void => {
+    const { tokens } = tokenize("pub type Foo = i32;");
+    const { diagnostics } = parse(tokens);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toBe(
+      "visibility qualifiers are not allowed on a type alias",
+    );
+  });
+
   it("`impl` with no body at EOF fails fast without hanging", (): void => {
     const { tokens } = tokenize("impl");
     const { program, diagnostics } = parse(tokens);
