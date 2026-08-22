@@ -371,3 +371,27 @@ describe("bodiless function signatures", (): void => {
     expect(isNone(result.code)).toBe(true);
   });
 });
+
+describe("trait/impl declarations", (): void => {
+  it("compiles a trait and impl declaration cleanly, erasing both from the emitted JavaScript", (): void => {
+    const result = compile(`
+      trait Draw {
+        fn draw(&self) -> str;
+      }
+      struct Point { x: i32, y: i32 }
+      impl Draw for Point {
+        fn draw(&self) -> str { "point" }
+      }
+      fn main() {
+        print("done");
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    assert(isSome(result.code), "Expected the program to compile");
+    const { javascript } = result.code.value;
+    assert(isSome(javascript), "Expected emitted JavaScript");
+    expect(javascript.value).toContain("function main()");
+    expect(javascript.value).not.toContain("Draw");
+    expect(javascript.value).not.toContain("draw");
+  });
+});
