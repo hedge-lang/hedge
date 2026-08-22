@@ -10,6 +10,7 @@ import type {
   FunctionDef,
   FunctionSignature,
   GenericParam,
+  ImplDecl,
   Item,
   LetStatement,
   Lifetime,
@@ -20,8 +21,11 @@ import type {
   Statement,
   StructBody,
   StructDecl,
+  TraitDecl,
+  TraitItem,
   TupleFieldsBody,
   Type,
+  TypeAliasDecl,
   Variant,
   LifetimeParam,
 } from "./ast.js";
@@ -537,6 +541,109 @@ function elideConstOrStaticDecl<T extends { readonly type: Type }>(
 }
 
 /**
+ * A type alias's own value isn't a function signature, so no rule 1/2
+ * pairing applies to it - an elided reference anywhere in it is resolved
+ * the same no-rule-applies way a struct field's or const's own type is.
+ */
+function elideTypeAliasDecl(
+  decl: TypeAliasDecl,
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+): TypeAliasDecl {
+  if (!isSome(decl.value)) {
+    return decl;
+  }
+  const names = new Set<string>(declaredLifetimeNames(decl.generics));
+  collectTypeLifetimeNames(decl.value.value, names);
+  const synth = createSynthesizer(names);
+  return {
+    ...decl,
+    value: some(
+      resolveNestedReferenceTypes(decl.value.value, tokens, diagnostics, synth),
+    ),
+  };
+}
+
+/**
+ * Each trait item builds its own independent lifetime scope, exactly like a
+ * nested `fn`/`struct` already does - the trait's own generics aren't
+ * threaded down to its items.
+ */
+function elideTraitItem(
+  item: TraitItem,
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+): TraitItem {
+  switch (item.kind) {
+    case "Function":
+      return elideFunction(item, tokens, diagnostics);
+    case "FunctionSignature":
+      return elideFunctionSignatureItem(item, tokens, diagnostics);
+    case "TypeAlias":
+      return elideTypeAliasDecl(item, tokens, diagnostics);
+    case "Const":
+      return elideConstOrStaticDecl(item, tokens, diagnostics);
+    default:
+      return assertNever(
+        item,
+        `Unexpected trait item: ${JSON.stringify(item)}`,
+      );
+  }
+}
+
+function elideTraitDecl(
+  decl: TraitDecl,
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+): TraitDecl {
+  return {
+    ...decl,
+    items: decl.items.map((item) => elideTraitItem(item, tokens, diagnostics)),
+  };
+}
+
+/**
+ * An impl's own target `Type` (and any trait-ref type arguments) isn't a
+ * function signature either, so it gets the same no-rule-applies treatment
+ * as a type alias's value. Each item in the body still builds its own
+ * independent scope via {@link elideItem}, same as `elideTraitItem`.
+ */
+function elideImplDecl(
+  decl: ImplDecl,
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+): ImplDecl {
+  const names = new Set<string>(declaredLifetimeNames(decl.generics));
+  collectTypeLifetimeNames(decl.type, names);
+  if (isSome(decl.traitRef)) {
+    for (const typeArgument of decl.traitRef.value.typeArguments) {
+      collectTypeLifetimeNames(typeArgument, names);
+    }
+  }
+  const synth = createSynthesizer(names);
+  const type = resolveNestedReferenceTypes(
+    decl.type,
+    tokens,
+    diagnostics,
+    synth,
+  );
+  const traitRef = isSome(decl.traitRef)
+    ? some({
+        ...decl.traitRef.value,
+        typeArguments: decl.traitRef.value.typeArguments.map((typeArgument) =>
+          resolveNestedReferenceTypes(typeArgument, tokens, diagnostics, synth),
+        ),
+      })
+    : decl.traitRef;
+  return {
+    ...decl,
+    type,
+    traitRef,
+    items: decl.items.map((item) => elideItem(item, tokens, diagnostics)),
+  };
+}
+
+/**
  * `outerNames` is only ever consulted by the `LetStatement` case (see
  * `elideLetStatement`) - a nested `FunctionDef`/`Struct` builds its own,
  * independent name scope and ignores it, matching Rust's own scoping rules
@@ -565,23 +672,25 @@ function elideStatement(
     case "Static":
       return elideConstOrStaticDecl(stmt, tokens, diagnostics);
     case "Trait":
+      return elideTraitDecl(stmt, tokens, diagnostics);
     case "Impl":
-      return stmt;
+      return elideImplDecl(stmt, tokens, diagnostics);
     default:
       return assertNever(stmt, `Unexpected statement: ${JSON.stringify(stmt)}`);
   }
 }
 
 /**
- * Only `FunctionDef`/`FunctionSignature`/`StructDecl`/`EnumDecl`/`LetStatement`/
- * `ConstDecl`/`StaticDecl` carry `Type` fields that can hold a `ReferenceType` - every
- * other `Item` kind is a bare expression or `ExpressionStatement`, neither
- * of which does. Narrowing to
- * this subset up front (rather than giving `elideStatement` a
- * `default: return item` branch over the full `Item` union) keeps
- * `elideStatement`'s own switch genuinely exhaustive: `Item` includes every
- * `Expression` variant, so a catch-all default there would either need ~20
- * no-op cases or silently accept kinds nobody's checked.
+ * Only `FunctionDef`/`FunctionSignature`/`StructDecl`/`EnumDecl`/`TraitDecl`/
+ * `ImplDecl`/`LetStatement`/`ConstDecl`/`StaticDecl` carry `Type` fields that
+ * can hold a `ReferenceType` (`TraitDecl`/`ImplDecl` transitively, through
+ * their own items) - every other `Item` kind is a bare expression or
+ * `ExpressionStatement`, neither of which does. Narrowing to this subset up
+ * front (rather than giving `elideStatement` a `default: return item` branch
+ * over the full `Item` union) keeps `elideStatement`'s own switch genuinely
+ * exhaustive: `Item` includes every `Expression` variant, so a catch-all
+ * default there would either need ~20 no-op cases or silently accept kinds
+ * nobody's checked.
  *
  * This also means elision deliberately does not descend into arbitrary
  * expression subtrees (an `if`-expression's branches, a call argument, ...)
@@ -598,6 +707,8 @@ function isTypeBearingItem(
   | FunctionSignature
   | StructDecl
   | EnumDecl
+  | TraitDecl
+  | ImplDecl
   | LetStatement
   | ConstDecl
   | StaticDecl {
@@ -606,10 +717,33 @@ function isTypeBearingItem(
     item.kind === "FunctionSignature" ||
     item.kind === "Struct" ||
     item.kind === "Enum" ||
+    item.kind === "Trait" ||
+    item.kind === "Impl" ||
     item.kind === "LetStatement" ||
     item.kind === "Const" ||
     item.kind === "Static"
   );
+}
+
+/**
+ * Entry point for eliding any one `Item` - used both for `program.items`
+ * and, recursively, for an `ImplDecl`'s own general `Item*` body. `TypeAlias`
+ * is handled here rather than in `elideStatement` because it's an `Item`
+ * variant only, not a `Statement` one - a top-level (or impl-nested) type
+ * alias, unlike a trait's own associated `type`, has no enclosing
+ * `TraitItem` dispatch to reach it through.
+ */
+function elideItem(
+  item: Item,
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+): Item {
+  if (item.kind === "TypeAlias") {
+    return elideTypeAliasDecl(item, tokens, diagnostics);
+  }
+  return isTypeBearingItem(item)
+    ? elideStatement(item, tokens, diagnostics, new Set())
+    : item;
 }
 
 /**
@@ -632,9 +766,7 @@ export function elideLifetimes(
   return {
     ...program,
     items: program.items.map((item: Item): Item =>
-      isTypeBearingItem(item)
-        ? elideStatement(item, tokens, diagnostics, new Set())
-        : item,
+      elideItem(item, tokens, diagnostics),
     ),
   };
 }

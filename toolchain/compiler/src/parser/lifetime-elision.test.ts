@@ -388,3 +388,61 @@ describe("lifetime elision on a bodiless function signature", (): void => {
     expect(returnType.lifetime.value.name).toBe(paramType.lifetime.value.name);
   });
 });
+
+describe("lifetime elision reaches trait/impl bodies", (): void => {
+  it("applies rule 1 to a trait method's own reference parameter, with zero diagnostics", (): void => {
+    const { tokens } = tokenize("trait T { fn f(x: &i32); }");
+    const { program, diagnostics } = parse(tokens);
+    expect(diagnostics).toHaveLength(0);
+    assert(isSome(program), "Expected a program to come back");
+    const trait = program.value.items[0];
+    assert(trait?.kind === "Trait", "Expected a Trait item");
+    const method = trait.items[0];
+    assert(method?.kind === "FunctionSignature", "Expected a signature item");
+    const paramType = method.params[0]?.type;
+    assert(paramType?.kind === "ReferenceType", "Expected a reference param");
+    expect(isSome(paramType.lifetime)).toBe(true);
+  });
+
+  it("rejects an elided reference in a trait's own associated type value, since no elision rule applies there", (): void => {
+    const { tokens } = tokenize("trait T { type Item = &i32; }");
+    const { diagnostics } = parse(tokens);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("missing lifetime specifier");
+  });
+
+  it("rejects an elided reference on an impl's own target type, since no elision rule applies to an impl target", (): void => {
+    const { tokens } = tokenize("impl &Foo {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("missing lifetime specifier");
+    assert(isSome(program), "Expected a program to still come back");
+    const impl = program.value.items[0];
+    assert(impl?.kind === "Impl", "Expected an Impl item");
+    assert(impl.type.kind === "ReferenceType", "Expected a reference target");
+    expect(isSome(impl.type.lifetime)).toBe(true);
+  });
+
+  it("applies rule 1 to a method inside a trait nested in an impl body", (): void => {
+    const { tokens } = tokenize("impl Foo { trait Nested { fn f(x: &i32); } }");
+    const { program, diagnostics } = parse(tokens);
+    expect(diagnostics).toHaveLength(0);
+    assert(isSome(program), "Expected a program to come back");
+    const impl = program.value.items[0];
+    assert(impl?.kind === "Impl", "Expected an Impl item");
+    const nestedTrait = impl.items[0];
+    assert(nestedTrait?.kind === "Trait", "Expected a nested Trait item");
+    const method = nestedTrait.items[0];
+    assert(method?.kind === "FunctionSignature", "Expected a signature item");
+    const paramType = method.params[0]?.type;
+    assert(paramType?.kind === "ReferenceType", "Expected a reference param");
+    expect(isSome(paramType.lifetime)).toBe(true);
+  });
+
+  it("rejects an elided reference in a top-level (non-trait) type alias's value", (): void => {
+    const { tokens } = tokenize("type Foo = &i32;");
+    const { diagnostics } = parse(tokens);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toContain("missing lifetime specifier");
+  });
+});
