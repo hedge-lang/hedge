@@ -404,6 +404,20 @@ describe("lifetime elision reaches trait/impl bodies", (): void => {
     expect(isSome(paramType.lifetime)).toBe(true);
   });
 
+  it("applies rule 1 to a trait default method's own reference parameter, with zero diagnostics", (): void => {
+    const { tokens } = tokenize("trait T { fn f(x: &i32) { } }");
+    const { program, diagnostics } = parse(tokens);
+    expect(diagnostics).toHaveLength(0);
+    assert(isSome(program), "Expected a program to come back");
+    const trait = program.value.items[0];
+    assert(trait?.kind === "Trait", "Expected a Trait item");
+    const method = trait.items[0];
+    assert(method?.kind === "Function", "Expected a bodied Function item");
+    const paramType = method.signature.params[0]?.type;
+    assert(paramType?.kind === "ReferenceType", "Expected a reference param");
+    expect(isSome(paramType.lifetime)).toBe(true);
+  });
+
   it("rejects an elided reference in a trait's own associated type value, since no elision rule applies there", (): void => {
     const { tokens } = tokenize("trait T { type Item = &i32; }");
     const { diagnostics } = parse(tokens);
