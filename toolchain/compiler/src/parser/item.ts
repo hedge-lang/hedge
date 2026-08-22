@@ -1716,26 +1716,63 @@ function parseItemList(
 }
 
 /**
- * Parses the impl target: a `Path Generics?` (the shared shape of both a
- * `TraitRef` and a bare `NamedType`) followed by an optional `"for" Type`.
- * Disambiguates the grammar's `(TraitRef "for")? Type` by parsing the
- * `Path Generics?` once and only then checking for `for` - when present, the
- * already-parsed path becomes the `TraitRef` and a fresh `Type` follows;
- * otherwise that same path/generics pair is reinterpreted directly as the
- * inherent impl's own `NamedType` target, with no re-parse needed. An impl
- * target is deliberately narrower than the general `Type` production - every
- * spec/AC example (`impl Point`, `impl<T> Pair<T, T>`, `impl Draw for
- * Point`) is a bare named type either way.
+ * True for a token that can only ever start a `Type`, never a `Path` -
+ * `TraitRef` is strictly `Path Generics?`, so a leading `&`/`[`/`(`/`!`/
+ * `fn`/`dyn` rules out the `TraitRef "for"` alternative entirely and the
+ * target must be an ordinary (non-path-led) `Type`.
  */
-function parseImplTarget(
-  tokens: readonly Token[],
-  diagnostics: Diagnostic[],
-  pos: number,
-): PR<{
+function isNonPathTypeLead(token: Token | undefined): boolean {
+  if (token === undefined) {
+    return false;
+  }
+  if (
+    token.kind === "amp" ||
+    token.kind === "lbracket" ||
+    token.kind === "lparen" ||
+    token.kind === "bang"
+  ) {
+    return true;
+  }
+  return (
+    token.kind === "keyword" && (token.text === "fn" || token.text === "dyn")
+  );
+}
+
+interface ImplTargetResult {
   readonly traitRef: Option<TraitRef>;
   readonly type: Type;
   readonly next: number;
-}> {
+}
+
+/** The target is definitely not `TraitRef "for"` - parse it as an ordinary `Type`. */
+function parseNonPathImplTarget(
+  tokens: readonly Token[],
+  pos: number,
+): PR<ImplTargetResult> {
+  const typeResult = parseType(tokens, pos);
+  if (isErr(typeResult)) {
+    return typeResult;
+  }
+  return ok({
+    traitRef: none(),
+    type: typeResult.value.node,
+    next: typeResult.value.next,
+  });
+}
+
+/**
+ * Parses a `Path Generics?` (the shared shape of both a `TraitRef` and a
+ * bare `NamedType`) and disambiguates the grammar's `(TraitRef "for")? Type`
+ * by checking for `for` only after parsing it - when present, the
+ * already-parsed path becomes the `TraitRef` and a fresh `Type` follows;
+ * otherwise that same path/generics pair is reinterpreted directly as the
+ * inherent impl's own `NamedType` target, with no re-parse needed.
+ */
+function parsePathLedImplTarget(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<ImplTargetResult> {
   const pathStart = pos;
   const pathResult = parsePathSegments(tokens, pathStart);
   if (isErr(pathResult)) {
@@ -1803,6 +1840,22 @@ function parseImplTarget(
     },
     next,
   });
+}
+
+/**
+ * Parses the impl target. A leading token that can't possibly start a
+ * `Path` (`&T`, `[T; N]`, ...) means `TraitRef` never applied in the first
+ * place, so it goes straight to {@link parseNonPathImplTarget}; everything
+ * else needs {@link parsePathLedImplTarget}'s `TraitRef "for"` lookahead.
+ */
+function parseImplTarget(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<ImplTargetResult> {
+  return isNonPathTypeLead(tokens[pos])
+    ? parseNonPathImplTarget(tokens, pos)
+    : parsePathLedImplTarget(tokens, diagnostics, pos);
 }
 
 /**

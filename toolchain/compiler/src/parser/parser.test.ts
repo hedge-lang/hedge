@@ -6471,6 +6471,48 @@ describe("impl declarations", (): void => {
     });
   });
 
+  it("parses an inherent impl whose target is a reference type, not just a bare path", (): void => {
+    const ast = parseCleanly("impl<'a> &'a Foo {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Impl",
+          traitRef: none(),
+          type: {
+            kind: "ReferenceType",
+            mutable: false,
+            referent: { kind: "NamedType", path: { segments: ["Foo"] } },
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses an inherent impl whose target is an array type", (): void => {
+    const ast = parseCleanly("impl [i32; 3] {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Impl",
+          traitRef: none(),
+          type: {
+            kind: "ArrayType",
+            elementType: { kind: "NamedType", path: { segments: ["i32"] } },
+          },
+        },
+      ],
+    });
+  });
+
+  it("still produces the ordinary Slice 1 tuple-type diagnostic for an unsupported impl target, not a confusing path error", (): void => {
+    const { tokens } = tokenize("impl (i32, i32) {}");
+    const { diagnostics } = parse(tokens);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toBe(
+      "tuple types are not supported in Slice 1",
+    );
+  });
+
   it("parses an inherent impl with a method", (): void => {
     const ast = parseCleanly("impl Point { fn area(&self) -> i32 { 0 } }");
     expect(ast).toMatchObject({
