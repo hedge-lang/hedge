@@ -564,6 +564,9 @@ function elideStatement(
     case "Const":
     case "Static":
       return elideConstOrStaticDecl(stmt, tokens, diagnostics);
+    case "Trait":
+    case "Impl":
+      return stmt;
     default:
       return assertNever(stmt, `Unexpected statement: ${JSON.stringify(stmt)}`);
   }

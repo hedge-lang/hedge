@@ -477,6 +477,7 @@ function registerPatternBindings(
  * too, not just in `lowerStatements` - the two dispatches don't share code
  * since one may fork the block chain and the other never does.
  */
+// eslint-disable-next-line complexity -- Routing function over the full Statement union
 function recordConfinedStatement(
   target: MutableBlock,
   scopeStack: ScopeStack,
@@ -500,6 +501,8 @@ function recordConfinedStatement(
     case "FunctionSignature":
     case "Struct":
     case "Enum":
+    case "Trait":
+    case "Impl":
     case "Const":
     case "Static":
       // Local item declarations have no CFG effect in Slice 1 (see the
@@ -764,6 +767,8 @@ function lowerStatements(
       case "FunctionSignature":
       case "Struct":
       case "Enum":
+      case "Trait":
+      case "Impl":
       case "Const":
       case "Static":
         // Local item declarations have no CFG effect in Slice 1: they don't

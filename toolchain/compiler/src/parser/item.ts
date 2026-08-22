@@ -7,9 +7,11 @@ import {
   type Attribute,
   type ConstDecl,
   type EnumDecl,
+  type Expression,
   type FunctionDef,
   type FunctionSignature,
   type GenericParam,
+  type Identifier,
   type Item,
   type NamedFieldsBody,
   type Param,
@@ -19,9 +21,12 @@ import {
   type StructDecl,
   type StructField,
   type TraitBound,
+  type TraitDecl,
+  type TraitItem,
   type TupleField,
   type TupleFieldsBody,
   type Type,
+  type TypeAliasDecl,
   type Variant,
   type Visibility,
   type WhereClause,
@@ -41,6 +46,7 @@ import {
   skipUnsupportedTopLevelItem,
   skipUntilKindBalanced,
   spanAt,
+  tokenAt,
   tryCloseAngleList,
   unsupportedAsyncMessage,
   unsupportedPathKeywordMessage,
@@ -1273,24 +1279,24 @@ function parseEnum(
  * Static ::= "static" Identifier ":" Type "=" Expression ";"
  * ```
  */
-function parseConstOrStatic(
-  kind: "Const" | "Static",
+interface ConstOrStaticBody {
+  readonly name: Identifier;
+  readonly type: Type;
+  readonly value: Expression;
+  readonly next: number;
+}
+
+/**
+ * The shared body of a `const`/`static` declaration, from just past the
+ * leading keyword through the trailing `;` - the two declarations differ
+ * only in that keyword and their own AST `kind` discriminant.
+ */
+function parseConstOrStaticBody(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
-  pos: number,
-  attributes: readonly Attribute[] = [],
-  visibility: Option<Visibility> = none(),
-): PR<Parsed<ConstDecl | StaticDecl>> {
-  const start = pos;
-  const afterKeyword = expectKeyword(
-    tokens,
-    pos,
-    kind === "Const" ? "const" : "static",
-  );
-  if (isErr(afterKeyword)) {
-    return afterKeyword;
-  }
-  const nameResult = parseIdentifier(tokens, afterKeyword.value);
+  afterKeyword: number,
+): PR<ConstOrStaticBody> {
+  const nameResult = parseIdentifier(tokens, afterKeyword);
   if (isErr(nameResult)) {
     return nameResult;
   }
@@ -1323,10 +1329,314 @@ function parseConstOrStatic(
     return afterSemi;
   }
 
+  return ok({ name, type, value, next: afterSemi.value });
+}
+
+/**
+ * Parses a `const` declaration.
+ *
+ * Grammar:
+ *
+ * ```text
+ * Const ::= "const" Identifier ":" Type "=" Expression ";"
+ * ```
+ */
+function parseConst(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  attributes: readonly Attribute[] = [],
+  visibility: Option<Visibility> = none(),
+): PR<Parsed<ConstDecl>> {
+  const start = pos;
+  const afterKeyword = expectKeyword(tokens, pos, "const");
+  if (isErr(afterKeyword)) {
+    return afterKeyword;
+  }
+  const bodyResult = parseConstOrStaticBody(
+    tokens,
+    diagnostics,
+    afterKeyword.value,
+  );
+  if (isErr(bodyResult)) {
+    return bodyResult;
+  }
+  const { name, type, value, next } = bodyResult.value;
   return ok({
-    node: { kind, tokenId: start, visibility, name, type, value, attributes },
+    node: {
+      kind: "Const",
+      tokenId: start,
+      visibility,
+      name,
+      type,
+      value,
+      attributes,
+    },
+    next,
+  });
+}
+
+/**
+ * Parses a `static` declaration.
+ *
+ * Grammar:
+ *
+ * ```text
+ * Static ::= "static" Identifier ":" Type "=" Expression ";"
+ * ```
+ */
+function parseStatic(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  attributes: readonly Attribute[] = [],
+  visibility: Option<Visibility> = none(),
+): PR<Parsed<StaticDecl>> {
+  const start = pos;
+  const afterKeyword = expectKeyword(tokens, pos, "static");
+  if (isErr(afterKeyword)) {
+    return afterKeyword;
+  }
+  const bodyResult = parseConstOrStaticBody(
+    tokens,
+    diagnostics,
+    afterKeyword.value,
+  );
+  if (isErr(bodyResult)) {
+    return bodyResult;
+  }
+  const { name, type, value, next } = bodyResult.value;
+  return ok({
+    node: {
+      kind: "Static",
+      tokenId: start,
+      visibility,
+      name,
+      type,
+      value,
+      attributes,
+    },
+    next,
+  });
+}
+
+/**
+ * Parses a type alias / associated type declaration.
+ *
+ * Grammar:
+ *
+ * ```text
+ * TypeAlias ::= "type" Identifier Generics? ("=" Type)? ";"
+ * ```
+ */
+function parseTypeAlias(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  attributes: readonly Attribute[] = [],
+): PR<Parsed<TypeAliasDecl>> {
+  const start = pos;
+  const afterType = expectKeyword(tokens, pos, "type");
+  if (isErr(afterType)) {
+    return afterType;
+  }
+  const nameResult = parseIdentifier(tokens, afterType.value);
+  if (isErr(nameResult)) {
+    return nameResult;
+  }
+  const genericsResult = parseDeclarationGenerics(
+    tokens,
+    diagnostics,
+    nameResult.value.next,
+  );
+  let cursor = genericsResult.next;
+  let value: Option<Type> = none();
+  if (tokens[cursor]?.kind === "eq") {
+    const typeResult = parseType(tokens, cursor + 1);
+    if (isErr(typeResult)) {
+      return typeResult;
+    }
+    value = some(typeResult.value.node);
+    cursor = typeResult.value.next;
+  }
+  const afterSemi = expect(tokens, cursor, "semi");
+  if (isErr(afterSemi)) {
+    return afterSemi;
+  }
+  return ok({
+    node: {
+      kind: "TypeAlias",
+      tokenId: start,
+      name: nameResult.value.node,
+      generics: genericsResult.generics,
+      value,
+      attributes,
+    },
     next: afterSemi.value,
   });
+}
+
+/**
+ * Parses one trait item.
+ *
+ * Grammar:
+ *
+ * ```text
+ * TraitItem ::= Attribute* (Function | TypeAlias | Const)
+ * ```
+ */
+function parseTraitItem(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<TraitItem>> {
+  const attrResult = collectOuterAttributes(tokens, pos);
+  if (isErr(attrResult)) {
+    return attrResult;
+  }
+  const attributes = attrResult.value.attributes;
+  const cursor = attrResult.value.next;
+
+  const tokenResult = tokenAt(tokens, cursor);
+  if (isErr(tokenResult)) {
+    return tokenResult;
+  }
+  const token = tokenResult.value;
+  if (token.kind === "keyword" && token.text === "fn") {
+    return parseFunction(tokens, diagnostics, cursor, attributes);
+  }
+  if (token.kind === "keyword" && token.text === "type") {
+    return parseTypeAlias(tokens, diagnostics, cursor, attributes);
+  }
+  if (token.kind === "keyword" && token.text === "const") {
+    return parseConst(tokens, diagnostics, cursor, attributes);
+  }
+  const found =
+    token.kind === "keyword" ? `keyword "${token.text}"` : `"${token.kind}"`;
+  return err(
+    errorDiagnostic(
+      "HEDGE-PARSE-001",
+      `expected a function, associated type, or const in trait body, found ${found}`,
+      some(token.span),
+    ),
+  );
+}
+
+/**
+ * Parses the brace-delimited item list of a trait body. Unlike a struct's
+ * field list or an enum's variant list, items here are not comma-separated -
+ * each one self-terminates (`;` for a signature/type alias/const, a block
+ * for a bodied function), matching the top-level item sequence's own shape.
+ */
+function parseTraitItemList(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<readonly TraitItem[]>> {
+  const afterLbrace = expect(tokens, pos, "lbrace");
+  if (isErr(afterLbrace)) {
+    return afterLbrace;
+  }
+  let cursor = afterLbrace.value;
+  const items: TraitItem[] = [];
+  for (;;) {
+    if (
+      kindAt(tokens, cursor) === "rbrace" ||
+      kindAt(tokens, cursor) === "eof"
+    ) {
+      break;
+    }
+    const itemResult = parseTraitItem(tokens, diagnostics, cursor);
+    if (isErr(itemResult)) {
+      return itemResult;
+    }
+    items.push(itemResult.value.node);
+    cursor = itemResult.value.next;
+  }
+  const afterRbrace = expect(tokens, cursor, "rbrace");
+  if (isErr(afterRbrace)) {
+    return afterRbrace;
+  }
+  return ok({ node: items, next: afterRbrace.value });
+}
+
+/**
+ * Parses a trait declaration.
+ *
+ * Grammar:
+ *
+ * ```text
+ * Trait ::= "trait" Identifier Generics? (":" TraitBounds)? WhereClause? "{" TraitItem* "}"
+ * ```
+ */
+function parseTrait(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  attributes: readonly Attribute[] = [],
+  visibility: Option<Visibility> = none(),
+): PR<Parsed<TraitDecl>> {
+  const start = pos;
+  const afterTrait = expectKeyword(tokens, pos, "trait");
+  if (isErr(afterTrait)) {
+    return afterTrait;
+  }
+  const nameResult = parseIdentifier(tokens, afterTrait.value);
+  if (isErr(nameResult)) {
+    return nameResult;
+  }
+  const genericsResult = parseDeclarationGenerics(
+    tokens,
+    diagnostics,
+    nameResult.value.next,
+  );
+  let cursor = genericsResult.next;
+  let supertraits: readonly TraitBound[] = [];
+  if (tokens[cursor]?.kind === "colon") {
+    const boundsResult = parseTraitBounds(tokens, cursor + 1);
+    if (isErr(boundsResult)) {
+      return boundsResult;
+    }
+    supertraits = boundsResult.value.bounds;
+    cursor = boundsResult.value.cursor.next;
+    // A supertrait bound list has no enclosing `<...>` of its own to hand a
+    // leftover half off to, so a pending close here is always a genuine
+    // stray extra `>` (`trait Ord: Eq<T>> {}`) - same treatment
+    // `parseWherePredicate` gives its own trailing bound overflow.
+    if (boundsResult.value.cursor.pendingCloseHalf) {
+      const strayToken = tokens[cursor];
+      diagnostics.push(
+        errorDiagnostic(
+          "HEDGE-PARSE-005",
+          "unexpected extra '>' after supertrait bound",
+          strayToken !== undefined ? some(strayToken.span) : none(),
+        ),
+      );
+      cursor += 1;
+    }
+  }
+  const whereResult = checkWhereClause(
+    tokens,
+    diagnostics,
+    cursor,
+    skipToStructBody,
+  );
+  const itemsResult = parseTraitItemList(tokens, diagnostics, whereResult.next);
+  if (isErr(itemsResult)) {
+    return itemsResult;
+  }
+  const decl: TraitDecl = {
+    kind: "Trait",
+    tokenId: start,
+    visibility,
+    name: nameResult.value.node,
+    generics: genericsResult.generics,
+    supertraits,
+    whereClause: whereResult.whereClause,
+    items: itemsResult.value.node,
+    attributes,
+  };
+  return ok({ node: decl, next: itemsResult.value.next });
 }
 
 const UNSUPPORTED_TOP_LEVEL_KEYWORD_MESSAGES: ReadonlyMap<string, string> =
@@ -1334,7 +1644,6 @@ const UNSUPPORTED_TOP_LEVEL_KEYWORD_MESSAGES: ReadonlyMap<string, string> =
     ["export", "`export` declarations are not supported in Slice 1"],
     ["extern", "`extern` declarations are not supported in Slice 1"],
     ["impl", "`impl` declarations are not supported in Slice 1"],
-    ["trait", "`trait` declarations are not supported in Slice 1"],
     ["use", unsupportedPathKeywordMessage("use")],
     ["mod", unsupportedPathKeywordMessage("mod")],
     ["async", unsupportedAsyncMessage()],
@@ -1405,19 +1714,19 @@ export function parseItem(
       parseEnum(tokens, diagnostics, afterVis, attributes, vis.node),
     );
   }
-  if (
-    token?.kind === "keyword" &&
-    (token.text === "const" || token.text === "static")
-  ) {
+  if (token?.kind === "keyword" && token.text === "trait") {
     return wrapItemResult(
-      parseConstOrStatic(
-        token.text === "const" ? "Const" : "Static",
-        tokens,
-        diagnostics,
-        afterVis,
-        attributes,
-        vis.node,
-      ),
+      parseTrait(tokens, diagnostics, afterVis, attributes, vis.node),
+    );
+  }
+  if (token?.kind === "keyword" && token.text === "const") {
+    return wrapItemResult(
+      parseConst(tokens, diagnostics, afterVis, attributes, vis.node),
+    );
+  }
+  if (token?.kind === "keyword" && token.text === "static") {
+    return wrapItemResult(
+      parseStatic(tokens, diagnostics, afterVis, attributes, vis.node),
     );
   }
   if (token?.kind === "keyword" && token.text === "let") {

@@ -34,6 +34,8 @@ export type Item =
   | FunctionSignature
   | StructDecl
   | EnumDecl
+  | TraitDecl
+  | ImplDecl
   | ConstDecl
   | StaticDecl
   | Statement
@@ -59,6 +61,8 @@ export type Statement =
   | FunctionSignature
   | StructDecl
   | EnumDecl
+  | TraitDecl
+  | ImplDecl
   | ConstDecl
   | StaticDecl;
 
@@ -236,6 +240,19 @@ export interface StaticDecl extends DecoratedAstNode {
   readonly name: Identifier;
   readonly value: Expression;
   readonly attributes: readonly Attribute[];
+}
+
+/**
+ * `trait`/`impl` carry no semantic content yet - trait resolution, coherence,
+ * and witness construction are still open Slice 4 work. These exist only so
+ * `analyzeItem`/`analyzeStatement` stay exhaustive.
+ */
+interface TraitDecl extends AstNode {
+  readonly kind: "Trait";
+}
+
+interface ImplDecl extends AstNode {
+  readonly kind: "Impl";
 }
 
 export type StructBody = NamedFieldsBody | TupleFieldsBody | UnitBody;

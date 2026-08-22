@@ -919,6 +919,7 @@ function parseItem(
     ];
   }
   if (item.kind === "Static") return parseStaticDecl(ctx, item);
+  if (item.kind === "Trait" || item.kind === "Impl") return [];
   return parseExpression(ctx, item);
 }
 
@@ -1317,6 +1318,11 @@ function parseStatement(
     case "Const":
       // Same erasure as a top-level const (see `parseItem`) - every
       // reference already lowered to a literal at analysis time.
+      return [{ kind: "BlockStatement", body: [] }];
+    case "Trait":
+    case "Impl":
+      // Same erasure as a top-level trait/impl (see `parseItem`) - no
+      // semantic content exists to lower yet.
       return [{ kind: "BlockStatement", body: [] }];
     case "Static":
       // The parser rejects `static` in block position (see

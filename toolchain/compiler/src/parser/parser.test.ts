@@ -4160,7 +4160,7 @@ describe("Self as a type", (): void => {
 });
 
 describe("unsupported item keywords", (): void => {
-  it.each(["export", "extern", "impl", "trait"])(
+  it.each(["export", "extern", "impl"])(
     "rejects `%s` with a Slice 1 diagnostic",
     (keyword): void => {
       const { tokens } = tokenize(`${keyword} Foo {}`);
@@ -4181,7 +4181,7 @@ describe("unsupported item keywords", (): void => {
     expect(diagnostics[0].message).toContain("impl");
   });
 
-  it.each(["export", "extern", "impl", "trait"])(
+  it.each(["export", "extern", "impl"])(
     "recovers so a sibling function after a rejected `%s` declaration still parses",
     (keyword): void => {
       const { tokens } = tokenize(`${keyword} Foo {} fn bar() {}`);
@@ -4254,7 +4254,7 @@ describe("unsupported item keywords", (): void => {
     ]);
   });
 
-  it.each(["export", "extern", "impl", "trait", "async", "use", "mod"])(
+  it.each(["export", "extern", "impl", "async", "use", "mod"])(
     "`%s` with no body at EOF fails fast without hanging",
     (keyword): void => {
       const { tokens } = tokenize(keyword);
@@ -4265,24 +4265,21 @@ describe("unsupported item keywords", (): void => {
     },
   );
 
-  it.each(["trait Foo {}", "impl Foo {}"])(
-    "recovers past a redundant trailing semicolon after a rejected `%s`, without a secondary parsing error",
-    (construct): void => {
-      const { tokens } = tokenize(`${construct}; fn bar() {}`);
-      const { program, diagnostics } = parse(tokens);
-      assert(isSome(program), "Expected a program to come back");
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0]?.message).toContain("Slice 1");
-      expect(program.value.items).toMatchObject([
-        {
-          kind: "Function",
-          signature: {
-            name: { text: "bar" },
-          },
+  it("recovers past a redundant trailing semicolon after a rejected `impl Foo {}`, without a secondary parsing error", (): void => {
+    const { tokens } = tokenize("impl Foo {}; fn bar() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain("Slice 1");
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        signature: {
+          name: { text: "bar" },
         },
-      ]);
-    },
-  );
+      },
+    ]);
+  });
 
   it("recovers past a redundant trailing semicolon after a rejected `use`, without a secondary parsing error", (): void => {
     const { tokens } = tokenize("use foo;; fn bar() {}");
@@ -6223,5 +6220,219 @@ describe("loop/while/for guardrail in nested expression position", (): void => {
     assert(loopToken !== undefined, "expected to find the loop token");
     assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
     expect(diagnostics[0].span).toEqual(some(loopToken.span));
+  });
+});
+
+describe("trait declarations", (): void => {
+  function parseCleanly(source: string): Program {
+    const { tokens } = tokenize(source);
+    const { program, diagnostics } = parse(tokens);
+    expect(diagnostics).toEqual([]);
+    assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+    return program.value;
+  }
+
+  it("parses an empty trait declaration", (): void => {
+    const ast = parseCleanly("trait Draw {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Trait",
+          name: { text: "Draw" },
+          generics: [],
+          supertraits: [],
+          items: [],
+        },
+      ],
+    });
+  });
+
+  it("parses a trait with a required (bodiless) method", (): void => {
+    const ast = parseCleanly("trait Draw { fn draw(&self) -> str; }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Trait",
+          name: { text: "Draw" },
+          items: [
+            {
+              kind: "FunctionSignature",
+              name: { text: "draw" },
+              receiver: some({
+                kind: "Receiver",
+                byRef: true,
+                mutable: false,
+              }),
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a trait with a default (bodied) method", (): void => {
+    const ast = parseCleanly(
+      "trait Iterator { fn count(self) -> usize { 0 } }",
+    );
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Trait",
+          name: { text: "Iterator" },
+          items: [
+            {
+              kind: "Function",
+              signature: {
+                name: { text: "count" },
+                receiver: some({
+                  kind: "Receiver",
+                  byRef: false,
+                  mutable: false,
+                }),
+              },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a trait mixing a required method, a default method, and an associated type (the spec's own Iterator example)", (): void => {
+    const ast = parseCleanly(
+      "trait Iterator { type Item; fn next(&mut self) -> Option<Self::Item>; fn count(self) -> usize { 0 } }",
+    );
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Trait",
+          name: { text: "Iterator" },
+          items: [
+            { kind: "TypeAlias", name: { text: "Item" }, value: none() },
+            { kind: "FunctionSignature", name: { text: "next" } },
+            { kind: "Function", signature: { name: { text: "count" } } },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a single supertrait bound", (): void => {
+    const ast = parseCleanly("trait Ord: Eq {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Trait",
+          name: { text: "Ord" },
+          supertraits: [{ kind: "PathTraitBound", path: { segments: ["Eq"] } }],
+        },
+      ],
+    });
+  });
+
+  it("parses a `+`-chained multi-bound supertrait list", (): void => {
+    const ast = parseCleanly("trait Foo: A + B {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Trait",
+          supertraits: [
+            { kind: "PathTraitBound", path: { segments: ["A"] } },
+            { kind: "PathTraitBound", path: { segments: ["B"] } },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a generic trait declaration", (): void => {
+    const ast = parseCleanly("trait Container<T> { fn get(&self) -> T; }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Trait",
+          name: { text: "Container" },
+          generics: [{ kind: "TypeParam", name: { text: "T" } }],
+        },
+      ],
+    });
+  });
+
+  it("parses an associated type declaration with no definition", (): void => {
+    const ast = parseCleanly("trait Iterator { type Item; }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Trait",
+          items: [{ kind: "TypeAlias", name: { text: "Item" }, value: none() }],
+        },
+      ],
+    });
+  });
+
+  it("parses an associated type definition", (): void => {
+    const ast = parseCleanly("trait Foo { type Item = i32; }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Trait",
+          items: [
+            {
+              kind: "TypeAlias",
+              name: { text: "Item" },
+              value: some({ kind: "NamedType", path: { segments: ["i32"] } }),
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses an associated const in a trait body", (): void => {
+    const ast = parseCleanly("trait Foo { const N: i32 = 1; }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Trait",
+          items: [{ kind: "Const", name: { text: "N" } }],
+        },
+      ],
+    });
+  });
+
+  it("parses `pub trait`", (): void => {
+    const ast = parseCleanly("pub trait Draw {}");
+    expect(ast).toMatchObject({
+      items: [{ kind: "Trait", visibility: some({ kind: "Visibility" }) }],
+    });
+  });
+
+  it("rejects a trait item that is not a function, associated type, or const", (): void => {
+    const { tokens } = tokenize("trait Foo { struct Bar; }");
+    const { diagnostics } = parse(tokens);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toBe(
+      'expected a function, associated type, or const in trait body, found keyword "struct"',
+    );
+  });
+
+  it("`trait` with no body at EOF fails fast without hanging", (): void => {
+    const { tokens } = tokenize("trait");
+    const { program, diagnostics } = parse(tokens);
+    assert(isNone(program), "Expected no program to come back");
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toBe(
+      'Expected an identifier, found "eof" at offset 5',
+    );
+  });
+
+  it("skips a redundant trailing semicolon after a trait declaration, with no secondary parsing error", (): void => {
+    const ast = parseCleanly("trait Draw {}; fn bar() {}");
+    expect(ast).toMatchObject({
+      items: [
+        { kind: "Trait", name: { text: "Draw" } },
+        { kind: "Function", signature: { name: { text: "bar" } } },
+      ],
+    });
   });
 });
