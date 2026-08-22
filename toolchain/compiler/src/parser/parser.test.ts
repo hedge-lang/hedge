@@ -4160,7 +4160,7 @@ describe("Self as a type", (): void => {
 });
 
 describe("unsupported item keywords", (): void => {
-  it.each(["export", "extern", "impl"])(
+  it.each(["export", "extern"])(
     "rejects `%s` with a Slice 1 diagnostic",
     (keyword): void => {
       const { tokens } = tokenize(`${keyword} Foo {}`);
@@ -4171,17 +4171,7 @@ describe("unsupported item keywords", (): void => {
     },
   );
 
-  it("rejects impl<'a> Foo<'a> { ... } the same as a plain impl (lifetime generics don't change anything)", (): void => {
-    const { tokens } = tokenize("impl<'a> Foo<'a> { fn m(&'a self) {} }");
-    const { diagnostics } = parse(tokens);
-    expect(diagnostics).toHaveLength(1);
-    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].severity).toBe("error");
-    expect(diagnostics[0].message).toContain("Slice 1");
-    expect(diagnostics[0].message).toContain("impl");
-  });
-
-  it.each(["export", "extern", "impl"])(
+  it.each(["export", "extern"])(
     "recovers so a sibling function after a rejected `%s` declaration still parses",
     (keyword): void => {
       const { tokens } = tokenize(`${keyword} Foo {} fn bar() {}`);
@@ -4254,7 +4244,7 @@ describe("unsupported item keywords", (): void => {
     ]);
   });
 
-  it.each(["export", "extern", "impl", "async", "use", "mod"])(
+  it.each(["export", "extern", "async", "use", "mod"])(
     "`%s` with no body at EOF fails fast without hanging",
     (keyword): void => {
       const { tokens } = tokenize(keyword);
@@ -4264,22 +4254,6 @@ describe("unsupported item keywords", (): void => {
       expect(diagnostics[0].message).toContain("end of input");
     },
   );
-
-  it("recovers past a redundant trailing semicolon after a rejected `impl Foo {}`, without a secondary parsing error", (): void => {
-    const { tokens } = tokenize("impl Foo {}; fn bar() {}");
-    const { program, diagnostics } = parse(tokens);
-    assert(isSome(program), "Expected a program to come back");
-    expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Slice 1");
-    expect(program.value.items).toMatchObject([
-      {
-        kind: "Function",
-        signature: {
-          name: { text: "bar" },
-        },
-      },
-    ]);
-  });
 
   it("recovers past a redundant trailing semicolon after a rejected `use`, without a secondary parsing error", (): void => {
     const { tokens } = tokenize("use foo;; fn bar() {}");

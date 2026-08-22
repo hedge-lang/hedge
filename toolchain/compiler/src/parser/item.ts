@@ -12,6 +12,7 @@ import {
   type FunctionSignature,
   type GenericParam,
   type Identifier,
+  type ImplDecl,
   type Item,
   type NamedFieldsBody,
   type Param,
@@ -23,6 +24,7 @@ import {
   type TraitBound,
   type TraitDecl,
   type TraitItem,
+  type TraitRef,
   type TupleField,
   type TupleFieldsBody,
   type Type,
@@ -1639,11 +1641,201 @@ function parseTrait(
   return ok({ node: decl, next: itemsResult.value.next });
 }
 
+/**
+ * Parses the brace-delimited item list of an impl body - the grammar's own
+ * general `Item*`, unlike a trait body's narrower `TraitItem` set. Reuses
+ * `parseItem`, the same top-level item dispatch `parser.ts`'s own loop
+ * calls, including its lone-`;` skip.
+ */
+function parseItemList(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<readonly Item[]>> {
+  const afterLbrace = expect(tokens, pos, "lbrace");
+  if (isErr(afterLbrace)) {
+    return afterLbrace;
+  }
+  let cursor = afterLbrace.value;
+  const items: Item[] = [];
+  for (;;) {
+    if (
+      kindAt(tokens, cursor) === "rbrace" ||
+      kindAt(tokens, cursor) === "eof"
+    ) {
+      break;
+    }
+    if (kindAt(tokens, cursor) === "semi") {
+      cursor += 1;
+      continue;
+    }
+    const itemResult = parseItem(tokens, diagnostics, cursor);
+    if (isErr(itemResult)) {
+      return itemResult;
+    }
+    cursor = itemResult.value.next;
+    if (isSome(itemResult.value.node)) {
+      items.push(itemResult.value.node.value);
+    }
+  }
+  const afterRbrace = expect(tokens, cursor, "rbrace");
+  if (isErr(afterRbrace)) {
+    return afterRbrace;
+  }
+  return ok({ node: items, next: afterRbrace.value });
+}
+
+/**
+ * Parses the impl target: a `Path Generics?` (the shared shape of both a
+ * `TraitRef` and a bare `NamedType`) followed by an optional `"for" Type`.
+ * Disambiguates the grammar's `(TraitRef "for")? Type` by parsing the
+ * `Path Generics?` once and only then checking for `for` - when present, the
+ * already-parsed path becomes the `TraitRef` and a fresh `Type` follows;
+ * otherwise that same path/generics pair is reinterpreted directly as the
+ * inherent impl's own `NamedType` target, with no re-parse needed. An impl
+ * target is deliberately narrower than the general `Type` production - every
+ * spec/AC example (`impl Point`, `impl<T> Pair<T, T>`, `impl Draw for
+ * Point`) is a bare named type either way.
+ */
+function parseImplTarget(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<{
+  readonly traitRef: Option<TraitRef>;
+  readonly type: Type;
+  readonly next: number;
+}> {
+  const pathStart = pos;
+  const pathResult = parsePathSegments(tokens, pathStart);
+  if (isErr(pathResult)) {
+    return pathResult;
+  }
+  let cursor: GenericsCursor = {
+    next: pathResult.value.next,
+    pendingCloseHalf: false,
+  };
+  let typeArguments: readonly Type[] = [];
+  if (tokens[cursor.next]?.kind === "lt") {
+    const argsResult = parseTypeArgumentList(tokens, cursor.next);
+    if (isErr(argsResult)) {
+      return argsResult;
+    }
+    typeArguments = argsResult.value.typeArguments;
+    cursor = argsResult.value.cursor;
+  }
+
+  const forToken = tokens[cursor.next];
+  if (
+    !cursor.pendingCloseHalf &&
+    forToken?.kind === "keyword" &&
+    forToken.text === "for"
+  ) {
+    const typeResult = parseType(tokens, cursor.next + 1);
+    if (isErr(typeResult)) {
+      return typeResult;
+    }
+    return ok({
+      traitRef: some({
+        kind: "TraitRef",
+        tokenId: pathStart,
+        path: pathResult.value.node,
+        typeArguments,
+      }),
+      type: typeResult.value.node,
+      next: typeResult.value.next,
+    });
+  }
+
+  // A trait ref's own `<...>` list has no enclosing list to hand a leftover
+  // half off to, so a pending close here is always a genuine stray extra
+  // `>` (`impl Foo<T>> {}`) - same treatment `parseWherePredicate` gives its
+  // own trailing bound overflow.
+  let next = cursor.next;
+  if (cursor.pendingCloseHalf) {
+    const strayToken = tokens[next];
+    diagnostics.push(
+      errorDiagnostic(
+        "HEDGE-PARSE-005",
+        "unexpected extra '>' after impl target type",
+        strayToken !== undefined ? some(strayToken.span) : none(),
+      ),
+    );
+    next += 1;
+  }
+  return ok({
+    traitRef: none(),
+    type: {
+      kind: "NamedType",
+      tokenId: pathStart,
+      path: pathResult.value.node,
+      typeArguments,
+    },
+    next,
+  });
+}
+
+/**
+ * Parses an impl declaration.
+ *
+ * Grammar:
+ *
+ * ```text
+ * Impl     ::= "impl" Generics? (TraitRef "for")? Type WhereClause? "{" Item* "}"
+ * TraitRef ::= Path Generics?
+ * ```
+ */
+function parseImpl(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  attributes: readonly Attribute[] = [],
+): PR<Parsed<ImplDecl>> {
+  const start = pos;
+  const afterImpl = expectKeyword(tokens, pos, "impl");
+  if (isErr(afterImpl)) {
+    return afterImpl;
+  }
+  const genericsResult = parseDeclarationGenerics(
+    tokens,
+    diagnostics,
+    afterImpl.value,
+  );
+  const targetResult = parseImplTarget(
+    tokens,
+    diagnostics,
+    genericsResult.next,
+  );
+  if (isErr(targetResult)) {
+    return targetResult;
+  }
+  const whereResult = checkWhereClause(
+    tokens,
+    diagnostics,
+    targetResult.value.next,
+    skipToStructBody,
+  );
+  const itemsResult = parseItemList(tokens, diagnostics, whereResult.next);
+  if (isErr(itemsResult)) {
+    return itemsResult;
+  }
+  const decl: ImplDecl = {
+    kind: "Impl",
+    tokenId: start,
+    generics: genericsResult.generics,
+    traitRef: targetResult.value.traitRef,
+    type: targetResult.value.type,
+    whereClause: whereResult.whereClause,
+    items: itemsResult.value.node,
+    attributes,
+  };
+  return ok({ node: decl, next: itemsResult.value.next });
+}
+
 const UNSUPPORTED_TOP_LEVEL_KEYWORD_MESSAGES: ReadonlyMap<string, string> =
   new Map([
     ["export", "`export` declarations are not supported in Slice 1"],
     ["extern", "`extern` declarations are not supported in Slice 1"],
-    ["impl", "`impl` declarations are not supported in Slice 1"],
     ["use", unsupportedPathKeywordMessage("use")],
     ["mod", unsupportedPathKeywordMessage("mod")],
     ["async", unsupportedAsyncMessage()],
@@ -1718,6 +1910,34 @@ export function parseItem(
     return wrapItemResult(
       parseTrait(tokens, diagnostics, afterVis, attributes, vis.node),
     );
+  }
+  if (token?.kind === "keyword" && token.text === "type") {
+    if (afterVis > cursor) {
+      const visToken = tokens[cursor];
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-006",
+          "visibility qualifiers are not allowed on a type alias",
+          visToken !== undefined ? some(visToken.span) : none(),
+        ),
+      );
+    }
+    return wrapItemResult(
+      parseTypeAlias(tokens, diagnostics, afterVis, attributes),
+    );
+  }
+  if (token?.kind === "keyword" && token.text === "impl") {
+    if (afterVis > cursor) {
+      const visToken = tokens[cursor];
+      return err(
+        errorDiagnostic(
+          "HEDGE-PARSE-006",
+          "visibility qualifiers are not allowed on impl blocks",
+          visToken !== undefined ? some(visToken.span) : none(),
+        ),
+      );
+    }
+    return wrapItemResult(parseImpl(tokens, diagnostics, afterVis, attributes));
   }
   if (token?.kind === "keyword" && token.text === "const") {
     return wrapItemResult(

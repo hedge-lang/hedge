@@ -3034,6 +3034,8 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
       return { kind: "Trait", tokenId: item.tokenId };
     case "Impl":
       return { kind: "Impl", tokenId: item.tokenId };
+    case "TypeAlias":
+      return { kind: "TypeAlias", tokenId: item.tokenId };
     case "Const":
       return analyzeConstStatement(ctx, item);
     case "Static":

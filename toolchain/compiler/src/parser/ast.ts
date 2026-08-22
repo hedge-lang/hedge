@@ -30,6 +30,7 @@ export type Item =
   | EnumDecl
   | TraitDecl
   | ImplDecl
+  | TypeAliasDecl
   | ConstDecl
   | StaticDecl
   | Statement

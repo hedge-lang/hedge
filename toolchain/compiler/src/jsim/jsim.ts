@@ -882,6 +882,7 @@ function hedgeTypeToNumericKind(
   }
 }
 
+// eslint-disable-next-line complexity -- Routing function over the full Item union
 function parseItem(
   ctx: JsimContext,
   item: Semantics.Item,
@@ -919,7 +920,12 @@ function parseItem(
     ];
   }
   if (item.kind === "Static") return parseStaticDecl(ctx, item);
-  if (item.kind === "Trait" || item.kind === "Impl") return [];
+  if (
+    item.kind === "Trait" ||
+    item.kind === "Impl" ||
+    item.kind === "TypeAlias"
+  )
+    return [];
   return parseExpression(ctx, item);
 }
 

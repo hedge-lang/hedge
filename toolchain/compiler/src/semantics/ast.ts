@@ -36,6 +36,7 @@ export type Item =
   | EnumDecl
   | TraitDecl
   | ImplDecl
+  | TypeAliasDecl
   | ConstDecl
   | StaticDecl
   | Statement
@@ -253,6 +254,11 @@ interface TraitDecl extends AstNode {
 
 interface ImplDecl extends AstNode {
   readonly kind: "Impl";
+}
+
+/** Same rationale as `TraitDecl`/`ImplDecl` above. */
+interface TypeAliasDecl extends AstNode {
+  readonly kind: "TypeAlias";
 }
 
 export type StructBody = NamedFieldsBody | TupleFieldsBody | UnitBody;
