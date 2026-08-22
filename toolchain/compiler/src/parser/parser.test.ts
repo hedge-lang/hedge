@@ -6436,3 +6436,208 @@ describe("trait declarations", (): void => {
     });
   });
 });
+
+describe("impl declarations", (): void => {
+  function parseCleanly(source: string): Program {
+    const { tokens } = tokenize(source);
+    const { program, diagnostics } = parse(tokens);
+    expect(diagnostics).toEqual([]);
+    assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+    return program.value;
+  }
+
+  it("parses an empty inherent impl", (): void => {
+    const ast = parseCleanly("impl Point {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Impl",
+          generics: [],
+          traitRef: none(),
+          type: { kind: "NamedType", path: { segments: ["Point"] } },
+          items: [],
+        },
+      ],
+    });
+  });
+
+  it("parses an inherent impl with a method", (): void => {
+    const ast = parseCleanly("impl Point { fn area(&self) -> i32 { 0 } }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Impl",
+          traitRef: none(),
+          type: { kind: "NamedType", path: { segments: ["Point"] } },
+          items: [
+            {
+              kind: "Function",
+              signature: { name: { text: "area" } },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a generic inherent impl (the spec's own Pair<T, T> example)", (): void => {
+    const ast = parseCleanly("impl<T> Pair<T, T> {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Impl",
+          generics: [{ kind: "TypeParam", name: { text: "T" } }],
+          traitRef: none(),
+          type: {
+            kind: "NamedType",
+            path: { segments: ["Pair"] },
+            typeArguments: [
+              { kind: "NamedType", path: { segments: ["T"] } },
+              { kind: "NamedType", path: { segments: ["T"] } },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses a trait impl", (): void => {
+    const ast = parseCleanly(
+      'impl Draw for Point { fn draw(&self) -> str { "" } }',
+    );
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Impl",
+          traitRef: some({
+            kind: "TraitRef",
+            path: { segments: ["Draw"] },
+          }),
+          type: { kind: "NamedType", path: { segments: ["Point"] } },
+          items: [{ kind: "Function", signature: { name: { text: "draw" } } }],
+        },
+      ],
+    });
+  });
+
+  it("parses a blanket impl (`impl<T: A> B for T`)", (): void => {
+    const ast = parseCleanly("impl<T: A> B for T {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Impl",
+          generics: [
+            {
+              kind: "TypeParam",
+              name: { text: "T" },
+              bounds: [{ kind: "PathTraitBound", path: { segments: ["A"] } }],
+            },
+          ],
+          traitRef: some({ kind: "TraitRef", path: { segments: ["B"] } }),
+          type: { kind: "NamedType", path: { segments: ["T"] } },
+        },
+      ],
+    });
+  });
+
+  it("parses a blanket impl with a where clause", (): void => {
+    const ast = parseCleanly("impl<T> Foo for T where T: Bar {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Impl",
+          traitRef: some({ kind: "TraitRef", path: { segments: ["Foo"] } }),
+          type: { kind: "NamedType", path: { segments: ["T"] } },
+          whereClause: some({
+            kind: "WhereClause",
+            predicates: [
+              {
+                kind: "WherePredicate",
+                bounds: [
+                  { kind: "PathTraitBound", path: { segments: ["Bar"] } },
+                ],
+              },
+            ],
+          }),
+        },
+      ],
+    });
+  });
+
+  it("parses an associated const inside an impl body", (): void => {
+    const ast = parseCleanly("impl Foo { const N: i32 = 1; }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Impl",
+          items: [{ kind: "Const", name: { text: "N" } }],
+        },
+      ],
+    });
+  });
+
+  it("parses an associated type definition inside a trait impl", (): void => {
+    const ast = parseCleanly(
+      "impl Iterator for Counter { type Item = i32; fn next(&mut self) -> Option<i32> { None } }",
+    );
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Impl",
+          items: [
+            {
+              kind: "TypeAlias",
+              name: { text: "Item" },
+              value: some({ kind: "NamedType", path: { segments: ["i32"] } }),
+            },
+            { kind: "Function", signature: { name: { text: "next" } } },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("parses a trait and an impl nested inside an impl body (the general Item* body)", (): void => {
+    const ast = parseCleanly(
+      "impl Foo { trait Nested {} impl Nested for i32 {} }",
+    );
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Impl",
+          items: [
+            { kind: "Trait", name: { text: "Nested" } },
+            { kind: "Impl", traitRef: some({ kind: "TraitRef" }) },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("rejects `pub impl`", (): void => {
+    const { tokens } = tokenize("pub impl Foo {}");
+    const { diagnostics } = parse(tokens);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toBe(
+      "visibility qualifiers are not allowed on impl blocks",
+    );
+  });
+
+  it("`impl` with no body at EOF fails fast without hanging", (): void => {
+    const { tokens } = tokenize("impl");
+    const { program, diagnostics } = parse(tokens);
+    assert(isNone(program), "Expected no program to come back");
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+  });
+
+  it("skips a redundant trailing semicolon after an impl declaration, with no secondary parsing error", (): void => {
+    const ast = parseCleanly("impl Foo {}; fn bar() {}");
+    expect(ast).toMatchObject({
+      items: [
+        { kind: "Impl" },
+        { kind: "Function", signature: { name: { text: "bar" } } },
+      ],
+    });
+  });
+});
