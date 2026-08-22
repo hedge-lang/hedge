@@ -1642,10 +1642,29 @@ function parseTrait(
 }
 
 /**
+ * `Impl`'s own `Item*` production means an `ItemKind` declaration, never
+ * the `let`/bare-expression leniency `parseItem` also accepts at the
+ * top level and in block position - that leniency is a Slice-1 carve-out
+ * for those two positions specifically, not part of `ItemKind` itself.
+ */
+const IMPL_ITEM_KINDS: ReadonlySet<string> = new Set([
+  "Function",
+  "FunctionSignature",
+  "Struct",
+  "Enum",
+  "Trait",
+  "Impl",
+  "TypeAlias",
+  "Const",
+  "Static",
+]);
+
+/**
  * Parses the brace-delimited item list of an impl body - the grammar's own
  * general `Item*`, unlike a trait body's narrower `TraitItem` set. Reuses
  * `parseItem`, the same top-level item dispatch `parser.ts`'s own loop
- * calls, including its lone-`;` skip.
+ * calls, including its lone-`;` skip, but rejects any node it returns
+ * outside `IMPL_ITEM_KINDS`.
  */
 function parseItemList(
   tokens: readonly Token[],
@@ -1675,7 +1694,18 @@ function parseItemList(
     }
     cursor = itemResult.value.next;
     if (isSome(itemResult.value.node)) {
-      items.push(itemResult.value.node.value);
+      const node = itemResult.value.node.value;
+      if (!IMPL_ITEM_KINDS.has(node.kind)) {
+        const token = tokens[node.tokenId];
+        return err(
+          errorDiagnostic(
+            "HEDGE-PARSE-006",
+            `unexpected item kind '${node.kind}' in impl body`,
+            token !== undefined ? some(token.span) : none(),
+          ),
+        );
+      }
+      items.push(node);
     }
   }
   const afterRbrace = expect(tokens, cursor, "rbrace");

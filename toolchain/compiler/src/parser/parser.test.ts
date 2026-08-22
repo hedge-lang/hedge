@@ -6586,6 +6586,26 @@ describe("impl declarations", (): void => {
     });
   });
 
+  it("rejects a let statement inside an impl body, since Impl's grammar is Item* (declarations only)", (): void => {
+    const { tokens } = tokenize("impl Foo { let x = 1; }");
+    const { diagnostics } = parse(tokens);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toBe(
+      "unexpected item kind 'LetStatement' in impl body",
+    );
+  });
+
+  it("rejects a bare expression statement inside an impl body", (): void => {
+    const { tokens } = tokenize("impl Foo { x; }");
+    const { diagnostics } = parse(tokens);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(diagnostics[0].message).toBe(
+      "unexpected item kind 'ExpressionStatement' in impl body",
+    );
+  });
+
   it("parses an associated type definition inside a trait impl", (): void => {
     const ast = parseCleanly(
       "impl Iterator for Counter { type Item = i32; fn next(&mut self) -> Option<i32> { None } }",
