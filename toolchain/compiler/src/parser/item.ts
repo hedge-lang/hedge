@@ -1933,17 +1933,6 @@ function unsupportedTopLevelKeywordMessage(keyword: string): Option<string> {
   return messageFor === undefined ? none() : some(messageFor);
 }
 
-/**
- * Parses a top-level item.
- *
- * Supported slice-1 items:
- *
- * - Function declarations
- * - Struct declarations (named-field, tuple, and unit forms)
- * - Let statements
- * - Expression statements
- * - Bare expressions
- */
 /** Bubbles a per-element parse's own error, or wraps its success as the `Option<Item>` shape every branch below needs. */
 function wrapItemResult(result: PR<Parsed<Item>>): PR<Parsed<Option<Item>>> {
   if (isErr(result)) {
@@ -1977,9 +1966,26 @@ function rejectVisibility(
   );
 }
 
+type VisibleDeclarationParser = (
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  attributes: readonly Attribute[],
+  visibility: Option<Visibility>,
+) => PR<Parsed<Item>>;
+
+/** The top-level keywords that accept a leading `pub` uniformly. */
+const VISIBLE_DECLARATION_PARSERS = new Map<string, VisibleDeclarationParser>([
+  ["fn", parseFunction],
+  ["struct", parseStruct],
+  ["enum", parseEnum],
+  ["trait", parseTrait],
+  ["const", parseConst],
+  ["static", parseStatic],
+]);
+
 /**
- * Dispatches `fn`/`struct`/`enum`/`trait`/`const`/`static` - the top-level
- * keywords that accept a leading `pub` uniformly. `none()` means `token`
+ * Dispatches via {@link VISIBLE_DECLARATION_PARSERS}. `none()` means `token`
  * isn't one of them, so the caller should try the next candidate.
  */
 function parseVisibleDeclarationItem(
@@ -1993,55 +1999,58 @@ function parseVisibleDeclarationItem(
   if (token.kind !== "keyword") {
     return none();
   }
-  if (token.text === "fn") {
-    return some(
-      wrapItemResult(
-        parseFunction(tokens, diagnostics, afterVis, attributes, visibility),
-      ),
-    );
+  const parseDeclaration = VISIBLE_DECLARATION_PARSERS.get(token.text);
+  if (parseDeclaration === undefined) {
+    return none();
   }
-  if (token.text === "struct") {
-    return some(
-      wrapItemResult(
-        parseStruct(tokens, diagnostics, afterVis, attributes, visibility),
-      ),
-    );
-  }
-  if (token.text === "enum") {
-    return some(
-      wrapItemResult(
-        parseEnum(tokens, diagnostics, afterVis, attributes, visibility),
-      ),
-    );
-  }
-  if (token.text === "trait") {
-    return some(
-      wrapItemResult(
-        parseTrait(tokens, diagnostics, afterVis, attributes, visibility),
-      ),
-    );
-  }
-  if (token.text === "const") {
-    return some(
-      wrapItemResult(
-        parseConst(tokens, diagnostics, afterVis, attributes, visibility),
-      ),
-    );
-  }
-  if (token.text === "static") {
-    return some(
-      wrapItemResult(
-        parseStatic(tokens, diagnostics, afterVis, attributes, visibility),
-      ),
-    );
-  }
-  return none();
+  return some(
+    wrapItemResult(
+      parseDeclaration(tokens, diagnostics, afterVis, attributes, visibility),
+    ),
+  );
 }
 
+type NoVisibilityParser = (
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  attributes: readonly Attribute[],
+) => PR<Parsed<Item>>;
+
+interface NoVisibilityEntry {
+  readonly rejectionMessage: string;
+  readonly parse: NoVisibilityParser;
+}
+
+/** The top-level keywords that reject a leading `pub` outright. */
+const NO_VISIBILITY_PARSERS = new Map<string, NoVisibilityEntry>([
+  [
+    "type",
+    {
+      rejectionMessage: "visibility qualifiers are not allowed on a type alias",
+      parse: parseTypeAlias,
+    },
+  ],
+  [
+    "impl",
+    {
+      rejectionMessage: "visibility qualifiers are not allowed on impl blocks",
+      parse: parseImpl,
+    },
+  ],
+  [
+    "let",
+    {
+      rejectionMessage:
+        "visibility qualifiers are not allowed on let statements",
+      parse: parseLetStatement,
+    },
+  ],
+]);
+
 /**
- * Dispatches `type`/`impl`/`let` - the top-level items that reject a
- * leading `pub` outright. `none()` means `token` isn't one of them, so the
- * caller should try the next candidate.
+ * Dispatches via {@link NO_VISIBILITY_PARSERS}. `none()` means `token` isn't
+ * one of them, so the caller should try the next candidate.
  */
 function parseNoVisibilityItem(
   tokens: readonly Token[],
@@ -2054,50 +2063,21 @@ function parseNoVisibilityItem(
   if (token.kind !== "keyword") {
     return none();
   }
-  if (token.text === "type") {
-    const rejected = rejectVisibility(
-      tokens,
-      cursor,
-      afterVis,
-      "visibility qualifiers are not allowed on a type alias",
-    );
-    return some(
-      isErr(rejected)
-        ? rejected
-        : wrapItemResult(
-            parseTypeAlias(tokens, diagnostics, afterVis, attributes),
-          ),
-    );
+  const entry = NO_VISIBILITY_PARSERS.get(token.text);
+  if (entry === undefined) {
+    return none();
   }
-  if (token.text === "impl") {
-    const rejected = rejectVisibility(
-      tokens,
-      cursor,
-      afterVis,
-      "visibility qualifiers are not allowed on impl blocks",
-    );
-    return some(
-      isErr(rejected)
-        ? rejected
-        : wrapItemResult(parseImpl(tokens, diagnostics, afterVis, attributes)),
-    );
-  }
-  if (token.text === "let") {
-    const rejected = rejectVisibility(
-      tokens,
-      cursor,
-      afterVis,
-      "visibility qualifiers are not allowed on let statements",
-    );
-    return some(
-      isErr(rejected)
-        ? rejected
-        : wrapItemResult(
-            parseLetStatement(tokens, diagnostics, afterVis, attributes),
-          ),
-    );
-  }
-  return none();
+  const rejected = rejectVisibility(
+    tokens,
+    cursor,
+    afterVis,
+    entry.rejectionMessage,
+  );
+  return some(
+    isErr(rejected)
+      ? rejected
+      : wrapItemResult(entry.parse(tokens, diagnostics, afterVis, attributes)),
+  );
 }
 
 /**
