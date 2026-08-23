@@ -1012,6 +1012,18 @@ describe("execution tests", (): void => {
     });
   });
 
+  describe("generic call-site type inference", (): void => {
+    it("infers a generic parameter from a single argument, with no annotation", (): void => {
+      assertRunsTo(
+        `
+        fn identity<T>(x: T) -> T { x }
+        fn main() { print(identity(5)); }
+        `,
+        ["5"],
+      );
+    });
+  });
+
   describe("unused generic type parameters on a struct or enum", (): void => {
     it("rejects a struct's own type parameter that appears in none of its fields", (): void => {
       const result = compileHedgeCode(`struct Triple<A, B, C> { a: A, c: C }`);
