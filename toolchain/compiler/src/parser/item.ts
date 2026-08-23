@@ -1,5 +1,5 @@
 import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
-import type { Token } from "../lexer/token.js";
+import type { Token, TokenKind } from "../lexer/token.js";
 import { isSome, none, some, unwrapSomeOr, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import {
@@ -228,6 +228,69 @@ function parseLeadingReceiver(
   );
 }
 
+interface CommaListBody<T> {
+  readonly items: readonly T[];
+  readonly next: number;
+}
+
+/**
+ * Parses a comma-separated element list up to (not including) `close` -
+ * shared by every declaration's own bracketed element list (params, struct/
+ * tuple fields, enum variants). On a malformed element, recovers by
+ * skipping to the next comma or `close` and pushing the diagnostic, unless
+ * it's a guardrail diagnostic (see `isGuardrailDiagnostic`), which bubbles
+ * out fail-fast instead. `pos` is already past the opening delimiter and
+ * any construct-specific prefix (e.g. `parseParams`' own leading receiver);
+ * the caller still owns consuming/validating `close` itself, since that
+ * varies (`parseVariantList`'s own item-start-keyword recovery, for one).
+ */
+function parseCommaListBody<T>(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  close: TokenKind,
+  parseElement: (tokens: readonly Token[], pos: number) => PR<Parsed<T>>,
+): PR<CommaListBody<T>> {
+  let cursor = pos;
+  const items: T[] = [];
+
+  for (;;) {
+    // The `eof` check avoids attempting (and separately diagnosing) an
+    // element parse when nothing remains - the caller's own `expect(close)`
+    // already produces the single, correct "found end of input" diagnostic
+    // for a truncated list; without this, both would fire redundantly.
+    if (kindAt(tokens, cursor) === close || kindAt(tokens, cursor) === "eof") {
+      break;
+    }
+    const elementStart = cursor;
+    const elementResult = parseElement(tokens, elementStart);
+
+    if (isErr(elementResult)) {
+      if (isGuardrailDiagnostic(elementResult.error)) {
+        return elementResult;
+      }
+      diagnostics.push(elementResult.error);
+      cursor = skipUntilKindBalanced(tokens, elementStart, "comma", close);
+      if (kindAt(tokens, cursor) === "comma") {
+        cursor += 1;
+        continue;
+      }
+      break;
+    }
+
+    items.push(elementResult.value.node);
+    cursor = elementResult.value.next;
+
+    if (kindAt(tokens, cursor) === "comma") {
+      cursor += 1;
+    } else {
+      break;
+    }
+  }
+
+  return ok({ items, next: cursor });
+}
+
 function parseParams(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -243,52 +306,26 @@ function parseParams(
     return leadingReceiver;
   }
   const { receiver, next: leadingNext } = leadingReceiver.value;
-  let cursor = leadingNext;
 
-  const params: Param[] = [];
-
-  for (;;) {
-    // The `eof` check avoids attempting (and separately diagnosing) an
-    // element parse when nothing remains - the outer `expect(rparen)` below
-    // already produces the single, correct "found end of input" diagnostic
-    // for a truncated list; without this, both would fire redundantly.
-    if (
-      kindAt(tokens, cursor) === "rparen" ||
-      kindAt(tokens, cursor) === "eof"
-    ) {
-      break;
-    }
-    const paramStart = cursor;
-    const paramResult = parseParam(tokens, cursor);
-
-    if (isErr(paramResult)) {
-      if (isGuardrailDiagnostic(paramResult.error)) {
-        return paramResult;
-      }
-      diagnostics.push(paramResult.error);
-      cursor = skipUntilKindBalanced(tokens, paramStart, "comma", "rparen");
-      if (kindAt(tokens, cursor) === "comma") {
-        cursor += 1;
-        continue;
-      }
-      break;
-    }
-
-    params.push(paramResult.value.node);
-    cursor = paramResult.value.next;
-
-    if (kindAt(tokens, cursor) === "comma") {
-      cursor += 1;
-    } else {
-      break;
-    }
+  const bodyResult = parseCommaListBody(
+    tokens,
+    diagnostics,
+    leadingNext,
+    "rparen",
+    parseParam,
+  );
+  if (isErr(bodyResult)) {
+    return bodyResult;
   }
 
-  const afterClose = expect(tokens, cursor, "rparen");
+  const afterClose = expect(tokens, bodyResult.value.next, "rparen");
   if (isErr(afterClose)) {
     return afterClose;
   }
-  return ok({ node: { receiver, params }, next: afterClose.value });
+  return ok({
+    node: { receiver, params: bodyResult.value.items },
+    next: afterClose.value,
+  });
 }
 
 interface DeclarationGenericsResult {
@@ -843,7 +880,6 @@ function parseNamedField(
   });
 }
 
-// eslint-disable-next-line complexity -- List-recovery loop with a guardrail/EOF branch each; splitting would obscure the control flow.
 function parseNamedFieldsBody(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -853,47 +889,24 @@ function parseNamedFieldsBody(
   if (isErr(afterLbrace)) {
     return afterLbrace;
   }
-  let cursor = afterLbrace.value;
-  const fields: StructField[] = [];
-
-  for (;;) {
-    // See parseParams' matching check: avoids a redundant second diagnostic
-    // when the list is truncated with nothing left to try parsing.
-    if (tokens[cursor]?.kind === "rbrace" || tokens[cursor]?.kind === "eof") {
-      break;
-    }
-
-    const fieldStart = cursor;
-    const fieldResult = parseNamedField(tokens, cursor);
-
-    if (isErr(fieldResult)) {
-      if (isGuardrailDiagnostic(fieldResult.error)) {
-        return fieldResult;
-      }
-      diagnostics.push(fieldResult.error);
-      cursor = skipUntilKindBalanced(tokens, fieldStart, "comma", "rbrace");
-      if (tokens[cursor]?.kind === "comma") {
-        cursor += 1;
-        continue;
-      }
-      break;
-    }
-
-    fields.push(fieldResult.value.node);
-    cursor = fieldResult.value.next;
-
-    if (tokens[cursor]?.kind === "comma") {
-      cursor += 1;
-    } else {
-      break;
-    }
+  const bodyResult = parseCommaListBody(
+    tokens,
+    diagnostics,
+    afterLbrace.value,
+    "rbrace",
+    parseNamedField,
+  );
+  if (isErr(bodyResult)) {
+    return bodyResult;
   }
-
-  const afterRbrace = expect(tokens, cursor, "rbrace");
+  const afterRbrace = expect(tokens, bodyResult.value.next, "rbrace");
   if (isErr(afterRbrace)) {
     return afterRbrace;
   }
-  return ok({ node: { kind: "NamedFields", fields }, next: afterRbrace.value });
+  return ok({
+    node: { kind: "NamedFields", fields: bodyResult.value.items },
+    next: afterRbrace.value,
+  });
 }
 
 /**
@@ -943,7 +956,6 @@ function parseTupleField(
   });
 }
 
-// eslint-disable-next-line complexity -- List-recovery loop with a guardrail/EOF branch each; splitting would obscure the control flow.
 function parseTupleFieldsBody(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -953,47 +965,24 @@ function parseTupleFieldsBody(
   if (isErr(afterLparen)) {
     return afterLparen;
   }
-  let cursor = afterLparen.value;
-  const fields: TupleField[] = [];
-
-  for (;;) {
-    // See parseParams' matching check: avoids a redundant second diagnostic
-    // when the list is truncated with nothing left to try parsing.
-    if (tokens[cursor]?.kind === "rparen" || tokens[cursor]?.kind === "eof") {
-      break;
-    }
-
-    const fieldStart = cursor;
-    const fieldResult = parseTupleField(tokens, cursor);
-
-    if (isErr(fieldResult)) {
-      if (isGuardrailDiagnostic(fieldResult.error)) {
-        return fieldResult;
-      }
-      diagnostics.push(fieldResult.error);
-      cursor = skipUntilKindBalanced(tokens, fieldStart, "comma", "rparen");
-      if (tokens[cursor]?.kind === "comma") {
-        cursor += 1;
-        continue;
-      }
-      break;
-    }
-
-    fields.push(fieldResult.value.node);
-    cursor = fieldResult.value.next;
-
-    if (tokens[cursor]?.kind === "comma") {
-      cursor += 1;
-    } else {
-      break;
-    }
+  const bodyResult = parseCommaListBody(
+    tokens,
+    diagnostics,
+    afterLparen.value,
+    "rparen",
+    parseTupleField,
+  );
+  if (isErr(bodyResult)) {
+    return bodyResult;
   }
-
-  const afterRparen = expect(tokens, cursor, "rparen");
+  const afterRparen = expect(tokens, bodyResult.value.next, "rparen");
   if (isErr(afterRparen)) {
     return afterRparen;
   }
-  return ok({ node: { kind: "TupleFields", fields }, next: afterRparen.value });
+  return ok({
+    node: { kind: "TupleFields", fields: bodyResult.value.items },
+    next: afterRparen.value,
+  });
 }
 
 /**
@@ -1150,7 +1139,6 @@ function parseVariant(
  * "{" (Variant ("," Variant)* ","?)? "}"
  * ```
  */
-// eslint-disable-next-line complexity -- List-recovery loop with a guardrail/EOF branch each; splitting would obscure the control flow.
 function parseVariantList(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -1160,41 +1148,18 @@ function parseVariantList(
   if (isErr(afterLbrace)) {
     return afterLbrace;
   }
-  let cursor = afterLbrace.value;
-  const variants: Variant[] = [];
-
-  for (;;) {
-    // See parseParams' matching check: avoids a redundant second diagnostic
-    // when the list is truncated with nothing left to try parsing.
-    if (tokens[cursor]?.kind === "rbrace" || tokens[cursor]?.kind === "eof") {
-      break;
-    }
-
-    const variantStart = cursor;
-    const variantResult = parseVariant(tokens, diagnostics, cursor);
-
-    if (isErr(variantResult)) {
-      if (isGuardrailDiagnostic(variantResult.error)) {
-        return variantResult;
-      }
-      diagnostics.push(variantResult.error);
-      cursor = skipUntilKindBalanced(tokens, variantStart, "comma", "rbrace");
-      if (tokens[cursor]?.kind === "comma") {
-        cursor += 1;
-        continue;
-      }
-      break;
-    }
-
-    variants.push(variantResult.value.node);
-    cursor = variantResult.value.next;
-
-    if (tokens[cursor]?.kind === "comma") {
-      cursor += 1;
-    } else {
-      break;
-    }
+  const bodyResult = parseCommaListBody(
+    tokens,
+    diagnostics,
+    afterLbrace.value,
+    "rbrace",
+    (elementTokens, elementPos) =>
+      parseVariant(elementTokens, diagnostics, elementPos),
+  );
+  if (isErr(bodyResult)) {
+    return bodyResult;
   }
+  const { items: variants, next: cursor } = bodyResult.value;
 
   const afterRbrace = expect(tokens, cursor, "rbrace");
   if (isErr(afterRbrace)) {
