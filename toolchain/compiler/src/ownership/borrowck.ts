@@ -428,6 +428,8 @@ function walkStatementForBorrowBases(
     case "FunctionSignature":
     case "Struct":
     case "Enum":
+    case "Trait":
+    case "Impl":
     case "Const":
     case "Static":
       return;
@@ -724,6 +726,8 @@ function statementUses(statement: Semantics.Statement, out: Set<string>): void {
     case "FunctionSignature":
     case "Struct":
     case "Enum":
+    case "Trait":
+    case "Impl":
     case "Const":
     case "Static":
       // Local item declarations do not directly use outer bindings in Slice 1/2.

@@ -1,5 +1,5 @@
 import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
-import type { Token } from "../lexer/token.js";
+import type { Token, TokenKind } from "../lexer/token.js";
 import { isSome, none, some, unwrapSomeOr, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import {
@@ -7,9 +7,12 @@ import {
   type Attribute,
   type ConstDecl,
   type EnumDecl,
+  type Expression,
   type FunctionDef,
   type FunctionSignature,
   type GenericParam,
+  type Identifier,
+  type ImplDecl,
   type Item,
   type NamedFieldsBody,
   type Param,
@@ -19,9 +22,13 @@ import {
   type StructDecl,
   type StructField,
   type TraitBound,
+  type TraitDecl,
+  type TraitItem,
+  type TraitRef,
   type TupleField,
   type TupleFieldsBody,
   type Type,
+  type TypeAliasDecl,
   type Variant,
   type Visibility,
   type WhereClause,
@@ -41,6 +48,7 @@ import {
   skipUnsupportedTopLevelItem,
   skipUntilKindBalanced,
   spanAt,
+  tokenAt,
   tryCloseAngleList,
   unsupportedAsyncMessage,
   unsupportedPathKeywordMessage,
@@ -220,6 +228,69 @@ function parseLeadingReceiver(
   );
 }
 
+interface CommaListBody<T> {
+  readonly items: readonly T[];
+  readonly next: number;
+}
+
+/**
+ * Parses a comma-separated element list up to (not including) `close` -
+ * shared by every declaration's own bracketed element list (params, struct/
+ * tuple fields, enum variants). On a malformed element, recovers by
+ * skipping to the next comma or `close` and pushing the diagnostic, unless
+ * it's a guardrail diagnostic (see `isGuardrailDiagnostic`), which bubbles
+ * out fail-fast instead. `pos` is already past the opening delimiter and
+ * any construct-specific prefix (e.g. `parseParams`' own leading receiver);
+ * the caller still owns consuming/validating `close` itself, since that
+ * varies (`parseVariantList`'s own item-start-keyword recovery, for one).
+ */
+function parseCommaListBody<T>(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  close: TokenKind,
+  parseElement: (tokens: readonly Token[], pos: number) => PR<Parsed<T>>,
+): PR<CommaListBody<T>> {
+  let cursor = pos;
+  const items: T[] = [];
+
+  for (;;) {
+    // The `eof` check avoids attempting (and separately diagnosing) an
+    // element parse when nothing remains - the caller's own `expect(close)`
+    // already produces the single, correct "found end of input" diagnostic
+    // for a truncated list; without this, both would fire redundantly.
+    if (kindAt(tokens, cursor) === close || kindAt(tokens, cursor) === "eof") {
+      break;
+    }
+    const elementStart = cursor;
+    const elementResult = parseElement(tokens, elementStart);
+
+    if (isErr(elementResult)) {
+      if (isGuardrailDiagnostic(elementResult.error)) {
+        return elementResult;
+      }
+      diagnostics.push(elementResult.error);
+      cursor = skipUntilKindBalanced(tokens, elementStart, "comma", close);
+      if (kindAt(tokens, cursor) === "comma") {
+        cursor += 1;
+        continue;
+      }
+      break;
+    }
+
+    items.push(elementResult.value.node);
+    cursor = elementResult.value.next;
+
+    if (kindAt(tokens, cursor) === "comma") {
+      cursor += 1;
+    } else {
+      break;
+    }
+  }
+
+  return ok({ items, next: cursor });
+}
+
 function parseParams(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -235,52 +306,26 @@ function parseParams(
     return leadingReceiver;
   }
   const { receiver, next: leadingNext } = leadingReceiver.value;
-  let cursor = leadingNext;
 
-  const params: Param[] = [];
-
-  for (;;) {
-    // The `eof` check avoids attempting (and separately diagnosing) an
-    // element parse when nothing remains - the outer `expect(rparen)` below
-    // already produces the single, correct "found end of input" diagnostic
-    // for a truncated list; without this, both would fire redundantly.
-    if (
-      kindAt(tokens, cursor) === "rparen" ||
-      kindAt(tokens, cursor) === "eof"
-    ) {
-      break;
-    }
-    const paramStart = cursor;
-    const paramResult = parseParam(tokens, cursor);
-
-    if (isErr(paramResult)) {
-      if (isGuardrailDiagnostic(paramResult.error)) {
-        return paramResult;
-      }
-      diagnostics.push(paramResult.error);
-      cursor = skipUntilKindBalanced(tokens, paramStart, "comma", "rparen");
-      if (kindAt(tokens, cursor) === "comma") {
-        cursor += 1;
-        continue;
-      }
-      break;
-    }
-
-    params.push(paramResult.value.node);
-    cursor = paramResult.value.next;
-
-    if (kindAt(tokens, cursor) === "comma") {
-      cursor += 1;
-    } else {
-      break;
-    }
+  const bodyResult = parseCommaListBody(
+    tokens,
+    diagnostics,
+    leadingNext,
+    "rparen",
+    parseParam,
+  );
+  if (isErr(bodyResult)) {
+    return bodyResult;
   }
 
-  const afterClose = expect(tokens, cursor, "rparen");
+  const afterClose = expect(tokens, bodyResult.value.next, "rparen");
   if (isErr(afterClose)) {
     return afterClose;
   }
-  return ok({ node: { receiver, params }, next: afterClose.value });
+  return ok({
+    node: { receiver, params: bodyResult.value.items },
+    next: afterClose.value,
+  });
 }
 
 interface DeclarationGenericsResult {
@@ -835,7 +880,6 @@ function parseNamedField(
   });
 }
 
-// eslint-disable-next-line complexity -- List-recovery loop with a guardrail/EOF branch each; splitting would obscure the control flow.
 function parseNamedFieldsBody(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -845,47 +889,24 @@ function parseNamedFieldsBody(
   if (isErr(afterLbrace)) {
     return afterLbrace;
   }
-  let cursor = afterLbrace.value;
-  const fields: StructField[] = [];
-
-  for (;;) {
-    // See parseParams' matching check: avoids a redundant second diagnostic
-    // when the list is truncated with nothing left to try parsing.
-    if (tokens[cursor]?.kind === "rbrace" || tokens[cursor]?.kind === "eof") {
-      break;
-    }
-
-    const fieldStart = cursor;
-    const fieldResult = parseNamedField(tokens, cursor);
-
-    if (isErr(fieldResult)) {
-      if (isGuardrailDiagnostic(fieldResult.error)) {
-        return fieldResult;
-      }
-      diagnostics.push(fieldResult.error);
-      cursor = skipUntilKindBalanced(tokens, fieldStart, "comma", "rbrace");
-      if (tokens[cursor]?.kind === "comma") {
-        cursor += 1;
-        continue;
-      }
-      break;
-    }
-
-    fields.push(fieldResult.value.node);
-    cursor = fieldResult.value.next;
-
-    if (tokens[cursor]?.kind === "comma") {
-      cursor += 1;
-    } else {
-      break;
-    }
+  const bodyResult = parseCommaListBody(
+    tokens,
+    diagnostics,
+    afterLbrace.value,
+    "rbrace",
+    parseNamedField,
+  );
+  if (isErr(bodyResult)) {
+    return bodyResult;
   }
-
-  const afterRbrace = expect(tokens, cursor, "rbrace");
+  const afterRbrace = expect(tokens, bodyResult.value.next, "rbrace");
   if (isErr(afterRbrace)) {
     return afterRbrace;
   }
-  return ok({ node: { kind: "NamedFields", fields }, next: afterRbrace.value });
+  return ok({
+    node: { kind: "NamedFields", fields: bodyResult.value.items },
+    next: afterRbrace.value,
+  });
 }
 
 /**
@@ -935,7 +956,6 @@ function parseTupleField(
   });
 }
 
-// eslint-disable-next-line complexity -- List-recovery loop with a guardrail/EOF branch each; splitting would obscure the control flow.
 function parseTupleFieldsBody(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -945,47 +965,24 @@ function parseTupleFieldsBody(
   if (isErr(afterLparen)) {
     return afterLparen;
   }
-  let cursor = afterLparen.value;
-  const fields: TupleField[] = [];
-
-  for (;;) {
-    // See parseParams' matching check: avoids a redundant second diagnostic
-    // when the list is truncated with nothing left to try parsing.
-    if (tokens[cursor]?.kind === "rparen" || tokens[cursor]?.kind === "eof") {
-      break;
-    }
-
-    const fieldStart = cursor;
-    const fieldResult = parseTupleField(tokens, cursor);
-
-    if (isErr(fieldResult)) {
-      if (isGuardrailDiagnostic(fieldResult.error)) {
-        return fieldResult;
-      }
-      diagnostics.push(fieldResult.error);
-      cursor = skipUntilKindBalanced(tokens, fieldStart, "comma", "rparen");
-      if (tokens[cursor]?.kind === "comma") {
-        cursor += 1;
-        continue;
-      }
-      break;
-    }
-
-    fields.push(fieldResult.value.node);
-    cursor = fieldResult.value.next;
-
-    if (tokens[cursor]?.kind === "comma") {
-      cursor += 1;
-    } else {
-      break;
-    }
+  const bodyResult = parseCommaListBody(
+    tokens,
+    diagnostics,
+    afterLparen.value,
+    "rparen",
+    parseTupleField,
+  );
+  if (isErr(bodyResult)) {
+    return bodyResult;
   }
-
-  const afterRparen = expect(tokens, cursor, "rparen");
+  const afterRparen = expect(tokens, bodyResult.value.next, "rparen");
   if (isErr(afterRparen)) {
     return afterRparen;
   }
-  return ok({ node: { kind: "TupleFields", fields }, next: afterRparen.value });
+  return ok({
+    node: { kind: "TupleFields", fields: bodyResult.value.items },
+    next: afterRparen.value,
+  });
 }
 
 /**
@@ -1142,7 +1139,6 @@ function parseVariant(
  * "{" (Variant ("," Variant)* ","?)? "}"
  * ```
  */
-// eslint-disable-next-line complexity -- List-recovery loop with a guardrail/EOF branch each; splitting would obscure the control flow.
 function parseVariantList(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -1152,41 +1148,18 @@ function parseVariantList(
   if (isErr(afterLbrace)) {
     return afterLbrace;
   }
-  let cursor = afterLbrace.value;
-  const variants: Variant[] = [];
-
-  for (;;) {
-    // See parseParams' matching check: avoids a redundant second diagnostic
-    // when the list is truncated with nothing left to try parsing.
-    if (tokens[cursor]?.kind === "rbrace" || tokens[cursor]?.kind === "eof") {
-      break;
-    }
-
-    const variantStart = cursor;
-    const variantResult = parseVariant(tokens, diagnostics, cursor);
-
-    if (isErr(variantResult)) {
-      if (isGuardrailDiagnostic(variantResult.error)) {
-        return variantResult;
-      }
-      diagnostics.push(variantResult.error);
-      cursor = skipUntilKindBalanced(tokens, variantStart, "comma", "rbrace");
-      if (tokens[cursor]?.kind === "comma") {
-        cursor += 1;
-        continue;
-      }
-      break;
-    }
-
-    variants.push(variantResult.value.node);
-    cursor = variantResult.value.next;
-
-    if (tokens[cursor]?.kind === "comma") {
-      cursor += 1;
-    } else {
-      break;
-    }
+  const bodyResult = parseCommaListBody(
+    tokens,
+    diagnostics,
+    afterLbrace.value,
+    "rbrace",
+    (elementTokens, elementPos) =>
+      parseVariant(elementTokens, diagnostics, elementPos),
+  );
+  if (isErr(bodyResult)) {
+    return bodyResult;
   }
+  const { items: variants, next: cursor } = bodyResult.value;
 
   const afterRbrace = expect(tokens, cursor, "rbrace");
   if (isErr(afterRbrace)) {
@@ -1273,24 +1246,24 @@ function parseEnum(
  * Static ::= "static" Identifier ":" Type "=" Expression ";"
  * ```
  */
-function parseConstOrStatic(
-  kind: "Const" | "Static",
+interface ConstOrStaticBody {
+  readonly name: Identifier;
+  readonly type: Type;
+  readonly value: Expression;
+  readonly next: number;
+}
+
+/**
+ * The shared body of a `const`/`static` declaration, from just past the
+ * leading keyword through the trailing `;` - the two declarations differ
+ * only in that keyword and their own AST `kind` discriminant.
+ */
+function parseConstOrStaticBody(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
-  pos: number,
-  attributes: readonly Attribute[] = [],
-  visibility: Option<Visibility> = none(),
-): PR<Parsed<ConstDecl | StaticDecl>> {
-  const start = pos;
-  const afterKeyword = expectKeyword(
-    tokens,
-    pos,
-    kind === "Const" ? "const" : "static",
-  );
-  if (isErr(afterKeyword)) {
-    return afterKeyword;
-  }
-  const nameResult = parseIdentifier(tokens, afterKeyword.value);
+  afterKeyword: number,
+): PR<ConstOrStaticBody> {
+  const nameResult = parseIdentifier(tokens, afterKeyword);
   if (isErr(nameResult)) {
     return nameResult;
   }
@@ -1323,18 +1296,609 @@ function parseConstOrStatic(
     return afterSemi;
   }
 
+  return ok({ name, type, value, next: afterSemi.value });
+}
+
+/**
+ * Parses a `const` declaration.
+ *
+ * Grammar:
+ *
+ * ```text
+ * Const ::= "const" Identifier ":" Type "=" Expression ";"
+ * ```
+ */
+function parseConst(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  attributes: readonly Attribute[] = [],
+  visibility: Option<Visibility> = none(),
+): PR<Parsed<ConstDecl>> {
+  const start = pos;
+  const afterKeyword = expectKeyword(tokens, pos, "const");
+  if (isErr(afterKeyword)) {
+    return afterKeyword;
+  }
+  const bodyResult = parseConstOrStaticBody(
+    tokens,
+    diagnostics,
+    afterKeyword.value,
+  );
+  if (isErr(bodyResult)) {
+    return bodyResult;
+  }
+  const { name, type, value, next } = bodyResult.value;
   return ok({
-    node: { kind, tokenId: start, visibility, name, type, value, attributes },
+    node: {
+      kind: "Const",
+      tokenId: start,
+      visibility,
+      name,
+      type,
+      value,
+      attributes,
+    },
+    next,
+  });
+}
+
+/**
+ * Parses a `static` declaration.
+ *
+ * Grammar:
+ *
+ * ```text
+ * Static ::= "static" Identifier ":" Type "=" Expression ";"
+ * ```
+ */
+function parseStatic(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  attributes: readonly Attribute[] = [],
+  visibility: Option<Visibility> = none(),
+): PR<Parsed<StaticDecl>> {
+  const start = pos;
+  const afterKeyword = expectKeyword(tokens, pos, "static");
+  if (isErr(afterKeyword)) {
+    return afterKeyword;
+  }
+  const bodyResult = parseConstOrStaticBody(
+    tokens,
+    diagnostics,
+    afterKeyword.value,
+  );
+  if (isErr(bodyResult)) {
+    return bodyResult;
+  }
+  const { name, type, value, next } = bodyResult.value;
+  return ok({
+    node: {
+      kind: "Static",
+      tokenId: start,
+      visibility,
+      name,
+      type,
+      value,
+      attributes,
+    },
+    next,
+  });
+}
+
+/**
+ * Parses a type alias / associated type declaration.
+ *
+ * Grammar:
+ *
+ * ```text
+ * TypeAlias ::= "type" Identifier Generics? ("=" Type)? ";"
+ * ```
+ */
+function parseTypeAlias(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  attributes: readonly Attribute[] = [],
+): PR<Parsed<TypeAliasDecl>> {
+  const start = pos;
+  const afterType = expectKeyword(tokens, pos, "type");
+  if (isErr(afterType)) {
+    return afterType;
+  }
+  const nameResult = parseIdentifier(tokens, afterType.value);
+  if (isErr(nameResult)) {
+    return nameResult;
+  }
+  const genericsResult = parseDeclarationGenerics(
+    tokens,
+    diagnostics,
+    nameResult.value.next,
+  );
+  let cursor = genericsResult.next;
+  let value: Option<Type> = none();
+  if (tokens[cursor]?.kind === "eq") {
+    const typeResult = parseType(tokens, cursor + 1);
+    if (isErr(typeResult)) {
+      return typeResult;
+    }
+    value = some(typeResult.value.node);
+    cursor = typeResult.value.next;
+  }
+  const afterSemi = expect(tokens, cursor, "semi");
+  if (isErr(afterSemi)) {
+    return afterSemi;
+  }
+  return ok({
+    node: {
+      kind: "TypeAlias",
+      tokenId: start,
+      name: nameResult.value.node,
+      generics: genericsResult.generics,
+      value,
+      attributes,
+    },
     next: afterSemi.value,
   });
+}
+
+/**
+ * Parses one trait item.
+ *
+ * Grammar:
+ *
+ * ```text
+ * TraitItem ::= Attribute* (Function | TypeAlias | Const)
+ * ```
+ */
+function parseTraitItem(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<TraitItem>> {
+  const attrResult = collectOuterAttributes(tokens, pos);
+  if (isErr(attrResult)) {
+    return attrResult;
+  }
+  const attributes = attrResult.value.attributes;
+  const cursor = attrResult.value.next;
+
+  const tokenResult = tokenAt(tokens, cursor);
+  if (isErr(tokenResult)) {
+    return tokenResult;
+  }
+  const token = tokenResult.value;
+  if (token.kind === "keyword" && token.text === "fn") {
+    return parseFunction(tokens, diagnostics, cursor, attributes);
+  }
+  if (token.kind === "keyword" && token.text === "type") {
+    return parseTypeAlias(tokens, diagnostics, cursor, attributes);
+  }
+  if (token.kind === "keyword" && token.text === "const") {
+    return parseConst(tokens, diagnostics, cursor, attributes);
+  }
+  const found =
+    token.kind === "keyword" ? `keyword "${token.text}"` : `"${token.kind}"`;
+  return err(
+    errorDiagnostic(
+      "HEDGE-PARSE-001",
+      `expected a function, associated type, or const in trait body, found ${found}`,
+      some(token.span),
+    ),
+  );
+}
+
+/**
+ * Parses the brace-delimited item list of a trait body. Unlike a struct's
+ * field list or an enum's variant list, items here are not comma-separated -
+ * each one self-terminates (`;` for a signature/type alias/const, a block
+ * for a bodied function), matching the top-level item sequence's own shape.
+ */
+function parseTraitItemList(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<readonly TraitItem[]>> {
+  const afterLbrace = expect(tokens, pos, "lbrace");
+  if (isErr(afterLbrace)) {
+    return afterLbrace;
+  }
+  let cursor = afterLbrace.value;
+  const items: TraitItem[] = [];
+  for (;;) {
+    if (
+      kindAt(tokens, cursor) === "rbrace" ||
+      kindAt(tokens, cursor) === "eof"
+    ) {
+      break;
+    }
+    const itemResult = parseTraitItem(tokens, diagnostics, cursor);
+    if (isErr(itemResult)) {
+      return itemResult;
+    }
+    items.push(itemResult.value.node);
+    cursor = itemResult.value.next;
+  }
+  const afterRbrace = expect(tokens, cursor, "rbrace");
+  if (isErr(afterRbrace)) {
+    return afterRbrace;
+  }
+  return ok({ node: items, next: afterRbrace.value });
+}
+
+/**
+ * Parses a trait declaration.
+ *
+ * Grammar:
+ *
+ * ```text
+ * Trait ::= "trait" Identifier Generics? (":" TraitBounds)? WhereClause? "{" TraitItem* "}"
+ * ```
+ */
+function parseTrait(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  attributes: readonly Attribute[] = [],
+  visibility: Option<Visibility> = none(),
+): PR<Parsed<TraitDecl>> {
+  const start = pos;
+  const afterTrait = expectKeyword(tokens, pos, "trait");
+  if (isErr(afterTrait)) {
+    return afterTrait;
+  }
+  const nameResult = parseIdentifier(tokens, afterTrait.value);
+  if (isErr(nameResult)) {
+    return nameResult;
+  }
+  const genericsResult = parseDeclarationGenerics(
+    tokens,
+    diagnostics,
+    nameResult.value.next,
+  );
+  let cursor = genericsResult.next;
+  let supertraits: readonly TraitBound[] = [];
+  if (tokens[cursor]?.kind === "colon") {
+    const boundsResult = parseTraitBounds(tokens, cursor + 1);
+    if (isErr(boundsResult)) {
+      return boundsResult;
+    }
+    supertraits = boundsResult.value.bounds;
+    cursor = boundsResult.value.cursor.next;
+    // A supertrait bound list has no enclosing `<...>` of its own to hand a
+    // leftover half off to, so a pending close here is always a genuine
+    // stray extra `>` (`trait Ord: Eq<T>> {}`) - same treatment
+    // `parseWherePredicate` gives its own trailing bound overflow.
+    if (boundsResult.value.cursor.pendingCloseHalf) {
+      const strayToken = tokens[cursor];
+      diagnostics.push(
+        errorDiagnostic(
+          "HEDGE-PARSE-005",
+          "unexpected extra '>' after supertrait bound",
+          strayToken !== undefined ? some(strayToken.span) : none(),
+        ),
+      );
+      cursor += 1;
+    }
+  }
+  const whereResult = checkWhereClause(
+    tokens,
+    diagnostics,
+    cursor,
+    skipToStructBody,
+  );
+  const itemsResult = parseTraitItemList(tokens, diagnostics, whereResult.next);
+  if (isErr(itemsResult)) {
+    return itemsResult;
+  }
+  const decl: TraitDecl = {
+    kind: "Trait",
+    tokenId: start,
+    visibility,
+    name: nameResult.value.node,
+    generics: genericsResult.generics,
+    supertraits,
+    whereClause: whereResult.whereClause,
+    items: itemsResult.value.node,
+    attributes,
+  };
+  return ok({ node: decl, next: itemsResult.value.next });
+}
+
+/**
+ * `Impl`'s own `Item*` production means an `ItemKind` declaration, never
+ * the `let`/bare-expression leniency `parseItem` also accepts at the
+ * top level and in block position - that leniency is a Slice-1 carve-out
+ * for those two positions specifically, not part of `ItemKind` itself.
+ */
+const IMPL_ITEM_KINDS: ReadonlySet<string> = new Set([
+  "Function",
+  "FunctionSignature",
+  "Struct",
+  "Enum",
+  "Trait",
+  "Impl",
+  "TypeAlias",
+  "Const",
+  "Static",
+]);
+
+/**
+ * `err(...)` naming `node`'s own kind if it falls outside `IMPL_ITEM_KINDS`,
+ * `ok(node)` otherwise - split out of `parseItemList`'s loop so that loop
+ * only has to handle raw parsing, not this semantic gate too.
+ */
+function validateImplBodyItem(tokens: readonly Token[], node: Item): PR<Item> {
+  if (IMPL_ITEM_KINDS.has(node.kind)) {
+    return ok(node);
+  }
+  const token = tokens[node.tokenId];
+  return err(
+    errorDiagnostic(
+      "HEDGE-PARSE-006",
+      `unexpected item kind '${node.kind}' in impl body`,
+      token !== undefined ? some(token.span) : none(),
+    ),
+  );
+}
+
+/**
+ * Parses the brace-delimited item list of an impl body - the grammar's own
+ * general `Item*`, unlike a trait body's narrower `TraitItem` set. Reuses
+ * `parseItem`, the same top-level item dispatch `parser.ts`'s own loop
+ * calls, including its lone-`;` skip, validating each returned node via
+ * {@link validateImplBodyItem}.
+ */
+function parseItemList(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<Parsed<readonly Item[]>> {
+  const afterLbrace = expect(tokens, pos, "lbrace");
+  if (isErr(afterLbrace)) {
+    return afterLbrace;
+  }
+  let cursor = afterLbrace.value;
+  const items: Item[] = [];
+  for (;;) {
+    if (
+      kindAt(tokens, cursor) === "rbrace" ||
+      kindAt(tokens, cursor) === "eof"
+    ) {
+      break;
+    }
+    if (kindAt(tokens, cursor) === "semi") {
+      cursor += 1;
+      continue;
+    }
+    const itemResult = parseItem(tokens, diagnostics, cursor);
+    if (isErr(itemResult)) {
+      return itemResult;
+    }
+    cursor = itemResult.value.next;
+    if (isSome(itemResult.value.node)) {
+      const validated = validateImplBodyItem(
+        tokens,
+        itemResult.value.node.value,
+      );
+      if (isErr(validated)) {
+        return validated;
+      }
+      items.push(validated.value);
+    }
+  }
+  const afterRbrace = expect(tokens, cursor, "rbrace");
+  if (isErr(afterRbrace)) {
+    return afterRbrace;
+  }
+  return ok({ node: items, next: afterRbrace.value });
+}
+
+/**
+ * True for a token that can only ever start a `Type`, never a `Path` -
+ * `TraitRef` is strictly `Path Generics?`, so a leading `&`/`[`/`(`/`!`/
+ * `fn`/`dyn` rules out the `TraitRef "for"` alternative entirely and the
+ * target must be an ordinary (non-path-led) `Type`.
+ */
+function isNonPathTypeLead(token: Token | undefined): boolean {
+  if (token === undefined) {
+    return false;
+  }
+  if (
+    token.kind === "amp" ||
+    token.kind === "lbracket" ||
+    token.kind === "lparen" ||
+    token.kind === "bang"
+  ) {
+    return true;
+  }
+  return (
+    token.kind === "keyword" && (token.text === "fn" || token.text === "dyn")
+  );
+}
+
+interface ImplTargetResult {
+  readonly traitRef: Option<TraitRef>;
+  readonly type: Type;
+  readonly next: number;
+}
+
+/** The target is definitely not `TraitRef "for"` - parse it as an ordinary `Type`. */
+function parseNonPathImplTarget(
+  tokens: readonly Token[],
+  pos: number,
+): PR<ImplTargetResult> {
+  const typeResult = parseType(tokens, pos);
+  if (isErr(typeResult)) {
+    return typeResult;
+  }
+  return ok({
+    traitRef: none(),
+    type: typeResult.value.node,
+    next: typeResult.value.next,
+  });
+}
+
+/**
+ * Parses a `Path Generics?` (the shared shape of both a `TraitRef` and a
+ * bare `NamedType`) and disambiguates the grammar's `(TraitRef "for")? Type`
+ * by checking for `for` only after parsing it - when present, the
+ * already-parsed path becomes the `TraitRef` and a fresh `Type` follows;
+ * otherwise that same path/generics pair is reinterpreted directly as the
+ * inherent impl's own `NamedType` target, with no re-parse needed.
+ */
+function parsePathLedImplTarget(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<ImplTargetResult> {
+  const pathStart = pos;
+  const pathResult = parsePathSegments(tokens, pathStart);
+  if (isErr(pathResult)) {
+    return pathResult;
+  }
+  let cursor: GenericsCursor = {
+    next: pathResult.value.next,
+    pendingCloseHalf: false,
+  };
+  let typeArguments: readonly Type[] = [];
+  if (tokens[cursor.next]?.kind === "lt") {
+    const argsResult = parseTypeArgumentList(tokens, cursor.next);
+    if (isErr(argsResult)) {
+      return argsResult;
+    }
+    typeArguments = argsResult.value.typeArguments;
+    cursor = argsResult.value.cursor;
+  }
+
+  const forToken = tokens[cursor.next];
+  if (
+    !cursor.pendingCloseHalf &&
+    forToken?.kind === "keyword" &&
+    forToken.text === "for"
+  ) {
+    const typeResult = parseType(tokens, cursor.next + 1);
+    if (isErr(typeResult)) {
+      return typeResult;
+    }
+    return ok({
+      traitRef: some({
+        kind: "TraitRef",
+        tokenId: pathStart,
+        path: pathResult.value.node,
+        typeArguments,
+      }),
+      type: typeResult.value.node,
+      next: typeResult.value.next,
+    });
+  }
+
+  // A trait ref's own `<...>` list has no enclosing list to hand a leftover
+  // half off to, so a pending close here is always a genuine stray extra
+  // `>` (`impl Foo<T>> {}`) - same treatment `parseWherePredicate` gives its
+  // own trailing bound overflow.
+  let next = cursor.next;
+  if (cursor.pendingCloseHalf) {
+    const strayToken = tokens[next];
+    diagnostics.push(
+      errorDiagnostic(
+        "HEDGE-PARSE-005",
+        "unexpected extra '>' after impl target type",
+        strayToken !== undefined ? some(strayToken.span) : none(),
+      ),
+    );
+    next += 1;
+  }
+  return ok({
+    traitRef: none(),
+    type: {
+      kind: "NamedType",
+      tokenId: pathStart,
+      path: pathResult.value.node,
+      typeArguments,
+    },
+    next,
+  });
+}
+
+/**
+ * Parses the impl target. A leading token that can't possibly start a
+ * `Path` (`&T`, `[T; N]`, ...) means `TraitRef` never applied in the first
+ * place, so it goes straight to {@link parseNonPathImplTarget}; everything
+ * else needs {@link parsePathLedImplTarget}'s `TraitRef "for"` lookahead.
+ */
+function parseImplTarget(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+): PR<ImplTargetResult> {
+  return isNonPathTypeLead(tokens[pos])
+    ? parseNonPathImplTarget(tokens, pos)
+    : parsePathLedImplTarget(tokens, diagnostics, pos);
+}
+
+/**
+ * Parses an impl declaration.
+ *
+ * Grammar:
+ *
+ * ```text
+ * Impl     ::= "impl" Generics? (TraitRef "for")? Type WhereClause? "{" Item* "}"
+ * TraitRef ::= Path Generics?
+ * ```
+ */
+function parseImpl(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  attributes: readonly Attribute[] = [],
+): PR<Parsed<ImplDecl>> {
+  const start = pos;
+  const afterImpl = expectKeyword(tokens, pos, "impl");
+  if (isErr(afterImpl)) {
+    return afterImpl;
+  }
+  const genericsResult = parseDeclarationGenerics(
+    tokens,
+    diagnostics,
+    afterImpl.value,
+  );
+  const targetResult = parseImplTarget(
+    tokens,
+    diagnostics,
+    genericsResult.next,
+  );
+  if (isErr(targetResult)) {
+    return targetResult;
+  }
+  const whereResult = checkWhereClause(
+    tokens,
+    diagnostics,
+    targetResult.value.next,
+    skipToStructBody,
+  );
+  const itemsResult = parseItemList(tokens, diagnostics, whereResult.next);
+  if (isErr(itemsResult)) {
+    return itemsResult;
+  }
+  const decl: ImplDecl = {
+    kind: "Impl",
+    tokenId: start,
+    generics: genericsResult.generics,
+    traitRef: targetResult.value.traitRef,
+    type: targetResult.value.type,
+    whereClause: whereResult.whereClause,
+    items: itemsResult.value.node,
+    attributes,
+  };
+  return ok({ node: decl, next: itemsResult.value.next });
 }
 
 const UNSUPPORTED_TOP_LEVEL_KEYWORD_MESSAGES: ReadonlyMap<string, string> =
   new Map([
     ["export", "`export` declarations are not supported in Slice 1"],
     ["extern", "`extern` declarations are not supported in Slice 1"],
-    ["impl", "`impl` declarations are not supported in Slice 1"],
-    ["trait", "`trait` declarations are not supported in Slice 1"],
     ["use", unsupportedPathKeywordMessage("use")],
     ["mod", unsupportedPathKeywordMessage("mod")],
     ["async", unsupportedAsyncMessage()],
@@ -1349,6 +1913,204 @@ function unsupportedTopLevelKeywordMessage(keyword: string): Option<string> {
   return messageFor === undefined ? none() : some(messageFor);
 }
 
+/** Bubbles a per-element parse's own error, or wraps its success as the `Option<Item>` shape every branch below needs. */
+function wrapItemResult(result: PR<Parsed<Item>>): PR<Parsed<Option<Item>>> {
+  if (isErr(result)) {
+    return result;
+  }
+  return ok({ node: some(result.value.node), next: result.value.next });
+}
+
+/**
+ * `err(...)` if a visibility qualifier was actually consumed between
+ * `cursor` and `afterVis` (i.e. `afterVis > cursor`), `ok(undefined)`
+ * otherwise - shared by every item kind that rejects a leading `pub`
+ * outright rather than accepting it.
+ */
+function rejectVisibility(
+  tokens: readonly Token[],
+  cursor: number,
+  afterVis: number,
+  message: string,
+): PR<undefined> {
+  if (afterVis <= cursor) {
+    return ok(undefined);
+  }
+  const visToken = tokens[cursor];
+  return err(
+    errorDiagnostic(
+      "HEDGE-PARSE-006",
+      message,
+      visToken !== undefined ? some(visToken.span) : none(),
+    ),
+  );
+}
+
+type VisibleDeclarationParser = (
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  attributes: readonly Attribute[],
+  visibility: Option<Visibility>,
+) => PR<Parsed<Item>>;
+
+/** The top-level keywords that accept a leading `pub` uniformly. */
+const VISIBLE_DECLARATION_PARSERS = new Map<string, VisibleDeclarationParser>([
+  ["fn", parseFunction],
+  ["struct", parseStruct],
+  ["enum", parseEnum],
+  ["trait", parseTrait],
+  ["const", parseConst],
+  ["static", parseStatic],
+]);
+
+/**
+ * Dispatches via {@link VISIBLE_DECLARATION_PARSERS}. `none()` means `token`
+ * isn't one of them, so the caller should try the next candidate.
+ */
+function parseVisibleDeclarationItem(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  afterVis: number,
+  attributes: readonly Attribute[],
+  visibility: Option<Visibility>,
+  token: Token,
+): Option<PR<Parsed<Option<Item>>>> {
+  if (token.kind !== "keyword") {
+    return none();
+  }
+  const parseDeclaration = VISIBLE_DECLARATION_PARSERS.get(token.text);
+  if (parseDeclaration === undefined) {
+    return none();
+  }
+  return some(
+    wrapItemResult(
+      parseDeclaration(tokens, diagnostics, afterVis, attributes, visibility),
+    ),
+  );
+}
+
+type NoVisibilityParser = (
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  pos: number,
+  attributes: readonly Attribute[],
+) => PR<Parsed<Item>>;
+
+interface NoVisibilityEntry {
+  readonly rejectionMessage: string;
+  readonly parse: NoVisibilityParser;
+}
+
+/** The top-level keywords that reject a leading `pub` outright. */
+const NO_VISIBILITY_PARSERS = new Map<string, NoVisibilityEntry>([
+  [
+    "type",
+    {
+      rejectionMessage: "visibility qualifiers are not allowed on a type alias",
+      parse: parseTypeAlias,
+    },
+  ],
+  [
+    "impl",
+    {
+      rejectionMessage: "visibility qualifiers are not allowed on impl blocks",
+      parse: parseImpl,
+    },
+  ],
+  [
+    "let",
+    {
+      rejectionMessage:
+        "visibility qualifiers are not allowed on let statements",
+      parse: parseLetStatement,
+    },
+  ],
+]);
+
+/**
+ * Dispatches via {@link NO_VISIBILITY_PARSERS}. `none()` means `token` isn't
+ * one of them, so the caller should try the next candidate.
+ */
+function parseNoVisibilityItem(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  cursor: number,
+  afterVis: number,
+  attributes: readonly Attribute[],
+  token: Token,
+): Option<PR<Parsed<Option<Item>>>> {
+  if (token.kind !== "keyword") {
+    return none();
+  }
+  const entry = NO_VISIBILITY_PARSERS.get(token.text);
+  if (entry === undefined) {
+    return none();
+  }
+  const rejected = rejectVisibility(
+    tokens,
+    cursor,
+    afterVis,
+    entry.rejectionMessage,
+  );
+  return some(
+    isErr(rejected)
+      ? rejected
+      : wrapItemResult(entry.parse(tokens, diagnostics, afterVis, attributes)),
+  );
+}
+
+/**
+ * Falls through to an unsupported top-level keyword (skipped, diagnosed,
+ * recovered), a stray `pub` on none of the above, or a bare expression -
+ * the tail of `parseItem`'s own dispatch once no declaration keyword matched.
+ */
+function parseUnsupportedOrExpressionItem(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  cursor: number,
+  afterVis: number,
+  token: Token | undefined,
+): PR<Parsed<Option<Item>>> {
+  if (token?.kind === "keyword") {
+    const message = unsupportedTopLevelKeywordMessage(token.text);
+    if (isSome(message)) {
+      const skipResult = skipUnsupportedTopLevelItem(
+        tokens,
+        token,
+        afterVis,
+        message.value,
+      );
+      if (isErr(skipResult)) {
+        return skipResult;
+      }
+      diagnostics.push(skipResult.value.diagnostic);
+      return ok({ node: none(), next: skipResult.value.next });
+    }
+  }
+  const rejected = rejectVisibility(
+    tokens,
+    cursor,
+    afterVis,
+    "visibility qualifiers are not allowed here",
+  );
+  if (isErr(rejected)) {
+    return rejected;
+  }
+  const exprResult = parseExpression(tokens, diagnostics, cursor);
+  if (isErr(exprResult)) {
+    return exprResult;
+  }
+  const parsed = exprResult.value;
+  if (tokens[parsed.next]?.kind === "semi") {
+    return ok({
+      node: some(expressionStatement(parsed.node)),
+      next: parsed.next + 1,
+    });
+  }
+  return ok({ node: some(parsed.node), next: parsed.next });
+}
+
 /**
  * Parses a top-level item.
  *
@@ -1360,15 +2122,6 @@ function unsupportedTopLevelKeywordMessage(keyword: string): Option<string> {
  * - Expression statements
  * - Bare expressions
  */
-/** Bubbles a per-element parse's own error, or wraps its success as the `Option<Item>` shape every branch below needs. */
-function wrapItemResult(result: PR<Parsed<Item>>): PR<Parsed<Option<Item>>> {
-  if (isErr(result)) {
-    return result;
-  }
-  return ok({ node: some(result.value.node), next: result.value.next });
-}
-
-// eslint-disable-next-line complexity -- Top-level item dispatch with visibility/attribute prefix; each item kind is a necessary branch.
 export function parseItem(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -1390,87 +2143,37 @@ export function parseItem(
   const vis = visResult.value;
   const afterVis = vis.next;
   const token = tokens[afterVis];
-  if (token?.kind === "keyword" && token.text === "fn") {
-    return wrapItemResult(
-      parseFunction(tokens, diagnostics, afterVis, attributes, vis.node),
+
+  if (token !== undefined) {
+    const declarationResult = parseVisibleDeclarationItem(
+      tokens,
+      diagnostics,
+      afterVis,
+      attributes,
+      vis.node,
+      token,
     );
-  }
-  if (token?.kind === "keyword" && token.text === "struct") {
-    return wrapItemResult(
-      parseStruct(tokens, diagnostics, afterVis, attributes, vis.node),
-    );
-  }
-  if (token?.kind === "keyword" && token.text === "enum") {
-    return wrapItemResult(
-      parseEnum(tokens, diagnostics, afterVis, attributes, vis.node),
-    );
-  }
-  if (
-    token?.kind === "keyword" &&
-    (token.text === "const" || token.text === "static")
-  ) {
-    return wrapItemResult(
-      parseConstOrStatic(
-        token.text === "const" ? "Const" : "Static",
-        tokens,
-        diagnostics,
-        afterVis,
-        attributes,
-        vis.node,
-      ),
-    );
-  }
-  if (token?.kind === "keyword" && token.text === "let") {
-    if (afterVis > cursor) {
-      const visToken = tokens[cursor];
-      return err(
-        errorDiagnostic(
-          "HEDGE-PARSE-006",
-          "visibility qualifiers are not allowed on let statements",
-          visToken !== undefined ? some(visToken.span) : none(),
-        ),
-      );
+    if (isSome(declarationResult)) {
+      return declarationResult.value;
     }
-    return wrapItemResult(
-      parseLetStatement(tokens, diagnostics, afterVis, attributes),
+    const noVisibilityResult = parseNoVisibilityItem(
+      tokens,
+      diagnostics,
+      cursor,
+      afterVis,
+      attributes,
+      token,
     );
-  }
-  if (token?.kind === "keyword") {
-    const message = unsupportedTopLevelKeywordMessage(token.text);
-    if (isSome(message)) {
-      const skipResult = skipUnsupportedTopLevelItem(
-        tokens,
-        token,
-        afterVis,
-        message.value,
-      );
-      if (isErr(skipResult)) {
-        return skipResult;
-      }
-      diagnostics.push(skipResult.value.diagnostic);
-      return ok({ node: none(), next: skipResult.value.next });
+    if (isSome(noVisibilityResult)) {
+      return noVisibilityResult.value;
     }
   }
-  if (afterVis > cursor) {
-    const visToken = tokens[cursor];
-    return err(
-      errorDiagnostic(
-        "HEDGE-PARSE-006",
-        "visibility qualifiers are not allowed here",
-        visToken !== undefined ? some(visToken.span) : none(),
-      ),
-    );
-  }
-  const exprResult = parseExpression(tokens, diagnostics, cursor);
-  if (isErr(exprResult)) {
-    return exprResult;
-  }
-  const parsed = exprResult.value;
-  if (tokens[parsed.next]?.kind === "semi") {
-    return ok({
-      node: some(expressionStatement(parsed.node)),
-      next: parsed.next + 1,
-    });
-  }
-  return ok({ node: some(parsed.node), next: parsed.next });
+
+  return parseUnsupportedOrExpressionItem(
+    tokens,
+    diagnostics,
+    cursor,
+    afterVis,
+    token,
+  );
 }

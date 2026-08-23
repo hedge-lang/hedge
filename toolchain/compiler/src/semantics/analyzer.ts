@@ -3030,6 +3030,12 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
       const cached = lookupEnum(ctx, item.name.text);
       return cached?.tokenId === item.tokenId ? cached : analyzeEnum(ctx, item);
     }
+    case "Trait":
+      return { kind: "Trait", tokenId: item.tokenId };
+    case "Impl":
+      return { kind: "Impl", tokenId: item.tokenId };
+    case "TypeAlias":
+      return { kind: "TypeAlias", tokenId: item.tokenId };
     case "Const":
       return analyzeConstStatement(ctx, item);
     case "Static":
@@ -3696,6 +3702,10 @@ function analyzeStatement(
       // Name and type already registered by `registerConstsAndStatics`;
       // this analyzes the (runtime, not const-folded) initializer itself.
       return analyzeStaticDecl(ctx, statement);
+    case "Trait":
+      return { kind: "Trait", tokenId: statement.tokenId };
+    case "Impl":
+      return { kind: "Impl", tokenId: statement.tokenId };
     default:
       assertNever(
         statement,

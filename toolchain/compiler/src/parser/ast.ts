@@ -28,6 +28,9 @@ export type Item =
   | FunctionSignature
   | StructDecl
   | EnumDecl
+  | TraitDecl
+  | ImplDecl
+  | TypeAliasDecl
   | ConstDecl
   | StaticDecl
   | Statement
@@ -40,6 +43,8 @@ export type Statement =
   | FunctionSignature
   | StructDecl
   | EnumDecl
+  | TraitDecl
+  | ImplDecl
   | ConstDecl
   | StaticDecl;
 
@@ -595,6 +600,50 @@ export interface WherePredicate extends AstNode {
   readonly kind: "WherePredicate";
   readonly type: Type;
   readonly bounds: readonly TraitBound[];
+}
+
+export interface TraitDecl extends AstNode {
+  readonly kind: "Trait";
+  readonly visibility: Option<Visibility>;
+  readonly name: Identifier;
+  readonly generics: readonly GenericParam[];
+  readonly supertraits: readonly TraitBound[];
+  readonly whereClause: Option<WhereClause>;
+  readonly items: readonly TraitItem[];
+  readonly attributes: readonly Attribute[];
+}
+
+/** The grammar's own narrower `TraitItem` production - unlike `Impl`, a
+ * trait body is not a general `Item*`. */
+export type TraitItem =
+  FunctionDef | FunctionSignature | TypeAliasDecl | ConstDecl;
+
+export interface TypeAliasDecl extends AstNode {
+  readonly kind: "TypeAlias";
+  readonly name: Identifier;
+  readonly generics: readonly GenericParam[];
+  readonly value: Option<Type>;
+  readonly attributes: readonly Attribute[];
+}
+
+/** `Draw`, `From<U>` as the implemented trait in `impl Draw for Point { ... }` -
+ * structurally identical to `PathTraitBound` but a distinct node since the
+ * grammar names it separately (`TraitRef ::= Path Generics?`, no `Lifetime`
+ * alternative). */
+export interface TraitRef extends AstNode {
+  readonly kind: "TraitRef";
+  readonly path: Path;
+  readonly typeArguments: readonly Type[];
+}
+
+export interface ImplDecl extends AstNode {
+  readonly kind: "Impl";
+  readonly generics: readonly GenericParam[];
+  readonly traitRef: Option<TraitRef>;
+  readonly type: Type;
+  readonly whereClause: Option<WhereClause>;
+  readonly items: readonly Item[];
+  readonly attributes: readonly Attribute[];
 }
 
 export interface PathExpression extends AstNode {

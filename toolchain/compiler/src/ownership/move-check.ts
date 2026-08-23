@@ -1189,6 +1189,7 @@ function walkScrutinee(
   );
 }
 
+// eslint-disable-next-line complexity -- Routing function over the full Statement union
 function walkStatement(
   ctx: Ctx,
   statement: Semantics.Statement,
@@ -1240,6 +1241,8 @@ function walkStatement(
     case "FunctionSignature":
     case "Struct":
     case "Enum":
+    case "Trait":
+    case "Impl":
     case "Const":
     case "Static":
       // Local item declarations don't use outer bindings in Slice 1.
