@@ -1625,11 +1625,30 @@ const IMPL_ITEM_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * `err(...)` naming `node`'s own kind if it falls outside `IMPL_ITEM_KINDS`,
+ * `ok(node)` otherwise - split out of `parseItemList`'s loop so that loop
+ * only has to handle raw parsing, not this semantic gate too.
+ */
+function validateImplBodyItem(tokens: readonly Token[], node: Item): PR<Item> {
+  if (IMPL_ITEM_KINDS.has(node.kind)) {
+    return ok(node);
+  }
+  const token = tokens[node.tokenId];
+  return err(
+    errorDiagnostic(
+      "HEDGE-PARSE-006",
+      `unexpected item kind '${node.kind}' in impl body`,
+      token !== undefined ? some(token.span) : none(),
+    ),
+  );
+}
+
+/**
  * Parses the brace-delimited item list of an impl body - the grammar's own
  * general `Item*`, unlike a trait body's narrower `TraitItem` set. Reuses
  * `parseItem`, the same top-level item dispatch `parser.ts`'s own loop
- * calls, including its lone-`;` skip, but rejects any node it returns
- * outside `IMPL_ITEM_KINDS`.
+ * calls, including its lone-`;` skip, validating each returned node via
+ * {@link validateImplBodyItem}.
  */
 function parseItemList(
   tokens: readonly Token[],
@@ -1659,18 +1678,14 @@ function parseItemList(
     }
     cursor = itemResult.value.next;
     if (isSome(itemResult.value.node)) {
-      const node = itemResult.value.node.value;
-      if (!IMPL_ITEM_KINDS.has(node.kind)) {
-        const token = tokens[node.tokenId];
-        return err(
-          errorDiagnostic(
-            "HEDGE-PARSE-006",
-            `unexpected item kind '${node.kind}' in impl body`,
-            token !== undefined ? some(token.span) : none(),
-          ),
-        );
+      const validated = validateImplBodyItem(
+        tokens,
+        itemResult.value.node.value,
+      );
+      if (isErr(validated)) {
+        return validated;
       }
-      items.push(node);
+      items.push(validated.value);
     }
   }
   const afterRbrace = expect(tokens, cursor, "rbrace");
