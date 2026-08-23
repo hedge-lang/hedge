@@ -1952,7 +1952,216 @@ function wrapItemResult(result: PR<Parsed<Item>>): PR<Parsed<Option<Item>>> {
   return ok({ node: some(result.value.node), next: result.value.next });
 }
 
-// eslint-disable-next-line complexity -- Top-level item dispatch with visibility/attribute prefix; each item kind is a necessary branch.
+/**
+ * `err(...)` if a visibility qualifier was actually consumed between
+ * `cursor` and `afterVis` (i.e. `afterVis > cursor`), `ok(undefined)`
+ * otherwise - shared by every item kind that rejects a leading `pub`
+ * outright rather than accepting it.
+ */
+function rejectVisibility(
+  tokens: readonly Token[],
+  cursor: number,
+  afterVis: number,
+  message: string,
+): PR<undefined> {
+  if (afterVis <= cursor) {
+    return ok(undefined);
+  }
+  const visToken = tokens[cursor];
+  return err(
+    errorDiagnostic(
+      "HEDGE-PARSE-006",
+      message,
+      visToken !== undefined ? some(visToken.span) : none(),
+    ),
+  );
+}
+
+/**
+ * Dispatches `fn`/`struct`/`enum`/`trait`/`const`/`static` - the top-level
+ * keywords that accept a leading `pub` uniformly. `none()` means `token`
+ * isn't one of them, so the caller should try the next candidate.
+ */
+function parseVisibleDeclarationItem(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  afterVis: number,
+  attributes: readonly Attribute[],
+  visibility: Option<Visibility>,
+  token: Token,
+): Option<PR<Parsed<Option<Item>>>> {
+  if (token.kind !== "keyword") {
+    return none();
+  }
+  if (token.text === "fn") {
+    return some(
+      wrapItemResult(
+        parseFunction(tokens, diagnostics, afterVis, attributes, visibility),
+      ),
+    );
+  }
+  if (token.text === "struct") {
+    return some(
+      wrapItemResult(
+        parseStruct(tokens, diagnostics, afterVis, attributes, visibility),
+      ),
+    );
+  }
+  if (token.text === "enum") {
+    return some(
+      wrapItemResult(
+        parseEnum(tokens, diagnostics, afterVis, attributes, visibility),
+      ),
+    );
+  }
+  if (token.text === "trait") {
+    return some(
+      wrapItemResult(
+        parseTrait(tokens, diagnostics, afterVis, attributes, visibility),
+      ),
+    );
+  }
+  if (token.text === "const") {
+    return some(
+      wrapItemResult(
+        parseConst(tokens, diagnostics, afterVis, attributes, visibility),
+      ),
+    );
+  }
+  if (token.text === "static") {
+    return some(
+      wrapItemResult(
+        parseStatic(tokens, diagnostics, afterVis, attributes, visibility),
+      ),
+    );
+  }
+  return none();
+}
+
+/**
+ * Dispatches `type`/`impl`/`let` - the top-level items that reject a
+ * leading `pub` outright. `none()` means `token` isn't one of them, so the
+ * caller should try the next candidate.
+ */
+function parseNoVisibilityItem(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  cursor: number,
+  afterVis: number,
+  attributes: readonly Attribute[],
+  token: Token,
+): Option<PR<Parsed<Option<Item>>>> {
+  if (token.kind !== "keyword") {
+    return none();
+  }
+  if (token.text === "type") {
+    const rejected = rejectVisibility(
+      tokens,
+      cursor,
+      afterVis,
+      "visibility qualifiers are not allowed on a type alias",
+    );
+    return some(
+      isErr(rejected)
+        ? rejected
+        : wrapItemResult(
+            parseTypeAlias(tokens, diagnostics, afterVis, attributes),
+          ),
+    );
+  }
+  if (token.text === "impl") {
+    const rejected = rejectVisibility(
+      tokens,
+      cursor,
+      afterVis,
+      "visibility qualifiers are not allowed on impl blocks",
+    );
+    return some(
+      isErr(rejected)
+        ? rejected
+        : wrapItemResult(parseImpl(tokens, diagnostics, afterVis, attributes)),
+    );
+  }
+  if (token.text === "let") {
+    const rejected = rejectVisibility(
+      tokens,
+      cursor,
+      afterVis,
+      "visibility qualifiers are not allowed on let statements",
+    );
+    return some(
+      isErr(rejected)
+        ? rejected
+        : wrapItemResult(
+            parseLetStatement(tokens, diagnostics, afterVis, attributes),
+          ),
+    );
+  }
+  return none();
+}
+
+/**
+ * Falls through to an unsupported top-level keyword (skipped, diagnosed,
+ * recovered), a stray `pub` on none of the above, or a bare expression -
+ * the tail of `parseItem`'s own dispatch once no declaration keyword matched.
+ */
+function parseUnsupportedOrExpressionItem(
+  tokens: readonly Token[],
+  diagnostics: Diagnostic[],
+  cursor: number,
+  afterVis: number,
+  token: Token | undefined,
+): PR<Parsed<Option<Item>>> {
+  if (token?.kind === "keyword") {
+    const message = unsupportedTopLevelKeywordMessage(token.text);
+    if (isSome(message)) {
+      const skipResult = skipUnsupportedTopLevelItem(
+        tokens,
+        token,
+        afterVis,
+        message.value,
+      );
+      if (isErr(skipResult)) {
+        return skipResult;
+      }
+      diagnostics.push(skipResult.value.diagnostic);
+      return ok({ node: none(), next: skipResult.value.next });
+    }
+  }
+  const rejected = rejectVisibility(
+    tokens,
+    cursor,
+    afterVis,
+    "visibility qualifiers are not allowed here",
+  );
+  if (isErr(rejected)) {
+    return rejected;
+  }
+  const exprResult = parseExpression(tokens, diagnostics, cursor);
+  if (isErr(exprResult)) {
+    return exprResult;
+  }
+  const parsed = exprResult.value;
+  if (tokens[parsed.next]?.kind === "semi") {
+    return ok({
+      node: some(expressionStatement(parsed.node)),
+      next: parsed.next + 1,
+    });
+  }
+  return ok({ node: some(parsed.node), next: parsed.next });
+}
+
+/**
+ * Parses a top-level item.
+ *
+ * Supported slice-1 items:
+ *
+ * - Function declarations
+ * - Struct declarations (named-field, tuple, and unit forms)
+ * - Let statements
+ * - Expression statements
+ * - Bare expressions
+ */
 export function parseItem(
   tokens: readonly Token[],
   diagnostics: Diagnostic[],
@@ -1974,115 +2183,37 @@ export function parseItem(
   const vis = visResult.value;
   const afterVis = vis.next;
   const token = tokens[afterVis];
-  if (token?.kind === "keyword" && token.text === "fn") {
-    return wrapItemResult(
-      parseFunction(tokens, diagnostics, afterVis, attributes, vis.node),
+
+  if (token !== undefined) {
+    const declarationResult = parseVisibleDeclarationItem(
+      tokens,
+      diagnostics,
+      afterVis,
+      attributes,
+      vis.node,
+      token,
     );
-  }
-  if (token?.kind === "keyword" && token.text === "struct") {
-    return wrapItemResult(
-      parseStruct(tokens, diagnostics, afterVis, attributes, vis.node),
-    );
-  }
-  if (token?.kind === "keyword" && token.text === "enum") {
-    return wrapItemResult(
-      parseEnum(tokens, diagnostics, afterVis, attributes, vis.node),
-    );
-  }
-  if (token?.kind === "keyword" && token.text === "trait") {
-    return wrapItemResult(
-      parseTrait(tokens, diagnostics, afterVis, attributes, vis.node),
-    );
-  }
-  if (token?.kind === "keyword" && token.text === "type") {
-    if (afterVis > cursor) {
-      const visToken = tokens[cursor];
-      return err(
-        errorDiagnostic(
-          "HEDGE-PARSE-006",
-          "visibility qualifiers are not allowed on a type alias",
-          visToken !== undefined ? some(visToken.span) : none(),
-        ),
-      );
+    if (isSome(declarationResult)) {
+      return declarationResult.value;
     }
-    return wrapItemResult(
-      parseTypeAlias(tokens, diagnostics, afterVis, attributes),
+    const noVisibilityResult = parseNoVisibilityItem(
+      tokens,
+      diagnostics,
+      cursor,
+      afterVis,
+      attributes,
+      token,
     );
-  }
-  if (token?.kind === "keyword" && token.text === "impl") {
-    if (afterVis > cursor) {
-      const visToken = tokens[cursor];
-      return err(
-        errorDiagnostic(
-          "HEDGE-PARSE-006",
-          "visibility qualifiers are not allowed on impl blocks",
-          visToken !== undefined ? some(visToken.span) : none(),
-        ),
-      );
-    }
-    return wrapItemResult(parseImpl(tokens, diagnostics, afterVis, attributes));
-  }
-  if (token?.kind === "keyword" && token.text === "const") {
-    return wrapItemResult(
-      parseConst(tokens, diagnostics, afterVis, attributes, vis.node),
-    );
-  }
-  if (token?.kind === "keyword" && token.text === "static") {
-    return wrapItemResult(
-      parseStatic(tokens, diagnostics, afterVis, attributes, vis.node),
-    );
-  }
-  if (token?.kind === "keyword" && token.text === "let") {
-    if (afterVis > cursor) {
-      const visToken = tokens[cursor];
-      return err(
-        errorDiagnostic(
-          "HEDGE-PARSE-006",
-          "visibility qualifiers are not allowed on let statements",
-          visToken !== undefined ? some(visToken.span) : none(),
-        ),
-      );
-    }
-    return wrapItemResult(
-      parseLetStatement(tokens, diagnostics, afterVis, attributes),
-    );
-  }
-  if (token?.kind === "keyword") {
-    const message = unsupportedTopLevelKeywordMessage(token.text);
-    if (isSome(message)) {
-      const skipResult = skipUnsupportedTopLevelItem(
-        tokens,
-        token,
-        afterVis,
-        message.value,
-      );
-      if (isErr(skipResult)) {
-        return skipResult;
-      }
-      diagnostics.push(skipResult.value.diagnostic);
-      return ok({ node: none(), next: skipResult.value.next });
+    if (isSome(noVisibilityResult)) {
+      return noVisibilityResult.value;
     }
   }
-  if (afterVis > cursor) {
-    const visToken = tokens[cursor];
-    return err(
-      errorDiagnostic(
-        "HEDGE-PARSE-006",
-        "visibility qualifiers are not allowed here",
-        visToken !== undefined ? some(visToken.span) : none(),
-      ),
-    );
-  }
-  const exprResult = parseExpression(tokens, diagnostics, cursor);
-  if (isErr(exprResult)) {
-    return exprResult;
-  }
-  const parsed = exprResult.value;
-  if (tokens[parsed.next]?.kind === "semi") {
-    return ok({
-      node: some(expressionStatement(parsed.node)),
-      next: parsed.next + 1,
-    });
-  }
-  return ok({ node: some(parsed.node), next: parsed.next });
+
+  return parseUnsupportedOrExpressionItem(
+    tokens,
+    diagnostics,
+    cursor,
+    afterVis,
+    token,
+  );
 }
