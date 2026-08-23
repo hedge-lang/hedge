@@ -1022,6 +1022,16 @@ describe("execution tests", (): void => {
         ["5"],
       );
     });
+
+    it("infers a generic parameter through a single reference-hop argument", (): void => {
+      assertRunsTo(
+        `
+        fn peek<T>(x: &T) -> &T { x }
+        fn main() { let v = 5; print(*peek(&v)); }
+        `,
+        ["5"],
+      );
+    });
   });
 
   describe("unused generic type parameters on a struct or enum", (): void => {

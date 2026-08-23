@@ -686,6 +686,15 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     ],
   },
   {
+    id: "GENERIC-CALL-INFERENCE",
+    description:
+      "A generic call's type parameters are unified from its arguments, an expected return type, or an explicit turbofish, with a conflicting or unsolved variable reported as a diagnostic",
+    specRefs: ["0015-generics-and-traits.md"],
+    testIds: [
+      "infers a generic parameter from a single argument, with no annotation",
+    ],
+  },
+  {
     id: "SKIP-BUDGET-GOVERNANCE",
     description:
       "Skip and skipIf usage remains within explicit conformance governance budget",
