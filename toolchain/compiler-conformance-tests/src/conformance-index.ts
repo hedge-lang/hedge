@@ -701,6 +701,10 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "reports a conflicting inference across two occurrences of the same parameter, blaming the second",
       "reports a conflicting inference through a reference-hop parameter, at the same reference depth on both sides",
       "does not cascade a second diagnostic when a generic argument is already an unresolved name",
+      "lets an explicit turbofish override inference for the parameter it names",
+      "reports a conflict when a turbofish disagrees with the actual argument, blaming the argument",
+      "treats an empty turbofish as full inference rather than an arity error",
+      "rejects a non-empty turbofish whose argument count does not match the callee's declared generics",
     ],
   },
   {

@@ -1119,6 +1119,50 @@ describe("execution tests", (): void => {
       ]);
     });
 
+    it("lets an explicit turbofish override inference for the parameter it names", (): void => {
+      assertRunsTo(
+        `
+        fn identity<T>(x: T) -> T { x }
+        fn main() { print(identity::<i32>(5)); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("reports a conflict when a turbofish disagrees with the actual argument, blaming the argument", (): void => {
+      const result = compileHedgeCode(
+        `fn identity<T>(x: T) -> T { x } fn main() { print(identity::<i32>("s")); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(errors[0]?.message).toBe(
+        "argument 1 to function `identity` type mismatch: expected `i32`, found `str`",
+      );
+    });
+
+    it("treats an empty turbofish as full inference rather than an arity error", (): void => {
+      assertRunsTo(
+        `
+        fn identity<T>(x: T) -> T { x }
+        fn main() { print(identity::<>(5)); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("rejects a non-empty turbofish whose argument count does not match the callee's declared generics", (): void => {
+      const result = compileHedgeCode(
+        `fn identity<T>(x: T) -> T { x } fn main() { print(identity::<i32, str>(5)); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-011");
+      expect(errors[0]?.message).toBe(
+        "`identity` declares 1 generic parameter(s), but the turbofish supplies 2",
+      );
+    });
+
     it("does not cascade a second diagnostic when a generic argument is already an unresolved name", (): void => {
       assertNoCascade(
         `fn same<T>(a: T, b: T) -> T { a } fn main() { print(same(undefined_name, 5)); }`,
