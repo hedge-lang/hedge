@@ -5657,8 +5657,7 @@ function analyzeCall(
   const { args: checkedArgs, bindings } = checkPositionalCallArgs(
     ctx,
     call,
-    "function",
-    calleeName(call),
+    { kindLabel: "function", name: calleeName(call) },
     calleeType.params.map((type) => ({ type })),
     args,
     calleeType.genericParams,
@@ -5744,8 +5743,7 @@ function analyzeEnumVariantCallConstruction(
   const { args: checkedArgs } = checkPositionalCallArgs(
     ctx,
     call,
-    "variant",
-    variantName,
+    { kindLabel: "variant", name: variantName },
     variant.body.value.fields,
     args,
     enumDecl.generics,
@@ -6018,24 +6016,32 @@ function seedExpectedReturnType(
   }
 }
 
+/** How a positional-argument check names its callee in a diagnostic - a
+ * tuple-shaped construction (`Enum::Variant(...)`, a tuple struct's own
+ * `Name(...)`) or an ordinary function call, distinguished only by
+ * `kindLabel`'s wording. Bundled into one type (rather than two loose
+ * parameters) so `checkPositionalCallArgs`/`checkGenericPositionalArg`
+ * each stay under the parameter-count ceiling. */
+interface CallSiteDescription {
+  readonly kindLabel: "variant" | "struct" | "function";
+  readonly name: string;
+}
+
 /** Arity, then per-argument type checking, for any call whose callee has a
- * known positional parameter list - a tuple-shaped construction
- * (`Enum::Variant(...)`, a tuple struct's own `Name(...)`) or an ordinary
- * function call, distinguished only by `kindLabel`'s wording. `params` is
- * anything carrying a declared type per position, so a `TupleField[]` and a
- * `FunctionType`'s own `Type[]` both satisfy it. `genericParams` is the
- * callee's own declared type-parameter names (empty for a non-generic
- * callee); a position naming one of them unifies instead of a plain
- * `typesEqual` check. Returns the bindings unification produced alongside
- * the checked arguments, so a caller can substitute them into a return
- * type. `seedBindings`, when given, is unified into (e.g. a turbofish's
+ * known positional parameter list. `params` is anything carrying a
+ * declared type per position, so a `TupleField[]` and a `FunctionType`'s
+ * own `Type[]` both satisfy it. `genericParams` is the callee's own
+ * declared type-parameter names (empty for a non-generic callee); a
+ * position naming one of them unifies instead of a plain `typesEqual`
+ * check. Returns the bindings unification produced alongside the checked
+ * arguments, so a caller can substitute them into a return type.
+ * `seedBindings`, when given, is unified into (e.g. a turbofish's
  * already-resolved argument list) rather than starting empty, so a later
  * argument that disagrees with a seed is reported as the conflict. */
 function checkPositionalCallArgs(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
-  kindLabel: "variant" | "struct" | "function",
-  name: string,
+  site: CallSiteDescription,
   params: readonly { readonly type: Semantics.Type }[],
   args: readonly Semantics.Expression[],
   genericParams: readonly string[],
@@ -6051,7 +6057,7 @@ function checkPositionalCallArgs(
   if (fields.length !== args.length) {
     emitError(
       ctx,
-      `${kindLabel} \`${name}\` takes ${fields.length} argument(s), but ${args.length} ${args.length === 1 ? "was" : "were"} supplied`,
+      `${site.kindLabel} \`${site.name}\` takes ${fields.length} argument(s), but ${args.length} ${args.length === 1 ? "was" : "were"} supplied`,
       call.tokenId,
       "HEDGE-TYPE-008",
     );
@@ -6068,8 +6074,7 @@ function checkPositionalCallArgs(
     ) {
       return checkGenericPositionalArg(
         ctx,
-        kindLabel,
-        name,
+        site,
         i,
         field.type,
         arg,
@@ -6089,7 +6094,7 @@ function checkPositionalCallArgs(
     if (mismatch) {
       emitError(
         ctx,
-        `argument ${i + 1} to ${kindLabel} \`${name}\` type mismatch: expected \`${describeType(field.type)}\`, found \`${describeType(getType(expr))}\``,
+        `argument ${i + 1} to ${site.kindLabel} \`${site.name}\` type mismatch: expected \`${describeType(field.type)}\`, found \`${describeType(getType(expr))}\``,
         arg.tokenId,
         "HEDGE-TYPE-001",
       );
@@ -6105,8 +6110,7 @@ function checkPositionalCallArgs(
  * would otherwise push the loop body past. */
 function checkGenericPositionalArg(
   ctx: AnalysisContext,
-  kindLabel: "variant" | "struct" | "function",
-  name: string,
+  site: CallSiteDescription,
   index: number,
   declaredType: Semantics.Type,
   arg: Semantics.Expression,
@@ -6155,7 +6159,7 @@ function checkGenericPositionalArg(
       const expectedType = substituteGenericType(declaredType, bindings);
       emitError(
         ctx,
-        `argument ${index + 1} to ${kindLabel} \`${name}\` type mismatch: expected \`${describeType(expectedType)}\`, found \`${describeType(coercedArgType)}\``,
+        `argument ${index + 1} to ${site.kindLabel} \`${site.name}\` type mismatch: expected \`${describeType(expectedType)}\`, found \`${describeType(coercedArgType)}\``,
         coercedArg.tokenId,
         "HEDGE-TYPE-010",
         relatedSpanAt(
@@ -6175,7 +6179,7 @@ function checkGenericPositionalArg(
       // `unifyGenericParam` just bound to suppress a downstream cascade.
       emitError(
         ctx,
-        `argument ${index + 1} to ${kindLabel} \`${name}\` type mismatch: expected \`${describeType(declaredType)}\`, found \`${describeType(coercedArgType)}\``,
+        `argument ${index + 1} to ${site.kindLabel} \`${site.name}\` type mismatch: expected \`${describeType(declaredType)}\`, found \`${describeType(coercedArgType)}\``,
         coercedArg.tokenId,
         "HEDGE-TYPE-001",
       );
@@ -6241,8 +6245,7 @@ function analyzeTupleStructCallConstruction(
   const { args: checkedArgs } = checkPositionalCallArgs(
     ctx,
     call,
-    "struct",
-    structName,
+    { kindLabel: "struct", name: structName },
     structDecl.body.fields,
     args,
     structDecl.generics,
