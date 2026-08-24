@@ -710,6 +710,10 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "does not seed a struct field initializer's declared type into a generic call's inference",
       "infers through the enclosing function's own declared return type, consistent with the argument",
       "reports a conflict between the enclosing function's return type and the argument, blaming the argument",
+      "reports a generic parameter that never appears in any parameter or return position as unsolved",
+      "rescues an otherwise-unsolved generic parameter via an explicit turbofish",
+      "coerces an unsuffixed literal argument against the already-resolved concrete type",
+      "range-checks a negative unsuffixed literal against the already-resolved concrete type",
     ],
   },
   {

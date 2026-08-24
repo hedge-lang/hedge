@@ -1233,6 +1233,48 @@ describe("execution tests", (): void => {
         "argument 1 to function `identity` type mismatch: expected `str`, found `i32`",
       );
     });
+
+    it("reports a generic parameter that never appears in any parameter or return position as unsolved", (): void => {
+      const result = compileHedgeCode(
+        `fn discard<T>(x: i32) -> i32 { x } fn main() { print(discard(5)); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-006");
+      expect(errors[0]?.message).toBe(
+        "cannot infer type of generic parameter `T` without an explicit type annotation or turbofish",
+      );
+    });
+
+    it("rescues an otherwise-unsolved generic parameter via an explicit turbofish", (): void => {
+      assertRunsTo(
+        `
+        fn discard<T>(x: i32) -> i32 { x }
+        fn main() { print(discard::<str>(5)); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("coerces an unsuffixed literal argument against the already-resolved concrete type", (): void => {
+      assertRunsTo(
+        `
+        fn same<T>(a: T, b: T) -> T { a }
+        fn main() { print(same(5i64, 2)); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("range-checks a negative unsuffixed literal against the already-resolved concrete type", (): void => {
+      const result = compileHedgeCode(
+        `fn same<T>(a: T, b: T) -> T { a } fn main() { print(same(5i8, -200)); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-005");
+      expect(errors[0]?.message).toBe("out of range for i8");
+    });
   });
 
   describe("unused generic type parameters on a struct or enum", (): void => {
