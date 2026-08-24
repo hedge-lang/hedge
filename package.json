@@ -33,7 +33,7 @@
     "@eslint/markdown": "^8.0.3",
     "@types/node": "^26.2.0",
     "@vitest/coverage-v8": "^4.1.11",
-    "eslint": "^10.8.1",
+    "eslint": "^10.9.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-boundaries": "^7.2.0",
     "jsonc-eslint-parser": "^3.3.0",
@@ -46,7 +46,7 @@
     "vitest": "^4.1.11"
   },
   "optionalDependencies": {
-    "@rolldown/binding-linux-x64-gnu": "^1.2.4",
-    "@rolldown/binding-win32-x64-msvc": "^1.2.4"
+    "@rolldown/binding-linux-x64-gnu": "^1.2.5",
+    "@rolldown/binding-win32-x64-msvc": "^1.2.5"
   }
 }
