@@ -1092,9 +1092,13 @@ describe("execution tests", (): void => {
       );
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
       expect(errors[0]?.message).toBe(
         "argument 2 to function `same` type mismatch: expected `i32`, found `str`",
       );
+      expect(errors[0]?.relatedSpans).toEqual([
+        { span: { start: 57, end: 58 }, label: "inferred as `i32` here" },
+      ]);
     });
 
     it("reports a conflicting inference through a reference-hop parameter, at the same reference depth on both sides", (): void => {
@@ -1106,9 +1110,13 @@ describe("execution tests", (): void => {
       );
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
       expect(errors[0]?.message).toBe(
         "argument 2 to function `samer` type mismatch: expected `&i32`, found `&str`",
       );
+      expect(errors[0]?.relatedSpans).toEqual([
+        { span: { start: 114, end: 115 }, label: "inferred as `i32` here" },
+      ]);
     });
 
     it("does not cascade a second diagnostic when a generic argument is already an unresolved name", (): void => {
