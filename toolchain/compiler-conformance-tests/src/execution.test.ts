@@ -1275,6 +1275,54 @@ describe("execution tests", (): void => {
       expect(errors[0]?.code).toBe("HEDGE-TYPE-005");
       expect(errors[0]?.message).toBe("out of range for i8");
     });
+
+    it("reports a structural mismatch (non-reference argument for a reference-hop parameter) as an ordinary type mismatch, not an unsolved variable", (): void => {
+      const result = compileHedgeCode(
+        `
+        fn borrow<T>(x: &T) -> &T { x }
+        fn main() { let v = 5; print(*borrow(v)); }
+        `,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-001");
+      expect(errors[0]?.message).toBe(
+        "argument 1 to function `borrow` type mismatch: expected `&T`, found `i32`",
+      );
+    });
+
+    it("reports a mutability mismatch on a reference-hop parameter as an ordinary type mismatch", (): void => {
+      const result = compileHedgeCode(
+        `
+        fn borrowmut<T>(x: &mut T) {}
+        fn main() { let v = 5; borrowmut(&v); }
+        `,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-001");
+      expect(errors[0]?.message).toBe(
+        "argument 1 to function `borrowmut` type mismatch: expected `&mut T`, found `&i32`",
+      );
+    });
+
+    it("does not cascade a second diagnostic when the enclosing function's return type is Self used outside a trait or impl", (): void => {
+      assertNoCascade(
+        `fn identity<T>(x: T) -> T { x } fn make() -> Self { identity(5) }`,
+      );
+    });
+
+    it("does not cascade a second diagnostic when a let binding's annotation is Self used outside a trait or impl", (): void => {
+      assertNoCascade(
+        `fn identity<T>(x: T) -> T { x } fn main() { let x: Self = identity(5); print(x); }`,
+      );
+    });
+
+    it("does not cascade a second diagnostic when a turbofish argument is Self used outside a trait or impl", (): void => {
+      assertNoCascade(
+        `fn identity<T>(x: T) -> T { x } fn main() { print(identity::<Self>(5)); }`,
+      );
+    });
   });
 
   describe("unused generic type parameters on a struct or enum", (): void => {

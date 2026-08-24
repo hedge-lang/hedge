@@ -714,6 +714,11 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "rescues an otherwise-unsolved generic parameter via an explicit turbofish",
       "coerces an unsuffixed literal argument against the already-resolved concrete type",
       "range-checks a negative unsuffixed literal against the already-resolved concrete type",
+      "reports a structural mismatch (non-reference argument for a reference-hop parameter) as an ordinary type mismatch, not an unsolved variable",
+      "reports a mutability mismatch on a reference-hop parameter as an ordinary type mismatch",
+      "does not cascade a second diagnostic when the enclosing function's return type is Self used outside a trait or impl",
+      "does not cascade a second diagnostic when a let binding's annotation is Self used outside a trait or impl",
+      "does not cascade a second diagnostic when a turbofish argument is Self used outside a trait or impl",
     ],
   },
   {
