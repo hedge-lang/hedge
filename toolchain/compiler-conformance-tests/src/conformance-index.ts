@@ -705,6 +705,11 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "reports a conflict when a turbofish disagrees with the actual argument, blaming the argument",
       "treats an empty turbofish as full inference rather than an arity error",
       "rejects a non-empty turbofish whose argument count does not match the callee's declared generics",
+      "infers through a let binding's own type annotation, consistent with the argument",
+      "reports a conflict between a let annotation's seeded type and the argument, blaming the argument",
+      "does not seed a struct field initializer's declared type into a generic call's inference",
+      "infers through the enclosing function's own declared return type, consistent with the argument",
+      "reports a conflict between the enclosing function's return type and the argument, blaming the argument",
     ],
   },
   {

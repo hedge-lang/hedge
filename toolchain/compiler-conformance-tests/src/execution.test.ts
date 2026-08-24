@@ -1168,6 +1168,71 @@ describe("execution tests", (): void => {
         `fn same<T>(a: T, b: T) -> T { a } fn main() { print(same(undefined_name, 5)); }`,
       );
     });
+
+    it("infers through a let binding's own type annotation, consistent with the argument", (): void => {
+      assertRunsTo(
+        `
+        fn identity<T>(x: T) -> T { x }
+        fn main() { let x: i32 = identity(5); print(x); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("reports a conflict between a let annotation's seeded type and the argument, blaming the argument", (): void => {
+      const result = compileHedgeCode(
+        `fn identity<T>(x: T) -> T { x } fn main() { let x: str = identity(5); print(x); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(errors[0]?.message).toBe(
+        "argument 1 to function `identity` type mismatch: expected `str`, found `i32`",
+      );
+    });
+
+    it("does not seed a struct field initializer's declared type into a generic call's inference", (): void => {
+      const result = compileHedgeCode(
+        `
+        struct Box { v: str }
+        fn identity<T>(x: T) -> T { x }
+        fn main() { let b = Box { v: identity(5) }; print(b.v); }
+        `,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-001");
+      expect(errors[0]?.message).toBe(
+        "field `v` type mismatch: expected `str`, found `i32`",
+      );
+    });
+
+    it("infers through the enclosing function's own declared return type, consistent with the argument", (): void => {
+      assertRunsTo(
+        `
+        fn identity<T>(x: T) -> T { x }
+        fn wrap() -> i32 { identity(5) }
+        fn main() { print(wrap()); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("reports a conflict between the enclosing function's return type and the argument, blaming the argument", (): void => {
+      const result = compileHedgeCode(
+        `
+        fn identity<T>(x: T) -> T { x }
+        fn wrap() -> str { identity(5) }
+        fn main() { print(wrap()); }
+        `,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(errors[0]?.message).toBe(
+        "argument 1 to function `identity` type mismatch: expected `str`, found `i32`",
+      );
+    });
   });
 
   describe("unused generic type parameters on a struct or enum", (): void => {
