@@ -1052,6 +1052,39 @@ describe("execution tests", (): void => {
         ["1"],
       );
     });
+
+    it("leaves an ordinary non-generic call unaffected", (): void => {
+      assertRunsTo(
+        `
+        fn add(a: i32, b: i32) -> i32 { a + b }
+        fn main() { print(add(1, 2)); }
+        `,
+        ["3"],
+      );
+    });
+
+    it("infers a generic call nested inside another generic function's own body", (): void => {
+      assertRunsTo(
+        `
+        fn outer<T>(x: T) -> T {
+          fn inner<T>(y: T) -> T { y }
+          inner(x)
+        }
+        fn main() { print(outer(42)); }
+        `,
+        ["42"],
+      );
+    });
+
+    it("infers a composed generic call passed as another generic call's argument", (): void => {
+      assertRunsTo(
+        `
+        fn identity<T>(x: T) -> T { x }
+        fn main() { print(identity(identity(5))); }
+        `,
+        ["5"],
+      );
+    });
   });
 
   describe("unused generic type parameters on a struct or enum", (): void => {

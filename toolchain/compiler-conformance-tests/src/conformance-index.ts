@@ -695,6 +695,9 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "infers a generic parameter through a single reference-hop argument",
       "infers two independent generic parameters from two arguments in one call",
       "infers a repeated generic parameter consistently across two occurrences",
+      "leaves an ordinary non-generic call unaffected",
+      "infers a generic call nested inside another generic function's own body",
+      "infers a composed generic call passed as another generic call's argument",
     ],
   },
   {
