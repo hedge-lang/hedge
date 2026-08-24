@@ -698,6 +698,9 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "leaves an ordinary non-generic call unaffected",
       "infers a generic call nested inside another generic function's own body",
       "infers a composed generic call passed as another generic call's argument",
+      "reports a conflicting inference across two occurrences of the same parameter, blaming the second",
+      "reports a conflicting inference through a reference-hop parameter, at the same reference depth on both sides",
+      "does not cascade a second diagnostic when a generic argument is already an unresolved name",
     ],
   },
   {

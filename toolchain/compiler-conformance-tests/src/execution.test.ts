@@ -1085,6 +1085,37 @@ describe("execution tests", (): void => {
         ["5"],
       );
     });
+
+    it("reports a conflicting inference across two occurrences of the same parameter, blaming the second", (): void => {
+      const result = compileHedgeCode(
+        `fn same<T>(a: T, b: T) -> T { a } fn main() { print(same(1, "s")); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.message).toBe(
+        "argument 2 to function `same` type mismatch: expected `i32`, found `str`",
+      );
+    });
+
+    it("reports a conflicting inference through a reference-hop parameter, at the same reference depth on both sides", (): void => {
+      const result = compileHedgeCode(
+        `
+        fn samer<'a, T>(a: &'a T, b: &T) -> &'a T { a }
+        fn main() { let x = 1; let y = "s"; print(*samer(&x, &y)); }
+        `,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.message).toBe(
+        "argument 2 to function `samer` type mismatch: expected `&i32`, found `&str`",
+      );
+    });
+
+    it("does not cascade a second diagnostic when a generic argument is already an unresolved name", (): void => {
+      assertNoCascade(
+        `fn same<T>(a: T, b: T) -> T { a } fn main() { print(same(undefined_name, 5)); }`,
+      );
+    });
   });
 
   describe("unused generic type parameters on a struct or enum", (): void => {
