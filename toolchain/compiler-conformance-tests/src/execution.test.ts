@@ -1032,6 +1032,26 @@ describe("execution tests", (): void => {
         ["5"],
       );
     });
+
+    it("infers two independent generic parameters from two arguments in one call", (): void => {
+      assertRunsTo(
+        `
+        fn first<A, B>(a: A, b: B) -> A { a }
+        fn main() { print(first(1, "s")); }
+        `,
+        ["1"],
+      );
+    });
+
+    it("infers a repeated generic parameter consistently across two occurrences", (): void => {
+      assertRunsTo(
+        `
+        fn same<T>(a: T, b: T) -> T { a }
+        fn main() { print(same(1, 2)); }
+        `,
+        ["1"],
+      );
+    });
   });
 
   describe("unused generic type parameters on a struct or enum", (): void => {

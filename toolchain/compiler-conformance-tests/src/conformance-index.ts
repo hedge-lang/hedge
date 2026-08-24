@@ -692,6 +692,9 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     specRefs: ["0015-generics-and-traits.md"],
     testIds: [
       "infers a generic parameter from a single argument, with no annotation",
+      "infers a generic parameter through a single reference-hop argument",
+      "infers two independent generic parameters from two arguments in one call",
+      "infers a repeated generic parameter consistently across two occurrences",
     ],
   },
   {
