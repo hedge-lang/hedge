@@ -3875,4 +3875,63 @@ describe("trait and impl declarations", (): void => {
       "trait `Draw` is already implemented for type `Point`",
     );
   });
+
+  it("rejects two blanket impls of the same trait", (): void => {
+    const result = diagnose(`
+      trait A {}
+      trait B { fn f(&self) -> str; }
+      impl<T: A> B for T {}
+      impl<T: A> B for T {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "conflicting implementations of trait `B`",
+    );
+  });
+
+  it("rejects a blanket impl and a concrete impl of the same trait", (): void => {
+    const result = diagnose(`
+      trait A {}
+      trait B { fn f(&self) -> str; }
+      struct Point { x: i32, y: i32 }
+      impl<T: A> B for T {}
+      impl B for Point { fn f(&self) -> str { "a" } }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "conflicting implementations of trait `B` for type `Point`",
+    );
+  });
+
+  it("accepts two impls of different traits for the same type", (): void => {
+    const result = diagnose(`
+      trait Draw { fn draw(&self) -> str; }
+      trait Describe { fn describe(&self) -> str; }
+      struct Point { x: i32, y: i32 }
+      impl Draw for Point { fn draw(&self) -> str { "a" } }
+      impl Describe for Point { fn describe(&self) -> str { "b" } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts two impls of the same trait for different types", (): void => {
+    const result = diagnose(`
+      trait Draw { fn draw(&self) -> str; }
+      struct Point { x: i32, y: i32 }
+      struct Circle { r: i32 }
+      impl Draw for Point { fn draw(&self) -> str { "a" } }
+      impl Draw for Circle { fn draw(&self) -> str { "b" } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts an inherent impl alongside a trait impl for the same type", (): void => {
+    const result = diagnose(`
+      trait Draw { fn draw(&self) -> str; }
+      struct Point { x: i32, y: i32 }
+      impl Point {}
+      impl Draw for Point { fn draw(&self) -> str { "a" } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
 });
