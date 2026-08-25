@@ -6012,8 +6012,9 @@ function checkGenericPositionalConstruction(
  * against an ordinary argument is still blamed at the argument; a
  * disagreement against turbofish itself (no argument involved at all) is
  * blamed here, at the call's own site, since there is no argument span to
- * point at instead. */
-/** Whether a conflict was reported, so the caller can substitute
+ * point at instead.
+ *
+ * Returns whether a conflict was reported, so the caller can substitute
  * `expectedType` directly as the call's own final type instead of the
  * ordinary bindings-substituted one - the conflict is already fully
  * reported here, so the enclosing `let`/return reconciliation seeing a
