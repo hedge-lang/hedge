@@ -480,7 +480,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("fn f(a: i32) {} fn main() { f(true); }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toContain(
-        "argument 0 to function `f` type mismatch: expected `i32`, found `bool`",
+        "argument 1 to function `f` type mismatch: expected `i32`, found `bool`",
       );
     });
 
@@ -503,7 +503,7 @@ describe("semantic analysis", (): void => {
         "struct P { x: i32 } struct Q { x: i32 } fn f(p: P) {} fn main() { f(Q { x: 1 }); }",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("argument 0");
+      expect(result.diagnostics[0]?.message).toContain("argument 1");
     });
 
     it("coerces an unsuffixed literal argument to the parameter type", () => {
@@ -752,7 +752,7 @@ describe("semantic analysis", (): void => {
       `);
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toBe(
-        "argument 1 to variant `Move` type mismatch: expected `i32`, found `bool`",
+        "argument 2 to variant `Move` type mismatch: expected `i32`, found `bool`",
       );
     });
 

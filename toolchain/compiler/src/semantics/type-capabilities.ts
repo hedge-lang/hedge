@@ -84,6 +84,14 @@ const TYPE_CAPABILITIES: ReadonlyMap<
   // `using`, producing a runtime TypeError (plain values have no
   // `[Symbol.dispose]`).
   ["ReferenceType", new Set(["copy"])],
+  // A bare generic-parameter type deliberately has no entry here, unlike
+  // ReferenceType above: an uninstantiated `T` must stay move-only for move
+  // tracking, since a real instantiation could always be a move-only type
+  // (no trait bounds are checked yet, so nothing rules that out). The
+  // *drop-generation* side of this (a generic-typed binding gets a
+  // scope-end `using` it can't actually satisfy, since no witness-based
+  // Drop exists yet) is a separate, narrower problem, handled directly in
+  // `ownership/move-check.ts`'s `recordDrops` instead of here.
   ...INTEGER_KINDS.map((k): [string, ReadonlySet<TypeCapability>] => [
     k,
     INTEGER_CAPS,

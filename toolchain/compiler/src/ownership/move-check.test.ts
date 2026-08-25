@@ -1068,4 +1068,17 @@ describe("move-check", (): void => {
     const { diagnostics } = checkLoose("fn f(x: &mut i32); fn main() {}");
     expect(diagnostics).toEqual([]);
   });
+
+  it("rejects moving a bare generic-parameter-typed value twice inside a generic function's own body", (): void => {
+    const { diagnostics } = check(`
+      fn consume<T>(other: T) {}
+      fn outer<T>(x: T) {
+        consume(x);
+        consume(x);
+      }
+    `);
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].message).toBe("use of moved value `x`");
+  });
 });

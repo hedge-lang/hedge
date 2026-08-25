@@ -1012,6 +1012,426 @@ describe("execution tests", (): void => {
     });
   });
 
+  describe("generic call-site type inference", (): void => {
+    it("infers a generic parameter from a single argument, with no annotation", (): void => {
+      assertRunsTo(
+        `
+        fn identity<T>(x: T) -> T { x }
+        fn main() { print(identity(5)); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("infers a generic parameter through a single reference-hop argument", (): void => {
+      assertRunsTo(
+        `
+        fn peek<T>(x: &T) -> &T { x }
+        fn main() { let v = 5; print(*peek(&v)); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("infers two independent generic parameters from two arguments in one call", (): void => {
+      assertRunsTo(
+        `
+        fn first<A, B>(a: A, b: B) -> A { a }
+        fn main() { print(first(1, "s")); }
+        `,
+        ["1"],
+      );
+    });
+
+    it("infers a repeated generic parameter consistently across two occurrences", (): void => {
+      assertRunsTo(
+        `
+        fn same<T>(a: T, b: T) -> T { a }
+        fn main() { print(same(1, 2)); }
+        `,
+        ["1"],
+      );
+    });
+
+    it("leaves an ordinary non-generic call unaffected", (): void => {
+      assertRunsTo(
+        `
+        fn add(a: i32, b: i32) -> i32 { a + b }
+        fn main() { print(add(1, 2)); }
+        `,
+        ["3"],
+      );
+    });
+
+    it("infers a generic call nested inside another generic function's own body", (): void => {
+      assertRunsTo(
+        `
+        fn outer<T>(x: T) -> T {
+          fn inner<T>(y: T) -> T { y }
+          inner(x)
+        }
+        fn main() { print(outer(42)); }
+        `,
+        ["42"],
+      );
+    });
+
+    it("infers a composed generic call passed as another generic call's argument", (): void => {
+      assertRunsTo(
+        `
+        fn identity<T>(x: T) -> T { x }
+        fn main() { print(identity(identity(5))); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("reports a conflicting inference across two occurrences of the same parameter, blaming the second", (): void => {
+      const result = compileHedgeCode(
+        `fn same<T>(a: T, b: T) -> T { a } fn main() { print(same(1, "s")); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(errors[0]?.message).toBe(
+        "argument 2 to function `same` type mismatch: expected `i32`, found `str`",
+      );
+      expect(errors[0]?.relatedSpans).toEqual([
+        { span: { start: 57, end: 58 }, label: "inferred as `i32` here" },
+      ]);
+    });
+
+    it("reports a conflicting inference through a reference-hop parameter, at the same reference depth on both sides", (): void => {
+      const result = compileHedgeCode(
+        `
+        fn samer<'a, T>(a: &'a T, b: &T) -> &'a T { a }
+        fn main() { let x = 1; let y = "s"; print(*samer(&x, &y)); }
+        `,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(errors[0]?.message).toBe(
+        "argument 2 to function `samer` type mismatch: expected `&i32`, found `&str`",
+      );
+      expect(errors[0]?.relatedSpans).toEqual([
+        { span: { start: 114, end: 115 }, label: "inferred as `i32` here" },
+      ]);
+    });
+
+    it("lets an explicit turbofish override inference for the parameter it names", (): void => {
+      assertRunsTo(
+        `
+        fn identity<T>(x: T) -> T { x }
+        fn main() { print(identity::<i32>(5)); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("reports a conflict when a turbofish disagrees with the actual argument, blaming the argument", (): void => {
+      const result = compileHedgeCode(
+        `fn identity<T>(x: T) -> T { x } fn main() { print(identity::<i32>("s")); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(errors[0]?.message).toBe(
+        "argument 1 to function `identity` type mismatch: expected `i32`, found `str`",
+      );
+    });
+
+    it("treats an empty turbofish as full inference rather than an arity error", (): void => {
+      assertRunsTo(
+        `
+        fn identity<T>(x: T) -> T { x }
+        fn main() { print(identity::<>(5)); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("rejects a non-empty turbofish whose argument count does not match the callee's declared generics", (): void => {
+      const result = compileHedgeCode(
+        `fn identity<T>(x: T) -> T { x } fn main() { print(identity::<i32, str>(5)); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-011");
+      expect(errors[0]?.message).toBe(
+        "`identity` declares 1 generic parameter(s), but the turbofish supplies 2",
+      );
+    });
+
+    it("does not cascade a second diagnostic when a generic argument is already an unresolved name", (): void => {
+      assertNoCascade(
+        `fn same<T>(a: T, b: T) -> T { a } fn main() { print(same(undefined_name, 5)); }`,
+      );
+    });
+
+    it("infers through a let binding's own type annotation, consistent with the argument", (): void => {
+      assertRunsTo(
+        `
+        fn identity<T>(x: T) -> T { x }
+        fn main() { let x: i32 = identity(5); print(x); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("reports a conflict between a let annotation's seeded type and the argument, blaming the argument", (): void => {
+      const result = compileHedgeCode(
+        `fn identity<T>(x: T) -> T { x } fn main() { let x: str = identity(5); print(x); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(errors[0]?.message).toBe(
+        "argument 1 to function `identity` type mismatch: expected `str`, found `i32`",
+      );
+    });
+
+    it("does not seed a struct field initializer's declared type into a generic call's inference", (): void => {
+      const result = compileHedgeCode(
+        `
+        struct Box { v: str }
+        fn identity<T>(x: T) -> T { x }
+        fn main() { let b = Box { v: identity(5) }; print(b.v); }
+        `,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-001");
+      expect(errors[0]?.message).toBe(
+        "field `v` type mismatch: expected `str`, found `i32`",
+      );
+    });
+
+    it("infers through the enclosing function's own declared return type, consistent with the argument", (): void => {
+      assertRunsTo(
+        `
+        fn identity<T>(x: T) -> T { x }
+        fn wrap() -> i32 { identity(5) }
+        fn main() { print(wrap()); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("reports a conflict between the enclosing function's return type and the argument, blaming the argument", (): void => {
+      const result = compileHedgeCode(
+        `
+        fn identity<T>(x: T) -> T { x }
+        fn wrap() -> str { identity(5) }
+        fn main() { print(wrap()); }
+        `,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(errors[0]?.message).toBe(
+        "argument 1 to function `identity` type mismatch: expected `str`, found `i32`",
+      );
+    });
+
+    it("reports a generic parameter that never appears in any parameter or return position as unsolved", (): void => {
+      const result = compileHedgeCode(
+        `fn discard<T>(x: i32) -> i32 { x } fn main() { print(discard(5)); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-006");
+      expect(errors[0]?.message).toBe(
+        "cannot infer type of generic parameter `T` without an explicit type annotation or turbofish",
+      );
+    });
+
+    it("rescues an otherwise-unsolved generic parameter via an explicit turbofish", (): void => {
+      assertRunsTo(
+        `
+        fn discard<T>(x: i32) -> i32 { x }
+        fn main() { print(discard::<str>(5)); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("coerces an unsuffixed literal argument against the already-resolved concrete type", (): void => {
+      assertRunsTo(
+        `
+        fn same<T>(a: T, b: T) -> T { a }
+        fn main() { print(same(5i64, 2)); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("range-checks a negative unsuffixed literal against the already-resolved concrete type", (): void => {
+      const result = compileHedgeCode(
+        `fn same<T>(a: T, b: T) -> T { a } fn main() { print(same(5i8, -200)); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-005");
+      expect(errors[0]?.message).toBe("out of range for i8");
+    });
+
+    it("reports a structural mismatch (non-reference argument for a reference-hop parameter) as an ordinary type mismatch, not an unsolved variable", (): void => {
+      const result = compileHedgeCode(
+        `
+        fn borrow<T>(x: &T) -> &T { x }
+        fn main() { let v = 5; print(*borrow(v)); }
+        `,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-001");
+      expect(errors[0]?.message).toBe(
+        "argument 1 to function `borrow` type mismatch: expected `&T`, found `i32`",
+      );
+    });
+
+    it("reports a mutability mismatch on a reference-hop parameter as an ordinary type mismatch", (): void => {
+      const result = compileHedgeCode(
+        `
+        fn borrowmut<T>(x: &mut T) {}
+        fn main() { let v = 5; borrowmut(&v); }
+        `,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-001");
+      expect(errors[0]?.message).toBe(
+        "argument 1 to function `borrowmut` type mismatch: expected `&mut T`, found `&i32`",
+      );
+    });
+
+    it("does not cascade a second diagnostic when the enclosing function's return type is Self used outside a trait or impl", (): void => {
+      assertNoCascade(
+        `fn identity<T>(x: T) -> T { x } fn make() -> Self { identity(5) }`,
+      );
+    });
+
+    it("does not cascade a second diagnostic when a let binding's annotation is Self used outside a trait or impl", (): void => {
+      assertNoCascade(
+        `fn identity<T>(x: T) -> T { x } fn main() { let x: Self = identity(5); print(x); }`,
+      );
+    });
+
+    it("does not cascade a second diagnostic when a turbofish argument is Self used outside a trait or impl", (): void => {
+      assertNoCascade(
+        `fn identity<T>(x: T) -> T { x } fn main() { print(identity::<Self>(5)); }`,
+      );
+    });
+
+    it("does not cascade an unsolved-variable diagnostic on top of a wrong-arity generic call", (): void => {
+      assertNoCascade(
+        `fn identity<T>(x: T) -> T { x } fn main() { identity(); }`,
+      );
+    });
+
+    it("does not cascade an unsolved-variable diagnostic per parameter on a wrong-arity multi-generic call", (): void => {
+      const result = compileHedgeCode(
+        `fn pair<A, B>(a: A, b: B) -> A { a } fn main() { print(pair(1)); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-008");
+    });
+
+    it("does not cascade a second diagnostic when a turbofish conflicts with a let annotation", (): void => {
+      const result = compileHedgeCode(
+        `fn identity<T>(x: T) -> T { x } fn main() { let y: str = identity::<i32>(5); print(y); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(errors[0]?.message).toBe(
+        "call to `identity` type mismatch: expected `i32`, found `str`",
+      );
+    });
+
+    it("does not cascade a second diagnostic when a turbofish conflicts with the enclosing function's return type", (): void => {
+      const result = compileHedgeCode(
+        `
+        fn identity<T>(x: T) -> T { x }
+        fn wrap() -> str { identity::<i32>(5) }
+        fn main() { print(wrap()); }
+        `,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(errors[0]?.message).toBe(
+        "call to `identity` type mismatch: expected `i32`, found `str`",
+      );
+    });
+  });
+
+  describe("generic enum-variant construction turbofish and unsolved-variable checks", (): void => {
+    it("lets an explicit turbofish override inference on a generic enum-variant construction", (): void => {
+      assertRunsTo(
+        `
+        enum Wrap<T> { Value(T) }
+        fn main() { let w = Wrap::Value::<i32>(5); match w { Wrap::Value(v) => print(v) } }
+        `,
+        ["5"],
+      );
+    });
+
+    it("reports a conflict when a turbofish disagrees with the actual argument on a generic enum-variant construction", (): void => {
+      const result = compileHedgeCode(
+        `enum Wrap<T> { Value(T) } fn main() { let w = Wrap::Value::<str>(5); print(w); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(errors[0]?.message).toBe(
+        "argument 1 to variant `Value` type mismatch: expected `str`, found `i32`",
+      );
+    });
+
+    it("reports an enum generic parameter unused by the constructed variant as unsolved", (): void => {
+      const result = compileHedgeCode(
+        `enum Two<A, B> { First(A), Second(B) } fn main() { let w = Two::First(5); print(w); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-006");
+      expect(errors[0]?.message).toBe(
+        "cannot infer type of generic parameter `B` without an explicit type annotation or turbofish",
+      );
+    });
+  });
+
+  describe("generic tuple-struct construction turbofish inference", (): void => {
+    it("lets an explicit turbofish override inference on a generic tuple-struct construction", (): void => {
+      assertRunsTo(
+        `
+        struct Pair<T>(T, T);
+        fn main() { let p = Pair::<i32>(1, 2); let Pair(a, b) = p; print(a); }
+        `,
+        ["1"],
+      );
+    });
+
+    it("reports a conflict when a turbofish disagrees with the actual argument on a generic tuple-struct construction", (): void => {
+      const result = compileHedgeCode(
+        `struct Pair<T>(T, T); fn main() { let p = Pair::<i32>("s", "t"); print(p); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(2);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(errors[0]?.message).toBe(
+        "argument 1 to struct `Pair` type mismatch: expected `i32`, found `str`",
+      );
+      expect(errors[1]?.code).toBe("HEDGE-TYPE-010");
+      expect(errors[1]?.message).toBe(
+        "argument 2 to struct `Pair` type mismatch: expected `i32`, found `str`",
+      );
+    });
+  });
+
   describe("unused generic type parameters on a struct or enum", (): void => {
     it("rejects a struct's own type parameter that appears in none of its fields", (): void => {
       const result = compileHedgeCode(`struct Triple<A, B, C> { a: A, c: C }`);

@@ -4,6 +4,7 @@ import {
   warningDiagnostic,
   type Diagnostic,
   type DiagnosticCode,
+  type RelatedSpan,
 } from "../diagnostics.js";
 import type { IntSuffix, Token } from "../lexer/token.js";
 import {
@@ -396,20 +397,24 @@ function resolve(ctx: AnalysisContext, name: string): Option<ScopedVariable> {
  * @param message - The error message to emit.
  * @param tokenId - The identifier of the token associated with the error.
  * @param code - Stable identifier for this diagnostic, if it has one.
+ * @param relatedSpans - Secondary source locations, e.g. the site a
+ *   conflicting value was first bound at.
  */
 function emitError(
   ctx: AnalysisContext,
   message: string,
   tokenId: number,
   code: DiagnosticCode,
+  relatedSpans?: readonly RelatedSpan[],
 ): void {
   const token = ctx.tokens[tokenId];
+  const diagnostic = errorDiagnostic(
+    code,
+    message,
+    token !== undefined ? some(token.span) : none(),
+  );
   ctx.diagnostics.push(
-    errorDiagnostic(
-      code,
-      message,
-      token !== undefined ? some(token.span) : none(),
-    ),
+    relatedSpans !== undefined ? { ...diagnostic, relatedSpans } : diagnostic,
   );
 }
 
@@ -2375,12 +2380,11 @@ function analyzeStructPattern(
       pattern: none<Semantics.Pattern>(),
     };
   });
-  const result: Semantics.StructPattern = {
+  return {
     ...pattern,
     fields,
     type: scrutineeType,
   };
-  return result;
 }
 
 function analyzeSlicePattern(
@@ -2454,19 +2458,17 @@ function analyzeSlicePattern(
         type: boundType,
         mutable: localMutable,
       });
-      const result: Semantics.RestPattern = {
+      return {
         ...el,
         name: some({ ...el.name.value, type: boundType }),
       };
-      return result;
     },
   );
-  const result: Semantics.SlicePattern = {
+  return {
     ...pattern,
     elements,
     type: scrutineeType,
   };
-  return result;
 }
 
 interface OrPatternBinding {
@@ -3604,7 +3606,13 @@ function analyzeFunction(
     buildFunctionSignature(ctx, decl.signature);
   const body = checkFunctionReturnType(
     ctx,
-    analyzeBlock(ctx, decl.body),
+    analyzeBlock(
+      ctx,
+      decl.body,
+      isSome(decl.signature.returnType) && !suppressReturnTypeMismatch
+        ? expectedReturnType
+        : undefined,
+    ),
     expectedReturnType,
     suppressReturnTypeMismatch,
   );
@@ -3619,9 +3627,15 @@ function analyzeFunction(
   return result;
 }
 
+/** `expectedType`, when given, seeds a trailing expression that's directly
+ * a call to a generic callee - the enclosing function's own declared return
+ * type, threaded down only from `analyzeFunction`'s own top-level call.
+ * Every other caller (an `if`/`else` branch, a nested block, ...) omits it,
+ * unaffected. */
 function analyzeBlock(
   ctx: AnalysisContext,
   block: Parser.Block,
+  expectedType?: Semantics.Type,
 ): Semantics.Block {
   pushFrame(ctx);
   registerTypeDecls(ctx, block.statements);
@@ -3630,7 +3644,9 @@ function analyzeBlock(
     analyzeStatement(ctx, statement),
   );
   const analyzedTrailing = mapSome(block.trailingExpression, (expr) =>
-    analyzeExpression(ctx, expr),
+    expr.kind === "CallExpression" && expectedType !== undefined
+      ? analyzeCall(ctx, expr, expectedType)
+      : analyzeExpression(ctx, expr),
   );
   const type: Semantics.Type = isSome(analyzedTrailing)
     ? getType(analyzedTrailing.value)
@@ -3718,29 +3734,43 @@ function analyzeLetStatement(
   ctx: AnalysisContext,
   statement: Parser.LetStatement,
 ): Semantics.LetStatement {
+  // Resolved once up front (rather than only after the initializer, as
+  // every other branch below still effectively did) so a call initializer
+  // can seed it into its own unification before argument-driven inference
+  // runs - see `analyzeCall`'s `expectedType` parameter. Bundled with
+  // `isSelf` so every use site below carries both in lockstep, rather than
+  // separately re-checking `isSome(statement.type)` alongside
+  // `isSome(annotation)` to prove they agree.
+  const annotation: Option<{
+    readonly type: Semantics.Type;
+    readonly isSelf: boolean;
+  }> = mapSome(statement.type, (type) => ({
+    type: validateSlice1Type(ctx, type, statement.tokenId),
+    isSelf: isSelfType(type),
+  }));
   const analyzedInitializer: Option<Semantics.Expression> = mapSome(
     statement.initializer,
-    (initializer) => analyzeExpression(ctx, initializer),
+    (initializer) =>
+      initializer.kind === "CallExpression" &&
+      isSome(annotation) &&
+      !annotation.value.isSelf
+        ? analyzeCall(ctx, initializer, annotation.value.type)
+        : analyzeExpression(ctx, initializer),
   );
 
   let coercedInitializer: Option<Semantics.Expression> = analyzedInitializer;
   let bindingType: Semantics.Type;
   if (isSome(analyzedInitializer)) {
     bindingType = getType(analyzedInitializer.value);
-    if (isSome(statement.type)) {
-      const annotationType = validateSlice1Type(
-        ctx,
-        statement.type.value,
-        statement.tokenId,
-      );
+    if (isSome(annotation)) {
       const { expr, mismatch } = reconcileExpressionType(
         ctx,
         analyzedInitializer.value,
-        annotationType,
+        annotation.value.type,
         statement.tokenId,
       );
       coercedInitializer = some(expr);
-      if (mismatch && !isSelfType(statement.type.value)) {
+      if (mismatch && !annotation.value.isSelf) {
         emitError(
           ctx,
           "type mismatch: explicit annotation does not match initializer type",
@@ -3748,7 +3778,7 @@ function analyzeLetStatement(
           "HEDGE-TYPE-001",
         );
       }
-      bindingType = annotationType;
+      bindingType = annotation.value.type;
     } else if (
       analyzedInitializer.value.kind === "ArrayExpression" &&
       analyzedInitializer.value.elements.length === 0
@@ -3760,12 +3790,8 @@ function analyzeLetStatement(
         "HEDGE-TYPE-006",
       );
     }
-  } else if (isSome(statement.type)) {
-    bindingType = validateSlice1Type(
-      ctx,
-      statement.type.value,
-      statement.tokenId,
-    );
+  } else if (isSome(annotation)) {
+    bindingType = annotation.value.type;
   } else {
     bindingType = { kind: "UnitType", tokenId: statement.tokenId };
   }
@@ -5568,6 +5594,7 @@ function analyzeIdentifier(
 function analyzeCall(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
+  expectedType?: Semantics.Type,
 ): Semantics.CallExpression {
   const args = call.arguments.map((arg) => analyzeExpression(ctx, arg));
   // Must run before ordinary path analysis on `call.callee`, which would
@@ -5604,22 +5631,67 @@ function analyzeCall(
       type: { kind: "UnitType", tokenId: call.tokenId },
     };
   }
-  const checkedArgs = calleeType.paramsArePlaceholder
-    ? [...args]
-    : checkPositionalCallArgs(
-        ctx,
-        call,
-        "function",
-        calleeName(call),
-        calleeType.params.map((type) => ({ type })),
-        args,
-      );
+  if (calleeType.paramsArePlaceholder) {
+    return {
+      ...call,
+      callee,
+      arguments: [...args],
+      type: calleeType.returnType,
+    };
+  }
+  const turbofishBindings: GenericBindings = new Map();
+  seedTurbofishBindings(ctx, call, calleeType.genericParams, turbofishBindings);
+  const expectedTypeConflicted =
+    expectedType !== undefined &&
+    seedExpectedReturnType(
+      ctx,
+      call,
+      calleeType.returnType,
+      expectedType,
+      new Set(calleeType.genericParams),
+      turbofishBindings,
+    );
+  const { args: checkedArgs, bindings } = checkPositionalCallArgs(
+    ctx,
+    call,
+    { kindLabel: "function", name: calleeName(call) },
+    calleeType.params.map((type) => ({ type })),
+    args,
+    calleeType.genericParams,
+    turbofishBindings,
+  );
+  for (const paramName of calleeType.genericParams) {
+    if (bindings.has(paramName)) continue;
+    emitError(
+      ctx,
+      `cannot infer type of generic parameter \`${paramName}\` without an explicit type annotation or turbofish`,
+      call.tokenId,
+      "HEDGE-TYPE-006",
+    );
+  }
+  // A conflict already reported by `seedExpectedReturnType` means the
+  // enclosing `let`/return reconciliation would otherwise see a return type
+  // that still disagrees with `expectedType` and double-report the same
+  // problem - report the call's own type as `expectedType` itself instead,
+  // so that reconciliation trivially agrees.
+  const returnType = expectedTypeConflicted
+    ? expectedType
+    : getReturnType(calleeType, bindings);
   return {
     ...call,
     callee,
     arguments: checkedArgs,
-    type: calleeType.returnType,
+    type: returnType,
   };
+}
+
+function getReturnType(
+  calleeType: Semantics.FunctionType,
+  bindings: GenericBindings,
+): Semantics.Type {
+  return calleeType.genericParams.length > 0
+    ? substituteGenericType(calleeType.returnType, bindings)
+    : calleeType.returnType;
 }
 
 /** The callee's source-level name for a diagnostic. */
@@ -5678,44 +5750,407 @@ function analyzeEnumVariantCallConstruction(
     );
     return some({ type: enumDecl.type, args: [...args] });
   }
-  const checkedArgs = checkPositionalCallArgs(
+  const checkedArgs = checkGenericPositionalConstruction(
     ctx,
     call,
-    "variant",
-    variantName,
+    { kindLabel: "variant", name: variantName },
     variant.body.value.fields,
     args,
+    enumDecl.generics,
   );
   return some({ type: enumDecl.type, args: checkedArgs });
 }
 
+/** A generic-parameter name's inferred concrete type, alongside the token
+ * where that binding was first established - needed to point a later
+ * conflict's `relatedSpans` back at it. */
+interface GenericBinding {
+  readonly type: Semantics.Type;
+  readonly tokenId: number;
+  /** True for a binding that stands in for an already-diagnosed failure
+   * (`Self` outside a trait/impl, a structurally mismatched reference hop)
+   * rather than a real resolved type - a later real binding replaces it
+   * silently instead of conflicting against it, so one root-cause failure
+   * doesn't cascade into a second, unrelated-looking diagnostic. */
+  readonly isErrorPlaceholder?: boolean;
+}
+
+/** Bound as unification walks a call's arguments
+ * (docs/adr/0012-unification-based-generic-call-inference.md). Internal
+ * bookkeeping for this pass only - never joins `Semantics.Type` itself. */
+type GenericBindings = Map<string, GenericBinding>;
+
+/** Whether `declaredType` is a generic-parameter position at all - a bare
+ * generic-named `NamedType`, or a single reference hop to one, the only two
+ * shapes generic-parameter resolution currently supports. Anything else,
+ * including a compound position, is never treated as generic here. */
+function involvesGenericParam(
+  declaredType: Semantics.Type,
+  genericNames: ReadonlySet<string>,
+): boolean {
+  const base =
+    declaredType.kind === "ReferenceType"
+      ? declaredType.referent
+      : declaredType;
+  if (base.kind !== "NamedType" || base.path.segments.length !== 1) {
+    return false;
+  }
+  const name = base.path.segments[0];
+  return name !== undefined && genericNames.has(name);
+}
+
+/** Substitutes every generic-parameter-named `NamedType` position in `type`
+ * for its bound concrete type, recursing through a single reference hop -
+ * the only two shapes generic-parameter resolution currently supports. A
+ * `NamedType` with no binding yet (or not a generic parameter at all)
+ * passes through unchanged. */
+function substituteGenericType(
+  type: Semantics.Type,
+  bindings: GenericBindings,
+): Semantics.Type {
+  if (type.kind === "NamedType") {
+    const name = type.path.segments[0];
+    const bound = name === undefined ? undefined : bindings.get(name);
+    return bound?.type ?? type;
+  }
+  if (type.kind === "ReferenceType") {
+    return {
+      ...type,
+      referent: substituteGenericType(type.referent, bindings),
+    };
+  }
+  return type;
+}
+
+type UnifyOutcome =
+  | { readonly kind: "Bound" }
+  | {
+      readonly kind: "Conflict";
+      readonly previous: Semantics.Type;
+      readonly previousTokenId: number;
+    }
+  | { readonly kind: "Mismatch" };
+
+/** A single `relatedSpans` entry pointing at `tokenId`, or none if the
+ * token can't be resolved - the shared shape a conflict diagnostic's
+ * "inferred here" note takes at every `unifyGenericParam` call site. */
+function relatedSpanAt(
+  ctx: AnalysisContext,
+  tokenId: number,
+  label: string,
+): readonly RelatedSpan[] {
+  const token = ctx.tokens[tokenId];
+  return token === undefined ? [] : [{ span: token.span, label }];
+}
+
+/** Online Robinson-style unification of one declared type against one
+ * argument's actual type, binding a not-yet-seen generic parameter name
+ * into `bindings` (recorded at `tokenId`, so a later conflict can point
+ * back at where the binding came from) or checking a subsequent occurrence
+ * against its existing binding. Only called once `involvesGenericParam` has
+ * already confirmed `declaredType` is a real generic-parameter position, so
+ * a `NamedType` reached here is always in `genericNames`. */
+function unifyGenericParam(
+  declaredType: Semantics.Type,
+  actualType: Semantics.Type,
+  tokenId: number,
+  genericNames: ReadonlySet<string>,
+  bindings: GenericBindings,
+): UnifyOutcome {
+  if (declaredType.kind === "NamedType") {
+    const name = declaredType.path.segments[0];
+    assert(
+      name !== undefined && genericNames.has(name),
+      "unifyGenericParam called on a non-generic NamedType",
+    );
+    const existing = bindings.get(name);
+    if (existing === undefined || existing.isErrorPlaceholder) {
+      bindings.set(name, { type: actualType, tokenId });
+      return { kind: "Bound" };
+    }
+    return typesEqual(existing.type, actualType)
+      ? { kind: "Bound" }
+      : {
+          kind: "Conflict",
+          previous: existing.type,
+          previousTokenId: existing.tokenId,
+        };
+  }
+  if (
+    declaredType.kind === "ReferenceType" &&
+    actualType.kind === "ReferenceType" &&
+    declaredType.mutable === actualType.mutable
+  ) {
+    return unifyGenericParam(
+      declaredType.referent,
+      actualType.referent,
+      tokenId,
+      genericNames,
+      bindings,
+    );
+  }
+  bindMismatchedReferentPlaceholder(
+    declaredType,
+    tokenId,
+    genericNames,
+    bindings,
+  );
+  return { kind: "Mismatch" };
+}
+
+/** The declared shape itself doesn't match (wrong mutability, or a
+ * non-reference actual type against a `&T`/`&mut T` position), so the
+ * referent's own generic name is never actually reached by
+ * `unifyGenericParam`'s own recursion. Bind it to an error-recovery
+ * placeholder anyway (unless something valid already bound it - a real
+ * prior occurrence should never be clobbered by a later structural
+ * failure), so a downstream "cannot be inferred" check doesn't cascade a
+ * second diagnostic on top of this one's own. */
+function bindMismatchedReferentPlaceholder(
+  declaredType: Semantics.Type,
+  tokenId: number,
+  genericNames: ReadonlySet<string>,
+  bindings: GenericBindings,
+): void {
+  if (
+    declaredType.kind !== "ReferenceType" ||
+    declaredType.referent.kind !== "NamedType" ||
+    declaredType.referent.path.segments.length !== 1
+  ) {
+    return;
+  }
+  const name = declaredType.referent.path.segments[0];
+  if (name !== undefined && genericNames.has(name) && !bindings.has(name)) {
+    bindings.set(name, {
+      type: { kind: "UnitType", tokenId },
+      tokenId,
+      isErrorPlaceholder: true,
+    });
+  }
+}
+
+/** Seeds `bindings` from a call's own turbofish type-argument list, if any -
+ * these take priority over argument-driven inference, so they must run
+ * before it (a later disagreement from an ordinary argument is then
+ * reported as the conflict, blaming the argument). An empty list (`::<>`)
+ * means zero explicit arguments were supplied, so it's treated exactly like
+ * an absent turbofish - full inference, not an arity error. A non-empty
+ * list that doesn't match the callee's declared generic-parameter count is
+ * rejected outright. */
+function seedTurbofishBindings(
+  ctx: AnalysisContext,
+  call: Parser.CallExpression,
+  genericParams: readonly string[],
+  bindings: GenericBindings,
+): void {
+  if (call.callee.kind !== "PathExpression") return;
+  const typeArgs = call.callee.typeArguments;
+  if (typeArgs.length === 0) return;
+  if (typeArgs.length !== genericParams.length) {
+    emitError(
+      ctx,
+      `\`${calleeName(call)}\` declares ${genericParams.length} generic parameter(s), but the turbofish supplies ${typeArgs.length}`,
+      call.tokenId,
+      "HEDGE-TYPE-011",
+    );
+    return;
+  }
+  genericParams.forEach((paramName, index) => {
+    const argType = typeArgs[index];
+    if (argType === undefined) return;
+    bindings.set(paramName, {
+      type: validateSlice1Type(ctx, argType, argType.tokenId),
+      tokenId: argType.tokenId,
+      // `Self` outside a trait/impl already reports its own diagnostic
+      // (validateSlice1Type, above) and resolves to the UnitType
+      // error-recovery placeholder - marked so a real argument later in
+      // the same call isn't wrongly reported as conflicting with it.
+      isErrorPlaceholder: isSelfType(argType),
+    });
+  });
+}
+
+/** Seeds turbofish, then argument-driven unification, then checks every
+ * declared generic parameter got resolved - the same sequence `analyzeCall`
+ * runs for an ordinary function call, minus the expected-return-type seed
+ * (a constructed value's own type never reifies which concrete types its
+ * generics resolved to - `EnumType`/`StructType` compare by name alone, see
+ * `typesEqual` - so there's no return type for an outer expected type to
+ * seed against the way an ordinary function call has one). Shared by
+ * `analyzeEnumVariantCallConstruction` and `analyzeTupleStructCallConstruction`. */
+function checkGenericPositionalConstruction(
+  ctx: AnalysisContext,
+  call: Parser.CallExpression,
+  site: CallSiteDescription,
+  params: readonly { readonly type: Semantics.Type }[],
+  args: readonly Semantics.Expression[],
+  genericParams: readonly string[],
+): Semantics.Expression[] {
+  const turbofishBindings: GenericBindings = new Map();
+  seedTurbofishBindings(ctx, call, genericParams, turbofishBindings);
+  const { args: checkedArgs, bindings } = checkPositionalCallArgs(
+    ctx,
+    call,
+    site,
+    params,
+    args,
+    genericParams,
+    turbofishBindings,
+  );
+  for (const paramName of genericParams) {
+    if (bindings.has(paramName)) continue;
+    emitError(
+      ctx,
+      `cannot infer type of generic parameter \`${paramName}\` without an explicit type annotation or turbofish`,
+      call.tokenId,
+      "HEDGE-TYPE-006",
+    );
+  }
+  return checkedArgs;
+}
+
+/** Seeds `bindings` from a calling context's already-known expected type - a
+ * `let` binding's own annotation, or the enclosing function's declared
+ * return type - unifying it against the callee's declared return type. Runs
+ * after turbofish and before argument-driven inference, so a disagreement
+ * against an ordinary argument is still blamed at the argument; a
+ * disagreement against turbofish itself (no argument involved at all) is
+ * blamed here, at the call's own site, since there is no argument span to
+ * point at instead.
+ *
+ * Returns whether a conflict was reported, so the caller can substitute
+ * `expectedType` directly as the call's own final type instead of the
+ * ordinary bindings-substituted one - the conflict is already fully
+ * reported here, so the enclosing `let`/return reconciliation seeing a
+ * type that still disagrees with `expectedType` would only double-report
+ * the same problem under a different, more confusing message. */
+function seedExpectedReturnType(
+  ctx: AnalysisContext,
+  call: Parser.CallExpression,
+  returnType: Semantics.Type,
+  expectedType: Semantics.Type,
+  genericNames: ReadonlySet<string>,
+  bindings: GenericBindings,
+): boolean {
+  if (!involvesGenericParam(returnType, genericNames)) return false;
+  const outcome = unifyGenericParam(
+    returnType,
+    expectedType,
+    call.tokenId,
+    genericNames,
+    bindings,
+  );
+  switch (outcome.kind) {
+    case "Bound":
+      return false;
+    case "Conflict": {
+      emitError(
+        ctx,
+        `call to \`${calleeName(call)}\` type mismatch: expected \`${describeType(substituteGenericType(returnType, bindings))}\`, found \`${describeType(expectedType)}\``,
+        call.tokenId,
+        "HEDGE-TYPE-010",
+        relatedSpanAt(
+          ctx,
+          outcome.previousTokenId,
+          `inferred as \`${describeType(outcome.previous)}\` here`,
+        ),
+      );
+      return true;
+    }
+    case "Mismatch":
+      // The declared return shape itself doesn't match the expected type
+      // (e.g. `&T` against a non-reference annotation) - a structural
+      // problem the existing post-hoc annotation/return-type check (run
+      // separately by the caller) still catches, so no diagnostic needed
+      // here beyond leaving the generic parameter unbound.
+      return false;
+    default:
+      return assertNever(
+        outcome,
+        `Unexpected unify outcome: ${JSON.stringify(outcome)}`,
+      );
+  }
+}
+
+/** How a positional-argument check names its callee in a diagnostic - a
+ * tuple-shaped construction (`Enum::Variant(...)`, a tuple struct's own
+ * `Name(...)`) or an ordinary function call, distinguished only by
+ * `kindLabel`'s wording. Bundled into one type (rather than two loose
+ * parameters) so `checkPositionalCallArgs`/`checkGenericPositionalArg`
+ * each stay under the parameter-count ceiling. */
+interface CallSiteDescription {
+  readonly kindLabel: "variant" | "struct" | "function";
+  readonly name: string;
+}
+
 /** Arity, then per-argument type checking, for any call whose callee has a
- * known positional parameter list - a tuple-shaped construction
- * (`Enum::Variant(...)`, a tuple struct's own `Name(...)`) or an ordinary
- * function call, distinguished only by `kindLabel`'s wording. `params` is
- * anything carrying a declared type per position, so a `TupleField[]` and a
- * `FunctionType`'s own `Type[]` both satisfy it. */
+ * known positional parameter list. `params` is anything carrying a
+ * declared type per position, so a `TupleField[]` and a `FunctionType`'s
+ * own `Type[]` both satisfy it. `genericParams` is the callee's own
+ * declared type-parameter names (empty for a non-generic callee); a
+ * position naming one of them unifies instead of a plain `typesEqual`
+ * check. Returns the bindings unification produced alongside the checked
+ * arguments, so a caller can substitute them into a return type.
+ * `seedBindings`, when given, is unified into (e.g. a turbofish's
+ * already-resolved argument list) rather than starting empty, so a later
+ * argument that disagrees with a seed is reported as the conflict. */
 function checkPositionalCallArgs(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
-  kindLabel: "variant" | "struct" | "function",
-  name: string,
+  site: CallSiteDescription,
   params: readonly { readonly type: Semantics.Type }[],
   args: readonly Semantics.Expression[],
-): Semantics.Expression[] {
+  genericParams: readonly string[],
+  seedBindings?: GenericBindings,
+): {
+  readonly args: Semantics.Expression[];
+  readonly bindings: GenericBindings;
+} {
   const fields = params;
+  const genericNames = new Set(genericParams);
+  const bindings: GenericBindings =
+    seedBindings ?? new Map<string, GenericBinding>();
   if (fields.length !== args.length) {
     emitError(
       ctx,
-      `${kindLabel} \`${name}\` takes ${fields.length} argument(s), but ${args.length} ${args.length === 1 ? "was" : "were"} supplied`,
+      `${site.kindLabel} \`${site.name}\` takes ${fields.length} argument(s), but ${args.length} ${args.length === 1 ? "was" : "were"} supplied`,
       call.tokenId,
       "HEDGE-TYPE-008",
     );
-    return [...args];
+    // Arity mismatch means the per-argument loop below never runs, so
+    // nothing would otherwise bind a generic parameter that isn't already
+    // seeded (turbofish, expected return type). Placeholder-bind the rest
+    // so the caller's own unsolved-variable check doesn't also fire for
+    // each one on top of this arity error.
+    for (const paramName of genericNames) {
+      if (bindings.has(paramName)) continue;
+      bindings.set(paramName, {
+        type: { kind: "UnitType", tokenId: call.tokenId },
+        tokenId: call.tokenId,
+        isErrorPlaceholder: true,
+      });
+    }
+    return { args: [...args], bindings };
   }
-  return args.map((arg, i) => {
+  const checkedArgs = args.map((arg, i) => {
     const field = fields[i];
     if (field === undefined) return arg;
+    const argType = getType(arg);
+    if (
+      genericNames.size > 0 &&
+      involvesGenericParam(field.type, genericNames) &&
+      !(argType.kind === "UnitType" && isAmbiguousUnitExpr(arg))
+    ) {
+      return checkGenericPositionalArg(
+        ctx,
+        site,
+        i,
+        field.type,
+        arg,
+        genericNames,
+        bindings,
+      );
+    }
     const { expr, mismatch } = reconcileExpressionType(
       ctx,
       arg,
@@ -5728,13 +6163,103 @@ function checkPositionalCallArgs(
     if (mismatch) {
       emitError(
         ctx,
-        `argument ${i} to ${kindLabel} \`${name}\` type mismatch: expected \`${describeType(field.type)}\`, found \`${describeType(getType(expr))}\``,
+        `argument ${i + 1} to ${site.kindLabel} \`${site.name}\` type mismatch: expected \`${describeType(field.type)}\`, found \`${describeType(getType(expr))}\``,
         arg.tokenId,
         "HEDGE-TYPE-001",
       );
     }
     return expr;
   });
+  return { args: checkedArgs, bindings };
+}
+
+/** The generic-parameter-position branch of `checkPositionalCallArgs`'s
+ * per-argument loop, split out to stay under the branch-count ceiling a
+ * plain literal coercion plus range-check plus conflict-report combination
+ * would otherwise push the loop body past. */
+function checkGenericPositionalArg(
+  ctx: AnalysisContext,
+  site: CallSiteDescription,
+  index: number,
+  declaredType: Semantics.Type,
+  arg: Semantics.Expression,
+  genericNames: ReadonlySet<string>,
+  bindings: GenericBindings,
+): Semantics.Expression {
+  // An unsuffixed literal has no fixed type of its own yet - coerce it
+  // against whatever concrete type this generic parameter has already
+  // resolved to (from an earlier argument, turbofish, or an expected return
+  // type) before unifying, the same coercion `reconcileExpressionType`
+  // applies for an ordinary (non-generic) declared type. A parameter not
+  // yet bound to anything concrete leaves `coercedArg` untouched, so the
+  // literal's own default type still seeds the binding.
+  const coercedArg = isUnsuffixedLiteralExpr(arg)
+    ? coerceToIntegerType(arg, substituteGenericType(declaredType, bindings))
+    : arg;
+  const coercedArgType = getType(coercedArg);
+  const outcome = unifyGenericParam(
+    declaredType,
+    coercedArgType,
+    coercedArg.tokenId,
+    genericNames,
+    bindings,
+  );
+  if (coercedArg.kind === "IntLiteral") {
+    checkPosLiteralRange(ctx, coercedArg, coercedArgType);
+  } else if (
+    coercedArg.kind === "UnaryExpression" &&
+    coercedArg.operator === "Neg" &&
+    coercedArg.operand.kind === "IntLiteral" &&
+    !isSome(coercedArg.operand.suffix)
+  ) {
+    const rangeError = checkNegLiteralRange(coercedArg.operand, coercedArgType);
+    if (isSome(rangeError)) {
+      emitError(ctx, rangeError.value, coercedArg.tokenId, "HEDGE-TYPE-005");
+    }
+  }
+  switch (outcome.kind) {
+    case "Bound":
+      break;
+    case "Conflict": {
+      // Render `expected` at the same depth as `declaredType` itself (e.g.
+      // `&i32`, not the unwrapped `i32` a reference-hop binding stores) so
+      // it's directly comparable to `found`, which is the argument's own
+      // whole type.
+      const expectedType = substituteGenericType(declaredType, bindings);
+      emitError(
+        ctx,
+        `argument ${index + 1} to ${site.kindLabel} \`${site.name}\` type mismatch: expected \`${describeType(expectedType)}\`, found \`${describeType(coercedArgType)}\``,
+        coercedArg.tokenId,
+        "HEDGE-TYPE-010",
+        relatedSpanAt(
+          ctx,
+          outcome.previousTokenId,
+          `inferred as \`${describeType(outcome.previous)}\` here`,
+        ),
+      );
+      break;
+    }
+    case "Mismatch":
+      // The declared shape itself doesn't match (e.g. `&T` against a
+      // non-reference argument, or against a `&mut` when `&` is declared) -
+      // a structural problem unrelated to what T resolves to, so `declaredType`
+      // is rendered as-is (`&T`), not substituted - there is no concrete
+      // type to substitute in, only the error-recovery placeholder
+      // `unifyGenericParam` just bound to suppress a downstream cascade.
+      emitError(
+        ctx,
+        `argument ${index + 1} to ${site.kindLabel} \`${site.name}\` type mismatch: expected \`${describeType(declaredType)}\`, found \`${describeType(coercedArgType)}\``,
+        coercedArg.tokenId,
+        "HEDGE-TYPE-001",
+      );
+      break;
+    default:
+      assertNever(
+        outcome,
+        `Unexpected unify outcome: ${JSON.stringify(outcome)}`,
+      );
+  }
+  return coercedArg;
 }
 
 /**
@@ -5786,13 +6311,13 @@ function analyzeTupleStructCallConstruction(
     );
     return some({ callee, type: structDecl.type, args: [...args] });
   }
-  const checkedArgs = checkPositionalCallArgs(
+  const checkedArgs = checkGenericPositionalConstruction(
     ctx,
     call,
-    "struct",
-    structName,
+    { kindLabel: "struct", name: structName },
     structDecl.body.fields,
     args,
+    structDecl.generics,
   );
   return some({ callee, type: structDecl.type, args: checkedArgs });
 }

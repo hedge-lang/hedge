@@ -50,6 +50,8 @@ export type DiagnosticCode =
   | "HEDGE-TYPE-007" // operation invalid for this type
   | "HEDGE-TYPE-008" // construction does not match the type's shape
   | "HEDGE-TYPE-009" // struct/enum type parameter declared but never used
+  | "HEDGE-TYPE-010" // generic parameter bound to conflicting types
+  | "HEDGE-TYPE-011" // turbofish argument count does not match declared generics
   // Patterns.
   | "HEDGE-PATTERN-001" // refutable pattern in an irrefutable position
   | "HEDGE-PATTERN-002" // non-exhaustive match
