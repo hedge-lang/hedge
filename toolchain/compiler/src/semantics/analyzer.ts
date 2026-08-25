@@ -84,11 +84,18 @@ interface AnalysisContext {
    * would make coherence checking depend on textual position.
    */
   readonly implRegistry: RegisteredImpl[];
-  /** Every trait's own supertrait names, keyed by trait name - flat and
-   * program-wide for the same reason `implRegistry` is: a supertrait
-   * requirement is a fact about the trait itself, not about where it
-   * happens to be declared. */
-  readonly traitRegistry: Map<string, readonly string[]>;
+  /** Every trait's own supertraits and required methods, keyed by trait
+   * name - flat and program-wide for the same reason `implRegistry` is:
+   * these are facts about the trait itself, not about where it happens to
+   * be declared. */
+  readonly traitRegistry: Map<string, RegisteredTrait>;
+}
+
+/** One registered trait's own supertrait and required-method names, for
+ * checking an impl of it against both. */
+interface RegisteredTrait {
+  readonly supertraits: readonly string[];
+  readonly requiredMethods: readonly string[];
 }
 
 /** One registered trait impl, extracted just far enough for coherence and
@@ -1308,12 +1315,16 @@ function buildImplDecl(item: Parser.ImplDecl): Semantics.ImplDecl {
     blanketBounds: isSome(targetTypeName)
       ? (genericParamBoundNames(item.generics).get(targetTypeName.value) ?? [])
       : [],
+    providedMethods: item.items
+      .filter((decl): decl is Parser.FunctionDef => decl.kind === "Function")
+      .map((decl) => decl.signature.name.text),
   };
 }
 
-/** Extracts a `trait`'s name and its own supertrait names from the parse
- * tree - a `LifetimeTraitBound` supertrait contributes nothing, since it
- * names no trait. */
+/** Extracts a `trait`'s name, its own supertrait names, and its required
+ * (bodiless) vs. default (bodied) method names from the parse tree - a
+ * `LifetimeTraitBound` supertrait contributes nothing, since it names no
+ * trait. */
 function buildTraitDecl(item: Parser.TraitDecl): Semantics.TraitDecl {
   return {
     kind: "Trait",
@@ -1325,6 +1336,15 @@ function buildTraitDecl(item: Parser.TraitDecl): Semantics.TraitDecl {
           bound.kind === "PathTraitBound",
       )
       .map((bound) => bound.path.segments.at(-1) ?? ""),
+    requiredMethods: item.items
+      .filter(
+        (decl): decl is Parser.FunctionSignature =>
+          decl.kind === "FunctionSignature",
+      )
+      .map((decl) => decl.name.text),
+    defaultMethods: item.items
+      .filter((decl): decl is Parser.FunctionDef => decl.kind === "Function")
+      .map((decl) => decl.signature.name.text),
   };
 }
 
@@ -1419,7 +1439,10 @@ function registerTraits(
   for (const item of items) {
     if (item.kind !== "Trait") continue;
     const decl = buildTraitDecl(item);
-    ctx.traitRegistry.set(decl.name, decl.supertraits);
+    ctx.traitRegistry.set(decl.name, {
+      supertraits: decl.supertraits,
+      requiredMethods: decl.requiredMethods,
+    });
   }
 }
 
@@ -1473,9 +1496,21 @@ function registerImpls(
     if (!incoming.isBlanket) {
       concreteImpls.push({ tokenId: item.tokenId, impl: incoming });
     }
+    const requiredMethods =
+      ctx.traitRegistry.get(traitName)?.requiredMethods ?? [];
+    for (const method of requiredMethods) {
+      if (decl.providedMethods.includes(method)) continue;
+      emitError(
+        ctx,
+        `impl of trait \`${traitName}\` for \`${incoming.targetTypeName}\` is missing method \`${method}\``,
+        item.tokenId,
+        "HEDGE-TRAIT-003",
+      );
+    }
   }
   for (const { tokenId, impl } of concreteImpls) {
-    for (const supertrait of ctx.traitRegistry.get(impl.traitName) ?? []) {
+    for (const supertrait of ctx.traitRegistry.get(impl.traitName)
+      ?.supertraits ?? []) {
       if (typeNameSatisfiesTraitBound(ctx, impl.targetTypeName, supertrait)) {
         continue;
       }

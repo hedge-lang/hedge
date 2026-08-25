@@ -246,12 +246,17 @@ export interface StaticDecl extends DecoratedAstNode {
 /**
  * `name`/`supertraits` carry just enough identity for supertrait-completeness
  * checking (does an impl of this trait also implement each trait it
- * requires). Associated types and witness construction are still open work.
+ * requires). `requiredMethods` (no body in the trait declaration) and
+ * `defaultMethods` (a body in the trait declaration) drive impl completeness
+ * checking - a default method needs no override, a required one does.
+ * Associated types and witness construction are still open work.
  */
 export interface TraitDecl extends AstNode {
   readonly kind: "Trait";
   readonly name: string;
   readonly supertraits: readonly string[];
+  readonly requiredMethods: readonly string[];
+  readonly defaultMethods: readonly string[];
 }
 
 /**
@@ -263,7 +268,9 @@ export interface TraitDecl extends AstNode {
  * parameter's own name (`T`), which `isBlanket` distinguishes from an
  * equally-named concrete type, and `blanketBounds` holds that parameter's
  * own required trait names (`A`) - empty for a concrete impl, or an
- * unconstrained blanket impl.
+ * unconstrained blanket impl. `providedMethods` is every bodied method this
+ * impl itself declares, for completeness checking against its trait's own
+ * `requiredMethods`.
  */
 export interface ImplDecl extends AstNode {
   readonly kind: "Impl";
@@ -274,6 +281,7 @@ export interface ImplDecl extends AstNode {
   readonly targetTypeName: Option<string>;
   readonly isBlanket: boolean;
   readonly blanketBounds: readonly string[];
+  readonly providedMethods: readonly string[];
 }
 
 /** Carries no semantic content yet - a type alias's own value type is still

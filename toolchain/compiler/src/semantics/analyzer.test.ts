@@ -3880,8 +3880,8 @@ describe("trait and impl declarations", (): void => {
     const result = diagnose(`
       trait A {}
       trait B { fn f(&self) -> str; }
-      impl<T: A> B for T {}
-      impl<T: A> B for T {}
+      impl<T: A> B for T { fn f(&self) -> str { "a" } }
+      impl<T: A> B for T { fn f(&self) -> str { "b" } }
     `);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.message).toBe(
@@ -3894,7 +3894,7 @@ describe("trait and impl declarations", (): void => {
       trait A {}
       trait B { fn f(&self) -> str; }
       struct Point { x: i32, y: i32 }
-      impl<T: A> B for T {}
+      impl<T: A> B for T { fn f(&self) -> str { "a" } }
       impl B for Point { fn f(&self) -> str { "a" } }
     `);
     expect(result.diagnostics).toHaveLength(1);
@@ -4066,7 +4066,7 @@ describe("trait and impl declarations", (): void => {
         trait B { fn f(&self) -> str; }
         struct Point { x: i32, y: i32 }
         impl A for Point {}
-        impl<T: A> B for T {}
+        impl<T: A> B for T { fn f(&self) -> str { "a" } }
         fn needs_b<U: B>(x: U) {}
         fn main() { needs_b(Point { x: 0, y: 0 }); }
       `);
@@ -4078,7 +4078,7 @@ describe("trait and impl declarations", (): void => {
         trait A {}
         trait B { fn f(&self) -> str; }
         struct Point { x: i32, y: i32 }
-        impl<T: A> B for T {}
+        impl<T: A> B for T { fn f(&self) -> str { "a" } }
         fn needs_b<U: B>(x: U) {}
         fn main() { needs_b(Point { x: 0, y: 0 }); }
       `);
