@@ -3934,4 +3934,20 @@ describe("trait and impl declarations", (): void => {
     `);
     expect(result.diagnostics).toEqual([]);
   });
+
+  describe("orphan rule", (): void => {
+    it("analyzes an impl declared in the same package as both its trait and its type with no diagnostics", (): void => {
+      // TODO(Hedge-264): cross-package enforcement (an impl written where
+      // neither the trait nor the type is defined) has no referent yet -
+      // there's no module/package system (ROADMAP Slice 7). Every impl the
+      // compiler can analyze today is "within the defining package", so the
+      // orphan rule is a real no-op pre-Slice-7, not an oversight.
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl Draw for Point { fn draw(&self) -> str { "a" } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
 });
