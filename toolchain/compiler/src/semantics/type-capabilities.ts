@@ -84,19 +84,14 @@ const TYPE_CAPABILITIES: ReadonlyMap<
   // `using`, producing a runtime TypeError (plain values have no
   // `[Symbol.dispose]`).
   ["ReferenceType", new Set(["copy"])],
-  // A bare generic-parameter type (the only thing `NamedType` represents in
-  // `Semantics.Type` - every concrete named type resolves to its own kind
-  // instead) is erased at runtime with no witness/Drop machinery wired up
-  // yet, so the compiler cannot generate a valid scope-end disposal for one
-  // regardless of what the eventual concrete type's own real Copy-ness will
-  // be. Marking it move-only here is actively worse than permissive: without
-  // this entry, `recordDrops` (ownership/move-check.ts) wraps every
-  // generic-typed parameter that isn't the function's own return value in a
-  // scope-end `using`, which throws at runtime for any concrete type without
-  // a `[Symbol.dispose]` (which is every type reachable today, since no
-  // witness-based Drop exists). Revisit once witness-passing gives a real,
-  // per-instantiation Copy answer instead of this erased approximation.
-  ["NamedType", new Set(["copy"])],
+  // A bare generic-parameter type deliberately has no entry here, unlike
+  // ReferenceType above: an uninstantiated `T` must stay move-only for move
+  // tracking, since a real instantiation could always be a move-only type
+  // (no trait bounds are checked yet, so nothing rules that out). The
+  // *drop-generation* side of this (a generic-typed binding gets a
+  // scope-end `using` it can't actually satisfy, since no witness-based
+  // Drop exists yet) is a separate, narrower problem, handled directly in
+  // `ownership/move-check.ts`'s `recordDrops` instead of here.
   ...INTEGER_KINDS.map((k): [string, ReadonlySet<TypeCapability>] => [
     k,
     INTEGER_CAPS,

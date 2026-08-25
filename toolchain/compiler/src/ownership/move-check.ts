@@ -1336,7 +1336,16 @@ function recordDrops(
   const conditionalDrops: ConditionalDrop[] = [];
   for (let i = declarations.length - 1; i >= 0; i -= 1) {
     const declaration = declarations[i];
-    if (declaration === undefined || hasCapability(declaration.type, "copy")) {
+    if (
+      declaration === undefined ||
+      hasCapability(declaration.type, "copy") ||
+      // A bare generic-parameter type is move-only for tracking purposes
+      // (see type-capabilities.ts) but still can't get a scope-end `using`
+      // - there's no witness-based Drop to call yet, so wrapping it would
+      // throw at runtime for any concrete instantiation. Skip drop
+      // generation for it specifically, without touching its Copy-ness.
+      declaration.type.kind === "NamedType"
+    ) {
       continue;
     }
     const declState = state.get(declaration.id);
