@@ -84,14 +84,20 @@ interface AnalysisContext {
    * would make coherence checking depend on textual position.
    */
   readonly implRegistry: RegisteredImpl[];
+  /** Every trait's own supertrait names, keyed by trait name - flat and
+   * program-wide for the same reason `implRegistry` is: a supertrait
+   * requirement is a fact about the trait itself, not about where it
+   * happens to be declared. */
+  readonly traitRegistry: Map<string, readonly string[]>;
 }
 
-/** One registered trait impl, extracted just far enough to detect an
- * exact-duplicate `(Trait, Type)` pair. */
+/** One registered trait impl, extracted just far enough for coherence and
+ * bound checking. */
 interface RegisteredImpl {
   readonly traitName: string;
   readonly targetTypeName: string;
   readonly isBlanket: boolean;
+  readonly blanketBounds: readonly string[];
   readonly tokenId: number;
 }
 
@@ -1299,6 +1305,26 @@ function buildImplDecl(item: Parser.ImplDecl): Semantics.ImplDecl {
     isBlanket:
       isSome(targetTypeName) &&
       genericParamNames(item.generics).includes(targetTypeName.value),
+    blanketBounds: isSome(targetTypeName)
+      ? (genericParamBoundNames(item.generics).get(targetTypeName.value) ?? [])
+      : [],
+  };
+}
+
+/** Extracts a `trait`'s name and its own supertrait names from the parse
+ * tree - a `LifetimeTraitBound` supertrait contributes nothing, since it
+ * names no trait. */
+function buildTraitDecl(item: Parser.TraitDecl): Semantics.TraitDecl {
+  return {
+    kind: "Trait",
+    tokenId: item.tokenId,
+    name: item.name.text,
+    supertraits: item.supertraits
+      .filter(
+        (bound): bound is Parser.PathTraitBound =>
+          bound.kind === "PathTraitBound",
+      )
+      .map((bound) => bound.path.segments.at(-1) ?? ""),
   };
 }
 
@@ -1346,12 +1372,36 @@ function typeSatisfiesTraitBound(
       return declaredGenericParamBounds(ctx, paramName).includes(traitName);
     }
   }
-  const typeName = describeType(type);
-  return ctx.implRegistry.some(
-    (impl) =>
-      impl.traitName === traitName &&
-      (impl.isBlanket || impl.targetTypeName === typeName),
-  );
+  return typeNameSatisfiesTraitBound(ctx, describeType(type), traitName);
+}
+
+/**
+ * Does the concrete type named `typeName` implement `traitName`, via a
+ * concrete registered impl or a blanket impl whose own bound is satisfied.
+ * A blanket impl's bound is checked recursively (its own `A` in
+ * `impl<T: A> B for T` may itself be satisfied only through another
+ * blanket impl) - `typeName` is always concrete here, so this never
+ * revisits `typeSatisfiesTraitBound`'s abstract-parameter case.
+ */
+function typeNameSatisfiesTraitBound(
+  ctx: AnalysisContext,
+  typeName: string,
+  traitName: string,
+): boolean {
+  return ctx.implRegistry.some((impl) => {
+    if (impl.traitName !== traitName) return false;
+    if (!impl.isBlanket) return impl.targetTypeName === typeName;
+    return impl.blanketBounds.every((bound) =>
+      typeNameSatisfiesTraitBound(ctx, typeName, bound),
+    );
+  });
+}
+
+function traitBoundNotSatisfiedMessage(
+  typeName: string,
+  traitName: string,
+): string {
+  return `the trait bound \`${typeName}: ${traitName}\` is not satisfied`;
 }
 
 /**
@@ -1359,10 +1409,38 @@ function typeSatisfiesTraitBound(
  * program-wide, and reports two overlapping impls of the same trait as a
  * coherence error.
  */
+/** Registers every top-level `trait`'s own name and supertraits into
+ * `ctx.traitRegistry`, so `registerImpls` can look up a trait's supertrait
+ * requirements before checking whether an impl of it is complete. */
+function registerTraits(
+  ctx: AnalysisContext,
+  items: readonly (Parser.Item | Parser.Statement)[],
+): void {
+  for (const item of items) {
+    if (item.kind !== "Trait") continue;
+    const decl = buildTraitDecl(item);
+    ctx.traitRegistry.set(decl.name, decl.supertraits);
+  }
+}
+
+/**
+ * Registers every top-level trait impl into `ctx.implRegistry`, flat and
+ * program-wide, reports two overlapping impls of the same trait as a
+ * coherence error, and - once every impl is registered, so declaration
+ * order within the program doesn't matter - reports a concrete impl
+ * missing one of its trait's own supertrait implementations. Supertrait
+ * completeness is not checked for a blanket impl: proving its own type
+ * parameter's bound implies the supertrait needs impl-definition-time bound
+ * implication checking this ticket doesn't attempt.
+ */
 function registerImpls(
   ctx: AnalysisContext,
   items: readonly (Parser.Item | Parser.Statement)[],
 ): void {
+  const concreteImpls: {
+    readonly tokenId: number;
+    readonly impl: RegisteredImpl;
+  }[] = [];
   for (const item of items) {
     if (item.kind !== "Impl") continue;
     const decl = buildImplDecl(item);
@@ -1374,6 +1452,7 @@ function registerImpls(
       traitName,
       targetTypeName: targetType.value,
       isBlanket: decl.isBlanket,
+      blanketBounds: decl.blanketBounds,
       tokenId: item.tokenId,
     };
     const existing = ctx.implRegistry.find(
@@ -1391,6 +1470,22 @@ function registerImpls(
       );
     }
     ctx.implRegistry.push(incoming);
+    if (!incoming.isBlanket) {
+      concreteImpls.push({ tokenId: item.tokenId, impl: incoming });
+    }
+  }
+  for (const { tokenId, impl } of concreteImpls) {
+    for (const supertrait of ctx.traitRegistry.get(impl.traitName) ?? []) {
+      if (typeNameSatisfiesTraitBound(ctx, impl.targetTypeName, supertrait)) {
+        continue;
+      }
+      emitError(
+        ctx,
+        traitBoundNotSatisfiedMessage(impl.targetTypeName, supertrait),
+        tokenId,
+        "HEDGE-TRAIT-002",
+      );
+    }
   }
 }
 
@@ -3206,7 +3301,7 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
       return cached?.tokenId === item.tokenId ? cached : analyzeEnum(ctx, item);
     }
     case "Trait":
-      return { kind: "Trait", tokenId: item.tokenId };
+      return buildTraitDecl(item);
     case "Impl":
       return buildImplDecl(item);
     case "TypeAlias":
@@ -3893,7 +3988,7 @@ function analyzeStatement(
       // this analyzes the (runtime, not const-folded) initializer itself.
       return analyzeStaticDecl(ctx, statement);
     case "Trait":
-      return { kind: "Trait", tokenId: statement.tokenId };
+      return buildTraitDecl(statement);
     case "Impl":
       return buildImplDecl(statement);
     default:
@@ -5851,7 +5946,7 @@ function analyzeCall(
       if (typeSatisfiesTraitBound(ctx, binding.type, traitName)) continue;
       emitError(
         ctx,
-        `the trait bound \`${describeType(binding.type)}: ${traitName}\` is not satisfied`,
+        traitBoundNotSatisfiedMessage(describeType(binding.type), traitName),
         call.tokenId,
         "HEDGE-TRAIT-002",
       );
@@ -6610,9 +6705,11 @@ export function analyze(
     genericParamStack: [],
     genericParamBoundStack: [],
     implRegistry: [],
+    traitRegistry: new Map(),
   };
   // Before functions, so a signature can name any declared type.
   registerTypeDecls(ctx, program.items);
+  registerTraits(ctx, program.items);
   registerImpls(ctx, program.items);
   const topLevelFunctionNames = new Set<string>();
   for (const item of program.items) {
