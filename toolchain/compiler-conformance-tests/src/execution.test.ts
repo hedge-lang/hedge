@@ -1368,6 +1368,42 @@ describe("execution tests", (): void => {
     });
   });
 
+  describe("generic enum-variant construction turbofish and unsolved-variable checks", (): void => {
+    it("lets an explicit turbofish override inference on a generic enum-variant construction", (): void => {
+      assertRunsTo(
+        `
+        enum Wrap<T> { Value(T) }
+        fn main() { let w = Wrap::Value::<i32>(5); match w { Wrap::Value(v) => print(v) } }
+        `,
+        ["5"],
+      );
+    });
+
+    it("reports a conflict when a turbofish disagrees with the actual argument on a generic enum-variant construction", (): void => {
+      const result = compileHedgeCode(
+        `enum Wrap<T> { Value(T) } fn main() { let w = Wrap::Value::<str>(5); print(w); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(errors[0]?.message).toBe(
+        "argument 1 to variant `Value` type mismatch: expected `str`, found `i32`",
+      );
+    });
+
+    it("reports an enum generic parameter unused by the constructed variant as unsolved", (): void => {
+      const result = compileHedgeCode(
+        `enum Two<A, B> { First(A), Second(B) } fn main() { let w = Two::First(5); print(w); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-006");
+      expect(errors[0]?.message).toBe(
+        "cannot infer type of generic parameter `B` without an explicit type annotation or turbofish",
+      );
+    });
+  });
+
   describe("unused generic type parameters on a struct or enum", (): void => {
     it("rejects a struct's own type parameter that appears in none of its fields", (): void => {
       const result = compileHedgeCode(`struct Triple<A, B, C> { a: A, c: C }`);

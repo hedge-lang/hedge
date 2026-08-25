@@ -5746,7 +5746,7 @@ function analyzeEnumVariantCallConstruction(
     );
     return some({ type: enumDecl.type, args: [...args] });
   }
-  const { args: checkedArgs } = checkPositionalCallArgs(
+  const checkedArgs = checkGenericPositionalConstruction(
     ctx,
     call,
     { kindLabel: "variant", name: variantName },
@@ -5964,6 +5964,45 @@ function seedTurbofishBindings(
       isErrorPlaceholder: isSelfType(argType),
     });
   });
+}
+
+/** Seeds turbofish, then argument-driven unification, then checks every
+ * declared generic parameter got resolved - the same sequence `analyzeCall`
+ * runs for an ordinary function call, minus the expected-return-type seed
+ * (a constructed value's own type never reifies which concrete types its
+ * generics resolved to - `EnumType`/`StructType` compare by name alone, see
+ * `typesEqual` - so there's no return type for an outer expected type to
+ * seed against the way an ordinary function call has one). Shared by
+ * `analyzeEnumVariantCallConstruction` and `analyzeTupleStructCallConstruction`. */
+function checkGenericPositionalConstruction(
+  ctx: AnalysisContext,
+  call: Parser.CallExpression,
+  site: CallSiteDescription,
+  params: readonly { readonly type: Semantics.Type }[],
+  args: readonly Semantics.Expression[],
+  genericParams: readonly string[],
+): Semantics.Expression[] {
+  const turbofishBindings: GenericBindings = new Map();
+  seedTurbofishBindings(ctx, call, genericParams, turbofishBindings);
+  const { args: checkedArgs, bindings } = checkPositionalCallArgs(
+    ctx,
+    call,
+    site,
+    params,
+    args,
+    genericParams,
+    turbofishBindings,
+  );
+  for (const paramName of genericParams) {
+    if (bindings.has(paramName)) continue;
+    emitError(
+      ctx,
+      `cannot infer type of generic parameter \`${paramName}\` without an explicit type annotation or turbofish`,
+      call.tokenId,
+      "HEDGE-TYPE-006",
+    );
+  }
+  return checkedArgs;
 }
 
 /** Seeds `bindings` from a calling context's already-known expected type - a

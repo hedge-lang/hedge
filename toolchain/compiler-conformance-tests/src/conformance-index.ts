@@ -726,6 +726,17 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     ],
   },
   {
+    id: "GENERIC-CONSTRUCTION-INFERENCE",
+    description:
+      "Turbofish and unsolved-variable checking on tuple-shaped generic construction (enum-variant and tuple-struct) match the ordinary generic-call behavior",
+    specRefs: ["0015-generics-and-traits.md"],
+    testIds: [
+      "lets an explicit turbofish override inference on a generic enum-variant construction",
+      "reports a conflict when a turbofish disagrees with the actual argument on a generic enum-variant construction",
+      "reports an enum generic parameter unused by the constructed variant as unsolved",
+    ],
+  },
+  {
     id: "SKIP-BUDGET-GOVERNANCE",
     description:
       "Skip and skipIf usage remains within explicit conformance governance budget",
