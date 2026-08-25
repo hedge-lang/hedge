@@ -24,6 +24,16 @@ function diagnose(source: string): AnalysisResult {
   return analyze(program.value, tokens);
 }
 
+/** A keyword token's own text, for asserting that a `tokenId` points at a
+ * specific keyword - `none()` for a token kind with no `text` field. */
+function keywordTextAt(
+  tokens: ReturnType<typeof tokenize>["tokens"],
+  tokenId: number,
+): string | undefined {
+  const token = tokens[tokenId];
+  return token?.kind === "keyword" ? token.text : undefined;
+}
+
 describe("semantic analysis", (): void => {
   it("accepts the tracer bullet with no diagnostics", (): void => {
     const result = diagnose(`
@@ -4177,6 +4187,107 @@ describe("trait and impl declarations", (): void => {
         }
       `);
       expect(result.diagnostics).toEqual([]);
+    });
+  });
+
+  describe("witness construction", (): void => {
+    it("records a witness naming the resolving impl for a satisfied generic call bound", (): void => {
+      const { result, tokens } = analyzeWithTokens(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl Draw for Point { fn draw(&self) -> str { "a" } }
+        fn draw_all<T: Draw>(x: T) {}
+        fn main() { draw_all(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      expect(witnesses).toHaveLength(1);
+      const witness = witnesses?.[0];
+      expect(witness).toMatchObject({
+        kind: "Impl",
+        traitName: "Draw",
+        typeName: "Point",
+        methods: [{ name: "draw", source: "impl" }],
+      });
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(keywordTextAt(tokens, witness.implTokenId)).toBe("impl");
+    });
+
+    it("records two witness entries for two independently-satisfied bounds on one call", (): void => {
+      const { result } = analyzeWithTokens(`
+        trait Draw { fn draw(&self) -> str; }
+        trait Describe { fn describe(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl Draw for Point { fn draw(&self) -> str { "a" } }
+        impl Describe for Point { fn describe(&self) -> str { "b" } }
+        fn show<T: Draw + Describe>(x: T) {}
+        fn main() { show(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      expect(
+        witnesses?.map((w) => (w.kind === "Impl" ? w.traitName : w.kind)),
+      ).toEqual(["Draw", "Describe"]);
+    });
+
+    it("records a witness pointing at the blanket impl, not a synthesized concrete one", (): void => {
+      const { result, tokens } = analyzeWithTokens(`
+        trait A {}
+        trait B { fn f(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl A for Point {}
+        impl<T: A> B for T { fn f(&self) -> str { "a" } }
+        fn needs_b<U: B>(x: U) {}
+        fn main() { needs_b(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      const witness = witnesses?.[0];
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(keywordTextAt(tokens, witness.implTokenId)).toBe("impl");
+      const implTokenSpan = tokens[witness.implTokenId]?.span;
+      // The blanket impl is the second `impl` in the source; the first
+      // registers `A for Point`, so a witness pointing at the blanket impl
+      // (not the first, unrelated one) starts at a later source position.
+      const firstImplTokenId = tokens.findIndex(
+        (t) => t.kind === "keyword" && t.text === "impl",
+      );
+      const firstImplSpan = tokens[firstImplTokenId]?.span;
+      expect(implTokenSpan?.start).toBeGreaterThan(firstImplSpan?.start ?? -1);
+    });
+
+    it("marks a default method not overridden by the impl as default-sourced, and an overridden one as impl-sourced", (): void => {
+      const { result } = analyzeWithTokens(`
+        trait Shape {
+          fn draw(&self) -> str;
+          fn describe(&self) -> str { "a shape" }
+        }
+        struct Point { x: i32, y: i32 }
+        impl Shape for Point { fn draw(&self) -> str { "a" } }
+        fn show<T: Shape>(x: T) {}
+        fn main() { show(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      const witness = witnesses?.[0];
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(witness.methods).toEqual([
+        { name: "draw", source: "impl" },
+        { name: "describe", source: "default" },
+      ]);
+    });
+
+    it("records a forwarded witness when the bound is satisfied through an enclosing function's own abstract type parameter", (): void => {
+      const { result } = analyzeWithTokens(`
+        trait Draw { fn draw(&self) -> str; }
+        fn inner<U: Draw>(x: U) {}
+        fn outer<T: Draw>(x: T) { inner(x); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      expect(witnesses).toEqual([
+        { kind: "Forwarded", traitName: "Draw", paramName: "T" },
+      ]);
     });
   });
 });

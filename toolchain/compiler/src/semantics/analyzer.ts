@@ -29,7 +29,44 @@ import { hasCapability, type TypeCapability } from "./type-capabilities.js";
 export interface AnalysisResult {
   readonly diagnostics: readonly Diagnostic[];
   readonly program: Semantics.Program;
+  /** Every resolved trait bound at every generic call site, keyed by the
+   * call's own `tokenId` - one entry per declared generic parameter's bound
+   * that resolved, in the same order the callee declares them, for codegen
+   * to turn into a hidden witness argument later. A call with unresolved
+   * bounds carries no entry (analysis already reported the diagnostic). */
+  readonly witnesses: ReadonlyMap<number, readonly WitnessRef[]>;
 }
+
+/** One trait method a witness carries, and where its implementation comes
+ * from: the impl's own override, or the trait's own default body when the
+ * impl doesn't override it. */
+export interface WitnessMethod {
+  readonly name: string;
+  readonly source: "impl" | "default";
+}
+
+/**
+ * How one generic call site's declared bound resolved. `Impl` names the
+ * registered impl (concrete or blanket) that satisfies it, plus its own
+ * method list. `Forwarded` covers a still-abstract argument (the enclosing
+ * declaration's own generic parameter) - there is no impl to reference yet,
+ * since the concrete type isn't known until whatever calls the enclosing
+ * function supplies it; codegen forwards the enclosing function's own
+ * received witness for `paramName` instead of resolving a new one.
+ */
+export type WitnessRef =
+  | {
+      readonly kind: "Impl";
+      readonly traitName: string;
+      readonly typeName: string;
+      readonly implTokenId: number;
+      readonly methods: readonly WitnessMethod[];
+    }
+  | {
+      readonly kind: "Forwarded";
+      readonly traitName: string;
+      readonly paramName: string;
+    };
 
 /**
  * Everything one lexical scope owns, in a single object so a scope is pushed
@@ -89,6 +126,9 @@ interface AnalysisContext {
    * these are facts about the trait itself, not about where it happens to
    * be declared. */
   readonly traitRegistry: Map<string, RegisteredTrait>;
+  /** Mutable build-up of `AnalysisResult.witnesses`, keyed by call-site
+   * `tokenId`. */
+  readonly witnessTable: Map<number, WitnessRef[]>;
 }
 
 /** One registered trait's own supertrait and required-method names, for
@@ -96,6 +136,7 @@ interface AnalysisContext {
 interface RegisteredTrait {
   readonly supertraits: readonly string[];
   readonly requiredMethods: readonly string[];
+  readonly defaultMethods: readonly string[];
 }
 
 /** One registered trait impl, extracted just far enough for coherence and
@@ -105,6 +146,7 @@ interface RegisteredImpl {
   readonly targetTypeName: string;
   readonly isBlanket: boolean;
   readonly blanketBounds: readonly string[];
+  readonly providedMethods: readonly string[];
   readonly tokenId: number;
 }
 
@@ -1381,40 +1423,79 @@ function implOverlapMessage(
  * declaration's own bound list instead of `implRegistry`, since no concrete
  * impl can exist for a type that isn't concrete yet.
  */
-function typeSatisfiesTraitBound(
+/**
+ * Resolves `type: traitName` to the witness that satisfies it, or `none()`
+ * if nothing does. A still-abstract type (the enclosing declaration's own
+ * generic parameter) resolves against that declaration's own bound list,
+ * since no concrete impl can exist for a type that isn't concrete yet -
+ * codegen forwards the enclosing function's own received witness for it
+ * instead of looking one up here.
+ */
+function resolveTraitBound(
   ctx: AnalysisContext,
   type: Semantics.Type,
   traitName: string,
-): boolean {
+): Option<WitnessRef> {
   if (type.kind === "NamedType" && type.path.segments.length === 1) {
     const paramName = type.path.segments[0];
     if (paramName !== undefined && isDeclaredGenericParam(ctx, paramName)) {
-      return declaredGenericParamBounds(ctx, paramName).includes(traitName);
+      return declaredGenericParamBounds(ctx, paramName).includes(traitName)
+        ? some({ kind: "Forwarded", traitName, paramName })
+        : none();
     }
   }
-  return typeNameSatisfiesTraitBound(ctx, describeType(type), traitName);
+  return resolveTraitBoundForTypeName(ctx, describeType(type), traitName);
 }
 
 /**
- * Does the concrete type named `typeName` implement `traitName`, via a
+ * Resolves `typeName: traitName` against a concrete type name, via a
  * concrete registered impl or a blanket impl whose own bound is satisfied.
  * A blanket impl's bound is checked recursively (its own `A` in
  * `impl<T: A> B for T` may itself be satisfied only through another
  * blanket impl) - `typeName` is always concrete here, so this never
- * revisits `typeSatisfiesTraitBound`'s abstract-parameter case.
+ * revisits `resolveTraitBound`'s abstract-parameter case.
  */
-function typeNameSatisfiesTraitBound(
+function resolveTraitBoundForTypeName(
   ctx: AnalysisContext,
   typeName: string,
   traitName: string,
-): boolean {
-  return ctx.implRegistry.some((impl) => {
+): Option<WitnessRef> {
+  const impl = ctx.implRegistry.find((impl) => {
     if (impl.traitName !== traitName) return false;
     if (!impl.isBlanket) return impl.targetTypeName === typeName;
     return impl.blanketBounds.every((bound) =>
-      typeNameSatisfiesTraitBound(ctx, typeName, bound),
+      isSome(resolveTraitBoundForTypeName(ctx, typeName, bound)),
     );
   });
+  if (impl === undefined) return none();
+  return some({
+    kind: "Impl",
+    traitName,
+    typeName,
+    implTokenId: impl.tokenId,
+    methods: witnessMethods(ctx, impl),
+  });
+}
+
+/** An impl's own witness method list: every one of its trait's methods, in
+ * the trait's own declaration order (required methods first, then default
+ * methods), each marked `"impl"` when this impl provides or overrides it
+ * and `"default"` when it falls back to the trait's own default body. */
+function witnessMethods(
+  ctx: AnalysisContext,
+  impl: RegisteredImpl,
+): readonly WitnessMethod[] {
+  const trait = ctx.traitRegistry.get(impl.traitName);
+  if (trait === undefined) return [];
+  const required = trait.requiredMethods.map((name): WitnessMethod => ({
+    name,
+    source: "impl",
+  }));
+  const defaults = trait.defaultMethods.map((name): WitnessMethod => ({
+    name,
+    source: impl.providedMethods.includes(name) ? "impl" : "default",
+  }));
+  return [...required, ...defaults];
 }
 
 function traitBoundNotSatisfiedMessage(
@@ -1424,11 +1505,6 @@ function traitBoundNotSatisfiedMessage(
   return `the trait bound \`${typeName}: ${traitName}\` is not satisfied`;
 }
 
-/**
- * Registers every top-level trait impl into `ctx.implRegistry`, flat and
- * program-wide, and reports two overlapping impls of the same trait as a
- * coherence error.
- */
 /** Registers every top-level `trait`'s own name and supertraits into
  * `ctx.traitRegistry`, so `registerImpls` can look up a trait's supertrait
  * requirements before checking whether an impl of it is complete. */
@@ -1442,6 +1518,7 @@ function registerTraits(
     ctx.traitRegistry.set(decl.name, {
       supertraits: decl.supertraits,
       requiredMethods: decl.requiredMethods,
+      defaultMethods: decl.defaultMethods,
     });
   }
 }
@@ -1476,6 +1553,7 @@ function registerImpls(
       targetTypeName: targetType.value,
       isBlanket: decl.isBlanket,
       blanketBounds: decl.blanketBounds,
+      providedMethods: decl.providedMethods,
       tokenId: item.tokenId,
     };
     const existing = ctx.implRegistry.find(
@@ -1511,7 +1589,11 @@ function registerImpls(
   for (const { tokenId, impl } of concreteImpls) {
     for (const supertrait of ctx.traitRegistry.get(impl.traitName)
       ?.supertraits ?? []) {
-      if (typeNameSatisfiesTraitBound(ctx, impl.targetTypeName, supertrait)) {
+      if (
+        isSome(
+          resolveTraitBoundForTypeName(ctx, impl.targetTypeName, supertrait),
+        )
+      ) {
         continue;
       }
       emitError(
@@ -5978,7 +6060,11 @@ function analyzeCall(
     if (binding.isErrorPlaceholder === true) continue;
     for (const traitName of calleeType.genericParamBounds.get(paramName) ??
       []) {
-      if (typeSatisfiesTraitBound(ctx, binding.type, traitName)) continue;
+      const witness = resolveTraitBound(ctx, binding.type, traitName);
+      if (isSome(witness)) {
+        recordWitness(ctx, call.tokenId, witness.value);
+        continue;
+      }
       emitError(
         ctx,
         traitBoundNotSatisfiedMessage(describeType(binding.type), traitName),
@@ -6159,6 +6245,22 @@ function relatedSpanAt(
 ): readonly RelatedSpan[] {
   const token = ctx.tokens[tokenId];
   return token === undefined ? [] : [{ span: token.span, label }];
+}
+
+/** Appends one resolved witness onto a call site's own entry in
+ * `ctx.witnessTable`, in resolution order (which matches declaration order,
+ * since `analyzeCall` walks `calleeType.genericParamBounds` in that order). */
+function recordWitness(
+  ctx: AnalysisContext,
+  callTokenId: number,
+  witness: WitnessRef,
+): void {
+  const existing = ctx.witnessTable.get(callTokenId);
+  if (existing === undefined) {
+    ctx.witnessTable.set(callTokenId, [witness]);
+  } else {
+    existing.push(witness);
+  }
 }
 
 /** Online Robinson-style unification of one declared type against one
@@ -6741,6 +6843,7 @@ export function analyze(
     genericParamBoundStack: [],
     implRegistry: [],
     traitRegistry: new Map(),
+    witnessTable: new Map(),
   };
   // Before functions, so a signature can name any declared type.
   registerTypeDecls(ctx, program.items);
@@ -6790,5 +6893,6 @@ export function analyze(
   return {
     diagnostics: ctx.diagnostics,
     program: { ...program, attributes, items },
+    witnesses: ctx.witnessTable,
   };
 }
