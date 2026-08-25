@@ -253,11 +253,12 @@ interface TraitDecl extends AstNode {
 }
 
 /**
- * `traitRef`/`targetTypeName` carry just enough identity for coherence
- * checking to detect an exact-duplicate `(Trait, Type)` pair.
- * `targetTypeName` is `none()` for a target that isn't a plain named type
- * (a reference/array impl target, or a blanket impl's own type parameter) -
- * coherence checking doesn't handle those shapes yet.
+ * `traitRef`/`targetTypeName`/`isBlanket` carry just enough identity for
+ * coherence checking. `targetTypeName` is `none()` for a target that isn't a
+ * plain named type (a reference/array impl target) - coherence checking
+ * doesn't handle those shapes yet. For a blanket impl (`impl<T: A> B for T`),
+ * `targetTypeName` holds the type parameter's own name (`T`), which
+ * `isBlanket` distinguishes from an equally-named concrete type.
  */
 export interface ImplDecl extends AstNode {
   readonly kind: "Impl";
@@ -266,6 +267,7 @@ export interface ImplDecl extends AstNode {
     readonly tokenId: number;
   }>;
   readonly targetTypeName: Option<string>;
+  readonly isBlanket: boolean;
 }
 
 /** Same rationale as `TraitDecl`/`ImplDecl` above. */

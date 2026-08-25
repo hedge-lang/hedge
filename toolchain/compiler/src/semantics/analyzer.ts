@@ -85,6 +85,7 @@ interface AnalysisContext {
 interface RegisteredImpl {
   readonly traitName: string;
   readonly targetTypeName: string;
+  readonly isBlanket: boolean;
   readonly tokenId: number;
 }
 
@@ -1241,6 +1242,10 @@ function registerTypeDecls(
  * emitting any diagnostic - duplicate/coherence checking happens once, in
  * `registerImpls`, against the whole program's impl set. */
 function buildImplDecl(item: Parser.ImplDecl): Semantics.ImplDecl {
+  const targetTypeName: Option<string> =
+    item.type.kind === "NamedType"
+      ? some(item.type.path.segments.at(-1) ?? "")
+      : none();
   return {
     kind: "Impl",
     tokenId: item.tokenId,
@@ -1248,17 +1253,43 @@ function buildImplDecl(item: Parser.ImplDecl): Semantics.ImplDecl {
       name: traitRef.path.segments.at(-1) ?? "",
       tokenId: traitRef.tokenId,
     })),
-    targetTypeName:
-      item.type.kind === "NamedType"
-        ? some(item.type.path.segments.at(-1) ?? "")
-        : none(),
+    targetTypeName,
+    isBlanket:
+      isSome(targetTypeName) &&
+      genericParamNames(item.generics).includes(targetTypeName.value),
   };
 }
 
 /**
+ * Two impls of the same trait overlap when either is blanket (a blanket
+ * impl claims the trait for every type, regardless of its own bound - the
+ * bound is a well-formedness constraint on the impl body, not something
+ * overlap-checking consults) or when they target the exact same concrete
+ * type.
+ */
+function implsOverlap(a: RegisteredImpl, b: RegisteredImpl): boolean {
+  return a.isBlanket || b.isBlanket || a.targetTypeName === b.targetTypeName;
+}
+
+function implOverlapMessage(
+  traitName: string,
+  incoming: RegisteredImpl,
+  existing: RegisteredImpl,
+): string {
+  if (incoming.isBlanket && existing.isBlanket) {
+    return `conflicting implementations of trait \`${traitName}\``;
+  }
+  if (incoming.isBlanket || existing.isBlanket) {
+    const concrete = incoming.isBlanket ? existing : incoming;
+    return `conflicting implementations of trait \`${traitName}\` for type \`${concrete.targetTypeName}\``;
+  }
+  return `trait \`${traitName}\` is already implemented for type \`${incoming.targetTypeName}\``;
+}
+
+/**
  * Registers every top-level trait impl into `ctx.implRegistry`, flat and
- * program-wide, and reports an exact-duplicate `(Trait, Type)` pair as a
- * coherence error naming both the trait and the type.
+ * program-wide, and reports two overlapping impls of the same trait as a
+ * coherence error.
  */
 function registerImpls(
   ctx: AnalysisContext,
@@ -1271,22 +1302,27 @@ function registerImpls(
     const targetType = decl.targetTypeName;
     if (!isSome(traitRef) || !isSome(targetType)) continue;
     const traitName = traitRef.value.name;
-    const targetTypeName = targetType.value;
+    const incoming: RegisteredImpl = {
+      traitName,
+      targetTypeName: targetType.value,
+      isBlanket: decl.isBlanket,
+      tokenId: item.tokenId,
+    };
     const existing = ctx.implRegistry.find(
       (registered) =>
         registered.traitName === traitName &&
-        registered.targetTypeName === targetTypeName,
+        implsOverlap(registered, incoming),
     );
     if (existing !== undefined) {
       emitError(
         ctx,
-        `trait \`${traitName}\` is already implemented for type \`${targetTypeName}\``,
+        implOverlapMessage(traitName, incoming, existing),
         item.tokenId,
         "HEDGE-TRAIT-001",
         relatedSpanAt(ctx, existing.tokenId, "first implemented here"),
       );
     }
-    ctx.implRegistry.push({ traitName, targetTypeName, tokenId: item.tokenId });
+    ctx.implRegistry.push(incoming);
   }
 }
 
