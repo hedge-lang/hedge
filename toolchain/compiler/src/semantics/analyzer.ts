@@ -5644,7 +5644,8 @@ function analyzeCall(
   }
   const turbofishBindings: GenericBindings = new Map();
   seedTurbofishBindings(ctx, call, calleeType.genericParams, turbofishBindings);
-  if (expectedType !== undefined) {
+  const expectedTypeConflicted =
+    expectedType !== undefined &&
     seedExpectedReturnType(
       ctx,
       call,
@@ -5653,7 +5654,6 @@ function analyzeCall(
       new Set(calleeType.genericParams),
       turbofishBindings,
     );
-  }
   const { args: checkedArgs, bindings } = checkPositionalCallArgs(
     ctx,
     call,
@@ -5672,8 +5672,14 @@ function analyzeCall(
       "HEDGE-TYPE-006",
     );
   }
-  const returnType =
-    calleeType.genericParams.length > 0
+  // A conflict already reported by `seedExpectedReturnType` means the
+  // enclosing `let`/return reconciliation would otherwise see a return type
+  // that still disagrees with `expectedType` and double-report the same
+  // problem - report the call's own type as `expectedType` itself instead,
+  // so that reconciliation trivially agrees.
+  const returnType = expectedTypeConflicted
+    ? expectedType
+    : calleeType.genericParams.length > 0
       ? substituteGenericType(calleeType.returnType, bindings)
       : calleeType.returnType;
   return {
@@ -5968,6 +5974,12 @@ function seedTurbofishBindings(
  * disagreement against turbofish itself (no argument involved at all) is
  * blamed here, at the call's own site, since there is no argument span to
  * point at instead. */
+/** Whether a conflict was reported, so the caller can substitute
+ * `expectedType` directly as the call's own final type instead of the
+ * ordinary bindings-substituted one - the conflict is already fully
+ * reported here, so the enclosing `let`/return reconciliation seeing a
+ * type that still disagrees with `expectedType` would only double-report
+ * the same problem under a different, more confusing message. */
 function seedExpectedReturnType(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
@@ -5975,8 +5987,8 @@ function seedExpectedReturnType(
   expectedType: Semantics.Type,
   genericNames: ReadonlySet<string>,
   bindings: GenericBindings,
-): void {
-  if (!involvesGenericParam(returnType, genericNames)) return;
+): boolean {
+  if (!involvesGenericParam(returnType, genericNames)) return false;
   const outcome = unifyGenericParam(
     returnType,
     expectedType,
@@ -5986,7 +5998,7 @@ function seedExpectedReturnType(
   );
   switch (outcome.kind) {
     case "Bound":
-      return;
+      return false;
     case "Conflict": {
       emitError(
         ctx,
@@ -5999,7 +6011,7 @@ function seedExpectedReturnType(
           `inferred as \`${describeType(outcome.previous)}\` here`,
         ),
       );
-      return;
+      return true;
     }
     case "Mismatch":
       // The declared return shape itself doesn't match the expected type
@@ -6007,9 +6019,9 @@ function seedExpectedReturnType(
       // problem the existing post-hoc annotation/return-type check (run
       // separately by the caller) still catches, so no diagnostic needed
       // here beyond leaving the generic parameter unbound.
-      return;
+      return false;
     default:
-      assertNever(
+      return assertNever(
         outcome,
         `Unexpected unify outcome: ${JSON.stringify(outcome)}`,
       );

@@ -1338,6 +1338,34 @@ describe("execution tests", (): void => {
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-008");
     });
+
+    it("does not cascade a second diagnostic when a turbofish conflicts with a let annotation", (): void => {
+      const result = compileHedgeCode(
+        `fn identity<T>(x: T) -> T { x } fn main() { let y: str = identity::<i32>(5); print(y); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(errors[0]?.message).toBe(
+        "call to `identity` type mismatch: expected `i32`, found `str`",
+      );
+    });
+
+    it("does not cascade a second diagnostic when a turbofish conflicts with the enclosing function's return type", (): void => {
+      const result = compileHedgeCode(
+        `
+        fn identity<T>(x: T) -> T { x }
+        fn wrap() -> str { identity::<i32>(5) }
+        fn main() { print(wrap()); }
+        `,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(errors[0]?.message).toBe(
+        "call to `identity` type mismatch: expected `i32`, found `str`",
+      );
+    });
   });
 
   describe("unused generic type parameters on a struct or enum", (): void => {
