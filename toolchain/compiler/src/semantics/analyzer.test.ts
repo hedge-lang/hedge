@@ -4125,4 +4125,58 @@ describe("trait and impl declarations", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
   });
+
+  describe("trait completeness", (): void => {
+    it("rejects an impl missing a required (non-default) trait method, naming the missing method", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl Draw for Point {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "impl of trait `Draw` for `Point` is missing method `draw`",
+      );
+    });
+
+    it("reports each missing required method separately", (): void => {
+      const result = diagnose(`
+        trait Shape { fn draw(&self) -> str; fn area(&self) -> i32; }
+        struct Point { x: i32, y: i32 }
+        impl Shape for Point {}
+      `);
+      expect(result.diagnostics).toHaveLength(2);
+      expect(result.diagnostics.map((d) => d.message)).toEqual([
+        "impl of trait `Shape` for `Point` is missing method `draw`",
+        "impl of trait `Shape` for `Point` is missing method `area`",
+      ]);
+    });
+
+    it("accepts an impl providing every required method while omitting a default method", (): void => {
+      const result = diagnose(`
+        trait Shape {
+          fn draw(&self) -> str;
+          fn describe(&self) -> str { "a shape" }
+        }
+        struct Point { x: i32, y: i32 }
+        impl Shape for Point { fn draw(&self) -> str { "a" } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("accepts an impl that also overrides a default method", (): void => {
+      const result = diagnose(`
+        trait Shape {
+          fn draw(&self) -> str;
+          fn describe(&self) -> str { "a shape" }
+        }
+        struct Point { x: i32, y: i32 }
+        impl Shape for Point {
+          fn draw(&self) -> str { "a" }
+          fn describe(&self) -> str { "a point" }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
 });
