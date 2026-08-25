@@ -1404,6 +1404,34 @@ describe("execution tests", (): void => {
     });
   });
 
+  describe("generic tuple-struct construction turbofish inference", (): void => {
+    it("lets an explicit turbofish override inference on a generic tuple-struct construction", (): void => {
+      assertRunsTo(
+        `
+        struct Pair<T>(T, T);
+        fn main() { let p = Pair::<i32>(1, 2); let Pair(a, b) = p; print(a); }
+        `,
+        ["1"],
+      );
+    });
+
+    it("reports a conflict when a turbofish disagrees with the actual argument on a generic tuple-struct construction", (): void => {
+      const result = compileHedgeCode(
+        `struct Pair<T>(T, T); fn main() { let p = Pair::<i32>("s", "t"); print(p); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(2);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(errors[0]?.message).toBe(
+        "argument 1 to struct `Pair` type mismatch: expected `i32`, found `str`",
+      );
+      expect(errors[1]?.code).toBe("HEDGE-TYPE-010");
+      expect(errors[1]?.message).toBe(
+        "argument 2 to struct `Pair` type mismatch: expected `i32`, found `str`",
+      );
+    });
+  });
+
   describe("unused generic type parameters on a struct or enum", (): void => {
     it("rejects a struct's own type parameter that appears in none of its fields", (): void => {
       const result = compileHedgeCode(`struct Triple<A, B, C> { a: A, c: C }`);

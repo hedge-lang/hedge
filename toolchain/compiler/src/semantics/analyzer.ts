@@ -6306,7 +6306,7 @@ function analyzeTupleStructCallConstruction(
     );
     return some({ callee, type: structDecl.type, args: [...args] });
   }
-  const { args: checkedArgs } = checkPositionalCallArgs(
+  const checkedArgs = checkGenericPositionalConstruction(
     ctx,
     call,
     { kindLabel: "struct", name: structName },
