@@ -2380,12 +2380,11 @@ function analyzeStructPattern(
       pattern: none<Semantics.Pattern>(),
     };
   });
-  const result: Semantics.StructPattern = {
+  return {
     ...pattern,
     fields,
     type: scrutineeType,
   };
-  return result;
 }
 
 function analyzeSlicePattern(
@@ -2459,19 +2458,17 @@ function analyzeSlicePattern(
         type: boundType,
         mutable: localMutable,
       });
-      const result: Semantics.RestPattern = {
+      return {
         ...el,
         name: some({ ...el.name.value, type: boundType }),
       };
-      return result;
     },
   );
-  const result: Semantics.SlicePattern = {
+  return {
     ...pattern,
     elements,
     type: scrutineeType,
   };
-  return result;
 }
 
 interface OrPatternBinding {
@@ -5679,15 +5676,22 @@ function analyzeCall(
   // so that reconciliation trivially agrees.
   const returnType = expectedTypeConflicted
     ? expectedType
-    : calleeType.genericParams.length > 0
-      ? substituteGenericType(calleeType.returnType, bindings)
-      : calleeType.returnType;
+    : getReturnType(calleeType, bindings);
   return {
     ...call,
     callee,
     arguments: checkedArgs,
     type: returnType,
   };
+}
+
+function getReturnType(
+  calleeType: Semantics.FunctionType,
+  bindings: GenericBindings,
+): Semantics.Type {
+  return calleeType.genericParams.length > 0
+    ? substituteGenericType(calleeType.returnType, bindings)
+    : calleeType.returnType;
 }
 
 /** The callee's source-level name for a diagnostic. */
