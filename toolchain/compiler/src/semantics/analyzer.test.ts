@@ -4058,4 +4058,71 @@ describe("trait and impl declarations", (): void => {
       );
     });
   });
+
+  describe("blanket impls and supertraits", (): void => {
+    it("resolves a blanket impl for a concrete type that implements the blanket's own bound", (): void => {
+      const result = diagnose(`
+        trait A {}
+        trait B { fn f(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl A for Point {}
+        impl<T: A> B for T {}
+        fn needs_b<U: B>(x: U) {}
+        fn main() { needs_b(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects calling a function requiring a blanket-implemented trait for a concrete type that does not implement the blanket's own bound", (): void => {
+      const result = diagnose(`
+        trait A {}
+        trait B { fn f(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl<T: A> B for T {}
+        fn needs_b<U: B>(x: U) {}
+        fn main() { needs_b(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: B` is not satisfied",
+      );
+    });
+
+    it("accepts registering a trait impl whose supertrait is also implemented for the same type", (): void => {
+      const result = diagnose(`
+        trait Eq {}
+        trait Ord: Eq {}
+        struct Point { x: i32, y: i32 }
+        impl Eq for Point {}
+        impl Ord for Point {}
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects registering a trait impl missing its supertrait's own implementation, naming the missing supertrait", (): void => {
+      const result = diagnose(`
+        trait Eq {}
+        trait Ord: Eq {}
+        struct Point { x: i32, y: i32 }
+        impl Ord for Point {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: Eq` is not satisfied",
+      );
+    });
+
+    it("resolves a two-level supertrait chain, each impl already requiring the level below it", (): void => {
+      const result = diagnose(`
+        trait A {}
+        trait B: A {}
+        trait C: B {}
+        struct Point { x: i32, y: i32 }
+        impl A for Point {}
+        impl B for Point {}
+        impl C for Point {}
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
 });
