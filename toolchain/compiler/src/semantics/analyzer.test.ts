@@ -3853,3 +3853,26 @@ describe("bodiless function signatures", (): void => {
     ]);
   });
 });
+
+describe("trait and impl declarations", (): void => {
+  it("analyzes an empty inherent impl with no diagnostics", (): void => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      impl Point {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects two impls of the same trait for the exact same concrete type", (): void => {
+    const result = diagnose(`
+      trait Draw { fn draw(&self) -> str; }
+      struct Point { x: i32, y: i32 }
+      impl Draw for Point { fn draw(&self) -> str { "a" } }
+      impl Draw for Point { fn draw(&self) -> str { "b" } }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "trait `Draw` is already implemented for type `Point`",
+    );
+  });
+});

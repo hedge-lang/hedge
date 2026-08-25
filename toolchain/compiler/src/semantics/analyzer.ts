@@ -70,6 +70,22 @@ interface AnalysisContext {
    * inherits an enclosing item's generics than it would its locals.
    */
   readonly genericParamStack: ReadonlySet<string>[];
+  /**
+   * Every trait impl registered anywhere in the program, flat and
+   * program-wide rather than scoped to a frame - an impl's existence is a
+   * fact needed by any generic call that resolves its bound, regardless of
+   * how deeply the impl itself is nested, so scoping it like a type name
+   * would make coherence checking depend on textual position.
+   */
+  readonly implRegistry: RegisteredImpl[];
+}
+
+/** One registered trait impl, extracted just far enough to detect an
+ * exact-duplicate `(Trait, Type)` pair. */
+interface RegisteredImpl {
+  readonly traitName: string;
+  readonly targetTypeName: string;
+  readonly tokenId: number;
 }
 
 function newScopeFrame(): ScopeFrame {
@@ -1218,6 +1234,59 @@ function registerTypeDecls(
         frame.enums.set(item.name.text, analyzeEnum(ctx, item));
       }
     }
+  }
+}
+
+/** Extracts an `impl`'s trait/target identity from the parse tree, without
+ * emitting any diagnostic - duplicate/coherence checking happens once, in
+ * `registerImpls`, against the whole program's impl set. */
+function buildImplDecl(item: Parser.ImplDecl): Semantics.ImplDecl {
+  return {
+    kind: "Impl",
+    tokenId: item.tokenId,
+    traitRef: mapSome(item.traitRef, (traitRef) => ({
+      name: traitRef.path.segments.at(-1) ?? "",
+      tokenId: traitRef.tokenId,
+    })),
+    targetTypeName:
+      item.type.kind === "NamedType"
+        ? some(item.type.path.segments.at(-1) ?? "")
+        : none(),
+  };
+}
+
+/**
+ * Registers every top-level trait impl into `ctx.implRegistry`, flat and
+ * program-wide, and reports an exact-duplicate `(Trait, Type)` pair as a
+ * coherence error naming both the trait and the type.
+ */
+function registerImpls(
+  ctx: AnalysisContext,
+  items: readonly (Parser.Item | Parser.Statement)[],
+): void {
+  for (const item of items) {
+    if (item.kind !== "Impl") continue;
+    const decl = buildImplDecl(item);
+    const traitRef = decl.traitRef;
+    const targetType = decl.targetTypeName;
+    if (!isSome(traitRef) || !isSome(targetType)) continue;
+    const traitName = traitRef.value.name;
+    const targetTypeName = targetType.value;
+    const existing = ctx.implRegistry.find(
+      (registered) =>
+        registered.traitName === traitName &&
+        registered.targetTypeName === targetTypeName,
+    );
+    if (existing !== undefined) {
+      emitError(
+        ctx,
+        `trait \`${traitName}\` is already implemented for type \`${targetTypeName}\``,
+        item.tokenId,
+        "HEDGE-TRAIT-001",
+        relatedSpanAt(ctx, existing.tokenId, "first implemented here"),
+      );
+    }
+    ctx.implRegistry.push({ traitName, targetTypeName, tokenId: item.tokenId });
   }
 }
 
@@ -3035,7 +3104,7 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
     case "Trait":
       return { kind: "Trait", tokenId: item.tokenId };
     case "Impl":
-      return { kind: "Impl", tokenId: item.tokenId };
+      return buildImplDecl(item);
     case "TypeAlias":
       return { kind: "TypeAlias", tokenId: item.tokenId };
     case "Const":
@@ -3721,7 +3790,7 @@ function analyzeStatement(
     case "Trait":
       return { kind: "Trait", tokenId: statement.tokenId };
     case "Impl":
-      return { kind: "Impl", tokenId: statement.tokenId };
+      return buildImplDecl(statement);
     default:
       assertNever(
         statement,
@@ -6420,9 +6489,11 @@ export function analyze(
     tokens,
     constResolving: new Set(),
     genericParamStack: [],
+    implRegistry: [],
   };
   // Before functions, so a signature can name any declared type.
   registerTypeDecls(ctx, program.items);
+  registerImpls(ctx, program.items);
   const topLevelFunctionNames = new Set<string>();
   for (const item of program.items) {
     if (item.kind !== "Function" && item.kind !== "FunctionSignature") {

@@ -244,16 +244,28 @@ export interface StaticDecl extends DecoratedAstNode {
 }
 
 /**
- * `trait`/`impl` carry no semantic content yet - trait resolution, coherence,
- * and witness construction are still open Slice 4 work. These exist only so
- * `analyzeItem`/`analyzeStatement` stay exhaustive.
+ * `trait` carries no semantic content yet - associated types, supertrait
+ * enforcement beyond registration, and witness construction are still open
+ * work. Exists only so `analyzeItem`/`analyzeStatement` stay exhaustive.
  */
 interface TraitDecl extends AstNode {
   readonly kind: "Trait";
 }
 
-interface ImplDecl extends AstNode {
+/**
+ * `traitRef`/`targetTypeName` carry just enough identity for coherence
+ * checking to detect an exact-duplicate `(Trait, Type)` pair.
+ * `targetTypeName` is `none()` for a target that isn't a plain named type
+ * (a reference/array impl target, or a blanket impl's own type parameter) -
+ * coherence checking doesn't handle those shapes yet.
+ */
+export interface ImplDecl extends AstNode {
   readonly kind: "Impl";
+  readonly traitRef: Option<{
+    readonly name: string;
+    readonly tokenId: number;
+  }>;
+  readonly targetTypeName: Option<string>;
 }
 
 /** Same rationale as `TraitDecl`/`ImplDecl` above. */
