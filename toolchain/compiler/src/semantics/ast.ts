@@ -525,6 +525,10 @@ export interface FunctionType {
    */
   readonly paramsArePlaceholder: boolean;
   readonly genericParams: readonly string[];
+  /** Each declared generic parameter's own required trait names (`T: Draw`),
+   * keyed by parameter name; a parameter with no bounds still gets an empty
+   * array, not a missing key. */
+  readonly genericParamBounds: ReadonlyMap<string, readonly string[]>;
 }
 
 /**

@@ -70,6 +70,12 @@ interface AnalysisContext {
    * inherits an enclosing item's generics than it would its locals.
    */
   readonly genericParamStack: ReadonlySet<string>[];
+  /** Same lifecycle as `genericParamStack`, keyed the same way - each
+   * declared type parameter's own inline trait bounds, so a call inside a
+   * generic body can check a still-abstract argument's bound against the
+   * enclosing declaration's own bound list instead of searching
+   * `implRegistry` for a concrete impl that doesn't exist yet. */
+  readonly genericParamBoundStack: ReadonlyMap<string, readonly string[]>[];
   /**
    * Every trait impl registered anywhere in the program, flat and
    * program-wide rather than scoped to a frame - an impl's existence is a
@@ -125,21 +131,56 @@ function genericParamNames(
     .map((param) => param.name.text);
 }
 
+/** Each `TypeParam`'s own inline trait-bound names (`T: Draw`), keyed by
+ * parameter name - a `LifetimeTraitBound` (`T: 'a`) contributes nothing,
+ * since it names no trait. */
+function genericParamBoundNames(
+  generics: readonly Parser.GenericParam[],
+): ReadonlyMap<string, readonly string[]> {
+  const bounds = new Map<string, readonly string[]>();
+  for (const param of generics) {
+    if (param.kind !== "TypeParam") continue;
+    bounds.set(
+      param.name.text,
+      param.bounds
+        .filter(
+          (bound): bound is Parser.PathTraitBound =>
+            bound.kind === "PathTraitBound",
+        )
+        .map((bound) => bound.path.segments.at(-1) ?? ""),
+    );
+  }
+  return bounds;
+}
+
 function pushGenericParams(
   ctx: AnalysisContext,
   generics: readonly Parser.GenericParam[],
 ): void {
   ctx.genericParamStack.push(new Set(genericParamNames(generics)));
+  ctx.genericParamBoundStack.push(genericParamBoundNames(generics));
 }
 
 function popGenericParams(ctx: AnalysisContext): void {
   ctx.genericParamStack.pop();
+  ctx.genericParamBoundStack.pop();
 }
 
 /** Only the innermost open item's own type parameters are visible. */
 function isDeclaredGenericParam(ctx: AnalysisContext, name: string): boolean {
   const innermost = ctx.genericParamStack.at(-1);
   return innermost?.has(name) ?? false;
+}
+
+/** The innermost open item's own declared bounds for one of its type
+ * parameters - empty for a parameter with no bounds, or one not declared
+ * by the innermost item at all. */
+function declaredGenericParamBounds(
+  ctx: AnalysisContext,
+  name: string,
+): readonly string[] {
+  const innermost = ctx.genericParamBoundStack.at(-1);
+  return innermost?.get(name) ?? [];
 }
 
 /**
@@ -325,6 +366,7 @@ const BUILTIN_SCOPE: [string, ScopedVariable][] = [
         returnType: UNIT,
         paramsArePlaceholder: true,
         genericParams: [],
+        genericParamBounds: new Map(),
       },
       mutable: false,
     },
@@ -1284,6 +1326,32 @@ function implOverlapMessage(
     return `conflicting implementations of trait \`${traitName}\` for type \`${concrete.targetTypeName}\``;
   }
   return `trait \`${traitName}\` is already implemented for type \`${incoming.targetTypeName}\``;
+}
+
+/**
+ * Whether `type` satisfies `traitName`, for generic bound checking at a
+ * call site. A still-abstract type (the enclosing declaration's own generic
+ * parameter, not yet resolved to a concrete type) checks against that
+ * declaration's own bound list instead of `implRegistry`, since no concrete
+ * impl can exist for a type that isn't concrete yet.
+ */
+function typeSatisfiesTraitBound(
+  ctx: AnalysisContext,
+  type: Semantics.Type,
+  traitName: string,
+): boolean {
+  if (type.kind === "NamedType" && type.path.segments.length === 1) {
+    const paramName = type.path.segments[0];
+    if (paramName !== undefined && isDeclaredGenericParam(ctx, paramName)) {
+      return declaredGenericParamBounds(ctx, paramName).includes(traitName);
+    }
+  }
+  const typeName = describeType(type);
+  return ctx.implRegistry.some(
+    (impl) =>
+      impl.traitName === traitName &&
+      (impl.isBlanket || impl.targetTypeName === typeName),
+  );
 }
 
 /**
@@ -3437,6 +3505,7 @@ function fnSignatureType(
       : { kind: "UnitType", tokenId: signature.tokenId },
     paramsArePlaceholder: false,
     genericParams: genericParamNames(signature.generics),
+    genericParamBounds: genericParamBoundNames(signature.generics),
   };
   popGenericParams(ctx);
   return type;
@@ -5766,13 +5835,27 @@ function analyzeCall(
     turbofishBindings,
   );
   for (const paramName of calleeType.genericParams) {
-    if (bindings.has(paramName)) continue;
-    emitError(
-      ctx,
-      `cannot infer type of generic parameter \`${paramName}\` without an explicit type annotation or turbofish`,
-      call.tokenId,
-      "HEDGE-TYPE-006",
-    );
+    const binding = bindings.get(paramName);
+    if (binding === undefined) {
+      emitError(
+        ctx,
+        `cannot infer type of generic parameter \`${paramName}\` without an explicit type annotation or turbofish`,
+        call.tokenId,
+        "HEDGE-TYPE-006",
+      );
+      continue;
+    }
+    if (binding.isErrorPlaceholder === true) continue;
+    for (const traitName of calleeType.genericParamBounds.get(paramName) ??
+      []) {
+      if (typeSatisfiesTraitBound(ctx, binding.type, traitName)) continue;
+      emitError(
+        ctx,
+        `the trait bound \`${describeType(binding.type)}: ${traitName}\` is not satisfied`,
+        call.tokenId,
+        "HEDGE-TRAIT-002",
+      );
+    }
   }
   // A conflict already reported by `seedExpectedReturnType` means the
   // enclosing `let`/return reconciliation would otherwise see a return type
@@ -6525,6 +6608,7 @@ export function analyze(
     tokens,
     constResolving: new Set(),
     genericParamStack: [],
+    genericParamBoundStack: [],
     implRegistry: [],
   };
   // Before functions, so a signature can name any declared type.

@@ -3950,4 +3950,112 @@ describe("trait and impl declarations", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
   });
+
+  describe("generic bound checking at call sites", (): void => {
+    it("rejects a generic call whose concrete type has no impl of the bound trait", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        fn draw_all<T: Draw>(x: T) {}
+        fn main() { draw_all(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: Draw` is not satisfied",
+      );
+    });
+
+    it("accepts a generic call whose concrete type has a matching impl", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl Draw for Point { fn draw(&self) -> str { "a" } }
+        fn draw_all<T: Draw>(x: T) {}
+        fn main() { draw_all(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects when one of two bounds on the same param is unsatisfied, naming only the missing one", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        trait Describe { fn describe(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl Draw for Point { fn draw(&self) -> str { "a" } }
+        fn show<T: Draw + Describe>(x: T) {}
+        fn main() { show(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: Describe` is not satisfied",
+      );
+    });
+
+    it("accepts when all bounds on one param are satisfied", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        trait Describe { fn describe(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl Draw for Point { fn draw(&self) -> str { "a" } }
+        impl Describe for Point { fn describe(&self) -> str { "b" } }
+        fn show<T: Draw + Describe>(x: T) {}
+        fn main() { show(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("reports each of two independently-unsatisfied bounds on two different generic params", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        trait Describe { fn describe(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        struct Circle { r: i32 }
+        fn pair<T: Draw, U: Describe>(a: T, b: U) {}
+        fn main() { pair(Point { x: 0, y: 0 }, Circle { r: 1 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(2);
+      expect(result.diagnostics.map((d) => d.message)).toEqual([
+        "the trait bound `Point: Draw` is not satisfied",
+        "the trait bound `Circle: Describe` is not satisfied",
+      ]);
+    });
+
+    it("does not cascade a second diagnostic beyond the missing-impl error itself", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        fn draw_all<T: Draw>(x: T) -> T { x }
+        fn main() {
+          let p = draw_all(Point { x: 0, y: 0 });
+          print(p.x);
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: Draw` is not satisfied",
+      );
+    });
+
+    it("propagates bound satisfaction through an enclosing generic function's own abstract type parameter", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        fn inner<U: Draw>(x: U) {}
+        fn outer<T: Draw>(x: T) { inner(x); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects when an enclosing generic function's own abstract type parameter lacks the callee's required bound", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        trait Describe { fn describe(&self) -> str; }
+        fn inner<U: Draw>(x: U) {}
+        fn outer<T: Describe>(x: T) { inner(x); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `T: Draw` is not satisfied",
+      );
+    });
+  });
 });
