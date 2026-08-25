@@ -719,6 +719,8 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "does not cascade a second diagnostic when the enclosing function's return type is Self used outside a trait or impl",
       "does not cascade a second diagnostic when a let binding's annotation is Self used outside a trait or impl",
       "does not cascade a second diagnostic when a turbofish argument is Self used outside a trait or impl",
+      "does not cascade an unsolved-variable diagnostic on top of a wrong-arity generic call",
+      "does not cascade an unsolved-variable diagnostic per parameter on a wrong-arity multi-generic call",
     ],
   },
   {

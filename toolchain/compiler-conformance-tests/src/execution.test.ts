@@ -1323,6 +1323,21 @@ describe("execution tests", (): void => {
         `fn identity<T>(x: T) -> T { x } fn main() { print(identity::<Self>(5)); }`,
       );
     });
+
+    it("does not cascade an unsolved-variable diagnostic on top of a wrong-arity generic call", (): void => {
+      assertNoCascade(
+        `fn identity<T>(x: T) -> T { x } fn main() { identity(); }`,
+      );
+    });
+
+    it("does not cascade an unsolved-variable diagnostic per parameter on a wrong-arity multi-generic call", (): void => {
+      const result = compileHedgeCode(
+        `fn pair<A, B>(a: A, b: B) -> A { a } fn main() { print(pair(1)); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-008");
+    });
   });
 
   describe("unused generic type parameters on a struct or enum", (): void => {

@@ -6061,6 +6061,19 @@ function checkPositionalCallArgs(
       call.tokenId,
       "HEDGE-TYPE-008",
     );
+    // Arity mismatch means the per-argument loop below never runs, so
+    // nothing would otherwise bind a generic parameter that isn't already
+    // seeded (turbofish, expected return type). Placeholder-bind the rest
+    // so the caller's own unsolved-variable check doesn't also fire for
+    // each one on top of this arity error.
+    for (const paramName of genericNames) {
+      if (bindings.has(paramName)) continue;
+      bindings.set(paramName, {
+        type: { kind: "UnitType", tokenId: call.tokenId },
+        tokenId: call.tokenId,
+        isErrorPlaceholder: true,
+      });
+    }
     return { args: [...args], bindings };
   }
   const checkedArgs = args.map((arg, i) => {
