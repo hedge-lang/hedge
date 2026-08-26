@@ -40,7 +40,7 @@ export interface AnalysisResult {
 /** One trait method a witness carries, and where its implementation comes
  * from: the impl's own override, or the trait's own default body when the
  * impl doesn't override it. */
-export interface WitnessMethod {
+interface WitnessMethod {
   readonly name: string;
   readonly source: "impl" | "default";
 }
@@ -54,7 +54,7 @@ export interface WitnessMethod {
  * function supplies it; codegen forwards the enclosing function's own
  * received witness for `paramName` instead of resolving a new one.
  */
-export type WitnessRef =
+type WitnessRef =
   | {
       readonly kind: "Impl";
       readonly traitName: string;
@@ -1650,11 +1650,12 @@ function warnIfSurprisinglyVisible(
   );
 }
 
-function registerImpls(
-  ctx: AnalysisContext,
+/** Every top-level struct/enum's own name - what `warnIfSurprisinglyVisible`
+ * checks a nested impl's target type against. */
+function collectTopLevelStructEnumNames(
   allItems: readonly DepthedItem[],
-): void {
-  const topLevelStructEnumNames = new Set(
+): ReadonlySet<string> {
+  return new Set(
     allItems
       .map(({ item, depth }) => (depth === 0 ? item : undefined))
       .filter(
@@ -1663,58 +1664,87 @@ function registerImpls(
       )
       .map((item) => item.name.text),
   );
-  const concreteImpls: {
+}
+
+function reportMissingRequiredMethods(
+  ctx: AnalysisContext,
+  item: Parser.ImplDecl,
+  traitName: string,
+  targetTypeName: string,
+  providedMethods: readonly string[],
+): void {
+  const requiredMethods =
+    ctx.traitRegistry.get(traitName)?.requiredMethods ?? [];
+  for (const method of requiredMethods) {
+    if (providedMethods.includes(method)) continue;
+    emitError(
+      ctx,
+      `impl of trait \`${traitName}\` for \`${targetTypeName}\` is missing method \`${method}\``,
+      item.tokenId,
+      "HEDGE-TRAIT-003",
+    );
+  }
+}
+
+/** Registers one `impl`'s coherence/completeness/visibility facts, or
+ * `undefined` for a not-yet-handled shape (no trait, or a non-named-type
+ * target). Split out of `registerImpls` to keep that loop itself simple. */
+function registerOneImpl(
+  ctx: AnalysisContext,
+  item: Parser.ImplDecl,
+  depth: number,
+  topLevelStructEnumNames: ReadonlySet<string>,
+): RegisteredImpl | undefined {
+  const decl = buildImplDecl(item);
+  const traitRef = decl.traitRef;
+  const targetType = decl.targetTypeName;
+  if (!isSome(traitRef) || !isSome(targetType)) return undefined;
+  const traitName = traitRef.value.name;
+  const incoming: RegisteredImpl = {
+    traitName,
+    targetTypeName: targetType.value,
+    isBlanket: decl.isBlanket,
+    blanketBounds: decl.blanketBounds,
+    providedMethods: decl.providedMethods,
+    tokenId: item.tokenId,
+  };
+  const existing = ctx.implRegistry.find(
+    (registered) =>
+      registered.traitName === traitName && implsOverlap(registered, incoming),
+  );
+  if (existing !== undefined) {
+    emitError(
+      ctx,
+      implOverlapMessage(traitName, incoming, existing),
+      item.tokenId,
+      "HEDGE-TRAIT-001",
+      relatedSpanAt(ctx, existing.tokenId, "first implemented here"),
+    );
+  }
+  ctx.implRegistry.push(incoming);
+  if (depth > 0) {
+    warnIfSurprisinglyVisible(ctx, item, incoming, topLevelStructEnumNames);
+  }
+  reportMissingRequiredMethods(
+    ctx,
+    item,
+    traitName,
+    incoming.targetTypeName,
+    decl.providedMethods,
+  );
+  return incoming;
+}
+
+/** A concrete impl missing one of its trait's own supertrait
+ * implementations - deferred until every impl is registered, so
+ * declaration order within the program doesn't matter. */
+function checkSupertraitCompleteness(
+  ctx: AnalysisContext,
+  concreteImpls: readonly {
     readonly tokenId: number;
     readonly impl: RegisteredImpl;
-  }[] = [];
-  for (const { item, depth } of allItems) {
-    if (item.kind !== "Impl") continue;
-    const decl = buildImplDecl(item);
-    const traitRef = decl.traitRef;
-    const targetType = decl.targetTypeName;
-    if (!isSome(traitRef) || !isSome(targetType)) continue;
-    const traitName = traitRef.value.name;
-    const incoming: RegisteredImpl = {
-      traitName,
-      targetTypeName: targetType.value,
-      isBlanket: decl.isBlanket,
-      blanketBounds: decl.blanketBounds,
-      providedMethods: decl.providedMethods,
-      tokenId: item.tokenId,
-    };
-    const existing = ctx.implRegistry.find(
-      (registered) =>
-        registered.traitName === traitName &&
-        implsOverlap(registered, incoming),
-    );
-    if (existing !== undefined) {
-      emitError(
-        ctx,
-        implOverlapMessage(traitName, incoming, existing),
-        item.tokenId,
-        "HEDGE-TRAIT-001",
-        relatedSpanAt(ctx, existing.tokenId, "first implemented here"),
-      );
-    }
-    ctx.implRegistry.push(incoming);
-    if (!incoming.isBlanket) {
-      concreteImpls.push({ tokenId: item.tokenId, impl: incoming });
-    }
-    if (depth > 0) {
-      warnIfSurprisinglyVisible(ctx, item, incoming, topLevelStructEnumNames);
-    }
-    const requiredMethods =
-      ctx.traitRegistry.get(traitName)?.requiredMethods ?? [];
-    for (const method of requiredMethods) {
-      if (decl.providedMethods.includes(method)) continue;
-      emitError(
-        ctx,
-        `impl of trait \`${traitName}\` for \`${incoming.targetTypeName}\` is missing method \`${method}\``,
-        item.tokenId,
-        "HEDGE-TRAIT-003",
-      );
-    }
-  }
+  }[],
+): void {
   for (const { tokenId, impl } of concreteImpls) {
     for (const supertrait of ctx.traitRegistry.get(impl.traitName)
       ?.supertraits ?? []) {
@@ -1733,6 +1763,34 @@ function registerImpls(
       );
     }
   }
+}
+
+/**
+ * Registers every trait impl into `ctx.implRegistry`, flat and
+ * program-wide, reports two overlapping impls of the same trait as a
+ * coherence error, and reports a concrete impl missing one of its trait's
+ * own supertrait implementations. Supertrait completeness is not checked
+ * for a blanket impl: proving its own type parameter's bound implies the
+ * supertrait needs impl-definition-time bound implication checking this
+ * ticket doesn't attempt.
+ */
+function registerImpls(
+  ctx: AnalysisContext,
+  allItems: readonly DepthedItem[],
+): void {
+  const topLevelStructEnumNames = collectTopLevelStructEnumNames(allItems);
+  const concreteImpls: {
+    readonly tokenId: number;
+    readonly impl: RegisteredImpl;
+  }[] = [];
+  for (const { item, depth } of allItems) {
+    if (item.kind !== "Impl") continue;
+    const incoming = registerOneImpl(ctx, item, depth, topLevelStructEnumNames);
+    if (incoming !== undefined && !incoming.isBlanket) {
+      concreteImpls.push({ tokenId: item.tokenId, impl: incoming });
+    }
+  }
+  checkSupertraitCompleteness(ctx, concreteImpls);
 }
 
 /**
@@ -6106,6 +6164,49 @@ function analyzeIdentifier(
   return { ...identifier, type };
 }
 
+/**
+ * For each of the callee's declared generic parameters: reports an unsolved
+ * generic (`HEDGE-TYPE-006`) if inference never bound it, otherwise checks
+ * its resolved type against every trait bound that parameter declares,
+ * recording a witness for each satisfied one and reporting the rest as
+ * `HEDGE-TRAIT-002`. Split out of `analyzeCall` to keep that function
+ * itself under the complexity ceiling.
+ */
+function checkCallGenericBounds(
+  ctx: AnalysisContext,
+  call: Parser.CallExpression,
+  calleeType: Semantics.FunctionType,
+  bindings: GenericBindings,
+): void {
+  for (const paramName of calleeType.genericParams) {
+    const binding = bindings.get(paramName);
+    if (binding === undefined) {
+      emitError(
+        ctx,
+        `cannot infer type of generic parameter \`${paramName}\` without an explicit type annotation or turbofish`,
+        call.tokenId,
+        "HEDGE-TYPE-006",
+      );
+      continue;
+    }
+    if (binding.isErrorPlaceholder === true) continue;
+    for (const traitName of calleeType.genericParamBounds.get(paramName) ??
+      []) {
+      const witness = resolveTraitBound(ctx, binding.type, traitName);
+      if (isSome(witness)) {
+        recordWitness(ctx, call.tokenId, witness.value);
+        continue;
+      }
+      emitError(
+        ctx,
+        traitBoundNotSatisfiedMessage(describeType(binding.type), traitName),
+        call.tokenId,
+        "HEDGE-TRAIT-002",
+      );
+    }
+  }
+}
+
 function analyzeCall(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
@@ -6175,33 +6276,7 @@ function analyzeCall(
     calleeType.genericParams,
     turbofishBindings,
   );
-  for (const paramName of calleeType.genericParams) {
-    const binding = bindings.get(paramName);
-    if (binding === undefined) {
-      emitError(
-        ctx,
-        `cannot infer type of generic parameter \`${paramName}\` without an explicit type annotation or turbofish`,
-        call.tokenId,
-        "HEDGE-TYPE-006",
-      );
-      continue;
-    }
-    if (binding.isErrorPlaceholder === true) continue;
-    for (const traitName of calleeType.genericParamBounds.get(paramName) ??
-      []) {
-      const witness = resolveTraitBound(ctx, binding.type, traitName);
-      if (isSome(witness)) {
-        recordWitness(ctx, call.tokenId, witness.value);
-        continue;
-      }
-      emitError(
-        ctx,
-        traitBoundNotSatisfiedMessage(describeType(binding.type), traitName),
-        call.tokenId,
-        "HEDGE-TRAIT-002",
-      );
-    }
-  }
+  checkCallGenericBounds(ctx, call, calleeType, bindings);
   // A conflict already reported by `seedExpectedReturnType` means the
   // enclosing `let`/return reconciliation would otherwise see a return type
   // that still disagrees with `expectedType` and double-report the same
