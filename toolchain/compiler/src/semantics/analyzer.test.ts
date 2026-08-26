@@ -4290,4 +4290,87 @@ describe("trait and impl declarations", (): void => {
       ]);
     });
   });
+
+  describe("nested impl registration and visibility", (): void => {
+    it("resolves a generic call against an impl declared inside another function's body", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        fn draw_all<T: Draw>(x: T) {}
+        fn helper() {
+          impl Draw for Point { fn draw(&self) -> str { "a" } }
+          draw_all(Point { x: 0, y: 0 });
+        }
+        fn main() { draw_all(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("does not warn on a top-level impl", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl Draw for Point { fn draw(&self) -> str { "a" } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("warns on an impl declared inside a function that targets a top-level struct", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        fn helper() {
+          impl Draw for Point { fn draw(&self) -> str { "a" } }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("warning");
+      expect(result.diagnostics[0]?.message).toBe(
+        "impl of trait `Draw` for `Point` takes effect everywhere in the program, not just this scope",
+      );
+    });
+
+    it("warns on a nested blanket impl regardless of its target", (): void => {
+      const result = diagnose(`
+        trait A {}
+        trait B { fn f(&self) -> str; }
+        fn helper() {
+          impl<T: A> B for T { fn f(&self) -> str { "a" } }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("warning");
+      expect(result.diagnostics[0]?.message).toBe(
+        "blanket impl of trait `B` takes effect everywhere in the program, not just this scope",
+      );
+    });
+
+    it("does not warn when both the struct and its impl are declared inside the same function", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        fn helper() {
+          struct Point { x: i32, y: i32 }
+          impl Draw for Point { fn draw(&self) -> str { "a" } }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("warns on an impl nested inside an if-branch that targets a top-level struct", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        fn helper(cond: bool) {
+          if cond {
+            impl Draw for Point { fn draw(&self) -> str { "a" } }
+          }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("warning");
+      expect(result.diagnostics[0]?.message).toBe(
+        "impl of trait `Draw` for `Point` takes effect everywhere in the program, not just this scope",
+      );
+    });
+  });
 });
