@@ -4303,7 +4303,13 @@ describe("trait and impl declarations", (): void => {
         }
         fn main() { draw_all(Point { x: 0, y: 0 }); }
       `);
-      expect(result.diagnostics).toEqual([]);
+      // The impl targets Point, a top-level struct, so it also trips the
+      // visibility lint below - expected here, not a resolution failure.
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("warning");
+      expect(result.diagnostics[0]?.message).toBe(
+        "impl of trait `Draw` for `Point` takes effect everywhere in the program, not just this scope",
+      );
     });
 
     it("does not warn on a top-level impl", (): void => {

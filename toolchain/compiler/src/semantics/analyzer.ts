@@ -1505,14 +1505,96 @@ function traitBoundNotSatisfiedMessage(
   return `the trait bound \`${typeName}: ${traitName}\` is not satisfied`;
 }
 
-/** Registers every top-level `trait`'s own name and supertraits into
+/** One item found anywhere in the program by `collectAllItems`, alongside
+ * how deeply nested it is (0 = a top-level program item). Impl/trait
+ * registration needs every declaration regardless of nesting - a value can
+ * flow out of the scope it was constructed in and still need its trait
+ * impl resolved far from where either was declared. */
+interface DepthedItem {
+  readonly item: Parser.Item | Parser.Statement;
+  readonly depth: number;
+}
+
+/**
+ * Walks the whole program looking for every item, including one nested
+ * inside a function body, an `impl`/`trait` body, or an `if`/`match`/
+ * `while` block - not just top-level items, since `impl`/`trait` are valid
+ * statements and take program-wide effect regardless of where they're
+ * declared. Does not descend into an arbitrary expression position beyond
+ * these (a call argument's own block-valued sub-expression, for instance) -
+ * a known, narrow gap, matching `parser/lifetime-elision.ts`'s own
+ * similarly-scoped walk.
+ */
+function collectAllItems(
+  items: readonly (Parser.Item | Parser.Statement)[],
+  depth: number,
+): readonly DepthedItem[] {
+  const collected: DepthedItem[] = [];
+  for (const item of items) {
+    collected.push({ item, depth });
+    if (item.kind === "Function") {
+      collected.push(...collectBlockItems(item.body, depth + 1));
+    } else if (item.kind === "Impl" || item.kind === "Trait") {
+      collected.push(...collectAllItems(item.items, depth + 1));
+    } else if (item.kind === "ExpressionStatement") {
+      collected.push(...collectExpressionItems(item.expression, depth));
+    } else if (item.kind === "LetStatement" && isSome(item.initializer)) {
+      collected.push(...collectExpressionItems(item.initializer.value, depth));
+    }
+  }
+  return collected;
+}
+
+function collectBlockItems(
+  block: Parser.Block,
+  depth: number,
+): readonly DepthedItem[] {
+  const inner = collectAllItems(block.statements, depth);
+  return isSome(block.trailingExpression)
+    ? [
+        ...inner,
+        ...collectExpressionItems(block.trailingExpression.value, depth),
+      ]
+    : inner;
+}
+
+function collectExpressionItems(
+  expr: Parser.Expression,
+  depth: number,
+): readonly DepthedItem[] {
+  switch (expr.kind) {
+    case "Block":
+      return collectBlockItems(expr, depth + 1);
+    case "IfExpression": {
+      const thenItems = collectBlockItems(expr.thenBranch, depth + 1);
+      if (!isSome(expr.elseBranch)) return thenItems;
+      const elseBranch = expr.elseBranch.value;
+      return [
+        ...thenItems,
+        ...(elseBranch.kind === "IfExpression"
+          ? collectExpressionItems(elseBranch, depth)
+          : collectBlockItems(elseBranch, depth + 1)),
+      ];
+    }
+    case "WhileExpression":
+      return collectBlockItems(expr.body, depth + 1);
+    case "MatchExpression":
+      return expr.arms.flatMap((arm) =>
+        collectExpressionItems(arm.body, depth + 1),
+      );
+    default:
+      return [];
+  }
+}
+
+/** Registers every `trait`'s own name and supertraits into
  * `ctx.traitRegistry`, so `registerImpls` can look up a trait's supertrait
  * requirements before checking whether an impl of it is complete. */
 function registerTraits(
   ctx: AnalysisContext,
-  items: readonly (Parser.Item | Parser.Statement)[],
+  allItems: readonly DepthedItem[],
 ): void {
-  for (const item of items) {
+  for (const { item } of allItems) {
     if (item.kind !== "Trait") continue;
     const decl = buildTraitDecl(item);
     ctx.traitRegistry.set(decl.name, {
@@ -1533,15 +1615,59 @@ function registerTraits(
  * parameter's bound implies the supertrait needs impl-definition-time bound
  * implication checking this ticket doesn't attempt.
  */
+/**
+ * Warns when a non-top-level `impl` still takes program-wide effect despite
+ * living in a nested scope - the common, unsurprising case (both the impl
+ * and its target type are local to the same nested scope, so nothing
+ * outside that scope could construct a value needing the impl anyway) is
+ * deliberately not flagged: `targetTypeName` only appears here when it was
+ * itself declared at the program's top level, so a value of that type can
+ * always reach code outside the impl's own declaring scope. A blanket impl
+ * always warns when nested, since it can affect any external type
+ * satisfying its bound, not just one named locally.
+ */
+function warnIfSurprisinglyVisible(
+  ctx: AnalysisContext,
+  item: Parser.ImplDecl,
+  incoming: RegisteredImpl,
+  topLevelStructEnumNames: ReadonlySet<string>,
+): void {
+  if (incoming.isBlanket) {
+    emitWarning(
+      ctx,
+      `blanket impl of trait \`${incoming.traitName}\` takes effect everywhere in the program, not just this scope`,
+      item.tokenId,
+      "HEDGE-LINT-003",
+    );
+    return;
+  }
+  if (!topLevelStructEnumNames.has(incoming.targetTypeName)) return;
+  emitWarning(
+    ctx,
+    `impl of trait \`${incoming.traitName}\` for \`${incoming.targetTypeName}\` takes effect everywhere in the program, not just this scope`,
+    item.tokenId,
+    "HEDGE-LINT-003",
+  );
+}
+
 function registerImpls(
   ctx: AnalysisContext,
-  items: readonly (Parser.Item | Parser.Statement)[],
+  allItems: readonly DepthedItem[],
 ): void {
+  const topLevelStructEnumNames = new Set(
+    allItems
+      .map(({ item, depth }) => (depth === 0 ? item : undefined))
+      .filter(
+        (item): item is Parser.StructDecl | Parser.EnumDecl =>
+          item?.kind === "Struct" || item?.kind === "Enum",
+      )
+      .map((item) => item.name.text),
+  );
   const concreteImpls: {
     readonly tokenId: number;
     readonly impl: RegisteredImpl;
   }[] = [];
-  for (const item of items) {
+  for (const { item, depth } of allItems) {
     if (item.kind !== "Impl") continue;
     const decl = buildImplDecl(item);
     const traitRef = decl.traitRef;
@@ -1573,6 +1699,9 @@ function registerImpls(
     ctx.implRegistry.push(incoming);
     if (!incoming.isBlanket) {
       concreteImpls.push({ tokenId: item.tokenId, impl: incoming });
+    }
+    if (depth > 0) {
+      warnIfSurprisinglyVisible(ctx, item, incoming, topLevelStructEnumNames);
     }
     const requiredMethods =
       ctx.traitRegistry.get(traitName)?.requiredMethods ?? [];
@@ -6847,8 +6976,9 @@ export function analyze(
   };
   // Before functions, so a signature can name any declared type.
   registerTypeDecls(ctx, program.items);
-  registerTraits(ctx, program.items);
-  registerImpls(ctx, program.items);
+  const allItems = collectAllItems(program.items, 0);
+  registerTraits(ctx, allItems);
+  registerImpls(ctx, allItems);
   const topLevelFunctionNames = new Set<string>();
   for (const item of program.items) {
     if (item.kind !== "Function" && item.kind !== "FunctionSignature") {
