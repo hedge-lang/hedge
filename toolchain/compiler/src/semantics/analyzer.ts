@@ -1452,12 +1452,16 @@ function resolveTraitBoundForTypeName(
   ctx: AnalysisContext,
   typeName: string,
   traitName: string,
+  visiting: ReadonlySet<string> = new Set(),
 ): Option<WitnessRef> {
+  const key = `${typeName}::${traitName}`;
+  if (visiting.has(key)) return none();
+  const nextVisiting = new Set(visiting).add(key);
   const impl = ctx.implRegistry.find((impl) => {
     if (impl.traitName !== traitName) return false;
     if (!impl.isBlanket) return impl.targetTypeName === typeName;
     return impl.blanketBounds.every((bound) =>
-      isSome(resolveTraitBoundForTypeName(ctx, typeName, bound)),
+      isSome(resolveTraitBoundForTypeName(ctx, typeName, bound, nextVisiting)),
     );
   });
   if (impl === undefined) return none();

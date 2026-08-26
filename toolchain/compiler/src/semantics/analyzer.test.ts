@@ -4379,4 +4379,36 @@ describe("trait and impl declarations", (): void => {
       );
     });
   });
+
+  describe("cyclic blanket bounds", (): void => {
+    it("does not overflow the stack when a blanket impl's own bound is the same trait it implements", (): void => {
+      const result = diagnose(`
+        trait A {}
+        impl<T: A> A for T {}
+        struct Point { x: i32, y: i32 }
+        fn needs_a<U: A>(x: U) {}
+        fn main() { needs_a(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: A` is not satisfied",
+      );
+    });
+
+    it("does not overflow the stack on a longer blanket-bound cycle", (): void => {
+      const result = diagnose(`
+        trait A {}
+        trait B {}
+        impl<T: B> A for T {}
+        impl<T: A> B for T {}
+        struct Point { x: i32, y: i32 }
+        fn needs_a<U: A>(x: U) {}
+        fn main() { needs_a(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: A` is not satisfied",
+      );
+    });
+  });
 });
