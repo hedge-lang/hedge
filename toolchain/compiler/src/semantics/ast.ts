@@ -249,7 +249,7 @@ export interface StaticDecl extends DecoratedAstNode {
  * requires). `requiredMethods` (no body in the trait declaration) and
  * `defaultMethods` (a body in the trait declaration) drive impl completeness
  * checking - a default method needs no override, a required one does.
- * Associated types and witness construction are still open work.
+ * Associated types are still open work.
  */
 export interface TraitDecl extends AstNode {
   readonly kind: "Trait";
