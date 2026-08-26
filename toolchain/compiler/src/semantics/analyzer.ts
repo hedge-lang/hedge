@@ -1417,13 +1417,6 @@ function implOverlapMessage(
 }
 
 /**
- * Whether `type` satisfies `traitName`, for generic bound checking at a
- * call site. A still-abstract type (the enclosing declaration's own generic
- * parameter, not yet resolved to a concrete type) checks against that
- * declaration's own bound list instead of `implRegistry`, since no concrete
- * impl can exist for a type that isn't concrete yet.
- */
-/**
  * Resolves `type: traitName` to the witness that satisfies it, or `none()`
  * if nothing does. A still-abstract type (the enclosing declaration's own
  * generic parameter) resolves against that declaration's own bound list,
@@ -1605,16 +1598,6 @@ function registerTraits(
   }
 }
 
-/**
- * Registers every top-level trait impl into `ctx.implRegistry`, flat and
- * program-wide, reports two overlapping impls of the same trait as a
- * coherence error, and - once every impl is registered, so declaration
- * order within the program doesn't matter - reports a concrete impl
- * missing one of its trait's own supertrait implementations. Supertrait
- * completeness is not checked for a blanket impl: proving its own type
- * parameter's bound implies the supertrait needs impl-definition-time bound
- * implication checking this ticket doesn't attempt.
- */
 /**
  * Warns when a non-top-level `impl` still takes program-wide effect despite
  * living in a nested scope - the common, unsurprising case (both the impl
