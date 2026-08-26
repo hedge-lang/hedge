@@ -1526,20 +1526,22 @@ function collectAllItems(
   items: readonly (Parser.Item | Parser.Statement)[],
   depth: number,
 ): readonly DepthedItem[] {
-  const collected: DepthedItem[] = [];
-  for (const item of items) {
-    collected.push({ item, depth });
+  return items.flatMap((item): readonly DepthedItem[] => {
+    const self: DepthedItem = { item, depth };
     if (item.kind === "Function") {
-      collected.push(...collectBlockItems(item.body, depth + 1));
-    } else if (item.kind === "Impl" || item.kind === "Trait") {
-      collected.push(...collectAllItems(item.items, depth + 1));
-    } else if (item.kind === "ExpressionStatement") {
-      collected.push(...collectExpressionItems(item.expression, depth));
-    } else if (item.kind === "LetStatement" && isSome(item.initializer)) {
-      collected.push(...collectExpressionItems(item.initializer.value, depth));
+      return [self, ...collectBlockItems(item.body, depth + 1)];
     }
-  }
-  return collected;
+    if (item.kind === "Impl" || item.kind === "Trait") {
+      return [self, ...collectAllItems(item.items, depth + 1)];
+    }
+    if (item.kind === "ExpressionStatement") {
+      return [self, ...collectExpressionItems(item.expression, depth)];
+    }
+    if (item.kind === "LetStatement" && isSome(item.initializer)) {
+      return [self, ...collectExpressionItems(item.initializer.value, depth)];
+    }
+    return [self];
+  });
 }
 
 function collectBlockItems(
@@ -1727,12 +1729,9 @@ function registerOneImpl(
  * declaration order within the program doesn't matter. */
 function checkSupertraitCompleteness(
   ctx: AnalysisContext,
-  concreteImpls: readonly {
-    readonly tokenId: number;
-    readonly impl: RegisteredImpl;
-  }[],
+  concreteImpls: readonly RegisteredImpl[],
 ): void {
-  for (const { tokenId, impl } of concreteImpls) {
+  for (const impl of concreteImpls) {
     for (const supertrait of ctx.traitRegistry.get(impl.traitName)
       ?.supertraits ?? []) {
       if (
@@ -1745,7 +1744,7 @@ function checkSupertraitCompleteness(
       emitError(
         ctx,
         traitBoundNotSatisfiedMessage(impl.targetTypeName, supertrait),
-        tokenId,
+        impl.tokenId,
         "HEDGE-TRAIT-002",
       );
     }
@@ -1766,15 +1765,12 @@ function registerImpls(
   allItems: readonly DepthedItem[],
 ): void {
   const topLevelStructEnumNames = collectTopLevelStructEnumNames(allItems);
-  const concreteImpls: {
-    readonly tokenId: number;
-    readonly impl: RegisteredImpl;
-  }[] = [];
+  const concreteImpls: RegisteredImpl[] = [];
   for (const { item, depth } of allItems) {
     if (item.kind !== "Impl") continue;
     const incoming = registerOneImpl(ctx, item, depth, topLevelStructEnumNames);
     if (incoming !== undefined && !incoming.isBlanket) {
-      concreteImpls.push({ tokenId: item.tokenId, impl: incoming });
+      concreteImpls.push(incoming);
     }
   }
   checkSupertraitCompleteness(ctx, concreteImpls);
