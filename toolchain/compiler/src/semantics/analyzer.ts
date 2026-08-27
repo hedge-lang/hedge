@@ -233,6 +233,50 @@ function traitBoundNames(
     .map((bound) => bound.path.segments.at(-1) ?? "");
 }
 
+/** Rejects any trait bound naming a trait that isn't declared - a sibling
+ * of `traitBoundNames`, which only extracts names and never checks them.
+ * Callers run this once `ctx.traitRegistry` is known to be fully populated
+ * for whatever it's checking against (immediately for a bound list that
+ * can't forward-reference anything still being registered, or after a
+ * dedicated first pass when it can, as trait supertraits do). */
+function validateTraitBoundNames(
+  ctx: AnalysisContext,
+  bounds: readonly Parser.TraitBound[],
+): void {
+  for (const bound of bounds) {
+    if (bound.kind !== "PathTraitBound") continue;
+    const name = bound.path.segments.at(-1) ?? "";
+    if (ctx.traitRegistry.has(name)) continue;
+    emitError(
+      ctx,
+      `cannot find trait \`${name}\` in this scope`,
+      bound.tokenId,
+      "HEDGE-NAME-001",
+    );
+  }
+}
+
+/** Validates every trait bound named across `generics`' own inline bounds
+ * and `whereClause`'s predicates - the same two sources
+ * `genericParamBoundNames` merges names from, checked here instead of
+ * silently trusted. `ctx.traitRegistry` must already be fully populated
+ * when this runs. */
+function validateGenericParamBounds(
+  ctx: AnalysisContext,
+  generics: readonly Parser.GenericParam[],
+  whereClause: Option<Parser.WhereClause>,
+): void {
+  for (const param of generics) {
+    if (param.kind !== "TypeParam") continue;
+    validateTraitBoundNames(ctx, param.bounds);
+  }
+  for (const predicate of isSome(whereClause)
+    ? whereClause.value.predicates
+    : []) {
+    validateTraitBoundNames(ctx, predicate.bounds);
+  }
+}
+
 function pushGenericParams(
   ctx: AnalysisContext,
   generics: readonly Parser.GenericParam[],
@@ -1765,13 +1809,19 @@ function collectExpressionItems(
   }
 }
 
-/** Registers every `trait`'s own name and supertraits into
- * `ctx.traitRegistry`, so `registerImpls` can look up a trait's supertrait
- * requirements before checking whether an impl of it is complete. */
+/**
+ * Registers every `trait`'s own name and supertraits into `ctx.traitRegistry`
+ * first, then validates every supertrait reference in a second pass over
+ * only the traits just registered - so `trait A: B {}` declared before
+ * `trait B {}` still resolves (both are registered before either's
+ * supertraits are checked), while a genuinely undeclared supertrait is
+ * still rejected.
+ */
 function registerTraits(
   ctx: AnalysisContext,
   allItems: readonly DepthedItem[],
 ): void {
+  const traitItems: Parser.TraitDecl[] = [];
   for (const { item } of allItems) {
     if (item.kind !== "Trait") continue;
     const decl = buildTraitDecl(item);
@@ -1779,6 +1829,10 @@ function registerTraits(
       supertraits: decl.supertraits,
       methods: decl.methods,
     });
+    traitItems.push(item);
+  }
+  for (const item of traitItems) {
+    validateTraitBoundNames(ctx, item.supertraits);
   }
 }
 
@@ -1898,6 +1952,7 @@ function registerOneImpl(
   topLevelStructEnumNames: ReadonlySet<string>,
 ): RegisteredImpl | undefined {
   const decl = buildImplDecl(item);
+  validateGenericParamBounds(ctx, item.generics, item.whereClause);
   const traitRef = decl.traitRef;
   const bareTargetTypeName = decl.targetTypeName;
   if (!isSome(traitRef) || !isSome(bareTargetTypeName)) return undefined;
@@ -4108,6 +4163,7 @@ function fnSignatureType(
   signature: Parser.FunctionSignature,
 ): Semantics.FunctionType {
   pushGenericParams(ctx, signature.generics, signature.whereClause);
+  validateGenericParamBounds(ctx, signature.generics, signature.whereClause);
   const type: Semantics.FunctionType = {
     kind: "FunctionType",
     params: signature.params.map((p) =>

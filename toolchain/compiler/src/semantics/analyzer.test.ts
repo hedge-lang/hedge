@@ -4581,5 +4581,54 @@ describe("trait and impl declarations", (): void => {
         "the trait bound `P: Missing2` is not satisfied",
       );
     });
+
+    it("rejects a blanket impl bound naming an undeclared trait", (): void => {
+      const result = diagnose(`
+        trait B { fn f(&self) -> str; }
+        impl<T: Missing> B for T { fn f(&self) -> str { "a" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find trait `Missing` in this scope",
+      );
+    });
+
+    it("rejects a trait's own supertrait naming an undeclared trait", (): void => {
+      const result = diagnose(`
+        trait B: Missing {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find trait `Missing` in this scope",
+      );
+    });
+
+    it("resolves a trait's own supertrait declared later in the same scope, without a false undeclared-trait error", (): void => {
+      const result = diagnose(`
+        trait A: B {}
+        trait B {}
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects an ordinary generic function's inline bound naming an undeclared trait", (): void => {
+      const result = diagnose(`
+        fn f<T: Missing>(x: T) {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find trait `Missing` in this scope",
+      );
+    });
+
+    it("rejects an ordinary generic function's where-clause bound naming an undeclared trait", (): void => {
+      const result = diagnose(`
+        fn f<T>(x: T) where T: Missing {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find trait `Missing` in this scope",
+      );
+    });
   });
 });
