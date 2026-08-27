@@ -1851,6 +1851,15 @@ function registerOneImpl(
     : resolveStructOrEnumIdentity(bareTargetTypeName.value, scope);
   if (!isSome(targetTypeName)) return undefined;
   const traitName = traitRef.value.name;
+  if (!ctx.traitRegistry.has(traitName)) {
+    emitError(
+      ctx,
+      `cannot find trait \`${traitName}\` in this scope`,
+      traitRef.value.tokenId,
+      "HEDGE-NAME-001",
+    );
+    return undefined;
+  }
   const incoming: RegisteredImpl = {
     traitName,
     targetTypeName: targetTypeName.value,

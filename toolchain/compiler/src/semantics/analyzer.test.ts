@@ -4467,4 +4467,33 @@ describe("trait and impl declarations", (): void => {
       expect(result.diagnostics[0]?.code).toBe("HEDGE-LINT-004");
     });
   });
+
+  describe("impl trait reference validation", (): void => {
+    it("rejects an impl whose trait reference names an undeclared trait", (): void => {
+      const result = diagnose(`
+        struct P { x: i32 }
+        impl Missing for P {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find trait `Missing` in this scope",
+      );
+    });
+
+    it("does not let a generic call resolve against an impl of an undeclared trait", (): void => {
+      const result = diagnose(`
+        struct P { x: i32 }
+        impl Missing for P {}
+        trait Missing2 {}
+        fn needs<T: Missing2>(x: T) {}
+        fn main() { needs(P { x: 0 }); }
+      `);
+      expect(result.diagnostics.map((d) => d.message)).toContain(
+        "cannot find trait `Missing` in this scope",
+      );
+      expect(result.diagnostics.map((d) => d.message)).toContain(
+        "the trait bound `P: Missing2` is not satisfied",
+      );
+    });
+  });
 });
