@@ -278,7 +278,7 @@ export interface TraitDecl extends AstNode {
  * own required trait names (`A`) - empty for a concrete impl, or an
  * unconstrained blanket impl. `providedMethods` is every bodied method this
  * impl itself declares, for completeness checking against its trait's own
- * `requiredMethods`.
+ * `methods` (the non-default ones).
  */
 export interface ImplDecl extends AstNode {
   readonly kind: "Impl";

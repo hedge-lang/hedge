@@ -1647,9 +1647,10 @@ function resolveTraitBoundForTypeName(
 }
 
 /** An impl's own witness method list: every one of its trait's methods, in
- * the trait's own declaration order (required methods first, then default
- * methods), each marked `"impl"` when this impl provides or overrides it
- * and `"default"` when it falls back to the trait's own default body. */
+ * the trait's own interleaved declaration order (source order, not grouped
+ * by required-vs-default), each marked `"impl"` when this impl provides or
+ * overrides it and `"default"` when it falls back to the trait's own
+ * default body. */
 function witnessMethods(
   ctx: AnalysisContext,
   impl: RegisteredImpl,
