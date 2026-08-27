@@ -4631,4 +4631,59 @@ describe("trait and impl declarations", (): void => {
       );
     });
   });
+
+  describe("duplicate trait declarations", (): void => {
+    it("rejects two top-level traits declared with the same name", (): void => {
+      const result = diagnose(`
+        trait Draw {}
+        trait Draw {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "trait `Draw` is defined more than once",
+      );
+    });
+
+    it("rejects three top-level traits declared with the same name, once per duplicate", (): void => {
+      const result = diagnose(`
+        trait Draw {}
+        trait Draw {}
+        trait Draw {}
+      `);
+      expect(result.diagnostics).toHaveLength(2);
+      expect(result.diagnostics[0]?.message).toBe(
+        "trait `Draw` is defined more than once",
+      );
+      expect(result.diagnostics[1]?.message).toBe(
+        "trait `Draw` is defined more than once",
+      );
+    });
+
+    it("rejects two same-named traits declared inside the same function body", (): void => {
+      const result = diagnose(`
+        fn f() {
+          trait Draw {}
+          trait Draw {}
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "trait `Draw` is defined more than once",
+      );
+    });
+
+    it("lets a block-local trait shadow an outer trait of the same name without a duplicate-definition error", (): void => {
+      const result = diagnose(`
+        trait Draw {}
+        fn f() {
+          trait Draw {}
+        }
+      `);
+      expect(
+        result.diagnostics.filter(
+          (d) => d.message === "trait `Draw` is defined more than once",
+        ),
+      ).toHaveLength(0);
+    });
+  });
 });

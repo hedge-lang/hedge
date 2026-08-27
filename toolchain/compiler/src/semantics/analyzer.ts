@@ -1698,19 +1698,34 @@ const EMPTY_STRUCTURAL_SCOPE: StructuralScope = {
 /** Extends `scope` with every struct/enum/trait declared directly in
  * `items` (not recursing into nested bodies) - shadowing whatever the
  * enclosing scope already bound for the same name, the same way a real
- * nested block's own type declarations shadow an outer one. */
+ * nested block's own type declarations shadow an outer one. `seenTraitsHere`
+ * tracks only names introduced by this call, so a same-named duplicate
+ * within `items` is a real error while shadowing an outer trait isn't. */
 function extendStructuralScope(
+  ctx: AnalysisContext,
   scope: StructuralScope,
   items: readonly (Parser.Item | Parser.Statement)[],
 ): StructuralScope {
   const structs = new Map(scope.structs);
   const enums = new Map(scope.enums);
   const traits = new Map(scope.traits);
+  const seenTraitsHere = new Set<string>();
   for (const item of items) {
     if (item.kind === "Struct") structs.set(item.name.text, item.name.tokenId);
     else if (item.kind === "Enum") enums.set(item.name.text, item.name.tokenId);
-    else if (item.kind === "Trait")
+    else if (item.kind === "Trait") {
+      if (seenTraitsHere.has(item.name.text)) {
+        emitError(
+          ctx,
+          `trait \`${item.name.text}\` is defined more than once`,
+          item.name.tokenId,
+          "HEDGE-NAME-002",
+        );
+        continue;
+      }
+      seenTraitsHere.add(item.name.text);
       traits.set(item.name.text, item.name.tokenId);
+    }
   }
   return { structs, enums, traits };
 }
@@ -1738,26 +1753,44 @@ interface DepthedItem {
  * similarly-scoped walk.
  */
 function collectAllItems(
+  ctx: AnalysisContext,
   items: readonly (Parser.Item | Parser.Statement)[],
   depth: number,
   enclosingScope: StructuralScope = EMPTY_STRUCTURAL_SCOPE,
 ): readonly DepthedItem[] {
-  const scope = extendStructuralScope(enclosingScope, items);
+  const scope = extendStructuralScope(ctx, enclosingScope, items);
+  return collectItemsWithScope(ctx, items, depth, scope);
+}
+
+/** Walks `items` against an already-extended `scope`, shared by
+ * `collectAllItems` (which extends the scope itself) and `collectBlockItems`
+ * (which extends it once and reuses the result for the trailing expression
+ * too - extending twice over the same statements would double-report a
+ * same-scope duplicate trait). */
+function collectItemsWithScope(
+  ctx: AnalysisContext,
+  items: readonly (Parser.Item | Parser.Statement)[],
+  depth: number,
+  scope: StructuralScope,
+): readonly DepthedItem[] {
   return items.flatMap((item): readonly DepthedItem[] => {
     const self: DepthedItem = { item, depth, scope };
     if (item.kind === "Function") {
-      return [self, ...collectBlockItems(item.body, depth + 1, scope)];
+      return [self, ...collectBlockItems(ctx, item.body, depth + 1, scope)];
     }
     if (item.kind === "Impl" || item.kind === "Trait") {
-      return [self, ...collectAllItems(item.items, depth + 1, scope)];
+      return [self, ...collectAllItems(ctx, item.items, depth + 1, scope)];
     }
     if (item.kind === "ExpressionStatement") {
-      return [self, ...collectExpressionItems(item.expression, depth, scope)];
+      return [
+        self,
+        ...collectExpressionItems(ctx, item.expression, depth, scope),
+      ];
     }
     if (item.kind === "LetStatement" && isSome(item.initializer)) {
       return [
         self,
-        ...collectExpressionItems(item.initializer.value, depth, scope),
+        ...collectExpressionItems(ctx, item.initializer.value, depth, scope),
       ];
     }
     return [self];
@@ -1765,44 +1798,56 @@ function collectAllItems(
 }
 
 function collectBlockItems(
+  ctx: AnalysisContext,
   block: Parser.Block,
   depth: number,
   enclosingScope: StructuralScope,
 ): readonly DepthedItem[] {
-  const inner = collectAllItems(block.statements, depth, enclosingScope);
-  const scope = extendStructuralScope(enclosingScope, block.statements);
+  const scope = extendStructuralScope(ctx, enclosingScope, block.statements);
+  const inner = collectItemsWithScope(ctx, block.statements, depth, scope);
   return isSome(block.trailingExpression)
     ? [
         ...inner,
-        ...collectExpressionItems(block.trailingExpression.value, depth, scope),
+        ...collectExpressionItems(
+          ctx,
+          block.trailingExpression.value,
+          depth,
+          scope,
+        ),
       ]
     : inner;
 }
 
 function collectExpressionItems(
+  ctx: AnalysisContext,
   expr: Parser.Expression,
   depth: number,
   scope: StructuralScope,
 ): readonly DepthedItem[] {
   switch (expr.kind) {
     case "Block":
-      return collectBlockItems(expr, depth + 1, scope);
+      return collectBlockItems(ctx, expr, depth + 1, scope);
     case "IfExpression": {
-      const thenItems = collectBlockItems(expr.thenBranch, depth + 1, scope);
+      const thenItems = collectBlockItems(
+        ctx,
+        expr.thenBranch,
+        depth + 1,
+        scope,
+      );
       if (!isSome(expr.elseBranch)) return thenItems;
       const elseBranch = expr.elseBranch.value;
       return [
         ...thenItems,
         ...(elseBranch.kind === "IfExpression"
-          ? collectExpressionItems(elseBranch, depth, scope)
-          : collectBlockItems(elseBranch, depth + 1, scope)),
+          ? collectExpressionItems(ctx, elseBranch, depth, scope)
+          : collectBlockItems(ctx, elseBranch, depth + 1, scope)),
       ];
     }
     case "WhileExpression":
-      return collectBlockItems(expr.body, depth + 1, scope);
+      return collectBlockItems(ctx, expr.body, depth + 1, scope);
     case "MatchExpression":
       return expr.arms.flatMap((arm) =>
-        collectExpressionItems(arm.body, depth + 1, scope),
+        collectExpressionItems(ctx, arm.body, depth + 1, scope),
       );
     default:
       return [];
@@ -7323,7 +7368,7 @@ export function analyze(
   };
   // Before functions, so a signature can name any declared type.
   registerTypeDecls(ctx, program.items);
-  const allItems = collectAllItems(program.items, 0);
+  const allItems = collectAllItems(ctx, program.items, 0);
   registerTraits(ctx, allItems);
   registerImpls(ctx, allItems);
   const topLevelFunctionNames = new Set<string>();
