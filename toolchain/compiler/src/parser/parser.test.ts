@@ -6840,7 +6840,7 @@ describe("dyn as a type", (): void => {
   });
 
   it("parses dyn Draw as a let type annotation", (): void => {
-    const ast = parseCleanly("let x: dyn Draw;");
+    const ast = parseCleanly("let mut x: dyn Draw;");
     expect(ast).toMatchObject({
       items: [
         {

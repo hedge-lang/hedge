@@ -460,3 +460,12 @@ describe("lifetime elision reaches trait/impl bodies", (): void => {
     expect(diagnostics[0].message).toContain("missing lifetime specifier");
   });
 });
+
+describe("lifetime elision - dyn types", (): void => {
+  it("survives a dyn-typed parameter with zero diagnostics", (): void => {
+    const { tokens } = tokenize("fn f(x: dyn Draw) {}");
+    const { program, diagnostics } = parse(tokens);
+    expect(diagnostics).toHaveLength(0);
+    assert(isSome(program), "Expected a program to come back");
+  });
+});

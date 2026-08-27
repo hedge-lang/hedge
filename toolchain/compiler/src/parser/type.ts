@@ -4,8 +4,10 @@ import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import type {
   ArrayType,
+  DynType,
   Lifetime,
   NamedType,
+  PathTraitBound,
   ReferenceType,
   Type,
   UnitType,
@@ -24,7 +26,7 @@ import {
   type GenericsCursor,
   type PR,
 } from "./parse-utils.js";
-import { parseTypePathSegments } from "./path.js";
+import { parsePathSegments, parseTypePathSegments } from "./path.js";
 
 /**
  * Result of `parseTypeWithCloseState`: a parsed `Type` plus whether it ended
@@ -167,6 +169,10 @@ function parseTypeWithCloseState(
     );
   }
 
+  if (token.kind === "keyword" && token.text === "dyn") {
+    return parseDynTypeWithCloseState(tokens, pos);
+  }
+
   return err(
     errorDiagnostic(
       "HEDGE-PARSE-004",
@@ -174,6 +180,86 @@ function parseTypeWithCloseState(
       some(token.span),
     ),
   );
+}
+
+/**
+ * Parses a `dyn` type at `pos` (the `dyn` keyword token already confirmed by
+ * the caller): `dyn Path Generics?`, naming the trait it stands for. Unlike
+ * a bound list's own `TraitBound`, `dyn` never accepts the bare-lifetime
+ * alternative (`dyn 'a`), since a dyn type must name a trait.
+ */
+function parseDynTypeWithCloseState(
+  tokens: readonly Token[],
+  pos: number,
+): PR<TypeParseResult> {
+  const afterDyn = pos + 1;
+  const nextToken = tokens[afterDyn];
+  if (nextToken?.kind === "lifetime") {
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-004",
+        "`dyn` must name a trait, not a lifetime",
+        some(nextToken.span),
+      ),
+    );
+  }
+  const boundResult = parsePathTraitBound(tokens, afterDyn);
+  if (isErr(boundResult)) {
+    return boundResult;
+  }
+  const dynType: DynType = {
+    kind: "DynType",
+    tokenId: pos,
+    bound: boundResult.value.bound,
+  };
+  return ok({
+    node: dynType,
+    next: boundResult.value.cursor.next,
+    pendingCloseHalf: boundResult.value.cursor.pendingCloseHalf,
+  });
+}
+
+export interface PathTraitBoundResult {
+  readonly bound: PathTraitBound;
+  readonly cursor: GenericsCursor;
+}
+
+/**
+ * Parses `Path Generics?` as a trait bound naming a single trait - the
+ * shared tail of a `TraitBound`'s two grammar alternatives, and the only
+ * form `dyn` accepts. `item.ts`'s `parseTraitBound` (bound lists, which
+ * also allow a bare lifetime) delegates here for its own non-lifetime case.
+ */
+export function parsePathTraitBound(
+  tokens: readonly Token[],
+  pos: number,
+): PR<PathTraitBoundResult> {
+  const pathResult = parsePathSegments(tokens, pos);
+  if (isErr(pathResult)) {
+    return pathResult;
+  }
+  let cursor: GenericsCursor = {
+    next: pathResult.value.next,
+    pendingCloseHalf: false,
+  };
+  let typeArguments: readonly Type[] = [];
+  if (tokens[cursor.next]?.kind === "lt") {
+    const argsResult = parseTypeArgumentList(tokens, cursor.next);
+    if (isErr(argsResult)) {
+      return argsResult;
+    }
+    typeArguments = argsResult.value.typeArguments;
+    cursor = argsResult.value.cursor;
+  }
+  return ok({
+    bound: {
+      kind: "PathTraitBound",
+      tokenId: pos,
+      path: pathResult.value.node,
+      typeArguments,
+    },
+    cursor,
+  });
 }
 
 /**

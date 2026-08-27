@@ -108,6 +108,11 @@ function collectTypeLifetimeNames(type: Type, names: Set<string>): void {
       return;
     case "UnitType":
       return;
+    case "DynType":
+      // A dyn type's own bound type arguments (`dyn From<&T>`) aren't
+      // walked here, matching the same not-yet-addressed gap a bound
+      // list's own trait bound arguments already have.
+      return;
     default:
       assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
@@ -166,6 +171,8 @@ function resolveNestedReferenceTypes(
         ),
       };
     case "UnitType":
+      return type;
+    case "DynType":
       return type;
     default:
       return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
