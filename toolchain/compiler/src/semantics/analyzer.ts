@@ -6326,9 +6326,13 @@ function analyzeIdentifier(
  * For each of the callee's declared generic parameters: reports an unsolved
  * generic (`HEDGE-TYPE-006`) if inference never bound it, otherwise checks
  * its resolved type against every trait bound that parameter declares,
- * recording a witness for each satisfied one and reporting the rest as
- * `HEDGE-TRAIT-002`. Split out of `analyzeCall` to keep that function
- * itself under the complexity ceiling.
+ * reporting an unsatisfied one as `HEDGE-TRAIT-002`. Witnesses are
+ * accumulated locally and committed to `ctx.witnessTable` only once every
+ * bound on this call resolved - `AnalysisResult.witnesses` documents that a
+ * call with unresolved bounds carries no entry at all, so a partial write
+ * (one bound's witness recorded before a later bound on the same call
+ * fails) would violate that contract. Split out of `analyzeCall` to keep
+ * that function itself under the complexity ceiling.
  */
 function checkCallGenericBounds(
   ctx: AnalysisContext,
@@ -6336,6 +6340,8 @@ function checkCallGenericBounds(
   calleeType: Semantics.FunctionType,
   bindings: GenericBindings,
 ): void {
+  const witnesses: WitnessRef[] = [];
+  let allBoundsSatisfied = true;
   for (const paramName of calleeType.genericParams) {
     const binding = bindings.get(paramName);
     if (binding === undefined) {
@@ -6345,6 +6351,7 @@ function checkCallGenericBounds(
         call.tokenId,
         "HEDGE-TYPE-006",
       );
+      allBoundsSatisfied = false;
       continue;
     }
     if (binding.isErrorPlaceholder === true) continue;
@@ -6352,9 +6359,10 @@ function checkCallGenericBounds(
       []) {
       const witness = resolveTraitBound(ctx, binding.type, traitName);
       if (isSome(witness)) {
-        recordWitness(ctx, call.tokenId, witness.value);
+        witnesses.push(witness.value);
         continue;
       }
+      allBoundsSatisfied = false;
       emitError(
         ctx,
         traitBoundNotSatisfiedMessage(describeType(binding.type), traitName),
@@ -6362,6 +6370,9 @@ function checkCallGenericBounds(
         "HEDGE-TRAIT-002",
       );
     }
+  }
+  if (allBoundsSatisfied && witnesses.length > 0) {
+    ctx.witnessTable.set(call.tokenId, witnesses);
   }
 }
 
@@ -6607,22 +6618,6 @@ function relatedSpanAt(
 ): readonly RelatedSpan[] {
   const token = ctx.tokens[tokenId];
   return token === undefined ? [] : [{ span: token.span, label }];
-}
-
-/** Appends one resolved witness onto a call site's own entry in
- * `ctx.witnessTable`, in resolution order (which matches declaration order,
- * since `analyzeCall` walks `calleeType.genericParamBounds` in that order). */
-function recordWitness(
-  ctx: AnalysisContext,
-  callTokenId: number,
-  witness: WitnessRef,
-): void {
-  const existing = ctx.witnessTable.get(callTokenId);
-  if (existing === undefined) {
-    ctx.witnessTable.set(callTokenId, [witness]);
-  } else {
-    existing.push(witness);
-  }
 }
 
 /** Online Robinson-style unification of one declared type against one

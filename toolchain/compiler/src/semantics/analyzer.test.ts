@@ -4306,6 +4306,22 @@ describe("trait and impl declarations", (): void => {
       ]);
     });
 
+    it("does not record any witnesses for a call when only some of its bounds are satisfied", (): void => {
+      const { result } = analyzeWithTokens(`
+        trait Draw { fn draw(&self) -> str; }
+        trait Describe { fn describe(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl Draw for Point { fn draw(&self) -> str { "a" } }
+        fn show<T: Draw + Describe>(x: T) {}
+        fn main() { show(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: Describe` is not satisfied",
+      );
+      expect(result.witnesses.size).toBe(0);
+    });
+
     it("records a forwarded witness when the bound is satisfied through an enclosing function's own abstract type parameter", (): void => {
       const { result } = analyzeWithTokens(`
         trait Draw { fn draw(&self) -> str; }
