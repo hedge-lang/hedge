@@ -84,7 +84,6 @@ export function parseType(
  * (`Container<&Foo<T>>`); `ArrayType`'s element recursion never needs to,
  * since its own close is the unambiguous `]`, never a shared `>`.
  */
-// eslint-disable-next-line complexity -- Guardrail cluster; each unsupported-syntax branch is a necessary, independent case.
 function parseTypeWithCloseState(
   tokens: readonly Token[],
   pos: number,
@@ -96,38 +95,10 @@ function parseTypeWithCloseState(
   const token = tokenResult.value;
 
   if (token.kind === "lparen") {
-    const nextResult = tokenAt(tokens, pos + 1);
-    if (isErr(nextResult)) {
-      return nextResult;
-    }
-    const next = nextResult.value;
-    if (next.kind === "rparen") {
-      const unit: UnitType = { kind: "UnitType", tokenId: pos };
-      return ok({ node: unit, next: pos + 2, pendingCloseHalf: false });
-    }
-    if (next.kind === "eof") {
-      return err(
-        errorDiagnostic(
-          "HEDGE-PARSE-002",
-          "expected `)` to close type, found end of input",
-          some(token.span),
-        ),
-      );
-    }
-    return err(
-      errorDiagnostic(
-        "HEDGE-PARSE-004",
-        "tuple types are not supported in Slice 1",
-        some(token.span),
-      ),
-    );
+    return parseUnitOrTupleType(tokens, pos, token);
   }
 
-  if (
-    token.kind === "ident" ||
-    token.kind === "path_sep" ||
-    isSome(pathKeywordAt(tokens, pos))
-  ) {
+  if (isNamedTypeLead(tokens, pos, token)) {
     return parseNamedTypeWithCloseState(tokens, pos);
   }
 
@@ -178,6 +149,43 @@ function parseTypeWithCloseState(
       "HEDGE-PARSE-004",
       `type syntax "${token.kind}" is not supported in Slice 1`,
       some(token.span),
+    ),
+  );
+}
+
+/**
+ * Parses `(` at `pos` (already confirmed by the caller, also passed as
+ * `openParen` for its span): the unit type `()`, or a guardrail rejection
+ * for tuple syntax `(Type, ...)` - tuple types are not supported in Slice 1.
+ */
+function parseUnitOrTupleType(
+  tokens: readonly Token[],
+  pos: number,
+  openParen: Token,
+): PR<TypeParseResult> {
+  const nextResult = tokenAt(tokens, pos + 1);
+  if (isErr(nextResult)) {
+    return nextResult;
+  }
+  const next = nextResult.value;
+  if (next.kind === "rparen") {
+    const unit: UnitType = { kind: "UnitType", tokenId: pos };
+    return ok({ node: unit, next: pos + 2, pendingCloseHalf: false });
+  }
+  if (next.kind === "eof") {
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-002",
+        "expected `)` to close type, found end of input",
+        some(openParen.span),
+      ),
+    );
+  }
+  return err(
+    errorDiagnostic(
+      "HEDGE-PARSE-004",
+      "tuple types are not supported in Slice 1",
+      some(openParen.span),
     ),
   );
 }
@@ -260,6 +268,20 @@ export function parsePathTraitBound(
     },
     cursor,
   });
+}
+
+/** True when `token` can start a named type: an identifier, a leading `::`,
+ * or a path keyword (`Self`, ...). */
+function isNamedTypeLead(
+  tokens: readonly Token[],
+  pos: number,
+  token: Token,
+): boolean {
+  return (
+    token.kind === "ident" ||
+    token.kind === "path_sep" ||
+    isSome(pathKeywordAt(tokens, pos))
+  );
 }
 
 /**
