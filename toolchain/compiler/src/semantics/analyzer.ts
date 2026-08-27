@@ -1252,6 +1252,39 @@ function scopedTypeName(nameTokenId: number, name: string): string {
   return `scoped(${nameTokenId})::${name}`;
 }
 
+/** Warns when a new struct/enum declaration shadows an outer one already
+ * visible in an enclosing frame - matching `HEDGE-LINT-002`'s existing
+ * precedent for a shadowed generic parameter. `relatedSpans` names the
+ * shadowed declaration and any impl already registered against the
+ * shadowing one, since that combination is exactly what makes shadowing
+ * easy to get wrong (a value of the shadowing type carries a different
+ * trait impl set than a same-named value from the outer scope would). */
+function warnIfShadowsOuterDeclaration(
+  ctx: AnalysisContext,
+  kindLabel: "struct" | "enum",
+  name: string,
+  tokenId: number,
+  ownIdentity: string,
+  outerTokenId: number | undefined,
+): void {
+  if (outerTokenId === undefined) return;
+  const relatedSpans = [
+    ...relatedSpanAt(ctx, outerTokenId, "shadowed declaration"),
+    ...ctx.implRegistry
+      .filter((impl) => impl.targetTypeName === ownIdentity)
+      .flatMap((impl) =>
+        relatedSpanAt(ctx, impl.tokenId, "impl for this declaration"),
+      ),
+  ];
+  emitWarning(
+    ctx,
+    `${kindLabel} \`${name}\` shadows an outer declaration of the same name`,
+    tokenId,
+    "HEDGE-LINT-004",
+    relatedSpans,
+  );
+}
+
 /**
  * Names first, then bodies. Resolving a type reference needs only the
  * declaration's own `type`, which its name alone determines, so the split is
@@ -1275,6 +1308,14 @@ function declareStructName(
     kind: "StructType",
     name: scopedTypeName(item.name.tokenId, item.name.text),
   };
+  warnIfShadowsOuterDeclaration(
+    ctx,
+    "struct",
+    item.name.text,
+    item.name.tokenId,
+    type.name,
+    lookupStruct(ctx, item.name.text)?.name.tokenId,
+  );
   frame.types.set(item.name.text, {
     ...item,
     name: { ...item.name, type },
@@ -1303,6 +1344,14 @@ function declareEnumName(
     kind: "EnumType",
     name: scopedTypeName(item.name.tokenId, item.name.text),
   };
+  warnIfShadowsOuterDeclaration(
+    ctx,
+    "enum",
+    item.name.text,
+    item.name.tokenId,
+    type.name,
+    lookupEnum(ctx, item.name.text)?.name.tokenId,
+  );
   frame.enums.set(item.name.text, {
     ...item,
     name: { ...item.name, type },

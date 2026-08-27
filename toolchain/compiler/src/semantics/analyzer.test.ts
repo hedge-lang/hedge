@@ -596,18 +596,26 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
-    it("lets a block-local struct shadow an outer one without disturbing the outer declaration", () => {
+    it("lets a block-local struct shadow an outer one without disturbing the outer declaration, but warns about the shadowing", () => {
       const result = diagnose(
         "struct P { a: i32 } fn main() { { struct P { b: i32 } } let p: P = P { a: 1 }; }",
       );
-      expect(result.diagnostics).toEqual([]);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("warning");
+      expect(result.diagnostics[0]?.message).toBe(
+        "struct `P` shadows an outer declaration of the same name",
+      );
     });
 
-    it("lets a block-local enum shadow an outer one without disturbing the outer declaration", () => {
+    it("lets a block-local enum shadow an outer one without disturbing the outer declaration, but warns about the shadowing", () => {
       const result = diagnose(
         "enum E { A } fn main() { { enum E { B } } let e: E = E::A; }",
       );
-      expect(result.diagnostics).toEqual([]);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("warning");
+      expect(result.diagnostics[0]?.message).toBe(
+        "enum `E` shadows an outer declaration of the same name",
+      );
     });
 
     it("still rejects two structs with the same name in the same scope", () => {
@@ -4423,7 +4431,9 @@ describe("trait and impl declarations", (): void => {
           impl Draw for P { fn draw(&self) -> str { "inner" } }
         }
       `);
-      expect(result.diagnostics).toEqual([]);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("warning");
+      expect(result.diagnostics[0]?.code).toBe("HEDGE-LINT-004");
     });
 
     it("resolves a shadowed local struct's own impl without leaking onto an outer same-named struct lacking one", (): void => {
@@ -4437,13 +4447,14 @@ describe("trait and impl declarations", (): void => {
         fn needs_draw<T: Draw>(x: T) {}
         fn caller() { needs_draw(P { a: 0 }); }
       `);
-      expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(result.diagnostics).toHaveLength(2);
+      expect(result.diagnostics[0]?.code).toBe("HEDGE-LINT-004");
+      expect(result.diagnostics[1]?.message).toBe(
         "the trait bound `P: Draw` is not satisfied",
       );
     });
 
-    it("does not warn on a nested impl whose target is a nested, shadowed struct with no impl-carrying top-level namesake", (): void => {
+    it("warns about the struct shadowing but not the impl visibility lint, for a nested impl targeting a nested shadowed struct with no impl-carrying top-level namesake", (): void => {
       const result = diagnose(`
         trait Draw { fn draw(&self) -> str; }
         struct P { a: i32 }
@@ -4452,7 +4463,8 @@ describe("trait and impl declarations", (): void => {
           impl Draw for P { fn draw(&self) -> str { "inner" } }
         }
       `);
-      expect(result.diagnostics).toEqual([]);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.code).toBe("HEDGE-LINT-004");
     });
   });
 });
