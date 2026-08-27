@@ -24,6 +24,16 @@ function diagnose(source: string): AnalysisResult {
   return analyze(program.value, tokens);
 }
 
+/** A keyword token's own text, for asserting that a `tokenId` points at a
+ * specific keyword - `none()` for a token kind with no `text` field. */
+function keywordTextAt(
+  tokens: ReturnType<typeof tokenize>["tokens"],
+  tokenId: number,
+): string | undefined {
+  const token = tokens[tokenId];
+  return token?.kind === "keyword" ? token.text : undefined;
+}
+
 describe("semantic analysis", (): void => {
   it("accepts the tracer bullet with no diagnostics", (): void => {
     const result = diagnose(`
@@ -586,18 +596,26 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
-    it("lets a block-local struct shadow an outer one without disturbing the outer declaration", () => {
+    it("lets a block-local struct shadow an outer one without disturbing the outer declaration, but warns about the shadowing", () => {
       const result = diagnose(
         "struct P { a: i32 } fn main() { { struct P { b: i32 } } let p: P = P { a: 1 }; }",
       );
-      expect(result.diagnostics).toEqual([]);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("warning");
+      expect(result.diagnostics[0]?.message).toBe(
+        "struct `P` shadows an outer declaration of the same name",
+      );
     });
 
-    it("lets a block-local enum shadow an outer one without disturbing the outer declaration", () => {
+    it("lets a block-local enum shadow an outer one without disturbing the outer declaration, but warns about the shadowing", () => {
       const result = diagnose(
         "enum E { A } fn main() { { enum E { B } } let e: E = E::A; }",
       );
-      expect(result.diagnostics).toEqual([]);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("warning");
+      expect(result.diagnostics[0]?.message).toBe(
+        "enum `E` shadows an outer declaration of the same name",
+      );
     });
 
     it("still rejects two structs with the same name in the same scope", () => {
@@ -3851,5 +3869,821 @@ describe("bodiless function signatures", (): void => {
       "a function signature with no body is not allowed as a top-level item",
       "a function signature with no body is not allowed as a top-level item",
     ]);
+  });
+});
+
+describe("trait and impl declarations", (): void => {
+  it("analyzes an empty inherent impl with no diagnostics", (): void => {
+    const result = diagnose(`
+      struct Point { x: i32, y: i32 }
+      impl Point {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects two impls of the same trait for the exact same concrete type", (): void => {
+    const result = diagnose(`
+      trait Draw { fn draw(&self) -> str; }
+      struct Point { x: i32, y: i32 }
+      impl Draw for Point { fn draw(&self) -> str { "a" } }
+      impl Draw for Point { fn draw(&self) -> str { "b" } }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "trait `Draw` is already implemented for type `Point`",
+    );
+  });
+
+  it("rejects two blanket impls of the same trait", (): void => {
+    const result = diagnose(`
+      trait A {}
+      trait B { fn f(&self) -> str; }
+      impl<T: A> B for T { fn f(&self) -> str { "a" } }
+      impl<T: A> B for T { fn f(&self) -> str { "b" } }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "conflicting implementations of trait `B`",
+    );
+  });
+
+  it("rejects a blanket impl and a concrete impl of the same trait", (): void => {
+    const result = diagnose(`
+      trait A {}
+      trait B { fn f(&self) -> str; }
+      struct Point { x: i32, y: i32 }
+      impl<T: A> B for T { fn f(&self) -> str { "a" } }
+      impl B for Point { fn f(&self) -> str { "a" } }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "conflicting implementations of trait `B` for type `Point`",
+    );
+  });
+
+  it("accepts two impls of different traits for the same type", (): void => {
+    const result = diagnose(`
+      trait Draw { fn draw(&self) -> str; }
+      trait Describe { fn describe(&self) -> str; }
+      struct Point { x: i32, y: i32 }
+      impl Draw for Point { fn draw(&self) -> str { "a" } }
+      impl Describe for Point { fn describe(&self) -> str { "b" } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts two impls of the same trait for different types", (): void => {
+    const result = diagnose(`
+      trait Draw { fn draw(&self) -> str; }
+      struct Point { x: i32, y: i32 }
+      struct Circle { r: i32 }
+      impl Draw for Point { fn draw(&self) -> str { "a" } }
+      impl Draw for Circle { fn draw(&self) -> str { "b" } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts an inherent impl alongside a trait impl for the same type", (): void => {
+    const result = diagnose(`
+      trait Draw { fn draw(&self) -> str; }
+      struct Point { x: i32, y: i32 }
+      impl Point {}
+      impl Draw for Point { fn draw(&self) -> str { "a" } }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  describe("orphan rule", (): void => {
+    it("analyzes an impl declared in the same package as both its trait and its type with no diagnostics", (): void => {
+      // TODO(Hedge-264): cross-package enforcement (an impl written where
+      // neither the trait nor the type is defined) has no referent yet -
+      // there's no module/package system (ROADMAP Slice 7). Every impl the
+      // compiler can analyze today is "within the defining package", so the
+      // orphan rule is a real no-op pre-Slice-7, not an oversight.
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl Draw for Point { fn draw(&self) -> str { "a" } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
+  describe("generic bound checking at call sites", (): void => {
+    it("rejects a generic call whose concrete type has no impl of the bound trait", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        fn draw_all<T: Draw>(x: T) {}
+        fn main() { draw_all(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: Draw` is not satisfied",
+      );
+    });
+
+    it("accepts a generic call whose concrete type has a matching impl", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl Draw for Point { fn draw(&self) -> str { "a" } }
+        fn draw_all<T: Draw>(x: T) {}
+        fn main() { draw_all(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects when one of two bounds on the same param is unsatisfied, naming only the missing one", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        trait Describe { fn describe(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl Draw for Point { fn draw(&self) -> str { "a" } }
+        fn show<T: Draw + Describe>(x: T) {}
+        fn main() { show(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: Describe` is not satisfied",
+      );
+    });
+
+    it("accepts when all bounds on one param are satisfied", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        trait Describe { fn describe(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl Draw for Point { fn draw(&self) -> str { "a" } }
+        impl Describe for Point { fn describe(&self) -> str { "b" } }
+        fn show<T: Draw + Describe>(x: T) {}
+        fn main() { show(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("reports each of two independently-unsatisfied bounds on two different generic params", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        trait Describe { fn describe(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        struct Circle { r: i32 }
+        fn pair<T: Draw, U: Describe>(a: T, b: U) {}
+        fn main() { pair(Point { x: 0, y: 0 }, Circle { r: 1 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(2);
+      expect(result.diagnostics.map((d) => d.message)).toEqual([
+        "the trait bound `Point: Draw` is not satisfied",
+        "the trait bound `Circle: Describe` is not satisfied",
+      ]);
+    });
+
+    it("does not cascade a second diagnostic beyond the missing-impl error itself", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        fn draw_all<T: Draw>(x: T) -> T { x }
+        fn main() {
+          let p = draw_all(Point { x: 0, y: 0 });
+          print(p.x);
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: Draw` is not satisfied",
+      );
+    });
+
+    it("propagates bound satisfaction through an enclosing generic function's own abstract type parameter", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        fn inner<U: Draw>(x: U) {}
+        fn outer<T: Draw>(x: T) { inner(x); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects when an enclosing generic function's own abstract type parameter lacks the callee's required bound", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        trait Describe { fn describe(&self) -> str; }
+        fn inner<U: Draw>(x: U) {}
+        fn outer<T: Describe>(x: T) { inner(x); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `T: Draw` is not satisfied",
+      );
+    });
+
+    it("propagates bound satisfaction through a transitive supertrait on the enclosing declaration's own bound", (): void => {
+      const result = diagnose(`
+        trait Eq {}
+        trait Ord: Eq {}
+        fn inner<U: Eq>(x: U) {}
+        fn outer<T: Ord>(x: T) { inner(x); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("propagates bound satisfaction through a two-level transitive supertrait chain", (): void => {
+      const result = diagnose(`
+        trait A {}
+        trait B: A {}
+        trait C: B {}
+        fn inner<U: A>(x: U) {}
+        fn outer<T: C>(x: T) { inner(x); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("checks a where-clause bound the same as an inline one, not just inline bounds", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        fn needs_draw<T>(x: T) where T: Draw {}
+        fn main() { needs_draw(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: Draw` is not satisfied",
+      );
+    });
+  });
+
+  describe("blanket impls and supertraits", (): void => {
+    it("resolves a blanket impl for a concrete type that implements the blanket's own bound", (): void => {
+      const result = diagnose(`
+        trait A {}
+        trait B { fn f(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl A for Point {}
+        impl<T: A> B for T { fn f(&self) -> str { "a" } }
+        fn needs_b<U: B>(x: U) {}
+        fn main() { needs_b(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects calling a function requiring a blanket-implemented trait for a concrete type that does not implement the blanket's own bound", (): void => {
+      const result = diagnose(`
+        trait A {}
+        trait B { fn f(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl<T: A> B for T { fn f(&self) -> str { "a" } }
+        fn needs_b<U: B>(x: U) {}
+        fn main() { needs_b(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: B` is not satisfied",
+      );
+    });
+
+    it("accepts registering a trait impl whose supertrait is also implemented for the same type", (): void => {
+      const result = diagnose(`
+        trait Eq {}
+        trait Ord: Eq {}
+        struct Point { x: i32, y: i32 }
+        impl Eq for Point {}
+        impl Ord for Point {}
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects registering a trait impl missing its supertrait's own implementation, naming the missing supertrait", (): void => {
+      const result = diagnose(`
+        trait Eq {}
+        trait Ord: Eq {}
+        struct Point { x: i32, y: i32 }
+        impl Ord for Point {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: Eq` is not satisfied",
+      );
+    });
+
+    it("resolves a two-level supertrait chain, each impl already requiring the level below it", (): void => {
+      const result = diagnose(`
+        trait A {}
+        trait B: A {}
+        trait C: B {}
+        struct Point { x: i32, y: i32 }
+        impl A for Point {}
+        impl B for Point {}
+        impl C for Point {}
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("checks a blanket impl's where-clause bound the same as an inline one, not just inline bounds", (): void => {
+      const result = diagnose(`
+        trait A {}
+        trait B { fn f(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl<T> B for T where T: A { fn f(&self) -> str { "a" } }
+        fn needs_b<U: B>(x: U) {}
+        fn main() { needs_b(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: B` is not satisfied",
+      );
+    });
+  });
+
+  describe("trait completeness", (): void => {
+    it("rejects an impl missing a required (non-default) trait method, naming the missing method", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl Draw for Point {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "impl of trait `Draw` for `Point` is missing method `draw`",
+      );
+    });
+
+    it("reports each missing required method separately", (): void => {
+      const result = diagnose(`
+        trait Shape { fn draw(&self) -> str; fn area(&self) -> i32; }
+        struct Point { x: i32, y: i32 }
+        impl Shape for Point {}
+      `);
+      expect(result.diagnostics).toHaveLength(2);
+      expect(result.diagnostics.map((d) => d.message)).toEqual([
+        "impl of trait `Shape` for `Point` is missing method `draw`",
+        "impl of trait `Shape` for `Point` is missing method `area`",
+      ]);
+    });
+
+    it("accepts an impl providing every required method while omitting a default method", (): void => {
+      const result = diagnose(`
+        trait Shape {
+          fn draw(&self) -> str;
+          fn describe(&self) -> str { "a shape" }
+        }
+        struct Point { x: i32, y: i32 }
+        impl Shape for Point { fn draw(&self) -> str { "a" } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("accepts an impl that also overrides a default method", (): void => {
+      const result = diagnose(`
+        trait Shape {
+          fn draw(&self) -> str;
+          fn describe(&self) -> str { "a shape" }
+        }
+        struct Point { x: i32, y: i32 }
+        impl Shape for Point {
+          fn draw(&self) -> str { "a" }
+          fn describe(&self) -> str { "a point" }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
+  describe("witness construction", (): void => {
+    it("records a witness naming the resolving impl for a satisfied generic call bound", (): void => {
+      const { result, tokens } = analyzeWithTokens(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl Draw for Point { fn draw(&self) -> str { "a" } }
+        fn draw_all<T: Draw>(x: T) {}
+        fn main() { draw_all(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      expect(witnesses).toHaveLength(1);
+      const witness = witnesses?.[0];
+      expect(witness).toMatchObject({
+        kind: "Impl",
+        traitName: "Draw",
+        typeName: "Point",
+        methods: [{ name: "draw", source: "impl" }],
+      });
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(keywordTextAt(tokens, witness.implTokenId)).toBe("impl");
+    });
+
+    it("records two witness entries for two independently-satisfied bounds on one call", (): void => {
+      const { result } = analyzeWithTokens(`
+        trait Draw { fn draw(&self) -> str; }
+        trait Describe { fn describe(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl Draw for Point { fn draw(&self) -> str { "a" } }
+        impl Describe for Point { fn describe(&self) -> str { "b" } }
+        fn show<T: Draw + Describe>(x: T) {}
+        fn main() { show(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      expect(
+        witnesses?.map((w) => (w.kind === "Impl" ? w.traitName : w.kind)),
+      ).toEqual(["Draw", "Describe"]);
+    });
+
+    it("records a witness pointing at the blanket impl, not a synthesized concrete one", (): void => {
+      const { result, tokens } = analyzeWithTokens(`
+        trait A {}
+        trait B { fn f(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl A for Point {}
+        impl<T: A> B for T { fn f(&self) -> str { "a" } }
+        fn needs_b<U: B>(x: U) {}
+        fn main() { needs_b(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      const witness = witnesses?.[0];
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(keywordTextAt(tokens, witness.implTokenId)).toBe("impl");
+      const implTokenSpan = tokens[witness.implTokenId]?.span;
+      // The blanket impl is the second `impl` in the source; the first
+      // registers `A for Point`, so a witness pointing at the blanket impl
+      // (not the first, unrelated one) starts at a later source position.
+      const firstImplTokenId = tokens.findIndex(
+        (t) => t.kind === "keyword" && t.text === "impl",
+      );
+      const firstImplSpan = tokens[firstImplTokenId]?.span;
+      expect(implTokenSpan?.start).toBeGreaterThan(firstImplSpan?.start ?? -1);
+    });
+
+    it("marks a default method not overridden by the impl as default-sourced, and an overridden one as impl-sourced", (): void => {
+      const { result } = analyzeWithTokens(`
+        trait Shape {
+          fn draw(&self) -> str;
+          fn describe(&self) -> str { "a shape" }
+        }
+        struct Point { x: i32, y: i32 }
+        impl Shape for Point { fn draw(&self) -> str { "a" } }
+        fn show<T: Shape>(x: T) {}
+        fn main() { show(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      const witness = witnesses?.[0];
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(witness.methods).toEqual([
+        { name: "draw", source: "impl" },
+        { name: "describe", source: "default" },
+      ]);
+    });
+
+    it("preserves a trait's own interleaved declaration order in the witness method list, not a required-then-default order", (): void => {
+      const { result } = analyzeWithTokens(`
+        trait Shape {
+          fn describe(&self) -> str { "a shape" }
+          fn draw(&self) -> str;
+        }
+        struct Point { x: i32, y: i32 }
+        impl Shape for Point { fn draw(&self) -> str { "a" } }
+        fn show<T: Shape>(x: T) {}
+        fn main() { show(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      const witness = witnesses?.[0];
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(witness.methods).toEqual([
+        { name: "describe", source: "default" },
+        { name: "draw", source: "impl" },
+      ]);
+    });
+
+    it("does not record any witnesses for a call when only some of its bounds are satisfied", (): void => {
+      const { result } = analyzeWithTokens(`
+        trait Draw { fn draw(&self) -> str; }
+        trait Describe { fn describe(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl Draw for Point { fn draw(&self) -> str { "a" } }
+        fn show<T: Draw + Describe>(x: T) {}
+        fn main() { show(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: Describe` is not satisfied",
+      );
+      expect(result.witnesses.size).toBe(0);
+    });
+
+    it("records a forwarded witness when the bound is satisfied through an enclosing function's own abstract type parameter", (): void => {
+      const { result } = analyzeWithTokens(`
+        trait Draw { fn draw(&self) -> str; }
+        fn inner<U: Draw>(x: U) {}
+        fn outer<T: Draw>(x: T) { inner(x); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      expect(witnesses).toEqual([
+        { kind: "Forwarded", traitName: "Draw", paramName: "T" },
+      ]);
+    });
+  });
+
+  describe("nested impl registration and visibility", (): void => {
+    it("resolves a generic call against an impl declared inside another function's body", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        fn draw_all<T: Draw>(x: T) {}
+        fn helper() {
+          impl Draw for Point { fn draw(&self) -> str { "a" } }
+          draw_all(Point { x: 0, y: 0 });
+        }
+        fn main() { draw_all(Point { x: 0, y: 0 }); }
+      `);
+      // The impl targets Point, a top-level struct, so it also trips the
+      // visibility lint below - expected here, not a resolution failure.
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("warning");
+      expect(result.diagnostics[0]?.message).toBe(
+        "impl of trait `Draw` for `Point` takes effect everywhere in the program, not just this scope",
+      );
+    });
+
+    it("does not warn on a top-level impl", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl Draw for Point { fn draw(&self) -> str { "a" } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("warns on an impl declared inside a function that targets a top-level struct", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        fn helper() {
+          impl Draw for Point { fn draw(&self) -> str { "a" } }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("warning");
+      expect(result.diagnostics[0]?.message).toBe(
+        "impl of trait `Draw` for `Point` takes effect everywhere in the program, not just this scope",
+      );
+    });
+
+    it("warns on a nested blanket impl regardless of its target", (): void => {
+      const result = diagnose(`
+        trait A {}
+        trait B { fn f(&self) -> str; }
+        fn helper() {
+          impl<T: A> B for T { fn f(&self) -> str { "a" } }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("warning");
+      expect(result.diagnostics[0]?.message).toBe(
+        "blanket impl of trait `B` takes effect everywhere in the program, not just this scope",
+      );
+    });
+
+    it("does not warn when both the struct and its impl are declared inside the same function", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        fn helper() {
+          struct Point { x: i32, y: i32 }
+          impl Draw for Point { fn draw(&self) -> str { "a" } }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("warns on an impl nested inside an if-branch that targets a top-level struct", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        fn helper(cond: bool) {
+          if cond {
+            impl Draw for Point { fn draw(&self) -> str { "a" } }
+          }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("warning");
+      expect(result.diagnostics[0]?.message).toBe(
+        "impl of trait `Draw` for `Point` takes effect everywhere in the program, not just this scope",
+      );
+    });
+  });
+
+  describe("cyclic blanket bounds", (): void => {
+    it("does not overflow the stack when a blanket impl's own bound is the same trait it implements", (): void => {
+      const result = diagnose(`
+        trait A {}
+        impl<T: A> A for T {}
+        struct Point { x: i32, y: i32 }
+        fn needs_a<U: A>(x: U) {}
+        fn main() { needs_a(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: A` is not satisfied",
+      );
+    });
+
+    it("does not overflow the stack on a longer blanket-bound cycle", (): void => {
+      const result = diagnose(`
+        trait A {}
+        trait B {}
+        impl<T: B> A for T {}
+        impl<T: A> B for T {}
+        struct Point { x: i32, y: i32 }
+        fn needs_a<U: A>(x: U) {}
+        fn main() { needs_a(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: A` is not satisfied",
+      );
+    });
+  });
+
+  describe("impl target and trait identity under shadowing", (): void => {
+    it("does not report a false coherence conflict between impls of two shadowed same-named local structs", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct P { a: i32 }
+        impl Draw for P { fn draw(&self) -> str { "outer" } }
+        fn main() {
+          struct P { b: i32 }
+          impl Draw for P { fn draw(&self) -> str { "inner" } }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("warning");
+      expect(result.diagnostics[0]?.code).toBe("HEDGE-LINT-004");
+    });
+
+    it("resolves a shadowed local struct's own impl without leaking onto an outer same-named struct lacking one", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct P { a: i32 }
+        fn outer() {
+          struct P { b: i32 }
+          impl Draw for P { fn draw(&self) -> str { "inner" } }
+        }
+        fn needs_draw<T: Draw>(x: T) {}
+        fn caller() { needs_draw(P { a: 0 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(2);
+      expect(result.diagnostics[0]?.code).toBe("HEDGE-LINT-004");
+      expect(result.diagnostics[1]?.message).toBe(
+        "the trait bound `P: Draw` is not satisfied",
+      );
+    });
+
+    it("warns about the struct shadowing but not the impl visibility lint, for a nested impl targeting a nested shadowed struct with no impl-carrying top-level namesake", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct P { a: i32 }
+        fn main() {
+          struct P { b: i32 }
+          impl Draw for P { fn draw(&self) -> str { "inner" } }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.code).toBe("HEDGE-LINT-004");
+    });
+  });
+
+  describe("impl trait reference validation", (): void => {
+    it("rejects an impl whose trait reference names an undeclared trait", (): void => {
+      const result = diagnose(`
+        struct P { x: i32 }
+        impl Missing for P {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find trait `Missing` in this scope",
+      );
+    });
+
+    it("does not let a generic call resolve against an impl of an undeclared trait", (): void => {
+      const result = diagnose(`
+        struct P { x: i32 }
+        impl Missing for P {}
+        trait Missing2 {}
+        fn needs<T: Missing2>(x: T) {}
+        fn main() { needs(P { x: 0 }); }
+      `);
+      expect(result.diagnostics.map((d) => d.message)).toContain(
+        "cannot find trait `Missing` in this scope",
+      );
+      expect(result.diagnostics.map((d) => d.message)).toContain(
+        "the trait bound `P: Missing2` is not satisfied",
+      );
+    });
+
+    it("rejects a blanket impl bound naming an undeclared trait", (): void => {
+      const result = diagnose(`
+        trait B { fn f(&self) -> str; }
+        impl<T: Missing> B for T { fn f(&self) -> str { "a" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find trait `Missing` in this scope",
+      );
+    });
+
+    it("rejects a trait's own supertrait naming an undeclared trait", (): void => {
+      const result = diagnose(`
+        trait B: Missing {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find trait `Missing` in this scope",
+      );
+    });
+
+    it("resolves a trait's own supertrait declared later in the same scope, without a false undeclared-trait error", (): void => {
+      const result = diagnose(`
+        trait A: B {}
+        trait B {}
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects an ordinary generic function's inline bound naming an undeclared trait", (): void => {
+      const result = diagnose(`
+        fn f<T: Missing>(x: T) {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find trait `Missing` in this scope",
+      );
+    });
+
+    it("rejects an ordinary generic function's where-clause bound naming an undeclared trait", (): void => {
+      const result = diagnose(`
+        fn f<T>(x: T) where T: Missing {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find trait `Missing` in this scope",
+      );
+    });
+  });
+
+  describe("duplicate trait declarations", (): void => {
+    it("rejects two top-level traits declared with the same name", (): void => {
+      const result = diagnose(`
+        trait Draw {}
+        trait Draw {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "trait `Draw` is defined more than once",
+      );
+    });
+
+    it("rejects three top-level traits declared with the same name, once per duplicate", (): void => {
+      const result = diagnose(`
+        trait Draw {}
+        trait Draw {}
+        trait Draw {}
+      `);
+      expect(result.diagnostics).toHaveLength(2);
+      expect(result.diagnostics[0]?.message).toBe(
+        "trait `Draw` is defined more than once",
+      );
+      expect(result.diagnostics[1]?.message).toBe(
+        "trait `Draw` is defined more than once",
+      );
+    });
+
+    it("rejects two same-named traits declared inside the same function body", (): void => {
+      const result = diagnose(`
+        fn f() {
+          trait Draw {}
+          trait Draw {}
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "trait `Draw` is defined more than once",
+      );
+    });
+
+    it("lets a block-local trait shadow an outer trait of the same name without a duplicate-definition error", (): void => {
+      const result = diagnose(`
+        trait Draw {}
+        fn f() {
+          trait Draw {}
+        }
+      `);
+      expect(
+        result.diagnostics.filter(
+          (d) => d.message === "trait `Draw` is defined more than once",
+        ),
+      ).toHaveLength(0);
+    });
   });
 });

@@ -29,7 +29,44 @@ import { hasCapability, type TypeCapability } from "./type-capabilities.js";
 export interface AnalysisResult {
   readonly diagnostics: readonly Diagnostic[];
   readonly program: Semantics.Program;
+  /** Every resolved trait bound at every generic call site, keyed by the
+   * call's own `tokenId` - one entry per declared generic parameter's bound
+   * that resolved, in the same order the callee declares them, for codegen
+   * to turn into a hidden witness argument later. A call with unresolved
+   * bounds carries no entry (analysis already reported the diagnostic). */
+  readonly witnesses: ReadonlyMap<number, readonly WitnessRef[]>;
 }
+
+/** One trait method a witness carries, and where its implementation comes
+ * from: the impl's own override, or the trait's own default body when the
+ * impl doesn't override it. */
+interface WitnessMethod {
+  readonly name: string;
+  readonly source: "impl" | "default";
+}
+
+/**
+ * How one generic call site's declared bound resolved. `Impl` names the
+ * registered impl (concrete or blanket) that satisfies it, plus its own
+ * method list. `Forwarded` covers a still-abstract argument (the enclosing
+ * declaration's own generic parameter) - there is no impl to reference yet,
+ * since the concrete type isn't known until whatever calls the enclosing
+ * function supplies it; codegen forwards the enclosing function's own
+ * received witness for `paramName` instead of resolving a new one.
+ */
+type WitnessRef =
+  | {
+      readonly kind: "Impl";
+      readonly traitName: string;
+      readonly typeName: string;
+      readonly implTokenId: number;
+      readonly methods: readonly WitnessMethod[];
+    }
+  | {
+      readonly kind: "Forwarded";
+      readonly traitName: string;
+      readonly paramName: string;
+    };
 
 /**
  * Everything one lexical scope owns, in a single object so a scope is pushed
@@ -70,6 +107,46 @@ interface AnalysisContext {
    * inherits an enclosing item's generics than it would its locals.
    */
   readonly genericParamStack: ReadonlySet<string>[];
+  /** Same lifecycle as `genericParamStack`, keyed the same way - each
+   * declared type parameter's own inline trait bounds, so a call inside a
+   * generic body can check a still-abstract argument's bound against the
+   * enclosing declaration's own bound list instead of searching
+   * `implRegistry` for a concrete impl that doesn't exist yet. */
+  readonly genericParamBoundStack: ReadonlyMap<string, readonly string[]>[];
+  /**
+   * Every trait impl registered anywhere in the program, flat and
+   * program-wide rather than scoped to a frame - an impl's existence is a
+   * fact needed by any generic call that resolves its bound, regardless of
+   * how deeply the impl itself is nested, so scoping it like a type name
+   * would make coherence checking depend on textual position.
+   */
+  readonly implRegistry: RegisteredImpl[];
+  /** Every trait's own supertraits and required methods, keyed by trait
+   * name - flat and program-wide for the same reason `implRegistry` is:
+   * these are facts about the trait itself, not about where it happens to
+   * be declared. */
+  readonly traitRegistry: Map<string, RegisteredTrait>;
+  /** Mutable build-up of `AnalysisResult.witnesses`, keyed by call-site
+   * `tokenId`. */
+  readonly witnessTable: Map<number, WitnessRef[]>;
+}
+
+/** One registered trait's own supertrait and required-method names, for
+ * checking an impl of it against both. */
+interface RegisteredTrait {
+  readonly supertraits: readonly string[];
+  readonly methods: readonly Semantics.TraitMethod[];
+}
+
+/** One registered trait impl, extracted just far enough for coherence and
+ * bound checking. */
+interface RegisteredImpl {
+  readonly traitName: string;
+  readonly targetTypeName: string;
+  readonly isBlanket: boolean;
+  readonly blanketBounds: readonly string[];
+  readonly providedMethods: readonly string[];
+  readonly tokenId: number;
 }
 
 function newScopeFrame(): ScopeFrame {
@@ -108,21 +185,129 @@ function genericParamNames(
     .map((param) => param.name.text);
 }
 
+/** Each `TypeParam`'s own inline trait-bound names (`T: Draw`), keyed by
+ * parameter name - a `LifetimeTraitBound` (`T: 'a`) contributes nothing,
+ * since it names no trait. Merges in any matching `where`-clause predicate
+ * too (`where T: Draw`), since a bound written there is exactly as binding
+ * as one written inline - only a `where` predicate whose own type is a bare
+ * name matching a declared parameter is recognized, the same scope inline
+ * bounds are already limited to. */
+function genericParamBoundNames(
+  generics: readonly Parser.GenericParam[],
+  whereClause: Option<Parser.WhereClause> = none(),
+): ReadonlyMap<string, readonly string[]> {
+  const bounds = new Map<string, readonly string[]>();
+  for (const param of generics) {
+    if (param.kind !== "TypeParam") continue;
+    bounds.set(param.name.text, traitBoundNames(param.bounds));
+  }
+  for (const predicate of isSome(whereClause)
+    ? whereClause.value.predicates
+    : []) {
+    if (
+      predicate.type.kind !== "NamedType" ||
+      predicate.type.path.segments.length !== 1
+    ) {
+      continue;
+    }
+    const name = predicate.type.path.segments[0];
+    const existing = name === undefined ? undefined : bounds.get(name);
+    if (name === undefined || existing === undefined) continue;
+    bounds.set(name, [...existing, ...traitBoundNames(predicate.bounds)]);
+  }
+  return bounds;
+}
+
+/** Extracts the trait names from a list of `TraitBound`s - a
+ * `LifetimeTraitBound` (`T: 'a`) contributes nothing, since it names no
+ * trait. Shared by inline (`T: Draw`) and `where`-clause (`where T: Draw`)
+ * bound lists alike. */
+function traitBoundNames(
+  bounds: readonly Parser.TraitBound[],
+): readonly string[] {
+  return bounds
+    .filter(
+      (bound): bound is Parser.PathTraitBound =>
+        bound.kind === "PathTraitBound",
+    )
+    .map((bound) => bound.path.segments.at(-1) ?? "");
+}
+
+/** Rejects any trait bound naming a trait that isn't declared - a sibling
+ * of `traitBoundNames`, which only extracts names and never checks them.
+ * Callers run this once `ctx.traitRegistry` is known to be fully populated
+ * for whatever it's checking against (immediately for a bound list that
+ * can't forward-reference anything still being registered, or after a
+ * dedicated first pass when it can, as trait supertraits do). */
+function validateTraitBoundNames(
+  ctx: AnalysisContext,
+  bounds: readonly Parser.TraitBound[],
+): void {
+  for (const bound of bounds) {
+    if (bound.kind !== "PathTraitBound") continue;
+    const name = bound.path.segments.at(-1) ?? "";
+    if (ctx.traitRegistry.has(name)) continue;
+    emitError(
+      ctx,
+      `cannot find trait \`${name}\` in this scope`,
+      bound.tokenId,
+      "HEDGE-NAME-001",
+    );
+  }
+}
+
+/** Validates every trait bound named across `generics`' own inline bounds
+ * and `whereClause`'s predicates - the same two sources
+ * `genericParamBoundNames` merges names from, checked here instead of
+ * silently trusted. `ctx.traitRegistry` must already be fully populated
+ * when this runs. */
+function validateGenericParamBounds(
+  ctx: AnalysisContext,
+  generics: readonly Parser.GenericParam[],
+  whereClause: Option<Parser.WhereClause>,
+): void {
+  for (const param of generics) {
+    if (param.kind !== "TypeParam") continue;
+    validateTraitBoundNames(ctx, param.bounds);
+  }
+  for (const predicate of isSome(whereClause)
+    ? whereClause.value.predicates
+    : []) {
+    validateTraitBoundNames(ctx, predicate.bounds);
+  }
+}
+
 function pushGenericParams(
   ctx: AnalysisContext,
   generics: readonly Parser.GenericParam[],
+  whereClause: Option<Parser.WhereClause> = none(),
 ): void {
   ctx.genericParamStack.push(new Set(genericParamNames(generics)));
+  ctx.genericParamBoundStack.push(
+    genericParamBoundNames(generics, whereClause),
+  );
 }
 
 function popGenericParams(ctx: AnalysisContext): void {
   ctx.genericParamStack.pop();
+  ctx.genericParamBoundStack.pop();
 }
 
 /** Only the innermost open item's own type parameters are visible. */
 function isDeclaredGenericParam(ctx: AnalysisContext, name: string): boolean {
   const innermost = ctx.genericParamStack.at(-1);
   return innermost?.has(name) ?? false;
+}
+
+/** The innermost open item's own declared bounds for one of its type
+ * parameters - empty for a parameter with no bounds, or one not declared
+ * by the innermost item at all. */
+function declaredGenericParamBounds(
+  ctx: AnalysisContext,
+  name: string,
+): readonly string[] {
+  const innermost = ctx.genericParamBoundStack.at(-1);
+  return innermost?.get(name) ?? [];
 }
 
 /**
@@ -308,6 +493,7 @@ const BUILTIN_SCOPE: [string, ScopedVariable][] = [
         returnType: UNIT,
         paramsArePlaceholder: true,
         genericParams: [],
+        genericParamBounds: new Map(),
       },
       mutable: false,
     },
@@ -423,14 +609,16 @@ function emitWarning(
   message: string,
   tokenId: number,
   code: DiagnosticCode,
+  relatedSpans?: readonly RelatedSpan[],
 ): void {
   const token = ctx.tokens[tokenId];
+  const diagnostic = warningDiagnostic(
+    code,
+    message,
+    token !== undefined ? some(token.span) : none(),
+  );
   ctx.diagnostics.push(
-    warningDiagnostic(
-      code,
-      message,
-      token !== undefined ? some(token.span) : none(),
-    ),
+    relatedSpans !== undefined ? { ...diagnostic, relatedSpans } : diagnostic,
   );
 }
 
@@ -1125,11 +1313,48 @@ function analyzeStaticReference(
 }
 
 /**
- * A type's scope-qualified name. Frame depth disambiguates two same-named
- * declarations in nested scopes.
+ * A type's scope-qualified name. The declaring identifier's own `tokenId`
+ * disambiguates two same-named declarations - a purely structural identity
+ * assigned at parse time, so it distinguishes shadowed declarations at any
+ * depth *and* same-depth siblings alike (frame depth alone conflated two
+ * sibling blocks each declaring their own same-named local type, since both
+ * see the same `ctx.frames.length` at declaration time).
  */
-function scopedTypeName(ctx: AnalysisContext, name: string): string {
-  return `scoped(${ctx.frames.length})::${name}`;
+function scopedTypeName(nameTokenId: number, name: string): string {
+  return `scoped(${nameTokenId})::${name}`;
+}
+
+/** Warns when a new struct/enum declaration shadows an outer one already
+ * visible in an enclosing frame - matching `HEDGE-LINT-002`'s existing
+ * precedent for a shadowed generic parameter. `relatedSpans` names the
+ * shadowed declaration and any impl already registered against the
+ * shadowing one, since that combination is exactly what makes shadowing
+ * easy to get wrong (a value of the shadowing type carries a different
+ * trait impl set than a same-named value from the outer scope would). */
+function warnIfShadowsOuterDeclaration(
+  ctx: AnalysisContext,
+  kindLabel: "struct" | "enum",
+  name: string,
+  tokenId: number,
+  ownIdentity: string,
+  outerTokenId: number | undefined,
+): void {
+  if (outerTokenId === undefined) return;
+  const relatedSpans = [
+    ...relatedSpanAt(ctx, outerTokenId, "shadowed declaration"),
+    ...ctx.implRegistry
+      .filter((impl) => impl.targetTypeName === ownIdentity)
+      .flatMap((impl) =>
+        relatedSpanAt(ctx, impl.tokenId, "impl for this declaration"),
+      ),
+  ];
+  emitWarning(
+    ctx,
+    `${kindLabel} \`${name}\` shadows an outer declaration of the same name`,
+    tokenId,
+    "HEDGE-LINT-004",
+    relatedSpans,
+  );
 }
 
 /**
@@ -1153,8 +1378,16 @@ function declareStructName(
   }
   const type: Semantics.Type = {
     kind: "StructType",
-    name: scopedTypeName(ctx, item.name.text),
+    name: scopedTypeName(item.name.tokenId, item.name.text),
   };
+  warnIfShadowsOuterDeclaration(
+    ctx,
+    "struct",
+    item.name.text,
+    item.name.tokenId,
+    type.name,
+    lookupStruct(ctx, item.name.text)?.name.tokenId,
+  );
   frame.types.set(item.name.text, {
     ...item,
     name: { ...item.name, type },
@@ -1181,8 +1414,16 @@ function declareEnumName(
   }
   const type: Semantics.Type = {
     kind: "EnumType",
-    name: scopedTypeName(ctx, item.name.text),
+    name: scopedTypeName(item.name.tokenId, item.name.text),
   };
+  warnIfShadowsOuterDeclaration(
+    ctx,
+    "enum",
+    item.name.text,
+    item.name.tokenId,
+    type.name,
+    lookupEnum(ctx, item.name.text)?.name.tokenId,
+  );
   frame.enums.set(item.name.text, {
     ...item,
     name: { ...item.name, type },
@@ -1219,6 +1460,654 @@ function registerTypeDecls(
       }
     }
   }
+}
+
+/** Extracts an `impl`'s trait/target identity from the parse tree, without
+ * emitting any diagnostic - duplicate/coherence checking happens once, in
+ * `registerImpls`, against the whole program's impl set. */
+function buildImplDecl(item: Parser.ImplDecl): Semantics.ImplDecl {
+  const targetTypeName: Option<string> =
+    item.type.kind === "NamedType"
+      ? some(item.type.path.segments.at(-1) ?? "")
+      : none();
+  return {
+    kind: "Impl",
+    tokenId: item.tokenId,
+    traitRef: mapSome(item.traitRef, (traitRef) => ({
+      name: traitRef.path.segments.at(-1) ?? "",
+      tokenId: traitRef.tokenId,
+    })),
+    targetTypeName,
+    isBlanket:
+      isSome(targetTypeName) &&
+      genericParamNames(item.generics).includes(targetTypeName.value),
+    blanketBounds: isSome(targetTypeName)
+      ? (genericParamBoundNames(item.generics, item.whereClause).get(
+          targetTypeName.value,
+        ) ?? [])
+      : [],
+    providedMethods: item.items
+      .filter((decl): decl is Parser.FunctionDef => decl.kind === "Function")
+      .map((decl) => decl.signature.name.text),
+  };
+}
+
+/** Extracts a `trait`'s name, its own supertrait names, and its required
+ * (bodiless) vs. default (bodied) method names from the parse tree - a
+ * `LifetimeTraitBound` supertrait contributes nothing, since it names no
+ * trait. */
+function buildTraitDecl(item: Parser.TraitDecl): Semantics.TraitDecl {
+  return {
+    kind: "Trait",
+    tokenId: item.tokenId,
+    name: item.name.text,
+    supertraits: item.supertraits
+      .filter(
+        (bound): bound is Parser.PathTraitBound =>
+          bound.kind === "PathTraitBound",
+      )
+      .map((bound) => bound.path.segments.at(-1) ?? ""),
+    methods: item.items.flatMap((decl): readonly Semantics.TraitMethod[] => {
+      if (decl.kind === "FunctionSignature") {
+        return [{ name: decl.name.text, isDefault: false }];
+      }
+      if (decl.kind === "Function") {
+        return [{ name: decl.signature.name.text, isDefault: true }];
+      }
+      return [];
+    }),
+  };
+}
+
+/**
+ * Two impls of the same trait overlap when either is blanket (a blanket
+ * impl claims the trait for every type, regardless of its own bound - the
+ * bound is a well-formedness constraint on the impl body, not something
+ * overlap-checking consults) or when they target the exact same concrete
+ * type.
+ */
+function implsOverlap(a: RegisteredImpl, b: RegisteredImpl): boolean {
+  return a.isBlanket || b.isBlanket || a.targetTypeName === b.targetTypeName;
+}
+
+function implOverlapMessage(
+  traitName: string,
+  incoming: RegisteredImpl,
+  existing: RegisteredImpl,
+): string {
+  if (incoming.isBlanket && existing.isBlanket) {
+    return `conflicting implementations of trait \`${traitName}\``;
+  }
+  if (incoming.isBlanket || existing.isBlanket) {
+    const concrete = incoming.isBlanket ? existing : incoming;
+    return `conflicting implementations of trait \`${traitName}\` for type \`${bareTypeName(concrete.targetTypeName)}\``;
+  }
+  return `trait \`${traitName}\` is already implemented for type \`${bareTypeName(incoming.targetTypeName)}\``;
+}
+
+/**
+ * Resolves `type: traitName` to the witness that satisfies it, or `none()`
+ * if nothing does. A still-abstract type (the enclosing declaration's own
+ * generic parameter) resolves against that declaration's own bound list,
+ * since no concrete impl can exist for a type that isn't concrete yet -
+ * codegen forwards the enclosing function's own received witness for it
+ * instead of looking one up here.
+ */
+function resolveTraitBound(
+  ctx: AnalysisContext,
+  type: Semantics.Type,
+  traitName: string,
+): Option<WitnessRef> {
+  if (type.kind === "NamedType" && type.path.segments.length === 1) {
+    const paramName = type.path.segments[0];
+    if (paramName !== undefined && isDeclaredGenericParam(ctx, paramName)) {
+      return boundsImplyTrait(
+        ctx,
+        declaredGenericParamBounds(ctx, paramName),
+        traitName,
+      )
+        ? some({ kind: "Forwarded", traitName, paramName })
+        : none();
+    }
+  }
+  return resolveTraitBoundForTypeName(ctx, typeIdentity(type), traitName);
+}
+
+/**
+ * Whether `requiredTrait` is satisfied by `declaredBounds`, directly or
+ * transitively through a supertrait chain - `trait Ord: Eq` means a
+ * directly-declared `T: Ord` bound already implies `T: Eq`, so an abstract
+ * parameter's own bound list alone isn't enough to check against.
+ */
+function boundsImplyTrait(
+  ctx: AnalysisContext,
+  declaredBounds: readonly string[],
+  requiredTrait: string,
+  visiting: ReadonlySet<string> = new Set(),
+): boolean {
+  return declaredBounds.some((bound) => {
+    if (bound === requiredTrait) return true;
+    if (visiting.has(bound)) return false;
+    const supertraits = ctx.traitRegistry.get(bound)?.supertraits ?? [];
+    return boundsImplyTrait(
+      ctx,
+      supertraits,
+      requiredTrait,
+      new Set(visiting).add(bound),
+    );
+  });
+}
+
+/**
+ * A concrete type's own real identity for registry lookup - the full
+ * scoped name for a struct/enum (matching what `resolveStructOrEnumIdentity`
+ * independently produces for the same declaration, so a call site's
+ * resolved argument type and an impl's own resolved target always compare
+ * equal when they mean the same declaration), or the same as `describeType`
+ * for anything else, which carries no shadowing ambiguity to begin with.
+ */
+function typeIdentity(type: Semantics.Type): string {
+  return type.kind === "StructType" || type.kind === "EnumType"
+    ? type.name
+    : describeType(type);
+}
+
+/**
+ * Resolves `typeName: traitName` against a concrete type name, via a
+ * concrete registered impl or a blanket impl whose own bound is satisfied.
+ * A blanket impl's bound is checked recursively (its own `A` in
+ * `impl<T: A> B for T` may itself be satisfied only through another
+ * blanket impl) - `typeName` is always concrete here, so this never
+ * revisits `resolveTraitBound`'s abstract-parameter case.
+ */
+function resolveTraitBoundForTypeName(
+  ctx: AnalysisContext,
+  typeName: string,
+  traitName: string,
+  visiting: ReadonlySet<string> = new Set(),
+): Option<WitnessRef> {
+  const key = `${typeName}::${traitName}`;
+  if (visiting.has(key)) return none();
+  const nextVisiting = new Set(visiting).add(key);
+  const impl = ctx.implRegistry.find((impl) => {
+    if (impl.traitName !== traitName) return false;
+    if (!impl.isBlanket) return impl.targetTypeName === typeName;
+    return impl.blanketBounds.every((bound) =>
+      isSome(resolveTraitBoundForTypeName(ctx, typeName, bound, nextVisiting)),
+    );
+  });
+  if (impl === undefined) return none();
+  return some({
+    kind: "Impl",
+    traitName,
+    typeName: bareTypeName(typeName),
+    implTokenId: impl.tokenId,
+    methods: witnessMethods(ctx, impl),
+  });
+}
+
+/** An impl's own witness method list: every one of its trait's methods, in
+ * the trait's own interleaved declaration order (source order, not grouped
+ * by required-vs-default), each marked `"impl"` when this impl provides or
+ * overrides it and `"default"` when it falls back to the trait's own
+ * default body. */
+function witnessMethods(
+  ctx: AnalysisContext,
+  impl: RegisteredImpl,
+): readonly WitnessMethod[] {
+  const trait = ctx.traitRegistry.get(impl.traitName);
+  if (trait === undefined) return [];
+  return trait.methods.map((method): WitnessMethod => ({
+    name: method.name,
+    source:
+      !method.isDefault || impl.providedMethods.includes(method.name)
+        ? "impl"
+        : "default",
+  }));
+}
+
+function traitBoundNotSatisfiedMessage(
+  typeName: string,
+  traitName: string,
+): string {
+  return `the trait bound \`${typeName}: ${traitName}\` is not satisfied`;
+}
+
+/**
+ * Every struct/enum/trait name visible at one point in the program, each
+ * mapped to its declaring identifier's own `tokenId` - a purely structural,
+ * shadowing-aware resolution computed directly from the AST's own shape
+ * (mirroring `registerTypeDecls`'s per-block pre-registration and
+ * `ScopeFrame`'s innermost-shadows-outer lookup), with no dependency on
+ * live `ctx.frames` state. This is what lets an impl's target type and
+ * trait reference resolve to the *specific* declaration in scope - two
+ * shadowed same-named local structs never collide, since each keeps its
+ * own tokenId all the way through.
+ */
+interface StructuralScope {
+  readonly structs: ReadonlyMap<string, number>;
+  readonly enums: ReadonlyMap<string, number>;
+  readonly traits: ReadonlyMap<string, number>;
+}
+
+const EMPTY_STRUCTURAL_SCOPE: StructuralScope = {
+  structs: new Map(),
+  enums: new Map(),
+  traits: new Map(),
+};
+
+/** Extends `scope` with every struct/enum/trait declared directly in
+ * `items` (not recursing into nested bodies) - shadowing whatever the
+ * enclosing scope already bound for the same name, the same way a real
+ * nested block's own type declarations shadow an outer one. `seenTraitsHere`
+ * tracks only names introduced by this call, so a same-named duplicate
+ * within `items` is a real error while shadowing an outer trait isn't. */
+function extendStructuralScope(
+  ctx: AnalysisContext,
+  scope: StructuralScope,
+  items: readonly (Parser.Item | Parser.Statement)[],
+): StructuralScope {
+  const structs = new Map(scope.structs);
+  const enums = new Map(scope.enums);
+  const traits = new Map(scope.traits);
+  const seenTraitsHere = new Set<string>();
+  for (const item of items) {
+    if (item.kind === "Struct") structs.set(item.name.text, item.name.tokenId);
+    else if (item.kind === "Enum") enums.set(item.name.text, item.name.tokenId);
+    else if (item.kind === "Trait") {
+      if (seenTraitsHere.has(item.name.text)) {
+        emitError(
+          ctx,
+          `trait \`${item.name.text}\` is defined more than once`,
+          item.name.tokenId,
+          "HEDGE-NAME-002",
+        );
+        continue;
+      }
+      seenTraitsHere.add(item.name.text);
+      traits.set(item.name.text, item.name.tokenId);
+    }
+  }
+  return { structs, enums, traits };
+}
+
+/** One item found anywhere in the program by `collectAllItems`, alongside
+ * how deeply nested it is (0 = a top-level program item) and the
+ * `StructuralScope` visible at that exact point. Impl/trait registration
+ * needs every declaration regardless of nesting - a value can flow out of
+ * the scope it was constructed in and still need its trait impl resolved
+ * far from where either was declared. */
+interface DepthedItem {
+  readonly item: Parser.Item | Parser.Statement;
+  readonly depth: number;
+  readonly scope: StructuralScope;
+}
+
+/**
+ * Walks the whole program looking for every item, including one nested
+ * inside a function body, an `impl`/`trait` body, or an `if`/`match`/
+ * `while` block - not just top-level items, since `impl`/`trait` are valid
+ * statements and take program-wide effect regardless of where they're
+ * declared. Does not descend into an arbitrary expression position beyond
+ * these (a call argument's own block-valued sub-expression, for instance) -
+ * a known, narrow gap, matching `parser/lifetime-elision.ts`'s own
+ * similarly-scoped walk.
+ */
+function collectAllItems(
+  ctx: AnalysisContext,
+  items: readonly (Parser.Item | Parser.Statement)[],
+  depth: number,
+  enclosingScope: StructuralScope = EMPTY_STRUCTURAL_SCOPE,
+): readonly DepthedItem[] {
+  const scope = extendStructuralScope(ctx, enclosingScope, items);
+  return collectItemsWithScope(ctx, items, depth, scope);
+}
+
+/** Walks `items` against an already-extended `scope`, shared by
+ * `collectAllItems` (which extends the scope itself) and `collectBlockItems`
+ * (which extends it once and reuses the result for the trailing expression
+ * too - extending twice over the same statements would double-report a
+ * same-scope duplicate trait). */
+function collectItemsWithScope(
+  ctx: AnalysisContext,
+  items: readonly (Parser.Item | Parser.Statement)[],
+  depth: number,
+  scope: StructuralScope,
+): readonly DepthedItem[] {
+  return items.flatMap((item): readonly DepthedItem[] => {
+    const self: DepthedItem = { item, depth, scope };
+    if (item.kind === "Function") {
+      return [self, ...collectBlockItems(ctx, item.body, depth + 1, scope)];
+    }
+    if (item.kind === "Impl" || item.kind === "Trait") {
+      return [self, ...collectAllItems(ctx, item.items, depth + 1, scope)];
+    }
+    if (item.kind === "ExpressionStatement") {
+      return [
+        self,
+        ...collectExpressionItems(ctx, item.expression, depth, scope),
+      ];
+    }
+    if (item.kind === "LetStatement" && isSome(item.initializer)) {
+      return [
+        self,
+        ...collectExpressionItems(ctx, item.initializer.value, depth, scope),
+      ];
+    }
+    return [self];
+  });
+}
+
+function collectBlockItems(
+  ctx: AnalysisContext,
+  block: Parser.Block,
+  depth: number,
+  enclosingScope: StructuralScope,
+): readonly DepthedItem[] {
+  const scope = extendStructuralScope(ctx, enclosingScope, block.statements);
+  const inner = collectItemsWithScope(ctx, block.statements, depth, scope);
+  return isSome(block.trailingExpression)
+    ? [
+        ...inner,
+        ...collectExpressionItems(
+          ctx,
+          block.trailingExpression.value,
+          depth,
+          scope,
+        ),
+      ]
+    : inner;
+}
+
+function collectExpressionItems(
+  ctx: AnalysisContext,
+  expr: Parser.Expression,
+  depth: number,
+  scope: StructuralScope,
+): readonly DepthedItem[] {
+  switch (expr.kind) {
+    case "Block":
+      return collectBlockItems(ctx, expr, depth + 1, scope);
+    case "IfExpression": {
+      const thenItems = collectBlockItems(
+        ctx,
+        expr.thenBranch,
+        depth + 1,
+        scope,
+      );
+      if (!isSome(expr.elseBranch)) return thenItems;
+      const elseBranch = expr.elseBranch.value;
+      return [
+        ...thenItems,
+        ...(elseBranch.kind === "IfExpression"
+          ? collectExpressionItems(ctx, elseBranch, depth, scope)
+          : collectBlockItems(ctx, elseBranch, depth + 1, scope)),
+      ];
+    }
+    case "WhileExpression":
+      return collectBlockItems(ctx, expr.body, depth + 1, scope);
+    case "MatchExpression":
+      return expr.arms.flatMap((arm) =>
+        collectExpressionItems(ctx, arm.body, depth + 1, scope),
+      );
+    default:
+      return [];
+  }
+}
+
+/**
+ * Registers every `trait`'s own name and supertraits into `ctx.traitRegistry`
+ * first, then validates every supertrait reference in a second pass over
+ * only the traits just registered - so `trait A: B {}` declared before
+ * `trait B {}` still resolves (both are registered before either's
+ * supertraits are checked), while a genuinely undeclared supertrait is
+ * still rejected.
+ */
+function registerTraits(
+  ctx: AnalysisContext,
+  allItems: readonly DepthedItem[],
+): void {
+  const traitItems: Parser.TraitDecl[] = [];
+  for (const { item } of allItems) {
+    if (item.kind !== "Trait") continue;
+    const decl = buildTraitDecl(item);
+    ctx.traitRegistry.set(decl.name, {
+      supertraits: decl.supertraits,
+      methods: decl.methods,
+    });
+    traitItems.push(item);
+  }
+  for (const item of traitItems) {
+    validateTraitBoundNames(ctx, item.supertraits);
+  }
+}
+
+/**
+ * Warns when a non-top-level `impl` still takes program-wide effect despite
+ * living in a nested scope - the common, unsurprising case (both the impl
+ * and its target type are local to the same nested scope, so nothing
+ * outside that scope could construct a value needing the impl anyway) is
+ * deliberately not flagged: `targetTypeName` only appears here when it was
+ * itself declared at the program's top level, so a value of that type can
+ * always reach code outside the impl's own declaring scope. A blanket impl
+ * always warns when nested, since it can affect any external type
+ * satisfying its bound, not just one named locally.
+ */
+function warnIfSurprisinglyVisible(
+  ctx: AnalysisContext,
+  item: Parser.ImplDecl,
+  incoming: RegisteredImpl,
+  topLevelStructEnumNames: ReadonlySet<string>,
+): void {
+  if (incoming.isBlanket) {
+    emitWarning(
+      ctx,
+      `blanket impl of trait \`${incoming.traitName}\` takes effect everywhere in the program, not just this scope`,
+      item.tokenId,
+      "HEDGE-LINT-003",
+    );
+    return;
+  }
+  if (!topLevelStructEnumNames.has(incoming.targetTypeName)) return;
+  emitWarning(
+    ctx,
+    `impl of trait \`${incoming.traitName}\` for \`${bareTypeName(incoming.targetTypeName)}\` takes effect everywhere in the program, not just this scope`,
+    item.tokenId,
+    "HEDGE-LINT-003",
+  );
+}
+
+/** Every top-level struct/enum's own real identity - what
+ * `warnIfSurprisinglyVisible` checks a nested impl's resolved target type
+ * against. */
+function collectTopLevelStructEnumNames(
+  allItems: readonly DepthedItem[],
+): ReadonlySet<string> {
+  return new Set(
+    allItems.flatMap(({ item, depth }) =>
+      depth === 0 && (item.kind === "Struct" || item.kind === "Enum")
+        ? [scopedTypeName(item.name.tokenId, item.name.text)]
+        : [],
+    ),
+  );
+}
+
+/**
+ * Resolves a bare struct/enum name against `scope`'s own shadowing-aware
+ * bindings to the real, collision-free identity `scopedTypeName` will
+ * independently produce for that exact declaration - `none()` when the
+ * name isn't a struct/enum in scope at all (a blanket impl's own type
+ * parameter, or a genuinely unresolved name).
+ */
+function resolveStructOrEnumIdentity(
+  name: string,
+  scope: StructuralScope,
+): Option<string> {
+  const structTokenId = scope.structs.get(name);
+  if (structTokenId !== undefined) {
+    return some(scopedTypeName(structTokenId, name));
+  }
+  const enumTokenId = scope.enums.get(name);
+  if (enumTokenId !== undefined) {
+    return some(scopedTypeName(enumTokenId, name));
+  }
+  return none();
+}
+
+/** Strips a struct/enum's real scoped identity back to its bare,
+ * user-facing name for a diagnostic message - the same stripping
+ * `describeType`'s own `StructType`/`EnumType` case applies. */
+function bareTypeName(identity: string): string {
+  return identity.split("::").pop() ?? identity;
+}
+
+function reportMissingRequiredMethods(
+  ctx: AnalysisContext,
+  item: Parser.ImplDecl,
+  traitName: string,
+  targetTypeName: string,
+  providedMethods: readonly string[],
+): void {
+  const methods = ctx.traitRegistry.get(traitName)?.methods ?? [];
+  for (const method of methods) {
+    if (method.isDefault || providedMethods.includes(method.name)) continue;
+    emitError(
+      ctx,
+      `impl of trait \`${traitName}\` for \`${bareTypeName(targetTypeName)}\` is missing method \`${method.name}\``,
+      item.tokenId,
+      "HEDGE-TRAIT-003",
+    );
+  }
+}
+
+/** Registers one `impl`'s coherence/completeness/visibility facts, or
+ * `undefined` for a not-yet-handled shape (no trait, or a target that
+ * doesn't resolve to any struct/enum in scope). Split out of `registerImpls`
+ * to keep that loop itself simple. A concrete (non-blanket) target resolves
+ * through `scope` to its real, shadowing-aware identity - the bare source
+ * spelling alone would conflate two same-named structs in different
+ * scopes. A blanket impl's target is its own type parameter name (`T`),
+ * never a struct/enum, so it keeps the bare spelling unchanged. */
+function registerOneImpl(
+  ctx: AnalysisContext,
+  item: Parser.ImplDecl,
+  depth: number,
+  scope: StructuralScope,
+  topLevelStructEnumNames: ReadonlySet<string>,
+): RegisteredImpl | undefined {
+  const decl = buildImplDecl(item);
+  validateGenericParamBounds(ctx, item.generics, item.whereClause);
+  const traitRef = decl.traitRef;
+  const bareTargetTypeName = decl.targetTypeName;
+  if (!isSome(traitRef) || !isSome(bareTargetTypeName)) return undefined;
+  const targetTypeName = decl.isBlanket
+    ? some(bareTargetTypeName.value)
+    : resolveStructOrEnumIdentity(bareTargetTypeName.value, scope);
+  if (!isSome(targetTypeName)) return undefined;
+  const traitName = traitRef.value.name;
+  if (!ctx.traitRegistry.has(traitName)) {
+    emitError(
+      ctx,
+      `cannot find trait \`${traitName}\` in this scope`,
+      traitRef.value.tokenId,
+      "HEDGE-NAME-001",
+    );
+    return undefined;
+  }
+  const incoming: RegisteredImpl = {
+    traitName,
+    targetTypeName: targetTypeName.value,
+    isBlanket: decl.isBlanket,
+    blanketBounds: decl.blanketBounds,
+    providedMethods: decl.providedMethods,
+    tokenId: item.tokenId,
+  };
+  const existing = ctx.implRegistry.find(
+    (registered) =>
+      registered.traitName === traitName && implsOverlap(registered, incoming),
+  );
+  if (existing !== undefined) {
+    emitError(
+      ctx,
+      implOverlapMessage(traitName, incoming, existing),
+      item.tokenId,
+      "HEDGE-TRAIT-001",
+      relatedSpanAt(ctx, existing.tokenId, "first implemented here"),
+    );
+  }
+  ctx.implRegistry.push(incoming);
+  if (depth > 0) {
+    warnIfSurprisinglyVisible(ctx, item, incoming, topLevelStructEnumNames);
+  }
+  reportMissingRequiredMethods(
+    ctx,
+    item,
+    traitName,
+    incoming.targetTypeName,
+    decl.providedMethods,
+  );
+  return incoming;
+}
+
+/** A concrete impl missing one of its trait's own supertrait
+ * implementations - deferred until every impl is registered, so
+ * declaration order within the program doesn't matter. */
+function checkSupertraitCompleteness(
+  ctx: AnalysisContext,
+  concreteImpls: readonly RegisteredImpl[],
+): void {
+  for (const impl of concreteImpls) {
+    for (const supertrait of ctx.traitRegistry.get(impl.traitName)
+      ?.supertraits ?? []) {
+      if (
+        isSome(
+          resolveTraitBoundForTypeName(ctx, impl.targetTypeName, supertrait),
+        )
+      ) {
+        continue;
+      }
+      emitError(
+        ctx,
+        traitBoundNotSatisfiedMessage(
+          bareTypeName(impl.targetTypeName),
+          supertrait,
+        ),
+        impl.tokenId,
+        "HEDGE-TRAIT-002",
+      );
+    }
+  }
+}
+
+/**
+ * Registers every trait impl into `ctx.implRegistry`, flat and
+ * program-wide, reports two overlapping impls of the same trait as a
+ * coherence error, and reports a concrete impl missing one of its trait's
+ * own supertrait implementations. Supertrait completeness is not checked
+ * for a blanket impl: proving its own type parameter's bound implies the
+ * supertrait needs impl-definition-time bound implication checking this
+ * ticket doesn't attempt.
+ */
+function registerImpls(
+  ctx: AnalysisContext,
+  allItems: readonly DepthedItem[],
+): void {
+  const topLevelStructEnumNames = collectTopLevelStructEnumNames(allItems);
+  const concreteImpls: RegisteredImpl[] = [];
+  for (const { item, depth, scope } of allItems) {
+    if (item.kind !== "Impl") continue;
+    const incoming = registerOneImpl(
+      ctx,
+      item,
+      depth,
+      scope,
+      topLevelStructEnumNames,
+    );
+    if (incoming !== undefined && !incoming.isBlanket) {
+      concreteImpls.push(incoming);
+    }
+  }
+  checkSupertraitCompleteness(ctx, concreteImpls);
 }
 
 /**
@@ -1427,7 +2316,7 @@ function analyzeEnum(
   ctx: AnalysisContext,
   item: Parser.EnumDecl,
 ): Semantics.EnumDecl {
-  const scopedName = `scoped(${ctx.frames.length})::${item.name.text}`;
+  const scopedName = scopedTypeName(item.name.tokenId, item.name.text);
   const enumType: Semantics.Type = { kind: "EnumType", name: scopedName };
   const seenVariantNames = new Set<string>();
   for (const variant of item.variants) {
@@ -3033,9 +3922,9 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
       return cached?.tokenId === item.tokenId ? cached : analyzeEnum(ctx, item);
     }
     case "Trait":
-      return { kind: "Trait", tokenId: item.tokenId };
+      return buildTraitDecl(item);
     case "Impl":
-      return { kind: "Impl", tokenId: item.tokenId };
+      return buildImplDecl(item);
     case "TypeAlias":
       return { kind: "TypeAlias", tokenId: item.tokenId };
     case "Const":
@@ -3100,7 +3989,7 @@ function analyzeStruct(
   ctx: AnalysisContext,
   item: Parser.StructDecl,
 ): Semantics.StructDecl {
-  const scopedName = `scoped(${ctx.frames.length})::${item.name.text}`;
+  const scopedName = scopedTypeName(item.name.tokenId, item.name.text);
   checkUnusedGenericParams(ctx, item.generics, structFieldUsedNames(item.body));
   pushGenericParams(ctx, item.generics);
   const body = analyzeStructBody(ctx, item.body);
@@ -3317,7 +4206,8 @@ function fnSignatureType(
   ctx: AnalysisContext,
   signature: Parser.FunctionSignature,
 ): Semantics.FunctionType {
-  pushGenericParams(ctx, signature.generics);
+  pushGenericParams(ctx, signature.generics, signature.whereClause);
+  validateGenericParamBounds(ctx, signature.generics, signature.whereClause);
   const type: Semantics.FunctionType = {
     kind: "FunctionType",
     params: signature.params.map((p) =>
@@ -3332,6 +4222,10 @@ function fnSignatureType(
       : { kind: "UnitType", tokenId: signature.tokenId },
     paramsArePlaceholder: false,
     genericParams: genericParamNames(signature.generics),
+    genericParamBounds: genericParamBoundNames(
+      signature.generics,
+      signature.whereClause,
+    ),
   };
   popGenericParams(ctx);
   return type;
@@ -3719,9 +4613,9 @@ function analyzeStatement(
       // this analyzes the (runtime, not const-folded) initializer itself.
       return analyzeStaticDecl(ctx, statement);
     case "Trait":
-      return { kind: "Trait", tokenId: statement.tokenId };
+      return buildTraitDecl(statement);
     case "Impl":
-      return { kind: "Impl", tokenId: statement.tokenId };
+      return buildImplDecl(statement);
     default:
       assertNever(
         statement,
@@ -5591,6 +6485,60 @@ function analyzeIdentifier(
   return { ...identifier, type };
 }
 
+/**
+ * For each of the callee's declared generic parameters: reports an unsolved
+ * generic (`HEDGE-TYPE-006`) if inference never bound it, otherwise checks
+ * its resolved type against every trait bound that parameter declares,
+ * reporting an unsatisfied one as `HEDGE-TRAIT-002`. Witnesses are
+ * accumulated locally and committed to `ctx.witnessTable` only once every
+ * bound on this call resolved - `AnalysisResult.witnesses` documents that a
+ * call with unresolved bounds carries no entry at all, so a partial write
+ * (one bound's witness recorded before a later bound on the same call
+ * fails) would violate that contract. Split out of `analyzeCall` to keep
+ * that function itself under the complexity ceiling.
+ */
+function checkCallGenericBounds(
+  ctx: AnalysisContext,
+  call: Parser.CallExpression,
+  calleeType: Semantics.FunctionType,
+  bindings: GenericBindings,
+): void {
+  const witnesses: WitnessRef[] = [];
+  let allBoundsSatisfied = true;
+  for (const paramName of calleeType.genericParams) {
+    const binding = bindings.get(paramName);
+    if (binding === undefined) {
+      emitError(
+        ctx,
+        `cannot infer type of generic parameter \`${paramName}\` without an explicit type annotation or turbofish`,
+        call.tokenId,
+        "HEDGE-TYPE-006",
+      );
+      allBoundsSatisfied = false;
+      continue;
+    }
+    if (binding.isErrorPlaceholder) continue;
+    for (const traitName of calleeType.genericParamBounds.get(paramName) ??
+      []) {
+      const witness = resolveTraitBound(ctx, binding.type, traitName);
+      if (isSome(witness)) {
+        witnesses.push(witness.value);
+        continue;
+      }
+      allBoundsSatisfied = false;
+      emitError(
+        ctx,
+        traitBoundNotSatisfiedMessage(describeType(binding.type), traitName),
+        call.tokenId,
+        "HEDGE-TRAIT-002",
+      );
+    }
+  }
+  if (allBoundsSatisfied && witnesses.length > 0) {
+    ctx.witnessTable.set(call.tokenId, witnesses);
+  }
+}
+
 function analyzeCall(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
@@ -5660,15 +6608,7 @@ function analyzeCall(
     calleeType.genericParams,
     turbofishBindings,
   );
-  for (const paramName of calleeType.genericParams) {
-    if (bindings.has(paramName)) continue;
-    emitError(
-      ctx,
-      `cannot infer type of generic parameter \`${paramName}\` without an explicit type annotation or turbofish`,
-      call.tokenId,
-      "HEDGE-TYPE-006",
-    );
-  }
+  checkCallGenericBounds(ctx, call, calleeType, bindings);
   // A conflict already reported by `seedExpectedReturnType` means the
   // enclosing `let`/return reconciliation would otherwise see a return type
   // that still disagrees with `expectedType` and double-report the same
@@ -6420,9 +7360,16 @@ export function analyze(
     tokens,
     constResolving: new Set(),
     genericParamStack: [],
+    genericParamBoundStack: [],
+    implRegistry: [],
+    traitRegistry: new Map(),
+    witnessTable: new Map(),
   };
   // Before functions, so a signature can name any declared type.
   registerTypeDecls(ctx, program.items);
+  const allItems = collectAllItems(ctx, program.items, 0);
+  registerTraits(ctx, allItems);
+  registerImpls(ctx, allItems);
   const topLevelFunctionNames = new Set<string>();
   for (const item of program.items) {
     if (item.kind !== "Function" && item.kind !== "FunctionSignature") {
@@ -6467,5 +7414,6 @@ export function analyze(
   return {
     diagnostics: ctx.diagnostics,
     program: { ...program, attributes, items },
+    witnesses: ctx.witnessTable,
   };
 }

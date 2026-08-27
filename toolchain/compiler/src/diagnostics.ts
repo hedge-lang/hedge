@@ -81,6 +81,12 @@ export type DiagnosticCode =
   // Lints (warnings).
   | "HEDGE-LINT-001" // binding can never be used
   | "HEDGE-LINT-002" // generic parameter shadows an outer type of the same name
+  | "HEDGE-LINT-003" // nested impl takes effect outside its own declaring scope
+  | "HEDGE-LINT-004" // declaration shadows an outer one of the same name
+  // Trait resolution and coherence.
+  | "HEDGE-TRAIT-001" // conflicting/overlapping impls for one trait
+  | "HEDGE-TRAIT-002" // required trait bound not satisfied
+  | "HEDGE-TRAIT-003" // impl missing a required trait method
   // Items and slice gating.
   | "HEDGE-ITEM-001" // item not permitted in this position
   | "HEDGE-UNSUPPORTED-001"; // construct not yet supported by the analyzer

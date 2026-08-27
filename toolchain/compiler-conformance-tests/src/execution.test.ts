@@ -996,8 +996,8 @@ describe("execution tests", (): void => {
       );
     });
 
-    it("resolves a type parameter carrying an inline trait bound, even though the bound itself is not checked yet", (): void => {
-      assertCompilesClean(`fn f<T: Draw>(x: T) -> T { x }`);
+    it("resolves a type parameter carrying an inline trait bound naming a real trait", (): void => {
+      assertCompilesClean(`trait Draw {} fn f<T: Draw>(x: T) -> T { x }`);
     });
 
     it("resolves a type parameter whose name collides with a primitive type's name", (): void => {

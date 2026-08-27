@@ -243,20 +243,58 @@ export interface StaticDecl extends DecoratedAstNode {
   readonly attributes: readonly Attribute[];
 }
 
+/** One of a trait's own methods, in declaration order. `isDefault` is true
+ * for a method with a body in the trait declaration (needs no override) and
+ * false for a bodiless required one (an impl must provide it). */
+export interface TraitMethod {
+  readonly name: string;
+  readonly isDefault: boolean;
+}
+
 /**
- * `trait`/`impl` carry no semantic content yet - trait resolution, coherence,
- * and witness construction are still open Slice 4 work. These exist only so
- * `analyzeItem`/`analyzeStatement` stay exhaustive.
+ * `name`/`supertraits` carry just enough identity for supertrait-completeness
+ * checking (does an impl of this trait also implement each trait it
+ * requires). `methods` drives impl completeness checking and witness
+ * construction, in the trait's own declaration order - a single ordered
+ * list rather than separate required/default arrays, so an impl's witness
+ * doesn't quietly reorder an interleaved trait body. Associated types are
+ * still open work.
  */
-interface TraitDecl extends AstNode {
+export interface TraitDecl extends AstNode {
   readonly kind: "Trait";
+  readonly name: string;
+  readonly supertraits: readonly string[];
+  readonly methods: readonly TraitMethod[];
 }
 
-interface ImplDecl extends AstNode {
+/**
+ * `traitRef`/`targetTypeName`/`isBlanket`/`blanketBounds` carry just enough
+ * identity for coherence and bound checking. `targetTypeName` is `none()`
+ * for a target that isn't a plain named type (a reference/array impl
+ * target) - coherence checking doesn't handle those shapes yet. For a
+ * blanket impl (`impl<T: A> B for T`), `targetTypeName` holds the type
+ * parameter's own name (`T`), which `isBlanket` distinguishes from an
+ * equally-named concrete type, and `blanketBounds` holds that parameter's
+ * own required trait names (`A`) - empty for a concrete impl, or an
+ * unconstrained blanket impl. `providedMethods` is every bodied method this
+ * impl itself declares, for completeness checking against its trait's own
+ * `methods` (the non-default ones).
+ */
+export interface ImplDecl extends AstNode {
   readonly kind: "Impl";
+  readonly traitRef: Option<{
+    readonly name: string;
+    readonly tokenId: number;
+  }>;
+  readonly targetTypeName: Option<string>;
+  readonly isBlanket: boolean;
+  readonly blanketBounds: readonly string[];
+  readonly providedMethods: readonly string[];
 }
 
-/** Same rationale as `TraitDecl`/`ImplDecl` above. */
+/** Carries no semantic content yet - a type alias's own value type is still
+ * open work. Exists only so `analyzeItem`/`analyzeStatement` stay
+ * exhaustive. */
 interface TypeAliasDecl extends AstNode {
   readonly kind: "TypeAlias";
 }
@@ -511,6 +549,10 @@ export interface FunctionType {
    */
   readonly paramsArePlaceholder: boolean;
   readonly genericParams: readonly string[];
+  /** Each declared generic parameter's own required trait names (`T: Draw`),
+   * keyed by parameter name; a parameter with no bounds still gets an empty
+   * array, not a missing key. */
+  readonly genericParamBounds: ReadonlyMap<string, readonly string[]>;
 }
 
 /**
