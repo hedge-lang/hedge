@@ -1924,13 +1924,11 @@ function collectTopLevelStructEnumNames(
   allItems: readonly DepthedItem[],
 ): ReadonlySet<string> {
   return new Set(
-    allItems
-      .map(({ item, depth }) => (depth === 0 ? item : undefined))
-      .filter(
-        (item): item is Parser.StructDecl | Parser.EnumDecl =>
-          item?.kind === "Struct" || item?.kind === "Enum",
-      )
-      .map((item) => scopedTypeName(item.name.tokenId, item.name.text)),
+    allItems.flatMap(({ item, depth }) =>
+      depth === 0 && (item.kind === "Struct" || item.kind === "Enum")
+        ? [scopedTypeName(item.name.tokenId, item.name.text)]
+        : [],
+    ),
   );
 }
 
@@ -6519,7 +6517,7 @@ function checkCallGenericBounds(
       allBoundsSatisfied = false;
       continue;
     }
-    if (binding.isErrorPlaceholder === true) continue;
+    if (binding.isErrorPlaceholder) continue;
     for (const traitName of calleeType.genericParamBounds.get(paramName) ??
       []) {
       const witness = resolveTraitBound(ctx, binding.type, traitName);
