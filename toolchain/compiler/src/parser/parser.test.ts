@@ -6761,3 +6761,112 @@ describe("impl declarations", (): void => {
     });
   });
 });
+
+describe("dyn as a type", (): void => {
+  function parseCleanly(source: string): Program {
+    const { tokens } = tokenize(source);
+    const { program, diagnostics } = parse(tokens);
+    expect(diagnostics).toEqual([]);
+    assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+    return program.value;
+  }
+
+  it("parses dyn Draw as a function parameter type", (): void => {
+    const ast = parseCleanly("fn f(x: dyn Draw) {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          signature: {
+            params: [
+              {
+                kind: "Param",
+                type: {
+                  kind: "DynType",
+                  bound: {
+                    kind: "PathTraitBound",
+                    path: { segments: ["Draw"] },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses dyn Draw as a function return type", (): void => {
+    const ast = parseCleanly("fn f() -> dyn Draw {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Function",
+          signature: {
+            returnType: some({
+              kind: "DynType",
+              bound: { kind: "PathTraitBound", path: { segments: ["Draw"] } },
+            }),
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses dyn Draw as a struct field type", (): void => {
+    const ast = parseCleanly("struct S { d: dyn Draw }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Struct",
+          body: {
+            kind: "NamedFields",
+            fields: [
+              {
+                name: { kind: "Identifier", text: "d" },
+                type: {
+                  kind: "DynType",
+                  bound: {
+                    kind: "PathTraitBound",
+                    path: { segments: ["Draw"] },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  it("parses dyn Draw as a let type annotation", (): void => {
+    const ast = parseCleanly("let x: dyn Draw;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "LetStatement",
+          type: some({
+            kind: "DynType",
+            bound: { kind: "PathTraitBound", path: { segments: ["Draw"] } },
+          }),
+        },
+      ],
+    });
+  });
+
+  it("parses dyn Draw as an inherent impl target", (): void => {
+    const ast = parseCleanly("impl dyn Draw {}");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Impl",
+          traitRef: none(),
+          type: {
+            kind: "DynType",
+            bound: { kind: "PathTraitBound", path: { segments: ["Draw"] } },
+          },
+        },
+      ],
+    });
+  });
+});
