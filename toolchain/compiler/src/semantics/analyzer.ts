@@ -1486,12 +1486,41 @@ function resolveTraitBound(
   if (type.kind === "NamedType" && type.path.segments.length === 1) {
     const paramName = type.path.segments[0];
     if (paramName !== undefined && isDeclaredGenericParam(ctx, paramName)) {
-      return declaredGenericParamBounds(ctx, paramName).includes(traitName)
+      return boundsImplyTrait(
+        ctx,
+        declaredGenericParamBounds(ctx, paramName),
+        traitName,
+      )
         ? some({ kind: "Forwarded", traitName, paramName })
         : none();
     }
   }
   return resolveTraitBoundForTypeName(ctx, typeIdentity(type), traitName);
+}
+
+/**
+ * Whether `requiredTrait` is satisfied by `declaredBounds`, directly or
+ * transitively through a supertrait chain - `trait Ord: Eq` means a
+ * directly-declared `T: Ord` bound already implies `T: Eq`, so an abstract
+ * parameter's own bound list alone isn't enough to check against.
+ */
+function boundsImplyTrait(
+  ctx: AnalysisContext,
+  declaredBounds: readonly string[],
+  requiredTrait: string,
+  visiting: ReadonlySet<string> = new Set(),
+): boolean {
+  return declaredBounds.some((bound) => {
+    if (bound === requiredTrait) return true;
+    if (visiting.has(bound)) return false;
+    const supertraits = ctx.traitRegistry.get(bound)?.supertraits ?? [];
+    return boundsImplyTrait(
+      ctx,
+      supertraits,
+      requiredTrait,
+      new Set(visiting).add(bound),
+    );
+  });
 }
 
 /**

@@ -4075,6 +4075,27 @@ describe("trait and impl declarations", (): void => {
         "the trait bound `T: Draw` is not satisfied",
       );
     });
+
+    it("propagates bound satisfaction through a transitive supertrait on the enclosing declaration's own bound", (): void => {
+      const result = diagnose(`
+        trait Eq {}
+        trait Ord: Eq {}
+        fn inner<U: Eq>(x: U) {}
+        fn outer<T: Ord>(x: T) { inner(x); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("propagates bound satisfaction through a two-level transitive supertrait chain", (): void => {
+      const result = diagnose(`
+        trait A {}
+        trait B: A {}
+        trait C: B {}
+        fn inner<U: A>(x: U) {}
+        fn outer<T: C>(x: T) { inner(x); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
   });
 
   describe("blanket impls and supertraits", (): void => {
