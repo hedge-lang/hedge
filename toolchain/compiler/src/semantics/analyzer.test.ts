@@ -4096,6 +4096,19 @@ describe("trait and impl declarations", (): void => {
       `);
       expect(result.diagnostics).toEqual([]);
     });
+
+    it("checks a where-clause bound the same as an inline one, not just inline bounds", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        fn needs_draw<T>(x: T) where T: Draw {}
+        fn main() { needs_draw(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: Draw` is not satisfied",
+      );
+    });
   });
 
   describe("blanket impls and supertraits", (): void => {
@@ -4162,6 +4175,21 @@ describe("trait and impl declarations", (): void => {
         impl C for Point {}
       `);
       expect(result.diagnostics).toEqual([]);
+    });
+
+    it("checks a blanket impl's where-clause bound the same as an inline one, not just inline bounds", (): void => {
+      const result = diagnose(`
+        trait A {}
+        trait B { fn f(&self) -> str; }
+        struct Point { x: i32, y: i32 }
+        impl<T> B for T where T: A { fn f(&self) -> str { "a" } }
+        fn needs_b<U: B>(x: U) {}
+        fn main() { needs_b(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `Point: B` is not satisfied",
+      );
     });
   });
 

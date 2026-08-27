@@ -187,32 +187,61 @@ function genericParamNames(
 
 /** Each `TypeParam`'s own inline trait-bound names (`T: Draw`), keyed by
  * parameter name - a `LifetimeTraitBound` (`T: 'a`) contributes nothing,
- * since it names no trait. */
+ * since it names no trait. Merges in any matching `where`-clause predicate
+ * too (`where T: Draw`), since a bound written there is exactly as binding
+ * as one written inline - only a `where` predicate whose own type is a bare
+ * name matching a declared parameter is recognized, the same scope inline
+ * bounds are already limited to. */
 function genericParamBoundNames(
   generics: readonly Parser.GenericParam[],
+  whereClause: Option<Parser.WhereClause> = none(),
 ): ReadonlyMap<string, readonly string[]> {
   const bounds = new Map<string, readonly string[]>();
   for (const param of generics) {
     if (param.kind !== "TypeParam") continue;
-    bounds.set(
-      param.name.text,
-      param.bounds
-        .filter(
-          (bound): bound is Parser.PathTraitBound =>
-            bound.kind === "PathTraitBound",
-        )
-        .map((bound) => bound.path.segments.at(-1) ?? ""),
-    );
+    bounds.set(param.name.text, traitBoundNames(param.bounds));
+  }
+  for (const predicate of isSome(whereClause)
+    ? whereClause.value.predicates
+    : []) {
+    if (
+      predicate.type.kind !== "NamedType" ||
+      predicate.type.path.segments.length !== 1
+    ) {
+      continue;
+    }
+    const name = predicate.type.path.segments[0];
+    const existing = name === undefined ? undefined : bounds.get(name);
+    if (name === undefined || existing === undefined) continue;
+    bounds.set(name, [...existing, ...traitBoundNames(predicate.bounds)]);
   }
   return bounds;
+}
+
+/** Extracts the trait names from a list of `TraitBound`s - a
+ * `LifetimeTraitBound` (`T: 'a`) contributes nothing, since it names no
+ * trait. Shared by inline (`T: Draw`) and `where`-clause (`where T: Draw`)
+ * bound lists alike. */
+function traitBoundNames(
+  bounds: readonly Parser.TraitBound[],
+): readonly string[] {
+  return bounds
+    .filter(
+      (bound): bound is Parser.PathTraitBound =>
+        bound.kind === "PathTraitBound",
+    )
+    .map((bound) => bound.path.segments.at(-1) ?? "");
 }
 
 function pushGenericParams(
   ctx: AnalysisContext,
   generics: readonly Parser.GenericParam[],
+  whereClause: Option<Parser.WhereClause> = none(),
 ): void {
   ctx.genericParamStack.push(new Set(genericParamNames(generics)));
-  ctx.genericParamBoundStack.push(genericParamBoundNames(generics));
+  ctx.genericParamBoundStack.push(
+    genericParamBoundNames(generics, whereClause),
+  );
 }
 
 function popGenericParams(ctx: AnalysisContext): void {
@@ -1409,7 +1438,9 @@ function buildImplDecl(item: Parser.ImplDecl): Semantics.ImplDecl {
       isSome(targetTypeName) &&
       genericParamNames(item.generics).includes(targetTypeName.value),
     blanketBounds: isSome(targetTypeName)
-      ? (genericParamBoundNames(item.generics).get(targetTypeName.value) ?? [])
+      ? (genericParamBoundNames(item.generics, item.whereClause).get(
+          targetTypeName.value,
+        ) ?? [])
       : [],
     providedMethods: item.items
       .filter((decl): decl is Parser.FunctionDef => decl.kind === "Function")
@@ -4076,7 +4107,7 @@ function fnSignatureType(
   ctx: AnalysisContext,
   signature: Parser.FunctionSignature,
 ): Semantics.FunctionType {
-  pushGenericParams(ctx, signature.generics);
+  pushGenericParams(ctx, signature.generics, signature.whereClause);
   const type: Semantics.FunctionType = {
     kind: "FunctionType",
     params: signature.params.map((p) =>
@@ -4091,7 +4122,10 @@ function fnSignatureType(
       : { kind: "UnitType", tokenId: signature.tokenId },
     paramsArePlaceholder: false,
     genericParams: genericParamNames(signature.generics),
-    genericParamBounds: genericParamBoundNames(signature.generics),
+    genericParamBounds: genericParamBoundNames(
+      signature.generics,
+      signature.whereClause,
+    ),
   };
   popGenericParams(ctx);
   return type;
