@@ -243,20 +243,28 @@ export interface StaticDecl extends DecoratedAstNode {
   readonly attributes: readonly Attribute[];
 }
 
+/** One of a trait's own methods, in declaration order. `isDefault` is true
+ * for a method with a body in the trait declaration (needs no override) and
+ * false for a bodiless required one (an impl must provide it). */
+export interface TraitMethod {
+  readonly name: string;
+  readonly isDefault: boolean;
+}
+
 /**
  * `name`/`supertraits` carry just enough identity for supertrait-completeness
  * checking (does an impl of this trait also implement each trait it
- * requires). `requiredMethods` (no body in the trait declaration) and
- * `defaultMethods` (a body in the trait declaration) drive impl completeness
- * checking - a default method needs no override, a required one does.
- * Associated types are still open work.
+ * requires). `methods` drives impl completeness checking and witness
+ * construction, in the trait's own declaration order - a single ordered
+ * list rather than separate required/default arrays, so an impl's witness
+ * doesn't quietly reorder an interleaved trait body. Associated types are
+ * still open work.
  */
 export interface TraitDecl extends AstNode {
   readonly kind: "Trait";
   readonly name: string;
   readonly supertraits: readonly string[];
-  readonly requiredMethods: readonly string[];
-  readonly defaultMethods: readonly string[];
+  readonly methods: readonly TraitMethod[];
 }
 
 /**

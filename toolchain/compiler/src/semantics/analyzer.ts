@@ -135,8 +135,7 @@ interface AnalysisContext {
  * checking an impl of it against both. */
 interface RegisteredTrait {
   readonly supertraits: readonly string[];
-  readonly requiredMethods: readonly string[];
-  readonly defaultMethods: readonly string[];
+  readonly methods: readonly Semantics.TraitMethod[];
 }
 
 /** One registered trait impl, extracted just far enough for coherence and
@@ -1433,15 +1432,15 @@ function buildTraitDecl(item: Parser.TraitDecl): Semantics.TraitDecl {
           bound.kind === "PathTraitBound",
       )
       .map((bound) => bound.path.segments.at(-1) ?? ""),
-    requiredMethods: item.items
-      .filter(
-        (decl): decl is Parser.FunctionSignature =>
-          decl.kind === "FunctionSignature",
-      )
-      .map((decl) => decl.name.text),
-    defaultMethods: item.items
-      .filter((decl): decl is Parser.FunctionDef => decl.kind === "Function")
-      .map((decl) => decl.signature.name.text),
+    methods: item.items.flatMap((decl): readonly Semantics.TraitMethod[] => {
+      if (decl.kind === "FunctionSignature") {
+        return [{ name: decl.name.text, isDefault: false }];
+      }
+      if (decl.kind === "Function") {
+        return [{ name: decl.signature.name.text, isDefault: true }];
+      }
+      return [];
+    }),
   };
 }
 
@@ -1553,15 +1552,13 @@ function witnessMethods(
 ): readonly WitnessMethod[] {
   const trait = ctx.traitRegistry.get(impl.traitName);
   if (trait === undefined) return [];
-  const required = trait.requiredMethods.map((name): WitnessMethod => ({
-    name,
-    source: "impl",
+  return trait.methods.map((method): WitnessMethod => ({
+    name: method.name,
+    source:
+      !method.isDefault || impl.providedMethods.includes(method.name)
+        ? "impl"
+        : "default",
   }));
-  const defaults = trait.defaultMethods.map((name): WitnessMethod => ({
-    name,
-    source: impl.providedMethods.includes(name) ? "impl" : "default",
-  }));
-  return [...required, ...defaults];
 }
 
 function traitBoundNotSatisfiedMessage(
@@ -1720,8 +1717,7 @@ function registerTraits(
     const decl = buildTraitDecl(item);
     ctx.traitRegistry.set(decl.name, {
       supertraits: decl.supertraits,
-      requiredMethods: decl.requiredMethods,
-      defaultMethods: decl.defaultMethods,
+      methods: decl.methods,
     });
   }
 }
@@ -1814,13 +1810,12 @@ function reportMissingRequiredMethods(
   targetTypeName: string,
   providedMethods: readonly string[],
 ): void {
-  const requiredMethods =
-    ctx.traitRegistry.get(traitName)?.requiredMethods ?? [];
-  for (const method of requiredMethods) {
-    if (providedMethods.includes(method)) continue;
+  const methods = ctx.traitRegistry.get(traitName)?.methods ?? [];
+  for (const method of methods) {
+    if (method.isDefault || providedMethods.includes(method.name)) continue;
     emitError(
       ctx,
-      `impl of trait \`${traitName}\` for \`${bareTypeName(targetTypeName)}\` is missing method \`${method}\``,
+      `impl of trait \`${traitName}\` for \`${bareTypeName(targetTypeName)}\` is missing method \`${method.name}\``,
       item.tokenId,
       "HEDGE-TRAIT-003",
     );

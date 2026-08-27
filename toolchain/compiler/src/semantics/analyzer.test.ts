@@ -4285,6 +4285,27 @@ describe("trait and impl declarations", (): void => {
       ]);
     });
 
+    it("preserves a trait's own interleaved declaration order in the witness method list, not a required-then-default order", (): void => {
+      const { result } = analyzeWithTokens(`
+        trait Shape {
+          fn describe(&self) -> str { "a shape" }
+          fn draw(&self) -> str;
+        }
+        struct Point { x: i32, y: i32 }
+        impl Shape for Point { fn draw(&self) -> str { "a" } }
+        fn show<T: Shape>(x: T) {}
+        fn main() { show(Point { x: 0, y: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      const witness = witnesses?.[0];
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(witness.methods).toEqual([
+        { name: "describe", source: "default" },
+        { name: "draw", source: "impl" },
+      ]);
+    });
+
     it("records a forwarded witness when the bound is satisfied through an enclosing function's own abstract type parameter", (): void => {
       const { result } = analyzeWithTokens(`
         trait Draw { fn draw(&self) -> str; }
