@@ -537,14 +537,16 @@ function emitWarning(
   message: string,
   tokenId: number,
   code: DiagnosticCode,
+  relatedSpans?: readonly RelatedSpan[],
 ): void {
   const token = ctx.tokens[tokenId];
+  const diagnostic = warningDiagnostic(
+    code,
+    message,
+    token !== undefined ? some(token.span) : none(),
+  );
   ctx.diagnostics.push(
-    warningDiagnostic(
-      code,
-      message,
-      token !== undefined ? some(token.span) : none(),
-    ),
+    relatedSpans !== undefined ? { ...diagnostic, relatedSpans } : diagnostic,
   );
 }
 
@@ -1239,11 +1241,15 @@ function analyzeStaticReference(
 }
 
 /**
- * A type's scope-qualified name. Frame depth disambiguates two same-named
- * declarations in nested scopes.
+ * A type's scope-qualified name. The declaring identifier's own `tokenId`
+ * disambiguates two same-named declarations - a purely structural identity
+ * assigned at parse time, so it distinguishes shadowed declarations at any
+ * depth *and* same-depth siblings alike (frame depth alone conflated two
+ * sibling blocks each declaring their own same-named local type, since both
+ * see the same `ctx.frames.length` at declaration time).
  */
-function scopedTypeName(ctx: AnalysisContext, name: string): string {
-  return `scoped(${ctx.frames.length})::${name}`;
+function scopedTypeName(nameTokenId: number, name: string): string {
+  return `scoped(${nameTokenId})::${name}`;
 }
 
 /**
@@ -1267,7 +1273,7 @@ function declareStructName(
   }
   const type: Semantics.Type = {
     kind: "StructType",
-    name: scopedTypeName(ctx, item.name.text),
+    name: scopedTypeName(item.name.tokenId, item.name.text),
   };
   frame.types.set(item.name.text, {
     ...item,
@@ -1295,7 +1301,7 @@ function declareEnumName(
   }
   const type: Semantics.Type = {
     kind: "EnumType",
-    name: scopedTypeName(ctx, item.name.text),
+    name: scopedTypeName(item.name.tokenId, item.name.text),
   };
   frame.enums.set(item.name.text, {
     ...item,
@@ -1411,9 +1417,9 @@ function implOverlapMessage(
   }
   if (incoming.isBlanket || existing.isBlanket) {
     const concrete = incoming.isBlanket ? existing : incoming;
-    return `conflicting implementations of trait \`${traitName}\` for type \`${concrete.targetTypeName}\``;
+    return `conflicting implementations of trait \`${traitName}\` for type \`${bareTypeName(concrete.targetTypeName)}\``;
   }
-  return `trait \`${traitName}\` is already implemented for type \`${incoming.targetTypeName}\``;
+  return `trait \`${traitName}\` is already implemented for type \`${bareTypeName(incoming.targetTypeName)}\``;
 }
 
 /**
@@ -1437,7 +1443,21 @@ function resolveTraitBound(
         : none();
     }
   }
-  return resolveTraitBoundForTypeName(ctx, describeType(type), traitName);
+  return resolveTraitBoundForTypeName(ctx, typeIdentity(type), traitName);
+}
+
+/**
+ * A concrete type's own real identity for registry lookup - the full
+ * scoped name for a struct/enum (matching what `resolveStructOrEnumIdentity`
+ * independently produces for the same declaration, so a call site's
+ * resolved argument type and an impl's own resolved target always compare
+ * equal when they mean the same declaration), or the same as `describeType`
+ * for anything else, which carries no shadowing ambiguity to begin with.
+ */
+function typeIdentity(type: Semantics.Type): string {
+  return type.kind === "StructType" || type.kind === "EnumType"
+    ? type.name
+    : describeType(type);
 }
 
 /**
@@ -1468,7 +1488,7 @@ function resolveTraitBoundForTypeName(
   return some({
     kind: "Impl",
     traitName,
-    typeName,
+    typeName: bareTypeName(typeName),
     implTokenId: impl.tokenId,
     methods: witnessMethods(ctx, impl),
   });
@@ -1502,14 +1522,59 @@ function traitBoundNotSatisfiedMessage(
   return `the trait bound \`${typeName}: ${traitName}\` is not satisfied`;
 }
 
+/**
+ * Every struct/enum/trait name visible at one point in the program, each
+ * mapped to its declaring identifier's own `tokenId` - a purely structural,
+ * shadowing-aware resolution computed directly from the AST's own shape
+ * (mirroring `registerTypeDecls`'s per-block pre-registration and
+ * `ScopeFrame`'s innermost-shadows-outer lookup), with no dependency on
+ * live `ctx.frames` state. This is what lets an impl's target type and
+ * trait reference resolve to the *specific* declaration in scope - two
+ * shadowed same-named local structs never collide, since each keeps its
+ * own tokenId all the way through.
+ */
+interface StructuralScope {
+  readonly structs: ReadonlyMap<string, number>;
+  readonly enums: ReadonlyMap<string, number>;
+  readonly traits: ReadonlyMap<string, number>;
+}
+
+const EMPTY_STRUCTURAL_SCOPE: StructuralScope = {
+  structs: new Map(),
+  enums: new Map(),
+  traits: new Map(),
+};
+
+/** Extends `scope` with every struct/enum/trait declared directly in
+ * `items` (not recursing into nested bodies) - shadowing whatever the
+ * enclosing scope already bound for the same name, the same way a real
+ * nested block's own type declarations shadow an outer one. */
+function extendStructuralScope(
+  scope: StructuralScope,
+  items: readonly (Parser.Item | Parser.Statement)[],
+): StructuralScope {
+  const structs = new Map(scope.structs);
+  const enums = new Map(scope.enums);
+  const traits = new Map(scope.traits);
+  for (const item of items) {
+    if (item.kind === "Struct") structs.set(item.name.text, item.name.tokenId);
+    else if (item.kind === "Enum") enums.set(item.name.text, item.name.tokenId);
+    else if (item.kind === "Trait")
+      traits.set(item.name.text, item.name.tokenId);
+  }
+  return { structs, enums, traits };
+}
+
 /** One item found anywhere in the program by `collectAllItems`, alongside
- * how deeply nested it is (0 = a top-level program item). Impl/trait
- * registration needs every declaration regardless of nesting - a value can
- * flow out of the scope it was constructed in and still need its trait
- * impl resolved far from where either was declared. */
+ * how deeply nested it is (0 = a top-level program item) and the
+ * `StructuralScope` visible at that exact point. Impl/trait registration
+ * needs every declaration regardless of nesting - a value can flow out of
+ * the scope it was constructed in and still need its trait impl resolved
+ * far from where either was declared. */
 interface DepthedItem {
   readonly item: Parser.Item | Parser.Statement;
   readonly depth: number;
+  readonly scope: StructuralScope;
 }
 
 /**
@@ -1525,20 +1590,25 @@ interface DepthedItem {
 function collectAllItems(
   items: readonly (Parser.Item | Parser.Statement)[],
   depth: number,
+  enclosingScope: StructuralScope = EMPTY_STRUCTURAL_SCOPE,
 ): readonly DepthedItem[] {
+  const scope = extendStructuralScope(enclosingScope, items);
   return items.flatMap((item): readonly DepthedItem[] => {
-    const self: DepthedItem = { item, depth };
+    const self: DepthedItem = { item, depth, scope };
     if (item.kind === "Function") {
-      return [self, ...collectBlockItems(item.body, depth + 1)];
+      return [self, ...collectBlockItems(item.body, depth + 1, scope)];
     }
     if (item.kind === "Impl" || item.kind === "Trait") {
-      return [self, ...collectAllItems(item.items, depth + 1)];
+      return [self, ...collectAllItems(item.items, depth + 1, scope)];
     }
     if (item.kind === "ExpressionStatement") {
-      return [self, ...collectExpressionItems(item.expression, depth)];
+      return [self, ...collectExpressionItems(item.expression, depth, scope)];
     }
     if (item.kind === "LetStatement" && isSome(item.initializer)) {
-      return [self, ...collectExpressionItems(item.initializer.value, depth)];
+      return [
+        self,
+        ...collectExpressionItems(item.initializer.value, depth, scope),
+      ];
     }
     return [self];
   });
@@ -1547,12 +1617,14 @@ function collectAllItems(
 function collectBlockItems(
   block: Parser.Block,
   depth: number,
+  enclosingScope: StructuralScope,
 ): readonly DepthedItem[] {
-  const inner = collectAllItems(block.statements, depth);
+  const inner = collectAllItems(block.statements, depth, enclosingScope);
+  const scope = extendStructuralScope(enclosingScope, block.statements);
   return isSome(block.trailingExpression)
     ? [
         ...inner,
-        ...collectExpressionItems(block.trailingExpression.value, depth),
+        ...collectExpressionItems(block.trailingExpression.value, depth, scope),
       ]
     : inner;
 }
@@ -1560,26 +1632,27 @@ function collectBlockItems(
 function collectExpressionItems(
   expr: Parser.Expression,
   depth: number,
+  scope: StructuralScope,
 ): readonly DepthedItem[] {
   switch (expr.kind) {
     case "Block":
-      return collectBlockItems(expr, depth + 1);
+      return collectBlockItems(expr, depth + 1, scope);
     case "IfExpression": {
-      const thenItems = collectBlockItems(expr.thenBranch, depth + 1);
+      const thenItems = collectBlockItems(expr.thenBranch, depth + 1, scope);
       if (!isSome(expr.elseBranch)) return thenItems;
       const elseBranch = expr.elseBranch.value;
       return [
         ...thenItems,
         ...(elseBranch.kind === "IfExpression"
-          ? collectExpressionItems(elseBranch, depth)
-          : collectBlockItems(elseBranch, depth + 1)),
+          ? collectExpressionItems(elseBranch, depth, scope)
+          : collectBlockItems(elseBranch, depth + 1, scope)),
       ];
     }
     case "WhileExpression":
-      return collectBlockItems(expr.body, depth + 1);
+      return collectBlockItems(expr.body, depth + 1, scope);
     case "MatchExpression":
       return expr.arms.flatMap((arm) =>
-        collectExpressionItems(arm.body, depth + 1),
+        collectExpressionItems(arm.body, depth + 1, scope),
       );
     default:
       return [];
@@ -1633,14 +1706,15 @@ function warnIfSurprisinglyVisible(
   if (!topLevelStructEnumNames.has(incoming.targetTypeName)) return;
   emitWarning(
     ctx,
-    `impl of trait \`${incoming.traitName}\` for \`${incoming.targetTypeName}\` takes effect everywhere in the program, not just this scope`,
+    `impl of trait \`${incoming.traitName}\` for \`${bareTypeName(incoming.targetTypeName)}\` takes effect everywhere in the program, not just this scope`,
     item.tokenId,
     "HEDGE-LINT-003",
   );
 }
 
-/** Every top-level struct/enum's own name - what `warnIfSurprisinglyVisible`
- * checks a nested impl's target type against. */
+/** Every top-level struct/enum's own real identity - what
+ * `warnIfSurprisinglyVisible` checks a nested impl's resolved target type
+ * against. */
 function collectTopLevelStructEnumNames(
   allItems: readonly DepthedItem[],
 ): ReadonlySet<string> {
@@ -1651,8 +1725,37 @@ function collectTopLevelStructEnumNames(
         (item): item is Parser.StructDecl | Parser.EnumDecl =>
           item?.kind === "Struct" || item?.kind === "Enum",
       )
-      .map((item) => item.name.text),
+      .map((item) => scopedTypeName(item.name.tokenId, item.name.text)),
   );
+}
+
+/**
+ * Resolves a bare struct/enum name against `scope`'s own shadowing-aware
+ * bindings to the real, collision-free identity `scopedTypeName` will
+ * independently produce for that exact declaration - `none()` when the
+ * name isn't a struct/enum in scope at all (a blanket impl's own type
+ * parameter, or a genuinely unresolved name).
+ */
+function resolveStructOrEnumIdentity(
+  name: string,
+  scope: StructuralScope,
+): Option<string> {
+  const structTokenId = scope.structs.get(name);
+  if (structTokenId !== undefined) {
+    return some(scopedTypeName(structTokenId, name));
+  }
+  const enumTokenId = scope.enums.get(name);
+  if (enumTokenId !== undefined) {
+    return some(scopedTypeName(enumTokenId, name));
+  }
+  return none();
+}
+
+/** Strips a struct/enum's real scoped identity back to its bare,
+ * user-facing name for a diagnostic message - the same stripping
+ * `describeType`'s own `StructType`/`EnumType` case applies. */
+function bareTypeName(identity: string): string {
+  return identity.split("::").pop() ?? identity;
 }
 
 function reportMissingRequiredMethods(
@@ -1668,7 +1771,7 @@ function reportMissingRequiredMethods(
     if (providedMethods.includes(method)) continue;
     emitError(
       ctx,
-      `impl of trait \`${traitName}\` for \`${targetTypeName}\` is missing method \`${method}\``,
+      `impl of trait \`${traitName}\` for \`${bareTypeName(targetTypeName)}\` is missing method \`${method}\``,
       item.tokenId,
       "HEDGE-TRAIT-003",
     );
@@ -1676,22 +1779,32 @@ function reportMissingRequiredMethods(
 }
 
 /** Registers one `impl`'s coherence/completeness/visibility facts, or
- * `undefined` for a not-yet-handled shape (no trait, or a non-named-type
- * target). Split out of `registerImpls` to keep that loop itself simple. */
+ * `undefined` for a not-yet-handled shape (no trait, or a target that
+ * doesn't resolve to any struct/enum in scope). Split out of `registerImpls`
+ * to keep that loop itself simple. A concrete (non-blanket) target resolves
+ * through `scope` to its real, shadowing-aware identity - the bare source
+ * spelling alone would conflate two same-named structs in different
+ * scopes. A blanket impl's target is its own type parameter name (`T`),
+ * never a struct/enum, so it keeps the bare spelling unchanged. */
 function registerOneImpl(
   ctx: AnalysisContext,
   item: Parser.ImplDecl,
   depth: number,
+  scope: StructuralScope,
   topLevelStructEnumNames: ReadonlySet<string>,
 ): RegisteredImpl | undefined {
   const decl = buildImplDecl(item);
   const traitRef = decl.traitRef;
-  const targetType = decl.targetTypeName;
-  if (!isSome(traitRef) || !isSome(targetType)) return undefined;
+  const bareTargetTypeName = decl.targetTypeName;
+  if (!isSome(traitRef) || !isSome(bareTargetTypeName)) return undefined;
+  const targetTypeName = decl.isBlanket
+    ? some(bareTargetTypeName.value)
+    : resolveStructOrEnumIdentity(bareTargetTypeName.value, scope);
+  if (!isSome(targetTypeName)) return undefined;
   const traitName = traitRef.value.name;
   const incoming: RegisteredImpl = {
     traitName,
-    targetTypeName: targetType.value,
+    targetTypeName: targetTypeName.value,
     isBlanket: decl.isBlanket,
     blanketBounds: decl.blanketBounds,
     providedMethods: decl.providedMethods,
@@ -1743,7 +1856,10 @@ function checkSupertraitCompleteness(
       }
       emitError(
         ctx,
-        traitBoundNotSatisfiedMessage(impl.targetTypeName, supertrait),
+        traitBoundNotSatisfiedMessage(
+          bareTypeName(impl.targetTypeName),
+          supertrait,
+        ),
         impl.tokenId,
         "HEDGE-TRAIT-002",
       );
@@ -1766,9 +1882,15 @@ function registerImpls(
 ): void {
   const topLevelStructEnumNames = collectTopLevelStructEnumNames(allItems);
   const concreteImpls: RegisteredImpl[] = [];
-  for (const { item, depth } of allItems) {
+  for (const { item, depth, scope } of allItems) {
     if (item.kind !== "Impl") continue;
-    const incoming = registerOneImpl(ctx, item, depth, topLevelStructEnumNames);
+    const incoming = registerOneImpl(
+      ctx,
+      item,
+      depth,
+      scope,
+      topLevelStructEnumNames,
+    );
     if (incoming !== undefined && !incoming.isBlanket) {
       concreteImpls.push(incoming);
     }
@@ -1982,7 +2104,7 @@ function analyzeEnum(
   ctx: AnalysisContext,
   item: Parser.EnumDecl,
 ): Semantics.EnumDecl {
-  const scopedName = `scoped(${ctx.frames.length})::${item.name.text}`;
+  const scopedName = scopedTypeName(item.name.tokenId, item.name.text);
   const enumType: Semantics.Type = { kind: "EnumType", name: scopedName };
   const seenVariantNames = new Set<string>();
   for (const variant of item.variants) {
@@ -3655,7 +3777,7 @@ function analyzeStruct(
   ctx: AnalysisContext,
   item: Parser.StructDecl,
 ): Semantics.StructDecl {
-  const scopedName = `scoped(${ctx.frames.length})::${item.name.text}`;
+  const scopedName = scopedTypeName(item.name.tokenId, item.name.text);
   checkUnusedGenericParams(ctx, item.generics, structFieldUsedNames(item.body));
   pushGenericParams(ctx, item.generics);
   const body = analyzeStructBody(ctx, item.body);

@@ -4411,4 +4411,48 @@ describe("trait and impl declarations", (): void => {
       );
     });
   });
+
+  describe("impl target and trait identity under shadowing", (): void => {
+    it("does not report a false coherence conflict between impls of two shadowed same-named local structs", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct P { a: i32 }
+        impl Draw for P { fn draw(&self) -> str { "outer" } }
+        fn main() {
+          struct P { b: i32 }
+          impl Draw for P { fn draw(&self) -> str { "inner" } }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a shadowed local struct's own impl without leaking onto an outer same-named struct lacking one", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct P { a: i32 }
+        fn outer() {
+          struct P { b: i32 }
+          impl Draw for P { fn draw(&self) -> str { "inner" } }
+        }
+        fn needs_draw<T: Draw>(x: T) {}
+        fn caller() { needs_draw(P { a: 0 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "the trait bound `P: Draw` is not satisfied",
+      );
+    });
+
+    it("does not warn on a nested impl whose target is a nested, shadowed struct with no impl-carrying top-level namesake", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct P { a: i32 }
+        fn main() {
+          struct P { b: i32 }
+          impl Draw for P { fn draw(&self) -> str { "inner" } }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
 });
