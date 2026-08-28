@@ -6,6 +6,11 @@ import { isSome, none } from "../option.js";
 import { parse } from "../parser/parser.js";
 import type { AnalysisResult } from "./analyzer.js";
 import { analyze } from "./analyzer.js";
+import type {
+  FunctionDef as SemanticsFunctionDef,
+  ImplDecl as SemanticsImplDecl,
+  Type as SemanticsType,
+} from "./ast.js";
 
 function analyzeWithTokens(source: string): {
   result: AnalysisResult;
@@ -3617,13 +3622,391 @@ describe("array types", (): void => {
 });
 
 describe("Self as a type", (): void => {
-  it("rejects `Self::Item` as an unsupported qualified path", (): void => {
+  it("rejects `Self::Item` outside a trait or impl block", (): void => {
     const result = diagnose("fn f() -> Self::Item { }");
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(result.diagnostics[0].message).toBe(
-      "qualified type paths are not supported yet",
+      "`Self` can only be used inside a trait or impl block",
     );
+  });
+
+  it("rejects bare `Self` outside a trait or impl block", (): void => {
+    const result = diagnose("fn f() -> Self { }");
+    expect(result.diagnostics).toHaveLength(1);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(result.diagnostics[0].message).toBe(
+      "`Self` can only be used inside a trait or impl block",
+    );
+  });
+});
+
+describe("associated types and trait projections", (): void => {
+  describe("a trait's own declaration", (): void => {
+    it("type-checks a required associated type used as Self::Item in a method's return type", (): void => {
+      const result = diagnose(`
+        enum Option<T> { Some(T), None }
+        trait Iterator {
+          type Item;
+          fn next(&mut self) -> Option<Self::Item>;
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("type-checks Self::Item used as a method's own parameter type", (): void => {
+      const result = diagnose(`
+        trait Sink {
+          type Item;
+          fn accept(&mut self, x: Self::Item);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("type-checks Self::Item used inside a default (bodied) method's own signature", (): void => {
+      const result = diagnose(`
+        trait Peekable {
+          type Item;
+          fn peek(&self) -> Self::Item { 0 }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects Self::Bogus when the trait declares no associated type named Bogus", (): void => {
+      const result = diagnose(`
+        enum Option<T> { Some(T), None }
+        trait Iterator {
+          type Item;
+          fn next(&mut self) -> Option<Self::Bogus>;
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find associated type `Bogus` on trait `Iterator`",
+      );
+    });
+
+    it("type-checks bare Self used as a method's return type", (): void => {
+      const result = diagnose(`
+        trait Cloneable {
+          fn clone_it(&self) -> Self;
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("type-checks two required associated types both referenced in the same trait", (): void => {
+      const result = diagnose(`
+        trait Map {
+          type Key;
+          type Value;
+          fn get(&self, k: Self::Key) -> Self::Value;
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("type-checks Self::Item nested inside a reference and an array in a method signature", (): void => {
+      const result = diagnose(`
+        trait Batch {
+          type Item;
+          fn peek_ref(&self) -> &Self::Item;
+          fn fill(&self, out: [Self::Item; 3]);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
+  describe("an impl missing a required associated type", (): void => {
+    it("rejects an impl that omits the trait's own required associated type", (): void => {
+      const result = diagnose(`
+        trait Iterator { type Item; fn next(&mut self) -> i32; }
+        struct Counter { n: i32 }
+        impl Iterator for Counter { fn next(&mut self) -> i32 { 0 } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "impl of trait `Iterator` for `Counter` is missing associated type `Item`",
+      );
+    });
+
+    it("reports each missing required associated type separately when a trait declares two", (): void => {
+      const result = diagnose(`
+        trait Map { type Key; type Value; }
+        struct Dict { n: i32 }
+        impl Map for Dict {}
+      `);
+      expect(result.diagnostics).toHaveLength(2);
+      expect(result.diagnostics.map((d) => d.message)).toEqual([
+        "impl of trait `Map` for `Dict` is missing associated type `Key`",
+        "impl of trait `Map` for `Dict` is missing associated type `Value`",
+      ]);
+    });
+
+    it("rejects a blanket impl that omits the trait's own required associated type", (): void => {
+      const result = diagnose(`
+        trait A {}
+        trait Iterator { type Item; }
+        impl<T: A> Iterator for T {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "impl of trait `Iterator` for `T` is missing associated type `Item`",
+      );
+    });
+
+    it("accepts an impl that defines every required associated type", (): void => {
+      const result = diagnose(`
+        trait Iterator { type Item; fn next(&mut self) -> i32; }
+        struct Counter { n: i32 }
+        impl Iterator for Counter {
+          type Item = i32;
+          fn next(&mut self) -> i32 { 0 }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still reports the defined associated type's own bad value type, with no duplicate diagnostic", (): void => {
+      const result = diagnose(`
+        trait Iterator { type Item; }
+        struct Counter { n: i32 }
+        impl Iterator for Counter { type Item = Bogus; }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find type `Bogus` in this scope",
+      );
+    });
+
+    it("reports a missing associated type alongside an independently missing required method, not just one", (): void => {
+      const result = diagnose(`
+        trait Iterator { type Item; fn next(&mut self) -> i32; }
+        struct Counter { n: i32 }
+        impl Iterator for Counter {}
+      `);
+      expect(result.diagnostics).toHaveLength(2);
+      expect(result.diagnostics.map((d) => d.message).sort()).toEqual([
+        "impl of trait `Iterator` for `Counter` is missing associated type `Item`",
+        "impl of trait `Iterator` for `Counter` is missing method `next`",
+      ]);
+    });
+  });
+
+  describe("Self::Item inside a concrete impl resolves to the defined type", (): void => {
+    function findImpl(result: AnalysisResult): SemanticsImplDecl {
+      const impl = result.program.items.find((item) => item.kind === "Impl");
+      assert(impl?.kind === "Impl", "expected an Impl item");
+      return impl;
+    }
+
+    it("resolves Self::Item in a method's return type to the impl's own defined type", (): void => {
+      const result = diagnose(`
+        trait Iterator { type Item; fn next(&mut self) -> i32; }
+        struct Counter { n: i32 }
+        impl Iterator for Counter {
+          type Item = i32;
+          fn next(&mut self) -> Self::Item { 0 }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const impl = findImpl(result);
+      const next = impl.resolvedMethods.find((m) => m.name === "next");
+      assert(next !== undefined, "expected a resolved `next` method");
+      expect(next.returnType).toEqual({ kind: "PrimitiveI32Type" });
+    });
+
+    it("resolves Self::Item in a method's own parameter type the same way", (): void => {
+      const result = diagnose(`
+        trait Sink { type Item; }
+        struct Counter { n: i32 }
+        impl Sink for Counter {
+          type Item = i32;
+          fn accept(&mut self, x: Self::Item) {}
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const impl = findImpl(result);
+      const accept = impl.resolvedMethods.find((m) => m.name === "accept");
+      assert(accept !== undefined, "expected a resolved `accept` method");
+      expect(accept.params).toEqual([{ kind: "PrimitiveI32Type" }]);
+    });
+
+    it("resolves Self::Item to a struct type, not just a primitive", (): void => {
+      const result = diagnose(`
+        trait Sink { type Item; }
+        struct Point { x: i32, y: i32 }
+        struct Counter { n: i32 }
+        impl Sink for Counter {
+          type Item = Point;
+          fn accept(&mut self, x: Self::Item) {}
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const impl = findImpl(result);
+      const accept = impl.resolvedMethods.find((m) => m.name === "accept");
+      assert(accept !== undefined, "expected a resolved `accept` method");
+      assert(accept.params[0]?.kind === "StructType", "expected a StructType");
+      expect(accept.params[0].name.split("::").pop()).toBe("Point");
+    });
+
+    it("rejects Self::Bogus inside an impl when the trait declares no such associated type", (): void => {
+      const result = diagnose(`
+        trait Iterator { type Item; }
+        struct Counter { n: i32 }
+        impl Iterator for Counter {
+          type Item = i32;
+          fn peek(&self) -> Self::Bogus { 0 }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find associated type `Bogus` on `Counter`",
+      );
+    });
+
+    it("resolves bare Self in a method's return type to the impl's own concrete target type", (): void => {
+      const result = diagnose(`
+        trait Cloneable {}
+        struct Counter { n: i32 }
+        impl Cloneable for Counter {
+          fn clone_it(&self) -> Self { Counter { n: 0 } }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const impl = findImpl(result);
+      const cloneIt = impl.resolvedMethods.find((m) => m.name === "clone_it");
+      assert(cloneIt !== undefined, "expected a resolved `clone_it` method");
+      assert(cloneIt.returnType.kind === "StructType", "expected a StructType");
+      expect(cloneIt.returnType.name.split("::").pop()).toBe("Counter");
+    });
+  });
+
+  describe("an ordinary generic function's own projection", (): void => {
+    function findFn(
+      result: AnalysisResult,
+      name: string,
+    ): SemanticsFunctionDef {
+      const fn = result.program.items.find(
+        (item) => item.kind === "Function" && item.signature.name.text === name,
+      );
+      assert(fn?.kind === "Function", `expected a Function item named ${name}`);
+      return fn;
+    }
+
+    function expectItemProjection(
+      type: SemanticsType,
+      traitName: string,
+    ): void {
+      assert(type.kind === "Projection", "expected a Projection type");
+      expect(type.traitName).toBe(traitName);
+      expect(type.assocName).toBe("Item");
+      assert(
+        type.selfType.kind === "NamedType",
+        "expected an abstract NamedType selfType",
+      );
+      expect(type.selfType.path.segments).toEqual(["T"]);
+    }
+
+    it("type-checks a bound generic parameter's own projection used as a param type, return type, and let annotation", (): void => {
+      const result = diagnose(`
+        trait Iterator { type Item; }
+        fn describe<T: Iterator>(item: T::Item) -> T::Item {
+          let x: T::Item = item;
+          x
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const fn = findFn(result, "describe");
+      const paramType = fn.signature.params[0]?.type;
+      assert(paramType !== undefined, "expected a resolved param type");
+      expectItemProjection(paramType, "Iterator");
+      const returnType = fn.signature.returnType;
+      assert(isSome(returnType), "expected a resolved return type");
+      expectItemProjection(returnType.value, "Iterator");
+    });
+
+    it("rejects binding one bound parameter's projection to a different bound parameter's own projection", (): void => {
+      const result = diagnose(`
+        trait Iterator { type Item; }
+        fn mix<T: Iterator, U: Iterator>(a: T::Item, b: U::Item) {
+          let x: T::Item = b;
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "type mismatch: explicit annotation does not match initializer type",
+      );
+    });
+
+    it("rejects a projection on a generic parameter with no trait bound at all", (): void => {
+      const result = diagnose(`
+        fn f<T>(x: T::Item) {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "qualified type paths are not supported yet",
+      );
+    });
+
+    it("rejects a projection whose bound trait declares no associated type of that name", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        fn f<T: Draw>(x: T::Item) {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "cannot find associated type `Item` among the trait bounds of `T`",
+      );
+    });
+
+    it("rejects a projection ambiguous between two bound traits that each declare the same associated type name", (): void => {
+      const result = diagnose(`
+        trait Iterator { type Item; }
+        trait OtherIter { type Item; }
+        fn f<T: Iterator + OtherIter>(x: T::Item) {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "associated type `Item` is ambiguous between traits `Iterator`, `OtherIter`",
+      );
+    });
+
+    it("resolves a projection through a supertrait, not just a directly declared bound", (): void => {
+      const result = diagnose(`
+        trait Base { type Item; }
+        trait Sub: Base {}
+        fn f<T: Sub>(x: T::Item) -> T::Item { x }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const fn = findFn(result, "f");
+      const paramType = fn.signature.params[0]?.type;
+      assert(paramType !== undefined, "expected a resolved param type");
+      expectItemProjection(paramType, "Base");
+    });
+
+    it("resolves Self::Item against the trait's own associated type, not an unrelated same-named top-level struct", (): void => {
+      const result = diagnose(`
+        struct Item { x: i32 }
+        trait Iterator {
+          type Item;
+          fn next(&mut self) -> Self::Item;
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const trait = result.program.items.find((item) => item.kind === "Trait");
+      assert(trait?.kind === "Trait", "expected a Trait item");
+      const next = trait.methods.find((m) => m.name === "next");
+      assert(next !== undefined, "expected a resolved `next` method");
+      assert(
+        next.returnType.kind === "Projection",
+        "expected a Projection type",
+      );
+      expect(next.returnType.traitName).toBe("Iterator");
+    });
   });
 });
 

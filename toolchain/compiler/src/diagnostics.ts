@@ -87,6 +87,9 @@ export type DiagnosticCode =
   | "HEDGE-TRAIT-001" // conflicting/overlapping impls for one trait
   | "HEDGE-TRAIT-002" // required trait bound not satisfied
   | "HEDGE-TRAIT-003" // impl missing a required trait method
+  | "HEDGE-TRAIT-004" // impl missing a required associated type
+  | "HEDGE-TRAIT-005" // no known trait declares the named associated type
+  | "HEDGE-TRAIT-006" // associated type name ambiguous between two bound traits
   // Items and slice gating.
   | "HEDGE-ITEM-001" // item not permitted in this position
   | "HEDGE-UNSUPPORTED-001"; // construct not yet supported by the analyzer
