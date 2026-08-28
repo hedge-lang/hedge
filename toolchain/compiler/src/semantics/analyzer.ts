@@ -178,6 +178,11 @@ interface RegisteredImpl {
   readonly isBlanket: boolean;
   readonly blanketBounds: readonly string[];
   readonly providedMethods: readonly string[];
+  /** Every `type Name = Value;` this impl defines, resolved eagerly during
+   * registration (not left for `analyzeImplDecl`'s own real pass) so a
+   * *different* impl - of a supertrait, for the same target - can look this
+   * one up regardless of which of the two gets analyzed first. */
+  readonly associatedTypeDefs: ReadonlyMap<string, Semantics.Type>;
   readonly tokenId: number;
 }
 
@@ -996,7 +1001,16 @@ function validateProjectionType(
       return { kind: "UnitType", tokenId };
     }
     if (self.kind === "Impl") {
-      const resolved = self.associatedTypes.get(assocName);
+      const resolved =
+        self.associatedTypes.get(assocName) ??
+        (isSome(self.traitName)
+          ? resolveAssociatedTypeViaSupertrait(
+              ctx,
+              self.traitName.value,
+              self.targetType,
+              assocName,
+            )
+          : undefined);
       if (resolved === undefined) {
         emitError(
           ctx,
@@ -2097,29 +2111,40 @@ function typeIdentity(type: Semantics.Type): string {
 }
 
 /**
- * Resolves `typeName: traitName` against a concrete type name, via a
- * concrete registered impl or a blanket impl whose own bound is satisfied.
- * A blanket impl's bound is checked recursively (its own `A` in
- * `impl<T: A> B for T` may itself be satisfied only through another
- * blanket impl) - `typeName` is always concrete here, so this never
- * revisits `resolveTraitBound`'s abstract-parameter case.
+ * Finds the registered impl satisfying `typeName: traitName` - a concrete
+ * registered impl, or a blanket impl whose own bound is satisfied (checked
+ * recursively, since a blanket impl's own `A` in `impl<T: A> B for T` may
+ * itself be satisfied only through another blanket impl). `typeName` is
+ * always concrete here, so this never revisits `resolveTraitBound`'s
+ * abstract-parameter case. Shared by `resolveTraitBoundForTypeName` (builds
+ * a witness from the result) and `resolveAssociatedTypeViaSupertrait`
+ * (reads the impl's own associated-type definitions instead).
  */
-function resolveTraitBoundForTypeName(
+function findRegisteredImpl(
   ctx: AnalysisContext,
   typeName: string,
   traitName: string,
   visiting: ReadonlySet<string> = new Set(),
-): Option<WitnessRef> {
+): RegisteredImpl | undefined {
   const key = `${typeName}::${traitName}`;
-  if (visiting.has(key)) return none();
+  if (visiting.has(key)) return undefined;
   const nextVisiting = new Set(visiting).add(key);
-  const impl = ctx.implRegistry.find((impl) => {
+  return ctx.implRegistry.find((impl) => {
     if (impl.traitName !== traitName) return false;
     if (!impl.isBlanket) return impl.targetTypeName === typeName;
-    return impl.blanketBounds.every((bound) =>
-      isSome(resolveTraitBoundForTypeName(ctx, typeName, bound, nextVisiting)),
+    return impl.blanketBounds.every(
+      (bound) =>
+        findRegisteredImpl(ctx, typeName, bound, nextVisiting) !== undefined,
     );
   });
+}
+
+function resolveTraitBoundForTypeName(
+  ctx: AnalysisContext,
+  typeName: string,
+  traitName: string,
+): Option<WitnessRef> {
+  const impl = findRegisteredImpl(ctx, typeName, traitName);
   if (impl === undefined) return none();
   return some({
     kind: "Impl",
@@ -2128,6 +2153,32 @@ function resolveTraitBoundForTypeName(
     implTokenId: impl.tokenId,
     methods: witnessMethods(ctx, impl),
   });
+}
+
+/** `Self::assocName` inside an impl, when the impl's own definitions don't
+ * have it directly - searches `traitName`'s own supertraits for the one
+ * that actually declares `assocName`, then reads *that* trait's own
+ * separately registered impl for the same `targetType` (not this impl -
+ * a supertrait's associated type is defined wherever the supertrait itself
+ * is implemented, never required to be repeated in a subtrait's own impl
+ * body, the same way a supertrait's methods aren't). `undefined` covers
+ * every way this can fail to resolve (no declaring trait, ambiguous, or no
+ * such impl registered) - the caller's existing "not found" error already
+ * covers all of them without needing to tell them apart. */
+function resolveAssociatedTypeViaSupertrait(
+  ctx: AnalysisContext,
+  traitName: string,
+  targetType: Semantics.Type,
+  assocName: string,
+): Semantics.Type | undefined {
+  const result = resolveAssociatedTypeTrait(ctx, [traitName], assocName);
+  if (result.kind !== "Found") return undefined;
+  const impl = findRegisteredImpl(
+    ctx,
+    typeIdentity(targetType),
+    result.traitName,
+  );
+  return impl?.associatedTypeDefs.get(assocName);
 }
 
 /** An impl's own witness method list: every one of its trait's methods, in
@@ -2522,12 +2573,23 @@ function registerOneImpl(
     );
     return undefined;
   }
+  pushGenericParams(ctx, item.generics, item.whereClause);
+  const associatedTypeDefs = new Map<string, Semantics.Type>();
+  for (const alias of item.items) {
+    if (alias.kind !== "TypeAlias" || !isSome(alias.value)) continue;
+    associatedTypeDefs.set(
+      alias.name.text,
+      resolveSlice1Type(ctx, alias.value.value, alias.value.value.tokenId),
+    );
+  }
+  popGenericParams(ctx);
   const incoming: RegisteredImpl = {
     traitName,
     targetTypeName: targetTypeName.value,
     isBlanket: decl.isBlanket,
     blanketBounds: decl.blanketBounds,
     providedMethods: decl.providedMethods,
+    associatedTypeDefs,
     tokenId: item.tokenId,
   };
   const existing = ctx.implRegistry.find(

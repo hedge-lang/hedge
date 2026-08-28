@@ -3868,6 +3868,27 @@ describe("associated types and trait projections", (): void => {
       );
     });
 
+    it("resolves Self::Item through a supertrait's own separate impl for the same target type", (): void => {
+      const result = diagnose(`
+        trait Base { type Item; }
+        trait Sub: Base {}
+        struct X { n: i32 }
+        impl Base for X { type Item = i32; }
+        impl Sub for X { fn f(&self) -> Self::Item { 0 } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const impl = result.program.items.find(
+        (item) =>
+          item.kind === "Impl" &&
+          isSome(item.traitRef) &&
+          item.traitRef.value.name === "Sub",
+      );
+      assert(impl?.kind === "Impl", "expected an Impl item");
+      const f = impl.resolvedMethods.find((m) => m.name === "f");
+      assert(f !== undefined, "expected a resolved `f` method");
+      expect(f.returnType).toEqual({ kind: "PrimitiveI32Type" });
+    });
+
     it("resolves bare Self in a method's return type to the impl's own concrete target type", (): void => {
       const result = diagnose(`
         trait Cloneable {}
