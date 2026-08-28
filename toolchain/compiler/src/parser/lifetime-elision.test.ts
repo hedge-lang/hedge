@@ -468,4 +468,43 @@ describe("lifetime elision - dyn types", (): void => {
     expect(diagnostics).toHaveLength(0);
     assert(isSome(program), "Expected a program to come back");
   });
+
+  it("does not synthesize a colliding name for an elided parameter when a dyn bound's own type argument already carries an explicit synthesized-looking lifetime", (): void => {
+    // `x`'s dyn bound argument explicitly names lifetime "_0"; `y` is
+    // elided and must not receive the same synthesized name - this only
+    // holds if the collision-avoidance name set actually looks inside the
+    // dyn bound's own type arguments, not just its top-level shape.
+    const { tokens } = tokenize(
+      "fn f(x: dyn From<&'_0 T>, y: &i32) -> &i32 { y }",
+    );
+    const { program, diagnostics } = parse(tokens);
+    expect(diagnostics).toHaveLength(0);
+    assert(isSome(program), "Expected a program to come back");
+    const fn = program.value.items[0];
+    assert(fn?.kind === "Function", "Expected a Function item");
+    const yType = fn.signature.params[1]?.type;
+    assert(yType?.kind === "ReferenceType", "Expected a reference param");
+    assert(isSome(yType.lifetime), "Expected y's lifetime to be resolved");
+    expect(yType.lifetime.value.name).not.toBe("_0");
+  });
+
+  it("rejects an elided reference nested inside a dyn bound's own type argument", (): void => {
+    const { tokens } = tokenize("fn f(x: dyn From<&T>) {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(
+      diagnostics.some((d) => d.message.includes("missing lifetime specifier")),
+      "Expected the elided reference inside the dyn bound to be rejected",
+    );
+    assert(isSome(program), "Expected a program to come back");
+    const fn = program.value.items[0];
+    assert(fn?.kind === "Function", "Expected a Function item");
+    const xType = fn.signature.params[0]?.type;
+    assert(xType?.kind === "DynType", "Expected a dyn param");
+    const boundArg = xType.bound.typeArguments[0];
+    assert(boundArg?.kind === "ReferenceType", "Expected a reference argument");
+    assert(
+      isSome(boundArg.lifetime),
+      "Expected the nested reference to still get a resolved lifetime",
+    );
+  });
 });
