@@ -284,3 +284,136 @@ describe("parseType - generic type arguments", (): void => {
     expect(result.value.next).toBe(tokens.length - 1);
   });
 });
+
+describe("parseType - dyn types", (): void => {
+  it("parses dyn Draw as a dyn type naming Draw", (): void => {
+    const { tokens } = tokenize("dyn Draw");
+    const result = parseType(tokens, 0);
+    assert(!isErr(result), "Expected a successful parse");
+    expect(result.value.node).toMatchObject({
+      kind: "DynType",
+      bound: {
+        kind: "PathTraitBound",
+        path: { segments: ["Draw"] },
+        typeArguments: [],
+      },
+    });
+    expect(result.value.next).toBe(tokens.length - 1);
+  });
+
+  it("parses dyn From<i32>, carrying the bound's own type arguments", (): void => {
+    const { tokens } = tokenize("dyn From<i32>");
+    const result = parseType(tokens, 0);
+    assert(!isErr(result), "Expected a successful parse");
+    expect(result.value.node).toMatchObject({
+      kind: "DynType",
+      bound: {
+        kind: "PathTraitBound",
+        path: { segments: ["From"] },
+        typeArguments: [{ kind: "NamedType", path: { segments: ["i32"] } }],
+      },
+    });
+    expect(result.value.next).toBe(tokens.length - 1);
+  });
+
+  it("parses dyn Foo<Bar<Baz>>, splitting the trailing >> across the bound's own nesting", (): void => {
+    const { tokens } = tokenize("dyn Foo<Bar<Baz>>");
+    const result = parseType(tokens, 0);
+    assert(!isErr(result), "Expected a successful parse");
+    expect(result.value.node).toMatchObject({
+      kind: "DynType",
+      bound: {
+        kind: "PathTraitBound",
+        path: { segments: ["Foo"] },
+        typeArguments: [
+          {
+            kind: "NamedType",
+            path: { segments: ["Bar"] },
+            typeArguments: [{ kind: "NamedType", path: { segments: ["Baz"] } }],
+          },
+        ],
+      },
+    });
+    expect(result.value.next).toBe(tokens.length - 1);
+  });
+
+  it("parses &dyn Draw as a shared reference to a dyn type", (): void => {
+    const { tokens } = tokenize("&dyn Draw");
+    const result = parseType(tokens, 0);
+    assert(!isErr(result), "Expected a successful parse");
+    expect(result.value.node).toMatchObject({
+      kind: "ReferenceType",
+      mutable: false,
+      referent: {
+        kind: "DynType",
+        bound: { kind: "PathTraitBound", path: { segments: ["Draw"] } },
+      },
+    });
+  });
+
+  it("parses &mut dyn Draw as an exclusive reference to a dyn type", (): void => {
+    const { tokens } = tokenize("&mut dyn Draw");
+    const result = parseType(tokens, 0);
+    assert(!isErr(result), "Expected a successful parse");
+    expect(result.value.node).toMatchObject({
+      kind: "ReferenceType",
+      mutable: true,
+      referent: {
+        kind: "DynType",
+        bound: { kind: "PathTraitBound", path: { segments: ["Draw"] } },
+      },
+    });
+  });
+
+  it("parses [dyn Draw; 3] with a dyn type as the array element type", (): void => {
+    const { tokens } = tokenize("[dyn Draw; 3]");
+    const result = parseType(tokens, 0);
+    assert(!isErr(result), "Expected a successful parse");
+    expect(result.value.node).toMatchObject({
+      kind: "ArrayType",
+      elementType: {
+        kind: "DynType",
+        bound: { kind: "PathTraitBound", path: { segments: ["Draw"] } },
+      },
+    });
+  });
+
+  it("parses Vec<dyn Draw> with a dyn type as a generic type argument", (): void => {
+    const { tokens } = tokenize("Vec<dyn Draw>");
+    const result = parseType(tokens, 0);
+    assert(!isErr(result), "Expected a successful parse");
+    expect(result.value.node).toMatchObject({
+      kind: "NamedType",
+      path: { segments: ["Vec"] },
+      typeArguments: [
+        {
+          kind: "DynType",
+          bound: { kind: "PathTraitBound", path: { segments: ["Draw"] } },
+        },
+      ],
+    });
+    expect(result.value.next).toBe(tokens.length - 1);
+  });
+
+  it("rejects a bare dyn with nothing after it", (): void => {
+    const { tokens } = tokenize("dyn");
+    const result = parseType(tokens, 0);
+    assert(isErr(result), "Expected an error result");
+  });
+
+  it("rejects dyn 'a, since a dyn type must name a trait, not a lifetime", (): void => {
+    const { tokens } = tokenize("dyn 'a");
+    const lifetimeToken = tokens.find((t) => t.kind === "lifetime");
+    assert(lifetimeToken !== undefined, "Expected to find a lifetime token");
+    const result = parseType(tokens, 0);
+    assert(isErr(result), "Expected an error result");
+    expect(result.error.message).toContain("trait");
+    expect(result.error.span).toEqual(some(lifetimeToken.span));
+  });
+
+  it("rejects dyn 42, since the token after dyn is not a valid path", (): void => {
+    const { tokens } = tokenize("dyn 42");
+    const result = parseType(tokens, 0);
+    assert(isErr(result), "Expected an error result");
+  });
+});

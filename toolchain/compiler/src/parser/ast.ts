@@ -516,7 +516,7 @@ export interface Path {
   readonly segments: string[];
 }
 
-export type Type = NamedType | UnitType | ReferenceType | ArrayType;
+export type Type = NamedType | UnitType | ReferenceType | ArrayType | DynType;
 
 export interface NamedType extends AstNode {
   readonly kind: "NamedType";
@@ -554,6 +554,19 @@ export interface ArrayType extends AstNode {
   readonly length: Expression;
 }
 
+/**
+ * `dyn Trait` - a trait object type naming the trait it stands for. Only
+ * `Path Generics?` is accepted, not the bare-lifetime alternative a
+ * `TraitBound` allows in a bound list (`T: 'a`) - `dyn 'a` is guardrail-
+ * rejected at parse time, since a dyn type must name a trait. Witness
+ * layout and dynamic dispatch are not implemented yet; semantic analysis
+ * resolves this to the `UnitType` error-recovery placeholder.
+ */
+export interface DynType extends AstNode {
+  readonly kind: "DynType";
+  readonly bound: PathTraitBound;
+}
+
 /** `'a` - bare name, no leading `'`. May be a synthesized name (`_0`, `_1`, ...). */
 export interface Lifetime extends AstNode {
   readonly kind: "Lifetime";
@@ -575,10 +588,10 @@ export interface TypeParam extends AstNode {
 
 export type TraitBound = PathTraitBound | LifetimeTraitBound;
 
-/** `Draw`, `From<U>` - a trait name with optional type arguments (same
- * category as a turbofish's, see `parseTraitBoundTypeArguments`). A
- * compound argument (`Foo<Bar<Baz>>`) still hits the Type-position
- * generics guardrail one level down. */
+/** `Draw`, `From<U>` - a trait name with optional type arguments, parsed via
+ * the same `parseTypeArgumentList` a turbofish and a `NamedType`'s own
+ * arguments share; a compound argument (`Foo<Bar<Baz>>`) parses for real,
+ * not a guardrail. */
 export interface PathTraitBound extends AstNode {
   readonly kind: "PathTraitBound";
   readonly path: Path;

@@ -395,3 +395,20 @@ describe("trait/impl declarations", (): void => {
     expect(javascript.value).not.toContain("draw");
   });
 });
+
+describe("dyn Trait as a type", (): void => {
+  it("parses dyn Draw but rejects the program, since dyn dispatch is not implemented yet", (): void => {
+    const result = compile(`
+      trait Draw {
+        fn draw(&self) -> str;
+      }
+      fn f(x: dyn Draw) {}
+      fn main() {
+        print("done");
+      }
+    `);
+    expect(isNone(result.code)).toBe(true);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.code).toBe("HEDGE-UNSUPPORTED-001");
+  });
+});

@@ -3627,6 +3627,59 @@ describe("Self as a type", (): void => {
   });
 });
 
+describe("dyn Trait as a type", (): void => {
+  function expectDynGuardrail(
+    diagnostics: AnalysisResult["diagnostics"],
+  ): void {
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].code).toBe("HEDGE-UNSUPPORTED-001");
+    expect(diagnostics[0].message).toBe(
+      "`dyn Trait` types are not supported yet",
+    );
+  }
+
+  it("rejects dyn Draw as a function parameter type, with no cascade", (): void => {
+    const result = diagnose("fn f(x: dyn Draw) {}");
+    expectDynGuardrail(result.diagnostics);
+  });
+
+  it("rejects dyn Draw as a function return type, with no cascade", (): void => {
+    const result = diagnose("fn f() -> dyn Draw {}");
+    expectDynGuardrail(result.diagnostics);
+  });
+
+  it("rejects dyn Draw as a struct field type, with no cascade", (): void => {
+    const result = diagnose("struct S { d: dyn Draw }");
+    expectDynGuardrail(result.diagnostics);
+  });
+
+  it("rejects dyn Draw as a let type annotation, with no cascade", (): void => {
+    const result = diagnose("fn f() { let mut x: dyn Draw; }");
+    expectDynGuardrail(result.diagnostics);
+  });
+
+  it("counts a generic parameter used only inside a dyn bound's type arguments as used", (): void => {
+    const result = diagnose("struct S<T> { d: dyn From<T> }");
+    // Only the dyn guardrail itself - no HEDGE-TYPE-009 "declared but never
+    // used" for `T`, since it's genuinely mentioned in the field's own type.
+    expectDynGuardrail(result.diagnostics);
+  });
+
+  it("resolves a dyn-typed param's pre-registered signature without emitting or crashing", (): void => {
+    // Referencing `f` by name before its own declaration is analyzed
+    // (`let g = f;`) forces its signature through `resolveSlice1Type`,
+    // a separate, non-emitting code path from `validateSlice1Type`.
+    const result = diagnose(`
+      fn f(x: dyn Draw) {}
+      fn main() {
+        let g = f;
+      }
+    `);
+    expectDynGuardrail(result.diagnostics);
+  });
+});
+
 describe("generic parameter shadowing an outer type of the same name", (): void => {
   it("resolves a function's own type parameter over an outer struct of the same name, with a warning", (): void => {
     const result = diagnose("struct T {} fn f<T>(x: T) {}");

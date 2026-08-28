@@ -108,6 +108,11 @@ function collectTypeLifetimeNames(type: Type, names: Set<string>): void {
       return;
     case "UnitType":
       return;
+    case "DynType":
+      for (const typeArgument of type.bound.typeArguments) {
+        collectTypeLifetimeNames(typeArgument, names);
+      }
+      return;
     default:
       assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
@@ -167,6 +172,21 @@ function resolveNestedReferenceTypes(
       };
     case "UnitType":
       return type;
+    case "DynType":
+      return {
+        ...type,
+        bound: {
+          ...type.bound,
+          typeArguments: type.bound.typeArguments.map((typeArgument) =>
+            resolveNestedReferenceTypes(
+              typeArgument,
+              tokens,
+              diagnostics,
+              synth,
+            ),
+          ),
+        },
+      };
     default:
       return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }

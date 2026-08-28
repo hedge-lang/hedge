@@ -363,6 +363,11 @@ function collectNamedTypeMentions(type: Parser.Type, names: Set<string>): void {
       return;
     case "UnitType":
       return;
+    case "DynType":
+      for (const arg of type.bound.typeArguments) {
+        collectNamedTypeMentions(arg, names);
+      }
+      return;
     default:
       assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
@@ -894,6 +899,14 @@ function validateSlice1Type(
         ? { kind: "ArrayType", elementType, length: length.value }
         : { kind: "UnitType", tokenId };
     }
+    case "DynType":
+      emitError(
+        ctx,
+        "`dyn Trait` types are not supported yet",
+        tokenId,
+        "HEDGE-UNSUPPORTED-001",
+      );
+      return { kind: "UnitType", tokenId };
     default:
       assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
@@ -4197,6 +4210,8 @@ function resolveSlice1Type(
             ? Number(intLiteralValue(type.length))
             : 0,
       };
+    case "DynType":
+      return { kind: "UnitType", tokenId: fallbackTokenId };
     default:
       return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }

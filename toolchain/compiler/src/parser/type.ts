@@ -4,8 +4,10 @@ import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import type {
   ArrayType,
+  DynType,
   Lifetime,
   NamedType,
+  PathTraitBound,
   ReferenceType,
   Type,
   UnitType,
@@ -24,7 +26,7 @@ import {
   type GenericsCursor,
   type PR,
 } from "./parse-utils.js";
-import { parseTypePathSegments } from "./path.js";
+import { parsePathSegments, parseTypePathSegments } from "./path.js";
 
 /**
  * Result of `parseTypeWithCloseState`: a parsed `Type` plus whether it ended
@@ -82,7 +84,6 @@ export function parseType(
  * (`Container<&Foo<T>>`); `ArrayType`'s element recursion never needs to,
  * since its own close is the unambiguous `]`, never a shared `>`.
  */
-// eslint-disable-next-line complexity -- Guardrail cluster; each unsupported-syntax branch is a necessary, independent case.
 function parseTypeWithCloseState(
   tokens: readonly Token[],
   pos: number,
@@ -94,38 +95,10 @@ function parseTypeWithCloseState(
   const token = tokenResult.value;
 
   if (token.kind === "lparen") {
-    const nextResult = tokenAt(tokens, pos + 1);
-    if (isErr(nextResult)) {
-      return nextResult;
-    }
-    const next = nextResult.value;
-    if (next.kind === "rparen") {
-      const unit: UnitType = { kind: "UnitType", tokenId: pos };
-      return ok({ node: unit, next: pos + 2, pendingCloseHalf: false });
-    }
-    if (next.kind === "eof") {
-      return err(
-        errorDiagnostic(
-          "HEDGE-PARSE-002",
-          "expected `)` to close type, found end of input",
-          some(token.span),
-        ),
-      );
-    }
-    return err(
-      errorDiagnostic(
-        "HEDGE-PARSE-004",
-        "tuple types are not supported in Slice 1",
-        some(token.span),
-      ),
-    );
+    return parseUnitOrTupleType(tokens, pos, token);
   }
 
-  if (
-    token.kind === "ident" ||
-    token.kind === "path_sep" ||
-    isSome(pathKeywordAt(tokens, pos))
-  ) {
+  if (isNamedTypeLead(tokens, pos, token)) {
     return parseNamedTypeWithCloseState(tokens, pos);
   }
 
@@ -167,12 +140,147 @@ function parseTypeWithCloseState(
     );
   }
 
+  if (token.kind === "keyword" && token.text === "dyn") {
+    return parseDynTypeWithCloseState(tokens, pos);
+  }
+
   return err(
     errorDiagnostic(
       "HEDGE-PARSE-004",
       `type syntax "${token.kind}" is not supported in Slice 1`,
       some(token.span),
     ),
+  );
+}
+
+/**
+ * Parses `(` at `pos` (already confirmed by the caller, also passed as
+ * `openParen` for its span): the unit type `()`, or a guardrail rejection
+ * for tuple syntax `(Type, ...)` - tuple types are not supported in Slice 1.
+ */
+function parseUnitOrTupleType(
+  tokens: readonly Token[],
+  pos: number,
+  openParen: Token,
+): PR<TypeParseResult> {
+  const nextResult = tokenAt(tokens, pos + 1);
+  if (isErr(nextResult)) {
+    return nextResult;
+  }
+  const next = nextResult.value;
+  if (next.kind === "rparen") {
+    const unit: UnitType = { kind: "UnitType", tokenId: pos };
+    return ok({ node: unit, next: pos + 2, pendingCloseHalf: false });
+  }
+  if (next.kind === "eof") {
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-002",
+        "expected `)` to close type, found end of input",
+        some(openParen.span),
+      ),
+    );
+  }
+  return err(
+    errorDiagnostic(
+      "HEDGE-PARSE-004",
+      "tuple types are not supported in Slice 1",
+      some(openParen.span),
+    ),
+  );
+}
+
+/**
+ * Parses a `dyn` type at `pos` (the `dyn` keyword token already confirmed by
+ * the caller): `dyn Path Generics?`, naming the trait it stands for. Unlike
+ * a bound list's own `TraitBound`, `dyn` never accepts the bare-lifetime
+ * alternative (`dyn 'a`), since a dyn type must name a trait.
+ */
+function parseDynTypeWithCloseState(
+  tokens: readonly Token[],
+  pos: number,
+): PR<TypeParseResult> {
+  const afterDyn = pos + 1;
+  const nextToken = tokens[afterDyn];
+  if (nextToken?.kind === "lifetime") {
+    return err(
+      errorDiagnostic(
+        "HEDGE-PARSE-004",
+        "`dyn` must name a trait, not a lifetime",
+        some(nextToken.span),
+      ),
+    );
+  }
+  const boundResult = parsePathTraitBound(tokens, afterDyn);
+  if (isErr(boundResult)) {
+    return boundResult;
+  }
+  const dynType: DynType = {
+    kind: "DynType",
+    tokenId: pos,
+    bound: boundResult.value.bound,
+  };
+  return ok({
+    node: dynType,
+    next: boundResult.value.cursor.next,
+    pendingCloseHalf: boundResult.value.cursor.pendingCloseHalf,
+  });
+}
+
+export interface PathTraitBoundResult {
+  readonly bound: PathTraitBound;
+  readonly cursor: GenericsCursor;
+}
+
+/**
+ * Parses `Path Generics?` as a trait bound naming a single trait - the
+ * shared tail of a `TraitBound`'s two grammar alternatives, and the only
+ * form `dyn` accepts. `item.ts`'s `parseTraitBound` (bound lists, which
+ * also allow a bare lifetime) delegates here for its own non-lifetime case.
+ */
+export function parsePathTraitBound(
+  tokens: readonly Token[],
+  pos: number,
+): PR<PathTraitBoundResult> {
+  const pathResult = parsePathSegments(tokens, pos);
+  if (isErr(pathResult)) {
+    return pathResult;
+  }
+  let cursor: GenericsCursor = {
+    next: pathResult.value.next,
+    pendingCloseHalf: false,
+  };
+  let typeArguments: readonly Type[] = [];
+  if (tokens[cursor.next]?.kind === "lt") {
+    const argsResult = parseTypeArgumentList(tokens, cursor.next);
+    if (isErr(argsResult)) {
+      return argsResult;
+    }
+    typeArguments = argsResult.value.typeArguments;
+    cursor = argsResult.value.cursor;
+  }
+  return ok({
+    bound: {
+      kind: "PathTraitBound",
+      tokenId: pos,
+      path: pathResult.value.node,
+      typeArguments,
+    },
+    cursor,
+  });
+}
+
+/** True when `token` can start a named type: an identifier, a leading `::`,
+ * or a path keyword (`Self`, ...). */
+function isNamedTypeLead(
+  tokens: readonly Token[],
+  pos: number,
+  token: Token,
+): boolean {
+  return (
+    token.kind === "ident" ||
+    token.kind === "path_sep" ||
+    isSome(pathKeywordAt(tokens, pos))
   );
 }
 

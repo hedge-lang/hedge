@@ -64,7 +64,11 @@ import {
   parseBlock,
   parseLetStatement,
 } from "./statement.js";
-import { parseType, parseTypeArgumentList } from "./type.js";
+import {
+  parsePathTraitBound,
+  parseType,
+  parseTypeArgumentList,
+} from "./type.js";
 
 /** Parses an optional `pub` or `pub(scope)` visibility prefix. */
 // eslint-disable-next-line complexity -- This is too difficult to split up
@@ -363,31 +367,13 @@ function parseTraitBound(
       cursor: { next: pos + 1, pendingCloseHalf: false },
     });
   }
-  const pathResult = parsePathSegments(tokens, pos);
-  if (isErr(pathResult)) {
-    return pathResult;
-  }
-  let cursor: GenericsCursor = {
-    next: pathResult.value.next,
-    pendingCloseHalf: false,
-  };
-  let typeArguments: readonly Type[] = [];
-  if (tokens[cursor.next]?.kind === "lt") {
-    const argsResult = parseTypeArgumentList(tokens, cursor.next);
-    if (isErr(argsResult)) {
-      return argsResult;
-    }
-    typeArguments = argsResult.value.typeArguments;
-    cursor = argsResult.value.cursor;
+  const pathBoundResult = parsePathTraitBound(tokens, pos);
+  if (isErr(pathBoundResult)) {
+    return pathBoundResult;
   }
   return ok({
-    bound: {
-      kind: "PathTraitBound",
-      tokenId: pos,
-      path: pathResult.value.node,
-      typeArguments,
-    },
-    cursor,
+    bound: pathBoundResult.value.bound,
+    cursor: pathBoundResult.value.cursor,
   });
 }
 
