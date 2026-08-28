@@ -559,9 +559,9 @@ export type Type =
  * type), resolution substitutes directly to the defined type instead of
  * producing this node at all - a `ProjectionType` only ever represents the
  * genuinely-unresolved case. `selfType` is always either `NamedType{path:
- * ["Self"]}` or `NamedType{path:[paramName]}`, mirroring how a declared
- * generic parameter is represented (see "Generic parameter resolution" in
- * this package's own CLAUDE.md) rather than a dedicated marker type.
+ * ["Self"]}` or `NamedType{path:[paramName]}`, the same representation
+ * `analyzer.ts`'s `resolveDeclaredGenericParam` already gives a declared
+ * generic parameter, rather than a dedicated marker type.
  */
 interface ProjectionType extends AstNode {
   readonly kind: "Projection";

@@ -892,6 +892,26 @@ function isSelfType(type: Parser.Type): boolean {
   );
 }
 
+
+/** Shared by both `validateProjectionType` branches that search a set of
+ * bound traits for one declaring `assocName` - two or more matches is
+ * ambiguous either way, worded identically regardless of whether the search
+ * came from `Self`'s own trait or a generic parameter's bounds. */
+function emitAmbiguousAssociatedType(
+  ctx: AnalysisContext,
+  tokenId: number,
+  assocName: string,
+  matches: readonly string[],
+): Semantics.Type {
+  emitError(
+    ctx,
+    `associated type \`${assocName}\` is ambiguous between traits ${matches.map((n) => `\`${n}\``).join(", ")}`,
+    tokenId,
+    "HEDGE-TRAIT-006",
+  );
+  return { kind: "UnitType", tokenId };
+}
+
 /** `Self::assocName` or `paramName::assocName` - a projection. Only ever
  * reached from `validateNamedType` for a real 2-segment path. */
 function validateProjectionType(
@@ -936,13 +956,7 @@ function validateProjectionType(
       assocName,
     );
     if (matches.length > 1) {
-      emitError(
-        ctx,
-        `associated type \`${assocName}\` is ambiguous between traits ${matches.map((n) => `\`${n}\``).join(", ")}`,
-        tokenId,
-        "HEDGE-TRAIT-006",
-      );
-      return { kind: "UnitType", tokenId };
+      return emitAmbiguousAssociatedType(ctx, tokenId, assocName, matches);
     }
     const match = matches[0];
     if (match === undefined) {
@@ -971,13 +985,7 @@ function validateProjectionType(
     const bounds = declaredGenericParamBounds(ctx, baseName);
     const matches = collectAssociatedTypeTraits(ctx, bounds, assocName);
     if (matches.length > 1) {
-      emitError(
-        ctx,
-        `associated type \`${assocName}\` is ambiguous between traits ${matches.map((n) => `\`${n}\``).join(", ")}`,
-        tokenId,
-        "HEDGE-TRAIT-006",
-      );
-      return { kind: "UnitType", tokenId };
+      return emitAmbiguousAssociatedType(ctx, tokenId, assocName, matches);
     }
     const match = matches[0];
     if (match !== undefined) {
@@ -1802,14 +1810,14 @@ function buildTraitDecl(item: Parser.TraitDecl): Semantics.TraitDecl {
   };
 }
 
-function resolveTraitMethodSignature(
+/** Shared by `resolveTraitMethodSignature`/`resolveImplMethodSignature` -
+ * both need exactly this pair, resolved the same way, differing only in
+ * which other fields their own `Semantics` shape carries alongside it. */
+function resolveMethodSignatureTypes(
   ctx: AnalysisContext,
   signature: Parser.FunctionSignature,
-  isDefault: boolean,
-): Semantics.TraitMethod {
+): { params: readonly Semantics.Type[]; returnType: Semantics.Type } {
   return {
-    name: signature.name.text,
-    isDefault,
     params: signature.params.map((p) =>
       validateSlice1Type(ctx, p.type, p.type.tokenId),
     ),
@@ -1820,6 +1828,18 @@ function resolveTraitMethodSignature(
           signature.returnType.value.tokenId,
         )
       : { kind: "UnitType", tokenId: signature.tokenId },
+  };
+}
+
+function resolveTraitMethodSignature(
+  ctx: AnalysisContext,
+  signature: Parser.FunctionSignature,
+  isDefault: boolean,
+): Semantics.TraitMethod {
+  return {
+    name: signature.name.text,
+    isDefault,
+    ...resolveMethodSignatureTypes(ctx, signature),
   };
 }
 
@@ -1890,16 +1910,7 @@ function resolveImplMethodSignature(
 ): Semantics.ImplMethod {
   return {
     name: signature.name.text,
-    params: signature.params.map((p) =>
-      validateSlice1Type(ctx, p.type, p.type.tokenId),
-    ),
-    returnType: isSome(signature.returnType)
-      ? validateSlice1Type(
-          ctx,
-          signature.returnType.value,
-          signature.returnType.value.tokenId,
-        )
-      : { kind: "UnitType", tokenId: signature.tokenId },
+    ...resolveMethodSignatureTypes(ctx, signature),
   };
 }
 
@@ -1917,13 +1928,14 @@ function analyzeImplDecl(
   const targetType = resolveImplSelfTargetType(ctx, shallow);
   const traitName = mapSome(shallow.traitRef, (t) => t.name);
 
+  pushGenericParams(ctx, item.generics, item.whereClause);
+
   pushSelfContext(ctx, {
     kind: "Impl",
     targetType,
     traitName,
     associatedTypes: new Map(),
   });
-  pushGenericParams(ctx, item.generics, item.whereClause);
   const associatedTypeDefs = new Map<string, Semantics.Type>();
   for (const decl of item.items) {
     if (decl.kind !== "TypeAlias" || !isSome(decl.value)) continue;
@@ -1932,7 +1944,6 @@ function analyzeImplDecl(
       validateSlice1Type(ctx, decl.value.value, decl.value.value.tokenId),
     );
   }
-  popGenericParams(ctx);
   popSelfContext(ctx);
 
   pushSelfContext(ctx, {
@@ -1941,15 +1952,15 @@ function analyzeImplDecl(
     traitName,
     associatedTypes: associatedTypeDefs,
   });
-  pushGenericParams(ctx, item.generics, item.whereClause);
   const resolvedMethods = item.items.flatMap(
     (decl): readonly Semantics.ImplMethod[] =>
       decl.kind === "Function"
         ? [resolveImplMethodSignature(ctx, decl.signature)]
         : [],
   );
-  popGenericParams(ctx);
   popSelfContext(ctx);
+
+  popGenericParams(ctx);
 
   return { ...shallow, resolvedMethods, associatedTypeDefs };
 }
