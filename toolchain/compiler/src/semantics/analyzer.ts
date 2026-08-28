@@ -389,6 +389,28 @@ function collectAssociatedTypeTraits(
   return found;
 }
 
+/** Which trait among a searched set declares an associated type - shared
+ * result shape for every `Self::X`/`T::X` resolution site, so each caller
+ * handles "found"/"ambiguous"/"not found" the same way instead of
+ * re-deriving them from `collectAssociatedTypeTraits`'s own match list. */
+type AssociatedTypeSearchResult =
+  | { readonly kind: "Found"; readonly traitName: string }
+  | { readonly kind: "Ambiguous"; readonly matches: readonly string[] }
+  | { readonly kind: "NotFound" };
+
+function resolveAssociatedTypeTrait(
+  ctx: AnalysisContext,
+  seedTraitNames: readonly string[],
+  assocName: string,
+): AssociatedTypeSearchResult {
+  const matches = collectAssociatedTypeTraits(ctx, seedTraitNames, assocName);
+  if (matches.length > 1) return { kind: "Ambiguous", matches };
+  const match = matches[0];
+  return match === undefined
+    ? { kind: "NotFound" }
+    : { kind: "Found", traitName: match };
+}
+
 /**
  * Warns when a generic parameter's name collides with an outer struct or
  * enum - the parameter still wins; this only flags the ambiguity for
@@ -536,6 +558,20 @@ function lookupEnum(
     const decl = ctx.frames[i]?.enums.get(name);
     if (decl !== undefined) return decl;
   }
+  return undefined;
+}
+
+/** A bare name's own resolved type if it names a struct or enum in scope -
+ * `undefined` for anything else, leaving the caller to decide what "not a
+ * struct or enum" means for it (an error, a further fallback, ...). */
+function lookupStructOrEnumType(
+  ctx: AnalysisContext,
+  name: string,
+): Semantics.Type | undefined {
+  const structDecl = lookupStruct(ctx, name);
+  if (structDecl !== undefined) return structDecl.type;
+  const enumDecl = lookupEnum(ctx, name);
+  if (enumDecl !== undefined) return enumDecl.type;
   return undefined;
 }
 
@@ -892,7 +928,6 @@ function isSelfType(type: Parser.Type): boolean {
   );
 }
 
-
 /** Shared by both `validateProjectionType` branches that search a set of
  * bound traits for one declaring `assocName` - two or more matches is
  * ambiguous either way, worded identically regardless of whether the search
@@ -910,6 +945,29 @@ function emitAmbiguousAssociatedType(
     "HEDGE-TRAIT-006",
   );
   return { kind: "UnitType", tokenId };
+}
+
+/** Builds the unresolved-projection node itself - shared by every site that
+ * reaches a `Found` `AssociatedTypeSearchResult`, so the `NamedType`-shaped
+ * `selfType` (see `ProjectionType`'s own doc comment) is only ever
+ * constructed in one place. */
+function makeProjectionType(
+  tokenId: number,
+  traitName: string,
+  assocName: string,
+  selfBaseName: string,
+): Semantics.Type {
+  return {
+    kind: "Projection",
+    tokenId,
+    traitName,
+    assocName,
+    selfType: {
+      kind: "NamedType",
+      tokenId,
+      path: { absolute: false, segments: [selfBaseName] },
+    },
+  };
 }
 
 /** `Self::assocName` or `paramName::assocName` - a projection. Only ever
@@ -950,16 +1008,16 @@ function validateProjectionType(
       }
       return resolved;
     }
-    const matches = collectAssociatedTypeTraits(
-      ctx,
-      [self.traitName],
-      assocName,
-    );
-    if (matches.length > 1) {
-      return emitAmbiguousAssociatedType(ctx, tokenId, assocName, matches);
+    const result = resolveAssociatedTypeTrait(ctx, [self.traitName], assocName);
+    if (result.kind === "Ambiguous") {
+      return emitAmbiguousAssociatedType(
+        ctx,
+        tokenId,
+        assocName,
+        result.matches,
+      );
     }
-    const match = matches[0];
-    if (match === undefined) {
+    if (result.kind === "NotFound") {
       emitError(
         ctx,
         `cannot find associated type \`${assocName}\` on trait \`${self.traitName}\``,
@@ -968,38 +1026,22 @@ function validateProjectionType(
       );
       return { kind: "UnitType", tokenId };
     }
-    return {
-      kind: "Projection",
-      tokenId,
-      traitName: match,
-      assocName,
-      selfType: {
-        kind: "NamedType",
-        tokenId,
-        path: { absolute: false, segments: ["Self"] },
-      },
-    };
+    return makeProjectionType(tokenId, result.traitName, assocName, "Self");
   }
 
   if (isDeclaredGenericParam(ctx, baseName)) {
     const bounds = declaredGenericParamBounds(ctx, baseName);
-    const matches = collectAssociatedTypeTraits(ctx, bounds, assocName);
-    if (matches.length > 1) {
-      return emitAmbiguousAssociatedType(ctx, tokenId, assocName, matches);
-    }
-    const match = matches[0];
-    if (match !== undefined) {
-      return {
-        kind: "Projection",
+    const result = resolveAssociatedTypeTrait(ctx, bounds, assocName);
+    if (result.kind === "Ambiguous") {
+      return emitAmbiguousAssociatedType(
+        ctx,
         tokenId,
-        traitName: match,
         assocName,
-        selfType: {
-          kind: "NamedType",
-          tokenId,
-          path: { absolute: false, segments: [baseName] },
-        },
-      };
+        result.matches,
+      );
+    }
+    if (result.kind === "Found") {
+      return makeProjectionType(tokenId, result.traitName, assocName, baseName);
     }
     if (bounds.length > 0) {
       emitError(
@@ -1090,15 +1132,10 @@ function validateNamedType(
   if (isSome(prim)) {
     return prim.value;
   }
-  const structDecl = lookupStruct(ctx, name);
-  if (structDecl !== undefined) {
+  const resolved = lookupStructOrEnumType(ctx, name);
+  if (resolved !== undefined) {
     validateTypeArguments(ctx, type.typeArguments);
-    return structDecl.type;
-  }
-  const enumDecl = lookupEnum(ctx, name);
-  if (enumDecl !== undefined) {
-    validateTypeArguments(ctx, type.typeArguments);
-    return enumDecl.type;
+    return resolved;
   }
   emitError(
     ctx,
@@ -1897,11 +1934,12 @@ function resolveImplSelfTargetType(
       path: { absolute: false, segments: [bareTargetTypeName.value] },
     };
   }
-  const structDecl = lookupStruct(ctx, bareTargetTypeName.value);
-  if (structDecl !== undefined) return structDecl.type;
-  const enumDecl = lookupEnum(ctx, bareTargetTypeName.value);
-  if (enumDecl !== undefined) return enumDecl.type;
-  return { kind: "UnitType", tokenId: shallow.tokenId };
+  return (
+    lookupStructOrEnumType(ctx, bareTargetTypeName.value) ?? {
+      kind: "UnitType",
+      tokenId: shallow.tokenId,
+    }
+  );
 }
 
 function resolveImplMethodSignature(
@@ -4625,24 +4663,14 @@ function resolveProjectionType(
   ) {
     return undefined;
   }
-  const matches = collectAssociatedTypeTraits(
+  const result = resolveAssociatedTypeTrait(
     ctx,
     declaredGenericParamBounds(ctx, baseName),
     assocName,
   );
-  const match = matches.length === 1 ? matches[0] : undefined;
-  if (match === undefined) return undefined;
-  return {
-    kind: "Projection",
-    tokenId: fallbackTokenId,
-    traitName: match,
-    assocName,
-    selfType: {
-      kind: "NamedType",
-      tokenId: fallbackTokenId,
-      path: { absolute: false, segments: [baseName] },
-    },
-  };
+  return result.kind === "Found"
+    ? makeProjectionType(fallbackTokenId, result.traitName, assocName, baseName)
+    : undefined;
 }
 
 /**
@@ -4663,10 +4691,8 @@ function resolveNamedType(
     }
     const prim = namedTypeToPrimitive(name);
     if (isSome(prim)) return prim.value;
-    const structDecl = lookupStruct(ctx, name);
-    if (structDecl !== undefined) return structDecl.type;
-    const enumDecl = lookupEnum(ctx, name);
-    if (enumDecl !== undefined) return enumDecl.type;
+    const resolved = lookupStructOrEnumType(ctx, name);
+    if (resolved !== undefined) return resolved;
   }
   if (type.path.segments.length === 2) {
     const projection = resolveProjectionType(ctx, type, fallbackTokenId);
