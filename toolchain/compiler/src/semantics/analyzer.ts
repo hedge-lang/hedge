@@ -977,6 +977,40 @@ function makeProjectionType(
 
 /** `Self::assocName` or `paramName::assocName` - a projection. Only ever
  * reached from `validateNamedType` for a real 2-segment path. */
+/** `Self::assocName` when `self` is a concrete impl - direct hit on this
+ * impl's own definitions, else a supertrait's own separate impl (see
+ * `resolveAssociatedTypeViaSupertrait`), else the "not found" error. Split
+ * out of `validateProjectionType` purely to keep that function's own
+ * branching under the complexity cap - no shared behavior with anything
+ * else. */
+function validateSelfProjectionInImpl(
+  ctx: AnalysisContext,
+  self: SelfContext & { kind: "Impl" },
+  assocName: string,
+  tokenId: number,
+): Semantics.Type {
+  const resolved =
+    self.associatedTypes.get(assocName) ??
+    (isSome(self.traitName)
+      ? resolveAssociatedTypeViaSupertrait(
+          ctx,
+          self.traitName.value,
+          self.targetType,
+          assocName,
+        )
+      : undefined);
+  if (resolved === undefined) {
+    emitError(
+      ctx,
+      `cannot find associated type \`${assocName}\` on \`${describeType(self.targetType)}\``,
+      tokenId,
+      "HEDGE-TRAIT-005",
+    );
+    return { kind: "UnitType", tokenId };
+  }
+  return resolved;
+}
+
 function validateProjectionType(
   ctx: AnalysisContext,
   type: Parser.NamedType,
@@ -1001,26 +1035,7 @@ function validateProjectionType(
       return { kind: "UnitType", tokenId };
     }
     if (self.kind === "Impl") {
-      const resolved =
-        self.associatedTypes.get(assocName) ??
-        (isSome(self.traitName)
-          ? resolveAssociatedTypeViaSupertrait(
-              ctx,
-              self.traitName.value,
-              self.targetType,
-              assocName,
-            )
-          : undefined);
-      if (resolved === undefined) {
-        emitError(
-          ctx,
-          `cannot find associated type \`${assocName}\` on \`${describeType(self.targetType)}\``,
-          tokenId,
-          "HEDGE-TRAIT-005",
-        );
-        return { kind: "UnitType", tokenId };
-      }
-      return resolved;
+      return validateSelfProjectionInImpl(ctx, self, assocName, tokenId);
     }
     const result = resolveAssociatedTypeTrait(ctx, [self.traitName], assocName);
     if (result.kind === "Ambiguous") {
@@ -1861,14 +1876,58 @@ function buildTraitDecl(item: Parser.TraitDecl): Semantics.TraitDecl {
   };
 }
 
+/** Combines an enclosing trait/impl's own generics with one of its own
+ * methods' own - a method's type parameters need to be visible alongside
+ * the enclosing item's while resolving that one method's signature, but
+ * `genericParamStack` only ever consults its top frame (a deliberate
+ * scoping choice elsewhere - a nested item doesn't inherit an enclosing
+ * one's generics), so pushing the item's own generics once and the
+ * method's own separately would just have the second push shadow the
+ * first. One merged push, scoped to a single method's own resolution,
+ * makes both visible together instead. */
+function mergedGenericScope(
+  outerGenerics: readonly Parser.GenericParam[],
+  outerWhereClause: Option<Parser.WhereClause>,
+  innerGenerics: readonly Parser.GenericParam[],
+  innerWhereClause: Option<Parser.WhereClause>,
+): {
+  generics: readonly Parser.GenericParam[];
+  whereClause: Option<Parser.WhereClause>;
+} {
+  const predicates = [
+    ...(isSome(outerWhereClause) ? outerWhereClause.value.predicates : []),
+    ...(isSome(innerWhereClause) ? innerWhereClause.value.predicates : []),
+  ];
+  return {
+    generics: [...outerGenerics, ...innerGenerics],
+    whereClause:
+      predicates.length > 0
+        ? some({ kind: "WhereClause", predicates })
+        : none(),
+  };
+}
+
 /** Shared by `resolveTraitMethodSignature`/`resolveImplMethodSignature` -
- * both need exactly this pair, resolved the same way, differing only in
- * which other fields their own `Semantics` shape carries alongside it. */
+ * both need exactly this pair, resolved the same way (against the merged
+ * outer-item/method generic scope), differing only in which other fields
+ * their own `Semantics` shape carries alongside it. */
 function resolveMethodSignatureTypes(
   ctx: AnalysisContext,
+  outerGenerics: readonly Parser.GenericParam[],
+  outerWhereClause: Option<Parser.WhereClause>,
   signature: Parser.FunctionSignature,
 ): { params: readonly Semantics.Type[]; returnType: Semantics.Type } {
-  return {
+  const merged = mergedGenericScope(
+    outerGenerics,
+    outerWhereClause,
+    signature.generics,
+    signature.whereClause,
+  );
+  pushGenericParams(ctx, merged.generics, merged.whereClause);
+  const result: {
+    params: readonly Semantics.Type[];
+    returnType: Semantics.Type;
+  } = {
     params: signature.params.map((p) =>
       validateSlice1Type(ctx, p.type, p.type.tokenId),
     ),
@@ -1880,27 +1939,34 @@ function resolveMethodSignatureTypes(
         )
       : { kind: "UnitType", tokenId: signature.tokenId },
   };
+  popGenericParams(ctx);
+  return result;
 }
 
 function resolveTraitMethodSignature(
   ctx: AnalysisContext,
+  outerGenerics: readonly Parser.GenericParam[],
+  outerWhereClause: Option<Parser.WhereClause>,
   signature: Parser.FunctionSignature,
   isDefault: boolean,
 ): Semantics.TraitMethod {
   return {
     name: signature.name.text,
     isDefault,
-    ...resolveMethodSignatureTypes(ctx, signature),
+    ...resolveMethodSignatureTypes(
+      ctx,
+      outerGenerics,
+      outerWhereClause,
+      signature,
+    ),
   };
 }
 
 /** The real, diagnostic-emitting counterpart to `buildTraitDecl` - resolves
  * every method's own `params`/`returnType` for real, with `Self`/
- * `Self::Assoc` resolving against this trait's own abstract `SelfContext`.
- * Trait-level generics are visible to every method's own signature; a
- * method's own additional generics (`fn foo<U>(...)`) are not yet merged in
- * alongside them, matching the same "only the innermost item's own
- * parameters are visible" scoping every other item already follows. */
+ * `Self::Assoc` resolving against this trait's own abstract `SelfContext`,
+ * and each method's own generics merged alongside the trait's own (see
+ * `mergedGenericScope`). */
 function analyzeTraitDecl(
   ctx: AnalysisContext,
   item: Parser.TraitDecl,
@@ -1911,19 +1977,33 @@ function analyzeTraitDecl(
     traitName: shallow.name,
     associatedTypes: shallow.associatedTypes,
   });
-  pushGenericParams(ctx, item.generics, item.whereClause);
   const methods = item.items.flatMap(
     (decl): readonly Semantics.TraitMethod[] => {
       if (decl.kind === "FunctionSignature") {
-        return [resolveTraitMethodSignature(ctx, decl, false)];
+        return [
+          resolveTraitMethodSignature(
+            ctx,
+            item.generics,
+            item.whereClause,
+            decl,
+            false,
+          ),
+        ];
       }
       if (decl.kind === "Function") {
-        return [resolveTraitMethodSignature(ctx, decl.signature, true)];
+        return [
+          resolveTraitMethodSignature(
+            ctx,
+            item.generics,
+            item.whereClause,
+            decl.signature,
+            true,
+          ),
+        ];
       }
       return [];
     },
   );
-  popGenericParams(ctx);
   popSelfContext(ctx);
   return { ...shallow, methods };
 }
@@ -1958,11 +2038,18 @@ function resolveImplSelfTargetType(
 
 function resolveImplMethodSignature(
   ctx: AnalysisContext,
+  outerGenerics: readonly Parser.GenericParam[],
+  outerWhereClause: Option<Parser.WhereClause>,
   signature: Parser.FunctionSignature,
 ): Semantics.ImplMethod {
   return {
     name: signature.name.text,
-    ...resolveMethodSignatureTypes(ctx, signature),
+    ...resolveMethodSignatureTypes(
+      ctx,
+      outerGenerics,
+      outerWhereClause,
+      signature,
+    ),
   };
 }
 
@@ -1971,7 +2058,9 @@ function resolveImplMethodSignature(
  * no associated types yet, since one definition referencing a sibling isn't
  * supported), then resolves every method's own signature against the now-
  * complete associated-type map, so `Self::Item` inside a method substitutes
- * directly to the concrete definition rather than staying a `ProjectionType`. */
+ * directly to the concrete definition rather than staying a `ProjectionType`
+ * - each method's own generics merged alongside the impl's own (see
+ * `mergedGenericScope`). */
 function analyzeImplDecl(
   ctx: AnalysisContext,
   item: Parser.ImplDecl,
@@ -1981,7 +2070,6 @@ function analyzeImplDecl(
   const traitName = mapSome(shallow.traitRef, (t) => t.name);
 
   pushGenericParams(ctx, item.generics, item.whereClause);
-
   pushSelfContext(ctx, {
     kind: "Impl",
     targetType,
@@ -1997,6 +2085,7 @@ function analyzeImplDecl(
     );
   }
   popSelfContext(ctx);
+  popGenericParams(ctx);
 
   pushSelfContext(ctx, {
     kind: "Impl",
@@ -2007,12 +2096,17 @@ function analyzeImplDecl(
   const resolvedMethods = item.items.flatMap(
     (decl): readonly Semantics.ImplMethod[] =>
       decl.kind === "Function"
-        ? [resolveImplMethodSignature(ctx, decl.signature)]
+        ? [
+            resolveImplMethodSignature(
+              ctx,
+              item.generics,
+              item.whereClause,
+              decl.signature,
+            ),
+          ]
         : [],
   );
   popSelfContext(ctx);
-
-  popGenericParams(ctx);
 
   return { ...shallow, resolvedMethods, associatedTypeDefs };
 }

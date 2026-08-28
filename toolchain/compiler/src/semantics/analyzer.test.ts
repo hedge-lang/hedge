@@ -3718,6 +3718,15 @@ describe("associated types and trait projections", (): void => {
       `);
       expect(result.diagnostics).toEqual([]);
     });
+
+    it("resolves a trait method's own generic parameter, not just the trait's own generics", (): void => {
+      const result = diagnose(`
+        trait Mapper {
+          fn map<U>(&self, value: U);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
   });
 
   describe("an impl missing a required associated type", (): void => {
@@ -3903,6 +3912,17 @@ describe("associated types and trait projections", (): void => {
       assert(cloneIt !== undefined, "expected a resolved `clone_it` method");
       assert(cloneIt.returnType.kind === "StructType", "expected a StructType");
       expect(cloneIt.returnType.name.split("::").pop()).toBe("Counter");
+    });
+
+    it("resolves an impl method's own generic parameter, not just the impl's own generics", (): void => {
+      const result = diagnose(`
+        trait Mapper { fn map<U>(&self, value: U); }
+        struct Counter { n: i32 }
+        impl Mapper for Counter {
+          fn map<U>(&self, value: U) {}
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
     });
   });
 
