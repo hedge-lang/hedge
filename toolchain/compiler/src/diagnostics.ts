@@ -90,6 +90,7 @@ export type DiagnosticCode =
   | "HEDGE-TRAIT-004" // impl missing a required associated type
   | "HEDGE-TRAIT-005" // no known trait declares the named associated type
   | "HEDGE-TRAIT-006" // associated type name ambiguous between two bound traits
+  | "HEDGE-TRAIT-007" // impl defines an associated type its trait doesn't declare
   // Items and slice gating.
   | "HEDGE-ITEM-001" // item not permitted in this position
   | "HEDGE-UNSUPPORTED-001"; // construct not yet supported by the analyzer

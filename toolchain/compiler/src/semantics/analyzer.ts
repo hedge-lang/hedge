@@ -2076,13 +2076,24 @@ function analyzeImplDecl(
     traitName,
     associatedTypes: new Map(),
   });
+  const declaredNames = isSome(traitName)
+    ? declaredAssociatedTypeNames(ctx, traitName.value)
+    : undefined;
   const associatedTypeDefs = new Map<string, Semantics.Type>();
   for (const decl of item.items) {
     if (decl.kind !== "TypeAlias" || !isSome(decl.value)) continue;
-    associatedTypeDefs.set(
-      decl.name.text,
-      validateSlice1Type(ctx, decl.value.value, decl.value.value.tokenId),
+    const resolvedValue = validateSlice1Type(
+      ctx,
+      decl.value.value,
+      decl.value.value.tokenId,
     );
+    if (
+      declaredNames !== undefined &&
+      !declaredNames.includes(decl.name.text)
+    ) {
+      continue;
+    }
+    associatedTypeDefs.set(decl.name.text, resolvedValue);
   }
   popSelfContext(ctx);
   popGenericParams(ctx);
@@ -2633,6 +2644,42 @@ function reportMissingAssociatedTypes(
   }
 }
 
+/** `traitName`'s own directly declared associated-type names (empty for an
+ * unregistered or associated-type-free trait) - shared by the completeness
+ * check above and the two places that build an impl's own resolved
+ * `associatedTypeDefs` map, so a definition the trait doesn't declare is
+ * excluded from both consistently, not just flagged in one of them. */
+function declaredAssociatedTypeNames(
+  ctx: AnalysisContext,
+  traitName: string,
+): readonly string[] {
+  return ctx.traitRegistry.get(traitName)?.associatedTypes ?? [];
+}
+
+/** The mirror image of `reportMissingAssociatedTypes`: a `type Name =
+ * Value;` this impl defines that the trait doesn't declare at all (as
+ * opposed to omitting one the trait requires) - reported once here, in the
+ * same prepass, rather than in `analyzeImplDecl`'s own real pass, so it
+ * isn't double-reported once per pass. */
+function reportExtraAssociatedTypes(
+  ctx: AnalysisContext,
+  item: Parser.ImplDecl,
+  traitName: string,
+  targetTypeName: string,
+  providedAssociatedTypes: readonly string[],
+): void {
+  const declared = declaredAssociatedTypeNames(ctx, traitName);
+  for (const name of providedAssociatedTypes) {
+    if (declared.includes(name)) continue;
+    emitError(
+      ctx,
+      `impl of trait \`${traitName}\` for \`${bareTypeName(targetTypeName)}\` defines associated type \`${name}\`, which trait \`${traitName}\` does not declare`,
+      item.tokenId,
+      "HEDGE-TRAIT-007",
+    );
+  }
+}
+
 /** Registers one `impl`'s coherence/completeness/visibility facts, or
  * `undefined` for a not-yet-handled shape (no trait, or a target that
  * doesn't resolve to any struct/enum in scope). Split out of `registerImpls`
@@ -2667,10 +2714,12 @@ function registerOneImpl(
     );
     return undefined;
   }
+  const declaredNames = declaredAssociatedTypeNames(ctx, traitName);
   pushGenericParams(ctx, item.generics, item.whereClause);
   const associatedTypeDefs = new Map<string, Semantics.Type>();
   for (const alias of item.items) {
     if (alias.kind !== "TypeAlias" || !isSome(alias.value)) continue;
+    if (!declaredNames.includes(alias.name.text)) continue;
     associatedTypeDefs.set(
       alias.name.text,
       resolveSlice1Type(ctx, alias.value.value, alias.value.value.tokenId),
@@ -2711,6 +2760,13 @@ function registerOneImpl(
     decl.providedMethods,
   );
   reportMissingAssociatedTypes(
+    ctx,
+    item,
+    traitName,
+    incoming.targetTypeName,
+    decl.providedAssociatedTypes,
+  );
+  reportExtraAssociatedTypes(
     ctx,
     item,
     traitName,

@@ -3791,6 +3791,38 @@ describe("associated types and trait projections", (): void => {
       );
     });
 
+    it("rejects an impl-defined associated type the trait doesn't declare", (): void => {
+      const result = diagnose(`
+        trait Iterator { type Item; }
+        struct Counter { n: i32 }
+        impl Iterator for Counter {
+          type Item = i32;
+          type Bogus = i32;
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toBe(
+        "impl of trait `Iterator` for `Counter` defines associated type `Bogus`, which trait `Iterator` does not declare",
+      );
+    });
+
+    it("still rejects Self::Bogus when the impl defines it but the trait doesn't declare it", (): void => {
+      const result = diagnose(`
+        trait Iterator { type Item; }
+        struct Counter { n: i32 }
+        impl Iterator for Counter {
+          type Item = i32;
+          type Bogus = i32;
+          fn peek(&self) -> Self::Bogus { 0 }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(2);
+      expect(result.diagnostics.map((d) => d.message)).toEqual([
+        "impl of trait `Iterator` for `Counter` defines associated type `Bogus`, which trait `Iterator` does not declare",
+        "cannot find associated type `Bogus` on `Counter`",
+      ]);
+    });
+
     it("reports a missing associated type alongside an independently missing required method, not just one", (): void => {
       const result = diagnose(`
         trait Iterator { type Item; fn next(&mut self) -> i32; }
