@@ -810,11 +810,15 @@ function semanticTypeToJsPrimitive(
       // (that's the still-guardrailed `&mut`-cell lowering work), so a
       // reference-typed value's JS representation is just its referent's.
       return semanticTypeToJsPrimitive(type.referent);
+    case "ArrayType":
+      // The array erases to no JS primitive of its own; recurse only so a
+      // nested `dyn` element still reaches the throw below.
+      semanticTypeToJsPrimitive(type.elementType);
+      return none();
     case "NamedType":
     case "StructType":
     case "EnumType":
     case "FunctionType":
-    case "ArrayType":
     case "Projection":
       // No JS primitive to erase to; the caller renders these itself.
       return none();

@@ -410,4 +410,14 @@ describe("dyn Trait as a type", (): void => {
       `),
     ).toThrow("dyn Trait code generation is not implemented yet");
   });
+
+  it("throws at JSIM lowering for a dyn type nested inside an array parameter", (): void => {
+    expect(() =>
+      compile(`
+        trait Draw { fn draw(&self) -> str; }
+        fn f(xs: [dyn Draw; 2]) {}
+        fn main() { print("done"); }
+      `),
+    ).toThrow("dyn Trait code generation is not implemented yet");
+  });
 });
