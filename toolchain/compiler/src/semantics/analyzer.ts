@@ -952,6 +952,64 @@ function emitAmbiguousAssociatedType(
   return { kind: "UnitType", tokenId };
 }
 
+/** `HEDGE-TRAIT-005` plus the `UnitType` error-recovery placeholder - no
+ * trait in the searched set declares the associated type. `message` is
+ * caller-supplied because the phrasing depends on what the search was rooted
+ * in (a concrete impl, a trait, a generic parameter's bounds). */
+function emitUnresolvedAssociatedType(
+  ctx: AnalysisContext,
+  tokenId: number,
+  message: string,
+): Semantics.Type {
+  emitError(ctx, message, tokenId, "HEDGE-TRAIT-005");
+  return { kind: "UnitType", tokenId };
+}
+
+/** The shared tail of the two abstract projection paths (`Self::X` in a
+ * trait, `T::X` for a bound parameter): search `seedTraitNames` and their
+ * supertraits for the one declaring `assocName` - a lone match becomes a
+ * projection node named after `projectionBaseName`, several are ambiguous,
+ * none emits `notFoundMessage`. Callers differ only in the seed set and the
+ * two diagnostic wordings. Never called with an empty seed set - that falls
+ * through to the "unsupported qualified path" diagnostic instead. */
+function resolveAbstractProjection(
+  ctx: AnalysisContext,
+  search: {
+    readonly seedTraitNames: readonly string[];
+    readonly projectionBaseName: string;
+    readonly assocName: string;
+    readonly tokenId: number;
+    readonly notFoundMessage: string;
+  },
+): Semantics.Type {
+  const { assocName, tokenId } = search;
+  const result = resolveAssociatedTypeTrait(
+    ctx,
+    search.seedTraitNames,
+    assocName,
+  );
+  switch (result.kind) {
+    case "Ambiguous":
+      return emitAmbiguousAssociatedType(
+        ctx,
+        tokenId,
+        assocName,
+        result.matches,
+      );
+    case "Found":
+      return makeProjectionType(
+        tokenId,
+        result.traitName,
+        assocName,
+        search.projectionBaseName,
+      );
+    case "NotFound":
+      return emitUnresolvedAssociatedType(ctx, tokenId, search.notFoundMessage);
+    default:
+      return assertNever(result, "Unexpected associated-type search result");
+  }
+}
+
 /** Builds the unresolved-projection node itself - shared by every site that
  * reaches a `Found` `AssociatedTypeSearchResult`, so the `NamedType`-shaped
  * `selfType` (see `ProjectionType`'s own doc comment) is only ever
@@ -997,20 +1055,65 @@ function validateSelfProjectionInImpl(
           assocName,
         )
       : undefined);
-  if (resolved === undefined) {
+  return (
+    resolved ??
+    emitUnresolvedAssociatedType(
+      ctx,
+      tokenId,
+      `cannot find associated type \`${assocName}\` on \`${describeType(self.targetType)}\``,
+    )
+  );
+}
+
+function emitUnsupportedQualifiedPath(
+  ctx: AnalysisContext,
+  tokenId: number,
+): Semantics.Type {
+  emitError(
+    ctx,
+    "qualified type paths are not supported yet",
+    tokenId,
+    "HEDGE-UNSUPPORTED-001",
+  );
+  return { kind: "UnitType", tokenId };
+}
+
+/** `Self::assocName`, resolved against whichever trait or impl body is open
+ * (`HEDGE-NAME-006` when none is). An impl that concretely defines the
+ * associated type substitutes straight to it (`validateSelfProjectionInImpl`);
+ * an abstract trait `Self` goes through the same trait-set search
+ * `paramName::assocName` does. */
+function validateSelfProjection(
+  ctx: AnalysisContext,
+  assocName: string,
+  tokenId: number,
+): Semantics.Type {
+  const self = currentSelfContext(ctx);
+  if (self === undefined) {
     emitError(
       ctx,
-      `cannot find associated type \`${assocName}\` on \`${describeType(self.targetType)}\``,
+      "`Self` can only be used inside a trait or impl block",
       tokenId,
-      "HEDGE-TRAIT-005",
+      "HEDGE-NAME-006",
     );
     return { kind: "UnitType", tokenId };
   }
-  return resolved;
+  if (self.kind === "Impl") {
+    return validateSelfProjectionInImpl(ctx, self, assocName, tokenId);
+  }
+  return resolveAbstractProjection(ctx, {
+    seedTraitNames: [self.traitName],
+    projectionBaseName: "Self",
+    assocName,
+    tokenId,
+    notFoundMessage: `cannot find associated type \`${assocName}\` on trait \`${self.traitName}\``,
+  });
 }
 
 /** `Self::assocName` or `paramName::assocName` - a projection. Only ever
- * reached from `validateNamedType` for a real 2-segment path. */
+ * reached from `validateNamedType` for a real 2-segment path. A base that is
+ * neither `Self` nor a bound generic parameter falls through to the same
+ * "unsupported qualified path" diagnostic a concrete `Foo::Bar` gets. */
 function validateProjectionType(
   ctx: AnalysisContext,
   type: Parser.NamedType,
@@ -1024,72 +1127,22 @@ function validateProjectionType(
   );
 
   if (baseName === "Self") {
-    const self = currentSelfContext(ctx);
-    if (self === undefined) {
-      emitError(
-        ctx,
-        "`Self` can only be used inside a trait or impl block",
-        tokenId,
-        "HEDGE-NAME-006",
-      );
-      return { kind: "UnitType", tokenId };
-    }
-    if (self.kind === "Impl") {
-      return validateSelfProjectionInImpl(ctx, self, assocName, tokenId);
-    }
-    const result = resolveAssociatedTypeTrait(ctx, [self.traitName], assocName);
-    if (result.kind === "Ambiguous") {
-      return emitAmbiguousAssociatedType(
-        ctx,
-        tokenId,
-        assocName,
-        result.matches,
-      );
-    }
-    if (result.kind === "NotFound") {
-      emitError(
-        ctx,
-        `cannot find associated type \`${assocName}\` on trait \`${self.traitName}\``,
-        tokenId,
-        "HEDGE-TRAIT-005",
-      );
-      return { kind: "UnitType", tokenId };
-    }
-    return makeProjectionType(tokenId, result.traitName, assocName, "Self");
+    return validateSelfProjection(ctx, assocName, tokenId);
   }
 
-  if (isDeclaredGenericParam(ctx, baseName)) {
-    const bounds = declaredGenericParamBounds(ctx, baseName);
-    const result = resolveAssociatedTypeTrait(ctx, bounds, assocName);
-    if (result.kind === "Ambiguous") {
-      return emitAmbiguousAssociatedType(
-        ctx,
-        tokenId,
-        assocName,
-        result.matches,
-      );
-    }
-    if (result.kind === "Found") {
-      return makeProjectionType(tokenId, result.traitName, assocName, baseName);
-    }
-    if (bounds.length > 0) {
-      emitError(
-        ctx,
-        `cannot find associated type \`${assocName}\` among the trait bounds of \`${baseName}\``,
-        tokenId,
-        "HEDGE-TRAIT-005",
-      );
-      return { kind: "UnitType", tokenId };
-    }
+  const bounds = isDeclaredGenericParam(ctx, baseName)
+    ? declaredGenericParamBounds(ctx, baseName)
+    : [];
+  if (bounds.length === 0) {
+    return emitUnsupportedQualifiedPath(ctx, tokenId);
   }
-
-  emitError(
-    ctx,
-    "qualified type paths are not supported yet",
+  return resolveAbstractProjection(ctx, {
+    seedTraitNames: bounds,
+    projectionBaseName: baseName,
+    assocName,
     tokenId,
-    "HEDGE-UNSUPPORTED-001",
-  );
-  return { kind: "UnitType", tokenId };
+    notFoundMessage: `cannot find associated type \`${assocName}\` among the trait bounds of \`${baseName}\``,
+  });
 }
 
 /** Validates each of a struct/enum reference's own type arguments, purely
