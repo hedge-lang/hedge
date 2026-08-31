@@ -271,6 +271,10 @@ export interface TraitMethod {
 export interface TraitDecl extends AstNode {
   readonly kind: "Trait";
   readonly name: string;
+  /** This trait's own scope-qualified `traitRegistry` key - the identity a
+   * `dyn Trait`, a bound, or an `impl` resolves to, distinct per declaration
+   * even when two traits share `name`. */
+  readonly traitId: string;
   readonly supertraits: readonly string[];
   readonly methods: readonly TraitMethod[];
   readonly associatedTypes: readonly string[];
@@ -572,14 +576,16 @@ interface ProjectionType extends AstNode {
 }
 
 /**
- * `dyn Trait` - a trait object type. `traitName` is the trait's bare name,
- * the key `analyzer.ts`'s `traitRegistry` uses. No runtime representation
- * exists yet, so a program using this type passes analysis but does not
- * lower to JavaScript (`jsim.ts` throws).
+ * `dyn Trait` - a trait object type. `traitId` is the trait's scope-qualified
+ * `traitRegistry` key (`analyzer.ts`'s `scopedTypeName`), so a `dyn` of a
+ * shadowed trait keeps a distinct identity - stripped to the bare name for
+ * diagnostics, the same way `StructType`/`EnumType` handle `name`. No runtime
+ * representation exists yet, so a program using this type passes analysis but
+ * does not lower to JavaScript (`jsim.ts` throws).
  */
 interface DynType extends AstNode {
   readonly kind: "DynType";
-  readonly traitName: string;
+  readonly traitId: string;
 }
 
 /**

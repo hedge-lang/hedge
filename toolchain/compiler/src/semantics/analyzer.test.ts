@@ -12,6 +12,17 @@ import type {
   Type as SemanticsType,
 } from "./ast.js";
 
+/** The scope-qualified `traitRegistry` key of the named trait declared at
+ * top level in `result`'s program - the value a `DynType.traitId` or a
+ * `Projection.traitName` resolving to that trait must equal exactly. */
+function traitIdOf(result: AnalysisResult, name: string): string {
+  const trait = result.program.items.find(
+    (item) => item.kind === "Trait" && item.name === name,
+  );
+  assert(trait?.kind === "Trait", `expected a top-level trait named ${name}`);
+  return trait.traitId;
+}
+
 function analyzeWithTokens(source: string): {
   result: AnalysisResult;
   tokens: ReturnType<typeof tokenize>["tokens"];
@@ -3972,10 +3983,10 @@ describe("associated types and trait projections", (): void => {
 
     function expectItemProjection(
       type: SemanticsType,
-      traitName: string,
+      expectedTraitId: string,
     ): void {
       assert(type.kind === "Projection", "expected a Projection type");
-      expect(type.traitName).toBe(traitName);
+      expect(type.traitName).toBe(expectedTraitId);
       expect(type.assocName).toBe("Item");
       assert(
         type.selfType.kind === "NamedType",
@@ -3996,10 +4007,11 @@ describe("associated types and trait projections", (): void => {
       const fn = findFn(result, "describe");
       const paramType = fn.signature.params[0]?.type;
       assert(paramType !== undefined, "expected a resolved param type");
-      expectItemProjection(paramType, "Iterator");
+      const iteratorId = traitIdOf(result, "Iterator");
+      expectItemProjection(paramType, iteratorId);
       const returnType = fn.signature.returnType;
       assert(isSome(returnType), "expected a resolved return type");
-      expectItemProjection(returnType.value, "Iterator");
+      expectItemProjection(returnType.value, iteratorId);
     });
 
     it("rejects binding one bound parameter's projection to a different bound parameter's own projection", (): void => {
@@ -4058,7 +4070,7 @@ describe("associated types and trait projections", (): void => {
       const fn = findFn(result, "f");
       const paramType = fn.signature.params[0]?.type;
       assert(paramType !== undefined, "expected a resolved param type");
-      expectItemProjection(paramType, "Base");
+      expectItemProjection(paramType, traitIdOf(result, "Base"));
     });
 
     it("resolves Self::Item against the trait's own associated type, not an unrelated same-named top-level struct", (): void => {
@@ -4078,7 +4090,7 @@ describe("associated types and trait projections", (): void => {
         next.returnType.kind === "Projection",
         "expected a Projection type",
       );
-      expect(next.returnType.traitName).toBe("Iterator");
+      expect(next.returnType.traitName).toBe(traitIdOf(result, "Iterator"));
     });
   });
 });
@@ -4146,7 +4158,7 @@ describe("dyn Trait as a type", (): void => {
     assert(fn?.kind === "Function", "expected a Function item named f");
     const paramType = fn.signature.params[0]?.type;
     assert(paramType?.kind === "DynType", "expected a DynType param");
-    expect(paramType.traitName).toBe("Draw");
+    expect(paramType.traitId).toBe(traitIdOf(result, "Draw"));
   });
 
   function expectNotATrait(
@@ -4187,7 +4199,7 @@ describe("dyn Trait as a type", (): void => {
       paramType.referent.kind === "DynType",
       "expected a DynType referent",
     );
-    expect(paramType.referent.traitName).toBe("Draw");
+    expect(paramType.referent.traitId).toBe(traitIdOf(result, "Draw"));
   });
 
   it("resolves dyn Draw as a fixed-size array element type", (): void => {
@@ -4203,7 +4215,7 @@ describe("dyn Trait as a type", (): void => {
       paramType.elementType.kind === "DynType",
       "expected a DynType element",
     );
-    expect(paramType.elementType.traitName).toBe("Draw");
+    expect(paramType.elementType.traitId).toBe(traitIdOf(result, "Draw"));
   });
 
   it("resolves dyn Draw as a generic type argument", (): void => {
@@ -5497,6 +5509,68 @@ describe("trait and impl declarations", (): void => {
           (d) => d.message === "trait `Draw` is defined more than once",
         ),
       ).toHaveLength(0);
+    });
+
+    it("does not let a block-local non-object-safe trait taint an outer same-named dyn Trait", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> i32; }
+        fn outer(x: dyn Draw) {
+          trait Draw { fn combine(&self, other: Self); }
+          let z = 1;
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a dyn of the inner non-object-safe trait while the outer stays fine", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> i32; }
+        fn outer() {
+          trait Draw { fn combine(&self, other: Self); }
+          fn inner(x: dyn Draw) {}
+          let z = 1;
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.code).toBe("HEDGE-TRAIT-008");
+    });
+
+    it("treats a dyn of a shadowing inner trait as a different type from the outer one", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> i32; }
+        fn f(x: dyn Draw) {
+          trait Draw { fn draw(&self) -> i32; }
+          let y: dyn Draw = x;
+          let z = 1;
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.code).toBe("HEDGE-TYPE-001");
+      expect(result.diagnostics[0]?.message).toBe(
+        "type mismatch: explicit annotation does not match initializer type",
+      );
+    });
+
+    it("does not satisfy an outer trait's bound with an impl of a shadowing inner trait", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Circle {}
+        fn wants_draw<T: Draw>(x: T) {}
+        fn outer() {
+          trait Draw { fn paint(&self); }
+          impl Draw for Circle { fn paint(&self) {} }
+          wants_draw(Circle {});
+        }
+      `);
+      // The impl is of the inner `Draw`; `wants_draw`'s bound is the outer
+      // `Draw`, which `Circle` does not implement. The impl visibility lint
+      // fires alongside it.
+      expect(result.diagnostics).toHaveLength(2);
+      expect(result.diagnostics[0]?.code).toBe("HEDGE-LINT-003");
+      expect(result.diagnostics[1]?.code).toBe("HEDGE-TRAIT-002");
+      expect(result.diagnostics[1]?.message).toBe(
+        "the trait bound `Circle: Draw` is not satisfied",
+      );
     });
   });
 });
