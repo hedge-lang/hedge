@@ -133,6 +133,46 @@ export default defineConfig([
         },
       ],
 
+      /* The compiler must stay platform-agnostic: self-hosting means this
+         code eventually runs as compiled Hedge output on whatever JS runtime
+         hosts it. File I/O, process handling, and CLI argument parsing belong
+         in toolchain/cli; runtime support for emitted code belongs in
+         toolchain/runtime. */
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            "fs",
+            "path",
+            "os",
+            "process",
+            "child_process",
+            "crypto",
+            "url",
+            "util",
+            "stream",
+            "events",
+            "net",
+            "http",
+            "https",
+            "readline",
+            "worker_threads",
+            "perf_hooks",
+          ].map((name) => ({
+            name,
+            message:
+              "Node built-in - the compiler must stay platform-agnostic. Move file/process/CLI concerns to toolchain/cli.",
+          })),
+          patterns: [
+            {
+              group: ["node:*"],
+              message:
+                "Node built-in - the compiler must stay platform-agnostic. Move file/process/CLI concerns to toolchain/cli.",
+            },
+          ],
+        },
+      ],
+
       /* stricter correctness for compiler logic */
       complexity: ["error", 12],
     },
