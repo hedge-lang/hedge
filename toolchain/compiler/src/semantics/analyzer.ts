@@ -975,8 +975,6 @@ function makeProjectionType(
   };
 }
 
-/** `Self::assocName` or `paramName::assocName` - a projection. Only ever
- * reached from `validateNamedType` for a real 2-segment path. */
 /** `Self::assocName` when `self` is a concrete impl - direct hit on this
  * impl's own definitions, else a supertrait's own separate impl (see
  * `resolveAssociatedTypeViaSupertrait`), else the "not found" error. Split
@@ -1011,6 +1009,8 @@ function validateSelfProjectionInImpl(
   return resolved;
 }
 
+/** `Self::assocName` or `paramName::assocName` - a projection. Only ever
+ * reached from `validateNamedType` for a real 2-segment path. */
 function validateProjectionType(
   ctx: AnalysisContext,
   type: Parser.NamedType,
