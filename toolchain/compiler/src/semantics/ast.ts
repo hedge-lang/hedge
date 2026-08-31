@@ -550,7 +550,8 @@ export type Type =
   | FunctionType
   | ReferenceType
   | ArrayType
-  | ProjectionType;
+  | ProjectionType
+  | DynType;
 
 /**
  * `I::Item` where `I` isn't concrete yet - `Self` inside a trait's own
@@ -568,6 +569,17 @@ interface ProjectionType extends AstNode {
   readonly traitName: string;
   readonly assocName: string;
   readonly selfType: Type;
+}
+
+/**
+ * `dyn Trait` - a trait object type. `traitName` is the trait's bare name,
+ * the key `analyzer.ts`'s `traitRegistry` uses. No runtime representation
+ * exists yet, so a program using this type passes analysis but does not
+ * lower to JavaScript (`jsim.ts` throws).
+ */
+interface DynType extends AstNode {
+  readonly kind: "DynType";
+  readonly traitName: string;
 }
 
 /**

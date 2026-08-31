@@ -168,6 +168,11 @@ interface RegisteredTrait {
   readonly supertraits: readonly string[];
   readonly methods: readonly Semantics.TraitMethod[];
   readonly associatedTypes: readonly string[];
+  /** `some({ methodName })` when a method takes `Self` in a non-receiver
+   * argument position - the only rule that makes a trait non-object-safe
+   * here. A generic method and a `Self` return type both stay safe, unlike
+   * in Rust. */
+  readonly notObjectSafe: Option<{ readonly methodName: string }>;
 }
 
 /** One registered trait impl, extracted just far enough for coherence and
@@ -1258,16 +1263,43 @@ function validateSlice1Type(
         : { kind: "UnitType", tokenId };
     }
     case "DynType":
-      emitError(
-        ctx,
-        "`dyn Trait` types are not supported yet",
-        tokenId,
-        "HEDGE-UNSUPPORTED-001",
-      );
-      return { kind: "UnitType", tokenId };
+      return validateDynType(ctx, type, tokenId);
     default:
       assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
+}
+
+function validateDynType(
+  ctx: AnalysisContext,
+  type: Parser.DynType,
+  tokenId: number,
+): Semantics.Type {
+  const traitName = type.bound.path.segments.at(-1) ?? "";
+  const registered = ctx.traitRegistry.get(traitName);
+  if (registered === undefined) {
+    const namesSomethingElse =
+      isSome(namedTypeToPrimitive(traitName)) ||
+      lookupStructOrEnumType(ctx, traitName) !== undefined;
+    emitError(
+      ctx,
+      namesSomethingElse
+        ? `\`${traitName}\` is not a trait`
+        : `cannot find trait \`${traitName}\` in this scope`,
+      tokenId,
+      "HEDGE-NAME-001",
+    );
+    return { kind: "UnitType", tokenId };
+  }
+  if (isSome(registered.notObjectSafe)) {
+    emitError(
+      ctx,
+      `trait \`${traitName}\` cannot be made into a \`dyn\` object: method \`${registered.notObjectSafe.value.methodName}\` takes \`Self\` as a non-receiver argument`,
+      tokenId,
+      "HEDGE-TRAIT-008",
+    );
+    return { kind: "UnitType", tokenId };
+  }
+  return { kind: "DynType", tokenId, traitName };
 }
 
 /** Maps a resolved declared type to the width const-folding wraps/rounds at; `none()` for a non-numeric type. */
@@ -1307,6 +1339,7 @@ function foldWidthOf(type: Semantics.Type): Option<FoldWidth> {
     case "ReferenceType":
     case "ArrayType":
     case "Projection":
+    case "DynType":
       return none();
     default:
       return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
@@ -2549,6 +2582,47 @@ function collectExpressionItems(
   }
 }
 
+/** True when `Self` names the trait's own implementing type here (`Self`,
+ * not `Self::Assoc`), at any depth a `dyn` argument type can nest one. */
+function typeMentionsSelf(type: Parser.Type): boolean {
+  switch (type.kind) {
+    case "NamedType":
+      return (
+        (type.path.segments.length === 1 && type.path.segments[0] === "Self") ||
+        type.typeArguments.some(typeMentionsSelf)
+      );
+    case "ReferenceType":
+      return typeMentionsSelf(type.referent);
+    case "ArrayType":
+      return typeMentionsSelf(type.elementType);
+    case "DynType":
+      return type.bound.typeArguments.some(typeMentionsSelf);
+    case "UnitType":
+      return false;
+    default:
+      return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
+  }
+}
+
+/** The first trait method that takes `Self` in a non-receiver argument
+ * position - `none()` when the trait is object-safe. A `Receiver` carries no
+ * type of its own, so every `Self` reachable through a method's `params` is
+ * necessarily non-receiver. */
+function firstSelfArgMethod(
+  item: Parser.TraitDecl,
+): Option<{ readonly methodName: string }> {
+  for (const member of item.items) {
+    if (member.kind !== "Function" && member.kind !== "FunctionSignature") {
+      continue;
+    }
+    const signature = member.kind === "Function" ? member.signature : member;
+    if (signature.params.some((param) => typeMentionsSelf(param.type))) {
+      return some({ methodName: signature.name.text });
+    }
+  }
+  return none();
+}
+
 /**
  * Registers every `trait`'s own name and supertraits into `ctx.traitRegistry`
  * first, then validates every supertrait reference in a second pass over
@@ -2569,6 +2643,7 @@ function registerTraits(
       supertraits: decl.supertraits,
       methods: decl.methods,
       associatedTypes: decl.associatedTypes,
+      notObjectSafe: firstSelfArgMethod(item),
     });
     traitItems.push(item);
   }
@@ -5008,8 +5083,17 @@ function resolveSlice1Type(
             ? Number(intLiteralValue(type.length))
             : 0,
       };
-    case "DynType":
-      return { kind: "UnitType", tokenId: fallbackTokenId };
+    case "DynType": {
+      const traitName = type.bound.path.segments.at(-1) ?? "";
+      const registered = ctx.traitRegistry.get(traitName);
+      // Non-emitting - `validateSlice1Type` reports an unknown/non-trait name
+      // or a non-object-safe trait once the declaration's body is analyzed;
+      // here just mirror the type it lands on (`DynType` or the recovery
+      // `UnitType`) so a forward-registered signature matches.
+      return registered !== undefined && isNone(registered.notObjectSafe)
+        ? { kind: "DynType", tokenId: fallbackTokenId, traitName }
+        : { kind: "UnitType", tokenId: fallbackTokenId };
+    }
     default:
       return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
@@ -5601,6 +5685,8 @@ function describeType(type: Semantics.Type): string {
       return `fn(${type.params.map(describeType).join(", ")}) -> ${describeType(type.returnType)}`;
     case "Projection":
       return `${describeType(type.selfType)}::${type.assocName}`;
+    case "DynType":
+      return `dyn ${type.traitName}`;
     default:
       return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
@@ -5794,6 +5880,8 @@ function typesEqual(a: Semantics.Type, b: Semantics.Type): boolean {
         a.assocName === b.assocName &&
         typesEqual(a.selfType, b.selfType)
       );
+    case "DynType":
+      return b.kind === "DynType" && a.traitName === b.traitName;
     case "FunctionType":
     case "UnitType":
     case "PrimitiveI8Type":
