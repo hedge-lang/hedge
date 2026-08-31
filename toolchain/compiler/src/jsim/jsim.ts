@@ -815,6 +815,7 @@ function semanticTypeToJsPrimitive(
     case "EnumType":
     case "FunctionType":
     case "ArrayType":
+    case "Projection":
       // No JS primitive to erase to; the caller renders these itself.
       return none();
     default:
@@ -875,6 +876,7 @@ function hedgeTypeToNumericKind(
     case "EnumType":
     case "FunctionType":
     case "ArrayType":
+    case "Projection":
       // Not numeric, so no wrapping applies.
       return none();
     default:

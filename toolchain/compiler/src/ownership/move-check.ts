@@ -1343,8 +1343,11 @@ function recordDrops(
       // (see type-capabilities.ts) but still can't get a scope-end `using`
       // - there's no witness-based Drop to call yet, so wrapping it would
       // throw at runtime for any concrete instantiation. Skip drop
-      // generation for it specifically, without touching its Copy-ness.
-      declaration.type.kind === "NamedType"
+      // generation for it specifically, without touching its Copy-ness. An
+      // unresolved trait projection (`T::Item`) is the same abstract-type
+      // case one level removed, so it needs the same skip.
+      declaration.type.kind === "NamedType" ||
+      declaration.type.kind === "Projection"
     ) {
       continue;
     }

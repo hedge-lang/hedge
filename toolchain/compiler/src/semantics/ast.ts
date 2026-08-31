@@ -245,10 +245,16 @@ export interface StaticDecl extends DecoratedAstNode {
 
 /** One of a trait's own methods, in declaration order. `isDefault` is true
  * for a method with a body in the trait declaration (needs no override) and
- * false for a bodiless required one (an impl must provide it). */
+ * false for a bodiless required one (an impl must provide it). `params`/
+ * `returnType` are the method's own resolved signature types - a `Self`/
+ * `Self::Assoc` mention resolves within this trait's own abstract Self
+ * context (see analyzer.ts's `SelfContext`), stored here even though nothing
+ * consumes it yet. */
 export interface TraitMethod {
   readonly name: string;
   readonly isDefault: boolean;
+  readonly params: readonly Type[];
+  readonly returnType: Type;
 }
 
 /**
@@ -257,14 +263,25 @@ export interface TraitMethod {
  * requires). `methods` drives impl completeness checking and witness
  * construction, in the trait's own declaration order - a single ordered
  * list rather than separate required/default arrays, so an impl's witness
- * doesn't quietly reorder an interleaved trait body. Associated types are
- * still open work.
+ * doesn't quietly reorder an interleaved trait body. `associatedTypes` is
+ * every `type Name;` declared directly in this trait's own body (no value -
+ * a defined alias, `type Name = ...;`, is a plain, still-unhandled
+ * `TypeAliasDecl` item here, same as before).
  */
 export interface TraitDecl extends AstNode {
   readonly kind: "Trait";
   readonly name: string;
   readonly supertraits: readonly string[];
   readonly methods: readonly TraitMethod[];
+  readonly associatedTypes: readonly string[];
+}
+
+/** One impl-provided method's own resolved signature - mirrors `TraitMethod`
+ * minus `isDefault`, since every entry here is impl-provided by definition. */
+export interface ImplMethod {
+  readonly name: string;
+  readonly params: readonly Type[];
+  readonly returnType: Type;
 }
 
 /**
@@ -278,7 +295,13 @@ export interface TraitDecl extends AstNode {
  * own required trait names (`A`) - empty for a concrete impl, or an
  * unconstrained blanket impl. `providedMethods` is every bodied method this
  * impl itself declares, for completeness checking against its trait's own
- * `methods` (the non-default ones).
+ * `methods` (the non-default ones); `providedAssociatedTypes` is the same
+ * idea for `type Name = Value;` definitions - both are cheap, name-only
+ * lists usable during coherence's own flat prepass, before real resolution
+ * exists. `resolvedMethods`/`associatedTypeDefs` carry the real, resolved
+ * counterparts (`Self`/`Self::Assoc` already substituted against a concrete
+ * impl target - see analyzer.ts's `SelfContext`), populated only once this
+ * impl reaches its own real analysis pass.
  */
 export interface ImplDecl extends AstNode {
   readonly kind: "Impl";
@@ -290,6 +313,9 @@ export interface ImplDecl extends AstNode {
   readonly isBlanket: boolean;
   readonly blanketBounds: readonly string[];
   readonly providedMethods: readonly string[];
+  readonly providedAssociatedTypes: readonly string[];
+  readonly resolvedMethods: readonly ImplMethod[];
+  readonly associatedTypeDefs: ReadonlyMap<string, Type>;
 }
 
 /** Carries no semantic content yet - a type alias's own value type is still
@@ -523,7 +549,26 @@ export type Type =
   | EnumType
   | FunctionType
   | ReferenceType
-  | ArrayType;
+  | ArrayType
+  | ProjectionType;
+
+/**
+ * `I::Item` where `I` isn't concrete yet - `Self` inside a trait's own
+ * declaration, or a declared generic parameter bound to `traitName`. Once
+ * `selfType` is concrete (inside a trait impl that defines the associated
+ * type), resolution substitutes directly to the defined type instead of
+ * producing this node at all - a `ProjectionType` only ever represents the
+ * genuinely-unresolved case. `selfType` is always either `NamedType{path:
+ * ["Self"]}` or `NamedType{path:[paramName]}`, the same representation
+ * `analyzer.ts`'s `resolveDeclaredGenericParam` already gives a declared
+ * generic parameter, rather than a dedicated marker type.
+ */
+interface ProjectionType extends AstNode {
+  readonly kind: "Projection";
+  readonly traitName: string;
+  readonly assocName: string;
+  readonly selfType: Type;
+}
 
 /**
  * `[T; N]`, a fixed-size array. `length` is a resolved, non-negative integer

@@ -129,13 +129,45 @@ interface AnalysisContext {
   /** Mutable build-up of `AnalysisResult.witnesses`, keyed by call-site
    * `tokenId`. */
   readonly witnessTable: Map<number, WitnessRef[]>;
+  /**
+   * What `Self` means at the innermost currently-open trait or impl body -
+   * only the top is ever consulted, same lifecycle as `genericParamStack`. A
+   * nested item inside a method body would be its own independent scope
+   * (never populated today, since method bodies aren't analyzed), not a
+   * closure over the enclosing trait/impl.
+   */
+  readonly selfContextStack: SelfContext[];
 }
 
+/**
+ * `Trait`: `Self` is abstract (this trait's own name plus its directly
+ * declared associated-type names - a `Self::X` reference searches this set
+ * and each supertrait's own, transitively). `Impl`: `Self` is concrete (the
+ * impl's own target type), and `associatedTypes` is this impl's own
+ * `type Name = Value;` definitions, already resolved - a `Self::X` reference
+ * inside an impl substitutes directly against this map rather than staying a
+ * `ProjectionType`, since the target is no longer abstract.
+ */
+type SelfContext =
+  | {
+      readonly kind: "Trait";
+      readonly traitName: string;
+      readonly associatedTypes: readonly string[];
+    }
+  | {
+      readonly kind: "Impl";
+      readonly targetType: Semantics.Type;
+      readonly traitName: Option<string>;
+      readonly associatedTypes: ReadonlyMap<string, Semantics.Type>;
+    };
+
 /** One registered trait's own supertrait and required-method names, for
- * checking an impl of it against both. */
+ * checking an impl of it against both, plus its own directly declared
+ * associated-type names for projection resolution. */
 interface RegisteredTrait {
   readonly supertraits: readonly string[];
   readonly methods: readonly Semantics.TraitMethod[];
+  readonly associatedTypes: readonly string[];
 }
 
 /** One registered trait impl, extracted just far enough for coherence and
@@ -146,6 +178,11 @@ interface RegisteredImpl {
   readonly isBlanket: boolean;
   readonly blanketBounds: readonly string[];
   readonly providedMethods: readonly string[];
+  /** Every `type Name = Value;` this impl defines, resolved eagerly during
+   * registration (not left for `analyzeImplDecl`'s own real pass) so a
+   * *different* impl - of a supertrait, for the same target - can look this
+   * one up regardless of which of the two gets analyzed first. */
+  readonly associatedTypeDefs: ReadonlyMap<string, Semantics.Type>;
   readonly tokenId: number;
 }
 
@@ -310,6 +347,75 @@ function declaredGenericParamBounds(
   return innermost?.get(name) ?? [];
 }
 
+function pushSelfContext(ctx: AnalysisContext, self: SelfContext): void {
+  ctx.selfContextStack.push(self);
+}
+
+function popSelfContext(ctx: AnalysisContext): void {
+  ctx.selfContextStack.pop();
+}
+
+function currentSelfContext(ctx: AnalysisContext): SelfContext | undefined {
+  return ctx.selfContextStack.at(-1);
+}
+
+/**
+ * Every trait among `seedTraitNames` or reachable from one through a
+ * supertrait chain that declares an associated type named `assocName`,
+ * preserving first-seen order so a caller can report a deterministic
+ * ambiguity list. Shared by `Self::X` inside a trait's own declaration
+ * (`seedTraitNames` is just that trait's own name) and `T::X` for a bound
+ * generic parameter (`seedTraitNames` is every trait `T` is directly bound
+ * to) - both are the same question: which of a known set of traits (plus
+ * their own supertraits) declares this name.
+ */
+function collectAssociatedTypeTraits(
+  ctx: AnalysisContext,
+  seedTraitNames: readonly string[],
+  assocName: string,
+  visiting: ReadonlySet<string> = new Set(),
+): readonly string[] {
+  const found: string[] = [];
+  for (const traitName of seedTraitNames) {
+    if (visiting.has(traitName)) continue;
+    const trait = ctx.traitRegistry.get(traitName);
+    if (trait === undefined) continue;
+    if (trait.associatedTypes.includes(assocName)) found.push(traitName);
+    const nextVisiting = new Set(visiting).add(traitName);
+    for (const viaSupertrait of collectAssociatedTypeTraits(
+      ctx,
+      trait.supertraits,
+      assocName,
+      nextVisiting,
+    )) {
+      if (!found.includes(viaSupertrait)) found.push(viaSupertrait);
+    }
+  }
+  return found;
+}
+
+/** Which trait among a searched set declares an associated type - shared
+ * result shape for every `Self::X`/`T::X` resolution site, so each caller
+ * handles "found"/"ambiguous"/"not found" the same way instead of
+ * re-deriving them from `collectAssociatedTypeTraits`'s own match list. */
+type AssociatedTypeSearchResult =
+  | { readonly kind: "Found"; readonly traitName: string }
+  | { readonly kind: "Ambiguous"; readonly matches: readonly string[] }
+  | { readonly kind: "NotFound" };
+
+function resolveAssociatedTypeTrait(
+  ctx: AnalysisContext,
+  seedTraitNames: readonly string[],
+  assocName: string,
+): AssociatedTypeSearchResult {
+  const matches = collectAssociatedTypeTraits(ctx, seedTraitNames, assocName);
+  if (matches.length > 1) return { kind: "Ambiguous", matches };
+  const match = matches[0];
+  return match === undefined
+    ? { kind: "NotFound" }
+    : { kind: "Found", traitName: match };
+}
+
 /**
  * Warns when a generic parameter's name collides with an outer struct or
  * enum - the parameter still wins; this only flags the ambiguity for
@@ -457,6 +563,20 @@ function lookupEnum(
     const decl = ctx.frames[i]?.enums.get(name);
     if (decl !== undefined) return decl;
   }
+  return undefined;
+}
+
+/** A bare name's own resolved type if it names a struct or enum in scope -
+ * `undefined` for anything else, leaving the caller to decide what "not a
+ * struct or enum" means for it (an error, a further fallback, ...). */
+function lookupStructOrEnumType(
+  ctx: AnalysisContext,
+  name: string,
+): Semantics.Type | undefined {
+  const structDecl = lookupStruct(ctx, name);
+  if (structDecl !== undefined) return structDecl.type;
+  const enumDecl = lookupEnum(ctx, name);
+  if (enumDecl !== undefined) return enumDecl.type;
   return undefined;
 }
 
@@ -813,11 +933,242 @@ function isSelfType(type: Parser.Type): boolean {
   );
 }
 
+/** Shared by both `validateProjectionType` branches that search a set of
+ * bound traits for one declaring `assocName` - two or more matches is
+ * ambiguous either way, worded identically regardless of whether the search
+ * came from `Self`'s own trait or a generic parameter's bounds. */
+function emitAmbiguousAssociatedType(
+  ctx: AnalysisContext,
+  tokenId: number,
+  assocName: string,
+  matches: readonly string[],
+): Semantics.Type {
+  const matchList = matches.map((n) => `\`${n}\``).join(", ");
+  emitError(
+    ctx,
+    `associated type \`${assocName}\` is ambiguous between traits ${matchList}`,
+    tokenId,
+    "HEDGE-TRAIT-006",
+  );
+  return { kind: "UnitType", tokenId };
+}
+
+/** `HEDGE-TRAIT-005` plus the `UnitType` error-recovery placeholder - no
+ * trait in the searched set declares the associated type. `message` is
+ * caller-supplied because the phrasing depends on what the search was rooted
+ * in (a concrete impl, a trait, a generic parameter's bounds). */
+function emitUnresolvedAssociatedType(
+  ctx: AnalysisContext,
+  tokenId: number,
+  message: string,
+): Semantics.Type {
+  emitError(ctx, message, tokenId, "HEDGE-TRAIT-005");
+  return { kind: "UnitType", tokenId };
+}
+
+/** The shared tail of the two abstract projection paths (`Self::X` in a
+ * trait, `T::X` for a bound parameter): search `seedTraitNames` and their
+ * supertraits for the one declaring `assocName` - a lone match becomes a
+ * projection node named after `projectionBaseName`, several are ambiguous,
+ * none emits `notFoundMessage`. Callers differ only in the seed set and the
+ * two diagnostic wordings. Never called with an empty seed set - that falls
+ * through to the "unsupported qualified path" diagnostic instead. */
+function resolveAbstractProjection(
+  ctx: AnalysisContext,
+  search: {
+    readonly seedTraitNames: readonly string[];
+    readonly projectionBaseName: string;
+    readonly assocName: string;
+    readonly tokenId: number;
+    readonly notFoundMessage: string;
+  },
+): Semantics.Type {
+  const { assocName, tokenId } = search;
+  const result = resolveAssociatedTypeTrait(
+    ctx,
+    search.seedTraitNames,
+    assocName,
+  );
+  switch (result.kind) {
+    case "Ambiguous":
+      return emitAmbiguousAssociatedType(
+        ctx,
+        tokenId,
+        assocName,
+        result.matches,
+      );
+    case "Found":
+      return makeProjectionType(
+        tokenId,
+        result.traitName,
+        assocName,
+        search.projectionBaseName,
+      );
+    case "NotFound":
+      return emitUnresolvedAssociatedType(ctx, tokenId, search.notFoundMessage);
+    default:
+      return assertNever(result, "Unexpected associated-type search result");
+  }
+}
+
+/** Builds the unresolved-projection node itself - shared by every site that
+ * reaches a `Found` `AssociatedTypeSearchResult`, so the `NamedType`-shaped
+ * `selfType` (see `ProjectionType`'s own doc comment) is only ever
+ * constructed in one place. */
+function makeProjectionType(
+  tokenId: number,
+  traitName: string,
+  assocName: string,
+  selfBaseName: string,
+): Semantics.Type {
+  return {
+    kind: "Projection",
+    tokenId,
+    traitName,
+    assocName,
+    selfType: {
+      kind: "NamedType",
+      tokenId,
+      path: { absolute: false, segments: [selfBaseName] },
+    },
+  };
+}
+
+/** `Self::assocName` when `self` is a concrete impl - direct hit on this
+ * impl's own definitions, else a supertrait's own separate impl (see
+ * `resolveAssociatedTypeViaSupertrait`), else the "not found" error. Split
+ * out of `validateProjectionType` purely to keep that function's own
+ * branching under the complexity cap - no shared behavior with anything
+ * else. */
+function validateSelfProjectionInImpl(
+  ctx: AnalysisContext,
+  self: SelfContext & { kind: "Impl" },
+  assocName: string,
+  tokenId: number,
+): Semantics.Type {
+  const resolved =
+    self.associatedTypes.get(assocName) ??
+    (isSome(self.traitName)
+      ? resolveAssociatedTypeViaSupertrait(
+          ctx,
+          self.traitName.value,
+          self.targetType,
+          assocName,
+        )
+      : undefined);
+  return (
+    resolved ??
+    emitUnresolvedAssociatedType(
+      ctx,
+      tokenId,
+      `cannot find associated type \`${assocName}\` on \`${describeType(self.targetType)}\``,
+    )
+  );
+}
+
+function emitUnsupportedQualifiedPath(
+  ctx: AnalysisContext,
+  tokenId: number,
+): Semantics.Type {
+  emitError(
+    ctx,
+    "qualified type paths are not supported yet",
+    tokenId,
+    "HEDGE-UNSUPPORTED-001",
+  );
+  return { kind: "UnitType", tokenId };
+}
+
+/** `Self::assocName`, resolved against whichever trait or impl body is open
+ * (`HEDGE-NAME-006` when none is). An impl that concretely defines the
+ * associated type substitutes straight to it (`validateSelfProjectionInImpl`);
+ * an abstract trait `Self` goes through the same trait-set search
+ * `paramName::assocName` does. */
+function validateSelfProjection(
+  ctx: AnalysisContext,
+  assocName: string,
+  tokenId: number,
+): Semantics.Type {
+  const self = currentSelfContext(ctx);
+  if (self === undefined) {
+    emitError(
+      ctx,
+      "`Self` can only be used inside a trait or impl block",
+      tokenId,
+      "HEDGE-NAME-006",
+    );
+    return { kind: "UnitType", tokenId };
+  }
+  if (self.kind === "Impl") {
+    return validateSelfProjectionInImpl(ctx, self, assocName, tokenId);
+  }
+  return resolveAbstractProjection(ctx, {
+    seedTraitNames: [self.traitName],
+    projectionBaseName: "Self",
+    assocName,
+    tokenId,
+    notFoundMessage: `cannot find associated type \`${assocName}\` on trait \`${self.traitName}\``,
+  });
+}
+
+/** `Self::assocName` or `paramName::assocName` - a projection. Only ever
+ * reached from `validateNamedType` for a real 2-segment path. A base that is
+ * neither `Self` nor a bound generic parameter falls through to the same
+ * "unsupported qualified path" diagnostic a concrete `Foo::Bar` gets. */
+function validateProjectionType(
+  ctx: AnalysisContext,
+  type: Parser.NamedType,
+  tokenId: number,
+): Semantics.Type {
+  const baseName = type.path.segments[0];
+  const assocName = type.path.segments[1];
+  assert(
+    baseName !== undefined && assocName !== undefined,
+    "Projection path missing a segment",
+  );
+
+  if (baseName === "Self") {
+    return validateSelfProjection(ctx, assocName, tokenId);
+  }
+
+  const bounds = isDeclaredGenericParam(ctx, baseName)
+    ? declaredGenericParamBounds(ctx, baseName)
+    : [];
+  if (bounds.length === 0) {
+    return emitUnsupportedQualifiedPath(ctx, tokenId);
+  }
+  return resolveAbstractProjection(ctx, {
+    seedTraitNames: bounds,
+    projectionBaseName: baseName,
+    assocName,
+    tokenId,
+    notFoundMessage: `cannot find associated type \`${assocName}\` among the trait bounds of \`${baseName}\``,
+  });
+}
+
+/** Validates each of a struct/enum reference's own type arguments, purely
+ * for their diagnostics - `Semantics.StructType`/`EnumType` carry no
+ * argument list of their own yet, so nothing here can substitute a struct's
+ * declared generic fields against the concrete arguments; this only makes a
+ * projection (or any other malformed type) nested inside one, e.g.
+ * `Option<Self::Item>`, actually get visited instead of silently skipped. */
+function validateTypeArguments(
+  ctx: AnalysisContext,
+  typeArguments: readonly Parser.Type[],
+): void {
+  for (const arg of typeArguments) {
+    validateSlice1Type(ctx, arg, arg.tokenId);
+  }
+}
+
 function validateNamedType(
   ctx: AnalysisContext,
   type: Parser.NamedType,
   tokenId: number,
 ): Semantics.Type {
+  if (type.path.segments.length === 2) {
+    return validateProjectionType(ctx, type, tokenId);
+  }
   if (type.path.segments.length !== 1) {
     emitError(
       ctx,
@@ -830,13 +1181,23 @@ function validateNamedType(
   const name = type.path.segments[0];
   assert(name !== undefined, "Name segment missing");
   if (name === "Self") {
-    emitError(
-      ctx,
-      "`Self` can only be used inside a trait or impl block",
-      tokenId,
-      "HEDGE-NAME-006",
-    );
-    return { kind: "UnitType", tokenId };
+    const self = currentSelfContext(ctx);
+    if (self === undefined) {
+      emitError(
+        ctx,
+        "`Self` can only be used inside a trait or impl block",
+        tokenId,
+        "HEDGE-NAME-006",
+      );
+      return { kind: "UnitType", tokenId };
+    }
+    return self.kind === "Impl"
+      ? self.targetType
+      : {
+          kind: "NamedType",
+          tokenId,
+          path: { absolute: false, segments: ["Self"] },
+        };
   }
   if (isDeclaredGenericParam(ctx, name)) {
     if (type.typeArguments.length > 0) {
@@ -854,13 +1215,10 @@ function validateNamedType(
   if (isSome(prim)) {
     return prim.value;
   }
-  const structDecl = lookupStruct(ctx, name);
-  if (structDecl !== undefined) {
-    return structDecl.type;
-  }
-  const enumDecl = lookupEnum(ctx, name);
-  if (enumDecl !== undefined) {
-    return enumDecl.type;
+  const resolved = lookupStructOrEnumType(ctx, name);
+  if (resolved !== undefined) {
+    validateTypeArguments(ctx, type.typeArguments);
+    return resolved;
   }
   emitError(
     ctx,
@@ -948,6 +1306,7 @@ function foldWidthOf(type: Semantics.Type): Option<FoldWidth> {
     case "FunctionType":
     case "ReferenceType":
     case "ArrayType":
+    case "Projection":
       return none();
     default:
       return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
@@ -1475,9 +1834,23 @@ function registerTypeDecls(
   }
 }
 
+/** Every `type Name;` (no value) declared directly in an item list - a
+ * trait's own required associated types. Shared with `providedAssociatedTypes`
+ * below, which instead wants the `some(value)` half of the same filter. */
+function requiredAssociatedTypeNames(
+  items: readonly Parser.Item[],
+): readonly string[] {
+  return items.flatMap((decl) =>
+    decl.kind === "TypeAlias" && !isSome(decl.value) ? [decl.name.text] : [],
+  );
+}
+
 /** Extracts an `impl`'s trait/target identity from the parse tree, without
  * emitting any diagnostic - duplicate/coherence checking happens once, in
- * `registerImpls`, against the whole program's impl set. */
+ * `registerImpls`, against the whole program's impl set. `resolvedMethods`/
+ * `associatedTypeDefs` are left empty here - real resolution happens only in
+ * `analyzeImplDecl`, once this impl reaches its own analysis pass with a
+ * real `SelfContext` to resolve against. */
 function buildImplDecl(item: Parser.ImplDecl): Semantics.ImplDecl {
   const targetTypeName: Option<string> =
     item.type.kind === "NamedType"
@@ -1502,14 +1875,24 @@ function buildImplDecl(item: Parser.ImplDecl): Semantics.ImplDecl {
     providedMethods: item.items
       .filter((decl): decl is Parser.FunctionDef => decl.kind === "Function")
       .map((decl) => decl.signature.name.text),
+    providedAssociatedTypes: item.items.flatMap((decl) =>
+      decl.kind === "TypeAlias" && isSome(decl.value) ? [decl.name.text] : [],
+    ),
+    resolvedMethods: [],
+    associatedTypeDefs: new Map(),
   };
 }
 
-/** Extracts a `trait`'s name, its own supertrait names, and its required
- * (bodiless) vs. default (bodied) method names from the parse tree - a
- * `LifetimeTraitBound` supertrait contributes nothing, since it names no
- * trait. */
+/** Extracts a `trait`'s name, its own supertrait names, its required
+ * (bodiless) vs. default (bodied) method names, and its own directly
+ * declared associated-type names from the parse tree - a `LifetimeTraitBound`
+ * supertrait contributes nothing, since it names no trait. `methods`' own
+ * `params`/`returnType` are left as unit placeholders here - real resolution
+ * happens only in `analyzeTraitDecl`, once this trait reaches its own
+ * analysis pass with a real `SelfContext` to resolve `Self`/`Self::Assoc`
+ * against. */
 function buildTraitDecl(item: Parser.TraitDecl): Semantics.TraitDecl {
+  const unitType: Semantics.Type = { kind: "UnitType", tokenId: item.tokenId };
   return {
     kind: "Trait",
     tokenId: item.tokenId,
@@ -1522,14 +1905,275 @@ function buildTraitDecl(item: Parser.TraitDecl): Semantics.TraitDecl {
       .map((bound) => bound.path.segments.at(-1) ?? ""),
     methods: item.items.flatMap((decl): readonly Semantics.TraitMethod[] => {
       if (decl.kind === "FunctionSignature") {
-        return [{ name: decl.name.text, isDefault: false }];
+        return [
+          {
+            name: decl.name.text,
+            isDefault: false,
+            params: [],
+            returnType: unitType,
+          },
+        ];
       }
       if (decl.kind === "Function") {
-        return [{ name: decl.signature.name.text, isDefault: true }];
+        return [
+          {
+            name: decl.signature.name.text,
+            isDefault: true,
+            params: [],
+            returnType: unitType,
+          },
+        ];
       }
       return [];
     }),
+    associatedTypes: requiredAssociatedTypeNames(item.items),
   };
+}
+
+/** Combines an enclosing trait/impl's own generics with one of its own
+ * methods' own - a method's type parameters need to be visible alongside
+ * the enclosing item's while resolving that one method's signature, but
+ * `genericParamStack` only ever consults its top frame (a deliberate
+ * scoping choice elsewhere - a nested item doesn't inherit an enclosing
+ * one's generics), so pushing the item's own generics once and the
+ * method's own separately would just have the second push shadow the
+ * first. One merged push, scoped to a single method's own resolution,
+ * makes both visible together instead. */
+function mergedGenericScope(
+  outerGenerics: readonly Parser.GenericParam[],
+  outerWhereClause: Option<Parser.WhereClause>,
+  innerGenerics: readonly Parser.GenericParam[],
+  innerWhereClause: Option<Parser.WhereClause>,
+): {
+  generics: readonly Parser.GenericParam[];
+  whereClause: Option<Parser.WhereClause>;
+} {
+  const predicates = [
+    ...(isSome(outerWhereClause) ? outerWhereClause.value.predicates : []),
+    ...(isSome(innerWhereClause) ? innerWhereClause.value.predicates : []),
+  ];
+  return {
+    generics: [...outerGenerics, ...innerGenerics],
+    whereClause:
+      predicates.length > 0
+        ? some({ kind: "WhereClause", predicates })
+        : none(),
+  };
+}
+
+/** Shared by `resolveTraitMethodSignature`/`resolveImplMethodSignature` -
+ * both need exactly this pair, resolved the same way (against the merged
+ * outer-item/method generic scope), differing only in which other fields
+ * their own `Semantics` shape carries alongside it. */
+function resolveMethodSignatureTypes(
+  ctx: AnalysisContext,
+  outerGenerics: readonly Parser.GenericParam[],
+  outerWhereClause: Option<Parser.WhereClause>,
+  signature: Parser.FunctionSignature,
+): { params: readonly Semantics.Type[]; returnType: Semantics.Type } {
+  const merged = mergedGenericScope(
+    outerGenerics,
+    outerWhereClause,
+    signature.generics,
+    signature.whereClause,
+  );
+  pushGenericParams(ctx, merged.generics, merged.whereClause);
+  const result: {
+    params: readonly Semantics.Type[];
+    returnType: Semantics.Type;
+  } = {
+    params: signature.params.map((p) =>
+      validateSlice1Type(ctx, p.type, p.type.tokenId),
+    ),
+    returnType: isSome(signature.returnType)
+      ? validateSlice1Type(
+          ctx,
+          signature.returnType.value,
+          signature.returnType.value.tokenId,
+        )
+      : { kind: "UnitType", tokenId: signature.tokenId },
+  };
+  popGenericParams(ctx);
+  return result;
+}
+
+function resolveTraitMethodSignature(
+  ctx: AnalysisContext,
+  outerGenerics: readonly Parser.GenericParam[],
+  outerWhereClause: Option<Parser.WhereClause>,
+  signature: Parser.FunctionSignature,
+  isDefault: boolean,
+): Semantics.TraitMethod {
+  return {
+    name: signature.name.text,
+    isDefault,
+    ...resolveMethodSignatureTypes(
+      ctx,
+      outerGenerics,
+      outerWhereClause,
+      signature,
+    ),
+  };
+}
+
+/** The real, diagnostic-emitting counterpart to `buildTraitDecl` - resolves
+ * every method's own `params`/`returnType` for real, with `Self`/
+ * `Self::Assoc` resolving against this trait's own abstract `SelfContext`,
+ * and each method's own generics merged alongside the trait's own (see
+ * `mergedGenericScope`). */
+function analyzeTraitDecl(
+  ctx: AnalysisContext,
+  item: Parser.TraitDecl,
+): Semantics.TraitDecl {
+  const shallow = buildTraitDecl(item);
+  pushSelfContext(ctx, {
+    kind: "Trait",
+    traitName: shallow.name,
+    associatedTypes: shallow.associatedTypes,
+  });
+  const methods = item.items.flatMap(
+    (decl): readonly Semantics.TraitMethod[] => {
+      if (decl.kind === "FunctionSignature") {
+        return [
+          resolveTraitMethodSignature(
+            ctx,
+            item.generics,
+            item.whereClause,
+            decl,
+            false,
+          ),
+        ];
+      }
+      if (decl.kind === "Function") {
+        return [
+          resolveTraitMethodSignature(
+            ctx,
+            item.generics,
+            item.whereClause,
+            decl.signature,
+            true,
+          ),
+        ];
+      }
+      return [];
+    },
+  );
+  popSelfContext(ctx);
+  return { ...shallow, methods };
+}
+
+/** The impl's own concrete `Self` type - a blanket impl's target is its own
+ * type parameter, represented the same abstract way a declared generic
+ * parameter is (see `ProjectionType`'s own doc comment); a concrete impl's
+ * target resolves through ordinary struct/enum lookup, the same path
+ * `validateNamedType` itself would take for the same bare name. */
+function resolveImplSelfTargetType(
+  ctx: AnalysisContext,
+  shallow: Semantics.ImplDecl,
+): Semantics.Type {
+  const bareTargetTypeName = shallow.targetTypeName;
+  if (!isSome(bareTargetTypeName)) {
+    return { kind: "UnitType", tokenId: shallow.tokenId };
+  }
+  if (shallow.isBlanket) {
+    return {
+      kind: "NamedType",
+      tokenId: shallow.tokenId,
+      path: { absolute: false, segments: [bareTargetTypeName.value] },
+    };
+  }
+  return (
+    lookupStructOrEnumType(ctx, bareTargetTypeName.value) ?? {
+      kind: "UnitType",
+      tokenId: shallow.tokenId,
+    }
+  );
+}
+
+function resolveImplMethodSignature(
+  ctx: AnalysisContext,
+  outerGenerics: readonly Parser.GenericParam[],
+  outerWhereClause: Option<Parser.WhereClause>,
+  signature: Parser.FunctionSignature,
+): Semantics.ImplMethod {
+  return {
+    name: signature.name.text,
+    ...resolveMethodSignatureTypes(
+      ctx,
+      outerGenerics,
+      outerWhereClause,
+      signature,
+    ),
+  };
+}
+
+/** The real, diagnostic-emitting counterpart to `buildImplDecl` - resolves
+ * each `type Name = Value;` definition first (against a concrete `Self` but
+ * no associated types yet, since one definition referencing a sibling isn't
+ * supported), then resolves every method's own signature against the now-
+ * complete associated-type map, so `Self::Item` inside a method substitutes
+ * directly to the concrete definition rather than staying a `ProjectionType`
+ * - each method's own generics merged alongside the impl's own (see
+ * `mergedGenericScope`). */
+function analyzeImplDecl(
+  ctx: AnalysisContext,
+  item: Parser.ImplDecl,
+): Semantics.ImplDecl {
+  const shallow = buildImplDecl(item);
+  const targetType = resolveImplSelfTargetType(ctx, shallow);
+  const traitName = mapSome(shallow.traitRef, (t) => t.name);
+
+  pushGenericParams(ctx, item.generics, item.whereClause);
+  pushSelfContext(ctx, {
+    kind: "Impl",
+    targetType,
+    traitName,
+    associatedTypes: new Map(),
+  });
+  const declaredNames = isSome(traitName)
+    ? declaredAssociatedTypeNames(ctx, traitName.value)
+    : undefined;
+  const associatedTypeDefs = new Map<string, Semantics.Type>();
+  for (const decl of item.items) {
+    if (decl.kind !== "TypeAlias" || !isSome(decl.value)) continue;
+    const resolvedValue = validateSlice1Type(
+      ctx,
+      decl.value.value,
+      decl.value.value.tokenId,
+    );
+    if (
+      declaredNames !== undefined &&
+      !declaredNames.includes(decl.name.text)
+    ) {
+      continue;
+    }
+    associatedTypeDefs.set(decl.name.text, resolvedValue);
+  }
+  popSelfContext(ctx);
+  popGenericParams(ctx);
+
+  pushSelfContext(ctx, {
+    kind: "Impl",
+    targetType,
+    traitName,
+    associatedTypes: associatedTypeDefs,
+  });
+  const resolvedMethods = item.items.flatMap(
+    (decl): readonly Semantics.ImplMethod[] =>
+      decl.kind === "Function"
+        ? [
+            resolveImplMethodSignature(
+              ctx,
+              item.generics,
+              item.whereClause,
+              decl.signature,
+            ),
+          ]
+        : [],
+  );
+  popSelfContext(ctx);
+
+  return { ...shallow, resolvedMethods, associatedTypeDefs };
 }
 
 /**
@@ -1626,29 +2270,40 @@ function typeIdentity(type: Semantics.Type): string {
 }
 
 /**
- * Resolves `typeName: traitName` against a concrete type name, via a
- * concrete registered impl or a blanket impl whose own bound is satisfied.
- * A blanket impl's bound is checked recursively (its own `A` in
- * `impl<T: A> B for T` may itself be satisfied only through another
- * blanket impl) - `typeName` is always concrete here, so this never
- * revisits `resolveTraitBound`'s abstract-parameter case.
+ * Finds the registered impl satisfying `typeName: traitName` - a concrete
+ * registered impl, or a blanket impl whose own bound is satisfied (checked
+ * recursively, since a blanket impl's own `A` in `impl<T: A> B for T` may
+ * itself be satisfied only through another blanket impl). `typeName` is
+ * always concrete here, so this never revisits `resolveTraitBound`'s
+ * abstract-parameter case. Shared by `resolveTraitBoundForTypeName` (builds
+ * a witness from the result) and `resolveAssociatedTypeViaSupertrait`
+ * (reads the impl's own associated-type definitions instead).
  */
-function resolveTraitBoundForTypeName(
+function findRegisteredImpl(
   ctx: AnalysisContext,
   typeName: string,
   traitName: string,
   visiting: ReadonlySet<string> = new Set(),
-): Option<WitnessRef> {
+): RegisteredImpl | undefined {
   const key = `${typeName}::${traitName}`;
-  if (visiting.has(key)) return none();
+  if (visiting.has(key)) return undefined;
   const nextVisiting = new Set(visiting).add(key);
-  const impl = ctx.implRegistry.find((impl) => {
+  return ctx.implRegistry.find((impl) => {
     if (impl.traitName !== traitName) return false;
     if (!impl.isBlanket) return impl.targetTypeName === typeName;
-    return impl.blanketBounds.every((bound) =>
-      isSome(resolveTraitBoundForTypeName(ctx, typeName, bound, nextVisiting)),
+    return impl.blanketBounds.every(
+      (bound) =>
+        findRegisteredImpl(ctx, typeName, bound, nextVisiting) !== undefined,
     );
   });
+}
+
+function resolveTraitBoundForTypeName(
+  ctx: AnalysisContext,
+  typeName: string,
+  traitName: string,
+): Option<WitnessRef> {
+  const impl = findRegisteredImpl(ctx, typeName, traitName);
   if (impl === undefined) return none();
   return some({
     kind: "Impl",
@@ -1657,6 +2312,32 @@ function resolveTraitBoundForTypeName(
     implTokenId: impl.tokenId,
     methods: witnessMethods(ctx, impl),
   });
+}
+
+/** `Self::assocName` inside an impl, when the impl's own definitions don't
+ * have it directly - searches `traitName`'s own supertraits for the one
+ * that actually declares `assocName`, then reads *that* trait's own
+ * separately registered impl for the same `targetType` (not this impl -
+ * a supertrait's associated type is defined wherever the supertrait itself
+ * is implemented, never required to be repeated in a subtrait's own impl
+ * body, the same way a supertrait's methods aren't). `undefined` covers
+ * every way this can fail to resolve (no declaring trait, ambiguous, or no
+ * such impl registered) - the caller's existing "not found" error already
+ * covers all of them without needing to tell them apart. */
+function resolveAssociatedTypeViaSupertrait(
+  ctx: AnalysisContext,
+  traitName: string,
+  targetType: Semantics.Type,
+  assocName: string,
+): Semantics.Type | undefined {
+  const result = resolveAssociatedTypeTrait(ctx, [traitName], assocName);
+  if (result.kind !== "Found") return undefined;
+  const impl = findRegisteredImpl(
+    ctx,
+    typeIdentity(targetType),
+    result.traitName,
+  );
+  return impl?.associatedTypeDefs.get(assocName);
 }
 
 /** An impl's own witness method list: every one of its trait's methods, in
@@ -1887,6 +2568,7 @@ function registerTraits(
     ctx.traitRegistry.set(decl.name, {
       supertraits: decl.supertraits,
       methods: decl.methods,
+      associatedTypes: decl.associatedTypes,
     });
     traitItems.push(item);
   }
@@ -1993,6 +2675,65 @@ function reportMissingRequiredMethods(
   }
 }
 
+/** Mirrors `reportMissingRequiredMethods` for a trait's own required
+ * associated types (`type Name;`, no value) - every required one absent
+ * from this impl's own `type Name = Value;` definitions is a separate
+ * diagnostic. */
+function reportMissingAssociatedTypes(
+  ctx: AnalysisContext,
+  item: Parser.ImplDecl,
+  traitName: string,
+  targetTypeName: string,
+  providedAssociatedTypes: readonly string[],
+): void {
+  const required = ctx.traitRegistry.get(traitName)?.associatedTypes ?? [];
+  for (const name of required) {
+    if (providedAssociatedTypes.includes(name)) continue;
+    emitError(
+      ctx,
+      `impl of trait \`${traitName}\` for \`${bareTypeName(targetTypeName)}\` is missing associated type \`${name}\``,
+      item.tokenId,
+      "HEDGE-TRAIT-004",
+    );
+  }
+}
+
+/** `traitName`'s own directly declared associated-type names (empty for an
+ * unregistered or associated-type-free trait) - shared by the completeness
+ * check above and the two places that build an impl's own resolved
+ * `associatedTypeDefs` map, so a definition the trait doesn't declare is
+ * excluded from both consistently, not just flagged in one of them. */
+function declaredAssociatedTypeNames(
+  ctx: AnalysisContext,
+  traitName: string,
+): readonly string[] {
+  return ctx.traitRegistry.get(traitName)?.associatedTypes ?? [];
+}
+
+/** The mirror image of `reportMissingAssociatedTypes`: a `type Name =
+ * Value;` this impl defines that the trait doesn't declare at all (as
+ * opposed to omitting one the trait requires) - reported once here, in the
+ * same prepass, rather than in `analyzeImplDecl`'s own real pass, so it
+ * isn't double-reported once per pass. */
+function reportExtraAssociatedTypes(
+  ctx: AnalysisContext,
+  item: Parser.ImplDecl,
+  traitName: string,
+  targetTypeName: string,
+  providedAssociatedTypes: readonly string[],
+): void {
+  const declared = declaredAssociatedTypeNames(ctx, traitName);
+  for (const name of providedAssociatedTypes) {
+    if (declared.includes(name)) continue;
+    emitError(
+      ctx,
+      `impl of trait \`${traitName}\` for \`${bareTypeName(targetTypeName)}\` defines associated type \`${name}\`, which trait \`${traitName}\` does not declare`,
+      item.tokenId,
+      "HEDGE-TRAIT-007",
+    );
+  }
+}
+
 /** Registers one `impl`'s coherence/completeness/visibility facts, or
  * `undefined` for a not-yet-handled shape (no trait, or a target that
  * doesn't resolve to any struct/enum in scope). Split out of `registerImpls`
@@ -2027,12 +2768,25 @@ function registerOneImpl(
     );
     return undefined;
   }
+  const declaredNames = declaredAssociatedTypeNames(ctx, traitName);
+  pushGenericParams(ctx, item.generics, item.whereClause);
+  const associatedTypeDefs = new Map<string, Semantics.Type>();
+  for (const alias of item.items) {
+    if (alias.kind !== "TypeAlias" || !isSome(alias.value)) continue;
+    if (!declaredNames.includes(alias.name.text)) continue;
+    associatedTypeDefs.set(
+      alias.name.text,
+      resolveSlice1Type(ctx, alias.value.value, alias.value.value.tokenId),
+    );
+  }
+  popGenericParams(ctx);
   const incoming: RegisteredImpl = {
     traitName,
     targetTypeName: targetTypeName.value,
     isBlanket: decl.isBlanket,
     blanketBounds: decl.blanketBounds,
     providedMethods: decl.providedMethods,
+    associatedTypeDefs,
     tokenId: item.tokenId,
   };
   const existing = ctx.implRegistry.find(
@@ -2058,6 +2812,20 @@ function registerOneImpl(
     traitName,
     incoming.targetTypeName,
     decl.providedMethods,
+  );
+  reportMissingAssociatedTypes(
+    ctx,
+    item,
+    traitName,
+    incoming.targetTypeName,
+    decl.providedAssociatedTypes,
+  );
+  reportExtraAssociatedTypes(
+    ctx,
+    item,
+    traitName,
+    incoming.targetTypeName,
+    decl.providedAssociatedTypes,
   );
   return incoming;
 }
@@ -3935,9 +4703,9 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
       return cached?.tokenId === item.tokenId ? cached : analyzeEnum(ctx, item);
     }
     case "Trait":
-      return buildTraitDecl(item);
+      return analyzeTraitDecl(ctx, item);
     case "Impl":
-      return buildImplDecl(item);
+      return analyzeImplDecl(ctx, item);
     case "TypeAlias":
       return { kind: "TypeAlias", tokenId: item.tokenId };
     case "Const":
@@ -4143,6 +4911,34 @@ function analyzeCharLiteral(
   return { ...charLiteral, type: { kind: "PrimitiveCharType" } };
 }
 
+/** Non-emitting counterpart to `validateProjectionType`'s bound-parameter
+ * branch - `undefined` for anything that doesn't cleanly resolve (an
+ * unbound or ambiguous base), since the caller's own fallback to `UnitType`
+ * already covers every failure case without needing to distinguish them. */
+function resolveProjectionType(
+  ctx: AnalysisContext,
+  type: Parser.NamedType,
+  fallbackTokenId: number,
+): Semantics.Type | undefined {
+  const baseName = type.path.segments[0];
+  const assocName = type.path.segments[1];
+  if (
+    baseName === undefined ||
+    assocName === undefined ||
+    !isDeclaredGenericParam(ctx, baseName)
+  ) {
+    return undefined;
+  }
+  const result = resolveAssociatedTypeTrait(
+    ctx,
+    declaredGenericParamBounds(ctx, baseName),
+    assocName,
+  );
+  return result.kind === "Found"
+    ? makeProjectionType(fallbackTokenId, result.traitName, assocName, baseName)
+    : undefined;
+}
+
 /**
  * Must resolve user-declared names too, not just primitives, or every
  * struct and enum in a signature becomes `()` and call-site checking
@@ -4161,10 +4957,12 @@ function resolveNamedType(
     }
     const prim = namedTypeToPrimitive(name);
     if (isSome(prim)) return prim.value;
-    const structDecl = lookupStruct(ctx, name);
-    if (structDecl !== undefined) return structDecl.type;
-    const enumDecl = lookupEnum(ctx, name);
-    if (enumDecl !== undefined) return enumDecl.type;
+    const resolved = lookupStructOrEnumType(ctx, name);
+    if (resolved !== undefined) return resolved;
+  }
+  if (type.path.segments.length === 2) {
+    const projection = resolveProjectionType(ctx, type, fallbackTokenId);
+    if (projection !== undefined) return projection;
   }
   return { kind: "UnitType", tokenId: fallbackTokenId };
 }
@@ -4628,9 +5426,9 @@ function analyzeStatement(
       // this analyzes the (runtime, not const-folded) initializer itself.
       return analyzeStaticDecl(ctx, statement);
     case "Trait":
-      return buildTraitDecl(statement);
+      return analyzeTraitDecl(ctx, statement);
     case "Impl":
-      return buildImplDecl(statement);
+      return analyzeImplDecl(ctx, statement);
     default:
       assertNever(
         statement,
@@ -4801,6 +5599,8 @@ function describeType(type: Semantics.Type): string {
       return type.path.segments.at(-1) ?? "unknown";
     case "FunctionType":
       return `fn(${type.params.map(describeType).join(", ")}) -> ${describeType(type.returnType)}`;
+    case "Projection":
+      return `${describeType(type.selfType)}::${type.assocName}`;
     default:
       return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
@@ -4953,19 +5753,68 @@ function checkCoercedLiteralRange(
   }
 }
 
+/**
+ * Structural equality of two resolved types. A `NamedType` here is a
+ * still-abstract generic parameter, compared by name. `FunctionType` is
+ * compared by kind alone - its parameter and return types are not checked.
+ * The final group is every payload-free primitive plus
+ * `UnitType`: matching `kind` (already established by the guard) is the
+ * whole comparison, and the exhaustive switch forces a new payload-bearing
+ * `Type` variant to be classified here rather than silently landing in it.
+ */
 // eslint-disable-next-line complexity -- Routing function over the full Type union
 function typesEqual(a: Semantics.Type, b: Semantics.Type): boolean {
   if (a.kind !== b.kind) return false;
-  if (a.kind === "StructType" && b.kind === "StructType")
-    return a.name === b.name;
-  if (a.kind === "EnumType" && b.kind === "EnumType") return a.name === b.name;
-  if (a.kind === "ReferenceType" && b.kind === "ReferenceType")
-    return a.mutable === b.mutable && typesEqual(a.referent, b.referent);
-  if (a.kind === "ArrayType" && b.kind === "ArrayType")
-    return a.length === b.length && typesEqual(a.elementType, b.elementType);
-  if (a.kind === "NamedType" && b.kind === "NamedType")
-    return a.path.segments.join("::") === b.path.segments.join("::");
-  return true;
+  switch (a.kind) {
+    case "StructType":
+      return b.kind === "StructType" && a.name === b.name;
+    case "EnumType":
+      return b.kind === "EnumType" && a.name === b.name;
+    case "NamedType":
+      return (
+        b.kind === "NamedType" &&
+        a.path.segments.join("::") === b.path.segments.join("::")
+      );
+    case "ReferenceType":
+      return (
+        b.kind === "ReferenceType" &&
+        a.mutable === b.mutable &&
+        typesEqual(a.referent, b.referent)
+      );
+    case "ArrayType":
+      return (
+        b.kind === "ArrayType" &&
+        a.length === b.length &&
+        typesEqual(a.elementType, b.elementType)
+      );
+    case "Projection":
+      return (
+        b.kind === "Projection" &&
+        a.traitName === b.traitName &&
+        a.assocName === b.assocName &&
+        typesEqual(a.selfType, b.selfType)
+      );
+    case "FunctionType":
+    case "UnitType":
+    case "PrimitiveI8Type":
+    case "PrimitiveI16Type":
+    case "PrimitiveI32Type":
+    case "PrimitiveI64Type":
+    case "PrimitiveIsizeType":
+    case "PrimitiveU8Type":
+    case "PrimitiveU16Type":
+    case "PrimitiveU32Type":
+    case "PrimitiveU64Type":
+    case "PrimitiveUsizeType":
+    case "PrimitiveF32Type":
+    case "PrimitiveF64Type":
+    case "PrimitiveBooleanType":
+    case "PrimitiveCharType":
+    case "PrimitiveStringType":
+      return true;
+    default:
+      return assertNever(a, `Unexpected type: ${JSON.stringify(a)}`);
+  }
 }
 
 function isIntegerType(type: Semantics.Type): boolean {
@@ -7379,6 +8228,7 @@ export function analyze(
     implRegistry: [],
     traitRegistry: new Map(),
     witnessTable: new Map(),
+    selfContextStack: [],
   };
   // Before functions, so a signature can name any declared type.
   registerTypeDecls(ctx, program.items);
