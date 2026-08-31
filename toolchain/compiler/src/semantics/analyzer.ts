@@ -943,9 +943,10 @@ function emitAmbiguousAssociatedType(
   assocName: string,
   matches: readonly string[],
 ): Semantics.Type {
+  const matchList = matches.map((n) => `\`${n}\``).join(", ");
   emitError(
     ctx,
-    `associated type \`${assocName}\` is ambiguous between traits ${matches.map((n) => `\`${n}\``).join(", ")}`,
+    `associated type \`${assocName}\` is ambiguous between traits ${matchList}`,
     tokenId,
     "HEDGE-TRAIT-006",
   );
