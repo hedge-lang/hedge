@@ -161,6 +161,16 @@ type SelfContext =
       readonly associatedTypes: ReadonlyMap<string, Semantics.Type>;
     };
 
+/** The trait method that stops a `dyn` object from being formed: one that
+ * takes `Self` in a non-receiver argument position. `declaringTrait` is the
+ * trait that declares it - the `dyn`'d trait itself, or one of its
+ * supertraits. A generic method and a `Self` return type both stay safe,
+ * unlike in Rust. */
+interface SelfArgMethod {
+  readonly methodName: string;
+  readonly declaringTrait: string;
+}
+
 /** One registered trait's own supertrait and required-method names, for
  * checking an impl of it against both, plus its own directly declared
  * associated-type names for projection resolution. */
@@ -168,11 +178,9 @@ interface RegisteredTrait {
   readonly supertraits: readonly string[];
   readonly methods: readonly Semantics.TraitMethod[];
   readonly associatedTypes: readonly string[];
-  /** `some({ methodName })` when a method takes `Self` in a non-receiver
-   * argument position - the only rule that makes a trait non-object-safe
-   * here. A generic method and a `Self` return type both stay safe, unlike
-   * in Rust. */
-  readonly notObjectSafe: Option<{ readonly methodName: string }>;
+  /** `none()` when the trait is object-safe, accounting for its supertraits
+   * (see `propagateSupertraitObjectSafety`). */
+  readonly notObjectSafe: Option<SelfArgMethod>;
 }
 
 /** One registered trait impl, extracted just far enough for coherence and
@@ -1293,13 +1301,24 @@ function validateDynType(
   if (isSome(registered.notObjectSafe)) {
     emitError(
       ctx,
-      `trait \`${traitName}\` cannot be made into a \`dyn\` object: method \`${registered.notObjectSafe.value.methodName}\` takes \`Self\` as a non-receiver argument`,
+      notObjectSafeMessage(traitName, registered.notObjectSafe.value),
       tokenId,
       "HEDGE-TRAIT-008",
     );
     return { kind: "UnitType", tokenId };
   }
   return { kind: "DynType", tokenId, traitName };
+}
+
+function notObjectSafeMessage(
+  traitName: string,
+  offender: SelfArgMethod,
+): string {
+  const method =
+    offender.declaringTrait === traitName
+      ? `method \`${offender.methodName}\``
+      : `supertrait \`${offender.declaringTrait}\`'s method \`${offender.methodName}\``;
+  return `trait \`${traitName}\` cannot be made into a \`dyn\` object: ${method} takes \`Self\` as a non-receiver argument`;
 }
 
 /** Maps a resolved declared type to the width const-folding wraps/rounds at; `none()` for a non-numeric type. */
@@ -2604,21 +2623,60 @@ function typeMentionsSelf(type: Parser.Type): boolean {
   }
 }
 
-/** The first trait method that takes `Self` in a non-receiver argument
- * position - `none()` when the trait is object-safe. A `Receiver` carries no
- * type of its own, so every `Self` reachable through a method's `params` is
- * necessarily non-receiver. */
-function firstSelfArgMethod(
-  item: Parser.TraitDecl,
-): Option<{ readonly methodName: string }> {
+/** The trait's own first method taking `Self` in a non-receiver argument
+ * position - `none()` when the trait's own methods are all object-safe
+ * (supertraits are folded in later by `propagateSupertraitObjectSafety`). A
+ * `Receiver` carries no type of its own, so every `Self` reachable through a
+ * method's `params` is necessarily non-receiver. */
+function ownSelfArgMethod(item: Parser.TraitDecl): Option<SelfArgMethod> {
   for (const member of item.items) {
     if (member.kind !== "Function" && member.kind !== "FunctionSignature") {
       continue;
     }
     const signature = member.kind === "Function" ? member.signature : member;
     if (signature.params.some((param) => typeMentionsSelf(param.type))) {
-      return some({ methodName: signature.name.text });
+      return some({
+        methodName: signature.name.text,
+        declaringTrait: item.name.text,
+      });
     }
+  }
+  return none();
+}
+
+/** After every trait is registered with its own object-safety verdict, a
+ * trait with an object-safe body still isn't object-safe if any trait in its
+ * supertrait chain isn't. */
+function propagateSupertraitObjectSafety(ctx: AnalysisContext): void {
+  for (const [name, trait] of ctx.traitRegistry) {
+    if (isSome(trait.notObjectSafe)) continue;
+    const viaSupertrait = firstNonObjectSafeSupertrait(
+      ctx,
+      trait.supertraits,
+      new Set([name]),
+    );
+    if (isSome(viaSupertrait)) {
+      ctx.traitRegistry.set(name, { ...trait, notObjectSafe: viaSupertrait });
+    }
+  }
+}
+
+function firstNonObjectSafeSupertrait(
+  ctx: AnalysisContext,
+  supertraitNames: readonly string[],
+  visiting: ReadonlySet<string>,
+): Option<SelfArgMethod> {
+  for (const supertraitName of supertraitNames) {
+    if (visiting.has(supertraitName)) continue;
+    const supertrait = ctx.traitRegistry.get(supertraitName);
+    if (supertrait === undefined) continue;
+    if (isSome(supertrait.notObjectSafe)) return supertrait.notObjectSafe;
+    const viaChain = firstNonObjectSafeSupertrait(
+      ctx,
+      supertrait.supertraits,
+      new Set(visiting).add(supertraitName),
+    );
+    if (isSome(viaChain)) return viaChain;
   }
   return none();
 }
@@ -2629,7 +2687,8 @@ function firstSelfArgMethod(
  * only the traits just registered - so `trait A: B {}` declared before
  * `trait B {}` still resolves (both are registered before either's
  * supertraits are checked), while a genuinely undeclared supertrait is
- * still rejected.
+ * still rejected. Supertrait object safety is folded in last, once every
+ * trait's own verdict is known.
  */
 function registerTraits(
   ctx: AnalysisContext,
@@ -2643,13 +2702,14 @@ function registerTraits(
       supertraits: decl.supertraits,
       methods: decl.methods,
       associatedTypes: decl.associatedTypes,
-      notObjectSafe: firstSelfArgMethod(item),
+      notObjectSafe: ownSelfArgMethod(item),
     });
     traitItems.push(item);
   }
   for (const item of traitItems) {
     validateTraitBoundNames(ctx, item.supertraits);
   }
+  propagateSupertraitObjectSafety(ctx);
 }
 
 /**

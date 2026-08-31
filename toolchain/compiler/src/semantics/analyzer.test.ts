@@ -4368,6 +4368,76 @@ describe("dyn Trait object safety", (): void => {
     `);
     expectNotObjectSafe(result.diagnostics, "Combine", "combine");
   });
+
+  function expectNotObjectSafeViaSupertrait(
+    diagnostics: AnalysisResult["diagnostics"],
+    traitName: string,
+    supertraitName: string,
+    methodName: string,
+  ): void {
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].code).toBe("HEDGE-TRAIT-008");
+    expect(diagnostics[0].message).toBe(
+      `trait \`${traitName}\` cannot be made into a \`dyn\` object: supertrait \`${supertraitName}\`'s method \`${methodName}\` takes \`Self\` as a non-receiver argument`,
+    );
+  }
+
+  it("rejects dyn of a trait whose supertrait is not object-safe", (): void => {
+    const result = diagnose(`
+      trait Combine {
+        fn combine(&self, other: Self);
+      }
+      trait Extended: Combine {
+        fn describe(&self) -> i32;
+      }
+      fn f(x: dyn Extended) {}
+    `);
+    expectNotObjectSafeViaSupertrait(
+      result.diagnostics,
+      "Extended",
+      "Combine",
+      "combine",
+    );
+  });
+
+  it("rejects dyn of a trait whose non-object-safe supertrait is reached transitively", (): void => {
+    const result = diagnose(`
+      trait Base {
+        fn take(&self, other: Self);
+      }
+      trait Middle: Base {}
+      trait Top: Middle {}
+      fn f(x: dyn Top) {}
+    `);
+    expectNotObjectSafeViaSupertrait(result.diagnostics, "Top", "Base", "take");
+  });
+
+  it("accepts dyn of a trait whose supertraits are all object-safe", (): void => {
+    const result = diagnose(`
+      trait Base {
+        fn size(&self) -> i32;
+      }
+      trait Extended: Base {
+        fn describe(&self) -> i32;
+      }
+      fn f(x: dyn Extended) {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("reports one diagnostic when a trait and its supertrait both take a Self argument", (): void => {
+    const result = diagnose(`
+      trait Combine {
+        fn combine(&self, other: Self);
+      }
+      trait Extended: Combine {
+        fn merge(&self, other: Self);
+      }
+      fn f(x: dyn Extended) {}
+    `);
+    expectNotObjectSafe(result.diagnostics, "Extended", "merge");
+  });
 });
 
 describe("generic parameter shadowing an outer type of the same name", (): void => {
