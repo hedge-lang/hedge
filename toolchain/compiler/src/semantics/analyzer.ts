@@ -5752,25 +5752,68 @@ function checkCoercedLiteralRange(
   }
 }
 
+/**
+ * Structural equality of two resolved types. A `NamedType` here is a
+ * still-abstract generic parameter, compared by name. `FunctionType` is
+ * compared by kind alone - its parameter and return types are not checked.
+ * The final group is every payload-free primitive plus
+ * `UnitType`: matching `kind` (already established by the guard) is the
+ * whole comparison, and the exhaustive switch forces a new payload-bearing
+ * `Type` variant to be classified here rather than silently landing in it.
+ */
 // eslint-disable-next-line complexity -- Routing function over the full Type union
 function typesEqual(a: Semantics.Type, b: Semantics.Type): boolean {
   if (a.kind !== b.kind) return false;
-  if (a.kind === "StructType" && b.kind === "StructType")
-    return a.name === b.name;
-  if (a.kind === "EnumType" && b.kind === "EnumType") return a.name === b.name;
-  if (a.kind === "ReferenceType" && b.kind === "ReferenceType")
-    return a.mutable === b.mutable && typesEqual(a.referent, b.referent);
-  if (a.kind === "ArrayType" && b.kind === "ArrayType")
-    return a.length === b.length && typesEqual(a.elementType, b.elementType);
-  if (a.kind === "NamedType" && b.kind === "NamedType")
-    return a.path.segments.join("::") === b.path.segments.join("::");
-  if (a.kind === "Projection" && b.kind === "Projection")
-    return (
-      a.traitName === b.traitName &&
-      a.assocName === b.assocName &&
-      typesEqual(a.selfType, b.selfType)
-    );
-  return true;
+  switch (a.kind) {
+    case "StructType":
+      return b.kind === "StructType" && a.name === b.name;
+    case "EnumType":
+      return b.kind === "EnumType" && a.name === b.name;
+    case "NamedType":
+      return (
+        b.kind === "NamedType" &&
+        a.path.segments.join("::") === b.path.segments.join("::")
+      );
+    case "ReferenceType":
+      return (
+        b.kind === "ReferenceType" &&
+        a.mutable === b.mutable &&
+        typesEqual(a.referent, b.referent)
+      );
+    case "ArrayType":
+      return (
+        b.kind === "ArrayType" &&
+        a.length === b.length &&
+        typesEqual(a.elementType, b.elementType)
+      );
+    case "Projection":
+      return (
+        b.kind === "Projection" &&
+        a.traitName === b.traitName &&
+        a.assocName === b.assocName &&
+        typesEqual(a.selfType, b.selfType)
+      );
+    case "FunctionType":
+    case "UnitType":
+    case "PrimitiveI8Type":
+    case "PrimitiveI16Type":
+    case "PrimitiveI32Type":
+    case "PrimitiveI64Type":
+    case "PrimitiveIsizeType":
+    case "PrimitiveU8Type":
+    case "PrimitiveU16Type":
+    case "PrimitiveU32Type":
+    case "PrimitiveU64Type":
+    case "PrimitiveUsizeType":
+    case "PrimitiveF32Type":
+    case "PrimitiveF64Type":
+    case "PrimitiveBooleanType":
+    case "PrimitiveCharType":
+    case "PrimitiveStringType":
+      return true;
+    default:
+      return assertNever(a, `Unexpected type: ${JSON.stringify(a)}`);
+  }
 }
 
 function isIntegerType(type: Semantics.Type): boolean {
