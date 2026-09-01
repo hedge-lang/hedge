@@ -1310,6 +1310,18 @@ function ambiguousDropMessage(name: string, state: MoveState): string {
   }
 }
 
+/** A type that is move-only for tracking purposes but has no witness-based
+ * `Drop` to call, so it can't get a scope-end `using` (which would throw at
+ * runtime). A bare generic parameter (`T`), an unresolved trait projection
+ * (`T::Item`), and a `dyn Trait` value are all this abstract-type case. */
+function hasNoScopeEndDrop(type: Semantics.Type): boolean {
+  return (
+    type.kind === "NamedType" ||
+    type.kind === "Projection" ||
+    type.kind === "DynType"
+  );
+}
+
 /**
  * Reverse-order walk over `declarations` gives reverse-declaration-order
  * dropping for free. Skipping `Copy` types and keeping only bindings
@@ -1339,15 +1351,7 @@ function recordDrops(
     if (
       declaration === undefined ||
       hasCapability(declaration.type, "copy") ||
-      // A bare generic-parameter type is move-only for tracking purposes
-      // (see type-capabilities.ts) but still can't get a scope-end `using`
-      // - there's no witness-based Drop to call yet, so wrapping it would
-      // throw at runtime for any concrete instantiation. Skip drop
-      // generation for it specifically, without touching its Copy-ness. An
-      // unresolved trait projection (`T::Item`) is the same abstract-type
-      // case one level removed, so it needs the same skip.
-      declaration.type.kind === "NamedType" ||
-      declaration.type.kind === "Projection"
+      hasNoScopeEndDrop(declaration.type)
     ) {
       continue;
     }

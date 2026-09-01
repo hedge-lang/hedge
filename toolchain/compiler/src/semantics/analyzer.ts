@@ -82,6 +82,10 @@ interface ScopeFrame {
   readonly staticTypes: Map<string, Semantics.Type>;
   readonly types: Map<string, Semantics.StructDecl>;
   readonly enums: Map<string, Semantics.EnumDecl>;
+  /** Trait name -> its declaration's name tokenId, so a reference resolves
+   * to the lexically-visible declaration and `traitRegistry` (keyed by
+   * `scopedTypeName`) is looked up by identity, not bare name. */
+  readonly traits: Map<string, number>;
 }
 
 /**
@@ -161,6 +165,16 @@ type SelfContext =
       readonly associatedTypes: ReadonlyMap<string, Semantics.Type>;
     };
 
+/** The trait method that stops a `dyn` object from being formed: one that
+ * takes `Self` in a non-receiver argument position. `declaringTrait` is the
+ * trait that declares it - the `dyn`'d trait itself, or one of its
+ * supertraits. A generic method and a `Self` return type both stay safe,
+ * unlike in Rust. */
+interface SelfArgMethod {
+  readonly methodName: string;
+  readonly declaringTrait: string;
+}
+
 /** One registered trait's own supertrait and required-method names, for
  * checking an impl of it against both, plus its own directly declared
  * associated-type names for projection resolution. */
@@ -168,6 +182,9 @@ interface RegisteredTrait {
   readonly supertraits: readonly string[];
   readonly methods: readonly Semantics.TraitMethod[];
   readonly associatedTypes: readonly string[];
+  /** `none()` when the trait is object-safe, accounting for its supertraits
+   * (see `propagateSupertraitObjectSafety`). */
+  readonly notObjectSafe: Option<SelfArgMethod>;
 }
 
 /** One registered trait impl, extracted just far enough for coherence and
@@ -194,6 +211,7 @@ function newScopeFrame(): ScopeFrame {
     staticTypes: new Map(),
     types: new Map(),
     enums: new Map(),
+    traits: new Map(),
   };
 }
 
@@ -255,6 +273,23 @@ function genericParamBoundNames(
   return bounds;
 }
 
+/** Resolves every bound name in a `param -> bound names` map to its
+ * scope-qualified `traitRegistry` key, against the scope in effect now -
+ * used when building a signature's persisted `genericParamBounds`, so a
+ * later call site checks the trait visible where the callee was declared,
+ * not where it's called. */
+function resolveBoundNames(
+  ctx: AnalysisContext,
+  bounds: ReadonlyMap<string, readonly string[]>,
+): ReadonlyMap<string, readonly string[]> {
+  return new Map(
+    [...bounds].map(([param, names]) => [
+      param,
+      names.map((name) => lookupTrait(ctx, name) ?? name),
+    ]),
+  );
+}
+
 /** Extracts the trait names from a list of `TraitBound`s - a
  * `LifetimeTraitBound` (`T: 'a`) contributes nothing, since it names no
  * trait. Shared by inline (`T: Draw`) and `where`-clause (`where T: Draw`)
@@ -270,6 +305,17 @@ function traitBoundNames(
     .map((bound) => bound.path.segments.at(-1) ?? "");
 }
 
+/** Whether any registered trait carries this bare name, regardless of the
+ * scope it was declared in - an existence check, not identity resolution
+ * (which happens at the reference's own use site). */
+function traitNameIsRegistered(ctx: AnalysisContext, name: string): boolean {
+  const suffix = `::${name}`;
+  for (const key of ctx.traitRegistry.keys()) {
+    if (key === name || key.endsWith(suffix)) return true;
+  }
+  return false;
+}
+
 /** Rejects any trait bound naming a trait that isn't declared - a sibling
  * of `traitBoundNames`, which only extracts names and never checks them.
  * Callers run this once `ctx.traitRegistry` is known to be fully populated
@@ -283,7 +329,7 @@ function validateTraitBoundNames(
   for (const bound of bounds) {
     if (bound.kind !== "PathTraitBound") continue;
     const name = bound.path.segments.at(-1) ?? "";
-    if (ctx.traitRegistry.has(name)) continue;
+    if (traitNameIsRegistered(ctx, name)) continue;
     emitError(
       ctx,
       `cannot find trait \`${name}\` in this scope`,
@@ -337,14 +383,17 @@ function isDeclaredGenericParam(ctx: AnalysisContext, name: string): boolean {
 }
 
 /** The innermost open item's own declared bounds for one of its type
- * parameters - empty for a parameter with no bounds, or one not declared
- * by the innermost item at all. */
+ * parameters, each resolved to its scope-qualified `traitRegistry` key -
+ * empty for a parameter with no bounds, or one not declared by the innermost
+ * item at all. */
 function declaredGenericParamBounds(
   ctx: AnalysisContext,
   name: string,
 ): readonly string[] {
   const innermost = ctx.genericParamBoundStack.at(-1);
-  return innermost?.get(name) ?? [];
+  return (innermost?.get(name) ?? []).map(
+    (bound) => lookupTrait(ctx, bound) ?? bound,
+  );
 }
 
 function pushSelfContext(ctx: AnalysisContext, self: SelfContext): void {
@@ -562,6 +611,17 @@ function lookupEnum(
   for (let i = ctx.frames.length - 1; i >= 0; i -= 1) {
     const decl = ctx.frames[i]?.enums.get(name);
     if (decl !== undefined) return decl;
+  }
+  return undefined;
+}
+
+/** Innermost-first: the scope-qualified `traitRegistry` key a bare trait
+ * name resolves to in the current scope, or `undefined` if no trait of that
+ * name is visible. */
+function lookupTrait(ctx: AnalysisContext, name: string): string | undefined {
+  for (let i = ctx.frames.length - 1; i >= 0; i -= 1) {
+    const tokenId = ctx.frames[i]?.traits.get(name);
+    if (tokenId !== undefined) return scopedTypeName(tokenId, name);
   }
   return undefined;
 }
@@ -943,7 +1003,7 @@ function emitAmbiguousAssociatedType(
   assocName: string,
   matches: readonly string[],
 ): Semantics.Type {
-  const matchList = matches.map((n) => `\`${n}\``).join(", ");
+  const matchList = matches.map((n) => `\`${bareTypeName(n)}\``).join(", ");
   emitError(
     ctx,
     `associated type \`${assocName}\` is ambiguous between traits ${matchList}`,
@@ -1107,7 +1167,7 @@ function validateSelfProjection(
     projectionBaseName: "Self",
     assocName,
     tokenId,
-    notFoundMessage: `cannot find associated type \`${assocName}\` on trait \`${self.traitName}\``,
+    notFoundMessage: `cannot find associated type \`${assocName}\` on trait \`${bareTypeName(self.traitName)}\``,
   });
 }
 
@@ -1258,16 +1318,56 @@ function validateSlice1Type(
         : { kind: "UnitType", tokenId };
     }
     case "DynType":
-      emitError(
-        ctx,
-        "`dyn Trait` types are not supported yet",
-        tokenId,
-        "HEDGE-UNSUPPORTED-001",
-      );
-      return { kind: "UnitType", tokenId };
+      return validateDynType(ctx, type, tokenId);
     default:
       assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
+}
+
+function validateDynType(
+  ctx: AnalysisContext,
+  type: Parser.DynType,
+  tokenId: number,
+): Semantics.Type {
+  const bareName = type.bound.path.segments.at(-1) ?? "";
+  const traitId = lookupTrait(ctx, bareName);
+  const registered =
+    traitId === undefined ? undefined : ctx.traitRegistry.get(traitId);
+  if (registered === undefined || traitId === undefined) {
+    const namesSomethingElse =
+      isSome(namedTypeToPrimitive(bareName)) ||
+      lookupStructOrEnumType(ctx, bareName) !== undefined;
+    emitError(
+      ctx,
+      namesSomethingElse
+        ? `\`${bareName}\` is not a trait`
+        : `cannot find trait \`${bareName}\` in this scope`,
+      tokenId,
+      "HEDGE-NAME-001",
+    );
+    return { kind: "UnitType", tokenId };
+  }
+  if (isSome(registered.notObjectSafe)) {
+    emitError(
+      ctx,
+      notObjectSafeMessage(bareName, registered.notObjectSafe.value),
+      tokenId,
+      "HEDGE-TRAIT-008",
+    );
+    return { kind: "UnitType", tokenId };
+  }
+  return { kind: "DynType", tokenId, traitId };
+}
+
+function notObjectSafeMessage(
+  traitName: string,
+  offender: SelfArgMethod,
+): string {
+  const method =
+    offender.declaringTrait === traitName
+      ? `method \`${offender.methodName}\``
+      : `supertrait \`${offender.declaringTrait}\`'s method \`${offender.methodName}\``;
+  return `trait \`${traitName}\` cannot be made into a \`dyn\` object: ${method} takes \`Self\` as a non-receiver argument`;
 }
 
 /** Maps a resolved declared type to the width const-folding wraps/rounds at; `none()` for a non-numeric type. */
@@ -1307,6 +1407,7 @@ function foldWidthOf(type: Semantics.Type): Option<FoldWidth> {
     case "ReferenceType":
     case "ArrayType":
     case "Projection":
+    case "DynType":
       return none();
     default:
       return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
@@ -1806,6 +1907,23 @@ function declareEnumName(
   });
 }
 
+function declareTraitName(
+  ctx: AnalysisContext,
+  frame: ScopeFrame,
+  item: Parser.TraitDecl,
+): void {
+  if (frame.traits.has(item.name.text)) {
+    emitError(
+      ctx,
+      `trait \`${item.name.text}\` is defined more than once`,
+      item.name.tokenId,
+      "HEDGE-NAME-002",
+    );
+    return;
+  }
+  frame.traits.set(item.name.text, item.name.tokenId);
+}
+
 function registerTypeDecls(
   ctx: AnalysisContext,
   items: readonly (Parser.Item | Parser.Statement)[],
@@ -1816,6 +1934,8 @@ function registerTypeDecls(
       declareStructName(ctx, frame, item);
     } else if (item.kind === "Enum") {
       declareEnumName(ctx, frame, item);
+    } else if (item.kind === "Trait") {
+      declareTraitName(ctx, frame, item);
     }
   }
   // A declaration that lost the duplicate check is skipped rather than
@@ -1897,6 +2017,7 @@ function buildTraitDecl(item: Parser.TraitDecl): Semantics.TraitDecl {
     kind: "Trait",
     tokenId: item.tokenId,
     name: item.name.text,
+    traitId: scopedTypeName(item.name.tokenId, item.name.text),
     supertraits: item.supertraits
       .filter(
         (bound): bound is Parser.PathTraitBound =>
@@ -2028,7 +2149,7 @@ function analyzeTraitDecl(
   const shallow = buildTraitDecl(item);
   pushSelfContext(ctx, {
     kind: "Trait",
-    traitName: shallow.name,
+    traitName: shallow.traitId,
     associatedTypes: shallow.associatedTypes,
   });
   const methods = item.items.flatMap(
@@ -2121,7 +2242,10 @@ function analyzeImplDecl(
 ): Semantics.ImplDecl {
   const shallow = buildImplDecl(item);
   const targetType = resolveImplSelfTargetType(ctx, shallow);
-  const traitName = mapSome(shallow.traitRef, (t) => t.name);
+  const traitName = mapSome(
+    shallow.traitRef,
+    (t) => lookupTrait(ctx, t.name) ?? t.name,
+  );
 
   pushGenericParams(ctx, item.generics, item.whereClause);
   pushSelfContext(ctx, {
@@ -2188,10 +2312,11 @@ function implsOverlap(a: RegisteredImpl, b: RegisteredImpl): boolean {
 }
 
 function implOverlapMessage(
-  traitName: string,
+  traitId: string,
   incoming: RegisteredImpl,
   existing: RegisteredImpl,
 ): string {
+  const traitName = bareTypeName(traitId);
   if (incoming.isBlanket && existing.isBlanket) {
     return `conflicting implementations of trait \`${traitName}\``;
   }
@@ -2223,7 +2348,11 @@ function resolveTraitBound(
         declaredGenericParamBounds(ctx, paramName),
         traitName,
       )
-        ? some({ kind: "Forwarded", traitName, paramName })
+        ? some({
+            kind: "Forwarded",
+            traitName: bareTypeName(traitName),
+            paramName,
+          })
         : none();
     }
   }
@@ -2307,7 +2436,7 @@ function resolveTraitBoundForTypeName(
   if (impl === undefined) return none();
   return some({
     kind: "Impl",
-    traitName,
+    traitName: bareTypeName(traitName),
     typeName: bareTypeName(typeName),
     implTokenId: impl.tokenId,
     methods: witnessMethods(ctx, impl),
@@ -2364,7 +2493,7 @@ function traitBoundNotSatisfiedMessage(
   typeName: string,
   traitName: string,
 ): string {
-  return `the trait bound \`${typeName}: ${traitName}\` is not satisfied`;
+  return `the trait bound \`${bareTypeName(typeName)}: ${bareTypeName(traitName)}\` is not satisfied`;
 }
 
 /**
@@ -2393,34 +2522,21 @@ const EMPTY_STRUCTURAL_SCOPE: StructuralScope = {
 /** Extends `scope` with every struct/enum/trait declared directly in
  * `items` (not recursing into nested bodies) - shadowing whatever the
  * enclosing scope already bound for the same name, the same way a real
- * nested block's own type declarations shadow an outer one. `seenTraitsHere`
- * tracks only names introduced by this call, so a same-named duplicate
- * within `items` is a real error while shadowing an outer trait isn't. */
+ * nested block's own type declarations shadow an outer one. A same-name
+ * duplicate is reported by `declareStructName`/`declareEnumName`/
+ * `declareTraitName` in the live-frame pass, not here. */
 function extendStructuralScope(
-  ctx: AnalysisContext,
   scope: StructuralScope,
   items: readonly (Parser.Item | Parser.Statement)[],
 ): StructuralScope {
   const structs = new Map(scope.structs);
   const enums = new Map(scope.enums);
   const traits = new Map(scope.traits);
-  const seenTraitsHere = new Set<string>();
   for (const item of items) {
     if (item.kind === "Struct") structs.set(item.name.text, item.name.tokenId);
     else if (item.kind === "Enum") enums.set(item.name.text, item.name.tokenId);
-    else if (item.kind === "Trait") {
-      if (seenTraitsHere.has(item.name.text)) {
-        emitError(
-          ctx,
-          `trait \`${item.name.text}\` is defined more than once`,
-          item.name.tokenId,
-          "HEDGE-NAME-002",
-        );
-        continue;
-      }
-      seenTraitsHere.add(item.name.text);
+    else if (item.kind === "Trait")
       traits.set(item.name.text, item.name.tokenId);
-    }
   }
   return { structs, enums, traits };
 }
@@ -2448,13 +2564,12 @@ interface DepthedItem {
  * similarly-scoped walk.
  */
 function collectAllItems(
-  ctx: AnalysisContext,
   items: readonly (Parser.Item | Parser.Statement)[],
   depth: number,
   enclosingScope: StructuralScope = EMPTY_STRUCTURAL_SCOPE,
 ): readonly DepthedItem[] {
-  const scope = extendStructuralScope(ctx, enclosingScope, items);
-  return collectItemsWithScope(ctx, items, depth, scope);
+  const scope = extendStructuralScope(enclosingScope, items);
+  return collectItemsWithScope(items, depth, scope);
 }
 
 /** Walks `items` against an already-extended `scope`, shared by
@@ -2463,7 +2578,6 @@ function collectAllItems(
  * too - extending twice over the same statements would double-report a
  * same-scope duplicate trait). */
 function collectItemsWithScope(
-  ctx: AnalysisContext,
   items: readonly (Parser.Item | Parser.Statement)[],
   depth: number,
   scope: StructuralScope,
@@ -2471,21 +2585,18 @@ function collectItemsWithScope(
   return items.flatMap((item): readonly DepthedItem[] => {
     const self: DepthedItem = { item, depth, scope };
     if (item.kind === "Function") {
-      return [self, ...collectBlockItems(ctx, item.body, depth + 1, scope)];
+      return [self, ...collectBlockItems(item.body, depth + 1, scope)];
     }
     if (item.kind === "Impl" || item.kind === "Trait") {
-      return [self, ...collectAllItems(ctx, item.items, depth + 1, scope)];
+      return [self, ...collectAllItems(item.items, depth + 1, scope)];
     }
     if (item.kind === "ExpressionStatement") {
-      return [
-        self,
-        ...collectExpressionItems(ctx, item.expression, depth, scope),
-      ];
+      return [self, ...collectExpressionItems(item.expression, depth, scope)];
     }
     if (item.kind === "LetStatement" && isSome(item.initializer)) {
       return [
         self,
-        ...collectExpressionItems(ctx, item.initializer.value, depth, scope),
+        ...collectExpressionItems(item.initializer.value, depth, scope),
       ];
     }
     return [self];
@@ -2493,60 +2604,128 @@ function collectItemsWithScope(
 }
 
 function collectBlockItems(
-  ctx: AnalysisContext,
   block: Parser.Block,
   depth: number,
   enclosingScope: StructuralScope,
 ): readonly DepthedItem[] {
-  const scope = extendStructuralScope(ctx, enclosingScope, block.statements);
-  const inner = collectItemsWithScope(ctx, block.statements, depth, scope);
+  const scope = extendStructuralScope(enclosingScope, block.statements);
+  const inner = collectItemsWithScope(block.statements, depth, scope);
   return isSome(block.trailingExpression)
     ? [
         ...inner,
-        ...collectExpressionItems(
-          ctx,
-          block.trailingExpression.value,
-          depth,
-          scope,
-        ),
+        ...collectExpressionItems(block.trailingExpression.value, depth, scope),
       ]
     : inner;
 }
 
 function collectExpressionItems(
-  ctx: AnalysisContext,
   expr: Parser.Expression,
   depth: number,
   scope: StructuralScope,
 ): readonly DepthedItem[] {
   switch (expr.kind) {
     case "Block":
-      return collectBlockItems(ctx, expr, depth + 1, scope);
+      return collectBlockItems(expr, depth + 1, scope);
     case "IfExpression": {
-      const thenItems = collectBlockItems(
-        ctx,
-        expr.thenBranch,
-        depth + 1,
-        scope,
-      );
+      const thenItems = collectBlockItems(expr.thenBranch, depth + 1, scope);
       if (!isSome(expr.elseBranch)) return thenItems;
       const elseBranch = expr.elseBranch.value;
       return [
         ...thenItems,
         ...(elseBranch.kind === "IfExpression"
-          ? collectExpressionItems(ctx, elseBranch, depth, scope)
-          : collectBlockItems(ctx, elseBranch, depth + 1, scope)),
+          ? collectExpressionItems(elseBranch, depth, scope)
+          : collectBlockItems(elseBranch, depth + 1, scope)),
       ];
     }
     case "WhileExpression":
-      return collectBlockItems(ctx, expr.body, depth + 1, scope);
+      return collectBlockItems(expr.body, depth + 1, scope);
     case "MatchExpression":
       return expr.arms.flatMap((arm) =>
-        collectExpressionItems(ctx, arm.body, depth + 1, scope),
+        collectExpressionItems(arm.body, depth + 1, scope),
       );
     default:
       return [];
   }
+}
+
+/** True when `Self` names the trait's own implementing type here (`Self`,
+ * not `Self::Assoc`), at any depth a `dyn` argument type can nest one. */
+function typeMentionsSelf(type: Parser.Type): boolean {
+  switch (type.kind) {
+    case "NamedType":
+      return (
+        (type.path.segments.length === 1 && type.path.segments[0] === "Self") ||
+        type.typeArguments.some(typeMentionsSelf)
+      );
+    case "ReferenceType":
+      return typeMentionsSelf(type.referent);
+    case "ArrayType":
+      return typeMentionsSelf(type.elementType);
+    case "DynType":
+      return type.bound.typeArguments.some(typeMentionsSelf);
+    case "UnitType":
+      return false;
+    default:
+      return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
+  }
+}
+
+/** The trait's own first method taking `Self` in a non-receiver argument
+ * position - `none()` when the trait's own methods are all object-safe
+ * (supertraits are folded in later by `propagateSupertraitObjectSafety`). A
+ * `Receiver` carries no type of its own, so every `Self` reachable through a
+ * method's `params` is necessarily non-receiver. */
+function ownSelfArgMethod(item: Parser.TraitDecl): Option<SelfArgMethod> {
+  for (const member of item.items) {
+    if (member.kind !== "Function" && member.kind !== "FunctionSignature") {
+      continue;
+    }
+    const signature = member.kind === "Function" ? member.signature : member;
+    if (signature.params.some((param) => typeMentionsSelf(param.type))) {
+      return some({
+        methodName: signature.name.text,
+        declaringTrait: item.name.text,
+      });
+    }
+  }
+  return none();
+}
+
+/** After every trait is registered with its own object-safety verdict, a
+ * trait with an object-safe body still isn't object-safe if any trait in its
+ * supertrait chain isn't. */
+function propagateSupertraitObjectSafety(ctx: AnalysisContext): void {
+  for (const [name, trait] of ctx.traitRegistry) {
+    if (isSome(trait.notObjectSafe)) continue;
+    const viaSupertrait = firstNonObjectSafeSupertrait(
+      ctx,
+      trait.supertraits,
+      new Set([name]),
+    );
+    if (isSome(viaSupertrait)) {
+      ctx.traitRegistry.set(name, { ...trait, notObjectSafe: viaSupertrait });
+    }
+  }
+}
+
+function firstNonObjectSafeSupertrait(
+  ctx: AnalysisContext,
+  supertraitNames: readonly string[],
+  visiting: ReadonlySet<string>,
+): Option<SelfArgMethod> {
+  for (const supertraitName of supertraitNames) {
+    if (visiting.has(supertraitName)) continue;
+    const supertrait = ctx.traitRegistry.get(supertraitName);
+    if (supertrait === undefined) continue;
+    if (isSome(supertrait.notObjectSafe)) return supertrait.notObjectSafe;
+    const viaChain = firstNonObjectSafeSupertrait(
+      ctx,
+      supertrait.supertraits,
+      new Set(visiting).add(supertraitName),
+    );
+    if (isSome(viaChain)) return viaChain;
+  }
+  return none();
 }
 
 /**
@@ -2555,26 +2734,31 @@ function collectExpressionItems(
  * only the traits just registered - so `trait A: B {}` declared before
  * `trait B {}` still resolves (both are registered before either's
  * supertraits are checked), while a genuinely undeclared supertrait is
- * still rejected.
+ * still rejected. Supertrait object safety is folded in last, once every
+ * trait's own verdict is known.
  */
 function registerTraits(
   ctx: AnalysisContext,
   allItems: readonly DepthedItem[],
 ): void {
   const traitItems: Parser.TraitDecl[] = [];
-  for (const { item } of allItems) {
+  for (const { item, scope } of allItems) {
     if (item.kind !== "Trait") continue;
     const decl = buildTraitDecl(item);
-    ctx.traitRegistry.set(decl.name, {
-      supertraits: decl.supertraits,
+    ctx.traitRegistry.set(decl.traitId, {
+      supertraits: decl.supertraits.map((name) =>
+        resolveTraitIdentity(name, scope),
+      ),
       methods: decl.methods,
       associatedTypes: decl.associatedTypes,
+      notObjectSafe: ownSelfArgMethod(item),
     });
     traitItems.push(item);
   }
   for (const item of traitItems) {
     validateTraitBoundNames(ctx, item.supertraits);
   }
+  propagateSupertraitObjectSafety(ctx);
 }
 
 /**
@@ -2597,7 +2781,7 @@ function warnIfSurprisinglyVisible(
   if (incoming.isBlanket) {
     emitWarning(
       ctx,
-      `blanket impl of trait \`${incoming.traitName}\` takes effect everywhere in the program, not just this scope`,
+      `blanket impl of trait \`${bareTypeName(incoming.traitName)}\` takes effect everywhere in the program, not just this scope`,
       item.tokenId,
       "HEDGE-LINT-003",
     );
@@ -2606,7 +2790,7 @@ function warnIfSurprisinglyVisible(
   if (!topLevelStructEnumNames.has(incoming.targetTypeName)) return;
   emitWarning(
     ctx,
-    `impl of trait \`${incoming.traitName}\` for \`${bareTypeName(incoming.targetTypeName)}\` takes effect everywhere in the program, not just this scope`,
+    `impl of trait \`${bareTypeName(incoming.traitName)}\` for \`${bareTypeName(incoming.targetTypeName)}\` takes effect everywhere in the program, not just this scope`,
     item.tokenId,
     "HEDGE-LINT-003",
   );
@@ -2649,6 +2833,15 @@ function resolveStructOrEnumIdentity(
   return none();
 }
 
+/** `resolveStructOrEnumIdentity`'s trait counterpart, for the prepass sites
+ * that resolve a trait reference against a `StructuralScope` rather than
+ * live frames - falls back to the bare name so a genuinely undeclared
+ * reference still fails the `traitRegistry` lookup and gets reported. */
+function resolveTraitIdentity(name: string, scope: StructuralScope): string {
+  const tokenId = scope.traits.get(name);
+  return tokenId === undefined ? name : scopedTypeName(tokenId, name);
+}
+
 /** Strips a struct/enum's real scoped identity back to its bare,
  * user-facing name for a diagnostic message - the same stripping
  * `describeType`'s own `StructType`/`EnumType` case applies. */
@@ -2668,7 +2861,7 @@ function reportMissingRequiredMethods(
     if (method.isDefault || providedMethods.includes(method.name)) continue;
     emitError(
       ctx,
-      `impl of trait \`${traitName}\` for \`${bareTypeName(targetTypeName)}\` is missing method \`${method.name}\``,
+      `impl of trait \`${bareTypeName(traitName)}\` for \`${bareTypeName(targetTypeName)}\` is missing method \`${method.name}\``,
       item.tokenId,
       "HEDGE-TRAIT-003",
     );
@@ -2691,7 +2884,7 @@ function reportMissingAssociatedTypes(
     if (providedAssociatedTypes.includes(name)) continue;
     emitError(
       ctx,
-      `impl of trait \`${traitName}\` for \`${bareTypeName(targetTypeName)}\` is missing associated type \`${name}\``,
+      `impl of trait \`${bareTypeName(traitName)}\` for \`${bareTypeName(targetTypeName)}\` is missing associated type \`${name}\``,
       item.tokenId,
       "HEDGE-TRAIT-004",
     );
@@ -2727,7 +2920,7 @@ function reportExtraAssociatedTypes(
     if (declared.includes(name)) continue;
     emitError(
       ctx,
-      `impl of trait \`${traitName}\` for \`${bareTypeName(targetTypeName)}\` defines associated type \`${name}\`, which trait \`${traitName}\` does not declare`,
+      `impl of trait \`${bareTypeName(traitName)}\` for \`${bareTypeName(targetTypeName)}\` defines associated type \`${name}\`, which trait \`${bareTypeName(traitName)}\` does not declare`,
       item.tokenId,
       "HEDGE-TRAIT-007",
     );
@@ -2758,11 +2951,12 @@ function registerOneImpl(
     ? some(bareTargetTypeName.value)
     : resolveStructOrEnumIdentity(bareTargetTypeName.value, scope);
   if (!isSome(targetTypeName)) return undefined;
-  const traitName = traitRef.value.name;
+  const bareTraitName = traitRef.value.name;
+  const traitName = resolveTraitIdentity(bareTraitName, scope);
   if (!ctx.traitRegistry.has(traitName)) {
     emitError(
       ctx,
-      `cannot find trait \`${traitName}\` in this scope`,
+      `cannot find trait \`${bareTraitName}\` in this scope`,
       traitRef.value.tokenId,
       "HEDGE-NAME-001",
     );
@@ -2784,7 +2978,9 @@ function registerOneImpl(
     traitName,
     targetTypeName: targetTypeName.value,
     isBlanket: decl.isBlanket,
-    blanketBounds: decl.blanketBounds,
+    blanketBounds: decl.blanketBounds.map((bound) =>
+      resolveTraitIdentity(bound, scope),
+    ),
     providedMethods: decl.providedMethods,
     associatedTypeDefs,
     tokenId: item.tokenId,
@@ -5008,8 +5204,21 @@ function resolveSlice1Type(
             ? Number(intLiteralValue(type.length))
             : 0,
       };
-    case "DynType":
-      return { kind: "UnitType", tokenId: fallbackTokenId };
+    case "DynType": {
+      const bareName = type.bound.path.segments.at(-1) ?? "";
+      const traitId = lookupTrait(ctx, bareName);
+      const registered =
+        traitId === undefined ? undefined : ctx.traitRegistry.get(traitId);
+      // Non-emitting - `validateSlice1Type` reports an unknown/non-trait name
+      // or a non-object-safe trait once the declaration's body is analyzed;
+      // here just mirror the type it lands on (`DynType` or the recovery
+      // `UnitType`) so a forward-registered signature matches.
+      return traitId !== undefined &&
+        registered !== undefined &&
+        isNone(registered.notObjectSafe)
+        ? { kind: "DynType", tokenId: fallbackTokenId, traitId }
+        : { kind: "UnitType", tokenId: fallbackTokenId };
+    }
     default:
       return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
@@ -5035,9 +5244,9 @@ function fnSignatureType(
       : { kind: "UnitType", tokenId: signature.tokenId },
     paramsArePlaceholder: false,
     genericParams: genericParamNames(signature.generics),
-    genericParamBounds: genericParamBoundNames(
-      signature.generics,
-      signature.whereClause,
+    genericParamBounds: resolveBoundNames(
+      ctx,
+      genericParamBoundNames(signature.generics, signature.whereClause),
     ),
   };
   popGenericParams(ctx);
@@ -5601,6 +5810,8 @@ function describeType(type: Semantics.Type): string {
       return `fn(${type.params.map(describeType).join(", ")}) -> ${describeType(type.returnType)}`;
     case "Projection":
       return `${describeType(type.selfType)}::${type.assocName}`;
+    case "DynType":
+      return `dyn ${bareTypeName(type.traitId)}`;
     default:
       return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
@@ -5794,6 +6005,8 @@ function typesEqual(a: Semantics.Type, b: Semantics.Type): boolean {
         a.assocName === b.assocName &&
         typesEqual(a.selfType, b.selfType)
       );
+    case "DynType":
+      return b.kind === "DynType" && a.traitId === b.traitId;
     case "FunctionType":
     case "UnitType":
     case "PrimitiveI8Type":
@@ -8232,7 +8445,7 @@ export function analyze(
   };
   // Before functions, so a signature can name any declared type.
   registerTypeDecls(ctx, program.items);
-  const allItems = collectAllItems(ctx, program.items, 0);
+  const allItems = collectAllItems(program.items, 0);
   registerTraits(ctx, allItems);
   registerImpls(ctx, allItems);
   const topLevelFunctionNames = new Set<string>();

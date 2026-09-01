@@ -12,6 +12,17 @@ import type {
   Type as SemanticsType,
 } from "./ast.js";
 
+/** The scope-qualified `traitRegistry` key of the named trait declared at
+ * top level in `result`'s program - the value a `DynType.traitId` or a
+ * `Projection.traitName` resolving to that trait must equal exactly. */
+function traitIdOf(result: AnalysisResult, name: string): string {
+  const trait = result.program.items.find(
+    (item) => item.kind === "Trait" && item.name === name,
+  );
+  assert(trait?.kind === "Trait", `expected a top-level trait named ${name}`);
+  return trait.traitId;
+}
+
 function analyzeWithTokens(source: string): {
   result: AnalysisResult;
   tokens: ReturnType<typeof tokenize>["tokens"];
@@ -3972,10 +3983,10 @@ describe("associated types and trait projections", (): void => {
 
     function expectItemProjection(
       type: SemanticsType,
-      traitName: string,
+      expectedTraitId: string,
     ): void {
       assert(type.kind === "Projection", "expected a Projection type");
-      expect(type.traitName).toBe(traitName);
+      expect(type.traitName).toBe(expectedTraitId);
       expect(type.assocName).toBe("Item");
       assert(
         type.selfType.kind === "NamedType",
@@ -3996,10 +4007,11 @@ describe("associated types and trait projections", (): void => {
       const fn = findFn(result, "describe");
       const paramType = fn.signature.params[0]?.type;
       assert(paramType !== undefined, "expected a resolved param type");
-      expectItemProjection(paramType, "Iterator");
+      const iteratorId = traitIdOf(result, "Iterator");
+      expectItemProjection(paramType, iteratorId);
       const returnType = fn.signature.returnType;
       assert(isSome(returnType), "expected a resolved return type");
-      expectItemProjection(returnType.value, "Iterator");
+      expectItemProjection(returnType.value, iteratorId);
     });
 
     it("rejects binding one bound parameter's projection to a different bound parameter's own projection", (): void => {
@@ -4058,7 +4070,7 @@ describe("associated types and trait projections", (): void => {
       const fn = findFn(result, "f");
       const paramType = fn.signature.params[0]?.type;
       assert(paramType !== undefined, "expected a resolved param type");
-      expectItemProjection(paramType, "Base");
+      expectItemProjection(paramType, traitIdOf(result, "Base"));
     });
 
     it("resolves Self::Item against the trait's own associated type, not an unrelated same-named top-level struct", (): void => {
@@ -4078,61 +4090,365 @@ describe("associated types and trait projections", (): void => {
         next.returnType.kind === "Projection",
         "expected a Projection type",
       );
-      expect(next.returnType.traitName).toBe("Iterator");
+      expect(next.returnType.traitName).toBe(traitIdOf(result, "Iterator"));
     });
   });
 });
 
 describe("dyn Trait as a type", (): void => {
-  function expectDynGuardrail(
+  function expectUnknownTrait(
     diagnostics: AnalysisResult["diagnostics"],
+    traitName: string,
   ): void {
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].code).toBe("HEDGE-UNSUPPORTED-001");
+    expect(diagnostics[0].code).toBe("HEDGE-NAME-001");
     expect(diagnostics[0].message).toBe(
-      "`dyn Trait` types are not supported yet",
+      `cannot find trait \`${traitName}\` in this scope`,
     );
   }
 
-  it("rejects dyn Draw as a function parameter type, with no cascade", (): void => {
+  it("rejects dyn Draw naming no declared trait, as a function parameter type, with no cascade", (): void => {
     const result = diagnose("fn f(x: dyn Draw) {}");
-    expectDynGuardrail(result.diagnostics);
+    expectUnknownTrait(result.diagnostics, "Draw");
   });
 
-  it("rejects dyn Draw as a function return type, with no cascade", (): void => {
+  it("rejects dyn Draw naming no declared trait, as a function return type, with no cascade", (): void => {
     const result = diagnose("fn f() -> dyn Draw {}");
-    expectDynGuardrail(result.diagnostics);
+    expectUnknownTrait(result.diagnostics, "Draw");
   });
 
-  it("rejects dyn Draw as a struct field type, with no cascade", (): void => {
+  it("rejects dyn Draw naming no declared trait, as a struct field type, with no cascade", (): void => {
     const result = diagnose("struct S { d: dyn Draw }");
-    expectDynGuardrail(result.diagnostics);
+    expectUnknownTrait(result.diagnostics, "Draw");
   });
 
-  it("rejects dyn Draw as a let type annotation, with no cascade", (): void => {
+  it("rejects dyn Draw naming no declared trait, as a let type annotation, with no cascade", (): void => {
     const result = diagnose("fn f() { let mut x: dyn Draw; }");
-    expectDynGuardrail(result.diagnostics);
+    expectUnknownTrait(result.diagnostics, "Draw");
   });
 
   it("counts a generic parameter used only inside a dyn bound's type arguments as used", (): void => {
     const result = diagnose("struct S<T> { d: dyn From<T> }");
-    // Only the dyn guardrail itself - no HEDGE-TYPE-009 "declared but never
-    // used" for `T`, since it's genuinely mentioned in the field's own type.
-    expectDynGuardrail(result.diagnostics);
+    // Only the unknown-trait diagnostic itself - no HEDGE-TYPE-009 "declared
+    // but never used" for `T`, since it's genuinely mentioned in the field's
+    // own type.
+    expectUnknownTrait(result.diagnostics, "From");
   });
 
-  it("resolves a dyn-typed param's pre-registered signature without emitting or crashing", (): void => {
+  it("resolves a dyn-typed param's pre-registered signature without emitting twice or crashing", (): void => {
     // Referencing `f` by name before its own declaration is analyzed
     // (`let g = f;`) forces its signature through `resolveSlice1Type`,
-    // a separate, non-emitting code path from `validateSlice1Type`.
+    // a separate code path from `validateSlice1Type`.
     const result = diagnose(`
       fn f(x: dyn Draw) {}
       fn main() {
         let g = f;
       }
     `);
-    expectDynGuardrail(result.diagnostics);
+    expectUnknownTrait(result.diagnostics, "Draw");
+  });
+
+  it("resolves dyn Draw against a declared trait to a DynType naming that trait", (): void => {
+    const result = diagnose("trait Draw {} fn f(x: dyn Draw) {}");
+    expect(result.diagnostics).toEqual([]);
+    const fn = result.program.items.find(
+      (item) => item.kind === "Function" && item.signature.name.text === "f",
+    );
+    assert(fn?.kind === "Function", "expected a Function item named f");
+    const paramType = fn.signature.params[0]?.type;
+    assert(paramType?.kind === "DynType", "expected a DynType param");
+    expect(paramType.traitId).toBe(traitIdOf(result, "Draw"));
+  });
+
+  function expectNotATrait(
+    diagnostics: AnalysisResult["diagnostics"],
+    name: string,
+  ): void {
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].code).toBe("HEDGE-NAME-001");
+    expect(diagnostics[0].message).toBe(`\`${name}\` is not a trait`);
+  }
+
+  it("rejects dyn Draw naming a struct, with no cascade", (): void => {
+    const result = diagnose("struct Draw {} fn f(x: dyn Draw) {}");
+    expectNotATrait(result.diagnostics, "Draw");
+  });
+
+  it("rejects dyn Color naming an enum, with no cascade", (): void => {
+    const result = diagnose("enum Color { Red } fn f(x: dyn Color) {}");
+    expectNotATrait(result.diagnostics, "Color");
+  });
+
+  it("rejects dyn i32 naming a primitive, with no cascade", (): void => {
+    const result = diagnose("fn f(x: dyn i32) {}");
+    expectNotATrait(result.diagnostics, "i32");
+  });
+
+  it("resolves dyn Draw behind a shared reference", (): void => {
+    const result = diagnose("trait Draw {} fn f(x: &dyn Draw) {}");
+    expect(result.diagnostics).toEqual([]);
+    const fn = result.program.items.find(
+      (item) => item.kind === "Function" && item.signature.name.text === "f",
+    );
+    assert(fn?.kind === "Function", "expected a Function item named f");
+    const paramType = fn.signature.params[0]?.type;
+    assert(paramType?.kind === "ReferenceType", "expected a ReferenceType");
+    assert(
+      paramType.referent.kind === "DynType",
+      "expected a DynType referent",
+    );
+    expect(paramType.referent.traitId).toBe(traitIdOf(result, "Draw"));
+  });
+
+  it("resolves dyn Draw as a fixed-size array element type", (): void => {
+    const result = diagnose("trait Draw {} fn f(xs: [dyn Draw; 3]) {}");
+    expect(result.diagnostics).toEqual([]);
+    const fn = result.program.items.find(
+      (item) => item.kind === "Function" && item.signature.name.text === "f",
+    );
+    assert(fn?.kind === "Function", "expected a Function item named f");
+    const paramType = fn.signature.params[0]?.type;
+    assert(paramType?.kind === "ArrayType", "expected an ArrayType");
+    assert(
+      paramType.elementType.kind === "DynType",
+      "expected a DynType element",
+    );
+    expect(paramType.elementType.traitId).toBe(traitIdOf(result, "Draw"));
+  });
+
+  it("resolves dyn Draw as a generic type argument", (): void => {
+    const result = diagnose(
+      "trait Draw {} struct Box<T>(T); fn f(b: Box<dyn Draw>) {}",
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects an unknown trait named only inside a nested dyn position, with no cascade", (): void => {
+    const result = diagnose("fn f(x: &dyn Draw) {}");
+    expectUnknownTrait(result.diagnostics, "Draw");
+  });
+
+  it("treats two dyn types naming the same trait as equal", (): void => {
+    const result = diagnose(
+      "trait Draw {} fn f(x: dyn Draw) -> dyn Draw { x }",
+    );
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("treats two dyn types naming different traits as unequal, describing each as `dyn Trait`", (): void => {
+    const result = diagnose(
+      "trait Draw {} trait Paint {} fn f(x: dyn Draw) -> dyn Paint { x }",
+    );
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "return type mismatch: expected `dyn Paint`, found `dyn Draw`",
+    );
+  });
+
+  it("resolves a dyn param through the pre-registration path to the same DynType", (): void => {
+    // `let g = f;` reads `f`'s forward-registered signature, resolved by
+    // `resolveSlice1Type` rather than `validateSlice1Type`.
+    const result = diagnose(`
+      trait Draw {}
+      fn f(x: dyn Draw) {}
+      fn main() {
+        let g = f;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    const main = result.program.items.find(
+      (item) => item.kind === "Function" && item.signature.name.text === "main",
+    );
+    assert(main?.kind === "Function", "expected a Function item named main");
+    const letStmt = main.body.statements.find((s) => s.kind === "LetStatement");
+    assert(letStmt?.kind === "LetStatement", "expected a let statement");
+    const initType = letStmt.initializer;
+    assert(isSome(initType), "expected an initializer");
+    assert(
+      initType.value.type.kind === "FunctionType",
+      "expected f to have a FunctionType",
+    );
+    expect(initType.value.type.params[0]?.kind).toBe("DynType");
+  });
+});
+
+describe("dyn Trait object safety", (): void => {
+  function expectNotObjectSafe(
+    diagnostics: AnalysisResult["diagnostics"],
+    traitName: string,
+    methodName: string,
+  ): void {
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].code).toBe("HEDGE-TRAIT-008");
+    expect(diagnostics[0].message).toBe(
+      `trait \`${traitName}\` cannot be made into a \`dyn\` object: method \`${methodName}\` takes \`Self\` as a non-receiver argument`,
+    );
+  }
+
+  it("rejects dyn of a trait whose method takes Self by value as a non-receiver argument", (): void => {
+    const result = diagnose(`
+      trait Combine {
+        fn combine(&self, other: Self);
+      }
+      fn f(x: dyn Combine) {}
+    `);
+    expectNotObjectSafe(result.diagnostics, "Combine", "combine");
+  });
+
+  it("rejects dyn of a trait whose method takes &Self as a non-receiver argument", (): void => {
+    const result = diagnose(`
+      trait Combine {
+        fn combine(&self, other: &Self);
+      }
+      fn f(x: dyn Combine) {}
+    `);
+    expectNotObjectSafe(result.diagnostics, "Combine", "combine");
+  });
+
+  it("rejects dyn of a trait whose method takes &mut Self as a non-receiver argument", (): void => {
+    const result = diagnose(`
+      trait Combine {
+        fn combine(&self, other: &mut Self);
+      }
+      fn f(x: dyn Combine) {}
+    `);
+    expectNotObjectSafe(result.diagnostics, "Combine", "combine");
+  });
+
+  it("rejects dyn of a trait whose method takes a fixed-size array of Self as an argument", (): void => {
+    const result = diagnose(`
+      trait Combine {
+        fn combine(&self, others: [Self; 2]);
+      }
+      fn f(x: dyn Combine) {}
+    `);
+    expectNotObjectSafe(result.diagnostics, "Combine", "combine");
+  });
+
+  it("rejects dyn of a trait whose method takes Self as a generic type argument", (): void => {
+    const result = diagnose(`
+      struct Box<T>(T);
+      trait Combine {
+        fn combine(&self, other: Box<Self>);
+      }
+      fn f(x: dyn Combine) {}
+    `);
+    expectNotObjectSafe(result.diagnostics, "Combine", "combine");
+  });
+
+  it("accepts dyn of a trait whose only Self mentions are the receiver and the return type", (): void => {
+    const result = diagnose(`
+      trait Builder {
+        fn dup(&self) -> Self;
+        fn size(&self) -> i32;
+      }
+      fn f(x: dyn Builder) {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts dyn of a trait with a generic method", (): void => {
+    const result = diagnose(`
+      trait Visitor {
+        fn accept<T>(&self, value: T) -> i32;
+      }
+      fn f(x: dyn Visitor) {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("does not flag a non-object-safe trait declared on its own or used only as a bound", (): void => {
+    const result = diagnose(`
+      trait Combine {
+        fn combine(&self, other: Self);
+      }
+      fn g<T: Combine>(x: T) {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("reports one diagnostic for a trait with more than one Self-argument method", (): void => {
+    const result = diagnose(`
+      trait Combine {
+        fn combine(&self, other: Self);
+        fn merge(&self, other: Self);
+      }
+      fn f(x: dyn Combine) {}
+    `);
+    expectNotObjectSafe(result.diagnostics, "Combine", "combine");
+  });
+
+  function expectNotObjectSafeViaSupertrait(
+    diagnostics: AnalysisResult["diagnostics"],
+    traitName: string,
+    supertraitName: string,
+    methodName: string,
+  ): void {
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].code).toBe("HEDGE-TRAIT-008");
+    expect(diagnostics[0].message).toBe(
+      `trait \`${traitName}\` cannot be made into a \`dyn\` object: supertrait \`${supertraitName}\`'s method \`${methodName}\` takes \`Self\` as a non-receiver argument`,
+    );
+  }
+
+  it("rejects dyn of a trait whose supertrait is not object-safe", (): void => {
+    const result = diagnose(`
+      trait Combine {
+        fn combine(&self, other: Self);
+      }
+      trait Extended: Combine {
+        fn describe(&self) -> i32;
+      }
+      fn f(x: dyn Extended) {}
+    `);
+    expectNotObjectSafeViaSupertrait(
+      result.diagnostics,
+      "Extended",
+      "Combine",
+      "combine",
+    );
+  });
+
+  it("rejects dyn of a trait whose non-object-safe supertrait is reached transitively", (): void => {
+    const result = diagnose(`
+      trait Base {
+        fn take(&self, other: Self);
+      }
+      trait Middle: Base {}
+      trait Top: Middle {}
+      fn f(x: dyn Top) {}
+    `);
+    expectNotObjectSafeViaSupertrait(result.diagnostics, "Top", "Base", "take");
+  });
+
+  it("accepts dyn of a trait whose supertraits are all object-safe", (): void => {
+    const result = diagnose(`
+      trait Base {
+        fn size(&self) -> i32;
+      }
+      trait Extended: Base {
+        fn describe(&self) -> i32;
+      }
+      fn f(x: dyn Extended) {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("reports one diagnostic when a trait and its supertrait both take a Self argument", (): void => {
+    const result = diagnose(`
+      trait Combine {
+        fn combine(&self, other: Self);
+      }
+      trait Extended: Combine {
+        fn merge(&self, other: Self);
+      }
+      fn f(x: dyn Extended) {}
+    `);
+    expectNotObjectSafe(result.diagnostics, "Extended", "merge");
   });
 });
 
@@ -5193,6 +5509,68 @@ describe("trait and impl declarations", (): void => {
           (d) => d.message === "trait `Draw` is defined more than once",
         ),
       ).toHaveLength(0);
+    });
+
+    it("does not let a block-local non-object-safe trait taint an outer same-named dyn Trait", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> i32; }
+        fn outer(x: dyn Draw) {
+          trait Draw { fn combine(&self, other: Self); }
+          let z = 1;
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a dyn of the inner non-object-safe trait while the outer stays fine", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> i32; }
+        fn outer() {
+          trait Draw { fn combine(&self, other: Self); }
+          fn inner(x: dyn Draw) {}
+          let z = 1;
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.code).toBe("HEDGE-TRAIT-008");
+    });
+
+    it("treats a dyn of a shadowing inner trait as a different type from the outer one", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> i32; }
+        fn f(x: dyn Draw) {
+          trait Draw { fn draw(&self) -> i32; }
+          let y: dyn Draw = x;
+          let z = 1;
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.code).toBe("HEDGE-TYPE-001");
+      expect(result.diagnostics[0]?.message).toBe(
+        "type mismatch: explicit annotation does not match initializer type",
+      );
+    });
+
+    it("does not satisfy an outer trait's bound with an impl of a shadowing inner trait", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Circle {}
+        fn wants_draw<T: Draw>(x: T) {}
+        fn outer() {
+          trait Draw { fn paint(&self); }
+          impl Draw for Circle { fn paint(&self) {} }
+          wants_draw(Circle {});
+        }
+      `);
+      // The impl is of the inner `Draw`; `wants_draw`'s bound is the outer
+      // `Draw`, which `Circle` does not implement. The impl visibility lint
+      // fires alongside it.
+      expect(result.diagnostics).toHaveLength(2);
+      expect(result.diagnostics[0]?.code).toBe("HEDGE-LINT-003");
+      expect(result.diagnostics[1]?.code).toBe("HEDGE-TRAIT-002");
+      expect(result.diagnostics[1]?.message).toBe(
+        "the trait bound `Circle: Draw` is not satisfied",
+      );
     });
   });
 });

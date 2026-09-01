@@ -810,14 +810,23 @@ function semanticTypeToJsPrimitive(
       // (that's the still-guardrailed `&mut`-cell lowering work), so a
       // reference-typed value's JS representation is just its referent's.
       return semanticTypeToJsPrimitive(type.referent);
+    case "ArrayType":
+      // The array erases to no JS primitive of its own; recurse only so a
+      // nested `dyn` element still reaches the throw below.
+      semanticTypeToJsPrimitive(type.elementType);
+      return none();
     case "NamedType":
     case "StructType":
     case "EnumType":
     case "FunctionType":
-    case "ArrayType":
     case "Projection":
       // No JS primitive to erase to; the caller renders these itself.
       return none();
+    case "DynType":
+      // The `{ value, witness }` layout and dispatch don't exist yet, so a
+      // program that reaches lowering with a `dyn` type has passed analysis
+      // but cannot produce runnable output.
+      throw new Error("dyn Trait code generation is not implemented yet");
     default:
       return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
@@ -877,6 +886,7 @@ function hedgeTypeToNumericKind(
     case "FunctionType":
     case "ArrayType":
     case "Projection":
+    case "DynType":
       // Not numeric, so no wrapping applies.
       return none();
     default:
