@@ -10,7 +10,6 @@ import type { DiagnosticCode } from "./code.js";
  * the wrong code, and the English text lives solely in `message.ts`.
  */
 export type DiagnosticKind =
-  | RawDiagnosticKind
   // Lexing.
   | { readonly kind: "LexUnterminatedStringLiteral"; readonly offset: number }
   | {
@@ -559,20 +558,8 @@ export type DiagnosticKind =
 
 export type RadixName = "hex" | "octal" | "binary";
 
-/**
- * Wraps a preformatted message and its code so emission sites migrate to
- * structured variants one subsystem at a time. Removed once no site builds
- * one, at which point `tsc` proves every diagnostic is structured.
- */
-interface RawDiagnosticKind {
-  readonly kind: "Raw";
-  readonly code: DiagnosticCode;
-  readonly text: string;
-}
-
 /** The label on a diagnostic's secondary source location. */
 export type RelatedLabelKind =
-  | RawRelatedLabelKind
   | { readonly kind: "LabelMovedHere" }
   | { readonly kind: "LabelBorrowHere"; readonly borrow: string }
   | { readonly kind: "LabelShadowedDeclaration" }
@@ -580,16 +567,9 @@ export type RelatedLabelKind =
   | { readonly kind: "LabelFirstImplementedHere" }
   | { readonly kind: "LabelInferredAsHere"; readonly typeName: string };
 
-interface RawRelatedLabelKind {
-  readonly kind: "RawLabel";
-  readonly text: string;
-}
-
 // eslint-disable-next-line complexity -- One flat mapping over the DiagnosticKind union.
 export function codeOf(kind: DiagnosticKind): DiagnosticCode {
   switch (kind.kind) {
-    case "Raw":
-      return kind.code;
     case "LexUnterminatedStringLiteral":
     case "LexUnterminatedRawStringLiteral":
       return "HEDGE-LEX-001";

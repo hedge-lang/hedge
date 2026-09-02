@@ -16,12 +16,11 @@ export type {
 } from "./diagnostics/index.js";
 export {
   codeOf,
-  errorDiagnosticRaw,
+  errorDiagnostic,
   messageOf,
-  rawLabel,
   renderDiagnosticMessage,
   renderRelatedLabel,
-  warningDiagnosticRaw,
+  warningDiagnostic,
 } from "./diagnostics/index.js";
 
 export { checkBorrows } from "./ownership/borrowck.js";

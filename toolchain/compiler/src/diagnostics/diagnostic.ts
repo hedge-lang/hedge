@@ -51,28 +51,3 @@ export function warningDiagnostic(
     relatedSpans: [],
   };
 }
-
-/**
- * Transitional wrappers preserving the old `(code, message, span)` shape
- * while emission sites migrate to structured `DiagnosticKind`s. Removed once
- * no site calls them.
- */
-export function errorDiagnosticRaw(
-  code: DiagnosticCode,
-  text: string,
-  span: Option<Span>,
-): Diagnostic {
-  return errorDiagnostic({ kind: "Raw", code, text }, span);
-}
-
-export function warningDiagnosticRaw(
-  code: DiagnosticCode,
-  text: string,
-  span: Option<Span>,
-): Diagnostic {
-  return warningDiagnostic({ kind: "Raw", code, text }, span);
-}
-
-export function rawLabel(text: string): RelatedLabelKind {
-  return { kind: "RawLabel", text };
-}

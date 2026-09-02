@@ -11,8 +11,6 @@ import type { DiagnosticKind, RadixName, RelatedLabelKind } from "./kind.js";
 // eslint-disable-next-line complexity -- One flat rendering per DiagnosticKind variant.
 export function renderDiagnosticMessage(kind: DiagnosticKind): string {
   switch (kind.kind) {
-    case "Raw":
-      return kind.text;
     case "LexUnterminatedStringLiteral":
       return `Unterminated string literal starting at ${kind.offset}`;
     case "LexUnterminatedRawStringLiteral":
@@ -463,8 +461,6 @@ function radixArticle(radix: RadixName): string {
 
 export function renderRelatedLabel(label: RelatedLabelKind): string {
   switch (label.kind) {
-    case "RawLabel":
-      return label.text;
     case "LabelMovedHere":
       return "moved here";
     case "LabelBorrowHere":
