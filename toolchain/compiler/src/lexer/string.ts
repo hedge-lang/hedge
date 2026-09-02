@@ -1,4 +1,4 @@
-import { errorDiagnosticRaw } from "../diagnostics/index.js";
+import { errorDiagnostic } from "../diagnostics/index.js";
 import type { Diagnostic } from "../diagnostics/index.js";
 import { some } from "../option.js";
 import { scanEscapeSeq } from "./escape.js";
@@ -27,9 +27,8 @@ export function scanStringLiteral(
         const lastToken = tokens.at(-1);
         if (lastToken === undefined) {
           diagnostics.push(
-            errorDiagnosticRaw(
-              "HEDGE-LEX-001",
-              `Unterminated string literal starting at ${start}`,
+            errorDiagnostic(
+              { kind: "LexUnterminatedStringLiteral", offset: start },
               some({ start, end: source.length }),
             ),
           );
@@ -50,9 +49,8 @@ export function scanStringLiteral(
     i++;
   }
   diagnostics.push(
-    errorDiagnosticRaw(
-      "HEDGE-LEX-001",
-      `Unterminated string literal starting at ${start}`,
+    errorDiagnostic(
+      { kind: "LexUnterminatedStringLiteral", offset: start },
       some({ start, end: source.length }),
     ),
   );
@@ -93,9 +91,8 @@ export function scanRawString(
     i++;
   }
   diagnostics.push(
-    errorDiagnosticRaw(
-      "HEDGE-LEX-001",
-      `Unterminated raw string literal starting at ${start}`,
+    errorDiagnostic(
+      { kind: "LexUnterminatedRawStringLiteral", offset: start },
       some({ start, end: source.length }),
     ),
   );

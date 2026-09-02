@@ -1,4 +1,4 @@
-import { errorDiagnosticRaw } from "../diagnostics/index.js";
+import { errorDiagnostic } from "../diagnostics/index.js";
 import type { Diagnostic } from "../diagnostics/index.js";
 import { some } from "../option.js";
 import { scanEscapeSeq } from "./escape.js";
@@ -21,9 +21,8 @@ function recoverFromInvalidEscape(
   const lastToken = tokens.at(-1);
   if (lastToken === undefined) {
     diagnostics.push(
-      errorDiagnosticRaw(
-        "HEDGE-LEX-002",
-        `unterminated char literal at offset ${start}`,
+      errorDiagnostic(
+        { kind: "LexUnterminatedCharLiteral", offset: start },
         some({ start, end: source.length }),
       ),
     );
@@ -51,9 +50,8 @@ function scanEscapedCharLiteral(
   }
   if (source[escEnd] !== "'") {
     diagnostics.push(
-      errorDiagnosticRaw(
-        "HEDGE-LEX-002",
-        `unterminated char literal at offset ${start}`,
+      errorDiagnostic(
+        { kind: "LexUnterminatedCharLiteral", offset: start },
         some({ start, end: escEnd }),
       ),
     );
@@ -134,9 +132,8 @@ export function scanCharOrLifetime(
   if (n1 === "'") {
     // Empty char literal: ''
     diagnostics.push(
-      errorDiagnosticRaw(
-        "HEDGE-LEX-004",
-        `empty char literal at offset ${start}`,
+      errorDiagnostic(
+        { kind: "LexEmptyCharLiteral", offset: start },
         some({ start, end: start + 2 }),
       ),
     );
@@ -165,9 +162,8 @@ export function scanCharOrLifetime(
   // Unrecognised
   const end = start + 1;
   diagnostics.push(
-    errorDiagnosticRaw(
-      "HEDGE-LEX-005",
-      `Unexpected character "'" at offset ${start}`,
+    errorDiagnostic(
+      { kind: "LexUnexpectedCharacter", character: "'", offset: start },
       some({ start, end }),
     ),
   );

@@ -1,4 +1,4 @@
-import { type Diagnostic, errorDiagnosticRaw } from "../diagnostics/index.js";
+import { type Diagnostic, errorDiagnostic } from "../diagnostics/index.js";
 import { none, type Option, some } from "../option.js";
 import { err, isErr, ok, type Result } from "../result.js";
 import { type Token } from "./token.js";
@@ -90,9 +90,8 @@ export function isLineComment(
   const ch = source.at(index);
   if (ch === undefined) {
     return err(
-      errorDiagnosticRaw(
-        "HEDGE-LEX-009",
-        `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+      errorDiagnostic(
+        { kind: "LexReadPastEnd", index, sourceLength: source.length },
         none(),
       ),
     );
@@ -144,9 +143,8 @@ export function isBlockComment(
   const ch = source.at(index);
   if (ch === undefined) {
     return err(
-      errorDiagnosticRaw(
-        "HEDGE-LEX-009",
-        `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+      errorDiagnostic(
+        { kind: "LexReadPastEnd", index, sourceLength: source.length },
         none(),
       ),
     );
@@ -192,9 +190,8 @@ export function tokenizeBlockComment(
     }
   }
   diagnostics.push(
-    errorDiagnosticRaw(
-      "HEDGE-LEX-003",
-      "Unterminated block comment",
+    errorDiagnostic(
+      { kind: "LexUnterminatedBlockComment" },
       some({ start, end: source.length }),
     ),
   );
@@ -218,9 +215,8 @@ function isBlockOuterDocComment(
   const ch = source.at(index);
   if (ch === undefined) {
     return err(
-      errorDiagnosticRaw(
-        "HEDGE-LEX-009",
-        `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+      errorDiagnostic(
+        { kind: "LexReadPastEnd", index, sourceLength: source.length },
         none(),
       ),
     );
@@ -306,9 +302,8 @@ function tokenizeBlockOuterDocComment(
     }
   }
   diagnostics.push(
-    errorDiagnosticRaw(
-      "HEDGE-LEX-003",
-      "Unterminated block comment",
+    errorDiagnostic(
+      { kind: "LexUnterminatedBlockComment" },
       some({ start, end: source.length }),
     ),
   );
@@ -332,9 +327,8 @@ function isBlockInnerDocComment(
   const ch = source.at(index);
   if (ch === undefined) {
     return err(
-      errorDiagnosticRaw(
-        "HEDGE-LEX-009",
-        `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+      errorDiagnostic(
+        { kind: "LexReadPastEnd", index, sourceLength: source.length },
         none(),
       ),
     );
@@ -424,9 +418,8 @@ function tokenizeBlockInnerDocComment(
     }
   }
   diagnostics.push(
-    errorDiagnosticRaw(
-      "HEDGE-LEX-003",
-      "Unterminated block comment",
+    errorDiagnostic(
+      { kind: "LexUnterminatedBlockComment" },
       some({ start, end: source.length }),
     ),
   );
@@ -450,9 +443,8 @@ function isOuterDocComment(
   const ch = source.at(index);
   if (ch === undefined) {
     return err(
-      errorDiagnosticRaw(
-        "HEDGE-LEX-009",
-        `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+      errorDiagnostic(
+        { kind: "LexReadPastEnd", index, sourceLength: source.length },
         none(),
       ),
     );
@@ -600,9 +592,8 @@ function isInnerDocComment(
   const ch = source.at(index);
   if (ch === undefined) {
     return err(
-      errorDiagnosticRaw(
-        "HEDGE-LEX-009",
-        `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+      errorDiagnostic(
+        { kind: "LexReadPastEnd", index, sourceLength: source.length },
         none(),
       ),
     );

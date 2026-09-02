@@ -1,4 +1,4 @@
-import { errorDiagnosticRaw } from "../diagnostics/index.js";
+import { errorDiagnostic } from "../diagnostics/index.js";
 import type { Diagnostic } from "../diagnostics/index.js";
 import { none, some, type Option } from "../option.js";
 import { isIdentContinue } from "./ident.js";
@@ -40,9 +40,8 @@ function scanExponent(
   if (source[i] === "+" || source[i] === "-") i += 1;
   if (!isDigit(source[i] ?? "")) {
     diagnostics.push(
-      errorDiagnosticRaw(
-        "HEDGE-LEX-006",
-        `float exponent has no digits at offset ${pos}`,
+      errorDiagnostic(
+        { kind: "LexFloatExponentNoDigits", offset: pos },
         some({ start, end: i }),
       ),
     );
@@ -69,9 +68,8 @@ export function scanExponentFloat(
     const token = tokens.at(-1);
     if (!token) {
       diagnostics.push(
-        errorDiagnosticRaw(
-          "HEDGE-LEX-006",
-          `Unterminated float literal starting at ${start}`,
+        errorDiagnostic(
+          { kind: "LexUnterminatedFloatLiteral", offset: start },
           some({ start, end: source.length }),
         ),
       );
@@ -112,9 +110,8 @@ export function scanDotFloat(
       const lastToken = tokens.at(-1);
       if (lastToken === undefined) {
         diagnostics.push(
-          errorDiagnosticRaw(
-            "HEDGE-LEX-006",
-            `Unterminated float literal starting at ${start}`,
+          errorDiagnostic(
+            { kind: "LexUnterminatedFloatLiteral", offset: start },
             some({ start, end: source.length }),
           ),
         );
