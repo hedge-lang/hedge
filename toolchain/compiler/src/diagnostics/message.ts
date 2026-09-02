@@ -427,6 +427,31 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return "cannot assign to immutable binding";
     case "SemCannotAssignThroughSharedReference":
       return "cannot assign through a shared reference";
+    case "OwnBorrowMutThroughShared":
+      return `cannot borrow \`${kind.place}\` as mutable because \`${kind.through}\` is a shared reference.`;
+    case "OwnBorrowMutNotDeclaredMut":
+      return `Cannot borrow "${kind.baseName}" as &mut because it is not declared mut.`;
+    case "OwnConflictingBorrows":
+      return (
+        `Conflicting borrows of "${kind.place}": ${kind.first} at offset ${kind.firstOffset} ` +
+        `and ${kind.second} at offset ${kind.secondOffset} are both live.`
+      );
+    case "OwnUseOfUninitializedBinding":
+      return `use of uninitialized binding \`${kind.name}\``;
+    case "OwnUseOfMovedValue":
+      return `use of moved value \`${kind.name}\``;
+    case "OwnUseOfPossiblyMovedValue":
+      return `use of possibly-moved value \`${kind.name}\`: moved on some paths but not others`;
+    case "OwnUseOfPossiblyUninitializedBinding":
+      return `use of possibly-uninitialized binding \`${kind.name}\`: initialized on some paths but not others`;
+    case "OwnCannotMoveOutBorrowInstead":
+      return `cannot move out of \`${kind.place}\`; borrow it with \`&${kind.place}\` instead`;
+    case "OwnCannotMoveOutOfReference":
+      return `cannot move ${kind.place} out of a reference`;
+    case "OwnConditionalDropFlag":
+      return `\`${kind.name}\` needs a runtime drop flag to decide whether it is still owned at scope exit`;
+    case "OwnAmbiguousDrop":
+      return `\`${kind.name}\` may or may not have been initialized depending on the branch taken, and conditional drops are not yet supported`;
     default:
       return assertNever(kind);
   }
@@ -437,8 +462,24 @@ function radixArticle(radix: RadixName): string {
 }
 
 export function renderRelatedLabel(label: RelatedLabelKind): string {
-  // Becomes an exhaustive switch once RelatedLabelKind gains real variants.
-  return label.text;
+  switch (label.kind) {
+    case "RawLabel":
+      return label.text;
+    case "LabelMovedHere":
+      return "moved here";
+    case "LabelBorrowHere":
+      return `${label.borrow} borrow here`;
+    case "LabelShadowedDeclaration":
+      return "shadowed declaration";
+    case "LabelImplForThisDeclaration":
+      return "impl for this declaration";
+    case "LabelFirstImplementedHere":
+      return "first implemented here";
+    case "LabelInferredAsHere":
+      return `inferred as \`${label.typeName}\` here`;
+    default:
+      return assertNever(label);
+  }
 }
 
 /**

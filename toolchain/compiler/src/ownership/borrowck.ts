@@ -17,11 +17,7 @@
  * alone.
  */
 import { assert, assertNever } from "../assert.js";
-import {
-  type Diagnostic,
-  errorDiagnosticRaw,
-  rawLabel,
-} from "../diagnostics/index.js";
+import { type Diagnostic, errorDiagnostic } from "../diagnostics/index.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import type * as Semantics from "../semantics/ast.js";
@@ -1230,9 +1226,12 @@ function checkCapabilities(
         continue;
       case "blocked":
         diagnostics.push(
-          errorDiagnosticRaw(
-            "HEDGE-BORROW-CHECK-002",
-            `cannot borrow \`${describePlace(borrow.place)}\` as mutable because \`${borrow.capability.through}\` is a shared reference.`,
+          errorDiagnostic(
+            {
+              kind: "OwnBorrowMutThroughShared",
+              place: describePlace(borrow.place),
+              through: borrow.capability.through,
+            },
             spanOf(tokens, borrow.tokenId),
           ),
         );
@@ -1243,9 +1242,11 @@ function checkCapabilities(
           capabilities.get(borrow.place.baseId) === false
         ) {
           diagnostics.push(
-            errorDiagnosticRaw(
-              "HEDGE-BORROW-CHECK-002",
-              `Cannot borrow "${borrow.place.baseName}" as &mut because it is not declared mut.`,
+            errorDiagnostic(
+              {
+                kind: "OwnBorrowMutNotDeclaredMut",
+                baseName: borrow.place.baseName,
+              },
               spanOf(tokens, borrow.tokenId),
             ),
           );
@@ -1290,17 +1291,22 @@ function buildConflictingBorrowsDiagnostic(
 ): Diagnostic {
   const firstBorrowSpan = spanOf(tokens, a.tokenId);
   return {
-    ...errorDiagnosticRaw(
-      "HEDGE-BORROW-CHECK-001",
-      `Conflicting borrows of "${describePlace(a.place)}": ${describeBorrow(a)} at offset ${String(offsetOf(tokens, a.tokenId))} ` +
-        `and ${describeBorrow(b)} at offset ${String(offsetOf(tokens, b.tokenId))} are both live.`,
+    ...errorDiagnostic(
+      {
+        kind: "OwnConflictingBorrows",
+        place: describePlace(a.place),
+        first: describeBorrow(a),
+        firstOffset: String(offsetOf(tokens, a.tokenId)),
+        second: describeBorrow(b),
+        secondOffset: String(offsetOf(tokens, b.tokenId)),
+      },
       spanOf(tokens, b.tokenId),
     ),
     relatedSpans: isSome(firstBorrowSpan)
       ? [
           {
             span: firstBorrowSpan.value,
-            label: rawLabel(`${describeBorrow(a)} borrow here`),
+            label: { kind: "LabelBorrowHere", borrow: describeBorrow(a) },
           },
         ]
       : [],

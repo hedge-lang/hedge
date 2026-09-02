@@ -529,7 +529,33 @@ export type DiagnosticKind =
     }
   | { readonly kind: "SemNotABorrowablePlace" }
   | { readonly kind: "SemCannotAssignToImmutableBinding" }
-  | { readonly kind: "SemCannotAssignThroughSharedReference" };
+  | { readonly kind: "SemCannotAssignThroughSharedReference" }
+  // Ownership analysis.
+  | {
+      readonly kind: "OwnBorrowMutThroughShared";
+      readonly place: string;
+      readonly through: string;
+    }
+  | { readonly kind: "OwnBorrowMutNotDeclaredMut"; readonly baseName: string }
+  | {
+      readonly kind: "OwnConflictingBorrows";
+      readonly place: string;
+      readonly first: string;
+      readonly firstOffset: string;
+      readonly second: string;
+      readonly secondOffset: string;
+    }
+  | { readonly kind: "OwnUseOfUninitializedBinding"; readonly name: string }
+  | { readonly kind: "OwnUseOfMovedValue"; readonly name: string }
+  | { readonly kind: "OwnUseOfPossiblyMovedValue"; readonly name: string }
+  | {
+      readonly kind: "OwnUseOfPossiblyUninitializedBinding";
+      readonly name: string;
+    }
+  | { readonly kind: "OwnCannotMoveOutBorrowInstead"; readonly place: string }
+  | { readonly kind: "OwnCannotMoveOutOfReference"; readonly place: string }
+  | { readonly kind: "OwnConditionalDropFlag"; readonly name: string }
+  | { readonly kind: "OwnAmbiguousDrop"; readonly name: string };
 
 export type RadixName = "hex" | "octal" | "binary";
 
@@ -545,7 +571,14 @@ interface RawDiagnosticKind {
 }
 
 /** The label on a diagnostic's secondary source location. */
-export type RelatedLabelKind = RawRelatedLabelKind;
+export type RelatedLabelKind =
+  | RawRelatedLabelKind
+  | { readonly kind: "LabelMovedHere" }
+  | { readonly kind: "LabelBorrowHere"; readonly borrow: string }
+  | { readonly kind: "LabelShadowedDeclaration" }
+  | { readonly kind: "LabelImplForThisDeclaration" }
+  | { readonly kind: "LabelFirstImplementedHere" }
+  | { readonly kind: "LabelInferredAsHere"; readonly typeName: string };
 
 interface RawRelatedLabelKind {
   readonly kind: "RawLabel";
@@ -820,6 +853,24 @@ export function codeOf(kind: DiagnosticKind): DiagnosticCode {
     case "SemCannotAssignToImmutableBinding":
     case "SemCannotAssignThroughSharedReference":
       return "HEDGE-BORROW-CHECK-006";
+    case "OwnConflictingBorrows":
+      return "HEDGE-BORROW-CHECK-001";
+    case "OwnBorrowMutThroughShared":
+    case "OwnBorrowMutNotDeclaredMut":
+      return "HEDGE-BORROW-CHECK-002";
+    case "OwnUseOfMovedValue":
+    case "OwnUseOfPossiblyMovedValue":
+      return "HEDGE-BORROW-CHECK-003";
+    case "OwnUseOfUninitializedBinding":
+    case "OwnUseOfPossiblyUninitializedBinding":
+      return "HEDGE-MOVE-001";
+    case "OwnCannotMoveOutBorrowInstead":
+    case "OwnCannotMoveOutOfReference":
+      return "HEDGE-MOVE-002";
+    case "OwnAmbiguousDrop":
+      return "HEDGE-MOVE-003";
+    case "OwnConditionalDropFlag":
+      return "HEDGE-MOVE-004";
     default:
       return assertNever(kind);
   }

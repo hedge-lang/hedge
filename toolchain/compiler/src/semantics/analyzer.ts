@@ -2,9 +2,9 @@ import { assert, assertNever } from "../assert.js";
 import {
   errorDiagnostic,
   warningDiagnostic,
-  rawLabel,
   type Diagnostic,
   type DiagnosticKind,
+  type RelatedLabelKind,
   type RelatedSpan,
 } from "../diagnostics/index.js";
 import type { IntSuffix, Span, Token } from "../lexer/token.js";
@@ -1739,11 +1739,13 @@ function warnIfShadowsOuterDeclaration(
 ): void {
   if (outerTokenId === undefined) return;
   const relatedSpans = [
-    ...relatedSpanAt(ctx, outerTokenId, "shadowed declaration"),
+    ...relatedSpanAt(ctx, outerTokenId, { kind: "LabelShadowedDeclaration" }),
     ...ctx.implRegistry
       .filter((impl) => impl.targetTypeName === ownIdentity)
       .flatMap((impl) =>
-        relatedSpanAt(ctx, impl.tokenId, "impl for this declaration"),
+        relatedSpanAt(ctx, impl.tokenId, {
+          kind: "LabelImplForThisDeclaration",
+        }),
       ),
   ];
   emitWarning(
@@ -2944,7 +2946,9 @@ function registerOneImpl(
       ctx,
       implOverlapKind(traitName, incoming, existing),
       item.tokenId,
-      relatedSpanAt(ctx, existing.tokenId, "first implemented here"),
+      relatedSpanAt(ctx, existing.tokenId, {
+        kind: "LabelFirstImplementedHere",
+      }),
     );
   }
   ctx.implRegistry.push(incoming);
@@ -7736,12 +7740,10 @@ type UnifyOutcome =
 function relatedSpanAt(
   ctx: AnalysisContext,
   tokenId: number,
-  label: string,
+  label: RelatedLabelKind,
 ): readonly RelatedSpan[] {
   const token = ctx.tokens[tokenId];
-  return token === undefined
-    ? []
-    : [{ span: token.span, label: rawLabel(label) }];
+  return token === undefined ? [] : [{ span: token.span, label }];
 }
 
 /** Online Robinson-style unification of one declared type against one
@@ -7957,11 +7959,10 @@ function seedExpectedReturnType(
           found: describeType(expectedType),
         },
         call.tokenId,
-        relatedSpanAt(
-          ctx,
-          outcome.previousTokenId,
-          `inferred as \`${describeType(outcome.previous)}\` here`,
-        ),
+        relatedSpanAt(ctx, outcome.previousTokenId, {
+          kind: "LabelInferredAsHere",
+          typeName: describeType(outcome.previous),
+        }),
       );
       return true;
     }
@@ -8156,11 +8157,10 @@ function checkGenericPositionalArg(
           found: describeType(coercedArgType),
         },
         coercedArg.tokenId,
-        relatedSpanAt(
-          ctx,
-          outcome.previousTokenId,
-          `inferred as \`${describeType(outcome.previous)}\` here`,
-        ),
+        relatedSpanAt(ctx, outcome.previousTokenId, {
+          kind: "LabelInferredAsHere",
+          typeName: describeType(outcome.previous),
+        }),
       );
       break;
     }
