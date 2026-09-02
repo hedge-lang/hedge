@@ -39,9 +39,24 @@ export interface AssembledProgram {
   readonly parseDiagnostics: readonly Diagnostic[];
 }
 
-const PRELUDE_TOKENS: readonly Token[] = tokenize(PRELUDE_SOURCE).tokens.filter(
-  (token): boolean => token.kind !== "eof",
-);
+/**
+ * Prelude token spans are pushed past any real source offset so the combined
+ * stream stays a single non-overlapping span space: `parser.ts`'s
+ * missing-item-name recovery locates the offending token by `span.start`
+ * alone, and a prelude token sharing an offset with a user token would
+ * otherwise misdirect it.
+ */
+const SYNTHETIC_SPAN_BASE = 1_000_000_000;
+
+const PRELUDE_TOKENS: readonly Token[] = tokenize(PRELUDE_SOURCE)
+  .tokens.filter((token): boolean => token.kind !== "eof")
+  .map((token) => ({
+    ...token,
+    span: {
+      start: token.span.start + SYNTHETIC_SPAN_BASE,
+      end: token.span.end + SYNTHETIC_SPAN_BASE,
+    },
+  }));
 
 /**
  * Length of the leading run of module-level inner attributes (`#![...]`,

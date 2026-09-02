@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { assert } from "./assert.js";
 import { isNone, isSome } from "./option.js";
 import { compile } from "./driver.js";
+import { PRELUDE_SOURCE } from "./prelude.js";
 
 describe("driver", (): void => {
   it("compiles the tracer bullet to runnable JavaScript", (): void => {
@@ -442,6 +443,21 @@ describe("std prelude", (): void => {
     expect(isNone(result.code)).toBe(true);
     expect(result.diagnostics.map((d) => `${d.code}: ${d.message}`)).toEqual([
       "HEDGE-TRAIT-002: the trait bound `Counter: PartialEq` is not satisfied",
+    ]);
+  });
+
+  it("still recovers a missing-item-name error whose source offset collides with a prelude token", (): void => {
+    // The bad-name token (`struct`) is padded to sit at the same source
+    // offset as the prelude's first `fn`, the case where a span-keyed
+    // recovery lookup could pick the prelude token instead of the user's.
+    const pad = " ".repeat(PRELUDE_SOURCE.indexOf("fn ") - "fn ".length);
+    const result = compile(
+      `${pad}fn struct() {}\nfn main() { let x: Bogus = 1; }`,
+    );
+    expect(result.diagnostics.map((d) => d.code)).toEqual([
+      "HEDGE-PARSE-001",
+      "HEDGE-NAME-001",
+      "HEDGE-TYPE-001",
     ]);
   });
 
