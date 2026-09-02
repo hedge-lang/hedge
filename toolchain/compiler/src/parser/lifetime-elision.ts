@@ -1,6 +1,6 @@
 import { assertNever } from "../assert.js";
 import type { Diagnostic } from "../diagnostics/index.js";
-import { errorDiagnosticRaw } from "../diagnostics/index.js";
+import { errorDiagnostic } from "../diagnostics/index.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import type {
@@ -29,20 +29,6 @@ import type {
   Variant,
   LifetimeParam,
 } from "./ast.js";
-
-const NO_ELISION_RULE_MESSAGE =
-  "missing lifetime specifier: a reference with no applicable elision rule " +
-  "needs an explicit lifetime annotation (this applies to struct fields, " +
-  "let annotations, and references nested inside another reference)";
-
-function ambiguousReturnLifetimeMessage(referenceParamCount: number): string {
-  return (
-    "missing lifetime specifier: the return type borrows a reference, but " +
-    `the signature has ${referenceParamCount} reference parameters, so the ` +
-    "compiler cannot infer which one it borrows from; add explicit " +
-    "lifetime parameters (e.g. fn f<'a>(x: &'a T) -> &'a T)"
-  );
-}
 
 function spanOf(tokens: readonly Token[], tokenId: number): Option<Span> {
   const token = tokens[tokenId];
@@ -145,9 +131,8 @@ function resolveNestedReferenceTypes(
         return { ...type, referent };
       }
       diagnostics.push(
-        errorDiagnosticRaw(
-          "HEDGE-LIFETIME-001",
-          NO_ELISION_RULE_MESSAGE,
+        errorDiagnostic(
+          { kind: "ElisionNoApplicableRule" },
           spanOf(tokens, type.tokenId),
         ),
       );
@@ -410,9 +395,11 @@ function elideFunctionSignature(
         lifetime = soleReferenceParamLifetime;
       } else {
         diagnostics.push(
-          errorDiagnosticRaw(
-            "HEDGE-LIFETIME-001",
-            ambiguousReturnLifetimeMessage(referenceParamCount),
+          errorDiagnostic(
+            {
+              kind: "ElisionAmbiguousReturnLifetime",
+              referenceParamCount,
+            },
             spanOf(tokens, returnType.tokenId),
           ),
         );

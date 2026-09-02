@@ -1,7 +1,9 @@
 import {
   type Diagnostic,
-  errorDiagnosticRaw,
+  type DiagnosticKind,
+  errorDiagnostic,
   messageOf,
+  renderDiagnosticMessage,
 } from "../diagnostics/index.js";
 import { resolveEscape } from "../lexer/escape.js";
 import type {
@@ -36,9 +38,8 @@ export function tokenAt(tokens: readonly Token[], pos: number): PR<Token> {
   const token = tokens[pos];
   if (token === undefined) {
     return err(
-      errorDiagnosticRaw(
-        "HEDGE-PARSE-002",
-        `Unexpected end of input at token ${pos}`,
+      errorDiagnostic(
+        { kind: "ParseUnexpectedEndOfInputAtToken", token: pos },
         none(),
       ),
     );
@@ -81,9 +82,13 @@ export function expect(
   const token = tokenAtResult.value;
   if (token.kind !== kind) {
     return err(
-      errorDiagnosticRaw(
-        "HEDGE-PARSE-001",
-        `Expected ${kind}, found "${token.kind}" at offset ${token.span.start}`,
+      errorDiagnostic(
+        {
+          kind: "ParseExpectedFound",
+          expected: kind,
+          found: token.kind,
+          offset: token.span.start,
+        },
         some(token.span),
       ),
     );
@@ -109,9 +114,13 @@ export function expectKeyword(
   if (token.kind !== "keyword" || token.text !== text) {
     const found = token.kind === "keyword" ? token.text : token.kind;
     return err(
-      errorDiagnosticRaw(
-        "HEDGE-PARSE-001",
-        `Expected keyword "${text}", found "${found}" at offset ${token.span.start}`,
+      errorDiagnostic(
+        {
+          kind: "ParseExpectedKeyword",
+          keyword: text,
+          found,
+          offset: token.span.start,
+        },
         some(token.span),
       ),
     );
@@ -128,9 +137,6 @@ function stripUnderscores(text: string): string {
   return text.replaceAll("_", "");
 }
 
-export const MUT_MESSAGE: string =
-  "The keyword `mut` is reserved and cannot be used as an identifier. For a mutable binding, use `let mut`; for a mutable borrow, use `&mut`.";
-
 /**
  * True for a deliberate, permanent, fail-fast rejection of syntax that is
  * recognized but not yet implemented, or reserved (`mut` as an identifier,
@@ -141,12 +147,6 @@ export const MUT_MESSAGE: string =
  */
 export function isGuardrailDiagnostic(diagnostic: Diagnostic): boolean {
   return diagnostic.code === "HEDGE-PARSE-004";
-}
-
-export function unsupportedLoopMessage(keyword: string): string {
-  return keyword === "loop"
-    ? "`loop` expressions are not yet supported"
-    : `\`${keyword}\` loops are not yet supported`;
 }
 
 const LOOP_KEYWORDS: ReadonlySet<string> = new Set(["loop", "while", "for"]);
@@ -203,10 +203,6 @@ export function isWhileLetAt(tokens: readonly Token[], pos: number): boolean {
   );
 }
 
-export function unsupportedPathKeywordMessage(keyword: string): string {
-  return `\`${keyword}\` is not yet supported`;
-}
-
 const PATH_KEYWORDS: ReadonlySet<string> = new Set(["self", "super", "Self"]);
 
 /**
@@ -221,14 +217,6 @@ export function pathKeywordAt(
     return some(token);
   }
   return none();
-}
-
-export function unsupportedGenericsMessage(construct: string): string {
-  return `${construct} are not yet supported`;
-}
-
-export function unsupportedLifetimeMessage(construct: string): string {
-  return `${construct} are not yet supported`;
 }
 
 /**
@@ -480,9 +468,11 @@ export function skipBalancedBraceBlock(
   const openBraceToken = tokens[openBrace];
   if (openBraceToken?.kind !== "lbrace") {
     return err(
-      errorDiagnosticRaw(
-        "HEDGE-PARSE-001",
-        `expected \`{\` to start block, found \`${openBraceToken?.kind ?? "MISSING"}\``,
+      errorDiagnostic(
+        {
+          kind: "ParseExpectedBraceToStartBlockFound",
+          found: openBraceToken?.kind ?? "MISSING",
+        },
         openBraceToken ? some(openBraceToken.span) : none(),
       ),
     );
@@ -493,9 +483,8 @@ export function skipBalancedBraceBlock(
     const tok = tokens[cursor];
     if (tok === undefined || tok.kind === "eof") {
       return err(
-        errorDiagnosticRaw(
-          "HEDGE-PARSE-002",
-          "expected `}` to close block, found end of input",
+        errorDiagnostic(
+          { kind: "ParseExpectedCloseBraceEofInBlock" },
           some(openBraceToken.span),
         ),
       );
@@ -595,10 +584,6 @@ export function skipToStructBody(
   }
 }
 
-export function unsupportedAsyncMessage(): string {
-  return "`async` is not yet supported";
-}
-
 interface TopLevelBodyStart {
   readonly kind: "brace" | "semi";
   readonly pos: number;
@@ -647,20 +632,19 @@ export function skipUnsupportedTopLevelItem(
   tokens: readonly Token[],
   keyword: KeywordToken,
   pos: number,
-  message: string,
+  guardrail: DiagnosticKind,
 ): PR<{ diagnostic: Diagnostic; next: number }> {
-  const diagnostic = errorDiagnosticRaw(
-    "HEDGE-PARSE-004",
-    message,
-    some(keyword.span),
-  );
+  const diagnostic = errorDiagnostic(guardrail, some(keyword.span));
 
   const bodyStart = findTopLevelItemBodyStart(tokens, pos);
   if (bodyStart === undefined) {
     return err(
-      errorDiagnosticRaw(
-        "HEDGE-PARSE-002",
-        `${message}; expected a body for \`${keyword.text}\`, found end of input`,
+      errorDiagnostic(
+        {
+          kind: "ParseGuardrailThen",
+          guardrail: renderDiagnosticMessage(guardrail),
+          rest: `expected a body for \`${keyword.text}\`, found end of input`,
+        },
         some(keyword.span),
       ),
     );
@@ -673,9 +657,9 @@ export function skipUnsupportedTopLevelItem(
     return err({
       ...nextResult.error,
       kind: {
-        kind: "Raw",
-        code: nextResult.error.code,
-        text: `${message}; ${messageOf(nextResult.error)}`,
+        kind: "ParseGuardrailThen",
+        guardrail: renderDiagnosticMessage(guardrail),
+        rest: messageOf(nextResult.error),
       },
       span: some(keyword.span),
     });
@@ -703,9 +687,8 @@ export function parseIdentifier(
   const token = tokenAtResult.value;
   if (token.kind === "keyword" && token.text === "mut") {
     return err(
-      errorDiagnosticRaw(
-        "HEDGE-PARSE-004",
-        MUT_MESSAGE,
+      errorDiagnostic(
+        { kind: "ParseMutReservedIdentifier" },
         some({ start: token.span.start, end: token.span.end }),
       ),
     );
@@ -715,9 +698,12 @@ export function parseIdentifier(
     const found =
       token.kind === "keyword" ? `keyword "${token.text}"` : `"${token.kind}"`;
     return err(
-      errorDiagnosticRaw(
-        "HEDGE-PARSE-001",
-        `Expected an identifier, found ${found} at offset ${token.span.start}`,
+      errorDiagnostic(
+        {
+          kind: "ParseExpectedIdentifierFound",
+          found,
+          offset: token.span.start,
+        },
         some(token.span),
       ),
     );

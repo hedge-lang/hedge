@@ -72,7 +72,129 @@ export type DiagnosticKind =
       readonly kind: "LexUnknownEscapeSequence";
       readonly sequence: string;
       readonly offset: number;
-    };
+    }
+  // Parsing.
+  | {
+      readonly kind: "ParseExpectedFound";
+      readonly expected: string;
+      readonly found: string;
+      readonly offset: number;
+    }
+  | {
+      readonly kind: "ParseExpectedKeyword";
+      readonly keyword: string;
+      readonly found: string;
+      readonly offset: number;
+    }
+  | {
+      readonly kind: "ParseExpectedIdentifierFound";
+      readonly found: string;
+      readonly offset: number;
+    }
+  | {
+      readonly kind: "ParseExpectedIdentifierAfterPathSep";
+      readonly found: string;
+    }
+  | {
+      readonly kind: "ParseExpectedBraceToStartBlockFound";
+      readonly found: string;
+    }
+  | { readonly kind: "ParseExpectedColonAfterParamName"; readonly name: string }
+  | { readonly kind: "ParseExpectedColonAfterFieldName"; readonly name: string }
+  | {
+      readonly kind: "ParseExpectedParenAfterMethodGenerics";
+      readonly found: string;
+    }
+  | {
+      readonly kind: "ParseExpectedCommaOrCloseAngleInGenericParams";
+      readonly found: string;
+    }
+  | { readonly kind: "ParseExpectedStructBody"; readonly found: string }
+  | { readonly kind: "ParseExpectedTraitBodyItem"; readonly found: string }
+  | {
+      readonly kind: "ParseExpectedSemiOrCloseBracketInArrayType";
+      readonly found: string;
+    }
+  | {
+      readonly kind: "ParseExpectedCommaOrCloseAngleInTypeArgs";
+      readonly found: string;
+    }
+  | {
+      readonly kind: "ParseExpectedNumericLiteralAfterMinusInPattern";
+      readonly found: string;
+    }
+  | {
+      readonly kind: "ParseExpectedLiteralAfterRangeInPattern";
+      readonly found: string;
+    }
+  | { readonly kind: "ParseExpectedCommaOrParenInParens" }
+  | { readonly kind: "ParseExpectedSeparatorInArrayLiteral" }
+  | { readonly kind: "ParseExpectedIfOrBraceAfterElse" }
+  | { readonly kind: "ParseExpectedBraceToStartIfBody" }
+  | { readonly kind: "ParseExpectedBraceToStartWhileBody" }
+  | { readonly kind: "ParseExpectedArrowInMatchArm" }
+  | { readonly kind: "ParseExpectedCommaBetweenMatchArms" }
+  | { readonly kind: "ParseExpectedBraceAfterStructUpdate" }
+  | { readonly kind: "ParseExpectedBraceToCloseStructExpr" }
+  | { readonly kind: "ParseExpectedParenToCloseArgumentList" }
+  | { readonly kind: "ParseExpectedExpressionInBrackets" }
+  | { readonly kind: "ParseExpectedExpressionAfterInclusiveRange" }
+  | { readonly kind: "ParseExpectedBraceToCloseBlock" }
+  | { readonly kind: "ParseExpectedCommaOrParenAfterReceiver" }
+  | {
+      readonly kind: "ParseUnexpectedEndOfInputAtToken";
+      readonly token: number;
+    }
+  | { readonly kind: "ParseExpectedCloseBraceEofInBlock" }
+  | { readonly kind: "ParseExpectedBraceEofToOpenLoopBody" }
+  | { readonly kind: "ParseExpectedCloseBraceEofInMatch" }
+  | { readonly kind: "ParseUnterminatedAttributeArgumentList" }
+  | { readonly kind: "ParseExpectedCloseParenEofInType" }
+  | {
+      readonly kind: "ParseGuardrailThen";
+      readonly guardrail: string;
+      readonly rest: string;
+    }
+  | {
+      readonly kind: "ParseCannotChainOperators";
+      readonly left: string;
+      readonly right: string;
+    }
+  | { readonly kind: "ParseConstructNotSupported"; readonly construct: string }
+  | { readonly kind: "ParseLoopNotSupported"; readonly keyword: string }
+  | { readonly kind: "ParseKeywordNotSupported"; readonly keyword: string }
+  | {
+      readonly kind: "ParseDeclarationKeywordNotSupported";
+      readonly keyword: string;
+    }
+  | { readonly kind: "ParseAsyncNotSupported" }
+  | { readonly kind: "ParseMutReservedIdentifier" }
+  | { readonly kind: "ParseNeverTypeNotSupported" }
+  | { readonly kind: "ParseTupleTypeNotSupported" }
+  | { readonly kind: "ParseSliceTypeNotSupported" }
+  | { readonly kind: "ParseDynMustNameTrait" }
+  | { readonly kind: "ParsePubScopeNotSupported"; readonly scope: string }
+  | { readonly kind: "ParseExpectedType"; readonly found: string }
+  | { readonly kind: "ElisionNoApplicableRule" }
+  | {
+      readonly kind: "ElisionAmbiguousReturnLifetime";
+      readonly referenceParamCount: number;
+    }
+  | { readonly kind: "ParseStrayAngleBracket"; readonly context: string }
+  | {
+      readonly kind: "ParseUnexpectedItemKindInBlock";
+      readonly itemKind: string;
+    }
+  | {
+      readonly kind: "ParseUnexpectedItemKindInImplBody";
+      readonly itemKind: string;
+    }
+  | { readonly kind: "ParseVisibilityNotAllowed"; readonly location: string }
+  | { readonly kind: "ParseSigilOnPathPattern" }
+  | { readonly kind: "ParseSigilOnWildcardPattern"; readonly byRef: boolean }
+  | { readonly kind: "ParseMutOnFieldlessPattern" }
+  | { readonly kind: "ParseImmutableBindingNeverUsed" }
+  | { readonly kind: "ParseStructUpdateUnsupportedInSemantics" };
 
 export type RadixName = "hex" | "octal" | "binary";
 
@@ -131,6 +253,75 @@ export function codeOf(kind: DiagnosticKind): DiagnosticCode {
       return "HEDGE-LEX-008";
     case "LexReadPastEnd":
       return "HEDGE-LEX-009";
+    case "ParseExpectedFound":
+    case "ParseExpectedKeyword":
+    case "ParseExpectedIdentifierFound":
+    case "ParseExpectedIdentifierAfterPathSep":
+    case "ParseExpectedBraceToStartBlockFound":
+    case "ParseExpectedColonAfterParamName":
+    case "ParseExpectedColonAfterFieldName":
+    case "ParseExpectedParenAfterMethodGenerics":
+    case "ParseExpectedCommaOrCloseAngleInGenericParams":
+    case "ParseExpectedStructBody":
+    case "ParseExpectedTraitBodyItem":
+    case "ParseExpectedSemiOrCloseBracketInArrayType":
+    case "ParseExpectedCommaOrCloseAngleInTypeArgs":
+    case "ParseExpectedNumericLiteralAfterMinusInPattern":
+    case "ParseExpectedLiteralAfterRangeInPattern":
+    case "ParseExpectedCommaOrParenInParens":
+    case "ParseExpectedSeparatorInArrayLiteral":
+    case "ParseExpectedIfOrBraceAfterElse":
+    case "ParseExpectedBraceToStartIfBody":
+    case "ParseExpectedBraceToStartWhileBody":
+    case "ParseExpectedArrowInMatchArm":
+    case "ParseExpectedCommaBetweenMatchArms":
+    case "ParseExpectedBraceAfterStructUpdate":
+    case "ParseExpectedBraceToCloseStructExpr":
+    case "ParseExpectedParenToCloseArgumentList":
+    case "ParseExpectedExpressionInBrackets":
+    case "ParseExpectedExpressionAfterInclusiveRange":
+    case "ParseExpectedBraceToCloseBlock":
+    case "ParseExpectedCommaOrParenAfterReceiver":
+      return "HEDGE-PARSE-001";
+    case "ParseUnexpectedEndOfInputAtToken":
+    case "ParseExpectedCloseBraceEofInBlock":
+    case "ParseExpectedBraceEofToOpenLoopBody":
+    case "ParseExpectedCloseBraceEofInMatch":
+    case "ParseUnterminatedAttributeArgumentList":
+    case "ParseExpectedCloseParenEofInType":
+    case "ParseGuardrailThen":
+      return "HEDGE-PARSE-002";
+    case "ParseCannotChainOperators":
+      return "HEDGE-PARSE-003";
+    case "ParseConstructNotSupported":
+    case "ParseLoopNotSupported":
+    case "ParseKeywordNotSupported":
+    case "ParseDeclarationKeywordNotSupported":
+    case "ParseAsyncNotSupported":
+    case "ParseMutReservedIdentifier":
+    case "ParseNeverTypeNotSupported":
+    case "ParseTupleTypeNotSupported":
+    case "ParseSliceTypeNotSupported":
+    case "ParseDynMustNameTrait":
+    case "ParsePubScopeNotSupported":
+    case "ParseExpectedType":
+      return "HEDGE-PARSE-004";
+    case "ParseStrayAngleBracket":
+      return "HEDGE-PARSE-005";
+    case "ParseUnexpectedItemKindInBlock":
+    case "ParseUnexpectedItemKindInImplBody":
+    case "ParseVisibilityNotAllowed":
+    case "ParseSigilOnPathPattern":
+    case "ParseSigilOnWildcardPattern":
+    case "ParseMutOnFieldlessPattern":
+      return "HEDGE-PARSE-006";
+    case "ElisionNoApplicableRule":
+    case "ElisionAmbiguousReturnLifetime":
+      return "HEDGE-LIFETIME-001";
+    case "ParseImmutableBindingNeverUsed":
+      return "HEDGE-LINT-001";
+    case "ParseStructUpdateUnsupportedInSemantics":
+      return "HEDGE-UNSUPPORTED-001";
     default:
       return assertNever(kind);
   }

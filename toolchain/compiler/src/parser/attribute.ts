@@ -1,4 +1,4 @@
-import { errorDiagnosticRaw } from "../diagnostics/index.js";
+import { errorDiagnostic } from "../diagnostics/index.js";
 import type { Token } from "../lexer/token.js";
 import { none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
@@ -79,9 +79,13 @@ function parseAttributeArg(
     });
   }
   return err(
-    errorDiagnosticRaw(
-      "HEDGE-PARSE-001",
-      `Expected attribute argument, found "${token.kind}" at offset ${token.span.start}`,
+    errorDiagnostic(
+      {
+        kind: "ParseExpectedFound",
+        expected: "attribute argument",
+        found: token.kind,
+        offset: token.span.start,
+      },
       some(token.span),
     ),
   );
@@ -122,9 +126,8 @@ function parseAttributeArgList(
   while (tokens[cursor]?.kind !== "rparen") {
     if (tokens[cursor]?.kind === "eof") {
       return err(
-        errorDiagnosticRaw(
-          "HEDGE-PARSE-002",
-          "unterminated attribute argument list",
+        errorDiagnostic(
+          { kind: "ParseUnterminatedAttributeArgumentList" },
           lparenSpan !== undefined ? some(lparenSpan) : none(),
         ),
       );

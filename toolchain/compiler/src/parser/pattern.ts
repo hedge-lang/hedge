@@ -1,4 +1,4 @@
-import { errorDiagnosticRaw } from "../diagnostics/index.js";
+import { errorDiagnostic } from "../diagnostics/index.js";
 import { assert } from "../assert.js";
 import type { Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
@@ -22,9 +22,6 @@ import {
 } from "./parse-utils.js";
 import { parsePathSegments } from "./path.js";
 
-const sigilOnPathMessage =
-  "`mut`/`&`/`&mut` sigils cannot be applied to a struct, tuple-struct, or path pattern";
-
 /**
  * Tries to parse a pattern-literal bound (an optional leading `-` on a
  * numeric literal, or a bare literal) at `pos`. `none()` means `pos` is not
@@ -44,11 +41,12 @@ function tryParseRangePatternBound(
     if (nextTok?.kind !== "int" && nextTok?.kind !== "float") {
       return some(
         err(
-          errorDiagnosticRaw(
-            "HEDGE-PARSE-001",
-            `Expected a numeric literal after "-" in a pattern, found ${
-              nextTok === undefined ? "end of input" : `"${nextTok.kind}"`
-            }`,
+          errorDiagnostic(
+            {
+              kind: "ParseExpectedNumericLiteralAfterMinusInPattern",
+              found:
+                nextTok === undefined ? "end of input" : `"${nextTok.kind}"`,
+            },
             nextTok !== undefined ? some(nextTok.span) : spanAt(tokens, pos),
           ),
         ),
@@ -160,11 +158,11 @@ function parsePatternNoAlt(
       if (!isSome(endAttempt)) {
         const tok = tokens[afterOp];
         return err(
-          errorDiagnosticRaw(
-            "HEDGE-PARSE-001",
-            `Expected a literal after "..=" in a range pattern, found ${
-              tok === undefined ? "end of input" : `"${tok.kind}"`
-            }`,
+          errorDiagnostic(
+            {
+              kind: "ParseExpectedLiteralAfterRangeInPattern",
+              found: tok === undefined ? "end of input" : `"${tok.kind}"`,
+            },
             tok !== undefined ? some(tok.span) : spanAt(tokens, afterOp),
           ),
         );
@@ -273,9 +271,8 @@ function parseIdentifierRootedPattern(
   if (kindAt(tokens, next) === "path_sep") {
     if (byRef) {
       return err(
-        errorDiagnosticRaw(
-          "HEDGE-PARSE-006",
-          sigilOnPathMessage,
+        errorDiagnostic(
+          { kind: "ParseSigilOnPathPattern" },
           spanAt(tokens, pos),
         ),
       );
@@ -289,11 +286,8 @@ function parseIdentifierRootedPattern(
   if (ident.text === "_") {
     if (isMut || byRef) {
       return err(
-        errorDiagnosticRaw(
-          "HEDGE-PARSE-006",
-          byRef
-            ? "`&`/`&mut` cannot be applied to the wildcard pattern `_`"
-            : "`mut` cannot be applied to the wildcard pattern `_`",
+        errorDiagnostic(
+          { kind: "ParseSigilOnWildcardPattern", byRef },
           spanAt(tokens, pos),
         ),
       );
@@ -307,9 +301,8 @@ function parseIdentifierRootedPattern(
   if (kindAt(tokens, next) === "lbrace" || kindAt(tokens, next) === "lparen") {
     if (byRef) {
       return err(
-        errorDiagnosticRaw(
-          "HEDGE-PARSE-006",
-          sigilOnPathMessage,
+        errorDiagnostic(
+          { kind: "ParseSigilOnPathPattern" },
           spanAt(tokens, pos),
         ),
       );
@@ -475,9 +468,8 @@ function parsePathRootedPatternTail(
   }
   if (mutable) {
     return err(
-      errorDiagnosticRaw(
-        "HEDGE-PARSE-006",
-        "`mut` cannot be applied to a fieldless pattern like a bare unit variant",
+      errorDiagnostic(
+        { kind: "ParseMutOnFieldlessPattern" },
         spanAt(tokens, startPos),
       ),
     );

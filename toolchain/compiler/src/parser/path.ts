@@ -1,15 +1,13 @@
-import { errorDiagnosticRaw } from "../diagnostics/index.js";
+import { errorDiagnostic } from "../diagnostics/index.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some } from "../option.js";
 import { err, isErr, ok } from "../result.js";
 import type { Path, PathExpression } from "./ast.js";
 import type { Parsed } from "./parse.js";
 import {
-  MUT_MESSAGE,
   parseIdentifier,
   pathKeywordAt,
   tokenAt,
-  unsupportedPathKeywordMessage,
   type PR,
 } from "./parse-utils.js";
 
@@ -48,9 +46,11 @@ function parsePathSegmentsWithSelfHead(
     const selfHeadAllowed = allowSelfHead && firstKeyword.value.text === "Self";
     if (!selfHeadAllowed) {
       return err(
-        errorDiagnosticRaw(
-          "HEDGE-PARSE-004",
-          unsupportedPathKeywordMessage(firstKeyword.value.text),
+        errorDiagnostic(
+          {
+            kind: "ParseKeywordNotSupported",
+            keyword: firstKeyword.value.text,
+          },
           some(firstKeyword.value.span),
         ),
       );
@@ -84,9 +84,8 @@ function parsePathSegmentsWithSelfHead(
     if (nextToken?.kind !== "ident") {
       if (nextToken?.kind === "keyword" && nextToken.text === "mut") {
         return err(
-          errorDiagnosticRaw(
-            "HEDGE-PARSE-004",
-            MUT_MESSAGE,
+          errorDiagnostic(
+            { kind: "ParseMutReservedIdentifier" },
             some(nextToken.span),
           ),
         );
@@ -94,9 +93,8 @@ function parsePathSegmentsWithSelfHead(
       const keyword = pathKeywordAt(tokens, cursor);
       if (isSome(keyword)) {
         return err(
-          errorDiagnosticRaw(
-            "HEDGE-PARSE-004",
-            unsupportedPathKeywordMessage(keyword.value.text),
+          errorDiagnostic(
+            { kind: "ParseKeywordNotSupported", keyword: keyword.value.text },
             some(keyword.value.span),
           ),
         );
@@ -110,9 +108,8 @@ function parsePathSegmentsWithSelfHead(
       const span =
         nextToken !== undefined ? some(nextToken.span) : none<Span>();
       return err(
-        errorDiagnosticRaw(
-          "HEDGE-PARSE-001",
-          `Expected identifier after "::", found ${foundDesc}`,
+        errorDiagnostic(
+          { kind: "ParseExpectedIdentifierAfterPathSep", found: foundDesc },
           span,
         ),
       );

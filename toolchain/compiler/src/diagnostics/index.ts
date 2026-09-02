@@ -4,6 +4,7 @@ export {
   errorDiagnostic,
   errorDiagnosticRaw,
   rawLabel,
+  warningDiagnostic,
   warningDiagnosticRaw,
 } from "./diagnostic.js";
 export { codeOf, type DiagnosticKind, type RelatedLabelKind } from "./kind.js";
