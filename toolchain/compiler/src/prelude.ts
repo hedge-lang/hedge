@@ -1,4 +1,4 @@
-import type { Diagnostic } from "./diagnostics.js";
+import type { Diagnostic } from "./diagnostics/index.js";
 import { tokenize } from "./lexer/lexer.js";
 import type { Token } from "./lexer/token.js";
 import { isSome, type Option } from "./option.js";

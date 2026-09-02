@@ -1,4 +1,4 @@
-import { errorDiagnostic } from "../diagnostics.js";
+import { errorDiagnostic } from "../diagnostics/index.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some } from "../option.js";
 import { err, isErr, ok } from "../result.js";

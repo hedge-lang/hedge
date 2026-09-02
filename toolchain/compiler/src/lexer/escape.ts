@@ -1,5 +1,5 @@
-import type { Diagnostic } from "../diagnostics.js";
-import { errorDiagnostic } from "../diagnostics.js";
+import type { Diagnostic } from "../diagnostics/index.js";
+import { errorDiagnostic } from "../diagnostics/index.js";
 import { some } from "../option.js";
 import { isHexDigit } from "./int.js";
 import type { Token } from "./token.js";

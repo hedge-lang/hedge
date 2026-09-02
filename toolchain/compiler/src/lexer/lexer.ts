@@ -1,5 +1,5 @@
-import { errorDiagnostic } from "../diagnostics.js";
-import type { Diagnostic } from "../diagnostics.js";
+import { errorDiagnostic } from "../diagnostics/index.js";
+import type { Diagnostic } from "../diagnostics/index.js";
 import { isSome, some } from "../option.js";
 import type { Token } from "./token.js";
 import { tokenizeComment } from "./comments.js";

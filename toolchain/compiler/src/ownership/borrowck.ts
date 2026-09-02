@@ -17,7 +17,7 @@
  * alone.
  */
 import { assert, assertNever } from "../assert.js";
-import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
+import { type Diagnostic, errorDiagnostic } from "../diagnostics/index.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import type * as Semantics from "../semantics/ast.js";

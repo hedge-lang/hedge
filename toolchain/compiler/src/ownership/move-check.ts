@@ -30,7 +30,7 @@ import {
   type DiagnosticCode,
   errorDiagnostic,
   warningDiagnostic,
-} from "../diagnostics.js";
+} from "../diagnostics/index.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { hasCapability } from "../semantics/type-capabilities.js";

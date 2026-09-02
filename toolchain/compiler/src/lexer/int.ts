@@ -1,5 +1,5 @@
-import type { Diagnostic } from "../diagnostics.js";
-import { errorDiagnostic } from "../diagnostics.js";
+import type { Diagnostic } from "../diagnostics/index.js";
+import { errorDiagnostic } from "../diagnostics/index.js";
 import { none, some, type Option } from "../option.js";
 import { isIdentContinue } from "./ident.js";
 import type { IntSuffix, Token } from "./token.js";

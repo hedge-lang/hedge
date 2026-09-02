@@ -1,4 +1,4 @@
-import type { Diagnostic } from "../diagnostics.js";
+import type { Diagnostic } from "../diagnostics/index.js";
 import type { Token } from "./token.js";
 import {
   isDigit,

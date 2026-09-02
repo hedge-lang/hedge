@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { assert } from "../assert.js";
-import type { Diagnostic } from "../diagnostics.js";
+import type { Diagnostic } from "../diagnostics/index.js";
 import { tokenize } from "../lexer/lexer.js";
 import { isSome } from "../option.js";
 import { parse } from "../parser/parser.js";

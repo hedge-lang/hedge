@@ -1,4 +1,4 @@
-import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
+import { type Diagnostic, errorDiagnostic } from "../diagnostics/index.js";
 import { resolveEscape } from "../lexer/escape.js";
 import type {
   FloatToken,

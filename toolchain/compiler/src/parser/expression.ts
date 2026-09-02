@@ -3,7 +3,7 @@ import {
   type Diagnostic,
   errorDiagnostic,
   warningDiagnostic,
-} from "../diagnostics.js";
+} from "../diagnostics/index.js";
 import { resolveEscape } from "../lexer/escape.js";
 import type { Token, TokenKind } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";

@@ -1,6 +1,6 @@
 import { assertNever } from "../assert.js";
-import type { Diagnostic } from "../diagnostics.js";
-import { errorDiagnostic } from "../diagnostics.js";
+import type { Diagnostic } from "../diagnostics/index.js";
+import { errorDiagnostic } from "../diagnostics/index.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import type {

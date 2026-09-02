@@ -5,7 +5,7 @@ import {
   type Diagnostic,
   type DiagnosticCode,
   type RelatedSpan,
-} from "../diagnostics.js";
+} from "../diagnostics/index.js";
 import type { IntSuffix, Token } from "../lexer/token.js";
 import {
   isNone,
