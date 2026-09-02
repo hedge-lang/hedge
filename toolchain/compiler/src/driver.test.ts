@@ -421,3 +421,53 @@ describe("dyn Trait as a type", (): void => {
     ).toThrow("dyn Trait code generation is not implemented yet");
   });
 });
+
+describe("std prelude", (): void => {
+  it("resolves a user `impl Drop for X` against the prelude without a local trait declaration", (): void => {
+    const result = compile(`
+      struct Handle { fd: i32 }
+      impl Drop for Handle { fn drop(&mut self) {} }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(isSome(result.code)).toBe(true);
+  });
+
+  it("rejects `impl Eq for X` with no `impl PartialEq for X`, resolving Eq's supertrait from the prelude", (): void => {
+    const result = compile(`
+      struct Counter { n: i32 }
+      impl Eq for Counter {}
+      fn main() {}
+    `);
+    expect(isNone(result.code)).toBe(true);
+    expect(result.diagnostics.map((d) => `${d.code}: ${d.message}`)).toEqual([
+      "HEDGE-TRAIT-002: the trait bound `Counter: PartialEq` is not satisfied",
+    ]);
+  });
+
+  it("leaves emitted JavaScript byte-identical to the same program compiled before the prelude existed", (): void => {
+    const result = compile(`
+      struct Point { x: i32, y: i32 }
+      fn main() {
+        let mut p = Point { x: 1, y: 2 };
+        p.x = p.x + p.y;
+      }
+    `);
+    assert(isSome(result.code), "expected code");
+    const { javascript } = result.code.value;
+    assert(isSome(javascript), "expected javascript");
+    expect(javascript.value).toBe(
+      [
+        "#!/usr/bin/env node",
+        "",
+        "function main() {",
+        "  let p = ({x: 1, y: 2, [Symbol.dispose]() {}});",
+        "  p.x = ((p.x + p.y)|0);",
+        "}",
+        "",
+        "main();",
+        "",
+      ].join("\n"),
+    );
+  });
+});

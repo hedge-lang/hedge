@@ -1,0 +1,10 @@
+struct Counter {
+  n: i32,
+}
+
+impl Eq for Counter {}
+
+fn main() {
+  let c = Counter { n: 0 };
+  print(c.n);
+}

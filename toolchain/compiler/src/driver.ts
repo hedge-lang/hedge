@@ -2,14 +2,11 @@ import type { Code } from "./codegen/output.js";
 import { generate } from "./codegen/generator.js";
 import type { Diagnostic } from "./diagnostics.js";
 import { toJsim } from "./jsim/jsim.js";
-import { tokenize } from "./lexer/lexer.js";
-import type { Token } from "./lexer/token.js";
 import { optimize } from "./optimization/optimizer.js";
 import { none, some, type Option, isSome } from "./option.js";
 import { checkBorrows } from "./ownership/borrowck.js";
 import { analyzeOwnership } from "./ownership/move-check.js";
-import type { Program } from "./parser/ast.js";
-import { parse } from "./parser/parser.js";
+import { assembleProgram } from "./prelude.js";
 import { analyze } from "./semantics/analyzer.js";
 
 export interface CompileResult {
@@ -29,19 +26,6 @@ export interface CompileOptions {
    * program compilable today can ever trigger this warning.
    */
   readonly warnDropFlags?: boolean;
-}
-
-interface ParseSourceResult {
-  readonly program: Option<Program>;
-  readonly lexDiagnostics: readonly Diagnostic[];
-  readonly parseDiagnostics: readonly Diagnostic[];
-  readonly tokens: readonly Token[];
-}
-
-function parseSource(source: string): ParseSourceResult {
-  const { tokens, diagnostics: lexDiagnostics } = tokenize(source);
-  const { program, diagnostics: parseDiagnostics } = parse(tokens);
-  return { program, lexDiagnostics, parseDiagnostics, tokens };
 }
 
 function hasError(diagnostics: readonly Diagnostic[]): boolean {
@@ -64,7 +48,7 @@ export function compile(
     lexDiagnostics,
     parseDiagnostics,
     tokens,
-  } = parseSource(source);
+  } = assembleProgram(source);
   if (!isSome(programOpt)) {
     return {
       diagnostics: [...lexDiagnostics, ...parseDiagnostics],
