@@ -1,0 +1,2 @@
+error[HEDGE-TRAIT-001]: trait `Clone` is already implemented for type `Counter`
+  = note: first implemented here at offset 30

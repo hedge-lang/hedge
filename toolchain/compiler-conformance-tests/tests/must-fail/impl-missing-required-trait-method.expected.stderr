@@ -1,0 +1,1 @@
+error[HEDGE-TRAIT-003]: impl of trait `Clone` for `Counter` is missing method `clone`

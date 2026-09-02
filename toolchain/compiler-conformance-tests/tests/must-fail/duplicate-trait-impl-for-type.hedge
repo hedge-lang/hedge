@@ -1,0 +1,20 @@
+struct Counter {
+  n: i32,
+}
+
+impl Clone for Counter {
+  fn clone(&self) -> Self {
+    Counter { n: 0 }
+  }
+}
+
+impl Clone for Counter {
+  fn clone(&self) -> Self {
+    Counter { n: 1 }
+  }
+}
+
+fn main() {
+  let c = Counter { n: 0 };
+  print(c.n);
+}

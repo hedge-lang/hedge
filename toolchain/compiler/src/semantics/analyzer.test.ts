@@ -4,6 +4,7 @@ import { assert } from "../assert.js";
 import { tokenize } from "../lexer/lexer.js";
 import { isSome, none } from "../option.js";
 import { parse } from "../parser/parser.js";
+import { assembleProgram } from "../prelude.js";
 import type { AnalysisResult } from "./analyzer.js";
 import { analyze } from "./analyzer.js";
 import type {
@@ -37,6 +38,15 @@ function diagnose(source: string): AnalysisResult {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
   assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  return analyze(program.value, tokens);
+}
+
+/** `diagnose`, but with the std prelude compiled in front of `source` -
+ * the same assembly `driver.ts` does, so a bare `impl Clone for X` here
+ * resolves against the real prelude declaration. */
+function diagnoseWithPrelude(source: string): AnalysisResult {
+  const { program, tokens, parseDiagnostics } = assembleProgram(source);
+  assert(isSome(program), parseDiagnostics[0]?.message ?? "Parse failed");
   return analyze(program.value, tokens);
 }
 
@@ -5572,5 +5582,128 @@ describe("trait and impl declarations", (): void => {
         "the trait bound `Circle: Draw` is not satisfied",
       );
     });
+  });
+});
+
+describe("std prelude traits", (): void => {
+  it("registers Clone, PartialEq, Eq, Default, and Drop ahead of user code", (): void => {
+    const result = diagnoseWithPrelude("fn main() {}");
+    expect(result.diagnostics).toEqual([]);
+    const traitNames = result.program.items
+      .filter((item) => item.kind === "Trait")
+      .map((item) => item.name);
+    expect(traitNames).toEqual(["Clone", "PartialEq", "Eq", "Default", "Drop"]);
+  });
+
+  it("resolves a complete `impl Clone for X` against the prelude declaration", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Counter { n: i32 }
+      impl Clone for Counter { fn clone(&self) -> Self { Counter { n: 0 } } }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("resolves a complete `impl Default for X` against the prelude declaration", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Counter { n: i32 }
+      impl Default for Counter { fn default() -> Counter { Counter { n: 0 } } }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("resolves a complete `impl Drop for X` against the prelude declaration", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Handle { fd: i32 }
+      impl Drop for Handle { fn drop(&mut self) {} }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts `impl Eq for X` when `impl PartialEq for X` is also present", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Counter { n: i32 }
+      impl PartialEq for Counter { fn eq(&self, other: &Self) -> bool { true } }
+      impl Eq for Counter {}
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects `impl Clone for X` with no `clone` method, naming the method", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Counter { n: i32 }
+      impl Clone for Counter {}
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.code).toBe("HEDGE-TRAIT-003");
+    expect(result.diagnostics[0]?.message).toBe(
+      "impl of trait `Clone` for `Counter` is missing method `clone`",
+    );
+  });
+
+  it("rejects `impl Default for X` with no `default` method", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Counter { n: i32 }
+      impl Default for Counter {}
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "impl of trait `Default` for `Counter` is missing method `default`",
+    );
+  });
+
+  it("rejects `impl Drop for X` with no `drop` method", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Handle { fd: i32 }
+      impl Drop for Handle {}
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "impl of trait `Drop` for `Handle` is missing method `drop`",
+    );
+  });
+
+  it("rejects `impl Eq for X` when `PartialEq` is not implemented for X", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Counter { n: i32 }
+      impl Eq for Counter {}
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.code).toBe("HEDGE-TRAIT-002");
+    expect(result.diagnostics[0]?.message).toBe(
+      "the trait bound `Counter: PartialEq` is not satisfied",
+    );
+  });
+
+  it("rejects two `impl Clone for X` as a coherence conflict", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Counter { n: i32 }
+      impl Clone for Counter { fn clone(&self) -> Self { Counter { n: 0 } } }
+      impl Clone for Counter { fn clone(&self) -> Self { Counter { n: 1 } } }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.code).toBe("HEDGE-TRAIT-001");
+    expect(result.diagnostics[0]?.message).toBe(
+      "trait `Clone` is already implemented for type `Counter`",
+    );
+  });
+
+  it("reports a user trait colliding with a prelude trait as a duplicate", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Clone {}
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.message).toBe(
+      "trait `Clone` is defined more than once",
+    );
   });
 });

@@ -1,0 +1,1 @@
+error[HEDGE-TRAIT-002]: the trait bound `Counter: PartialEq` is not satisfied
