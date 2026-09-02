@@ -1,13 +1,13 @@
 import { assert, assertNever } from "../assert.js";
 import {
-  errorDiagnosticRaw,
-  warningDiagnosticRaw,
+  errorDiagnostic,
+  warningDiagnostic,
   rawLabel,
   type Diagnostic,
-  type DiagnosticCode,
+  type DiagnosticKind,
   type RelatedSpan,
 } from "../diagnostics/index.js";
-import type { IntSuffix, Token } from "../lexer/token.js";
+import type { IntSuffix, Span, Token } from "../lexer/token.js";
 import {
   isNone,
   isSome,
@@ -331,12 +331,7 @@ function validateTraitBoundNames(
     if (bound.kind !== "PathTraitBound") continue;
     const name = bound.path.segments.at(-1) ?? "";
     if (traitNameIsRegistered(ctx, name)) continue;
-    emitError(
-      ctx,
-      `cannot find trait \`${name}\` in this scope`,
-      bound.tokenId,
-      "HEDGE-NAME-001",
-    );
+    emitError(ctx, { kind: "SemCannotFindTrait", name }, bound.tokenId);
   }
 }
 
@@ -481,12 +476,7 @@ function resolveDeclaredGenericParam(
     lookupStruct(ctx, name) !== undefined ||
     lookupEnum(ctx, name) !== undefined
   ) {
-    emitWarning(
-      ctx,
-      `generic parameter \`${name}\` shadows an existing type of the same name`,
-      tokenId,
-      "HEDGE-LINT-002",
-    );
+    emitWarning(ctx, { kind: "SemGenericParamShadowsType", name }, tokenId);
   }
   return { kind: "NamedType", tokenId, path };
 }
@@ -570,9 +560,8 @@ function checkUnusedGenericParams(
     if (usedNames.has(param.name.text)) continue;
     emitError(
       ctx,
-      `type parameter \`${param.name.text}\` is declared but never used`,
+      { kind: "SemTypeParamNeverUsed", name: param.name.text },
       param.tokenId,
-      "HEDGE-TYPE-009",
     );
   }
 }
@@ -701,9 +690,6 @@ function bind(
   currentFrame(ctx).vars.set(name, scopedVariable);
 }
 
-const REFUTABLE_LET_OR_PARAM_PATTERN_MESSAGE =
-  "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match";
-
 /**
  * Analyzes a `let`/parameter pattern exactly like a match arm's own pattern
  * (via `analyzePattern`, which binds every name the pattern structurally
@@ -737,12 +723,7 @@ function analyzeLetOrParamPattern(
     : false;
   const result = analyzePattern(ctx, pattern, effectiveType, mode, rootMutable);
   if (!isIrrefutablePattern(ctx, result)) {
-    emitError(
-      ctx,
-      REFUTABLE_LET_OR_PARAM_PATTERN_MESSAGE,
-      pattern.tokenId,
-      "HEDGE-PATTERN-001",
-    );
+    emitError(ctx, { kind: "SemRefutableLetOrParamPattern" }, pattern.tokenId);
   }
   return result;
 }
@@ -774,35 +755,40 @@ function resolve(ctx: AnalysisContext, name: string): Option<ScopedVariable> {
  */
 function emitError(
   ctx: AnalysisContext,
-  message: string,
+  kind: DiagnosticKind,
   tokenId: number,
-  code: DiagnosticCode,
   relatedSpans?: readonly RelatedSpan[],
 ): void {
-  const token = ctx.tokens[tokenId];
-  const diagnostic = errorDiagnosticRaw(
-    code,
-    message,
-    token !== undefined ? some(token.span) : none(),
-  );
-  ctx.diagnostics.push(
-    relatedSpans !== undefined ? { ...diagnostic, relatedSpans } : diagnostic,
+  pushDiagnostic(
+    ctx,
+    errorDiagnostic(kind, spanForToken(ctx, tokenId)),
+    relatedSpans,
   );
 }
 
 function emitWarning(
   ctx: AnalysisContext,
-  message: string,
+  kind: DiagnosticKind,
   tokenId: number,
-  code: DiagnosticCode,
   relatedSpans?: readonly RelatedSpan[],
 ): void {
-  const token = ctx.tokens[tokenId];
-  const diagnostic = warningDiagnosticRaw(
-    code,
-    message,
-    token !== undefined ? some(token.span) : none(),
+  pushDiagnostic(
+    ctx,
+    warningDiagnostic(kind, spanForToken(ctx, tokenId)),
+    relatedSpans,
   );
+}
+
+function spanForToken(ctx: AnalysisContext, tokenId: number): Option<Span> {
+  const token = ctx.tokens[tokenId];
+  return token !== undefined ? some(token.span) : none();
+}
+
+function pushDiagnostic(
+  ctx: AnalysisContext,
+  diagnostic: Diagnostic,
+  relatedSpans: readonly RelatedSpan[] | undefined,
+): void {
   ctx.diagnostics.push(
     relatedSpans !== undefined ? { ...diagnostic, relatedSpans } : diagnostic,
   );
@@ -899,36 +885,20 @@ function foldArrayLength(
   );
   switch (outcome.kind) {
     case "NotFoldable":
-      emitError(
-        ctx,
-        "array length must be a compile-time constant expression",
-        outcome.tokenId,
-        "HEDGE-CONST-004",
-      );
+      emitError(ctx, { kind: "SemArrayLengthNotConstExpr" }, outcome.tokenId);
       return none();
     case "Undeclared":
       emitError(
         ctx,
-        `Cannot find name "${outcome.name}" in this scope.`,
+        { kind: "SemCannotFindName", name: outcome.name },
         outcome.tokenId,
-        "HEDGE-NAME-001",
       );
       return none();
     case "DivideByZero":
-      emitError(
-        ctx,
-        "attempt to divide by zero in a constant expression",
-        outcome.tokenId,
-        "HEDGE-CONST-003",
-      );
+      emitError(ctx, { kind: "SemConstDivideByZero" }, outcome.tokenId);
       return none();
     case "InvalidShift":
-      emitError(
-        ctx,
-        "shift amount must be between 0 and 63 in a constant expression",
-        outcome.tokenId,
-        "HEDGE-CONST-003",
-      );
+      emitError(ctx, { kind: "SemConstShiftOutOfRange" }, outcome.tokenId);
       return none();
     case "AlreadyDiagnosed":
       return none();
@@ -941,21 +911,11 @@ function foldArrayLength(
       );
   }
   if (outcome.value.kind !== "Int") {
-    emitError(
-      ctx,
-      "array length must be an integer",
-      length.tokenId,
-      "HEDGE-CONST-004",
-    );
+    emitError(ctx, { kind: "SemArrayLengthNotInteger" }, length.tokenId);
     return none();
   }
   if (outcome.value.value < 0n) {
-    emitError(
-      ctx,
-      "array length cannot be negative",
-      length.tokenId,
-      "HEDGE-CONST-004",
-    );
+    emitError(ctx, { kind: "SemArrayLengthNegative" }, length.tokenId);
     return none();
   }
   // An index is a `usize`, so a longer array could not be indexed by the type
@@ -966,9 +926,12 @@ function foldArrayLength(
   if (outcome.value.value > usizeMax) {
     emitError(
       ctx,
-      `array length ${outcome.value.value} exceeds the maximum ${usizeMax}`,
+      {
+        kind: "SemArrayLengthExceedsMax",
+        value: String(outcome.value.value),
+        max: String(usizeMax),
+      },
       length.tokenId,
-      "HEDGE-CONST-004",
     );
     return none();
   }
@@ -1007,9 +970,8 @@ function emitAmbiguousAssociatedType(
   const matchList = matches.map((n) => `\`${bareTypeName(n)}\``).join(", ");
   emitError(
     ctx,
-    `associated type \`${assocName}\` is ambiguous between traits ${matchList}`,
+    { kind: "SemAssocTypeAmbiguous", assocName, traitList: matchList },
     tokenId,
-    "HEDGE-TRAIT-006",
   );
   return { kind: "UnitType", tokenId };
 }
@@ -1021,9 +983,9 @@ function emitAmbiguousAssociatedType(
 function emitUnresolvedAssociatedType(
   ctx: AnalysisContext,
   tokenId: number,
-  message: string,
+  kind: DiagnosticKind,
 ): Semantics.Type {
-  emitError(ctx, message, tokenId, "HEDGE-TRAIT-005");
+  emitError(ctx, kind, tokenId);
   return { kind: "UnitType", tokenId };
 }
 
@@ -1041,7 +1003,7 @@ function resolveAbstractProjection(
     readonly projectionBaseName: string;
     readonly assocName: string;
     readonly tokenId: number;
-    readonly notFoundMessage: string;
+    readonly notFoundKind: DiagnosticKind;
   },
 ): Semantics.Type {
   const { assocName, tokenId } = search;
@@ -1066,7 +1028,7 @@ function resolveAbstractProjection(
         search.projectionBaseName,
       );
     case "NotFound":
-      return emitUnresolvedAssociatedType(ctx, tokenId, search.notFoundMessage);
+      return emitUnresolvedAssociatedType(ctx, tokenId, search.notFoundKind);
     default:
       return assertNever(result, "Unexpected associated-type search result");
   }
@@ -1119,11 +1081,11 @@ function validateSelfProjectionInImpl(
       : undefined);
   return (
     resolved ??
-    emitUnresolvedAssociatedType(
-      ctx,
-      tokenId,
-      `cannot find associated type \`${assocName}\` on \`${describeType(self.targetType)}\``,
-    )
+    emitUnresolvedAssociatedType(ctx, tokenId, {
+      kind: "SemAssocTypeNotFoundOnType",
+      assocName,
+      typeName: describeType(self.targetType),
+    })
   );
 }
 
@@ -1131,12 +1093,7 @@ function emitUnsupportedQualifiedPath(
   ctx: AnalysisContext,
   tokenId: number,
 ): Semantics.Type {
-  emitError(
-    ctx,
-    "qualified type paths are not supported yet",
-    tokenId,
-    "HEDGE-UNSUPPORTED-001",
-  );
+  emitError(ctx, { kind: "SemQualifiedTypePathsUnsupported" }, tokenId);
   return { kind: "UnitType", tokenId };
 }
 
@@ -1152,12 +1109,7 @@ function validateSelfProjection(
 ): Semantics.Type {
   const self = currentSelfContext(ctx);
   if (self === undefined) {
-    emitError(
-      ctx,
-      "`Self` can only be used inside a trait or impl block",
-      tokenId,
-      "HEDGE-NAME-006",
-    );
+    emitError(ctx, { kind: "SemSelfOutsideTraitOrImpl" }, tokenId);
     return { kind: "UnitType", tokenId };
   }
   if (self.kind === "Impl") {
@@ -1168,7 +1120,11 @@ function validateSelfProjection(
     projectionBaseName: "Self",
     assocName,
     tokenId,
-    notFoundMessage: `cannot find associated type \`${assocName}\` on trait \`${bareTypeName(self.traitName)}\``,
+    notFoundKind: {
+      kind: "SemAssocTypeNotFoundOnTrait",
+      assocName,
+      trait: bareTypeName(self.traitName),
+    },
   });
 }
 
@@ -1203,7 +1159,11 @@ function validateProjectionType(
     projectionBaseName: baseName,
     assocName,
     tokenId,
-    notFoundMessage: `cannot find associated type \`${assocName}\` among the trait bounds of \`${baseName}\``,
+    notFoundKind: {
+      kind: "SemAssocTypeNotFoundAmongBounds",
+      assocName,
+      baseName,
+    },
   });
 }
 
@@ -1231,12 +1191,7 @@ function validateNamedType(
     return validateProjectionType(ctx, type, tokenId);
   }
   if (type.path.segments.length !== 1) {
-    emitError(
-      ctx,
-      "qualified type paths are not supported yet",
-      tokenId,
-      "HEDGE-UNSUPPORTED-001",
-    );
+    emitError(ctx, { kind: "SemQualifiedTypePathsUnsupported" }, tokenId);
     return { kind: "UnitType", tokenId };
   }
   const name = type.path.segments[0];
@@ -1244,12 +1199,7 @@ function validateNamedType(
   if (name === "Self") {
     const self = currentSelfContext(ctx);
     if (self === undefined) {
-      emitError(
-        ctx,
-        "`Self` can only be used inside a trait or impl block",
-        tokenId,
-        "HEDGE-NAME-006",
-      );
+      emitError(ctx, { kind: "SemSelfOutsideTraitOrImpl" }, tokenId);
       return { kind: "UnitType", tokenId };
     }
     return self.kind === "Impl"
@@ -1262,12 +1212,7 @@ function validateNamedType(
   }
   if (isDeclaredGenericParam(ctx, name)) {
     if (type.typeArguments.length > 0) {
-      emitError(
-        ctx,
-        `generic type parameter \`${name}\` does not accept type arguments`,
-        tokenId,
-        "HEDGE-UNSUPPORTED-001",
-      );
+      emitError(ctx, { kind: "SemGenericTypeParamNoArguments", name }, tokenId);
       return { kind: "UnitType", tokenId };
     }
     return resolveDeclaredGenericParam(ctx, name, tokenId, type.path);
@@ -1281,12 +1226,7 @@ function validateNamedType(
     validateTypeArguments(ctx, type.typeArguments);
     return resolved;
   }
-  emitError(
-    ctx,
-    `cannot find type \`${name}\` in this scope`,
-    tokenId,
-    "HEDGE-NAME-001",
-  );
+  emitError(ctx, { kind: "SemCannotFindType", name }, tokenId);
   return { kind: "UnitType", tokenId };
 }
 
@@ -1341,34 +1281,32 @@ function validateDynType(
     emitError(
       ctx,
       namesSomethingElse
-        ? `\`${bareName}\` is not a trait`
-        : `cannot find trait \`${bareName}\` in this scope`,
+        ? { kind: "SemNameIsNotATrait", name: bareName }
+        : { kind: "SemCannotFindTrait", name: bareName },
       tokenId,
-      "HEDGE-NAME-001",
     );
     return { kind: "UnitType", tokenId };
   }
   if (isSome(registered.notObjectSafe)) {
     emitError(
       ctx,
-      notObjectSafeMessage(bareName, registered.notObjectSafe.value),
+      notObjectSafeKind(bareName, registered.notObjectSafe.value),
       tokenId,
-      "HEDGE-TRAIT-008",
     );
     return { kind: "UnitType", tokenId };
   }
   return { kind: "DynType", tokenId, traitId };
 }
 
-function notObjectSafeMessage(
+function notObjectSafeKind(
   traitName: string,
   offender: SelfArgMethod,
-): string {
+): DiagnosticKind {
   const method =
     offender.declaringTrait === traitName
       ? `method \`${offender.methodName}\``
       : `supertrait \`${offender.declaringTrait}\`'s method \`${offender.methodName}\``;
-  return `trait \`${traitName}\` cannot be made into a \`dyn\` object: ${method} takes \`Self\` as a non-receiver argument`;
+  return { kind: "SemTraitNotObjectSafe", trait: traitName, offender: method };
 }
 
 /** Maps a resolved declared type to the width const-folding wraps/rounds at; `none()` for a non-numeric type. */
@@ -1556,12 +1494,7 @@ function resolveConstRef(
   tokenId: number,
 ): ConstFoldOutcome {
   if (ctx.constResolving.has(name)) {
-    emitError(
-      ctx,
-      `const \`${name}\` cannot be defined in terms of itself`,
-      tokenId,
-      "HEDGE-CONST-002",
-    );
+    emitError(ctx, { kind: "SemConstDefinedInTermsOfItself", name }, tokenId);
     return { kind: "AlreadyDiagnosed", tokenId };
   }
   const constFrameIndex = findConstFrameIndex(ctx, name);
@@ -1635,42 +1568,33 @@ function resolveConstDecl(ctx: AnalysisContext, name: string): ConstEntry {
       } else {
         emitError(
           ctx,
-          `const \`${name}\`'s initializer does not match its declared type ${describeType(declaredType)}`,
+          {
+            kind: "SemConstInitializerTypeMismatch",
+            name,
+            declaredType: describeType(declaredType),
+          },
           decl.value.tokenId,
-          "HEDGE-TYPE-001",
         );
       }
       break;
     case "NotFoldable":
       emitError(
         ctx,
-        `const \`${name}\`'s initializer must be a compile-time constant expression`,
+        { kind: "SemConstInitializerNotConstExpr", name },
         outcome.tokenId,
-        "HEDGE-CONST-001",
       );
       break;
     case "DivideByZero":
-      emitError(
-        ctx,
-        "attempt to divide by zero in a constant expression",
-        outcome.tokenId,
-        "HEDGE-CONST-003",
-      );
+      emitError(ctx, { kind: "SemConstDivideByZero" }, outcome.tokenId);
       break;
     case "InvalidShift":
-      emitError(
-        ctx,
-        "shift amount must be between 0 and 63 in a constant expression",
-        outcome.tokenId,
-        "HEDGE-CONST-003",
-      );
+      emitError(ctx, { kind: "SemConstShiftOutOfRange" }, outcome.tokenId);
       break;
     case "Undeclared":
       emitError(
         ctx,
-        `Cannot find name "${outcome.name}" in this scope.`,
+        { kind: "SemCannotFindName", name: outcome.name },
         outcome.tokenId,
-        "HEDGE-NAME-001",
       );
       break;
     case "AlreadyDiagnosed":
@@ -1824,9 +1748,8 @@ function warnIfShadowsOuterDeclaration(
   ];
   emitWarning(
     ctx,
-    `${kindLabel} \`${name}\` shadows an outer declaration of the same name`,
+    { kind: "SemDeclarationShadowsOuter", declKind: kindLabel, name },
     tokenId,
-    "HEDGE-LINT-004",
     relatedSpans,
   );
 }
@@ -1844,9 +1767,12 @@ function declareStructName(
   if (frame.types.has(item.name.text)) {
     emitError(
       ctx,
-      `struct \`${item.name.text}\` is defined more than once`,
+      {
+        kind: "SemDefinedMoreThanOnce",
+        itemKind: "struct",
+        name: item.name.text,
+      },
       item.name.tokenId,
-      "HEDGE-NAME-002",
     );
     return;
   }
@@ -1880,9 +1806,12 @@ function declareEnumName(
   if (frame.enums.has(item.name.text)) {
     emitError(
       ctx,
-      `enum \`${item.name.text}\` is defined more than once`,
+      {
+        kind: "SemDefinedMoreThanOnce",
+        itemKind: "enum",
+        name: item.name.text,
+      },
       item.name.tokenId,
-      "HEDGE-NAME-002",
     );
     return;
   }
@@ -1916,9 +1845,12 @@ function declareTraitName(
   if (frame.traits.has(item.name.text)) {
     emitError(
       ctx,
-      `trait \`${item.name.text}\` is defined more than once`,
+      {
+        kind: "SemDefinedMoreThanOnce",
+        itemKind: "trait",
+        name: item.name.text,
+      },
       item.name.tokenId,
-      "HEDGE-NAME-002",
     );
     return;
   }
@@ -2312,20 +2244,28 @@ function implsOverlap(a: RegisteredImpl, b: RegisteredImpl): boolean {
   return a.isBlanket || b.isBlanket || a.targetTypeName === b.targetTypeName;
 }
 
-function implOverlapMessage(
+function implOverlapKind(
   traitId: string,
   incoming: RegisteredImpl,
   existing: RegisteredImpl,
-): string {
-  const traitName = bareTypeName(traitId);
+): DiagnosticKind {
+  const trait = bareTypeName(traitId);
   if (incoming.isBlanket && existing.isBlanket) {
-    return `conflicting implementations of trait \`${traitName}\``;
+    return { kind: "SemConflictingImpls", trait };
   }
   if (incoming.isBlanket || existing.isBlanket) {
     const concrete = incoming.isBlanket ? existing : incoming;
-    return `conflicting implementations of trait \`${traitName}\` for type \`${bareTypeName(concrete.targetTypeName)}\``;
+    return {
+      kind: "SemConflictingImplsForType",
+      trait,
+      typeName: bareTypeName(concrete.targetTypeName),
+    };
   }
-  return `trait \`${traitName}\` is already implemented for type \`${bareTypeName(incoming.targetTypeName)}\``;
+  return {
+    kind: "SemTraitAlreadyImplementedForType",
+    trait,
+    typeName: bareTypeName(incoming.targetTypeName),
+  };
 }
 
 /**
@@ -2488,13 +2428,6 @@ function witnessMethods(
         ? "impl"
         : "default",
   }));
-}
-
-function traitBoundNotSatisfiedMessage(
-  typeName: string,
-  traitName: string,
-): string {
-  return `the trait bound \`${bareTypeName(typeName)}: ${bareTypeName(traitName)}\` is not satisfied`;
 }
 
 /**
@@ -2782,18 +2715,23 @@ function warnIfSurprisinglyVisible(
   if (incoming.isBlanket) {
     emitWarning(
       ctx,
-      `blanket impl of trait \`${bareTypeName(incoming.traitName)}\` takes effect everywhere in the program, not just this scope`,
+      {
+        kind: "SemBlanketImplGlobalScope",
+        trait: bareTypeName(incoming.traitName),
+      },
       item.tokenId,
-      "HEDGE-LINT-003",
     );
     return;
   }
   if (!topLevelStructEnumNames.has(incoming.targetTypeName)) return;
   emitWarning(
     ctx,
-    `impl of trait \`${bareTypeName(incoming.traitName)}\` for \`${bareTypeName(incoming.targetTypeName)}\` takes effect everywhere in the program, not just this scope`,
+    {
+      kind: "SemImplGlobalScope",
+      trait: bareTypeName(incoming.traitName),
+      target: bareTypeName(incoming.targetTypeName),
+    },
     item.tokenId,
-    "HEDGE-LINT-003",
   );
 }
 
@@ -2862,9 +2800,13 @@ function reportMissingRequiredMethods(
     if (method.isDefault || providedMethods.includes(method.name)) continue;
     emitError(
       ctx,
-      `impl of trait \`${bareTypeName(traitName)}\` for \`${bareTypeName(targetTypeName)}\` is missing method \`${method.name}\``,
+      {
+        kind: "SemImplMissingMethod",
+        trait: bareTypeName(traitName),
+        target: bareTypeName(targetTypeName),
+        method: method.name,
+      },
       item.tokenId,
-      "HEDGE-TRAIT-003",
     );
   }
 }
@@ -2885,9 +2827,13 @@ function reportMissingAssociatedTypes(
     if (providedAssociatedTypes.includes(name)) continue;
     emitError(
       ctx,
-      `impl of trait \`${bareTypeName(traitName)}\` for \`${bareTypeName(targetTypeName)}\` is missing associated type \`${name}\``,
+      {
+        kind: "SemImplMissingAssociatedType",
+        trait: bareTypeName(traitName),
+        target: bareTypeName(targetTypeName),
+        assocName: name,
+      },
       item.tokenId,
-      "HEDGE-TRAIT-004",
     );
   }
 }
@@ -2921,9 +2867,13 @@ function reportExtraAssociatedTypes(
     if (declared.includes(name)) continue;
     emitError(
       ctx,
-      `impl of trait \`${bareTypeName(traitName)}\` for \`${bareTypeName(targetTypeName)}\` defines associated type \`${name}\`, which trait \`${bareTypeName(traitName)}\` does not declare`,
+      {
+        kind: "SemImplDefinesUndeclaredAssocType",
+        trait: bareTypeName(traitName),
+        target: bareTypeName(targetTypeName),
+        assocName: name,
+      },
       item.tokenId,
-      "HEDGE-TRAIT-007",
     );
   }
 }
@@ -2957,9 +2907,8 @@ function registerOneImpl(
   if (!ctx.traitRegistry.has(traitName)) {
     emitError(
       ctx,
-      `cannot find trait \`${bareTraitName}\` in this scope`,
+      { kind: "SemCannotFindTrait", name: bareTraitName },
       traitRef.value.tokenId,
-      "HEDGE-NAME-001",
     );
     return undefined;
   }
@@ -2993,9 +2942,8 @@ function registerOneImpl(
   if (existing !== undefined) {
     emitError(
       ctx,
-      implOverlapMessage(traitName, incoming, existing),
+      implOverlapKind(traitName, incoming, existing),
       item.tokenId,
-      "HEDGE-TRAIT-001",
       relatedSpanAt(ctx, existing.tokenId, "first implemented here"),
     );
   }
@@ -3046,12 +2994,12 @@ function checkSupertraitCompleteness(
       }
       emitError(
         ctx,
-        traitBoundNotSatisfiedMessage(
-          bareTypeName(impl.targetTypeName),
-          supertrait,
-        ),
+        {
+          kind: "SemTraitBoundNotSatisfied",
+          typeName: bareTypeName(impl.targetTypeName),
+          trait: bareTypeName(supertrait),
+        },
         impl.tokenId,
-        "HEDGE-TRAIT-002",
       );
     }
   }
@@ -3142,9 +3090,12 @@ function registerConst(ctx: AnalysisContext, item: Parser.ConstDecl): void {
   if (constFrame.has(item.name.text)) {
     emitError(
       ctx,
-      `const \`${item.name.text}\` is defined more than once`,
+      {
+        kind: "SemDefinedMoreThanOnce",
+        itemKind: "const",
+        name: item.name.text,
+      },
       item.name.tokenId,
-      "HEDGE-NAME-002",
     );
   } else {
     // A same-frame static collision is reported once, from the static
@@ -3162,9 +3113,8 @@ function registerConst(ctx: AnalysisContext, item: Parser.ConstDecl): void {
       // under its own name; the diagnostic already blocks codegen.
       emitError(
         ctx,
-        `const \`${item.name.text}\` collides with an existing function name`,
+        { kind: "SemConstCollidesWithFunction", name: item.name.text },
         item.name.tokenId,
-        "HEDGE-NAME-002",
       );
     }
     constFrame.set(item.name.text, item);
@@ -3183,9 +3133,12 @@ function registerStatic(
   if (staticFrame.has(item.name.text)) {
     emitError(
       ctx,
-      `static \`${item.name.text}\` is defined more than once`,
+      {
+        kind: "SemDefinedMoreThanOnce",
+        itemKind: "static",
+        name: item.name.text,
+      },
       item.name.tokenId,
-      "HEDGE-NAME-002",
     );
     return;
   }
@@ -3196,9 +3149,8 @@ function registerStatic(
     // making the static unreachable/ambiguous either way.
     emitError(
       ctx,
-      `static \`${item.name.text}\` collides with a const of the same name`,
+      { kind: "SemStaticCollidesWithConst", name: item.name.text },
       item.name.tokenId,
-      "HEDGE-NAME-002",
     );
   } else if (currentScope.has(item.name.text)) {
     // A static lowers to a real top-level accessor function of its
@@ -3208,18 +3160,12 @@ function registerStatic(
     // entry to resolve; the diagnostic already blocks codegen.
     emitError(
       ctx,
-      `static \`${item.name.text}\` collides with an existing function name`,
+      { kind: "SemStaticCollidesWithFunction", name: item.name.text },
       item.name.tokenId,
-      "HEDGE-NAME-002",
     );
   }
   if (isSome(item.visibility)) {
-    emitError(
-      ctx,
-      "static items cannot be pub yet",
-      item.tokenId,
-      "HEDGE-ITEM-001",
-    );
+    emitError(ctx, { kind: "SemStaticCannotBePub" }, item.tokenId);
   }
   // A local static is its own item, not a closure - see the matching
   // barrier around a local const's own type resolution.
@@ -3243,12 +3189,7 @@ function analyzeStaticDecl(
     item.value.tokenId,
   );
   if (mismatch) {
-    emitError(
-      ctx,
-      "type mismatch: static's declared type does not match its initializer",
-      item.value.tokenId,
-      "HEDGE-TYPE-001",
-    );
+    emitError(ctx, { kind: "SemStaticTypeMismatch" }, item.value.tokenId);
   }
   if (value.kind === "IntLiteral") {
     checkPosLiteralRange(ctx, value, declaredType);
@@ -3287,9 +3228,6 @@ function analyzeConstStatement(
   };
 }
 
-const TOP_LEVEL_ITEM_RESTRICTION_MESSAGE =
-  "only function, struct, enum, const, and static declarations are allowed at the top level";
-
 function analyzeEnum(
   ctx: AnalysisContext,
   item: Parser.EnumDecl,
@@ -3301,9 +3239,12 @@ function analyzeEnum(
     if (seenVariantNames.has(variant.name.text)) {
       emitError(
         ctx,
-        `variant \`${variant.name.text}\` is defined more than once`,
+        {
+          kind: "SemDefinedMoreThanOnce",
+          itemKind: "variant",
+          name: variant.name.text,
+        },
         variant.name.tokenId,
-        "HEDGE-NAME-002",
       );
     }
     seenVariantNames.add(variant.name.text);
@@ -3386,9 +3327,6 @@ function analyzeVariantBody(
   }
 }
 
-const WHILE_NOT_YET_SUPPORTED_MESSAGE =
-  "`while` expressions are not yet supported by semantic analysis";
-
 /** Placeholder for an `Expression` variant with no `Semantics` counterpart
  * yet - same "parser accepts it, semantics doesn't yet" pattern as
  * `analyzeEnumPlaceholder`, at expression rather than item
@@ -3398,9 +3336,9 @@ const WHILE_NOT_YET_SUPPORTED_MESSAGE =
 function analyzeExpressionPlaceholder(
   ctx: AnalysisContext,
   tokenId: number,
-  message: string,
+  kind: DiagnosticKind,
 ): Semantics.Expression {
-  emitError(ctx, message, tokenId, "HEDGE-UNSUPPORTED-001");
+  emitError(ctx, kind, tokenId);
   return {
     kind: "TupleExpression",
     tokenId,
@@ -3448,9 +3386,6 @@ function analyzeLiteralValue(
 // but not these). The message deliberately doesn't name a specific position -
 // `analyzePattern` is shared by all three, so a position-specific wording
 // would be wrong two-thirds of the time.
-const PATTERN_KIND_NOT_YET_SUPPORTED_MESSAGE =
-  "this pattern kind is not yet supported";
-
 /** Substitutes a placeholder `WildcardPattern` rather than propagating the
  * original (unsupported) kind - deliberately, so a guardrail-rejected arm
  * still counts as an exhaustiveness catch-all instead of also tripping a
@@ -3462,12 +3397,7 @@ function analyzePatternGuardrail(
   pattern: Parser.Pattern,
   scrutineeType: Semantics.Type,
 ): Semantics.WildcardPattern {
-  emitError(
-    ctx,
-    PATTERN_KIND_NOT_YET_SUPPORTED_MESSAGE,
-    pattern.tokenId,
-    "HEDGE-UNSUPPORTED-001",
-  );
+  emitError(ctx, { kind: "SemPatternKindNotYetSupported" }, pattern.tokenId);
   return {
     kind: "WildcardPattern",
     tokenId: pattern.tokenId,
@@ -3517,9 +3447,12 @@ function checkPatternLiteralType(
   if (typesEqual(literalType, scrutineeType)) return;
   emitError(
     ctx,
-    `expected \`${describeType(scrutineeType)}\`, found \`${describeType(literalType)}\``,
+    {
+      kind: "SemPatternTypeMismatch",
+      expected: describeType(scrutineeType),
+      found: describeType(literalType),
+    },
     tokenId,
-    "HEDGE-TYPE-001",
   );
 }
 
@@ -3618,21 +3551,11 @@ function checkMutOverrideLegality(
   tokenId: number,
 ): void {
   if (defaultMode === "shared") {
-    emitError(
-      ctx,
-      `cannot bind \`${name}\` as \`&mut\` through a shared reference`,
-      tokenId,
-      "HEDGE-PATTERN-007",
-    );
+    emitError(ctx, { kind: "SemCannotBindMutThroughSharedRef", name }, tokenId);
     return;
   }
   if (defaultMode === "owned" && !rootMutable) {
-    emitError(
-      ctx,
-      `cannot bind \`${name}\` as \`&mut\` because the underlying place is not mutable`,
-      tokenId,
-      "HEDGE-PATTERN-007",
-    );
+    emitError(ctx, { kind: "SemCannotBindMutPlaceNotMutable", name }, tokenId);
   }
 }
 
@@ -3699,18 +3622,23 @@ function resolveTupleVariantForPattern(
   if (variant === undefined) {
     emitError(
       ctx,
-      `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
+      {
+        kind: "SemNoVariantOnEnum",
+        variant: variantName ?? "undefined",
+        enumName: describeType(scrutineeType),
+      },
       pattern.tokenId,
-      "HEDGE-NAME-004",
     );
     return none();
   }
   if (!isSome(variant.body) || variant.body.value.kind !== "TupleFields") {
     emitError(
       ctx,
-      `variant \`${variantName}\` is not a tuple variant`,
+      {
+        kind: "SemVariantNotTupleVariant",
+        variant: variantName ?? "undefined",
+      },
       pattern.tokenId,
-      "HEDGE-PATTERN-005",
     );
     return none();
   }
@@ -3731,18 +3659,23 @@ function resolveStructVariantForPattern(
   if (variant === undefined) {
     emitError(
       ctx,
-      `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
+      {
+        kind: "SemNoVariantOnEnum",
+        variant: variantName ?? "undefined",
+        enumName: describeType(scrutineeType),
+      },
       pattern.tokenId,
-      "HEDGE-NAME-004",
     );
     return none();
   }
   if (!isSome(variant.body) || variant.body.value.kind !== "NamedFields") {
     emitError(
       ctx,
-      `variant \`${variantName}\` is not a struct variant`,
+      {
+        kind: "SemVariantNotStructVariant",
+        variant: variantName ?? "undefined",
+      },
       pattern.tokenId,
-      "HEDGE-PATTERN-005",
     );
     return none();
   }
@@ -3786,18 +3719,20 @@ function resolveTupleStructForPattern(
   if (patternName !== structDecl.value.name.text) {
     emitError(
       ctx,
-      `expected struct \`${structDecl.value.name.text}\`, found \`${patternName}\``,
+      {
+        kind: "SemPatternExpectedStruct",
+        expected: structDecl.value.name.text,
+        found: patternName ?? "undefined",
+      },
       pattern.tokenId,
-      "HEDGE-PATTERN-005",
     );
     return some({ fields: [], label, alreadyErrored: true });
   }
   if (structDecl.value.body.kind !== "TupleFields") {
     emitError(
       ctx,
-      `struct \`${patternName}\` is not a tuple struct`,
+      { kind: "SemStructNotTupleStruct", name: patternName },
       pattern.tokenId,
-      "HEDGE-PATTERN-005",
     );
     return some({ fields: [], label, alreadyErrored: true });
   }
@@ -3823,18 +3758,20 @@ function resolveStructForPattern(
   if (patternName !== structDecl.value.name.text) {
     emitError(
       ctx,
-      `expected struct \`${structDecl.value.name.text}\`, found \`${patternName}\``,
+      {
+        kind: "SemPatternExpectedStruct",
+        expected: structDecl.value.name.text,
+        found: patternName ?? "undefined",
+      },
       pattern.tokenId,
-      "HEDGE-PATTERN-005",
     );
     return some({ fields: [], label, alreadyErrored: true });
   }
   if (structDecl.value.body.kind !== "NamedFields") {
     emitError(
       ctx,
-      `struct \`${patternName}\` does not have named fields`,
+      { kind: "SemStructNoNamedFields", name: patternName },
       pattern.tokenId,
-      "HEDGE-PATTERN-005",
     );
     return some({ fields: [], label, alreadyErrored: true });
   }
@@ -4071,9 +4008,12 @@ function analyzeRangePattern(
   if (!typesEqual(start.type, end.type)) {
     emitError(
       ctx,
-      `range bounds must have the same type: \`${describeType(start.type)}\` and \`${describeType(end.type)}\``,
+      {
+        kind: "SemRangeBoundsSameType",
+        start: describeType(start.type),
+        end: describeType(end.type),
+      },
       pattern.tokenId,
-      "HEDGE-PATTERN-006",
     );
   } else {
     checkPatternLiteralType(ctx, start.type, scrutineeType, pattern.tokenId);
@@ -4083,9 +4023,12 @@ function analyzeRangePattern(
   if (low !== undefined && high !== undefined && low > high) {
     emitError(
       ctx,
-      `lower range bound ${low} is greater than upper bound ${high}, so the range matches nothing`,
+      {
+        kind: "SemRangeLowerGreaterThanUpper",
+        low: String(low),
+        high: String(high),
+      },
       pattern.tokenId,
-      "HEDGE-PATTERN-006",
     );
   }
   return {
@@ -4133,18 +4076,23 @@ function analyzePathPattern(
   if (variant === undefined) {
     emitError(
       ctx,
-      `no variant \`${variantName}\` on enum \`${describeType(scrutineeType)}\``,
+      {
+        kind: "SemNoVariantOnEnum",
+        variant: variantName ?? "undefined",
+        enumName: describeType(scrutineeType),
+      },
       pattern.tokenId,
-      "HEDGE-NAME-004",
     );
     return analyzePatternGuardrail(ctx, pattern, scrutineeType);
   }
   if (isSome(variant.body)) {
     emitError(
       ctx,
-      `variant \`${variantName}\` has fields; use \`${variantName}(...)\` or \`${variantName} { ... }\``,
+      {
+        kind: "SemVariantHasFieldsPattern",
+        variant: variantName ?? "undefined",
+      },
       pattern.tokenId,
-      "HEDGE-PATTERN-005",
     );
     return analyzePatternGuardrail(ctx, pattern, scrutineeType);
   }
@@ -4163,9 +4111,13 @@ function analyzeTupleStructPattern(
   if (!alreadyErrored && fields.length !== pattern.elements.length) {
     emitError(
       ctx,
-      `${label} has ${fields.length} field(s), but the pattern has ${pattern.elements.length}`,
+      {
+        kind: "SemPatternFieldCountMismatch",
+        label,
+        fieldCount: fields.length,
+        patternCount: pattern.elements.length,
+      },
       pattern.tokenId,
-      "HEDGE-PATTERN-005",
     );
   }
   // A `mut` sigil on this whole tuple-struct pattern treats
@@ -4209,9 +4161,8 @@ function analyzeStructPattern(
     if (declared === undefined && !alreadyErrored) {
       emitError(
         ctx,
-        `no field \`${field.name.text}\` on ${label}`,
+        { kind: "SemNoFieldOnLabeled", field: field.name.text, label },
         field.name.tokenId,
-        "HEDGE-NAME-003",
       );
     }
     if (isSome(field.pattern)) {
@@ -4270,9 +4221,8 @@ function analyzeSlicePattern(
   if (alreadyErrored) {
     emitError(
       ctx,
-      `a slice pattern can have at most one \`..\` rest, but this one has ${restCount}`,
+      { kind: "SemSlicePatternMultipleRest", restCount },
       pattern.tokenId,
-      "HEDGE-PATTERN-005",
     );
   } else {
     const hasRest = restCount === 1;
@@ -4281,10 +4231,17 @@ function analyzeSlicePattern(
       emitError(
         ctx,
         hasRest
-          ? `array has ${length} element(s), but the pattern requires at least ${nonRestCount}`
-          : `array has ${length} element(s), but the pattern requires exactly ${nonRestCount}`,
+          ? {
+              kind: "SemSlicePatternLengthAtLeast",
+              length,
+              minCount: nonRestCount,
+            }
+          : {
+              kind: "SemSlicePatternLengthExactly",
+              length,
+              exactCount: nonRestCount,
+            },
         pattern.tokenId,
-        "HEDGE-PATTERN-005",
       );
     }
   }
@@ -4459,9 +4416,12 @@ function checkOrPatternConsistency(
   if (inconsistentNames.length > 0) {
     emitError(
       ctx,
-      `or-pattern alternatives must bind the same names; \`${inconsistentNames.join("`, `")}\` ${inconsistentNames.length === 1 ? "is" : "are"} not bound by every alternative`,
+      {
+        kind: "SemOrPatternInconsistentNames",
+        names: inconsistentNames.join("`, `"),
+        single: inconsistentNames.length === 1,
+      },
       pattern.tokenId,
-      "HEDGE-PATTERN-004",
     );
   }
 
@@ -4489,9 +4449,8 @@ function checkOrPatternConsistency(
     if (!consistent) {
       emitError(
         ctx,
-        `or-pattern alternatives must bind \`${name}\` with the same type and mode in every alternative`,
+        { kind: "SemOrPatternInconsistentBinding", name },
         pattern.tokenId,
-        "HEDGE-PATTERN-004",
       );
     }
   }
@@ -4506,7 +4465,7 @@ function checkOrPatternReachability(
   let sawIrrefutable = false;
   for (const alt of pattern.alternatives) {
     if (sawIrrefutable) {
-      emitError(ctx, "unreachable pattern", alt.tokenId, "HEDGE-PATTERN-003");
+      emitError(ctx, { kind: "SemUnreachablePattern" }, alt.tokenId);
     } else if (isIrrefutablePattern(ctx, alt)) {
       sawIrrefutable = true;
     }
@@ -4723,7 +4682,7 @@ function checkUnreachableArms(
 
   for (const arm of arms) {
     if (isArmUnreachable(coverage, arm, hasCatchAll)) {
-      emitError(ctx, "unreachable pattern", arm.tokenId, "HEDGE-PATTERN-003");
+      emitError(ctx, { kind: "SemUnreachablePattern" }, arm.tokenId);
     }
     hasCatchAll = hasCatchAll || recordArmCoverage(ctx, coverage, arm);
   }
@@ -4788,9 +4747,8 @@ function checkMatchExhaustiveness(
 
   emitError(
     ctx,
-    `non-exhaustive patterns: \`${missing.join("`, `")}\` not covered`,
+    { kind: "SemNonExhaustivePatterns", missing: missing.join("`, `") },
     matchExpr.tokenId,
-    "HEDGE-PATTERN-002",
   );
 }
 
@@ -4863,12 +4821,7 @@ function analyzeMatchExpression(
       continue;
     }
     if (!typesEqual(resultType, armType)) {
-      emitError(
-        ctx,
-        "match arms have incompatible types",
-        matchExpr.tokenId,
-        "HEDGE-TYPE-004",
-      );
+      emitError(ctx, { kind: "SemMatchArmsIncompatible" }, matchExpr.tokenId);
       break;
     }
   }
@@ -4882,12 +4835,7 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
     case "Function":
       return analyzeFunction(ctx, item);
     case "FunctionSignature":
-      emitError(
-        ctx,
-        "a function signature with no body is not allowed as a top-level item",
-        item.tokenId,
-        "HEDGE-ITEM-001",
-      );
+      emitError(ctx, { kind: "SemSignatureNoBodyTopLevel" }, item.tokenId);
       return analyzeFunctionSignature(ctx, item);
     case "Struct": {
       const cached = lookupStruct(ctx, item.name.text);
@@ -4911,12 +4859,7 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
       return analyzeStaticDecl(ctx, item);
     case "LetStatement":
     case "ExpressionStatement": {
-      emitError(
-        ctx,
-        TOP_LEVEL_ITEM_RESTRICTION_MESSAGE,
-        item.tokenId,
-        "HEDGE-ITEM-001",
-      );
+      emitError(ctx, { kind: "SemTopLevelItemRestriction" }, item.tokenId);
       const prevLen = ctx.diagnostics.length;
       const analyzed = analyzeStatement(ctx, item);
       ctx.diagnostics.splice(prevLen); // suppress cascading errors - the restriction error is good enough
@@ -4951,12 +4894,7 @@ function analyzeItem(ctx: AnalysisContext, item: Parser.Item): Semantics.Item {
     case "Identifier":
       // A bare expression at top level: rejected, then analyzed anyway so a
       // reference inside it does not cascade a second diagnostic.
-      emitError(
-        ctx,
-        TOP_LEVEL_ITEM_RESTRICTION_MESSAGE,
-        item.tokenId,
-        "HEDGE-ITEM-001",
-      );
+      emitError(ctx, { kind: "SemTopLevelItemRestriction" }, item.tokenId);
       return analyzeExpression(ctx, item);
     default:
       return assertNever(item, `Unexpected item: ${JSON.stringify(item)}`);
@@ -5305,12 +5243,7 @@ function checkEscapingReferenceExpression(
   if (name === undefined) {
     return;
   }
-  emitError(
-    ctx,
-    `returns a reference to \`${name}\`, which does not live beyond this function`,
-    expr.tokenId,
-    "HEDGE-LIFETIME-002",
-  );
+  emitError(ctx, { kind: "SemReturnsReferenceToLocal", name }, expr.tokenId);
 }
 
 function checkEscapingStructExpression(
@@ -5331,9 +5264,12 @@ function checkEscapingStructExpression(
     }
     emitError(
       ctx,
-      `struct literal field \`${field.name.text}\` borrows \`${name}\`, which does not live beyond this function`,
+      {
+        kind: "SemStructLiteralFieldBorrowsLocal",
+        field: field.name.text,
+        name,
+      },
       fieldValue.tokenId,
-      "HEDGE-LIFETIME-002",
     );
   }
 }
@@ -5404,9 +5340,11 @@ function checkFunctionReturnType(
     if (expectedReturnType.kind !== "UnitType") {
       emitError(
         ctx,
-        `missing return value: expected \`${describeType(expectedReturnType)}\``,
+        {
+          kind: "SemMissingReturnValue",
+          expected: describeType(expectedReturnType),
+        },
         body.tokenId,
-        "HEDGE-TYPE-001",
       );
     }
     return body;
@@ -5426,9 +5364,12 @@ function checkFunctionReturnType(
     if (!suppressMismatch) {
       emitError(
         ctx,
-        `return type mismatch: expected \`${describeType(expectedReturnType)}\`, found \`${describeType(getType(expr))}\``,
+        {
+          kind: "SemReturnTypeMismatch",
+          expected: describeType(expectedReturnType),
+          found: describeType(getType(expr)),
+        },
         trailing.tokenId,
-        "HEDGE-TYPE-001",
       );
     }
   } else {
@@ -5604,12 +5545,7 @@ function analyzeStatement(
       return analyzeFunction(ctx, statement);
     }
     case "FunctionSignature": {
-      emitError(
-        ctx,
-        "a function signature with no body is not allowed inside a block",
-        statement.tokenId,
-        "HEDGE-ITEM-001",
-      );
+      emitError(ctx, { kind: "SemSignatureNoBodyInBlock" }, statement.tokenId);
       bind(ctx, statement.name.text, {
         type: fnSignatureType(ctx, statement),
         mutable: false,
@@ -5688,12 +5624,7 @@ function analyzeLetStatement(
       );
       coercedInitializer = some(expr);
       if (mismatch && !annotation.value.isSelf) {
-        emitError(
-          ctx,
-          "type mismatch: explicit annotation does not match initializer type",
-          statement.tokenId,
-          "HEDGE-TYPE-001",
-        );
+        emitError(ctx, { kind: "SemLetAnnotationMismatch" }, statement.tokenId);
       }
       bindingType = annotation.value.type;
     } else if (
@@ -5702,9 +5633,8 @@ function analyzeLetStatement(
     ) {
       emitError(
         ctx,
-        "cannot infer element type of an empty array literal without an explicit type annotation",
+        { kind: "SemCannotInferEmptyArrayElementType" },
         statement.tokenId,
-        "HEDGE-TYPE-006",
       );
     }
   } else if (isSome(annotation)) {
@@ -5821,7 +5751,7 @@ function describeType(type: Semantics.Type): string {
 function checkNegLiteralRange(
   operand: Semantics.Expression,
   annotationType: Semantics.Type,
-): Option<string> {
+): Option<DiagnosticKind> {
   const typeName = NUMERIC_TYPE_NAME.get(annotationType.kind);
   if (typeName === undefined) return none();
 
@@ -5829,19 +5759,19 @@ function checkNegLiteralRange(
     const val = -intLiteralValue(operand);
     const [min, max] = INT_BOUNDS.get(annotationType.kind) ?? [];
     if (min === undefined || max === undefined) {
-      return some(`unexpected int-literal range check for type ${typeName}`);
+      return some({ kind: "SemUnexpectedIntLiteralRangeCheck", typeName });
     }
     if (val > max || val < min) {
-      return some(`out of range for ${typeName}`);
+      return some({ kind: "SemLiteralOutOfRange", typeName });
     }
   } else if (operand.kind === "FloatLiteral") {
     const val = Number.parseFloat(operand.value);
     const max = NEG_FLOAT_MAX.get(annotationType.kind);
     if (max === undefined) {
-      return some(`unexpected float-literal range check for type ${typeName}`);
+      return some({ kind: "SemUnexpectedFloatLiteralRangeCheck", typeName });
     }
     if (val > max) {
-      return some(`out of range for ${typeName}`);
+      return some({ kind: "SemLiteralOutOfRange", typeName });
     }
   }
   return none();
@@ -5860,9 +5790,8 @@ function checkPosLiteralRange(
     const name = NUMERIC_TYPE_NAME.get(type.kind) ?? type.kind;
     emitError(
       ctx,
-      `out of range for ${name}`,
+      { kind: "SemLiteralOutOfRange", typeName: name },
       literal.tokenId,
-      "HEDGE-TYPE-005",
     );
   }
 }
@@ -5957,7 +5886,7 @@ function checkCoercedLiteralRange(
   ) {
     const rangeError = checkNegLiteralRange(expr.operand, expr.type);
     if (isSome(rangeError)) {
-      emitError(ctx, rangeError.value, expr.operand.tokenId, "HEDGE-TYPE-005");
+      emitError(ctx, rangeError.value, expr.operand.tokenId);
     }
   } else if (expr.kind === "BinaryExpression") {
     checkCoercedLiteralRange(ctx, expr.left);
@@ -6139,7 +6068,7 @@ function reconcileExpressionType(
   ) {
     const rangeError = checkNegLiteralRange(result.operand, expectedType);
     if (isSome(rangeError)) {
-      emitError(ctx, rangeError.value, tokenId, "HEDGE-TYPE-005");
+      emitError(ctx, rangeError.value, tokenId);
       suppressed = true;
     }
   }
@@ -6160,7 +6089,7 @@ interface ComparisonOperand {
 
 interface ComparisonSpec {
   readonly capability: TypeCapability;
-  readonly errorMessage: string;
+  readonly errorKind: DiagnosticKind;
 }
 
 /**
@@ -6183,18 +6112,13 @@ function inferComparisonType(
     // TODO(Hedge-265): equality should fall through to a resolved
     // PartialEq/Eq impl here instead of rejecting outright.
     // TODO(Hedge-279): same gap for ordering (PartialOrd/Ord).
-    emitError(ctx, spec.errorMessage, tokenId, "HEDGE-TYPE-002");
+    emitError(ctx, spec.errorKind, tokenId);
   } else if (
     left.isValid &&
     right.isValid &&
     !typesEqual(left.type, right.type)
   ) {
-    emitError(
-      ctx,
-      "comparison operands must have the same type",
-      tokenId,
-      "HEDGE-TYPE-003",
-    );
+    emitError(ctx, { kind: "SemComparisonOperandsSameType" }, tokenId);
   }
   return { kind: "PrimitiveBooleanType" };
 }
@@ -6208,20 +6132,10 @@ function inferLogicalType(
   tokenId: number,
 ): Semantics.Type {
   if (isLeftTypeValid && !hasCapability(leftType, "logical")) {
-    emitError(
-      ctx,
-      "logical operator operands must be `bool`",
-      tokenId,
-      "HEDGE-TYPE-002",
-    );
+    emitError(ctx, { kind: "SemLogicalOperandsMustBeBool" }, tokenId);
   }
   if (isRightTypeValid && !hasCapability(rightType, "logical")) {
-    emitError(
-      ctx,
-      "logical operator operands must be `bool`",
-      tokenId,
-      "HEDGE-TYPE-002",
-    );
+    emitError(ctx, { kind: "SemLogicalOperandsMustBeBool" }, tokenId);
   }
   return { kind: "PrimitiveBooleanType" };
 }
@@ -6239,26 +6153,27 @@ function inferArithmeticType(
   if (isLeftTypeValid && !hasCapability(leftType, "arithmetic")) {
     emitError(
       ctx,
-      `arithmetic operands must be numeric; left-operand is type \`${describeType(leftType)}\``,
+      {
+        kind: "SemArithmeticOperandNotNumeric",
+        side: "left",
+        found: describeType(leftType),
+      },
       tokenId,
-      "HEDGE-TYPE-002",
     );
   }
   if (isRightTypeValid && !hasCapability(rightType, "arithmetic")) {
     emitError(
       ctx,
-      `arithmetic operands must be numeric; right-operand is type \`${describeType(rightType)}\``,
+      {
+        kind: "SemArithmeticOperandNotNumeric",
+        side: "right",
+        found: describeType(rightType),
+      },
       tokenId,
-      "HEDGE-TYPE-002",
     );
   }
   if (isLeftTypeValid && isRightTypeValid && !typesEqual(leftType, rightType)) {
-    emitError(
-      ctx,
-      "arithmetic operands must have the same type",
-      tokenId,
-      "HEDGE-TYPE-003",
-    );
+    emitError(ctx, { kind: "SemArithmeticOperandsSameType" }, tokenId);
   }
   return isLeftTypeValid ? leftType : rightType;
 }
@@ -6279,20 +6194,10 @@ function inferShiftType(
 ): Semantics.Type {
   // TODO(Hedge-280): no fallback to a Shl/Shr-style operator trait yet.
   if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
-    emitError(
-      ctx,
-      "the shifted value must be an integer",
-      tokenId,
-      "HEDGE-TYPE-002",
-    );
+    emitError(ctx, { kind: "SemShiftedValueMustBeInteger" }, tokenId);
   }
   if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
-    emitError(
-      ctx,
-      "the shift amount must be an integer",
-      tokenId,
-      "HEDGE-TYPE-002",
-    );
+    emitError(ctx, { kind: "SemShiftAmountMustBeInteger" }, tokenId);
   }
   return isLeftTypeValid ? leftType : rightType;
 }
@@ -6308,28 +6213,13 @@ function inferBitwiseType(
   // TODO(Hedge-280): no fallback to a BitAnd/BitOr/BitXor-style operator
   // trait yet.
   if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
-    emitError(
-      ctx,
-      "bitwise operations require integer operands",
-      tokenId,
-      "HEDGE-TYPE-002",
-    );
+    emitError(ctx, { kind: "SemBitwiseRequiresInteger" }, tokenId);
   }
   if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
-    emitError(
-      ctx,
-      "bitwise operations require integer operands",
-      tokenId,
-      "HEDGE-TYPE-002",
-    );
+    emitError(ctx, { kind: "SemBitwiseRequiresInteger" }, tokenId);
   }
   if (isLeftTypeValid && isRightTypeValid && !typesEqual(leftType, rightType)) {
-    emitError(
-      ctx,
-      "bitwise operands must have the same type",
-      tokenId,
-      "HEDGE-TYPE-003",
-    );
+    emitError(ctx, { kind: "SemBitwiseOperandsSameType" }, tokenId);
   }
   return isLeftTypeValid ? leftType : rightType;
 }
@@ -6361,7 +6251,10 @@ function inferBinaryType(
         ctx,
         {
           capability: "equality",
-          errorMessage: "type does not support equality comparison",
+          errorKind: {
+            kind: "SemComparisonNotSupported",
+            relation: "equality",
+          },
         },
         { type: leftType, isValid: isLeftTypeValid },
         { type: rightType, isValid: isRightTypeValid },
@@ -6375,7 +6268,10 @@ function inferBinaryType(
         ctx,
         {
           capability: "ordering",
-          errorMessage: "type does not support ordering comparison",
+          errorKind: {
+            kind: "SemComparisonNotSupported",
+            relation: "ordering",
+          },
         },
         { type: leftType, isValid: isLeftTypeValid },
         { type: rightType, isValid: isRightTypeValid },
@@ -6456,9 +6352,8 @@ function unaryNotResultType(
   }
   emitError(
     ctx,
-    `\`!\` requires \`bool\` or an integer, found \`${describeType(operandType)}\``,
+    { kind: "SemNotRequiresBoolOrInteger", found: describeType(operandType) },
     tokenId,
-    "HEDGE-TYPE-002",
   );
   return { kind: "PrimitiveBooleanType" };
 }
@@ -6517,8 +6412,7 @@ function analyzeUnaryExpression(
     isSome(operand.suffix)
   ) {
     const rangeError = checkNegLiteralRange(operand, type);
-    if (isSome(rangeError))
-      emitError(ctx, rangeError.value, operand.tokenId, "HEDGE-TYPE-005");
+    if (isSome(rangeError)) emitError(ctx, rangeError.value, operand.tokenId);
   }
   return { ...expression, operand, type };
 }
@@ -6635,11 +6529,9 @@ function analyzeExpression(
     case "MatchExpression":
       return analyzeMatchExpression(ctx, expression);
     case "WhileExpression":
-      return analyzeExpressionPlaceholder(
-        ctx,
-        expression.tokenId,
-        WHILE_NOT_YET_SUPPORTED_MESSAGE,
-      );
+      return analyzeExpressionPlaceholder(ctx, expression.tokenId, {
+        kind: "SemWhileNotYetSupported",
+      });
     case "Block":
       return analyzeBlock(ctx, expression);
     case "Identifier":
@@ -6716,12 +6608,7 @@ function analyzeReferenceExpression(
   const operand = analyzeExpression(ctx, expression.operand);
 
   if (!isBorrowablePlace(expression.operand)) {
-    emitError(
-      ctx,
-      "only a local binding, a parameter, or a field, index, or dereference of one can be borrowed directly",
-      expression.tokenId,
-      "HEDGE-BORROW-CHECK-005",
-    );
+    emitError(ctx, { kind: "SemNotABorrowablePlace" }, expression.tokenId);
     return {
       ...expression,
       operand,
@@ -6756,9 +6643,8 @@ function analyzeDereferenceExpression(
     if (!(operandType.kind === "UnitType" && isAmbiguousUnitExpr(operand))) {
       emitError(
         ctx,
-        "cannot dereference a non-reference type",
+        { kind: "SemCannotDereferenceNonReference" },
         expression.tokenId,
-        "HEDGE-TYPE-007",
       );
     }
     return {
@@ -6808,9 +6694,12 @@ function analyzeArrayExpression(
     if (!typesEqual(elementType, elemType)) {
       emitError(
         ctx,
-        `array elements must all have the same type; expected \`${describeType(elementType)}\`, found \`${describeType(elemType)}\``,
+        {
+          kind: "SemArrayElementsSameType",
+          expected: describeType(elementType),
+          found: describeType(elemType),
+        },
         elem.tokenId,
-        "HEDGE-TYPE-003",
       );
       break;
     }
@@ -6841,9 +6730,11 @@ function analyzeArrayRepeatExpression(
     // in this ticket's const-eval scope, so still hits this diagnostic).
     emitError(
       ctx,
-      `repeat-form array element type must be Copy, found \`${describeType(valueType)}\``,
+      {
+        kind: "SemRepeatArrayElementMustBeCopy",
+        found: describeType(valueType),
+      },
       expression.value.tokenId,
-      "HEDGE-TYPE-002",
     );
     return { ...expression, value, count: 0, type: UNIT };
   }
@@ -6889,9 +6780,8 @@ function analyzeIndexExpression(
   if (arrayType.kind !== "ArrayType") {
     emitError(
       ctx,
-      `cannot index into non-array type \`${describeType(objectType)}\``,
+      { kind: "SemCannotIndexNonArray", found: describeType(objectType) },
       expression.tokenId,
-      "HEDGE-TYPE-007",
     );
     return { ...expression, object, index, type: UNIT };
   }
@@ -6899,9 +6789,8 @@ function analyzeIndexExpression(
   if (indexMismatch) {
     emitError(
       ctx,
-      `array index must be \`usize\`, found \`${describeType(getType(index))}\``,
+      { kind: "SemArrayIndexMustBeUsize", found: describeType(getType(index)) },
       expression.index.tokenId,
-      "HEDGE-TYPE-001",
     );
     return { ...expression, object, index, type: arrayType.elementType };
   }
@@ -6911,9 +6800,12 @@ function analyzeIndexExpression(
     if (literalIndex < 0 || literalIndex >= arrayType.length) {
       emitError(
         ctx,
-        `index ${String(literalIndex)} out of bounds for array of length ${String(arrayType.length)}`,
+        {
+          kind: "SemArrayIndexOutOfBounds",
+          index: String(literalIndex),
+          length: String(arrayType.length),
+        },
         expression.index.tokenId,
-        "HEDGE-TYPE-005",
       );
     }
   }
@@ -6944,9 +6836,8 @@ function analyzeFieldAccessExpression(
   if (structType.kind !== "StructType") {
     emitError(
       ctx,
-      "field access on non-struct type",
+      { kind: "SemFieldAccessOnNonStruct" },
       expression.field.tokenId,
-      "HEDGE-TYPE-007",
     );
     return unresolved();
   }
@@ -6961,9 +6852,8 @@ function analyzeFieldAccessExpression(
   if (structDecl.body.kind !== "NamedFields") {
     emitError(
       ctx,
-      `no field \`${fieldName}\` on struct \`${structName}\``,
+      { kind: "SemNoFieldOnStruct", field: fieldName, structName },
       expression.field.tokenId,
-      "HEDGE-NAME-003",
     );
     return unresolved();
   }
@@ -6974,9 +6864,8 @@ function analyzeFieldAccessExpression(
   if (matchedField === undefined) {
     emitError(
       ctx,
-      `no field \`${fieldName}\` on struct \`${structName}\``,
+      { kind: "SemNoFieldOnStruct", field: fieldName, structName },
       expression.field.tokenId,
-      "HEDGE-NAME-003",
     );
     return unresolved();
   }
@@ -7089,19 +6978,13 @@ function checkLhsMutability(
   if (isSome(violation)) {
     switch (violation.value) {
       case "immutable-binding":
-        emitError(
-          ctx,
-          "cannot assign to immutable binding",
-          tokenId,
-          "HEDGE-BORROW-CHECK-006",
-        );
+        emitError(ctx, { kind: "SemCannotAssignToImmutableBinding" }, tokenId);
         break;
       case "shared-reference":
         emitError(
           ctx,
-          "cannot assign through a shared reference",
+          { kind: "SemCannotAssignThroughSharedReference" },
           tokenId,
-          "HEDGE-BORROW-CHECK-006",
         );
         break;
       default:
@@ -7168,9 +7051,8 @@ function analyzeEnumVariantStructConstruction(
   if (enumDecl === undefined) {
     emitError(
       ctx,
-      `cannot find enum \`${enumName}\` in this scope`,
+      { kind: "SemCannotFindEnum", name: enumName },
       structExpression.tokenId,
-      "HEDGE-NAME-001",
     );
     return some({ type: UNIT, fields: [...fields] });
   }
@@ -7178,9 +7060,8 @@ function analyzeEnumVariantStructConstruction(
   if (variant === undefined) {
     emitError(
       ctx,
-      `no variant \`${variantName}\` on enum \`${enumName}\``,
+      { kind: "SemNoVariantOnEnum", variant: variantName, enumName },
       structExpression.tokenId,
-      "HEDGE-NAME-004",
     );
     return some({ type: enumDecl.type, fields: [...fields] });
   }
@@ -7188,10 +7069,9 @@ function analyzeEnumVariantStructConstruction(
     emitError(
       ctx,
       isSome(variant.body)
-        ? `variant \`${variantName}\` is a tuple variant; use \`${variantName}(...)\``
-        : `variant \`${variantName}\` is a unit variant; use \`${variantName}\` with no braces`,
+        ? { kind: "SemVariantIsTupleVariantConstruct", variant: variantName }
+        : { kind: "SemVariantIsUnitVariantConstruct", variant: variantName },
       structExpression.tokenId,
-      "HEDGE-TYPE-008",
     );
     return some({ type: enumDecl.type, fields: [...fields] });
   }
@@ -7267,9 +7147,8 @@ function analyzeStructExpression(
   if (structDecl === undefined) {
     emitError(
       ctx,
-      `cannot find struct \`${structName}\` in this scope`,
+      { kind: "SemCannotFindStruct", name: structName },
       structExpression.tokenId,
-      "HEDGE-NAME-001",
     );
     return {
       ...structExpression,
@@ -7296,9 +7175,12 @@ function analyzeStructExpression(
     for (const field of structExpression.fields) {
       emitError(
         ctx,
-        `field \`${field.name.text}\` provided for unit struct \`${structName}\``,
+        {
+          kind: "SemFieldProvidedForUnitStruct",
+          field: field.name.text,
+          structName,
+        },
         field.name.tokenId,
-        "HEDGE-TYPE-008",
       );
     }
   }
@@ -7339,9 +7221,8 @@ function analyzeStructNamedFields(
     if (seenFields.has(field.name.text)) {
       emitError(
         ctx,
-        `field \`${field.name.text}\` specified more than once in struct literal`,
+        { kind: "SemFieldSpecifiedMoreThanOnce", field: field.name.text },
         field.name.tokenId,
-        "HEDGE-NAME-005",
       );
     }
     seenFields.add(field.name.text);
@@ -7350,9 +7231,12 @@ function analyzeStructNamedFields(
     if (declaredField === undefined) {
       emitError(
         ctx,
-        `unknown field \`${field.name.text}\` for struct \`${structName}\``,
+        {
+          kind: "SemUnknownFieldForStruct",
+          field: field.name.text,
+          structName,
+        },
         field.name.tokenId,
-        "HEDGE-NAME-003",
       );
       return field;
     }
@@ -7374,9 +7258,13 @@ function analyzeStructNamedFields(
     if (mismatch) {
       emitError(
         ctx,
-        `field \`${field.name.text}\` type mismatch: expected \`${describeType(declaredField.type)}\`, found \`${describeType(getType(expr))}\``,
+        {
+          kind: "SemStructFieldTypeMismatch",
+          field: field.name.text,
+          expected: describeType(declaredField.type),
+          found: describeType(getType(expr)),
+        },
         value.tokenId,
-        "HEDGE-TYPE-001",
       );
     }
     return expr === value
@@ -7389,9 +7277,8 @@ function analyzeStructNamedFields(
       if (!seenFields.has(fieldName)) {
         emitError(
           ctx,
-          `missing required field \`${fieldName}\` in struct literal of type \`${structName}\``,
+          { kind: "SemMissingRequiredField", field: fieldName, structName },
           structTokenId,
-          "HEDGE-TYPE-008",
         );
       }
     }
@@ -7430,12 +7317,7 @@ function checkBranchTypesAgree(
     (thenType.kind === "UnitType" && branchUnitIsAmbiguous(thenBranch)) ||
     (elseType.kind === "UnitType" && branchUnitIsAmbiguous(elseBranch));
   if (!suppressed && !typesEqual(thenType, elseType)) {
-    emitError(
-      ctx,
-      "if expression branches have incompatible types",
-      tokenId,
-      "HEDGE-TYPE-004",
-    );
+    emitError(ctx, { kind: "SemIfBranchesIncompatible" }, tokenId);
   }
 }
 
@@ -7459,12 +7341,7 @@ function analyzeIfExpression(
     condType.kind !== "UnitType" &&
     condType.kind !== "PrimitiveBooleanType"
   ) {
-    emitError(
-      ctx,
-      "if condition must be `bool`",
-      ifExpression.tokenId,
-      "HEDGE-TYPE-002",
-    );
+    emitError(ctx, { kind: "SemIfConditionMustBeBool" }, ifExpression.tokenId);
   }
 
   if (isSome(elseBranch)) {
@@ -7588,9 +7465,8 @@ function checkCallGenericBounds(
     if (binding === undefined) {
       emitError(
         ctx,
-        `cannot infer type of generic parameter \`${paramName}\` without an explicit type annotation or turbofish`,
+        { kind: "SemCannotInferGenericParam", paramName },
         call.tokenId,
-        "HEDGE-TYPE-006",
       );
       allBoundsSatisfied = false;
       continue;
@@ -7606,9 +7482,12 @@ function checkCallGenericBounds(
       allBoundsSatisfied = false;
       emitError(
         ctx,
-        traitBoundNotSatisfiedMessage(describeType(binding.type), traitName),
+        {
+          kind: "SemTraitBoundNotSatisfied",
+          typeName: describeType(binding.type),
+          trait: bareTypeName(traitName),
+        },
         call.tokenId,
-        "HEDGE-TRAIT-002",
       );
     }
   }
@@ -7752,9 +7631,12 @@ function analyzeEnumVariantCallConstruction(
     if (args.length > 0) {
       emitError(
         ctx,
-        `variant \`${variantName}\` takes no arguments, but ${args.length} ${args.length === 1 ? "was" : "were"} supplied`,
+        {
+          kind: "SemVariantTakesNoArguments",
+          variant: variantName,
+          count: args.length,
+        },
         call.tokenId,
-        "HEDGE-TYPE-008",
       );
     }
     return some({ type: enumDecl.type, args: [...args] });
@@ -7762,9 +7644,8 @@ function analyzeEnumVariantCallConstruction(
   if (variant.body.value.kind !== "TupleFields") {
     emitError(
       ctx,
-      `variant \`${variantName}\` has named fields; use \`${variantName} { ... }\``,
+      { kind: "SemVariantHasNamedFields", variant: variantName },
       call.tokenId,
-      "HEDGE-TYPE-008",
     );
     return some({ type: enumDecl.type, args: [...args] });
   }
@@ -7969,9 +7850,13 @@ function seedTurbofishBindings(
   if (typeArgs.length !== genericParams.length) {
     emitError(
       ctx,
-      `\`${calleeName(call)}\` declares ${genericParams.length} generic parameter(s), but the turbofish supplies ${typeArgs.length}`,
+      {
+        kind: "SemTurbofishArgCountMismatch",
+        calleeName: calleeName(call),
+        declared: genericParams.length,
+        supplied: typeArgs.length,
+      },
       call.tokenId,
-      "HEDGE-TYPE-011",
     );
     return;
   }
@@ -8021,9 +7906,8 @@ function checkGenericPositionalConstruction(
     if (bindings.has(paramName)) continue;
     emitError(
       ctx,
-      `cannot infer type of generic parameter \`${paramName}\` without an explicit type annotation or turbofish`,
+      { kind: "SemCannotInferGenericParam", paramName },
       call.tokenId,
-      "HEDGE-TYPE-006",
     );
   }
   return checkedArgs;
@@ -8066,9 +7950,13 @@ function seedExpectedReturnType(
     case "Conflict": {
       emitError(
         ctx,
-        `call to \`${calleeName(call)}\` type mismatch: expected \`${describeType(substituteGenericType(returnType, bindings))}\`, found \`${describeType(expectedType)}\``,
+        {
+          kind: "SemCallReturnTypeMismatch",
+          calleeName: calleeName(call),
+          expected: describeType(substituteGenericType(returnType, bindings)),
+          found: describeType(expectedType),
+        },
         call.tokenId,
-        "HEDGE-TYPE-010",
         relatedSpanAt(
           ctx,
           outcome.previousTokenId,
@@ -8133,9 +8021,14 @@ function checkPositionalCallArgs(
   if (fields.length !== args.length) {
     emitError(
       ctx,
-      `${site.kindLabel} \`${site.name}\` takes ${fields.length} argument(s), but ${args.length} ${args.length === 1 ? "was" : "were"} supplied`,
+      {
+        kind: "SemConstructorArgCountMismatch",
+        calleeKind: site.kindLabel,
+        name: site.name,
+        expected: fields.length,
+        count: args.length,
+      },
       call.tokenId,
-      "HEDGE-TYPE-008",
     );
     // Arity mismatch means the per-argument loop below never runs, so
     // nothing would otherwise bind a generic parameter that isn't already
@@ -8183,9 +8076,15 @@ function checkPositionalCallArgs(
     if (mismatch) {
       emitError(
         ctx,
-        `argument ${i + 1} to ${site.kindLabel} \`${site.name}\` type mismatch: expected \`${describeType(field.type)}\`, found \`${describeType(getType(expr))}\``,
+        {
+          kind: "SemArgumentTypeMismatch",
+          argIndex: i + 1,
+          calleeKind: site.kindLabel,
+          calleeName: site.name,
+          expected: describeType(field.type),
+          found: describeType(getType(expr)),
+        },
         arg.tokenId,
-        "HEDGE-TYPE-001",
       );
     }
     return expr;
@@ -8234,7 +8133,7 @@ function checkGenericPositionalArg(
   ) {
     const rangeError = checkNegLiteralRange(coercedArg.operand, coercedArgType);
     if (isSome(rangeError)) {
-      emitError(ctx, rangeError.value, coercedArg.tokenId, "HEDGE-TYPE-005");
+      emitError(ctx, rangeError.value, coercedArg.tokenId);
     }
   }
   switch (outcome.kind) {
@@ -8248,9 +8147,15 @@ function checkGenericPositionalArg(
       const expectedType = substituteGenericType(declaredType, bindings);
       emitError(
         ctx,
-        `argument ${index + 1} to ${site.kindLabel} \`${site.name}\` type mismatch: expected \`${describeType(expectedType)}\`, found \`${describeType(coercedArgType)}\``,
+        {
+          kind: "SemArgumentTypeMismatchConflict",
+          argIndex: index + 1,
+          calleeKind: site.kindLabel,
+          calleeName: site.name,
+          expected: describeType(expectedType),
+          found: describeType(coercedArgType),
+        },
         coercedArg.tokenId,
-        "HEDGE-TYPE-010",
         relatedSpanAt(
           ctx,
           outcome.previousTokenId,
@@ -8268,9 +8173,15 @@ function checkGenericPositionalArg(
       // `unifyGenericParam` just bound to suppress a downstream cascade.
       emitError(
         ctx,
-        `argument ${index + 1} to ${site.kindLabel} \`${site.name}\` type mismatch: expected \`${describeType(declaredType)}\`, found \`${describeType(coercedArgType)}\``,
+        {
+          kind: "SemArgumentTypeMismatch",
+          argIndex: index + 1,
+          calleeKind: site.kindLabel,
+          calleeName: site.name,
+          expected: describeType(declaredType),
+          found: describeType(coercedArgType),
+        },
         coercedArg.tokenId,
-        "HEDGE-TYPE-001",
       );
       break;
     default:
@@ -8314,9 +8225,8 @@ function analyzeTupleStructCallConstruction(
   if (structDecl.body.kind === "NamedFields") {
     emitError(
       ctx,
-      `struct \`${structName}\` has named fields; use \`${structName} { ... }\``,
+      { kind: "SemStructHasNamedFields", structName },
       call.tokenId,
-      "HEDGE-TYPE-008",
     );
     return some({ callee, type: structDecl.type, args: [...args] });
   }
@@ -8325,9 +8235,8 @@ function analyzeTupleStructCallConstruction(
     // yet at all - reject unconditionally rather than accepting `()`.
     emitError(
       ctx,
-      `struct \`${structName}\` is a unit struct and cannot be constructed with \`()\``,
+      { kind: "SemUnitStructCannotUseParens", structName },
       call.tokenId,
-      "HEDGE-TYPE-008",
     );
     return some({ callee, type: structDecl.type, args: [...args] });
   }
@@ -8364,21 +8273,15 @@ function analyzeEnumVariantPathConstruction(
   if (enumName === undefined || variantName === undefined) return none();
   const enumDecl = lookupEnum(ctx, enumName);
   if (enumDecl === undefined) {
-    emitError(
-      ctx,
-      `cannot find enum \`${enumName}\` in this scope`,
-      path.tokenId,
-      "HEDGE-NAME-001",
-    );
+    emitError(ctx, { kind: "SemCannotFindEnum", name: enumName }, path.tokenId);
     return some({ ...path, type: UNIT });
   }
   const variant = enumDecl.variants.find((v) => v.name.text === variantName);
   if (variant === undefined) {
     emitError(
       ctx,
-      `no variant \`${variantName}\` on enum \`${enumName}\``,
+      { kind: "SemNoVariantOnEnum", variant: variantName, enumName },
       path.tokenId,
-      "HEDGE-NAME-004",
     );
     return some({ ...path, type: enumDecl.type });
   }
@@ -8411,12 +8314,7 @@ function analyzePath(
   if (isSome(resolvedType)) {
     return { ...path, type: resolvedType.value.type };
   }
-  emitError(
-    ctx,
-    `Cannot find name "${name}" in this scope.`,
-    path.tokenId,
-    "HEDGE-NAME-001",
-  );
+  emitError(ctx, { kind: "SemCannotFindName", name }, path.tokenId);
   return { ...path, type: { kind: "UnitType", tokenId: path.tokenId } };
 }
 
@@ -8460,9 +8358,12 @@ export function analyze(
     if (topLevelFunctionNames.has(signature.name.text)) {
       emitError(
         ctx,
-        `function \`${signature.name.text}\` is defined more than once`,
+        {
+          kind: "SemDefinedMoreThanOnce",
+          itemKind: "function",
+          name: signature.name.text,
+        },
         signature.name.tokenId,
-        "HEDGE-NAME-002",
       );
     } else {
       topLevelFunctionNames.add(signature.name.text);
@@ -8481,9 +8382,11 @@ export function analyze(
     ) {
       emitError(
         ctx,
-        `\`${structDecl.name.text}\` is defined multiple times: a function and a tuple struct constructor share the value namespace`,
+        {
+          kind: "SemFunctionTupleStructNamespaceClash",
+          name: structDecl.name.text,
+        },
         structDecl.name.tokenId,
-        "HEDGE-NAME-002",
       );
     }
   }

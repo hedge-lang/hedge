@@ -194,7 +194,342 @@ export type DiagnosticKind =
   | { readonly kind: "ParseSigilOnWildcardPattern"; readonly byRef: boolean }
   | { readonly kind: "ParseMutOnFieldlessPattern" }
   | { readonly kind: "ParseImmutableBindingNeverUsed" }
-  | { readonly kind: "ParseStructUpdateUnsupportedInSemantics" };
+  | { readonly kind: "ParseStructUpdateUnsupportedInSemantics" }
+  // Semantic analysis.
+  | { readonly kind: "SemCannotFindName"; readonly name: string }
+  | { readonly kind: "SemCannotFindType"; readonly name: string }
+  | { readonly kind: "SemCannotFindTrait"; readonly name: string }
+  | { readonly kind: "SemNameIsNotATrait"; readonly name: string }
+  | { readonly kind: "SemCannotFindEnum"; readonly name: string }
+  | { readonly kind: "SemCannotFindStruct"; readonly name: string }
+  | {
+      readonly kind: "SemDefinedMoreThanOnce";
+      readonly itemKind: string;
+      readonly name: string;
+    }
+  | { readonly kind: "SemConstCollidesWithFunction"; readonly name: string }
+  | { readonly kind: "SemStaticCollidesWithConst"; readonly name: string }
+  | { readonly kind: "SemStaticCollidesWithFunction"; readonly name: string }
+  | {
+      readonly kind: "SemFunctionTupleStructNamespaceClash";
+      readonly name: string;
+    }
+  | {
+      readonly kind: "SemNoFieldOnStruct";
+      readonly field: string;
+      readonly structName: string;
+    }
+  | {
+      readonly kind: "SemNoFieldOnLabeled";
+      readonly field: string;
+      readonly label: string;
+    }
+  | {
+      readonly kind: "SemUnknownFieldForStruct";
+      readonly field: string;
+      readonly structName: string;
+    }
+  | {
+      readonly kind: "SemNoVariantOnEnum";
+      readonly variant: string;
+      readonly enumName: string;
+    }
+  | { readonly kind: "SemFieldSpecifiedMoreThanOnce"; readonly field: string }
+  | { readonly kind: "SemSelfOutsideTraitOrImpl" }
+  | { readonly kind: "SemGenericParamShadowsType"; readonly name: string }
+  | { readonly kind: "SemBlanketImplGlobalScope"; readonly trait: string }
+  | {
+      readonly kind: "SemImplGlobalScope";
+      readonly trait: string;
+      readonly target: string;
+    }
+  | {
+      readonly kind: "SemDeclarationShadowsOuter";
+      readonly declKind: string;
+      readonly name: string;
+    }
+  | { readonly kind: "SemTypeParamNeverUsed"; readonly name: string }
+  | { readonly kind: "SemRefutableLetOrParamPattern" }
+  | { readonly kind: "SemConstInitializerNotConstExpr"; readonly name: string }
+  | { readonly kind: "SemConstDefinedInTermsOfItself"; readonly name: string }
+  | { readonly kind: "SemConstDivideByZero" }
+  | { readonly kind: "SemConstShiftOutOfRange" }
+  | { readonly kind: "SemArrayLengthNotConstExpr" }
+  | { readonly kind: "SemArrayLengthNotInteger" }
+  | { readonly kind: "SemArrayLengthNegative" }
+  | {
+      readonly kind: "SemArrayLengthExceedsMax";
+      readonly value: string;
+      readonly max: string;
+    }
+  | { readonly kind: "SemConflictingImpls"; readonly trait: string }
+  | {
+      readonly kind: "SemConflictingImplsForType";
+      readonly trait: string;
+      readonly typeName: string;
+    }
+  | {
+      readonly kind: "SemTraitAlreadyImplementedForType";
+      readonly trait: string;
+      readonly typeName: string;
+    }
+  | {
+      readonly kind: "SemTraitBoundNotSatisfied";
+      readonly typeName: string;
+      readonly trait: string;
+    }
+  | {
+      readonly kind: "SemImplMissingMethod";
+      readonly trait: string;
+      readonly target: string;
+      readonly method: string;
+    }
+  | {
+      readonly kind: "SemImplMissingAssociatedType";
+      readonly trait: string;
+      readonly target: string;
+      readonly assocName: string;
+    }
+  | {
+      readonly kind: "SemImplDefinesUndeclaredAssocType";
+      readonly trait: string;
+      readonly target: string;
+      readonly assocName: string;
+    }
+  | {
+      readonly kind: "SemAssocTypeNotFoundOnTrait";
+      readonly assocName: string;
+      readonly trait: string;
+    }
+  | {
+      readonly kind: "SemAssocTypeNotFoundAmongBounds";
+      readonly assocName: string;
+      readonly baseName: string;
+    }
+  | {
+      readonly kind: "SemAssocTypeNotFoundOnType";
+      readonly assocName: string;
+      readonly typeName: string;
+    }
+  | {
+      readonly kind: "SemAssocTypeAmbiguous";
+      readonly assocName: string;
+      readonly traitList: string;
+    }
+  | {
+      readonly kind: "SemTraitNotObjectSafe";
+      readonly trait: string;
+      readonly offender: string;
+    }
+  | { readonly kind: "SemQualifiedTypePathsUnsupported" }
+  | { readonly kind: "SemGenericTypeParamNoArguments"; readonly name: string }
+  | { readonly kind: "SemPatternKindNotYetSupported" }
+  | { readonly kind: "SemWhileNotYetSupported" }
+  | { readonly kind: "SemSignatureNoBodyTopLevel" }
+  | { readonly kind: "SemSignatureNoBodyInBlock" }
+  | { readonly kind: "SemTopLevelItemRestriction" }
+  | { readonly kind: "SemStaticCannotBePub" }
+  | {
+      readonly kind: "SemConstInitializerTypeMismatch";
+      readonly name: string;
+      readonly declaredType: string;
+    }
+  | {
+      readonly kind: "SemPatternTypeMismatch";
+      readonly expected: string;
+      readonly found: string;
+    }
+  | { readonly kind: "SemStaticTypeMismatch" }
+  | { readonly kind: "SemMissingReturnValue"; readonly expected: string }
+  | {
+      readonly kind: "SemReturnTypeMismatch";
+      readonly expected: string;
+      readonly found: string;
+    }
+  | { readonly kind: "SemLetAnnotationMismatch" }
+  | { readonly kind: "SemArrayIndexMustBeUsize"; readonly found: string }
+  | {
+      readonly kind: "SemStructFieldTypeMismatch";
+      readonly field: string;
+      readonly expected: string;
+      readonly found: string;
+    }
+  | {
+      readonly kind: "SemArgumentTypeMismatch";
+      readonly argIndex: number;
+      readonly calleeKind: string;
+      readonly calleeName: string;
+      readonly expected: string;
+      readonly found: string;
+    }
+  // Same rendered text as SemArgumentTypeMismatch, but a generic-inference
+  // conflict carries HEDGE-TYPE-010, not HEDGE-TYPE-001.
+  | {
+      readonly kind: "SemArgumentTypeMismatchConflict";
+      readonly argIndex: number;
+      readonly calleeKind: string;
+      readonly calleeName: string;
+      readonly expected: string;
+      readonly found: string;
+    }
+  | {
+      readonly kind: "SemCallReturnTypeMismatch";
+      readonly calleeName: string;
+      readonly expected: string;
+      readonly found: string;
+    }
+  | { readonly kind: "SemLogicalOperandsMustBeBool" }
+  | { readonly kind: "SemBitwiseRequiresInteger" }
+  | {
+      readonly kind: "SemArithmeticOperandNotNumeric";
+      readonly side: "left" | "right";
+      readonly found: string;
+    }
+  | { readonly kind: "SemShiftedValueMustBeInteger" }
+  | { readonly kind: "SemShiftAmountMustBeInteger" }
+  | { readonly kind: "SemNotRequiresBoolOrInteger"; readonly found: string }
+  | { readonly kind: "SemRepeatArrayElementMustBeCopy"; readonly found: string }
+  | { readonly kind: "SemIfConditionMustBeBool" }
+  | {
+      readonly kind: "SemComparisonNotSupported";
+      readonly relation: "equality" | "ordering";
+    }
+  | { readonly kind: "SemComparisonOperandsSameType" }
+  | { readonly kind: "SemArithmeticOperandsSameType" }
+  | { readonly kind: "SemBitwiseOperandsSameType" }
+  | {
+      readonly kind: "SemArrayElementsSameType";
+      readonly expected: string;
+      readonly found: string;
+    }
+  | { readonly kind: "SemMatchArmsIncompatible" }
+  | { readonly kind: "SemIfBranchesIncompatible" }
+  | { readonly kind: "SemLiteralOutOfRange"; readonly typeName: string }
+  | {
+      readonly kind: "SemUnexpectedIntLiteralRangeCheck";
+      readonly typeName: string;
+    }
+  | {
+      readonly kind: "SemUnexpectedFloatLiteralRangeCheck";
+      readonly typeName: string;
+    }
+  | {
+      readonly kind: "SemArrayIndexOutOfBounds";
+      readonly index: string;
+      readonly length: string;
+    }
+  | { readonly kind: "SemCannotInferEmptyArrayElementType" }
+  | { readonly kind: "SemCannotInferGenericParam"; readonly paramName: string }
+  | { readonly kind: "SemCannotDereferenceNonReference" }
+  | { readonly kind: "SemCannotIndexNonArray"; readonly found: string }
+  | { readonly kind: "SemFieldAccessOnNonStruct" }
+  | { readonly kind: "SemStructHasNamedFields"; readonly structName: string }
+  | {
+      readonly kind: "SemUnitStructCannotUseParens";
+      readonly structName: string;
+    }
+  | {
+      readonly kind: "SemFieldProvidedForUnitStruct";
+      readonly field: string;
+      readonly structName: string;
+    }
+  | {
+      readonly kind: "SemMissingRequiredField";
+      readonly field: string;
+      readonly structName: string;
+    }
+  | {
+      readonly kind: "SemVariantTakesNoArguments";
+      readonly variant: string;
+      readonly count: number;
+    }
+  | { readonly kind: "SemVariantHasNamedFields"; readonly variant: string }
+  | {
+      readonly kind: "SemVariantIsTupleVariantConstruct";
+      readonly variant: string;
+    }
+  | {
+      readonly kind: "SemVariantIsUnitVariantConstruct";
+      readonly variant: string;
+    }
+  | {
+      readonly kind: "SemConstructorArgCountMismatch";
+      readonly calleeKind: string;
+      readonly name: string;
+      readonly expected: number;
+      readonly count: number;
+    }
+  | {
+      readonly kind: "SemTurbofishArgCountMismatch";
+      readonly calleeName: string;
+      readonly declared: number;
+      readonly supplied: number;
+    }
+  | { readonly kind: "SemNonExhaustivePatterns"; readonly missing: string }
+  | { readonly kind: "SemUnreachablePattern" }
+  | {
+      readonly kind: "SemOrPatternInconsistentNames";
+      readonly names: string;
+      readonly single: boolean;
+    }
+  | {
+      readonly kind: "SemOrPatternInconsistentBinding";
+      readonly name: string;
+    }
+  | { readonly kind: "SemVariantNotTupleVariant"; readonly variant: string }
+  | { readonly kind: "SemVariantNotStructVariant"; readonly variant: string }
+  | {
+      readonly kind: "SemPatternExpectedStruct";
+      readonly expected: string;
+      readonly found: string;
+    }
+  | { readonly kind: "SemStructNotTupleStruct"; readonly name: string }
+  | { readonly kind: "SemStructNoNamedFields"; readonly name: string }
+  | { readonly kind: "SemVariantHasFieldsPattern"; readonly variant: string }
+  | {
+      readonly kind: "SemPatternFieldCountMismatch";
+      readonly label: string;
+      readonly fieldCount: number;
+      readonly patternCount: number;
+    }
+  | { readonly kind: "SemSlicePatternMultipleRest"; readonly restCount: number }
+  | {
+      readonly kind: "SemSlicePatternLengthAtLeast";
+      readonly length: number;
+      readonly minCount: number;
+    }
+  | {
+      readonly kind: "SemSlicePatternLengthExactly";
+      readonly length: number;
+      readonly exactCount: number;
+    }
+  | {
+      readonly kind: "SemRangeBoundsSameType";
+      readonly start: string;
+      readonly end: string;
+    }
+  | {
+      readonly kind: "SemRangeLowerGreaterThanUpper";
+      readonly low: string;
+      readonly high: string;
+    }
+  | {
+      readonly kind: "SemCannotBindMutThroughSharedRef";
+      readonly name: string;
+    }
+  | {
+      readonly kind: "SemCannotBindMutPlaceNotMutable";
+      readonly name: string;
+    }
+  | { readonly kind: "SemReturnsReferenceToLocal"; readonly name: string }
+  | {
+      readonly kind: "SemStructLiteralFieldBorrowsLocal";
+      readonly field: string;
+      readonly name: string;
+    }
+  | { readonly kind: "SemNotABorrowablePlace" }
+  | { readonly kind: "SemCannotAssignToImmutableBinding" }
+  | { readonly kind: "SemCannotAssignThroughSharedReference" };
 
 export type RadixName = "hex" | "octal" | "binary";
 
@@ -322,6 +657,169 @@ export function codeOf(kind: DiagnosticKind): DiagnosticCode {
       return "HEDGE-LINT-001";
     case "ParseStructUpdateUnsupportedInSemantics":
       return "HEDGE-UNSUPPORTED-001";
+    case "SemCannotFindName":
+    case "SemCannotFindType":
+    case "SemCannotFindTrait":
+    case "SemNameIsNotATrait":
+    case "SemCannotFindEnum":
+    case "SemCannotFindStruct":
+      return "HEDGE-NAME-001";
+    case "SemDefinedMoreThanOnce":
+    case "SemConstCollidesWithFunction":
+    case "SemStaticCollidesWithConst":
+    case "SemStaticCollidesWithFunction":
+    case "SemFunctionTupleStructNamespaceClash":
+      return "HEDGE-NAME-002";
+    case "SemNoFieldOnStruct":
+    case "SemNoFieldOnLabeled":
+    case "SemUnknownFieldForStruct":
+      return "HEDGE-NAME-003";
+    case "SemNoVariantOnEnum":
+      return "HEDGE-NAME-004";
+    case "SemFieldSpecifiedMoreThanOnce":
+      return "HEDGE-NAME-005";
+    case "SemSelfOutsideTraitOrImpl":
+      return "HEDGE-NAME-006";
+    case "SemGenericParamShadowsType":
+      return "HEDGE-LINT-002";
+    case "SemBlanketImplGlobalScope":
+    case "SemImplGlobalScope":
+      return "HEDGE-LINT-003";
+    case "SemDeclarationShadowsOuter":
+      return "HEDGE-LINT-004";
+    case "SemTypeParamNeverUsed":
+      return "HEDGE-TYPE-009";
+    case "SemRefutableLetOrParamPattern":
+      return "HEDGE-PATTERN-001";
+    case "SemConstInitializerNotConstExpr":
+      return "HEDGE-CONST-001";
+    case "SemConstDefinedInTermsOfItself":
+      return "HEDGE-CONST-002";
+    case "SemConstDivideByZero":
+    case "SemConstShiftOutOfRange":
+      return "HEDGE-CONST-003";
+    case "SemArrayLengthNotConstExpr":
+    case "SemArrayLengthNotInteger":
+    case "SemArrayLengthNegative":
+    case "SemArrayLengthExceedsMax":
+      return "HEDGE-CONST-004";
+    case "SemConflictingImpls":
+    case "SemConflictingImplsForType":
+    case "SemTraitAlreadyImplementedForType":
+      return "HEDGE-TRAIT-001";
+    case "SemTraitBoundNotSatisfied":
+      return "HEDGE-TRAIT-002";
+    case "SemImplMissingMethod":
+      return "HEDGE-TRAIT-003";
+    case "SemImplMissingAssociatedType":
+      return "HEDGE-TRAIT-004";
+    case "SemAssocTypeNotFoundOnTrait":
+    case "SemAssocTypeNotFoundAmongBounds":
+    case "SemAssocTypeNotFoundOnType":
+      return "HEDGE-TRAIT-005";
+    case "SemAssocTypeAmbiguous":
+      return "HEDGE-TRAIT-006";
+    case "SemImplDefinesUndeclaredAssocType":
+      return "HEDGE-TRAIT-007";
+    case "SemTraitNotObjectSafe":
+      return "HEDGE-TRAIT-008";
+    case "SemQualifiedTypePathsUnsupported":
+    case "SemGenericTypeParamNoArguments":
+    case "SemPatternKindNotYetSupported":
+    case "SemWhileNotYetSupported":
+      return "HEDGE-UNSUPPORTED-001";
+    case "SemSignatureNoBodyTopLevel":
+    case "SemSignatureNoBodyInBlock":
+    case "SemTopLevelItemRestriction":
+    case "SemStaticCannotBePub":
+      return "HEDGE-ITEM-001";
+    case "SemConstInitializerTypeMismatch":
+    case "SemPatternTypeMismatch":
+    case "SemStaticTypeMismatch":
+    case "SemMissingReturnValue":
+    case "SemReturnTypeMismatch":
+    case "SemLetAnnotationMismatch":
+    case "SemArrayIndexMustBeUsize":
+    case "SemStructFieldTypeMismatch":
+    case "SemArgumentTypeMismatch":
+      return "HEDGE-TYPE-001";
+    case "SemArgumentTypeMismatchConflict":
+    case "SemCallReturnTypeMismatch":
+      return "HEDGE-TYPE-010";
+    case "SemLogicalOperandsMustBeBool":
+    case "SemBitwiseRequiresInteger":
+    case "SemArithmeticOperandNotNumeric":
+    case "SemShiftedValueMustBeInteger":
+    case "SemShiftAmountMustBeInteger":
+    case "SemNotRequiresBoolOrInteger":
+    case "SemRepeatArrayElementMustBeCopy":
+    case "SemIfConditionMustBeBool":
+    case "SemComparisonNotSupported":
+      return "HEDGE-TYPE-002";
+    case "SemComparisonOperandsSameType":
+    case "SemArithmeticOperandsSameType":
+    case "SemBitwiseOperandsSameType":
+    case "SemArrayElementsSameType":
+      return "HEDGE-TYPE-003";
+    case "SemMatchArmsIncompatible":
+    case "SemIfBranchesIncompatible":
+      return "HEDGE-TYPE-004";
+    case "SemLiteralOutOfRange":
+    case "SemUnexpectedIntLiteralRangeCheck":
+    case "SemUnexpectedFloatLiteralRangeCheck":
+    case "SemArrayIndexOutOfBounds":
+      return "HEDGE-TYPE-005";
+    case "SemCannotInferEmptyArrayElementType":
+    case "SemCannotInferGenericParam":
+      return "HEDGE-TYPE-006";
+    case "SemCannotDereferenceNonReference":
+    case "SemCannotIndexNonArray":
+    case "SemFieldAccessOnNonStruct":
+      return "HEDGE-TYPE-007";
+    case "SemStructHasNamedFields":
+    case "SemUnitStructCannotUseParens":
+    case "SemFieldProvidedForUnitStruct":
+    case "SemMissingRequiredField":
+    case "SemVariantTakesNoArguments":
+    case "SemVariantHasNamedFields":
+    case "SemVariantIsTupleVariantConstruct":
+    case "SemVariantIsUnitVariantConstruct":
+    case "SemConstructorArgCountMismatch":
+      return "HEDGE-TYPE-008";
+    case "SemTurbofishArgCountMismatch":
+      return "HEDGE-TYPE-011";
+    case "SemNonExhaustivePatterns":
+      return "HEDGE-PATTERN-002";
+    case "SemUnreachablePattern":
+      return "HEDGE-PATTERN-003";
+    case "SemOrPatternInconsistentNames":
+    case "SemOrPatternInconsistentBinding":
+      return "HEDGE-PATTERN-004";
+    case "SemVariantNotTupleVariant":
+    case "SemVariantNotStructVariant":
+    case "SemPatternExpectedStruct":
+    case "SemStructNotTupleStruct":
+    case "SemStructNoNamedFields":
+    case "SemVariantHasFieldsPattern":
+    case "SemPatternFieldCountMismatch":
+    case "SemSlicePatternMultipleRest":
+    case "SemSlicePatternLengthAtLeast":
+    case "SemSlicePatternLengthExactly":
+      return "HEDGE-PATTERN-005";
+    case "SemRangeBoundsSameType":
+    case "SemRangeLowerGreaterThanUpper":
+      return "HEDGE-PATTERN-006";
+    case "SemCannotBindMutThroughSharedRef":
+    case "SemCannotBindMutPlaceNotMutable":
+      return "HEDGE-PATTERN-007";
+    case "SemReturnsReferenceToLocal":
+    case "SemStructLiteralFieldBorrowsLocal":
+      return "HEDGE-LIFETIME-002";
+    case "SemNotABorrowablePlace":
+      return "HEDGE-BORROW-CHECK-005";
+    case "SemCannotAssignToImmutableBinding":
+    case "SemCannotAssignThroughSharedReference":
+      return "HEDGE-BORROW-CHECK-006";
     default:
       return assertNever(kind);
   }

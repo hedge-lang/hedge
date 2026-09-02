@@ -190,6 +190,243 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return "immutable binding declared without a value can never be used";
     case "ParseStructUpdateUnsupportedInSemantics":
       return "struct update expression (`..base`) is not yet supported in semantic analysis";
+    case "SemCannotFindName":
+      return `Cannot find name "${kind.name}" in this scope.`;
+    case "SemCannotFindType":
+      return `cannot find type \`${kind.name}\` in this scope`;
+    case "SemCannotFindTrait":
+      return `cannot find trait \`${kind.name}\` in this scope`;
+    case "SemNameIsNotATrait":
+      return `\`${kind.name}\` is not a trait`;
+    case "SemCannotFindEnum":
+      return `cannot find enum \`${kind.name}\` in this scope`;
+    case "SemCannotFindStruct":
+      return `cannot find struct \`${kind.name}\` in this scope`;
+    case "SemDefinedMoreThanOnce":
+      return `${kind.itemKind} \`${kind.name}\` is defined more than once`;
+    case "SemConstCollidesWithFunction":
+      return `const \`${kind.name}\` collides with an existing function name`;
+    case "SemStaticCollidesWithConst":
+      return `static \`${kind.name}\` collides with a const of the same name`;
+    case "SemStaticCollidesWithFunction":
+      return `static \`${kind.name}\` collides with an existing function name`;
+    case "SemFunctionTupleStructNamespaceClash":
+      return `\`${kind.name}\` is defined multiple times: a function and a tuple struct constructor share the value namespace`;
+    case "SemNoFieldOnStruct":
+      return `no field \`${kind.field}\` on struct \`${kind.structName}\``;
+    case "SemNoFieldOnLabeled":
+      return `no field \`${kind.field}\` on ${kind.label}`;
+    case "SemUnknownFieldForStruct":
+      return `unknown field \`${kind.field}\` for struct \`${kind.structName}\``;
+    case "SemNoVariantOnEnum":
+      return `no variant \`${kind.variant}\` on enum \`${kind.enumName}\``;
+    case "SemFieldSpecifiedMoreThanOnce":
+      return `field \`${kind.field}\` specified more than once in struct literal`;
+    case "SemSelfOutsideTraitOrImpl":
+      return "`Self` can only be used inside a trait or impl block";
+    case "SemGenericParamShadowsType":
+      return `generic parameter \`${kind.name}\` shadows an existing type of the same name`;
+    case "SemBlanketImplGlobalScope":
+      return `blanket impl of trait \`${kind.trait}\` takes effect everywhere in the program, not just this scope`;
+    case "SemImplGlobalScope":
+      return `impl of trait \`${kind.trait}\` for \`${kind.target}\` takes effect everywhere in the program, not just this scope`;
+    case "SemDeclarationShadowsOuter":
+      return `${kind.declKind} \`${kind.name}\` shadows an outer declaration of the same name`;
+    case "SemTypeParamNeverUsed":
+      return `type parameter \`${kind.name}\` is declared but never used`;
+    case "SemRefutableLetOrParamPattern":
+      return "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match";
+    case "SemConstInitializerNotConstExpr":
+      return `const \`${kind.name}\`'s initializer must be a compile-time constant expression`;
+    case "SemConstDefinedInTermsOfItself":
+      return `const \`${kind.name}\` cannot be defined in terms of itself`;
+    case "SemConstDivideByZero":
+      return "attempt to divide by zero in a constant expression";
+    case "SemConstShiftOutOfRange":
+      return "shift amount must be between 0 and 63 in a constant expression";
+    case "SemArrayLengthNotConstExpr":
+      return "array length must be a compile-time constant expression";
+    case "SemArrayLengthNotInteger":
+      return "array length must be an integer";
+    case "SemArrayLengthNegative":
+      return "array length cannot be negative";
+    case "SemArrayLengthExceedsMax":
+      return `array length ${kind.value} exceeds the maximum ${kind.max}`;
+    case "SemConflictingImpls":
+      return `conflicting implementations of trait \`${kind.trait}\``;
+    case "SemConflictingImplsForType":
+      return `conflicting implementations of trait \`${kind.trait}\` for type \`${kind.typeName}\``;
+    case "SemTraitAlreadyImplementedForType":
+      return `trait \`${kind.trait}\` is already implemented for type \`${kind.typeName}\``;
+    case "SemTraitBoundNotSatisfied":
+      return `the trait bound \`${kind.typeName}: ${kind.trait}\` is not satisfied`;
+    case "SemImplMissingMethod":
+      return `impl of trait \`${kind.trait}\` for \`${kind.target}\` is missing method \`${kind.method}\``;
+    case "SemImplMissingAssociatedType":
+      return `impl of trait \`${kind.trait}\` for \`${kind.target}\` is missing associated type \`${kind.assocName}\``;
+    case "SemImplDefinesUndeclaredAssocType":
+      return `impl of trait \`${kind.trait}\` for \`${kind.target}\` defines associated type \`${kind.assocName}\`, which trait \`${kind.trait}\` does not declare`;
+    case "SemAssocTypeNotFoundOnTrait":
+      return `cannot find associated type \`${kind.assocName}\` on trait \`${kind.trait}\``;
+    case "SemAssocTypeNotFoundAmongBounds":
+      return `cannot find associated type \`${kind.assocName}\` among the trait bounds of \`${kind.baseName}\``;
+    case "SemAssocTypeNotFoundOnType":
+      return `cannot find associated type \`${kind.assocName}\` on \`${kind.typeName}\``;
+    case "SemAssocTypeAmbiguous":
+      return `associated type \`${kind.assocName}\` is ambiguous between traits ${kind.traitList}`;
+    case "SemTraitNotObjectSafe":
+      return `trait \`${kind.trait}\` cannot be made into a \`dyn\` object: ${kind.offender} takes \`Self\` as a non-receiver argument`;
+    case "SemQualifiedTypePathsUnsupported":
+      return "qualified type paths are not supported yet";
+    case "SemGenericTypeParamNoArguments":
+      return `generic type parameter \`${kind.name}\` does not accept type arguments`;
+    case "SemPatternKindNotYetSupported":
+      return "this pattern kind is not yet supported";
+    case "SemWhileNotYetSupported":
+      return "`while` expressions are not yet supported by semantic analysis";
+    case "SemSignatureNoBodyTopLevel":
+      return "a function signature with no body is not allowed as a top-level item";
+    case "SemSignatureNoBodyInBlock":
+      return "a function signature with no body is not allowed inside a block";
+    case "SemTopLevelItemRestriction":
+      return "only function, struct, enum, const, and static declarations are allowed at the top level";
+    case "SemStaticCannotBePub":
+      return "static items cannot be pub yet";
+    case "SemConstInitializerTypeMismatch":
+      return `const \`${kind.name}\`'s initializer does not match its declared type ${kind.declaredType}`;
+    case "SemPatternTypeMismatch":
+      return `expected \`${kind.expected}\`, found \`${kind.found}\``;
+    case "SemStaticTypeMismatch":
+      return "type mismatch: static's declared type does not match its initializer";
+    case "SemMissingReturnValue":
+      return `missing return value: expected \`${kind.expected}\``;
+    case "SemReturnTypeMismatch":
+      return `return type mismatch: expected \`${kind.expected}\`, found \`${kind.found}\``;
+    case "SemLetAnnotationMismatch":
+      return "type mismatch: explicit annotation does not match initializer type";
+    case "SemArrayIndexMustBeUsize":
+      return `array index must be \`usize\`, found \`${kind.found}\``;
+    case "SemStructFieldTypeMismatch":
+      return `field \`${kind.field}\` type mismatch: expected \`${kind.expected}\`, found \`${kind.found}\``;
+    case "SemArgumentTypeMismatch":
+    case "SemArgumentTypeMismatchConflict":
+      return `argument ${kind.argIndex} to ${kind.calleeKind} \`${kind.calleeName}\` type mismatch: expected \`${kind.expected}\`, found \`${kind.found}\``;
+    case "SemCallReturnTypeMismatch":
+      return `call to \`${kind.calleeName}\` type mismatch: expected \`${kind.expected}\`, found \`${kind.found}\``;
+    case "SemLogicalOperandsMustBeBool":
+      return "logical operator operands must be `bool`";
+    case "SemBitwiseRequiresInteger":
+      return "bitwise operations require integer operands";
+    case "SemArithmeticOperandNotNumeric":
+      return `arithmetic operands must be numeric; ${kind.side}-operand is type \`${kind.found}\``;
+    case "SemShiftedValueMustBeInteger":
+      return "the shifted value must be an integer";
+    case "SemShiftAmountMustBeInteger":
+      return "the shift amount must be an integer";
+    case "SemNotRequiresBoolOrInteger":
+      return `\`!\` requires \`bool\` or an integer, found \`${kind.found}\``;
+    case "SemRepeatArrayElementMustBeCopy":
+      return `repeat-form array element type must be Copy, found \`${kind.found}\``;
+    case "SemIfConditionMustBeBool":
+      return "if condition must be `bool`";
+    case "SemComparisonNotSupported":
+      return `type does not support ${kind.relation} comparison`;
+    case "SemComparisonOperandsSameType":
+      return "comparison operands must have the same type";
+    case "SemArithmeticOperandsSameType":
+      return "arithmetic operands must have the same type";
+    case "SemBitwiseOperandsSameType":
+      return "bitwise operands must have the same type";
+    case "SemArrayElementsSameType":
+      return `array elements must all have the same type; expected \`${kind.expected}\`, found \`${kind.found}\``;
+    case "SemMatchArmsIncompatible":
+      return "match arms have incompatible types";
+    case "SemIfBranchesIncompatible":
+      return "if expression branches have incompatible types";
+    case "SemLiteralOutOfRange":
+      return `out of range for ${kind.typeName}`;
+    case "SemUnexpectedIntLiteralRangeCheck":
+      return `unexpected int-literal range check for type ${kind.typeName}`;
+    case "SemUnexpectedFloatLiteralRangeCheck":
+      return `unexpected float-literal range check for type ${kind.typeName}`;
+    case "SemArrayIndexOutOfBounds":
+      return `index ${kind.index} out of bounds for array of length ${kind.length}`;
+    case "SemCannotInferEmptyArrayElementType":
+      return "cannot infer element type of an empty array literal without an explicit type annotation";
+    case "SemCannotInferGenericParam":
+      return `cannot infer type of generic parameter \`${kind.paramName}\` without an explicit type annotation or turbofish`;
+    case "SemCannotDereferenceNonReference":
+      return "cannot dereference a non-reference type";
+    case "SemCannotIndexNonArray":
+      return `cannot index into non-array type \`${kind.found}\``;
+    case "SemFieldAccessOnNonStruct":
+      return "field access on non-struct type";
+    case "SemStructHasNamedFields":
+      return `struct \`${kind.structName}\` has named fields; use \`${kind.structName} { ... }\``;
+    case "SemUnitStructCannotUseParens":
+      return `struct \`${kind.structName}\` is a unit struct and cannot be constructed with \`()\``;
+    case "SemFieldProvidedForUnitStruct":
+      return `field \`${kind.field}\` provided for unit struct \`${kind.structName}\``;
+    case "SemMissingRequiredField":
+      return `missing required field \`${kind.field}\` in struct literal of type \`${kind.structName}\``;
+    case "SemVariantTakesNoArguments":
+      return `variant \`${kind.variant}\` takes no arguments, but ${kind.count} ${kind.count === 1 ? "was" : "were"} supplied`;
+    case "SemVariantHasNamedFields":
+      return `variant \`${kind.variant}\` has named fields; use \`${kind.variant} { ... }\``;
+    case "SemVariantIsTupleVariantConstruct":
+      return `variant \`${kind.variant}\` is a tuple variant; use \`${kind.variant}(...)\``;
+    case "SemVariantIsUnitVariantConstruct":
+      return `variant \`${kind.variant}\` is a unit variant; use \`${kind.variant}\` with no braces`;
+    case "SemConstructorArgCountMismatch":
+      return `${kind.calleeKind} \`${kind.name}\` takes ${kind.expected} argument(s), but ${kind.count} ${kind.count === 1 ? "was" : "were"} supplied`;
+    case "SemTurbofishArgCountMismatch":
+      return `\`${kind.calleeName}\` declares ${kind.declared} generic parameter(s), but the turbofish supplies ${kind.supplied}`;
+    case "SemNonExhaustivePatterns":
+      return `non-exhaustive patterns: \`${kind.missing}\` not covered`;
+    case "SemUnreachablePattern":
+      return "unreachable pattern";
+    case "SemOrPatternInconsistentNames":
+      return `or-pattern alternatives must bind the same names; \`${kind.names}\` ${kind.single ? "is" : "are"} not bound by every alternative`;
+    case "SemOrPatternInconsistentBinding":
+      return `or-pattern alternatives must bind \`${kind.name}\` with the same type and mode in every alternative`;
+    case "SemVariantNotTupleVariant":
+      return `variant \`${kind.variant}\` is not a tuple variant`;
+    case "SemVariantNotStructVariant":
+      return `variant \`${kind.variant}\` is not a struct variant`;
+    case "SemPatternExpectedStruct":
+      return `expected struct \`${kind.expected}\`, found \`${kind.found}\``;
+    case "SemStructNotTupleStruct":
+      return `struct \`${kind.name}\` is not a tuple struct`;
+    case "SemStructNoNamedFields":
+      return `struct \`${kind.name}\` does not have named fields`;
+    case "SemVariantHasFieldsPattern":
+      return `variant \`${kind.variant}\` has fields; use \`${kind.variant}(...)\` or \`${kind.variant} { ... }\``;
+    case "SemPatternFieldCountMismatch":
+      return `${kind.label} has ${kind.fieldCount} field(s), but the pattern has ${kind.patternCount}`;
+    case "SemSlicePatternMultipleRest":
+      return `a slice pattern can have at most one \`..\` rest, but this one has ${kind.restCount}`;
+    case "SemSlicePatternLengthAtLeast":
+      return `array has ${kind.length} element(s), but the pattern requires at least ${kind.minCount}`;
+    case "SemSlicePatternLengthExactly":
+      return `array has ${kind.length} element(s), but the pattern requires exactly ${kind.exactCount}`;
+    case "SemRangeBoundsSameType":
+      return `range bounds must have the same type: \`${kind.start}\` and \`${kind.end}\``;
+    case "SemRangeLowerGreaterThanUpper":
+      return `lower range bound ${kind.low} is greater than upper bound ${kind.high}, so the range matches nothing`;
+    case "SemCannotBindMutThroughSharedRef":
+      return `cannot bind \`${kind.name}\` as \`&mut\` through a shared reference`;
+    case "SemCannotBindMutPlaceNotMutable":
+      return `cannot bind \`${kind.name}\` as \`&mut\` because the underlying place is not mutable`;
+    case "SemReturnsReferenceToLocal":
+      return `returns a reference to \`${kind.name}\`, which does not live beyond this function`;
+    case "SemStructLiteralFieldBorrowsLocal":
+      return `struct literal field \`${kind.field}\` borrows \`${kind.name}\`, which does not live beyond this function`;
+    case "SemNotABorrowablePlace":
+      return "only a local binding, a parameter, or a field, index, or dereference of one can be borrowed directly";
+    case "SemCannotAssignToImmutableBinding":
+      return "cannot assign to immutable binding";
+    case "SemCannotAssignThroughSharedReference":
+      return "cannot assign through a shared reference";
     default:
       return assertNever(kind);
   }
