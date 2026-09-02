@@ -206,20 +206,36 @@ describe("driver", (): void => {
     });
   });
 
-  describe("Slice 1 loop/label rejection", (): void => {
+  describe("loop/label rejection", (): void => {
     it.each([
-      ["loop", "fn main() { loop {} }"],
-      ["while", "fn main() { while true {} }"],
-      ["for", "fn main() { for x in v {} }"],
-      ["labeled loop", "fn main() { 'outer: loop {} }"],
+      [
+        "loop",
+        "fn main() { loop {} }",
+        "`loop` expressions are not yet supported",
+      ],
+      [
+        "while",
+        "fn main() { while true {} }",
+        "`while` loops are not yet supported",
+      ],
+      [
+        "for",
+        "fn main() { for x in v {} }",
+        "`for` loops are not yet supported",
+      ],
+      [
+        "labeled loop",
+        "fn main() { 'outer: loop {} }",
+        "`loop` expressions are not yet supported",
+      ],
     ])(
       "surfaces a recovered parse-time error for %s and produces no code",
-      (_label, source): void => {
+      (_label, source, message): void => {
         const result = compile(source);
         expect(isNone(result.code)).toBe(true);
         expect(
           result.diagnostics.some(
-            (d) => d.severity === "error" && d.message.includes("Slice 1"),
+            (d) => d.severity === "error" && d.message === message,
           ),
         ).toBe(true);
       },
@@ -394,6 +410,38 @@ describe("trait/impl declarations", (): void => {
     expect(javascript.value).toContain("function main()");
     expect(javascript.value).not.toContain("Draw");
     expect(javascript.value).not.toContain("draw");
+  });
+});
+
+describe("a rejected construct is named without an internal roadmap slice", (): void => {
+  it.each([
+    ["fn main() { loop {} }", "`loop` expressions are not yet supported"],
+    ["fn main() { while true {} }", "`while` loops are not yet supported"],
+    ["fn main() { for x in v {} }", "`for` loops are not yet supported"],
+    [
+      "fn f() { let x: Vec::<i32> = v; }",
+      "generic type arguments are not yet supported",
+    ],
+    ["fn f() { let x: 'a = y; }", "lifetime annotations are not yet supported"],
+    ["fn f(x: (i32, i32)) {}", "tuple types are not yet supported"],
+    ["fn f(x: [i32]) {}", "slice types (`[T]`) are not yet supported"],
+    ["fn f(x: !) {}", "the never type (`!`) is not yet supported"],
+    ["let x: Vec<'a> = v;", "lifetime arguments are not yet supported"],
+    ["async fn f() {}", "`async` is not yet supported"],
+    ["export fn f() {}", "`export` declarations are not yet supported"],
+    ["extern fn f() {}", "`extern` declarations are not yet supported"],
+    ["use foo;", "`use` is not yet supported"],
+    ["mod foo;", "`mod` is not yet supported"],
+    ["pub(crate) struct Foo;", "`pub(crate)` visibility is not yet supported"],
+    [
+      "fn f() { let x: i32::Foo = 0; }",
+      "qualified type paths are not supported yet",
+    ],
+    ["fn f(x: UnknownType) {}", "cannot find type `UnknownType` in this scope"],
+    ["fn f() -> Nope { 0 }", "cannot find type `Nope` in this scope"],
+  ])("%j is rejected with a slice-free message", (source, message): void => {
+    const { diagnostics } = compile(source);
+    expect(diagnostics[0]?.message).toBe(message);
   });
 });
 

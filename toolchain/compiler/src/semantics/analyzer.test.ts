@@ -2149,6 +2149,17 @@ describe("semantic analysis", (): void => {
     );
   });
 
+  it("distinguishes a name that never resolves from a recognized-but-unbuilt construct, by both wording and code", (): void => {
+    const undeclared = diagnose("fn f(x: UnknownType) {}").diagnostics[0];
+    const unbuilt = diagnose("fn f(x: i32::Foo) {}").diagnostics[0];
+    expect(undeclared?.code).toBe("HEDGE-NAME-001");
+    expect(undeclared?.message).toBe(
+      "cannot find type `UnknownType` in this scope",
+    );
+    expect(unbuilt?.code).toBe("HEDGE-UNSUPPORTED-001");
+    expect(unbuilt?.message).toBe("qualified type paths are not supported yet");
+  });
+
   it("unsupported param type diagnostic span points at the type token", (): void => {
     const source = "fn f(x: UnknownType) {}";
     const { result } = analyzeWithTokens(source);

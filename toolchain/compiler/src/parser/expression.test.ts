@@ -2861,12 +2861,11 @@ describe("while let expressions", (): void => {
 });
 
 describe("bare `while`/`loop`/`for` regression after while-let support", (): void => {
-  it("still rejects a bare while with the unchanged Slice 6 guardrail (`fn f() { while true { } }`)", (): void => {
+  it("still rejects a bare while with the unchanged loop guardrail (`fn f() { while true { } }`)", (): void => {
     const { tokens } = tokenize("fn f() { while true { } } fn g() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    expect(diagnostics[0]?.message).toContain("Slice 1");
-    expect(diagnostics[0]?.message).toContain("while");
+    expect(diagnostics[0]?.message).toBe("`while` loops are not yet supported");
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
@@ -2890,8 +2889,7 @@ describe("bare `while`/`loop`/`for` regression after while-let support", (): voi
     );
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    expect(diagnostics[0]?.message).toContain("Slice 1");
-    expect(diagnostics[0]?.message).toContain("while");
+    expect(diagnostics[0]?.message).toBe("`while` loops are not yet supported");
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
@@ -3650,8 +3648,9 @@ describe("turbofish", (): void => {
     const { program, diagnostics } = parse(tokenize("first::<'a>();").tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 2");
-    expect(diagnostics[0].message).toContain("lifetime");
+    expect(diagnostics[0].message).toBe(
+      "lifetime annotations are not yet supported",
+    );
   });
 
   it("rejects a lifetime as a later turbofish argument (first::<T, 'a>())", (): void => {
@@ -3660,7 +3659,9 @@ describe("turbofish", (): void => {
     );
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("lifetime");
+    expect(diagnostics[0].message).toBe(
+      "lifetime annotations are not yet supported",
+    );
   });
 
   it("rejects a.field::<T> with no call following as a parse error rather than silently discarding the turbofish", (): void => {
@@ -3694,10 +3695,7 @@ describe("comparison expressions unaffected by turbofish guardrail", (): void =>
     const { program, diagnostics } = parse(tokenize("a < b > c").tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("cannot chain");
-    expect(diagnostics[0].message).not.toContain("Slice 1");
-    expect(diagnostics[0].message).not.toContain("turbofish");
-    expect(diagnostics[0].message).not.toContain("generic");
+    expect(diagnostics[0].message).toBe("cannot chain '<' with '>'");
   });
 
   it("if x < y { } - comparison in condition position is unaffected", (): void => {

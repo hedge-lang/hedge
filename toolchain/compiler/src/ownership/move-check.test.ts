@@ -438,7 +438,10 @@ describe("move-check", (): void => {
     );
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("x");
+    expect(diagnostics[0].code).toBe("HEDGE-MOVE-003");
+    expect(diagnostics[0].message).toBe(
+      "`x` may or may not have been initialized depending on the branch taken, and conditional drops are not yet supported",
+    );
   });
 
   it("a struct initialized on only one branch is rejected on next use", (): void => {

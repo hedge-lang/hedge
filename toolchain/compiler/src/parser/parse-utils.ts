@@ -128,23 +128,21 @@ export const MUT_MESSAGE: string =
   "The keyword `mut` is reserved and cannot be used as an identifier. For a mutable binding, use `let mut`; for a mutable borrow, use `&mut`.";
 
 /**
- * True for a diagnostic that is an established Slice-gated guardrail
- * rejection (see the `` `x` is not supported in Slice N; ... `` convention
- * used throughout this file and `type.ts`/`pattern.ts`) or the `mut`-as-
- * identifier guardrail. These are permanent, deliberately fail-fast
- * rejections of syntax that belongs to a later slice or is otherwise
- * reserved - list-element panic-mode recovery must never swallow one, since
- * that would silently retrofit recovery onto a guardrail the rest of the
- * test suite pins as a total parse failure.
+ * True for a deliberate, permanent, fail-fast rejection of syntax that is
+ * recognized but not yet implemented, or reserved (`mut` as an identifier,
+ * `dyn` naming a lifetime, ...). Every such site emits `HEDGE-PARSE-004`, so
+ * the code alone is the discriminator. List-element panic-mode recovery must
+ * never swallow one - that would retrofit recovery onto a guardrail the rest
+ * of the suite pins as a total parse failure.
  */
 export function isGuardrailDiagnostic(diagnostic: Diagnostic): boolean {
-  return (
-    diagnostic.message.includes("Slice ") || diagnostic.message === MUT_MESSAGE
-  );
+  return diagnostic.code === "HEDGE-PARSE-004";
 }
 
 export function unsupportedLoopMessage(keyword: string): string {
-  return `\`${keyword}\` is not supported in Slice 1; loops are introduced in Slice 6`;
+  return keyword === "loop"
+    ? "`loop` expressions are not yet supported"
+    : `\`${keyword}\` loops are not yet supported`;
 }
 
 const LOOP_KEYWORDS: ReadonlySet<string> = new Set(["loop", "while", "for"]);
@@ -202,7 +200,7 @@ export function isWhileLetAt(tokens: readonly Token[], pos: number): boolean {
 }
 
 export function unsupportedPathKeywordMessage(keyword: string): string {
-  return `\`${keyword}\` is not supported in Slice 1; module resolution is introduced in Slice 7`;
+  return `\`${keyword}\` is not yet supported`;
 }
 
 const PATH_KEYWORDS: ReadonlySet<string> = new Set(["self", "super", "Self"]);
@@ -222,11 +220,11 @@ export function pathKeywordAt(
 }
 
 export function unsupportedGenericsMessage(construct: string): string {
-  return `${construct} are not supported in Slice 1; generics are introduced in Slice 4`;
+  return `${construct} are not yet supported`;
 }
 
 export function unsupportedLifetimeMessage(construct: string): string {
-  return `${construct} are not supported in Slice 1; lifetimes are introduced in Slice 2`;
+  return `${construct} are not yet supported`;
 }
 
 /**
@@ -594,7 +592,7 @@ export function skipToStructBody(
 }
 
 export function unsupportedAsyncMessage(): string {
-  return "`async` is not supported in Slice 1; async is introduced in Slice 8";
+  return "`async` is not yet supported";
 }
 
 interface TopLevelBodyStart {
