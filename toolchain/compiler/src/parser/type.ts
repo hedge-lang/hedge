@@ -57,7 +57,7 @@ interface TypeParseResult extends Parsed<Type> {
  * ```
  *
  * `(Type)` (tuple syntax) is recognized and produces a guardrail diagnostic;
- * tuple types are not supported in Slice 1.
+ * tuple types are not yet supported.
  */
 export function parseType(
   tokens: readonly Token[],
@@ -124,7 +124,7 @@ function parseTypeWithCloseState(
     return err(
       errorDiagnostic(
         "HEDGE-PARSE-004",
-        "the never type (!) is not supported in Slice 1",
+        "the never type (`!`) is not yet supported",
         some(token.span),
       ),
     );
@@ -147,7 +147,7 @@ function parseTypeWithCloseState(
   return err(
     errorDiagnostic(
       "HEDGE-PARSE-004",
-      `type syntax "${token.kind}" is not supported in Slice 1`,
+      `expected a type, found \`${token.kind}\``,
       some(token.span),
     ),
   );
@@ -156,7 +156,7 @@ function parseTypeWithCloseState(
 /**
  * Parses `(` at `pos` (already confirmed by the caller, also passed as
  * `openParen` for its span): the unit type `()`, or a guardrail rejection
- * for tuple syntax `(Type, ...)` - tuple types are not supported in Slice 1.
+ * for tuple syntax `(Type, ...)` - tuple types are not yet supported.
  */
 function parseUnitOrTupleType(
   tokens: readonly Token[],
@@ -184,7 +184,7 @@ function parseUnitOrTupleType(
   return err(
     errorDiagnostic(
       "HEDGE-PARSE-004",
-      "tuple types are not supported in Slice 1",
+      "tuple types are not yet supported",
       some(openParen.span),
     ),
   );
@@ -416,7 +416,7 @@ function parseArrayType(
     return err(
       errorDiagnostic(
         "HEDGE-PARSE-004",
-        "slice types ([T]) are not supported in Slice 1",
+        "slice types (`[T]`) are not yet supported",
         some(openBracket.span),
       ),
     );

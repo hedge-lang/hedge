@@ -387,7 +387,7 @@ describe("path expressions", (): void => {
 });
 
 describe("self/super/Self path segment diagnostics", (): void => {
-  function assertSlice7Error(input: string, kw: string): void {
+  function assertUnsupportedKeyword(input: string, kw: string): void {
     const { tokens } = tokenize(input);
     const keyword = tokens.find((t) => t.kind === "keyword" && t.text === kw);
     assert(keyword !== undefined, `Expected to find a ${kw} keyword token`);
@@ -395,47 +395,47 @@ describe("self/super/Self path segment diagnostics", (): void => {
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
     expect(diagnostics[0].severity).toBe("error");
-    expect(diagnostics[0].message).toContain("Slice 7");
+    expect(diagnostics[0].message).toBe(`\`${kw}\` is not yet supported`);
     expect(diagnostics[0].span).toEqual(some(keyword.span));
   }
 
-  it("produces a Slice 7 diagnostic for `super` as a segment after `::`", (): void => {
-    assertSlice7Error("::super;", "super");
+  it("rejects as not yet supported: `super` as a segment after `::`", (): void => {
+    assertUnsupportedKeyword("::super;", "super");
   });
 
-  it("produces a Slice 7 diagnostic for `self` as a non-first segment", (): void => {
-    assertSlice7Error("foo::self;", "self");
+  it("rejects as not yet supported: `self` as a non-first segment", (): void => {
+    assertUnsupportedKeyword("foo::self;", "self");
   });
 
-  it("produces a Slice 7 diagnostic for `self` as a non-first segment in type position", (): void => {
-    assertSlice7Error("let x: std::self::Foo;", "self");
+  it("rejects as not yet supported: `self` as a non-first segment in type position", (): void => {
+    assertUnsupportedKeyword("let x: std::self::Foo;", "self");
   });
 
-  it("produces a Slice 7 diagnostic for `self` before a turbofish, ahead of any generics guardrail", (): void => {
-    assertSlice7Error("self::<T>;", "self");
+  it("rejects as not yet supported: `self` before a turbofish, ahead of any generics guardrail", (): void => {
+    assertUnsupportedKeyword("self::<T>;", "self");
   });
 
   it.each(["self", "super", "Self"])(
-    "produces a Slice 7 diagnostic for bare `%s` in expression position",
+    "rejects as not yet supported: bare `%s` in expression position",
     (text): void => {
-      assertSlice7Error(`${text};`, text);
+      assertUnsupportedKeyword(`${text};`, text);
     },
   );
 
-  it("produces a Slice 7 diagnostic for bare `self` in type position", (): void => {
-    assertSlice7Error("let x: self::Foo;", "self");
+  it("rejects as not yet supported: bare `self` in type position", (): void => {
+    assertUnsupportedKeyword("let x: self::Foo;", "self");
   });
 
-  it("produces a Slice 7 diagnostic for bare `self` in struct-construction position", (): void => {
-    assertSlice7Error("self::Foo {}", "self");
+  it("rejects as not yet supported: bare `self` in struct-construction position", (): void => {
+    assertUnsupportedKeyword("self::Foo {}", "self");
   });
 
-  it("produces a Slice 7 diagnostic for bare `super` in type position", (): void => {
-    assertSlice7Error("let x: super;", "super");
+  it("rejects as not yet supported: bare `super` in type position", (): void => {
+    assertUnsupportedKeyword("let x: super;", "super");
   });
 
-  it("produces a Slice 7 diagnostic for `self` as the second segment of a `Self`-headed type path", (): void => {
-    assertSlice7Error("let x: Self::self;", "self");
+  it("rejects as not yet supported: `self` as the second segment of a `Self`-headed type path", (): void => {
+    assertUnsupportedKeyword("let x: Self::self;", "self");
   });
 });
 
@@ -580,7 +580,9 @@ describe("type annotations", (): void => {
   it("returns an error for an unsupported type syntax", (): void => {
     const result = parse(tokenize("let x: [i32];").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("[T]");
+    expect(result.diagnostics[0]?.message).toBe(
+      "slice types (`[T]`) are not yet supported",
+    );
   });
 });
 
@@ -592,7 +594,9 @@ describe("type annotation error diagnostics", (): void => {
     const result = parse(tokens);
     expect(result.program).toEqual(none());
     expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toContain("[T]");
+    expect(result.diagnostics[0]?.message).toBe(
+      "slice types (`[T]`) are not yet supported",
+    );
     expect(result.diagnostics[0]?.span).toEqual(some(lbracket.span));
   });
 
@@ -603,7 +607,9 @@ describe("type annotation error diagnostics", (): void => {
     const result = parse(tokens);
     expect(result.program).toEqual(none());
     expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toContain("!");
+    expect(result.diagnostics[0]?.message).toBe(
+      "the never type (`!`) is not yet supported",
+    );
     expect(result.diagnostics[0]?.span).toEqual(some(bang.span));
   });
 
@@ -817,8 +823,9 @@ describe("generic type arguments - type position", (): void => {
     const { diagnostics, program } = parse(tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 1");
-    expect(diagnostics[0].message).toContain("generic");
+    expect(diagnostics[0].message).toBe(
+      "generic type arguments are not yet supported",
+    );
     expect(diagnostics[0].span).toEqual(some(pathSep.span));
   });
 
@@ -829,8 +836,9 @@ describe("generic type arguments - type position", (): void => {
     const { program, diagnostics } = parse(tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 1");
-    expect(diagnostics[0].message).toContain("generic");
+    expect(diagnostics[0].message).toBe(
+      "generic type arguments are not yet supported",
+    );
     expect(diagnostics[0].span).toEqual(some(lt.span));
   });
 
@@ -878,8 +886,9 @@ describe("lifetime guardrail - generic type argument position", (): void => {
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
     expect(diagnostics[0].severity).toBe("error");
-    expect(diagnostics[0].message).toContain("Slice 2");
-    expect(diagnostics[0].message).toContain("lifetime");
+    expect(diagnostics[0].message).toBe(
+      "lifetime arguments are not yet supported",
+    );
     expect(diagnostics[0].span).toEqual(some(lt.span));
   });
 
@@ -890,8 +899,9 @@ describe("lifetime guardrail - generic type argument position", (): void => {
     const { diagnostics, program } = parse(tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 2");
-    expect(diagnostics[0].message).toContain("lifetime");
+    expect(diagnostics[0].message).toBe(
+      "lifetime arguments are not yet supported",
+    );
     expect(diagnostics[0].span).toEqual(some(lt.span));
   });
 
@@ -902,8 +912,9 @@ describe("lifetime guardrail - generic type argument position", (): void => {
     const { diagnostics, program } = parse(tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Slice 2");
-    expect(diagnostics[0].message).toContain("lifetime");
+    expect(diagnostics[0].message).toBe(
+      "lifetime arguments are not yet supported",
+    );
     expect(diagnostics[0].span).toEqual(some(pathSep.span));
   });
 
@@ -1228,8 +1239,8 @@ describe("struct declarations", (): void => {
     const result = parse(tokens);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toContain(
-      "tuple types are not supported",
+    expect(result.diagnostics[0]?.message).toBe(
+      "tuple types are not yet supported",
     );
   });
 
@@ -2079,8 +2090,8 @@ describe("tuple type guardrail", (): void => {
   it("returns an error for a parenthesized non-unit type", (): void => {
     const result = parse(tokenize("let x: (i32);").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain(
-      "tuple types are not supported",
+    expect(result.diagnostics[0]?.message).toBe(
+      "tuple types are not yet supported",
     );
   });
 
@@ -2106,16 +2117,20 @@ describe("visibility guardrails", (): void => {
     expect(result.diagnostics[0]?.message).toContain("let");
   });
 
-  it("rejects pub(self) with a Slice 1 diagnostic", (): void => {
+  it("rejects pub(self) as not yet supported", (): void => {
     const result = parse(tokenize("pub(self) struct Foo;").tokens);
     expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+    expect(result.diagnostics[0]?.message).toBe(
+      "`pub(self)` visibility is not yet supported",
+    );
   });
 
-  it("rejects pub(super) with a Slice 1 diagnostic", (): void => {
+  it("rejects pub(super) as not yet supported", (): void => {
     const result = parse(tokenize("pub(super) struct Foo;").tokens);
     expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toContain("Slice 1");
+    expect(result.diagnostics[0]?.message).toBe(
+      "`pub(super)` visibility is not yet supported",
+    );
   });
 
   it("rejects a visibility qualifier before a bare expression", (): void => {
@@ -3436,7 +3451,9 @@ describe("unsupported type syntax in additional positions", (): void => {
   it("rejects a pointer type *i32 in type position", (): void => {
     const result = parse(tokenize("let x: *i32;").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("star");
+    expect(result.diagnostics[0]?.message).toBe(
+      "expected a type, found `star`",
+    );
   });
 
   it("rejects a lifetime 'a in type position", (): void => {
@@ -3445,29 +3462,34 @@ describe("unsupported type syntax in additional positions", (): void => {
     assert(lifetime !== undefined, "Expected to find a lifetime token");
     const result = parse(tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("lifetime");
-    expect(result.diagnostics[0]?.message).toContain("Slice 2");
+    expect(result.diagnostics[0]?.message).toBe(
+      "lifetime annotations are not yet supported",
+    );
     expect(result.diagnostics[0]?.span).toEqual(some(lifetime.span));
   });
 
   it("rejects a named lifetime 'static in type position", (): void => {
     const result = parse(tokenize("let x: 'static;").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("lifetime");
-    expect(result.diagnostics[0]?.message).toContain("Slice 2");
+    expect(result.diagnostics[0]?.message).toBe(
+      "lifetime annotations are not yet supported",
+    );
   });
 
   it("rejects an anonymous lifetime '_ in type position", (): void => {
     const result = parse(tokenize("let x: '_;").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("lifetime");
-    expect(result.diagnostics[0]?.message).toContain("Slice 2");
+    expect(result.diagnostics[0]?.message).toBe(
+      "lifetime annotations are not yet supported",
+    );
   });
 
   it("does not misparse a char literal as a lifetime in type position (regression)", (): void => {
     const result = parse(tokenize("let x: 'a';").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).not.toContain("lifetime");
+    expect(result.diagnostics[0]?.message).toBe(
+      "expected a type, found `char`",
+    );
   });
 
   it("parses a reference return type fn f() -> &'a i32 {} (explicit lifetime avoids the zero-reference-parameter elision-ambiguity case, which is exercised separately)", (): void => {
@@ -3690,7 +3712,7 @@ describe("keyword edge cases", (): void => {
 });
 
 describe("dereference parses in previously-guardrailed positions", (): void => {
-  it("*1 parses (deref of an int literal, no longer a Slice-1 rejection)", (): void => {
+  it("*1 parses (deref of an int literal, no longer a guardrail rejection)", (): void => {
     const ast = parseProgram("*1;");
     expect(ast).toMatchObject({
       items: [
@@ -4160,26 +4182,27 @@ describe("Self as a type", (): void => {
 });
 
 describe("unsupported item keywords", (): void => {
-  it.each(["export", "extern"])(
-    "rejects `%s` with a Slice 1 diagnostic",
-    (keyword): void => {
-      const { tokens } = tokenize(`${keyword} Foo {}`);
-      const { diagnostics } = parse(tokens);
-      expect(diagnostics[0]?.severity).toBe("error");
-      expect(diagnostics[0]?.message).toContain("Slice 1");
-      expect(diagnostics[0]?.message).toContain(keyword);
-    },
-  );
+  it.each([
+    ["export", "`export` declarations are not yet supported"],
+    ["extern", "`extern` declarations are not yet supported"],
+  ])("rejects `%s` as not yet supported", (keyword, message): void => {
+    const { tokens } = tokenize(`${keyword} Foo {}`);
+    const { diagnostics } = parse(tokens);
+    expect(diagnostics[0]?.severity).toBe("error");
+    expect(diagnostics[0]?.message).toBe(message);
+  });
 
-  it.each(["export", "extern"])(
+  it.each([
+    ["export", "`export` declarations are not yet supported"],
+    ["extern", "`extern` declarations are not yet supported"],
+  ])(
     "recovers so a sibling function after a rejected `%s` declaration still parses",
-    (keyword): void => {
+    (keyword, message): void => {
       const { tokens } = tokenize(`${keyword} Foo {} fn bar() {}`);
       const { program, diagnostics } = parse(tokens);
       assert(isSome(program), "Expected a program to come back");
       expect(diagnostics[0]?.severity).toBe("error");
-      expect(diagnostics[0]?.message).toContain("Slice 1");
-      expect(diagnostics[0]?.message).toContain(keyword);
+      expect(diagnostics[0]?.message).toBe(message);
       expect(program.value.items).toMatchObject([
         {
           kind: "Function",
@@ -4191,15 +4214,12 @@ describe("unsupported item keywords", (): void => {
     },
   );
 
-  it("rejects `async fn` with a clear Slice 1/Slice 8 diagnostic and recovers", (): void => {
+  it("rejects `async fn` as not yet supported and recovers", (): void => {
     const { tokens } = tokenize("async fn foo() {} fn bar() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics[0]?.severity).toBe("error");
-    expect(diagnostics[0]?.message).toContain("Slice 1");
-    expect(diagnostics[0]?.message).toContain("Slice 8");
-    expect(diagnostics[0]?.message).toContain("async");
-    expect(diagnostics[0]?.message).not.toContain("Expected an expression");
+    expect(diagnostics[0]?.message).toBe("`async` is not yet supported");
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
@@ -4210,17 +4230,17 @@ describe("unsupported item keywords", (): void => {
     ]);
   });
 
-  it.each(["use", "mod"])(
-    "rejects top-level `%s` with a clear Slice 1/Slice 7 diagnostic and recovers",
-    (keyword): void => {
+  it.each([
+    ["use", "`use` is not yet supported"],
+    ["mod", "`mod` is not yet supported"],
+  ])(
+    "rejects top-level `%s` as not yet supported and recovers",
+    (keyword, message): void => {
       const { tokens } = tokenize(`${keyword} foo; fn bar() {}`);
       const { program, diagnostics } = parse(tokens);
       assert(isSome(program), "Expected a program to come back");
       expect(diagnostics[0]?.severity).toBe("error");
-      expect(diagnostics[0]?.message).toContain("Slice 1");
-      expect(diagnostics[0]?.message).toContain("Slice 7");
-      expect(diagnostics[0]?.message).toContain(keyword);
-      expect(diagnostics[0]?.message).not.toContain("Expected an expression");
+      expect(diagnostics[0]?.message).toBe(message);
       expect(program.value.items).toMatchObject([
         {
           kind: "Function",
@@ -4244,14 +4264,35 @@ describe("unsupported item keywords", (): void => {
     ]);
   });
 
-  it.each(["export", "extern", "async", "use", "mod"])(
+  it.each([
+    [
+      "export",
+      "`export` declarations are not yet supported; expected a body for `export`, found end of input",
+    ],
+    [
+      "extern",
+      "`extern` declarations are not yet supported; expected a body for `extern`, found end of input",
+    ],
+    [
+      "async",
+      "`async` is not yet supported; expected a body for `async`, found end of input",
+    ],
+    [
+      "use",
+      "`use` is not yet supported; expected a body for `use`, found end of input",
+    ],
+    [
+      "mod",
+      "`mod` is not yet supported; expected a body for `mod`, found end of input",
+    ],
+  ])(
     "`%s` with no body at EOF fails fast without hanging",
-    (keyword): void => {
+    (keyword, message): void => {
       const { tokens } = tokenize(keyword);
       const { program, diagnostics } = parse(tokens);
       assert(isNone(program), "Expected no program to come back");
       assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(diagnostics[0].message).toContain("end of input");
+      expect(diagnostics[0].message).toBe(message);
     },
   );
 
@@ -4260,7 +4301,7 @@ describe("unsupported item keywords", (): void => {
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Slice 1");
+    expect(diagnostics[0]?.message).toBe("`use` is not yet supported");
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
@@ -4380,6 +4421,15 @@ describe("item error recovery", (): void => {
     const { program, diagnostics } = parse(tokens);
     assert(isNone(program), "Expected no program to come back");
     expect(diagnostics).toHaveLength(1);
+  });
+
+  it("keeps a parameter with a `dyn` guardrail fail-fast even though its message names no slice", (): void => {
+    const { tokens } = tokenize("fn f(x: dyn 'a) {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isNone(program), "Expected no program to come back");
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].code).toBe("HEDGE-PARSE-004");
   });
 
   it("recovers past a leading stray comma in a parameter list", (): void => {
@@ -4560,10 +4610,10 @@ describe("item error recovery", (): void => {
     ]);
   });
 
-  it("reports an error for a struct field missing its type (a Slice 1 type guardrail, so the whole struct stays fail-fast)", (): void => {
+  it("reports an error for a struct field missing its type (a type guardrail, so the whole struct stays fail-fast)", (): void => {
     // Same reasoning as the tuple-field "missing type" case above: every
-    // parseType failure carries the Slice-1 guardrail phrasing, so it is
-    // never eligible for per-element list recovery.
+    // parseType failure carries HEDGE-PARSE-004, so it is never eligible for
+    // per-element list recovery.
     const { tokens } = tokenize("struct Foo { x: }");
     const { program, diagnostics } = parse(tokens);
     assert(isNone(program), "Expected no program to come back");
@@ -4644,11 +4694,10 @@ describe("item error recovery", (): void => {
     ]);
   });
 
-  it("reports an error for a tuple field missing its type (a Slice 1 type guardrail, so the whole struct stays fail-fast)", (): void => {
-    // Every parseType failure - even a wholly absent type - carries the
-    // "not supported in Slice 1" guardrail phrasing (see type.ts's own doc
-    // comment), so it is never eligible for per-element list recovery; see
-    // isGuardrailDiagnostic in parse-utils.ts.
+  it("reports an error for a tuple field missing its type (a type guardrail, so the whole struct stays fail-fast)", (): void => {
+    // Every parseType failure - even a wholly absent type - carries
+    // HEDGE-PARSE-004, so it is never eligible for per-element list recovery;
+    // see isGuardrailDiagnostic in parse-utils.ts.
     const { tokens } = tokenize("struct Foo(:);");
     const { program, diagnostics } = parse(tokens);
     assert(isNone(program), "Expected no program to come back");
@@ -5433,9 +5482,9 @@ describe("lifetime guardrail - nested and reversed-order generics", (): void => 
     expect(program).toEqual(none());
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("Slice 2");
-    expect(diagnostics[0].message).toContain("lifetime");
-    expect(diagnostics[0].message).not.toContain("Slice 4");
+    expect(diagnostics[0].message).toBe(
+      "lifetime arguments are not yet supported",
+    );
     expect(diagnostics[0].span).toEqual(some(innerLt.span));
   });
 
@@ -5446,9 +5495,9 @@ describe("lifetime guardrail - nested and reversed-order generics", (): void => 
     const { program, diagnostics } = parse(tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("Slice 2");
-    expect(diagnostics[0].message).toContain("lifetime");
-    expect(diagnostics[0].message).not.toContain("Slice 4");
+    expect(diagnostics[0].message).toBe(
+      "lifetime annotations are not yet supported",
+    );
     expect(diagnostics[0].span).toEqual(some(lifetime.span));
   });
 });
@@ -5640,7 +5689,9 @@ describe("where clauses: function declarations", (): void => {
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("lifetime");
+    expect(diagnostics[0].message).toBe(
+      "lifetime annotations are not yet supported",
+    );
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
@@ -5840,6 +5891,18 @@ describe("no-op let warnings", (): void => {
   });
 });
 
+const LOOP_GUARDRAIL_MESSAGE: Readonly<Record<string, string>> = {
+  loop: "`loop` expressions are not yet supported",
+  while: "`while` loops are not yet supported",
+  for: "`for` loops are not yet supported",
+};
+
+function loopGuardrailMessage(keyword: string): string {
+  const message = LOOP_GUARDRAIL_MESSAGE[keyword];
+  assert(message !== undefined, `no guardrail message for \`${keyword}\``);
+  return message;
+}
+
 describe("statement-level loop/while/for/label rejection with recovery", (): void => {
   it.each([
     ["loop", "loop {}"],
@@ -5852,8 +5915,7 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
       const { program, diagnostics } = parse(tokens);
       assert(isSome(program), "Expected a program to come back");
       expect(diagnostics[0]?.severity).toBe("error");
-      expect(diagnostics[0]?.message).toContain("Slice 1");
-      expect(diagnostics[0]?.message).toContain(keyword);
+      expect(diagnostics[0]?.message).toBe(loopGuardrailMessage(keyword));
       expect(program.value.items).toMatchObject([
         {
           kind: "Function",
@@ -5885,8 +5947,7 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
       expect(diagnostics[0].severity).toBe("error");
-      expect(diagnostics[0].message).toContain("Slice 1");
-      expect(diagnostics[0].message).toContain(keyword);
+      expect(diagnostics[0].message).toBe(loopGuardrailMessage(keyword));
       assert(isSome(program), "Expected a program to come back");
       expect(program.value.items).toMatchObject([
         {
@@ -5914,11 +5975,13 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     expect(isSome(program)).toBe(true);
     expect(diagnostics).toHaveLength(3);
     assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
-    expect(diagnostics[0].message).toContain("loop");
+    expect(diagnostics[0].message).toBe(
+      "`loop` expressions are not yet supported",
+    );
     assert(diagnostics[1] !== undefined, "Expected to get diagnostic");
-    expect(diagnostics[1].message).toContain("while");
+    expect(diagnostics[1].message).toBe("`while` loops are not yet supported");
     assert(diagnostics[2] !== undefined, "Expected to get diagnostic");
-    expect(diagnostics[2].message).toContain("for");
+    expect(diagnostics[2].message).toBe("`for` loops are not yet supported");
   });
 
   it("recovers across back-to-back rejected loops with no separator", (): void => {
@@ -5934,7 +5997,9 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     expect(isSome(program)).toBe(true);
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
-    expect(diagnostics[0].message).toContain("loop");
+    expect(diagnostics[0].message).toBe(
+      "`loop` expressions are not yet supported",
+    );
   });
 
   it("skips braces inside a string literal in the rejected loop's body", (): void => {
@@ -5945,7 +6010,9 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     expect(isSome(program)).toBe(true);
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
-    expect(diagnostics[0].message).toContain("loop");
+    expect(diagnostics[0].message).toBe(
+      "`loop` expressions are not yet supported",
+    );
     assert(isSome(program), "Expected a program to come back");
     expect(program.value.items).toMatchObject([
       {
@@ -6077,13 +6144,14 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     expect(diagnostics[0]?.span).toEqual(some(loopToken.span));
   });
 
-  it("a bare top-level `loop {}` (outside any function) also gets the Slice 1 diagnostic, fail-fast", (): void => {
+  it("a bare top-level `loop {}` (outside any function) also gets the guardrail diagnostic, fail-fast", (): void => {
     const { tokens } = tokenize("loop {}");
     const { program, diagnostics } = parse(tokens);
     assert(isNone(program), "Expected no program to come back");
     assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
-    expect(diagnostics[0].message).toContain("Slice 1");
-    expect(diagnostics[0].message).toContain("loop");
+    expect(diagnostics[0].message).toBe(
+      "`loop` expressions are not yet supported",
+    );
   });
 
   it("documents imprecise recovery when a while condition contains a bare brace (already-invalid syntax)", (): void => {
@@ -6097,7 +6165,7 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected program to come back");
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("while");
+    expect(diagnostics[0].message).toBe("`while` loops are not yet supported");
   });
 
   it("recovers even when a malformed condition has a stray closing bracket", (): void => {
@@ -6109,7 +6177,7 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected program to come back");
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("while");
+    expect(diagnostics[0].message).toBe("`while` loops are not yet supported");
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
@@ -6134,54 +6202,70 @@ describe("lifetime vs label disambiguation regression", (): void => {
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("loop");
-    expect(diagnostics[0].message).toContain("Slice 6");
-    expect(diagnostics[0].message).not.toContain("lifetime");
+    expect(diagnostics[0].message).toBe(
+      "`loop` expressions are not yet supported",
+    );
   });
 });
 
 describe("loop/while/for guardrail in nested expression position", (): void => {
-  it.each(["loop {}", "while true {}", "for x in v {}"])(
-    "`let y = %s;` produces the Slice-1 diagnostic, not a generic 'expected expression' error",
-    (construct): void => {
+  it.each([
+    ["loop {}", "loop"],
+    ["while true {}", "while"],
+    ["for x in v {}", "for"],
+  ])(
+    "`let y = %s;` produces the guardrail diagnostic, not a generic 'expected expression' error",
+    (construct, keyword): void => {
       const { tokens } = tokenize(`let y = ${construct};`);
       const { program, diagnostics } = parse(tokens);
       assert(isNone(program), "Expected program to be nonexistent");
       assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
-      expect(diagnostics[0].message).toContain("Slice 1");
+      expect(diagnostics[0].message).toBe(loopGuardrailMessage(keyword));
     },
   );
 
-  it.each(["loop {}", "while true {}", "for x in v {}"])(
-    "`foo(%s);` in call-argument position produces the Slice-1 diagnostic",
-    (construct): void => {
+  it.each([
+    ["loop {}", "loop"],
+    ["while true {}", "while"],
+    ["for x in v {}", "for"],
+  ])(
+    "`foo(%s);` in call-argument position produces the guardrail diagnostic",
+    (construct, keyword): void => {
       const { tokens } = tokenize(`foo(${construct});`);
       const { program, diagnostics } = parse(tokens);
       assert(isNone(program), "Expected no program to come back");
       assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
-      expect(diagnostics[0].message).toContain("Slice 1");
+      expect(diagnostics[0].message).toBe(loopGuardrailMessage(keyword));
     },
   );
 
-  it.each(["loop {}", "while true {}", "for x in v {}"])(
-    "`if %s { }` in if-condition position produces the Slice-1 diagnostic",
-    (construct): void => {
+  it.each([
+    ["loop {}", "loop"],
+    ["while true {}", "while"],
+    ["for x in v {}", "for"],
+  ])(
+    "`if %s { }` in if-condition position produces the guardrail diagnostic",
+    (construct, keyword): void => {
       const { tokens } = tokenize(`if ${construct} { }`);
       const { program, diagnostics } = parse(tokens);
       assert(isNone(program), "Expected program to be nonexistent");
       assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
-      expect(diagnostics[0].message).toContain("Slice 1");
+      expect(diagnostics[0].message).toBe(loopGuardrailMessage(keyword));
     },
   );
 
-  it.each(["loop {}", "while true {}", "for x in v {}"])(
-    "`1 + %s;` in binary-operand position produces the Slice-1 diagnostic",
-    (construct): void => {
+  it.each([
+    ["loop {}", "loop"],
+    ["while true {}", "while"],
+    ["for x in v {}", "for"],
+  ])(
+    "`1 + %s;` in binary-operand position produces the guardrail diagnostic",
+    (construct, keyword): void => {
       const { tokens } = tokenize(`1 + ${construct};`);
       const { program, diagnostics } = parse(tokens);
       assert(isNone(program), "Expected program to be nonexistent");
       assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
-      expect(diagnostics[0].message).toContain("Slice 1");
+      expect(diagnostics[0].message).toBe(loopGuardrailMessage(keyword));
     },
   );
 
@@ -6504,13 +6588,11 @@ describe("impl declarations", (): void => {
     });
   });
 
-  it("still produces the ordinary Slice 1 tuple-type diagnostic for an unsupported impl target, not a confusing path error", (): void => {
+  it("still produces the ordinary tuple-type diagnostic for an unsupported impl target, not a confusing path error", (): void => {
     const { tokens } = tokenize("impl (i32, i32) {}");
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toBe(
-      "tuple types are not supported in Slice 1",
-    );
+    expect(diagnostics[0].message).toBe("tuple types are not yet supported");
   });
 
   it("parses an inherent impl with a method", (): void => {

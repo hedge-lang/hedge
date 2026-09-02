@@ -1297,7 +1297,7 @@ function dropDecision(state: MoveState | undefined): DropDecision {
 function ambiguousDropMessage(name: string, state: MoveState): string {
   switch (state.kind) {
     case "PossiblyUninitialized":
-      return `\`${name}\` may or may not have been initialized depending on the branch taken; Slice 1 cannot conditionally drop it (no drop-flag support yet)`;
+      return `\`${name}\` may or may not have been initialized depending on the branch taken, and conditional drops are not yet supported`;
     case "Owned":
     case "Uninitialized":
     case "Unbound":

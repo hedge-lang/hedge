@@ -94,7 +94,7 @@ function parseVisibility(
         return err(
           errorDiagnostic(
             "HEDGE-PARSE-004",
-            `pub(${scope}) is not supported in Slice 1`,
+            `\`pub(${scope})\` visibility is not yet supported`,
             some(scopeToken.span),
           ),
         );
@@ -1883,8 +1883,8 @@ function parseImpl(
 
 const UNSUPPORTED_TOP_LEVEL_KEYWORD_MESSAGES: ReadonlyMap<string, string> =
   new Map([
-    ["export", "`export` declarations are not supported in Slice 1"],
-    ["extern", "`extern` declarations are not supported in Slice 1"],
+    ["export", "`export` declarations are not yet supported"],
+    ["extern", "`extern` declarations are not yet supported"],
     ["use", unsupportedPathKeywordMessage("use")],
     ["mod", unsupportedPathKeywordMessage("mod")],
     ["async", unsupportedAsyncMessage()],

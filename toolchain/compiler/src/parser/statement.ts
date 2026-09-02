@@ -81,7 +81,7 @@ function findLoopBodyOpenBrace(
 
 /**
  * Recovers from a rejected `loop`/`while`/`for` statement: builds the
- * "not supported until Slice 6" diagnostic for the matched keyword, then
+ * "not yet supported" diagnostic for the matched keyword, then
  * skips the whole construct as an opaque, brace-balanced token span so the
  * block's statement loop can resume at the next statement boundary.
  *
@@ -419,8 +419,8 @@ export function parseBlock(
       continue;
     }
     // `loop`/`while`/`for` statements, optionally label-prefixed, are not
-    // supported until Slice 6 - reject with a diagnostic and recover by
-    // skipping the whole construct so later statements still parse. The
+    // yet supported - reject with a diagnostic and recover by skipping the
+    // whole construct so later statements still parse. The
     // exact unlabeled `while` `let` sequence is the one exception: it falls
     // through to the ordinary expression path below, which routes
     // to a real `WhileExpression` via `parseExpression`/`parsePrimary`.

@@ -59,15 +59,16 @@ describe("parseType - reference types", (): void => {
     const { tokens } = tokenize("&&i32");
     const result = parseType(tokens, 0);
     assert(isErr(result), "Expected an error result");
-    expect(result.error.message).toContain("amp_amp");
+    expect(result.error.message).toBe("expected a type, found `amp_amp`");
   });
 
   it("still rejects a bare lifetime with no leading & in type position", (): void => {
     const { tokens } = tokenize("'a");
     const result = parseType(tokens, 0);
     assert(isErr(result), "Expected an error result");
-    expect(result.error.message).toContain("Slice 2");
-    expect(result.error.message).toContain("lifetime");
+    expect(result.error.message).toBe(
+      "lifetime annotations are not yet supported",
+    );
   });
 });
 
@@ -84,11 +85,13 @@ describe("parseType - array types", (): void => {
     expect(result.value.next).toBe(tokens.length - 1);
   });
 
-  it("still rejects a slice type ([T], no semicolon) with the existing Slice 1 guardrail", (): void => {
+  it("still rejects a slice type ([T], no semicolon) with the existing guardrail", (): void => {
     const { tokens } = tokenize("[i32]");
     const result = parseType(tokens, 0);
     assert(isErr(result), "Expected an error result");
-    expect(result.error.message).toContain("slice types");
+    expect(result.error.message).toBe(
+      "slice types (`[T]`) are not yet supported",
+    );
   });
 
   it("parses [[i32; 2]; 3] as a nested array type", (): void => {
@@ -164,14 +167,15 @@ describe("parseType - generic type arguments", (): void => {
     expect(result.value.next).toBe(tokens.length - 1);
   });
 
-  it("still produces the existing lifetime guardrail diagnostic for Ref<'a, T>, unchanged", (): void => {
+  it("still produces the lifetime guardrail diagnostic for Ref<'a, T>", (): void => {
     const { tokens } = tokenize("Ref<'a, T>");
     const lt = tokens.find((t) => t.kind === "lt");
     assert(lt !== undefined, "Expected to find a lt token");
     const result = parseType(tokens, 0);
     assert(isErr(result), "Expected an error result");
-    expect(result.error.message).toContain("Slice 2");
-    expect(result.error.message).toContain("lifetime");
+    expect(result.error.message).toBe(
+      "lifetime arguments are not yet supported",
+    );
     expect(result.error.span).toEqual(some(lt.span));
   });
 
@@ -415,5 +419,15 @@ describe("parseType - dyn types", (): void => {
     const { tokens } = tokenize("dyn 42");
     const result = parseType(tokens, 0);
     assert(isErr(result), "Expected an error result");
+  });
+});
+
+describe("parseType - a token that cannot begin a type", (): void => {
+  it("reports what it expected and what it found, not a not-yet-supported message", (): void => {
+    const { tokens } = tokenize(":");
+    const result = parseType(tokens, 0);
+    assert(isErr(result), "Expected an error result");
+    expect(result.error.code).toBe("HEDGE-PARSE-004");
+    expect(result.error.message).toBe("expected a type, found `colon`");
   });
 });
