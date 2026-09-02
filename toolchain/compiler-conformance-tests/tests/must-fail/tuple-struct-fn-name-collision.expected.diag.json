@@ -1,0 +1,10 @@
+[
+  {
+    "code": "HEDGE-NAME-002",
+    "kind": {
+      "kind": "SemFunctionTupleStructNamespaceClash",
+      "name": "Pair"
+    },
+    "relatedSpans": []
+  }
+]

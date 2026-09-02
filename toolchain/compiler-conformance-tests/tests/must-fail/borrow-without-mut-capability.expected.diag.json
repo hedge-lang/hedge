@@ -1,0 +1,10 @@
+[
+  {
+    "code": "HEDGE-BORROW-CHECK-002",
+    "kind": {
+      "kind": "OwnBorrowMutNotDeclaredMut",
+      "baseName": "x"
+    },
+    "relatedSpans": []
+  }
+]

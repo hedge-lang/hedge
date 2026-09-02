@@ -1,0 +1,10 @@
+[
+  {
+    "code": "HEDGE-PATTERN-002",
+    "kind": {
+      "kind": "SemNonExhaustivePatterns",
+      "missing": "_"
+    },
+    "relatedSpans": []
+  }
+]

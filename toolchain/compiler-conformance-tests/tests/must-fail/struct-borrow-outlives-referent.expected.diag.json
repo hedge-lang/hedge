@@ -1,0 +1,11 @@
+[
+  {
+    "code": "HEDGE-LIFETIME-002",
+    "kind": {
+      "kind": "SemStructLiteralFieldBorrowsLocal",
+      "field": "source",
+      "name": "s"
+    },
+    "relatedSpans": []
+  }
+]

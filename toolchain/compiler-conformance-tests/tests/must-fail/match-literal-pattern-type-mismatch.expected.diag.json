@@ -1,0 +1,11 @@
+[
+  {
+    "code": "HEDGE-TYPE-001",
+    "kind": {
+      "kind": "SemPatternTypeMismatch",
+      "expected": "Message",
+      "found": "i32"
+    },
+    "relatedSpans": []
+  }
+]

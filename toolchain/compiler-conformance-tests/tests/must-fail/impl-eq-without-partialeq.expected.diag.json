@@ -1,0 +1,11 @@
+[
+  {
+    "code": "HEDGE-TRAIT-002",
+    "kind": {
+      "kind": "SemTraitBoundNotSatisfied",
+      "typeName": "Counter",
+      "trait": "PartialEq"
+    },
+    "relatedSpans": []
+  }
+]

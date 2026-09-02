@@ -1,0 +1,10 @@
+[
+  {
+    "code": "HEDGE-NAME-001",
+    "kind": {
+      "kind": "SemCannotFindName",
+      "name": "undefined_name"
+    },
+    "relatedSpans": []
+  }
+]

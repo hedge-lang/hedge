@@ -1,0 +1,12 @@
+[
+  {
+    "code": "HEDGE-TRAIT-003",
+    "kind": {
+      "kind": "SemImplMissingMethod",
+      "trait": "Clone",
+      "target": "Counter",
+      "method": "clone"
+    },
+    "relatedSpans": []
+  }
+]

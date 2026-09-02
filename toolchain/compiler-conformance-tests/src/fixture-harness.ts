@@ -40,6 +40,8 @@ export interface MustFailFixture {
   readonly name: string;
   readonly sourcePath: string;
   readonly expectedPath: string;
+  /** Structured `[{code, kind, relatedSpans}]` snapshot, reword-proof. */
+  readonly expectedDiagPath: string;
 }
 
 const TESTS_DIR = fileURLToPath(new URL("../tests", import.meta.url));
@@ -124,7 +126,35 @@ export function runExecutionFixture(fixture: ExecutionFixture): {
 }
 
 export function discoverMustFailFixtures(): MustFailFixture[] {
-  return discoverFixtures(join(TESTS_DIR, "must-fail"), ".expected.stderr");
+  return discoverFixtures(join(TESTS_DIR, "must-fail"), ".expected.stderr").map(
+    (fixture) => ({
+      ...fixture,
+      expectedDiagPath: fixture.expectedPath.replace(
+        /\.expected\.stderr$/,
+        ".expected.diag.json",
+      ),
+    }),
+  );
+}
+
+/**
+ * The reword-proof view of a rejection: each diagnostic's `code`, its
+ * structured `kind`, and its related spans reduced to `{labelKind, spanStart}`.
+ * A wording change never touches this; only a change to the diagnostic a
+ * fixture actually produces does.
+ */
+export function structuredDiagnostics(
+  diagnostics: readonly Diagnostic[],
+): string {
+  const structured = diagnostics.map((diagnostic) => ({
+    code: diagnostic.code,
+    kind: diagnostic.kind,
+    relatedSpans: diagnostic.relatedSpans.map((related) => ({
+      labelKind: related.label.kind,
+      spanStart: related.span.start,
+    })),
+  }));
+  return `${JSON.stringify(structured, null, 2)}\n`;
 }
 
 /**

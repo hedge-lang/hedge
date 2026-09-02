@@ -1,0 +1,11 @@
+[
+  {
+    "code": "HEDGE-TYPE-008",
+    "kind": {
+      "kind": "SemMissingRequiredField",
+      "field": "y",
+      "structName": "Foo"
+    },
+    "relatedSpans": []
+  }
+]

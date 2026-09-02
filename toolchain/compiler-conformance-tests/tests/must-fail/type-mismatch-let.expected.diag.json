@@ -1,0 +1,9 @@
+[
+  {
+    "code": "HEDGE-TYPE-004",
+    "kind": {
+      "kind": "SemIfBranchesIncompatible"
+    },
+    "relatedSpans": []
+  }
+]

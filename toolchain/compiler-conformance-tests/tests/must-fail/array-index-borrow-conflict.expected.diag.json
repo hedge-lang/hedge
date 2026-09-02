@@ -1,0 +1,19 @@
+[
+  {
+    "code": "HEDGE-BORROW-CHECK-001",
+    "kind": {
+      "kind": "OwnConflictingBorrows",
+      "place": "arr[_]",
+      "first": "&mut",
+      "firstOffset": "99",
+      "second": "&mut",
+      "secondOffset": "122"
+    },
+    "relatedSpans": [
+      {
+        "labelKind": "LabelBorrowHere",
+        "spanStart": 99
+      }
+    ]
+  }
+]

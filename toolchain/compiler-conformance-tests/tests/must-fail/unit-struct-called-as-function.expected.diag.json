@@ -1,0 +1,10 @@
+[
+  {
+    "code": "HEDGE-TYPE-008",
+    "kind": {
+      "kind": "SemUnitStructCannotUseParens",
+      "structName": "Marker"
+    },
+    "relatedSpans": []
+  }
+]
