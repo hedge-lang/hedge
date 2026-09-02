@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { assert } from "../assert.js";
-import type { Diagnostic } from "../diagnostics/index.js";
+import { type Diagnostic, messageOf } from "../diagnostics/index.js";
 import { tokenize } from "../lexer/lexer.js";
 import { isSome } from "../option.js";
 import { parse } from "../parser/parser.js";
@@ -18,7 +18,7 @@ import { checkBorrows } from "./borrowck.js";
 function check(source: string): readonly Diagnostic[] {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
-  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  assert(isSome(program), messageOf(diagnostics[0], "Parse failed"));
   const analysis = analyze(program.value, tokens);
   return checkBorrows(analysis.program, tokens);
 }
@@ -50,7 +50,7 @@ describe("borrow checker", (): void => {
       'fn main() { let mut x = "a"; let r1 = &mut x; let r2 = &mut x; print(r1); print(r2); }',
     );
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
   });
 
   it("still detects a conflicting borrow when one borrow's only use is inside a match arm", (): void => {
@@ -58,7 +58,7 @@ describe("borrow checker", (): void => {
       'fn main() { let mut x = "a"; let r1 = &mut x; let r2 = &mut x; match true { _ => print(r1) }; print(r2); }',
     );
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
   });
 
   describe("last use nested inside a container expression", (): void => {
@@ -67,7 +67,7 @@ describe("borrow checker", (): void => {
         "fn main() { let mut x = 1; let r1 = &mut x; let r2 = &mut x; let t = (r1, 2); print(t); print(r2); }",
       );
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0]?.message).toBe(
+      expect(messageOf(diagnostics[0])).toBe(
         'Conflicting borrows of "x": &mut at offset 36 and &mut at offset 53 are both live.',
       );
     });
@@ -77,7 +77,7 @@ describe("borrow checker", (): void => {
         "fn main() { let mut x = 1; let r1 = &mut x; let r2 = &mut x; let arr = [r1]; print(arr); print(r2); }",
       );
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0]?.message).toBe(
+      expect(messageOf(diagnostics[0])).toBe(
         'Conflicting borrows of "x": &mut at offset 36 and &mut at offset 53 are both live.',
       );
     });
@@ -87,7 +87,7 @@ describe("borrow checker", (): void => {
         "fn main() { let mut x = 1; let r1 = &mut x; let r2 = &mut x; let range = r1..5; print(range); print(r2); }",
       );
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0]?.message).toBe(
+      expect(messageOf(diagnostics[0])).toBe(
         'Conflicting borrows of "x": &mut at offset 36 and &mut at offset 53 are both live.',
       );
     });
@@ -97,7 +97,7 @@ describe("borrow checker", (): void => {
         "struct Wrapper { inner: i32 } fn main() { let mut x = 1; let r1 = &mut x; let r2 = &mut x; let w = Wrapper { inner: r1 }; print(w); print(r2); }",
       );
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0]?.message).toBe(
+      expect(messageOf(diagnostics[0])).toBe(
         'Conflicting borrows of "x": &mut at offset 66 and &mut at offset 83 are both live.',
       );
     });
@@ -107,7 +107,7 @@ describe("borrow checker", (): void => {
         "fn main() { let mut x = 1; let r1 = &mut x; let r2 = &mut x; let result = r1.foo(); print(result); print(r2); }",
       );
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0]?.message).toBe(
+      expect(messageOf(diagnostics[0])).toBe(
         'Conflicting borrows of "x": &mut at offset 36 and &mut at offset 53 are both live.',
       );
     });
@@ -133,7 +133,7 @@ describe("borrow checker", (): void => {
       'fn main() { let mut x = "a"; let rw = &mut x; let r = &x; print(rw); print(r); }',
     );
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
   });
 
   it("names both borrow sites' own offsets in a conflicting-borrows diagnostic", (): void => {
@@ -142,7 +142,7 @@ describe("borrow checker", (): void => {
     );
     expect(diagnostics).toHaveLength(1);
     const offsetMentions =
-      diagnostics[0]?.message.match(/at offset \d+/g) ?? [];
+      messageOf(diagnostics[0]).match(/at offset \d+/g) ?? [];
     expect(offsetMentions).toHaveLength(2);
     expect(offsetMentions[0]).not.toEqual(offsetMentions[1]);
   });
@@ -159,13 +159,13 @@ describe("borrow checker", (): void => {
       'fn main() { let x = "a"; let r = &mut x; print(r); }',
     );
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("not declared mut");
+    expect(messageOf(diagnostics[0])).toContain("not declared mut");
   });
 
   it("rejects &mut borrow of an immutable function parameter", (): void => {
     const diagnostics = check("fn f(x: string) { let r = &mut x; print(r); }");
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("not declared mut");
+    expect(messageOf(diagnostics[0])).toContain("not declared mut");
   });
 
   it("tags a &mut-without-mut-capability diagnostic with the HEDGE-BORROW-CHECK-002 code", (): void => {
@@ -216,7 +216,7 @@ describe("borrow checker", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("not declared mut");
+    expect(messageOf(diagnostics[0])).toContain("not declared mut");
   });
 
   it("accepts two mutable borrows of the same base declared in sibling branches", (): void => {
@@ -249,7 +249,7 @@ describe("borrow checker", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
   });
 
   it("accepts a borrow taken inside a branch after an outer borrow's last use ends before the fork", (): void => {
@@ -301,7 +301,7 @@ describe("borrow checker", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("not declared mut");
+    expect(messageOf(diagnostics[0])).toContain("not declared mut");
   });
 });
 
@@ -318,7 +318,7 @@ describe("place-projection borrows", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
   });
 
   it("accepts two mutable borrows of distinct struct fields", (): void => {
@@ -361,7 +361,7 @@ describe("place-projection borrows", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
   });
 
   it("rejects a mutable borrow of a struct field overlapping a shared borrow of the whole struct, regardless of order", (): void => {
@@ -376,7 +376,7 @@ describe("place-projection borrows", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
   });
 
   it("rejects a mutable borrow of the whole struct overlapping a mutable borrow of one of its fields", (): void => {
@@ -391,7 +391,7 @@ describe("place-projection borrows", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
   });
 
   it("accepts two mutable borrows of distinct fields two levels deep in a nested struct chain", (): void => {
@@ -422,8 +422,8 @@ describe("place-projection borrows", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
-    expect(diagnostics[0]?.message).toContain("s.a.b");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("s.a.b");
   });
 
   it("rejects a mutable borrow of a nested field overlapping a mutable borrow of its own containing field", (): void => {
@@ -439,7 +439,7 @@ describe("place-projection borrows", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
   });
 
   it("rejects two overlapping mutable borrows of the same place reached through a dereference, naming the full place path", (): void => {
@@ -452,8 +452,8 @@ describe("place-projection borrows", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
-    expect(diagnostics[0]?.message).toContain("*r");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("*r");
   });
 
   it("rejects a shared borrow overlapping a mutable borrow of the same dereferenced place", (): void => {
@@ -466,7 +466,7 @@ describe("place-projection borrows", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
   });
 
   it("rejects overlapping mutable borrows reached by dereferencing two bindings that alias the same reference value", (): void => {
@@ -482,7 +482,7 @@ describe("place-projection borrows", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
   });
 
   it("rejects overlapping mutable borrows reached by dereferencing an alias of a &mut function parameter, not just a local borrow", (): void => {
@@ -496,7 +496,7 @@ describe("place-projection borrows", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
   });
 
   it("accepts sequential dereferenced borrows through aliased bindings when one alias's last use precedes the other's borrow", (): void => {
@@ -522,9 +522,9 @@ describe("place-projection borrows", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("cannot borrow");
-    expect(diagnostics[0]?.message).toContain("*r");
-    expect(diagnostics[0]?.message).toContain("r");
+    expect(messageOf(diagnostics[0])).toContain("cannot borrow");
+    expect(messageOf(diagnostics[0])).toContain("*r");
+    expect(messageOf(diagnostics[0])).toContain("r");
   });
 
   it("tags a &mut-through-a-shared-reference diagnostic with the same HEDGE-BORROW-CHECK-002 code as the not-declared-mut case", (): void => {
@@ -547,8 +547,8 @@ describe("place-projection borrows", (): void => {
     `);
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected diagnostic");
-    expect(diagnostics[0].message).toContain("shared reference");
-    expect(diagnostics[0].message).not.toContain("borrowed as immutable");
+    expect(messageOf(diagnostics[0])).toContain("shared reference");
+    expect(messageOf(diagnostics[0])).not.toContain("borrowed as immutable");
   });
 
   it("accepts taking &mut through a dereference of a mutable reference (a reborrow)", (): void => {
@@ -570,7 +570,7 @@ describe("place-projection borrows", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("cannot borrow");
+    expect(messageOf(diagnostics[0])).toContain("cannot borrow");
   });
 
   it("accepts a shared borrow of a field reached through a dereference of a shared reference", (): void => {
@@ -606,7 +606,7 @@ describe("place-projection borrows", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
   });
 
   it("rejects two overlapping mutable borrows of statically distinct dynamic indices, since indices are never provably distinct", (): void => {
@@ -619,7 +619,7 @@ describe("place-projection borrows", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
   });
 
   it("accepts any number of shared borrows of the same dynamic index", (): void => {
@@ -645,7 +645,7 @@ describe("place-projection borrows", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
   });
 
   it("rejects overlapping mutable borrows of a struct's array field at statically distinct indices, mixing field-then-index projections", (): void => {
@@ -663,7 +663,7 @@ describe("place-projection borrows", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
   });
 });
 
@@ -678,7 +678,7 @@ describe("pattern-derived &/&mut sub-bindings", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("not declared mut");
+    expect(messageOf(diagnostics[0])).toContain("not declared mut");
   });
 
   it("rejects a let-destructuring &mut sub-binding overlapping a later plain &mut borrow of the same scrutinee", (): void => {
@@ -693,7 +693,7 @@ describe("pattern-derived &/&mut sub-bindings", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
   });
 
   it("rejects an if-let &mut sub-binding overlapping a later plain &mut borrow of the same scrutinee", (): void => {
@@ -711,7 +711,7 @@ describe("pattern-derived &/&mut sub-bindings", (): void => {
       }
     `);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Conflicting borrows");
+    expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
   });
 
   it("accepts a let-destructuring &mut sub-binding whose extent ends before a later plain &mut borrow of the same scrutinee", (): void => {

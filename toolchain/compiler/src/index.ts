@@ -7,7 +7,22 @@ export type * from "./parser/ast.js";
 
 export { analyze } from "./semantics/analyzer.js";
 export type { AnalysisResult } from "./semantics/analyzer.js";
-export type { Diagnostic, RelatedSpan } from "./diagnostics/index.js";
+export type {
+  Diagnostic,
+  DiagnosticCode,
+  DiagnosticKind,
+  RelatedLabelKind,
+  RelatedSpan,
+} from "./diagnostics/index.js";
+export {
+  codeOf,
+  errorDiagnosticRaw,
+  messageOf,
+  rawLabel,
+  renderDiagnosticMessage,
+  renderRelatedLabel,
+  warningDiagnosticRaw,
+} from "./diagnostics/index.js";
 
 export { checkBorrows } from "./ownership/borrowck.js";
 

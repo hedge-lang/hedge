@@ -10,7 +10,14 @@
 import { stdout } from "node:process";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
-import { compile, isSome, some, parse, tokenize } from "@hedge-lang/compiler";
+import {
+  compile,
+  isSome,
+  messageOf,
+  some,
+  parse,
+  tokenize,
+} from "@hedge-lang/compiler";
 import type {
   BinaryOperator,
   Block,
@@ -154,7 +161,7 @@ function stripTokenIds(value: unknown): unknown {
 function parseProgram(source: string): Program {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
-  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  assert(isSome(program), messageOf(diagnostics[0], "Parse failed"));
   return program.value;
 }
 
@@ -601,7 +608,7 @@ describe("differential: generated programs", (): void => {
       if (compResult === null) {
         const r = compile(source);
         throw new Error(
-          `Compilation failed: ${r.diagnostics.map((d) => d.message).join("; ")}`,
+          `Compilation failed: ${r.diagnostics.map((d) => messageOf(d)).join("; ")}`,
         );
       }
       expect(compResult).toBe(refResult);

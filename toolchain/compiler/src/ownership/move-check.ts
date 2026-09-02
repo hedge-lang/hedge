@@ -28,8 +28,9 @@ import {
   type Diagnostic,
   type RelatedSpan,
   type DiagnosticCode,
-  errorDiagnostic,
-  warningDiagnostic,
+  errorDiagnosticRaw,
+  warningDiagnosticRaw,
+  rawLabel,
 } from "../diagnostics/index.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
@@ -191,7 +192,7 @@ function emitDiagnostic(
   },
 ): void {
   ctx.diagnostics.push({
-    ...errorDiagnostic(
+    ...errorDiagnosticRaw(
       extra.code,
       message,
       diagnosticSpan(ctx.tokens, tokenId),
@@ -207,7 +208,7 @@ function emitWarning(
   code: DiagnosticCode,
 ): void {
   ctx.diagnostics.push(
-    warningDiagnostic(code, message, diagnosticSpan(ctx.tokens, tokenId)),
+    warningDiagnosticRaw(code, message, diagnosticSpan(ctx.tokens, tokenId)),
   );
 }
 
@@ -331,7 +332,9 @@ function useOrMove(
     case "Unbound":
       emitDiagnostic(ctx, `use of moved value \`${name}\``, pathExpr.tokenId, {
         code: "HEDGE-BORROW-CHECK-003",
-        relatedSpans: [{ span: current.moveSite, label: "moved here" }],
+        relatedSpans: [
+          { span: current.moveSite, label: rawLabel("moved here") },
+        ],
       });
       state.set(id, { kind: "Owned" });
       return;

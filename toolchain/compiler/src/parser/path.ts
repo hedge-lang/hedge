@@ -1,4 +1,4 @@
-import { errorDiagnostic } from "../diagnostics/index.js";
+import { errorDiagnosticRaw } from "../diagnostics/index.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some } from "../option.js";
 import { err, isErr, ok } from "../result.js";
@@ -48,7 +48,7 @@ function parsePathSegmentsWithSelfHead(
     const selfHeadAllowed = allowSelfHead && firstKeyword.value.text === "Self";
     if (!selfHeadAllowed) {
       return err(
-        errorDiagnostic(
+        errorDiagnosticRaw(
           "HEDGE-PARSE-004",
           unsupportedPathKeywordMessage(firstKeyword.value.text),
           some(firstKeyword.value.span),
@@ -84,13 +84,17 @@ function parsePathSegmentsWithSelfHead(
     if (nextToken?.kind !== "ident") {
       if (nextToken?.kind === "keyword" && nextToken.text === "mut") {
         return err(
-          errorDiagnostic("HEDGE-PARSE-004", MUT_MESSAGE, some(nextToken.span)),
+          errorDiagnosticRaw(
+            "HEDGE-PARSE-004",
+            MUT_MESSAGE,
+            some(nextToken.span),
+          ),
         );
       }
       const keyword = pathKeywordAt(tokens, cursor);
       if (isSome(keyword)) {
         return err(
-          errorDiagnostic(
+          errorDiagnosticRaw(
             "HEDGE-PARSE-004",
             unsupportedPathKeywordMessage(keyword.value.text),
             some(keyword.value.span),
@@ -106,7 +110,7 @@ function parsePathSegmentsWithSelfHead(
       const span =
         nextToken !== undefined ? some(nextToken.span) : none<Span>();
       return err(
-        errorDiagnostic(
+        errorDiagnosticRaw(
           "HEDGE-PARSE-001",
           `Expected identifier after "::", found ${foundDesc}`,
           span,

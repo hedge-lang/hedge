@@ -1,8 +1,8 @@
 import { assert, assertNever } from "../assert.js";
 import {
   type Diagnostic,
-  errorDiagnostic,
-  warningDiagnostic,
+  errorDiagnosticRaw,
+  warningDiagnosticRaw,
 } from "../diagnostics/index.js";
 import { resolveEscape } from "../lexer/escape.js";
 import type { Token, TokenKind } from "../lexer/token.js";
@@ -515,7 +515,7 @@ function parseTupleOrGroup(
   if (tokens[cursor]?.kind !== "comma") {
     const tok = tokens[cursor];
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-001",
         `Expected ',' or ')' after expression in parentheses`,
         tok !== undefined ? some(tok.span) : none(),
@@ -590,7 +590,7 @@ function parseArrayListForm(
   if (tokens[cursor]?.kind !== "comma" && tokens[cursor]?.kind !== "rbracket") {
     const tok = tokens[cursor];
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-001",
         `Expected ',', ';', or ']' after expression in array literal`,
         tok !== undefined ? some(tok.span) : none(),
@@ -747,7 +747,7 @@ function parseElseClause(
     });
   }
   return err(
-    errorDiagnostic(
+    errorDiagnosticRaw(
       "HEDGE-PARSE-001",
       `Expected 'if' or '{' after 'else'`,
       afterElse !== undefined ? some(afterElse.span) : none(),
@@ -771,7 +771,7 @@ function parseIfExpression(
   const thenTok = tokens[condResult.value.next];
   if (thenTok === undefined || thenTok.kind !== "lbrace") {
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-001",
         `Expected '{' to start if body`,
         thenTok !== undefined ? some(thenTok.span) : none(),
@@ -832,7 +832,7 @@ function parseWhileExpression(
   const bodyTok = tokens[condResult.value.next];
   if (bodyTok?.kind !== "lbrace") {
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-001",
         `Expected '{' to start while body`,
         bodyTok !== undefined ? some(bodyTok.span) : none(),
@@ -880,7 +880,7 @@ function parseMatchArm(
   const arrowTok = tokens[cursor];
   if (arrowTok?.kind !== "fat_arrow") {
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-001",
         `Expected '=>' in match arm`,
         arrowTok !== undefined ? some(arrowTok.span) : none(),
@@ -938,7 +938,7 @@ function parseMatchExpression(
     const tok = tokens[cursor];
     if (tok === undefined || tok.kind === "eof") {
       return err(
-        errorDiagnostic(
+        errorDiagnosticRaw(
           "HEDGE-PARSE-002",
           "Expected '}' to close match expression, found end of input",
           none(),
@@ -964,7 +964,7 @@ function parseMatchExpression(
     const nextTok = tokens[cursor];
     if (nextTok === undefined || nextTok.kind === "eof") {
       return err(
-        errorDiagnostic(
+        errorDiagnosticRaw(
           "HEDGE-PARSE-002",
           "Expected '}' to close match expression, found end of input",
           none(),
@@ -972,7 +972,7 @@ function parseMatchExpression(
       );
     }
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-001",
         `Expected ',' between match arms`,
         some(nextTok.span),
@@ -1012,7 +1012,7 @@ function parseStructUpdateSpread(
   if (isErr(baseResult)) return baseResult;
   cursor = baseResult.value.next;
   diagnostics.push(
-    warningDiagnostic(
+    warningDiagnosticRaw(
       "HEDGE-UNSUPPORTED-001",
       "struct update expression (`..base`) is not yet supported in semantic analysis",
       some(spreadTok.span),
@@ -1022,7 +1022,7 @@ function parseStructUpdateSpread(
   if (tokens[cursor]?.kind !== "rbrace") {
     const tok = tokens[cursor];
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-001",
         `Expected '}' after struct update expression; spread must be last`,
         tok !== undefined ? some(tok.span) : none(),
@@ -1108,7 +1108,7 @@ function parseStructExpression(
   const closeTok = tokens[cursor];
   if (closeTok?.kind !== "rbrace") {
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-001",
         `Expected '}' to close struct expression`,
         closeTok !== undefined ? some(closeTok.span) : none(),
@@ -1166,7 +1166,7 @@ function parseTurbofishTypeArguments(
   if (argsResult.value.cursor.pendingCloseHalf) {
     const strayToken = tokens[argsResult.value.cursor.next];
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-005",
         "unexpected extra '>' after turbofish type argument list",
         strayToken !== undefined ? some(strayToken.span) : none(),
@@ -1324,7 +1324,7 @@ function parsePrimary(
   const loopKeyword = loopKeywordAt(tokens, pos);
   if (isSome(loopKeyword)) {
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-004",
         unsupportedLoopMessage(loopKeyword.value.token.text),
         some(loopKeyword.value.token.span),
@@ -1389,7 +1389,7 @@ function parsePrimary(
   }
 
   return err(
-    errorDiagnostic(
+    errorDiagnosticRaw(
       "HEDGE-PARSE-001",
       `Expected an expression, found "${token.kind}" at offset ${token.span.start}`,
       some(token.span),
@@ -1420,7 +1420,7 @@ function parseArguments(
     const cur = tokens[cursor];
     if (cur === undefined || cur.kind === "eof") {
       return err(
-        errorDiagnostic(
+        errorDiagnosticRaw(
           "HEDGE-PARSE-001",
           "Expected ')' to close argument list",
           none(),
@@ -1510,7 +1510,7 @@ function parseInfixField(
   if (hadTurbofish) {
     const badToken = tokens[afterTurbofish];
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-001",
         `expected '(' after generic arguments in method position, found "${badToken?.kind ?? "end of input"}"`,
         badToken !== undefined ? some(badToken.span) : none(),
@@ -1540,7 +1540,7 @@ function parseInfixIndex(
   const tok = tokens[cursor];
   if (tok === undefined || tok.kind === "eof" || tok.kind === "rbracket") {
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-001",
         `Expected an expression inside '[...]'`,
         tok !== undefined && tok.kind !== "eof" ? some(tok.span) : none(),
@@ -1606,7 +1606,7 @@ function parseInfixBinary(
         nextInfix.leftBp === infix.leftBp
       ) {
         return err(
-          errorDiagnostic(
+          errorDiagnosticRaw(
             "HEDGE-PARSE-003",
             `cannot chain '${infix.sigil}' with '${nextInfix.sigil}'`,
             some(peek.span),
@@ -1670,7 +1670,7 @@ function parseRangeEnd(
   if (isRangeEndTerminator(afterOp, allowStruct)) {
     if (inclusive) {
       return err(
-        errorDiagnostic(
+        errorDiagnosticRaw(
           "HEDGE-PARSE-001",
           "Expected an expression after '..='",
           afterOp !== undefined && afterOp.kind !== "eof"
@@ -1705,7 +1705,7 @@ function checkNoChainedRange(
   if (nextInfix?.kind !== "range") return ok(undefined);
   const sigil = inclusive ? "..=" : "..";
   return err(
-    errorDiagnostic(
+    errorDiagnosticRaw(
       "HEDGE-PARSE-003",
       `cannot chain '${sigil}' with '${nextInfix.sigil}'`,
       some(peek.span),

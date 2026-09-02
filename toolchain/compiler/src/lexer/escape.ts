@@ -1,5 +1,5 @@
 import type { Diagnostic } from "../diagnostics/index.js";
-import { errorDiagnostic } from "../diagnostics/index.js";
+import { errorDiagnosticRaw } from "../diagnostics/index.js";
 import { some } from "../option.js";
 import { isHexDigit } from "./int.js";
 import type { Token } from "./token.js";
@@ -13,7 +13,11 @@ function escapeError(
   message: string,
 ): null {
   diagnostics.push(
-    errorDiagnostic("HEDGE-LEX-008", message, some({ start: tokenStart, end })),
+    errorDiagnosticRaw(
+      "HEDGE-LEX-008",
+      message,
+      some({ start: tokenStart, end }),
+    ),
   );
   tokens.push({
     kind: "error",

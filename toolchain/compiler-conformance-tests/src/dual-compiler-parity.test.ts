@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 
-import { compile, isSome } from "@hedge-lang/compiler";
+import { compile, isSome, messageOf } from "@hedge-lang/compiler";
 import { describe, expect, it } from "vitest";
 
 import { shellSplit } from "./shell-split.js";
@@ -54,7 +54,7 @@ function compileWithBootstrap(source: string): ParityCompileOutput {
       : null;
   const diagnostics = result.diagnostics.map((diagnostic) => ({
     severity: diagnostic.severity,
-    message: diagnostic.message,
+    message: messageOf(diagnostic),
     spanKind: diagnostic.span.kind,
     code: extractDiagnosticCode(diagnostic),
   }));

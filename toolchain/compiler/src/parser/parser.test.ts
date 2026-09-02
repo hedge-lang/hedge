@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { messageOf } from "../diagnostics/index.js";
 import { assert } from "../assert.js";
 import { isNone, isSome, none, some } from "../option.js";
 import { parse } from "./parser.js";
@@ -9,7 +10,7 @@ import type { Program } from "./ast.js";
 function parseProgram(source: string): Program {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
-  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  assert(isSome(program), messageOf(diagnostics[0], "Parse failed"));
   return program.value;
 }
 
@@ -373,7 +374,7 @@ describe("path expressions", (): void => {
   it("returns an error for a trailing path separator", (): void => {
     const result = parse(tokenize("foo::;").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain(
+    expect(messageOf(result.diagnostics[0])).toContain(
       'Expected identifier after "::"',
     );
   });
@@ -382,7 +383,7 @@ describe("path expressions", (): void => {
     const { program, diagnostics } = parse(tokenize("::;").tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("Expected an identifier");
+    expect(messageOf(diagnostics[0])).toContain("Expected an identifier");
   });
 });
 
@@ -395,7 +396,7 @@ describe("self/super/Self path segment diagnostics", (): void => {
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
     expect(diagnostics[0].severity).toBe("error");
-    expect(diagnostics[0].message).toBe(`\`${kw}\` is not yet supported`);
+    expect(messageOf(diagnostics[0])).toBe(`\`${kw}\` is not yet supported`);
     expect(diagnostics[0].span).toEqual(some(keyword.span));
   }
 
@@ -580,7 +581,7 @@ describe("type annotations", (): void => {
   it("returns an error for an unsupported type syntax", (): void => {
     const result = parse(tokenize("let x: [i32];").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "slice types (`[T]`) are not yet supported",
     );
   });
@@ -594,7 +595,7 @@ describe("type annotation error diagnostics", (): void => {
     const result = parse(tokens);
     expect(result.program).toEqual(none());
     expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "slice types (`[T]`) are not yet supported",
     );
     expect(result.diagnostics[0]?.span).toEqual(some(lbracket.span));
@@ -607,7 +608,7 @@ describe("type annotation error diagnostics", (): void => {
     const result = parse(tokens);
     expect(result.program).toEqual(none());
     expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "the never type (`!`) is not yet supported",
     );
     expect(result.diagnostics[0]?.span).toEqual(some(bang.span));
@@ -823,7 +824,7 @@ describe("generic type arguments - type position", (): void => {
     const { diagnostics, program } = parse(tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "generic type arguments are not yet supported",
     );
     expect(diagnostics[0].span).toEqual(some(pathSep.span));
@@ -836,7 +837,7 @@ describe("generic type arguments - type position", (): void => {
     const { program, diagnostics } = parse(tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "generic type arguments are not yet supported",
     );
     expect(diagnostics[0].span).toEqual(some(lt.span));
@@ -886,7 +887,7 @@ describe("lifetime guardrail - generic type argument position", (): void => {
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
     expect(diagnostics[0].severity).toBe("error");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "lifetime arguments are not yet supported",
     );
     expect(diagnostics[0].span).toEqual(some(lt.span));
@@ -899,7 +900,7 @@ describe("lifetime guardrail - generic type argument position", (): void => {
     const { diagnostics, program } = parse(tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "lifetime arguments are not yet supported",
     );
     expect(diagnostics[0].span).toEqual(some(lt.span));
@@ -912,7 +913,7 @@ describe("lifetime guardrail - generic type argument position", (): void => {
     const { diagnostics, program } = parse(tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "lifetime arguments are not yet supported",
     );
     expect(diagnostics[0].span).toEqual(some(pathSep.span));
@@ -972,7 +973,7 @@ describe("struct declarations", (): void => {
   it("rejects a struct with no body at all", (): void => {
     const result = parse(tokenize("struct Foo").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       'expected struct body (`{`, `(`, or `;`), found "eof"',
     );
   });
@@ -980,7 +981,7 @@ describe("struct declarations", (): void => {
   it("rejects a struct whose body starts with an unexpected token", (): void => {
     const result = parse(tokenize("struct Foo = 1;").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       'expected struct body (`{`, `(`, or `;`), found "eq"',
     );
   });
@@ -988,7 +989,7 @@ describe("struct declarations", (): void => {
   it("rejects a tuple struct missing its trailing semicolon", (): void => {
     const result = parse(tokenize("struct Foo(i32)").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       'Expected semi, found "eof" at offset 15',
     );
   });
@@ -1239,7 +1240,7 @@ describe("struct declarations", (): void => {
     const result = parse(tokens);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "tuple types are not yet supported",
     );
   });
@@ -1716,7 +1717,7 @@ describe("enum declarations", (): void => {
     const { program, diagnostics } = parse(tokens);
     assert(isNone(program), "Expected no program to come back");
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("rbrace");
+    expect(messageOf(diagnostics[0])).toContain("rbrace");
   });
 
   it("a missing closing brace immediately followed by a sibling declaration recovers: the sibling still parses, with exactly one diagnostic", (): void => {
@@ -1724,7 +1725,7 @@ describe("enum declarations", (): void => {
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("rbrace");
+    expect(messageOf(diagnostics[0])).toContain("rbrace");
     expect(program.value.items).toMatchObject([
       {
         kind: "Enum",
@@ -1745,7 +1746,7 @@ describe("enum declarations", (): void => {
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("':'");
+    expect(messageOf(diagnostics[0])).toContain("':'");
     expect(program.value.items).toMatchObject([
       {
         kind: "Enum",
@@ -1766,7 +1767,7 @@ describe("enum declarations", (): void => {
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("identifier");
+    expect(messageOf(diagnostics[0])).toContain("identifier");
     expect(program.value.items).toMatchObject([
       {
         kind: "Enum",
@@ -1781,7 +1782,7 @@ describe("enum declarations", (): void => {
     const { program, diagnostics } = parse(tokens);
     assert(isNone(program), "Expected no program to come back");
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("identifier");
+    expect(messageOf(diagnostics[0])).toContain("identifier");
   });
 
   it("parses a local enum declaration inside a function body", (): void => {
@@ -1832,8 +1833,8 @@ describe("enum declarations", (): void => {
     const { program, diagnostics } = parse(tokens);
     assert(isNone(program), "Expected no program to come back");
     expect(diagnostics).toHaveLength(2);
-    expect(diagnostics[0]?.message).toContain("rparen");
-    expect(diagnostics[1]?.message).toContain("rbrace");
+    expect(messageOf(diagnostics[0])).toContain("rparen");
+    expect(messageOf(diagnostics[1])).toContain("rbrace");
   });
 
   it("parses a generic type inside a variant's tuple field (Vec<T>), matching the same behavior on a plain struct field", (): void => {
@@ -1908,21 +1909,21 @@ describe("const declarations", (): void => {
     const result = parse(tokenize("const N = 3;").tokens);
     expect(result.program).toEqual(none());
     assert(result.diagnostics[0] !== undefined, "expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("colon");
+    expect(messageOf(result.diagnostics[0])).toContain("colon");
   });
 
   it("rejects a const declaration missing its initializer", (): void => {
     const result = parse(tokenize("const N: usize;").tokens);
     expect(result.program).toEqual(none());
     assert(result.diagnostics[0] !== undefined, "expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("eq");
+    expect(messageOf(result.diagnostics[0])).toContain("eq");
   });
 
   it("rejects a const declaration missing its trailing semicolon", (): void => {
     const result = parse(tokenize("const N: usize = 3").tokens);
     expect(result.program).toEqual(none());
     assert(result.diagnostics[0] !== undefined, "expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("semi");
+    expect(messageOf(result.diagnostics[0])).toContain("semi");
   });
 });
 
@@ -1961,7 +1962,7 @@ describe("static declarations", (): void => {
     const result = parse(tokenize("static mut COUNT: i32 = 0;").tokens);
     expect(result.program).toEqual(none());
     assert(result.diagnostics[0] !== undefined, "expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("mut");
+    expect(messageOf(result.diagnostics[0])).toContain("mut");
   });
 });
 
@@ -2068,7 +2069,7 @@ describe("attribute parsing guardrails", (): void => {
   it("returns an error for an attribute arg that is neither string, int, nor path", (): void => {
     const result = parse(tokenize("#[attr(1.5)] fn f() {}").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain(
+    expect(messageOf(result.diagnostics[0])).toContain(
       "Expected attribute argument",
     );
   });
@@ -2076,13 +2077,13 @@ describe("attribute parsing guardrails", (): void => {
   it("returns an error when an attribute argument list is not closed", (): void => {
     const result = parse(tokenize("#[attr(").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("unterminated");
+    expect(messageOf(result.diagnostics[0])).toContain("unterminated");
   });
 
   it("returns an error when `]` is missing after attribute arguments", (): void => {
     const result = parse(tokenize("#[attr(x) fn f() {}").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("rbracket");
+    expect(messageOf(result.diagnostics[0])).toContain("rbracket");
   });
 });
 
@@ -2090,7 +2091,7 @@ describe("tuple type guardrail", (): void => {
   it("returns an error for a parenthesized non-unit type", (): void => {
     const result = parse(tokenize("let x: (i32);").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "tuple types are not yet supported",
     );
   });
@@ -2098,8 +2099,8 @@ describe("tuple type guardrail", (): void => {
   it("returns a clear error (not 'tuple types') for an unclosed ( in type position", (): void => {
     const result = parse(tokenize("let x: (").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).not.toContain("tuple");
-    expect(result.diagnostics[0]?.message).toContain(")");
+    expect(messageOf(result.diagnostics[0])).not.toContain("tuple");
+    expect(messageOf(result.diagnostics[0])).toContain(")");
   });
 
   it("still parses the unit type `()` successfully", (): void => {
@@ -2114,13 +2115,13 @@ describe("visibility guardrails", (): void => {
   it("returns an error for pub on a let statement", (): void => {
     const result = parse(tokenize("pub let x = 1;").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("let");
+    expect(messageOf(result.diagnostics[0])).toContain("let");
   });
 
   it("rejects pub(self) as not yet supported", (): void => {
     const result = parse(tokenize("pub(self) struct Foo;").tokens);
     expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "`pub(self)` visibility is not yet supported",
     );
   });
@@ -2128,7 +2129,7 @@ describe("visibility guardrails", (): void => {
   it("rejects pub(super) as not yet supported", (): void => {
     const result = parse(tokenize("pub(super) struct Foo;").tokens);
     expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "`pub(super)` visibility is not yet supported",
     );
   });
@@ -2136,7 +2137,7 @@ describe("visibility guardrails", (): void => {
   it("rejects a visibility qualifier before a bare expression", (): void => {
     const result = parse(tokenize("pub 42;").tokens);
     expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toContain("visibility");
+    expect(messageOf(result.diagnostics[0])).toContain("visibility");
   });
 });
 
@@ -2175,13 +2176,13 @@ describe("identifiers", (): void => {
     it("rejects a hard keyword as a function name", (): void => {
       const result = parse(tokenize("fn fn() {}").tokens);
       expect(result.program).toEqual(none());
-      expect(result.diagnostics[0]?.message).toContain("identifier");
+      expect(messageOf(result.diagnostics[0])).toContain("identifier");
     });
 
     it("rejects a hard keyword as a let binding name", (): void => {
       const result = parse(tokenize("let fn = 1;").tokens);
       expect(result.program).toEqual(none());
-      expect(result.diagnostics[0]?.message).toContain("identifier");
+      expect(messageOf(result.diagnostics[0])).toContain("identifier");
     });
 
     const ALL_HARD_KEYWORDS = Array.from(HARD_KEYWORDS);
@@ -2194,7 +2195,7 @@ describe("identifiers", (): void => {
           isNone(result.program),
           `expected parse("fn ${kw}() {}") to fail`,
         );
-        expect(result.diagnostics[0]?.message).toContain(kw);
+        expect(messageOf(result.diagnostics[0])).toContain(kw);
       },
     );
 
@@ -2215,7 +2216,7 @@ describe("identifiers", (): void => {
           isNone(result.program),
           `expected parse("let ${kw} = 1;") to fail`,
         );
-        expect(result.diagnostics[0]?.message).toContain(kw);
+        expect(messageOf(result.diagnostics[0])).toContain(kw);
       },
     );
 
@@ -2247,7 +2248,7 @@ describe("identifiers", (): void => {
     it("rejects mut as a function name with a diagnostic", (): void => {
       const result = parse(tokenize("fn mut() {}").tokens);
       expect(result.program).toEqual(none());
-      expect(result.diagnostics[0]?.message).toContain("mut");
+      expect(messageOf(result.diagnostics[0])).toContain("mut");
     });
 
     it.each(["mod", "box", "macro", "yield"])(
@@ -2255,7 +2256,7 @@ describe("identifiers", (): void => {
       (kw) => {
         const result = parse(tokenize(`let ${kw} = 1;`).tokens);
         expect(result.program).toEqual(none());
-        expect(result.diagnostics[0]?.message).toContain("keyword");
+        expect(messageOf(result.diagnostics[0])).toContain("keyword");
       },
     );
   });
@@ -2323,7 +2324,7 @@ describe("identifiers", (): void => {
       const { program, diagnostics } = parse(tokens);
       assert(
         isSome(program),
-        diagnostics[0]?.message ?? "expected program to compile",
+        messageOf(diagnostics[0], "expected program to compile"),
       );
       const stmt = program.value.items.find((s) => s.kind === "LetStatement");
       assert(stmt !== undefined, "expected LetStatement");
@@ -2339,7 +2340,7 @@ describe("identifiers", (): void => {
     it("identifier tokenId in a function declaration points to the name token", (): void => {
       const { tokens } = tokenize("fn foo() {}");
       const { program, diagnostics } = parse(tokens);
-      assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+      assert(isSome(program), messageOf(diagnostics[0], "Parse failed"));
       const fn_ = program.value.items[0];
       assert(fn_?.kind === "Function", "expected Function");
       const { tokenId } = fn_.signature.name;
@@ -2353,7 +2354,7 @@ describe("identifiers", (): void => {
     it("identifier tokenId in an expression points to the name token", (): void => {
       const { tokens } = tokenize("foo;");
       const { program, diagnostics } = parse(tokens);
-      assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+      assert(isSome(program), messageOf(diagnostics[0], "Parse failed"));
       const expr = program.value.items[0];
       assert(
         expr?.kind === "ExpressionStatement",
@@ -2658,7 +2659,7 @@ describe("core patterns", (): void => {
     const result = parse(tokens);
     expect(result.program).toEqual(none());
     expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toContain("wildcard");
+    expect(messageOf(result.diagnostics[0])).toContain("wildcard");
     expect(result.diagnostics[0]?.span).toEqual(some(mutToken.span));
   });
 
@@ -2752,7 +2753,7 @@ describe("core patterns", (): void => {
       tokenize("fn f(&Point { x, y }: Point) {}").tokens,
     );
     expect(isSome(program)).toBe(true);
-    expect(diagnostics[0]?.message).toContain(
+    expect(messageOf(diagnostics[0])).toContain(
       "cannot be applied to a struct, tuple-struct, or path pattern",
     );
   });
@@ -2762,7 +2763,7 @@ describe("core patterns", (): void => {
       tokenize("let &mut Pair(a, b) = pair;").tokens,
     );
     expect(program).toEqual(none());
-    expect(diagnostics[0]?.message).toContain(
+    expect(messageOf(diagnostics[0])).toContain(
       "cannot be applied to a struct, tuple-struct, or path pattern",
     );
   });
@@ -2772,7 +2773,7 @@ describe("core patterns", (): void => {
       tokenize("fn f() { match m { mut Message::Quit => 0 } }").tokens,
     );
     expect(program).toEqual(none());
-    expect(diagnostics[0]?.message).toContain(
+    expect(messageOf(diagnostics[0])).toContain(
       "`mut` cannot be applied to a fieldless pattern",
     );
   });
@@ -2887,7 +2888,7 @@ describe("core patterns", (): void => {
   it("gives the MUT_MESSAGE for fn f(mut: i32) {} (mut used as a param name)", (): void => {
     const result = parse(tokenize("fn f(mut: i32) {}").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain(
+    expect(messageOf(result.diagnostics[0])).toContain(
       "The keyword `mut` is reserved",
     );
   });
@@ -2900,7 +2901,7 @@ describe("core patterns", (): void => {
     assert(mutToken !== undefined, "Expected to find a mut token");
     const result = parse(tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain(
+    expect(messageOf(result.diagnostics[0])).toContain(
       "The keyword `mut` is reserved",
     );
     expect(result.diagnostics[0]?.span).toEqual(some(mutToken.span));
@@ -2963,13 +2964,13 @@ describe("core patterns", (): void => {
   it("rejects `&_`, since a byRef sigil cannot apply to the wildcard pattern", (): void => {
     const result = parse(tokenize("match x { &_ => 1 }").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("wildcard");
+    expect(messageOf(result.diagnostics[0])).toContain("wildcard");
   });
 
   it("rejects `&mut _`, since a byRef sigil cannot apply to the wildcard pattern", (): void => {
     const result = parse(tokenize("match x { &mut _ => 1 }").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("wildcard");
+    expect(messageOf(result.diagnostics[0])).toContain("wildcard");
   });
 
   it("parses `n @ 1..=5` storing both the binding name and the sub-pattern", (): void => {
@@ -3266,13 +3267,13 @@ describe("missing brace diagnostics", (): void => {
   it("produces a diagnostic when the closing brace is missing", (): void => {
     const result = parse(tokenize("fn f() { let x = 1;").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("}");
+    expect(messageOf(result.diagnostics[0])).toContain("}");
   });
 
   it("produces a diagnostic when the opening brace is missing", (): void => {
     const result = parse(tokenize("fn f() let x = 1; }").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("lbrace");
+    expect(messageOf(result.diagnostics[0])).toContain("lbrace");
   });
 });
 
@@ -3392,7 +3393,7 @@ describe("parse errors - missing tokens", (): void => {
   it("errors on a let statement with a pattern-starting token that is neither an identifier nor a literal", (): void => {
     const result = parse(tokenize("let + = 1;").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("identifier");
+    expect(messageOf(result.diagnostics[0])).toContain("identifier");
   });
 
   it("errors on a function declaration truncated at EOF with neither a body brace nor a semicolon", (): void => {
@@ -3451,7 +3452,7 @@ describe("unsupported type syntax in additional positions", (): void => {
   it("rejects a pointer type *i32 in type position", (): void => {
     const result = parse(tokenize("let x: *i32;").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "expected a type, found `star`",
     );
   });
@@ -3462,7 +3463,7 @@ describe("unsupported type syntax in additional positions", (): void => {
     assert(lifetime !== undefined, "Expected to find a lifetime token");
     const result = parse(tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "lifetime annotations are not yet supported",
     );
     expect(result.diagnostics[0]?.span).toEqual(some(lifetime.span));
@@ -3471,7 +3472,7 @@ describe("unsupported type syntax in additional positions", (): void => {
   it("rejects a named lifetime 'static in type position", (): void => {
     const result = parse(tokenize("let x: 'static;").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "lifetime annotations are not yet supported",
     );
   });
@@ -3479,7 +3480,7 @@ describe("unsupported type syntax in additional positions", (): void => {
   it("rejects an anonymous lifetime '_ in type position", (): void => {
     const result = parse(tokenize("let x: '_;").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "lifetime annotations are not yet supported",
     );
   });
@@ -3487,7 +3488,7 @@ describe("unsupported type syntax in additional positions", (): void => {
   it("does not misparse a char literal as a lifetime in type position (regression)", (): void => {
     const result = parse(tokenize("let x: 'a';").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "expected a type, found `char`",
     );
   });
@@ -3707,7 +3708,7 @@ describe("keyword edge cases", (): void => {
   it("foo::fn gives a diagnostic naming fn", (): void => {
     const result = parse(tokenize("foo::fn;").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("fn");
+    expect(messageOf(result.diagnostics[0])).toContain("fn");
   });
 });
 
@@ -3881,7 +3882,7 @@ describe("method receivers", (): void => {
     const { tokens } = tokenize(source);
     const { program, diagnostics } = parse(tokens);
     expect(diagnostics).toEqual([]);
-    assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+    assert(isSome(program), messageOf(diagnostics[0], "Parse failed"));
     return program.value;
   }
 
@@ -4016,7 +4017,7 @@ describe("method receivers", (): void => {
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].severity).toBe("error");
-    expect(diagnostics[0].message).toContain(
+    expect(messageOf(diagnostics[0])).toContain(
       'Expected an identifier, found keyword "self"',
     );
   });
@@ -4034,7 +4035,7 @@ describe("method receivers", (): void => {
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].severity).toBe("error");
-    expect(diagnostics[0].message).toContain("receiver");
+    expect(messageOf(diagnostics[0])).toContain("receiver");
   });
 });
 
@@ -4043,7 +4044,7 @@ describe("Self as a type", (): void => {
     const { tokens } = tokenize(source);
     const { program, diagnostics } = parse(tokens);
     expect(diagnostics).toEqual([]);
-    assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+    assert(isSome(program), messageOf(diagnostics[0], "Parse failed"));
     return program.value;
   }
 
@@ -4189,7 +4190,7 @@ describe("unsupported item keywords", (): void => {
     const { tokens } = tokenize(`${keyword} Foo {}`);
     const { diagnostics } = parse(tokens);
     expect(diagnostics[0]?.severity).toBe("error");
-    expect(diagnostics[0]?.message).toBe(message);
+    expect(messageOf(diagnostics[0])).toBe(message);
   });
 
   it.each([
@@ -4202,7 +4203,7 @@ describe("unsupported item keywords", (): void => {
       const { program, diagnostics } = parse(tokens);
       assert(isSome(program), "Expected a program to come back");
       expect(diagnostics[0]?.severity).toBe("error");
-      expect(diagnostics[0]?.message).toBe(message);
+      expect(messageOf(diagnostics[0])).toBe(message);
       expect(program.value.items).toMatchObject([
         {
           kind: "Function",
@@ -4219,7 +4220,7 @@ describe("unsupported item keywords", (): void => {
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics[0]?.severity).toBe("error");
-    expect(diagnostics[0]?.message).toBe("`async` is not yet supported");
+    expect(messageOf(diagnostics[0])).toBe("`async` is not yet supported");
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
@@ -4240,7 +4241,7 @@ describe("unsupported item keywords", (): void => {
       const { program, diagnostics } = parse(tokens);
       assert(isSome(program), "Expected a program to come back");
       expect(diagnostics[0]?.severity).toBe("error");
-      expect(diagnostics[0]?.message).toBe(message);
+      expect(messageOf(diagnostics[0])).toBe(message);
       expect(program.value.items).toMatchObject([
         {
           kind: "Function",
@@ -4255,7 +4256,7 @@ describe("unsupported item keywords", (): void => {
   it("parses a match used as a let initializer (`let y = match x {};`)", (): void => {
     const { tokens } = tokenize("let y = match x {};");
     const { program, diagnostics } = parse(tokens);
-    assert(isSome(program), diagnostics[0]?.message ?? "Expected a program");
+    assert(isSome(program), messageOf(diagnostics[0], "Expected a program"));
     expect(program.value.items).toMatchObject([
       {
         kind: "LetStatement",
@@ -4292,7 +4293,7 @@ describe("unsupported item keywords", (): void => {
       const { program, diagnostics } = parse(tokens);
       assert(isNone(program), "Expected no program to come back");
       assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(diagnostics[0].message).toBe(message);
+      expect(messageOf(diagnostics[0])).toBe(message);
     },
   );
 
@@ -4301,7 +4302,7 @@ describe("unsupported item keywords", (): void => {
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toBe("`use` is not yet supported");
+    expect(messageOf(diagnostics[0])).toBe("`use` is not yet supported");
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
@@ -4321,7 +4322,7 @@ describe("item error recovery", (): void => {
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].severity).toBe("error");
-    expect(diagnostics[0].message).toContain(":");
+    expect(messageOf(diagnostics[0])).toContain(":");
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
@@ -4340,8 +4341,8 @@ describe("item error recovery", (): void => {
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].severity).toBe("error");
-    expect(diagnostics[0].message).toContain("identifier");
-    expect(diagnostics[0].message).toContain("colon");
+    expect(messageOf(diagnostics[0])).toContain("identifier");
+    expect(messageOf(diagnostics[0])).toContain("colon");
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
@@ -4472,7 +4473,7 @@ describe("item error recovery", (): void => {
     const { tokens } = tokenize("fn f(x: i32, y");
     const { program, diagnostics } = parse(tokens);
     assert(isNone(program), "Expected no program to come back");
-    expect(diagnostics.some((d) => d.message.includes("eof"))).toBe(true);
+    expect(diagnostics.some((d) => messageOf(d).includes("eof"))).toBe(true);
   });
 
   it("recovers so a sibling function after a malformed parameter list still parses", (): void => {
@@ -4604,7 +4605,7 @@ describe("item error recovery", (): void => {
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.severity).toBe("error");
-    expect(diagnostics[0]?.message).toContain(":");
+    expect(messageOf(diagnostics[0])).toContain(":");
     expect(program.value.items).toMatchObject([
       { kind: "Struct", name: { text: "Foo" }, body: { fields: [] } },
     ]);
@@ -4627,7 +4628,7 @@ describe("item error recovery", (): void => {
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.severity).toBe("error");
-    expect(diagnostics[0]?.message).toContain(":");
+    expect(messageOf(diagnostics[0])).toContain(":");
     expect(program.value.items).toMatchObject([
       { kind: "Struct", name: { text: "Foo" }, body: { fields: [] } },
     ]);
@@ -5314,7 +5315,7 @@ describe("generic parameters: declaration position", (): void => {
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("generic parameter list");
+    expect(messageOf(diagnostics[0])).toContain("generic parameter list");
   });
 
   it("fn foo<T (unterminated to EOF) fails fast without hanging", (): void => {
@@ -5368,7 +5369,7 @@ describe("generic parameters: declaration position", (): void => {
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("extra");
+    expect(messageOf(diagnostics[0])).toContain("extra");
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
@@ -5385,7 +5386,7 @@ describe("generic parameters: declaration position", (): void => {
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("identifier");
+    expect(messageOf(diagnostics[0])).toContain("identifier");
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
@@ -5482,7 +5483,7 @@ describe("lifetime guardrail - nested and reversed-order generics", (): void => 
     expect(program).toEqual(none());
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "lifetime arguments are not yet supported",
     );
     expect(diagnostics[0].span).toEqual(some(innerLt.span));
@@ -5495,7 +5496,7 @@ describe("lifetime guardrail - nested and reversed-order generics", (): void => 
     const { program, diagnostics } = parse(tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "lifetime annotations are not yet supported",
     );
     expect(diagnostics[0].span).toEqual(some(lifetime.span));
@@ -5689,7 +5690,7 @@ describe("where clauses: function declarations", (): void => {
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "lifetime annotations are not yet supported",
     );
     expect(program.value.items).toMatchObject([
@@ -5709,7 +5710,7 @@ describe("where clauses: function declarations", (): void => {
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("extra");
+    expect(messageOf(diagnostics[0])).toContain("extra");
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
@@ -5915,7 +5916,7 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
       const { program, diagnostics } = parse(tokens);
       assert(isSome(program), "Expected a program to come back");
       expect(diagnostics[0]?.severity).toBe("error");
-      expect(diagnostics[0]?.message).toBe(loopGuardrailMessage(keyword));
+      expect(messageOf(diagnostics[0])).toBe(loopGuardrailMessage(keyword));
       expect(program.value.items).toMatchObject([
         {
           kind: "Function",
@@ -5947,7 +5948,7 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
       expect(diagnostics[0].severity).toBe("error");
-      expect(diagnostics[0].message).toBe(loopGuardrailMessage(keyword));
+      expect(messageOf(diagnostics[0])).toBe(loopGuardrailMessage(keyword));
       assert(isSome(program), "Expected a program to come back");
       expect(program.value.items).toMatchObject([
         {
@@ -5975,13 +5976,15 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     expect(isSome(program)).toBe(true);
     expect(diagnostics).toHaveLength(3);
     assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "`loop` expressions are not yet supported",
     );
     assert(diagnostics[1] !== undefined, "Expected to get diagnostic");
-    expect(diagnostics[1].message).toBe("`while` loops are not yet supported");
+    expect(messageOf(diagnostics[1])).toBe(
+      "`while` loops are not yet supported",
+    );
     assert(diagnostics[2] !== undefined, "Expected to get diagnostic");
-    expect(diagnostics[2].message).toBe("`for` loops are not yet supported");
+    expect(messageOf(diagnostics[2])).toBe("`for` loops are not yet supported");
   });
 
   it("recovers across back-to-back rejected loops with no separator", (): void => {
@@ -5997,7 +6000,7 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     expect(isSome(program)).toBe(true);
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "`loop` expressions are not yet supported",
     );
   });
@@ -6010,7 +6013,7 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     expect(isSome(program)).toBe(true);
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "`loop` expressions are not yet supported",
     );
     assert(isSome(program), "Expected a program to come back");
@@ -6057,7 +6060,7 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     const { program, diagnostics } = parse(tokens);
     assert(isNone(program), "Expected no program to come back");
     assert(diagnostics[0] !== undefined, "Expected a diagnostic to come back");
-    expect(diagnostics[0].message).toContain("end of input");
+    expect(messageOf(diagnostics[0])).toContain("end of input");
   });
 
   it("consumes a redundant trailing semicolon after a rejected loop", (): void => {
@@ -6149,7 +6152,7 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     const { program, diagnostics } = parse(tokens);
     assert(isNone(program), "Expected no program to come back");
     assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "`loop` expressions are not yet supported",
     );
   });
@@ -6165,7 +6168,9 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected program to come back");
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toBe("`while` loops are not yet supported");
+    expect(messageOf(diagnostics[0])).toBe(
+      "`while` loops are not yet supported",
+    );
   });
 
   it("recovers even when a malformed condition has a stray closing bracket", (): void => {
@@ -6177,7 +6182,9 @@ describe("statement-level loop/while/for/label rejection with recovery", (): voi
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected program to come back");
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toBe("`while` loops are not yet supported");
+    expect(messageOf(diagnostics[0])).toBe(
+      "`while` loops are not yet supported",
+    );
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
@@ -6202,7 +6209,7 @@ describe("lifetime vs label disambiguation regression", (): void => {
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "`loop` expressions are not yet supported",
     );
   });
@@ -6220,7 +6227,7 @@ describe("loop/while/for guardrail in nested expression position", (): void => {
       const { program, diagnostics } = parse(tokens);
       assert(isNone(program), "Expected program to be nonexistent");
       assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
-      expect(diagnostics[0].message).toBe(loopGuardrailMessage(keyword));
+      expect(messageOf(diagnostics[0])).toBe(loopGuardrailMessage(keyword));
     },
   );
 
@@ -6235,7 +6242,7 @@ describe("loop/while/for guardrail in nested expression position", (): void => {
       const { program, diagnostics } = parse(tokens);
       assert(isNone(program), "Expected no program to come back");
       assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
-      expect(diagnostics[0].message).toBe(loopGuardrailMessage(keyword));
+      expect(messageOf(diagnostics[0])).toBe(loopGuardrailMessage(keyword));
     },
   );
 
@@ -6250,7 +6257,7 @@ describe("loop/while/for guardrail in nested expression position", (): void => {
       const { program, diagnostics } = parse(tokens);
       assert(isNone(program), "Expected program to be nonexistent");
       assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
-      expect(diagnostics[0].message).toBe(loopGuardrailMessage(keyword));
+      expect(messageOf(diagnostics[0])).toBe(loopGuardrailMessage(keyword));
     },
   );
 
@@ -6265,7 +6272,7 @@ describe("loop/while/for guardrail in nested expression position", (): void => {
       const { program, diagnostics } = parse(tokens);
       assert(isNone(program), "Expected program to be nonexistent");
       assert(diagnostics[0] !== undefined, "Expected to get diagnostic");
-      expect(diagnostics[0].message).toBe(loopGuardrailMessage(keyword));
+      expect(messageOf(diagnostics[0])).toBe(loopGuardrailMessage(keyword));
     },
   );
 
@@ -6286,7 +6293,7 @@ describe("trait declarations", (): void => {
     const { tokens } = tokenize(source);
     const { program, diagnostics } = parse(tokens);
     expect(diagnostics).toEqual([]);
-    assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+    assert(isSome(program), messageOf(diagnostics[0], "Parse failed"));
     return program.value;
   }
 
@@ -6469,7 +6476,7 @@ describe("trait declarations", (): void => {
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].severity).toBe("error");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       'expected a function, associated type, or const in trait body, found keyword "struct"',
     );
   });
@@ -6479,7 +6486,7 @@ describe("trait declarations", (): void => {
     const { program, diagnostics } = parse(tokens);
     assert(isNone(program), "Expected no program to come back");
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       'Expected an identifier, found "eof" at offset 5',
     );
   });
@@ -6536,7 +6543,7 @@ describe("impl declarations", (): void => {
     const { tokens } = tokenize(source);
     const { program, diagnostics } = parse(tokens);
     expect(diagnostics).toEqual([]);
-    assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+    assert(isSome(program), messageOf(diagnostics[0], "Parse failed"));
     return program.value;
   }
 
@@ -6592,7 +6599,7 @@ describe("impl declarations", (): void => {
     const { tokens } = tokenize("impl (i32, i32) {}");
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toBe("tuple types are not yet supported");
+    expect(messageOf(diagnostics[0])).toBe("tuple types are not yet supported");
   });
 
   it("parses an inherent impl with a method", (): void => {
@@ -6715,7 +6722,7 @@ describe("impl declarations", (): void => {
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].severity).toBe("error");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "unexpected item kind 'LetStatement' in impl body",
     );
   });
@@ -6725,7 +6732,7 @@ describe("impl declarations", (): void => {
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].severity).toBe("error");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "unexpected item kind 'ExpressionStatement' in impl body",
     );
   });
@@ -6773,7 +6780,7 @@ describe("impl declarations", (): void => {
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].severity).toBe("error");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "visibility qualifiers are not allowed on impl blocks",
     );
   });
@@ -6783,7 +6790,7 @@ describe("impl declarations", (): void => {
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].severity).toBe("error");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "visibility qualifiers are not allowed on a type alias",
     );
   });
@@ -6849,7 +6856,7 @@ describe("dyn as a type", (): void => {
     const { tokens } = tokenize(source);
     const { program, diagnostics } = parse(tokens);
     expect(diagnostics).toEqual([]);
-    assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+    assert(isSome(program), messageOf(diagnostics[0], "Parse failed"));
     return program.value;
   }
 

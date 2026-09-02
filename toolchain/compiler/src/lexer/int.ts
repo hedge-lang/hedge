@@ -1,5 +1,5 @@
 import type { Diagnostic } from "../diagnostics/index.js";
-import { errorDiagnostic } from "../diagnostics/index.js";
+import { errorDiagnosticRaw } from "../diagnostics/index.js";
 import { none, some, type Option } from "../option.js";
 import { isIdentContinue } from "./ident.js";
 import type { IntSuffix, Token } from "./token.js";
@@ -60,7 +60,7 @@ function numError(
   message: string,
 ): number {
   diagnostics.push(
-    errorDiagnostic("HEDGE-LEX-006", message, some({ start, end })),
+    errorDiagnosticRaw("HEDGE-LEX-006", message, some({ start, end })),
   );
   tokens.push({
     kind: "error",

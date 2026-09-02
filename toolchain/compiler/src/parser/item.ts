@@ -1,4 +1,4 @@
-import { type Diagnostic, errorDiagnostic } from "../diagnostics/index.js";
+import { type Diagnostic, errorDiagnosticRaw } from "../diagnostics/index.js";
 import type { Token, TokenKind } from "../lexer/token.js";
 import { isSome, none, some, unwrapSomeOr, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
@@ -92,7 +92,7 @@ function parseVisibility(
       const scope = scopeToken.text;
       if (scope !== "package") {
         return err(
-          errorDiagnostic(
+          errorDiagnosticRaw(
             "HEDGE-PARSE-004",
             `\`pub(${scope})\` visibility is not yet supported`,
             some(scopeToken.span),
@@ -133,7 +133,7 @@ function parseParam(tokens: readonly Token[], pos: number): PR<Parsed<Param>> {
   if (kindAt(tokens, cursor) !== "colon") {
     const name = unwrapSomeOr(patternBindingName(pattern), "_");
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-001",
         `expected ':' after parameter name '${name}'`,
         spanAt(tokens, cursor),
@@ -224,7 +224,7 @@ function parseLeadingReceiver(
     return ok({ receiver: some(receiver), next: next + 1 });
   }
   return err(
-    errorDiagnostic(
+    errorDiagnosticRaw(
       "HEDGE-PARSE-001",
       "expected ',' or ')' after receiver",
       spanAt(tokens, next),
@@ -522,7 +522,7 @@ function parseGenericParamList(
     }
     const badToken = tokens[afterParam.next];
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-001",
         `expected ',' or '>' in generic parameter list, found "${badToken?.kind ?? "end of input"}"`,
         badToken !== undefined ? some(badToken.span) : none(),
@@ -556,7 +556,7 @@ function parseDeclarationGenerics(
   if (listResult.value.cursor.pendingCloseHalf) {
     const strayToken = tokens[listResult.value.cursor.next];
     diagnostics.push(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-005",
         "unexpected extra '>' after generic parameter list",
         strayToken !== undefined ? some(strayToken.span) : none(),
@@ -612,7 +612,7 @@ function parseWherePredicate(
   if (boundsResult.value.cursor.pendingCloseHalf) {
     const strayToken = tokens[next];
     diagnostics.push(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-005",
         "unexpected extra '>' after trait bound",
         strayToken !== undefined ? some(strayToken.span) : none(),
@@ -838,7 +838,7 @@ function parseNamedField(
   if (tokens[cursor]?.kind !== "colon") {
     const token = tokens[cursor];
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-001",
         `expected ':' after field name '${fieldName.text}'`,
         token !== undefined ? some(token.span) : none(),
@@ -1000,7 +1000,7 @@ function parseStructBody(
     return ok({ node: bodyResult.value.node, next: afterSemi.value });
   }
   return err(
-    errorDiagnostic(
+    errorDiagnosticRaw(
       "HEDGE-PARSE-001",
       `expected struct body (\`{\`, \`(\`, or \`;\`), found "${bodyToken?.kind ?? "end of input"}"`,
       bodyToken !== undefined ? some(bodyToken.span) : none(),
@@ -1467,7 +1467,7 @@ function parseTraitItem(
   const found =
     token.kind === "keyword" ? `keyword "${token.text}"` : `"${token.kind}"`;
   return err(
-    errorDiagnostic(
+    errorDiagnosticRaw(
       "HEDGE-PARSE-001",
       `expected a function, associated type, or const in trait body, found ${found}`,
       some(token.span),
@@ -1559,7 +1559,7 @@ function parseTrait(
     if (boundsResult.value.cursor.pendingCloseHalf) {
       const strayToken = tokens[cursor];
       diagnostics.push(
-        errorDiagnostic(
+        errorDiagnosticRaw(
           "HEDGE-PARSE-005",
           "unexpected extra '>' after supertrait bound",
           strayToken !== undefined ? some(strayToken.span) : none(),
@@ -1621,7 +1621,7 @@ function validateImplBodyItem(tokens: readonly Token[], node: Item): PR<Item> {
   }
   const token = tokens[node.tokenId];
   return err(
-    errorDiagnostic(
+    errorDiagnosticRaw(
       "HEDGE-PARSE-006",
       `unexpected item kind '${node.kind}' in impl body`,
       token !== undefined ? some(token.span) : none(),
@@ -1788,7 +1788,7 @@ function parsePathLedImplTarget(
   if (cursor.pendingCloseHalf) {
     const strayToken = tokens[next];
     diagnostics.push(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-005",
         "unexpected extra '>' after impl target type",
         strayToken !== undefined ? some(strayToken.span) : none(),
@@ -1924,7 +1924,7 @@ function rejectVisibility(
   }
   const visToken = tokens[cursor];
   return err(
-    errorDiagnostic(
+    errorDiagnosticRaw(
       "HEDGE-PARSE-006",
       message,
       visToken !== undefined ? some(visToken.span) : none(),

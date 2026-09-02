@@ -1,7 +1,8 @@
 import { assert, assertNever } from "../assert.js";
 import {
-  errorDiagnostic,
-  warningDiagnostic,
+  errorDiagnosticRaw,
+  warningDiagnosticRaw,
+  rawLabel,
   type Diagnostic,
   type DiagnosticCode,
   type RelatedSpan,
@@ -779,7 +780,7 @@ function emitError(
   relatedSpans?: readonly RelatedSpan[],
 ): void {
   const token = ctx.tokens[tokenId];
-  const diagnostic = errorDiagnostic(
+  const diagnostic = errorDiagnosticRaw(
     code,
     message,
     token !== undefined ? some(token.span) : none(),
@@ -797,7 +798,7 @@ function emitWarning(
   relatedSpans?: readonly RelatedSpan[],
 ): void {
   const token = ctx.tokens[tokenId];
-  const diagnostic = warningDiagnostic(
+  const diagnostic = warningDiagnosticRaw(
     code,
     message,
     token !== undefined ? some(token.span) : none(),
@@ -7857,7 +7858,9 @@ function relatedSpanAt(
   label: string,
 ): readonly RelatedSpan[] {
   const token = ctx.tokens[tokenId];
-  return token === undefined ? [] : [{ span: token.span, label }];
+  return token === undefined
+    ? []
+    : [{ span: token.span, label: rawLabel(label) }];
 }
 
 /** Online Robinson-style unification of one declared type against one

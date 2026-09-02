@@ -1,4 +1,10 @@
-import { compile, isSome, parse, tokenize } from "@hedge-lang/compiler";
+import {
+  compile,
+  isSome,
+  messageOf,
+  parse,
+  tokenize,
+} from "@hedge-lang/compiler";
 import { describe, expect, it } from "vitest";
 
 describe("diagnostic stability", (): void => {
@@ -21,7 +27,7 @@ describe("diagnostic stability", (): void => {
     const result = compile(`fn main() { let x = missing + 1; }`);
     const errors = result.diagnostics.filter((d) => d.severity === "error");
     expect(errors).toHaveLength(1);
-    expect(errors[0]?.message).toContain("missing");
+    expect(messageOf(errors[0])).toContain("missing");
   });
 
   it("parse failure emits at least one error diagnostic and no code", (): void => {
@@ -31,7 +37,8 @@ describe("diagnostic stability", (): void => {
     expect(result.code.kind).toBe("None");
     expect(
       errors.some(
-        (e) => e.message.includes("Expected") && e.message.includes("eof"),
+        (e) =>
+          messageOf(e).includes("Expected") && messageOf(e).includes("eof"),
       ),
     ).toBe(true);
   });
@@ -42,7 +49,7 @@ describe("diagnostic stability", (): void => {
     expect(isSome(program)).toBe(true);
     const warnings = diagnostics.filter((d) => d.severity === "warning");
     expect(warnings.length).toBeGreaterThan(0);
-    expect(warnings[0]?.message).toContain(
+    expect(messageOf(warnings[0])).toContain(
       "immutable binding declared without a value",
     );
   });
@@ -55,7 +62,9 @@ describe("diagnostic stability", (): void => {
     expect(first.diagnostics[0]?.severity).toBe(
       second.diagnostics[0]?.severity,
     );
-    expect(first.diagnostics[0]?.message).toBe(second.diagnostics[0]?.message);
+    expect(messageOf(first.diagnostics[0])).toBe(
+      messageOf(second.diagnostics[0]),
+    );
   });
 
   it("single unresolved identifier reused twice remains bounded in diagnostics", (): void => {
@@ -71,8 +80,8 @@ describe("diagnostic stability", (): void => {
     const firstError = result.diagnostics.find((d) => d.severity === "error");
     expect(firstError).toBeDefined();
     expect(
-      firstError?.message.includes("Expected") ||
-        firstError?.message.includes("expected"),
+      messageOf(firstError).includes("Expected") ||
+        messageOf(firstError).includes("expected"),
     ).toBe(true);
   });
 });

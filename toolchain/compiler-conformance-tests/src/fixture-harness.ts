@@ -10,7 +10,11 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { Diagnostic } from "@hedge-lang/compiler";
+import {
+  type Diagnostic,
+  messageOf,
+  renderRelatedLabel,
+} from "@hedge-lang/compiler";
 import { isSome } from "@hedge-lang/compiler";
 
 import { compileHedgeCode } from "./test-harness.js";
@@ -82,7 +86,7 @@ export function runExecutionFixture(fixture: ExecutionFixture): {
   if (!isSome(result.code) || !isSome(result.code.value.javascript)) {
     throw new Error(
       `execution fixture "${fixture.name}" failed to compile: ${result.diagnostics
-        .map((d) => d.message)
+        .map((d) => messageOf(d))
         .join("; ")}`,
     );
   }
@@ -133,9 +137,11 @@ export function renderDiagnostics(diagnostics: readonly Diagnostic[]): string {
 
 function renderDiagnostic(diagnostic: Diagnostic): string {
   const code = `[${diagnostic.code}]`;
-  const lines = [`${diagnostic.severity}${code}: ${diagnostic.message}`];
+  const lines = [`${diagnostic.severity}${code}: ${messageOf(diagnostic)}`];
   for (const related of diagnostic.relatedSpans) {
-    lines.push(`  = note: ${related.label} at offset ${related.span.start}`);
+    lines.push(
+      `  = note: ${renderRelatedLabel(related.label)} at offset ${related.span.start}`,
+    );
   }
   return lines.join("\n");
 }

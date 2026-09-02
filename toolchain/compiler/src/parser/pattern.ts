@@ -1,4 +1,4 @@
-import { errorDiagnostic } from "../diagnostics/index.js";
+import { errorDiagnosticRaw } from "../diagnostics/index.js";
 import { assert } from "../assert.js";
 import type { Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
@@ -44,7 +44,7 @@ function tryParseRangePatternBound(
     if (nextTok?.kind !== "int" && nextTok?.kind !== "float") {
       return some(
         err(
-          errorDiagnostic(
+          errorDiagnosticRaw(
             "HEDGE-PARSE-001",
             `Expected a numeric literal after "-" in a pattern, found ${
               nextTok === undefined ? "end of input" : `"${nextTok.kind}"`
@@ -160,7 +160,7 @@ function parsePatternNoAlt(
       if (!isSome(endAttempt)) {
         const tok = tokens[afterOp];
         return err(
-          errorDiagnostic(
+          errorDiagnosticRaw(
             "HEDGE-PARSE-001",
             `Expected a literal after "..=" in a range pattern, found ${
               tok === undefined ? "end of input" : `"${tok.kind}"`
@@ -273,7 +273,7 @@ function parseIdentifierRootedPattern(
   if (kindAt(tokens, next) === "path_sep") {
     if (byRef) {
       return err(
-        errorDiagnostic(
+        errorDiagnosticRaw(
           "HEDGE-PARSE-006",
           sigilOnPathMessage,
           spanAt(tokens, pos),
@@ -289,7 +289,7 @@ function parseIdentifierRootedPattern(
   if (ident.text === "_") {
     if (isMut || byRef) {
       return err(
-        errorDiagnostic(
+        errorDiagnosticRaw(
           "HEDGE-PARSE-006",
           byRef
             ? "`&`/`&mut` cannot be applied to the wildcard pattern `_`"
@@ -307,7 +307,7 @@ function parseIdentifierRootedPattern(
   if (kindAt(tokens, next) === "lbrace" || kindAt(tokens, next) === "lparen") {
     if (byRef) {
       return err(
-        errorDiagnostic(
+        errorDiagnosticRaw(
           "HEDGE-PARSE-006",
           sigilOnPathMessage,
           spanAt(tokens, pos),
@@ -475,7 +475,7 @@ function parsePathRootedPatternTail(
   }
   if (mutable) {
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-006",
         "`mut` cannot be applied to a fieldless pattern like a bare unit variant",
         spanAt(tokens, startPos),

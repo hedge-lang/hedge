@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { messageOf } from "../diagnostics/index.js";
 import { assert } from "../assert.js";
 
 import { tokenize } from "../lexer/lexer.js";
@@ -30,14 +31,14 @@ function analyzeWithTokens(source: string): {
 } {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
-  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  assert(isSome(program), messageOf(diagnostics[0], "Parse failed"));
   return { result: analyze(program.value, tokens), tokens };
 }
 
 function diagnose(source: string): AnalysisResult {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
-  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  assert(isSome(program), messageOf(diagnostics[0], "Parse failed"));
   return analyze(program.value, tokens);
 }
 
@@ -46,7 +47,7 @@ function diagnose(source: string): AnalysisResult {
  * resolves against the real prelude declaration. */
 function diagnoseWithPrelude(source: string): AnalysisResult {
   const { program, tokens, parseDiagnostics } = assembleProgram(source);
-  assert(isSome(program), parseDiagnostics[0]?.message ?? "Parse failed");
+  assert(isSome(program), messageOf(parseDiagnostics[0], "Parse failed"));
   return analyze(program.value, tokens);
 }
 
@@ -76,7 +77,7 @@ describe("semantic analysis", (): void => {
     expect(result.diagnostics).toHaveLength(1);
     const first = result.diagnostics[0];
     expect(first?.severity).toBe("error");
-    expect(first?.message).toContain("missing");
+    expect(messageOf(first)).toContain("missing");
   });
 
   it("resolves a let binding within its block", (): void => {
@@ -88,7 +89,7 @@ describe("semantic analysis", (): void => {
     const result = diagnose('fn main() { print(x); let x = "a"; }');
     expect(result.diagnostics).toHaveLength(1);
     const first = result.diagnostics[0];
-    expect(first?.message).toContain("x");
+    expect(messageOf(first)).toContain("x");
   });
 
   it("resolves a function parameter name inside the function body", (): void => {
@@ -99,7 +100,7 @@ describe("semantic analysis", (): void => {
   it("reports an error for a name that does not match any parameter", (): void => {
     const result = diagnose("fn f(x: i32) { print(y); }");
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toContain("y");
+    expect(messageOf(result.diagnostics[0])).toContain("y");
   });
 
   describe("top-level function resolution", () => {
@@ -120,7 +121,7 @@ describe("semantic analysis", (): void => {
     it("rejects a genuinely undefined top-level function call", (): void => {
       const result = diagnose("fn main() { print(missing_fn(1)); }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("missing_fn");
+      expect(messageOf(result.diagnostics[0])).toContain("missing_fn");
     });
 
     it("rejects a duplicate top-level function declaration", (): void => {
@@ -128,7 +129,7 @@ describe("semantic analysis", (): void => {
         "fn add(a: i32) -> i32 { a } fn add(b: i32) -> i32 { b } fn main() {}",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "defined more than once",
       );
     });
@@ -164,7 +165,7 @@ describe("semantic analysis", (): void => {
         'fn main() { let x: i32 = 1; let s: str = "a"; let y: i32 = x << s; }',
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "the shift amount must be an integer",
       );
     });
@@ -174,7 +175,7 @@ describe("semantic analysis", (): void => {
         "fn main() { let x: i32 = 1; let n: u8 = 2u8; let y: i32 = x & n; }",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "bitwise operands must have the same type",
       );
     });
@@ -182,7 +183,7 @@ describe("semantic analysis", (): void => {
     it("rejects shifting a non-integer value", () => {
       const result = diagnose("fn main() { let y = 1.5 << 2; }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "the shifted value must be an integer",
       );
     });
@@ -195,7 +196,7 @@ describe("semantic analysis", (): void => {
         fn main() { let a: P = P { x: 1 }; let b: P = P { x: 2 }; let c = a == b; }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "type does not support equality comparison",
       );
     });
@@ -203,7 +204,7 @@ describe("semantic analysis", (): void => {
     it("rejects an equality comparison between two individually-comparable but differently-typed operands", () => {
       const result = diagnose('fn main() { let x = 1 == "a"; }');
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "comparison operands must have the same type",
       );
     });
@@ -211,7 +212,7 @@ describe("semantic analysis", (): void => {
     it("rejects an ordering comparison between two individually-ordered but differently-typed operands", () => {
       const result = diagnose("fn main() { let x = 'a' < 1; }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "comparison operands must have the same type",
       );
     });
@@ -219,7 +220,7 @@ describe("semantic analysis", (): void => {
     it("does not cascade a capability diagnostic when a comparison operand is an unresolved name", () => {
       const result = diagnose("fn main() { let x = missing_name == 1; }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         'Cannot find name "missing_name" in this scope.',
       );
     });
@@ -227,7 +228,7 @@ describe("semantic analysis", (): void => {
     it("rejects a logical operator with a non-bool left operand", () => {
       const result = diagnose("fn main() { let x = 1 && true; }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "logical operator operands must be `bool`",
       );
     });
@@ -235,7 +236,7 @@ describe("semantic analysis", (): void => {
     it("rejects a logical operator with a non-bool right operand", () => {
       const result = diagnose("fn main() { let x = true && 1; }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "logical operator operands must be `bool`",
       );
     });
@@ -244,7 +245,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose('fn main() { let x = 1 && "a"; }');
       expect(result.diagnostics).toHaveLength(2);
       for (const diagnostic of result.diagnostics) {
-        expect(diagnostic.message).toBe(
+        expect(messageOf(diagnostic)).toBe(
           "logical operator operands must be `bool`",
         );
       }
@@ -253,7 +254,7 @@ describe("semantic analysis", (): void => {
     it("rejects arithmetic between two individually-numeric but differently-typed operands", () => {
       const result = diagnose("fn main() { let x = 1 + 1.5; }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "arithmetic operands must have the same type",
       );
     });
@@ -264,10 +265,10 @@ describe("semantic analysis", (): void => {
       // different types, unlike the comparison operators above.
       const result = diagnose("fn main() { let x = 1.5 & 2; }");
       expect(result.diagnostics).toHaveLength(2);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "bitwise operations require integer operands",
       );
-      expect(result.diagnostics[1]?.message).toBe(
+      expect(messageOf(result.diagnostics[1])).toBe(
         "bitwise operands must have the same type",
       );
     });
@@ -276,7 +277,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("fn main() { let x = 1.5 & 2.5; }");
       expect(result.diagnostics).toHaveLength(2);
       for (const diagnostic of result.diagnostics) {
-        expect(diagnostic.message).toBe(
+        expect(messageOf(diagnostic)).toBe(
           "bitwise operations require integer operands",
         );
       }
@@ -287,7 +288,7 @@ describe("semantic analysis", (): void => {
     it("still resolves an undeclared name inside a method call's receiver", () => {
       const result = diagnose("fn main() { missing.foo(); }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         'Cannot find name "missing" in this scope.',
       );
     });
@@ -297,7 +298,7 @@ describe("semantic analysis", (): void => {
         "fn main() { let x: i32 = 1; x.foo(missing_arg); }",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         'Cannot find name "missing_arg" in this scope.',
       );
     });
@@ -322,7 +323,7 @@ describe("semantic analysis", (): void => {
     it("rejects an array length one past that maximum", () => {
       const result = diagnose("fn f(arr: [i32; 4294967296]) { }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("exceeds the maximum");
+      expect(messageOf(result.diagnostics[0])).toContain("exceeds the maximum");
     });
   });
 
@@ -344,7 +345,7 @@ describe("semantic analysis", (): void => {
         "fn main() { let x: i32 = 5; let b: bool = !x; }",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("type mismatch");
+      expect(messageOf(result.diagnostics[0])).toContain("type mismatch");
     });
 
     it("rejects negating a string", () => {
@@ -352,7 +353,7 @@ describe("semantic analysis", (): void => {
         'fn main() { let s: str = "a"; let b: bool = !s; }',
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "`!` requires `bool` or an integer, found `str`",
       );
     });
@@ -362,7 +363,7 @@ describe("semantic analysis", (): void => {
         "fn main() { let f: f64 = 1.0; let b: bool = !f; }",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("found `f64`");
+      expect(messageOf(result.diagnostics[0])).toContain("found `f64`");
     });
   });
 
@@ -371,7 +372,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose(
         "fn main() { let c: bool = true; let x: i32 = if c { 1 } else { }; }",
       );
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "if expression branches have incompatible types",
       );
     });
@@ -381,7 +382,7 @@ describe("semantic analysis", (): void => {
         'fn main() { let c: bool = true; let x: i32 = if c { 1 } else { "a" }; }',
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "if expression branches have incompatible types",
       );
     });
@@ -399,7 +400,7 @@ describe("semantic analysis", (): void => {
       );
       expect(
         result.diagnostics.filter((d) =>
-          d.message.includes("if expression branches"),
+          messageOf(d).includes("if expression branches"),
         ),
       ).toEqual([]);
     });
@@ -411,7 +412,7 @@ describe("semantic analysis", (): void => {
         'fn main() { let x: i32 = 1; match x { "hello" => {}, _ => {} } }',
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "expected `i32`, found `str`",
       );
     });
@@ -421,7 +422,7 @@ describe("semantic analysis", (): void => {
         'fn main() { let x: str = "a"; match x { 1 => {}, _ => {} } }',
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "expected `str`, found `i32`",
       );
     });
@@ -431,7 +432,7 @@ describe("semantic analysis", (): void => {
         "enum E { A(i32) } fn main() { let e = E::A(1); match e { 7 => {}, _ => {} } }",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("expected `E`");
+      expect(messageOf(result.diagnostics[0])).toContain("expected `E`");
     });
 
     it("rejects a range pattern whose bounds disagree with the scrutinee", () => {
@@ -439,7 +440,7 @@ describe("semantic analysis", (): void => {
         "fn main() { let x: char = 'a'; match x { 1..=5 => {}, _ => {} } }",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "expected `char`, found `i32`",
       );
     });
@@ -449,7 +450,7 @@ describe("semantic analysis", (): void => {
         "fn main() { let x: i32 = 1; match x { 1..='z' => {}, _ => {} } }",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "range bounds must have the same type",
       );
     });
@@ -459,7 +460,7 @@ describe("semantic analysis", (): void => {
         "fn main() { let x: i32 = 1; match x { 10..=2 => {}, _ => {} } }",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("matches nothing");
+      expect(messageOf(result.diagnostics[0])).toContain("matches nothing");
     });
 
     it("rejects a mistyped pattern in an if let scrutinee too", () => {
@@ -467,7 +468,7 @@ describe("semantic analysis", (): void => {
         'fn main() { let x: i32 = 1; if let "s" = x { } }',
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "expected `i32`, found `str`",
       );
     });
@@ -484,7 +485,7 @@ describe("semantic analysis", (): void => {
         "fn main() { let x: u8 = 1; match x { 300 => {}, _ => {} } }",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("out of range for u8");
+      expect(messageOf(result.diagnostics[0])).toContain("out of range for u8");
     });
 
     it("accepts a negative range against a signed scrutinee", () => {
@@ -499,7 +500,7 @@ describe("semantic analysis", (): void => {
     it("rejects a call with too few arguments", () => {
       const result = diagnose("fn f(a: i32, b: str) {} fn main() { f(); }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "takes 2 argument(s), but 0 were supplied",
       );
     });
@@ -507,7 +508,7 @@ describe("semantic analysis", (): void => {
     it("rejects a call with too many arguments", () => {
       const result = diagnose("fn f(a: i32) {} fn main() { f(1, 2); }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "takes 1 argument(s), but 2 were supplied",
       );
     });
@@ -515,7 +516,7 @@ describe("semantic analysis", (): void => {
     it("rejects an argument whose type does not match the parameter", () => {
       const result = diagnose("fn f(a: i32) {} fn main() { f(true); }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "argument 1 to function `f` type mismatch: expected `i32`, found `bool`",
       );
     });
@@ -539,7 +540,7 @@ describe("semantic analysis", (): void => {
         "struct P { x: i32 } struct Q { x: i32 } fn f(p: P) {} fn main() { f(Q { x: 1 }); }",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("argument 1");
+      expect(messageOf(result.diagnostics[0])).toContain("argument 1");
     });
 
     it("coerces an unsuffixed literal argument to the parameter type", () => {
@@ -559,7 +560,7 @@ describe("semantic analysis", (): void => {
         'fn first(s: &str) -> &str { s } fn main() { print(first("hello")); }',
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "expected `&str`, found `str`",
       );
     });
@@ -567,7 +568,7 @@ describe("semantic analysis", (): void => {
     it("rejects an integer literal for a shared-reference parameter, the same way", () => {
       const result = diagnose("fn f(r: &i32) {} fn main() { f(5); }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "expected `&i32`, found `i32`",
       );
     });
@@ -577,7 +578,7 @@ describe("semantic analysis", (): void => {
         'fn f(s: &str) {} fn main() { let s = "a"; f(s); }',
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "expected `&str`, found `str`",
       );
     });
@@ -628,7 +629,7 @@ describe("semantic analysis", (): void => {
       );
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("warning");
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "struct `P` shadows an outer declaration of the same name",
       );
     });
@@ -639,7 +640,7 @@ describe("semantic analysis", (): void => {
       );
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("warning");
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "enum `E` shadows an outer declaration of the same name",
       );
     });
@@ -649,7 +650,7 @@ describe("semantic analysis", (): void => {
         "struct P { a: i32 } struct P { b: i32 } fn main() {}",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "struct `P` is defined more than once",
       );
     });
@@ -657,7 +658,7 @@ describe("semantic analysis", (): void => {
     it("still rejects two enums with the same name in the same scope", () => {
       const result = diagnose("enum E { A } enum E { B } fn main() {}");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "enum `E` is defined more than once",
       );
     });
@@ -691,7 +692,7 @@ describe("semantic analysis", (): void => {
         "enum Message { Move(i32, UnknownType) } fn main() {}",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "cannot find type `UnknownType` in this scope",
       );
     });
@@ -701,7 +702,7 @@ describe("semantic analysis", (): void => {
         "enum Message { Write { text: UnknownType } } fn main() {}",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "cannot find type `UnknownType` in this scope",
       );
     });
@@ -733,7 +734,7 @@ describe("semantic analysis", (): void => {
     it("rejects an enum with two variants sharing the same name", () => {
       const result = diagnose("enum Message { Quit, Quit } fn main() {}");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "variant `Quit` is defined more than once",
       );
     });
@@ -754,7 +755,7 @@ describe("semantic analysis", (): void => {
         fn main() { let m: i32 = Message::Quit; }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "type mismatch: explicit annotation does not match initializer type",
       );
     });
@@ -765,7 +766,7 @@ describe("semantic analysis", (): void => {
         fn main() { let m = Message::Quit(1); }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "variant `Quit` takes no arguments, but 1 was supplied",
       );
     });
@@ -784,7 +785,7 @@ describe("semantic analysis", (): void => {
         fn main() { let m = Message::Move(1); }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "variant `Move` takes 2 argument(s), but 1 was supplied",
       );
     });
@@ -795,7 +796,7 @@ describe("semantic analysis", (): void => {
         fn main() { let m = Message::Move(1, true); }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "argument 2 to variant `Move` type mismatch: expected `i32`, found `bool`",
       );
     });
@@ -806,7 +807,7 @@ describe("semantic analysis", (): void => {
         fn main() { let m = Message::Write(1); }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "variant `Write` has named fields; use `Write { ... }`",
       );
     });
@@ -825,7 +826,7 @@ describe("semantic analysis", (): void => {
         fn main() { let m: i32 = Message::Write { text: "hi" }; }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "type mismatch: explicit annotation does not match initializer type",
       );
     });
@@ -836,7 +837,7 @@ describe("semantic analysis", (): void => {
         fn main() { let m = Message::Write { text: "hi" }; }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "missing required field `urgent` in struct literal of type `Write`",
       );
     });
@@ -847,7 +848,7 @@ describe("semantic analysis", (): void => {
         fn main() { let m = Message::Write { text: "hi", bogus: 1 }; }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "unknown field `bogus` for struct `Write`",
       );
     });
@@ -855,7 +856,7 @@ describe("semantic analysis", (): void => {
     it("rejects a bare unit-variant-shaped path naming an enum that doesn't exist", () => {
       const result = diagnose(`fn main() { let m = NotAnEnum::Variant; }`);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "cannot find enum `NotAnEnum` in this scope",
       );
     });
@@ -863,7 +864,7 @@ describe("semantic analysis", (): void => {
     it("rejects a call-shaped construction naming an enum that doesn't exist", () => {
       const result = diagnose(`fn main() { let m = NotAnEnum::Variant(1); }`);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "cannot find enum `NotAnEnum` in this scope",
       );
     });
@@ -873,7 +874,7 @@ describe("semantic analysis", (): void => {
         `fn main() { let m = NotAnEnum::Variant { a: 1 }; }`,
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "cannot find enum `NotAnEnum` in this scope",
       );
     });
@@ -888,7 +889,7 @@ describe("semantic analysis", (): void => {
     it("rejects a zero-arm match as non-exhaustive", () => {
       const result = diagnose("fn main() { match 1 {}; }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "non-exhaustive patterns",
       );
     });
@@ -913,7 +914,7 @@ describe("semantic analysis", (): void => {
     it("rejects a match whose only arm is a bare literal pattern as non-exhaustive", () => {
       const result = diagnose("fn f(x: i32) -> i32 { match x { 1 => 0 } }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "non-exhaustive patterns",
       );
     });
@@ -926,8 +927,8 @@ describe("semantic analysis", (): void => {
         fn f(m: Message) -> i32 { match m { Message::Quit => 0 } }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("non-exhaustive");
-      expect(result.diagnostics[0]?.message).toContain("Move");
+      expect(messageOf(result.diagnostics[0])).toContain("non-exhaustive");
+      expect(messageOf(result.diagnostics[0])).toContain("Move");
     });
 
     it("rejects a three-variant enum match missing two variants, naming both", () => {
@@ -936,8 +937,8 @@ describe("semantic analysis", (): void => {
         fn f(m: Message) -> i32 { match m { Message::Quit => 0 } }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("Move");
-      expect(result.diagnostics[0]?.message).toContain("Stop");
+      expect(messageOf(result.diagnostics[0])).toContain("Move");
+      expect(messageOf(result.diagnostics[0])).toContain("Stop");
     });
 
     it("analyzes a match covering both variants of a two-variant unit enum cleanly", () => {
@@ -1001,7 +1002,7 @@ describe("semantic analysis", (): void => {
         fn f(m: Message) -> i32 { match m { Message::Quit => 0 } }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("Move");
+      expect(messageOf(result.diagnostics[0])).toContain("Move");
     });
   });
 
@@ -1036,7 +1037,7 @@ describe("semantic analysis", (): void => {
         fn f(p: Point) -> i32 { match p { Point { x, z } => x } }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "no field `z` on struct `Point`",
       );
     });
@@ -1047,7 +1048,7 @@ describe("semantic analysis", (): void => {
         fn f(p: Pair) -> i32 { match p { Pair(a) => a } }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "struct `Pair` has 2 field(s), but the pattern has 1",
       );
     });
@@ -1069,7 +1070,7 @@ describe("semantic analysis", (): void => {
         fn f(p: Point) { match p { Point(a, b) => a }; }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "struct `Point` is not a tuple struct",
       );
     });
@@ -1080,7 +1081,7 @@ describe("semantic analysis", (): void => {
         fn f(p: Pair) { match p { Pair { a } => a }; }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "struct `Pair` does not have named fields",
       );
     });
@@ -1092,7 +1093,7 @@ describe("semantic analysis", (): void => {
         fn f(p: Point) { match p { Other { x, y } => x + y }; }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "expected struct `Point`, found `Other`",
       );
     });
@@ -1104,7 +1105,7 @@ describe("semantic analysis", (): void => {
         fn f(p: Pair) { match p { Duo(a, b) => a }; }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "expected struct `Pair`, found `Duo`",
       );
     });
@@ -1133,8 +1134,8 @@ describe("semantic analysis", (): void => {
         fn f(w: Wrapper) -> i32 { match w { Wrapper::Only(x) => x } }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("non-exhaustive");
-      expect(result.diagnostics[0]?.message).toContain("Empty");
+      expect(messageOf(result.diagnostics[0])).toContain("non-exhaustive");
+      expect(messageOf(result.diagnostics[0])).toContain("Empty");
     });
   });
 
@@ -1142,8 +1143,8 @@ describe("semantic analysis", (): void => {
     it("rejects a bool match covering only true", () => {
       const result = diagnose("fn f(x: bool) -> i32 { match x { true => 0 } }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("non-exhaustive");
-      expect(result.diagnostics[0]?.message).toContain("false");
+      expect(messageOf(result.diagnostics[0])).toContain("non-exhaustive");
+      expect(messageOf(result.diagnostics[0])).toContain("false");
     });
 
     it("rejects a bool match covering only false", () => {
@@ -1151,8 +1152,8 @@ describe("semantic analysis", (): void => {
         "fn f(x: bool) -> i32 { match x { false => 0 } }",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("non-exhaustive");
-      expect(result.diagnostics[0]?.message).toContain("true");
+      expect(messageOf(result.diagnostics[0])).toContain("non-exhaustive");
+      expect(messageOf(result.diagnostics[0])).toContain("true");
     });
 
     it("analyzes a bool match covering both true and false cleanly", () => {
@@ -1176,7 +1177,7 @@ describe("semantic analysis", (): void => {
         "fn f(x: bool) -> i32 { match x { true => 0, true => 1, false => 2 } }",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("unreachable pattern");
+      expect(messageOf(result.diagnostics[0])).toContain("unreachable pattern");
     });
 
     it("rejects a duplicate enum-variant arm as unreachable", () => {
@@ -1191,7 +1192,7 @@ describe("semantic analysis", (): void => {
         }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("unreachable pattern");
+      expect(messageOf(result.diagnostics[0])).toContain("unreachable pattern");
     });
 
     it("rejects an arm following an unconditional wildcard as unreachable", () => {
@@ -1202,7 +1203,7 @@ describe("semantic analysis", (): void => {
         }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("unreachable pattern");
+      expect(messageOf(result.diagnostics[0])).toContain("unreachable pattern");
     });
 
     it("rejects an arm fully subsumed by an earlier or-pattern as unreachable", () => {
@@ -1216,7 +1217,7 @@ describe("semantic analysis", (): void => {
         }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("unreachable pattern");
+      expect(messageOf(result.diagnostics[0])).toContain("unreachable pattern");
     });
 
     it("treats an or-pattern with a wildcard alternative as irrefutable, satisfying exhaustiveness alone", () => {
@@ -1237,7 +1238,7 @@ describe("semantic analysis", (): void => {
         }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("unreachable pattern");
+      expect(messageOf(result.diagnostics[0])).toContain("unreachable pattern");
     });
 
     it("rejects an arm following an irrefutable or-pattern as unreachable", () => {
@@ -1248,7 +1249,7 @@ describe("semantic analysis", (): void => {
         }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("unreachable pattern");
+      expect(messageOf(result.diagnostics[0])).toContain("unreachable pattern");
     });
 
     it("points each unreachable-arm diagnostic at its own arm, not always the last one", () => {
@@ -1282,8 +1283,8 @@ describe("semantic analysis", (): void => {
         }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("non-exhaustive");
-      expect(result.diagnostics[0]?.message).toContain("Move");
+      expect(messageOf(result.diagnostics[0])).toContain("non-exhaustive");
+      expect(messageOf(result.diagnostics[0])).toContain("Move");
     });
 
     it("does not let a guarded arm make a later identical unguarded arm unreachable", () => {
@@ -1334,7 +1335,7 @@ describe("semantic analysis", (): void => {
         "fn f(x: i32) -> i32 { match x { 1 => 0, 2 => 1 } }",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("non-exhaustive");
+      expect(messageOf(result.diagnostics[0])).toContain("non-exhaustive");
     });
 
     it("accepts an i32 match with a final bare-binding arm (not `_`) as exhaustive", () => {
@@ -1349,7 +1350,7 @@ describe("semantic analysis", (): void => {
         `fn f(x: str) -> i32 { match x { "a" => 0, "b" => 1 } }`,
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("non-exhaustive");
+      expect(messageOf(result.diagnostics[0])).toContain("non-exhaustive");
     });
 
     it("rejects a char match covering only literal arms, with no wildcard or binding", () => {
@@ -1357,7 +1358,7 @@ describe("semantic analysis", (): void => {
         "fn f(x: char) -> i32 { match x { 'a' => 0, 'b' => 1 } }",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("non-exhaustive");
+      expect(messageOf(result.diagnostics[0])).toContain("non-exhaustive");
     });
   });
 
@@ -1367,7 +1368,7 @@ describe("semantic analysis", (): void => {
         "fn f() -> i32 { match undefined_var { 1 => 0 } }",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("Cannot find name");
+      expect(messageOf(result.diagnostics[0])).toContain("Cannot find name");
     });
 
     it("does not cascade a non-exhaustive diagnostic when the scrutinee's own type is already erroneous", () => {
@@ -1375,7 +1376,7 @@ describe("semantic analysis", (): void => {
         "fn f(x: i32) -> i32 { match x.nonexistent { 1 => 0 } }",
       );
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "field access on non-struct type",
       );
     });
@@ -1386,7 +1387,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("fn main() { while let y = opt { } }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "not yet supported by semantic analysis",
       );
     });
@@ -1431,7 +1432,7 @@ describe("semantic analysis", (): void => {
         }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         'Cannot find name "x" in this scope.',
       );
     });
@@ -1447,7 +1448,7 @@ describe("semantic analysis", (): void => {
         }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         'Cannot find name "x" in this scope.',
       );
     });
@@ -1455,7 +1456,7 @@ describe("semantic analysis", (): void => {
     it("reports exactly one diagnostic for an undefined scrutinee, no cascade", () => {
       const result = diagnose("fn main() { if let y = opt { } }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         'Cannot find name "opt" in this scope.',
       );
     });
@@ -1466,7 +1467,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("fn main() { let 1 = 5; }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match",
       );
     });
@@ -1475,7 +1476,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("fn main() { let 1..=5 = 3; }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match",
       );
     });
@@ -1484,7 +1485,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("fn main() { let 1 | 2 = 1; }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match",
       );
     });
@@ -1493,7 +1494,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("fn main() { let (a, b) = (1, 2); }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "this pattern kind is not yet supported",
       );
     });
@@ -1502,7 +1503,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("fn main() { let Point { x, y } = 1; }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "this pattern kind is not yet supported",
       );
     });
@@ -1511,7 +1512,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("fn main() { let Some(x) = 1; }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "this pattern kind is not yet supported",
       );
     });
@@ -1520,7 +1521,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("fn main() { let Message::Quit = 1; }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "this pattern kind is not yet supported",
       );
     });
@@ -1529,7 +1530,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("fn main() { let [a, ..tail] = 1; }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "this pattern kind is not yet supported",
       );
     });
@@ -1538,7 +1539,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("fn f(Point { x, y }: i32) {}");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "this pattern kind is not yet supported",
       );
     });
@@ -1547,7 +1548,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("fn main() { let n @ 1..=5 = 3; }");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "this pattern kind is not yet supported",
       );
     });
@@ -1596,7 +1597,7 @@ describe("semantic analysis", (): void => {
         fn f(p: Point) -> i32 { let Point { x, .. } = p; x + y }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("y");
+      expect(messageOf(result.diagnostics[0])).toContain("y");
     });
 
     it("destructures a single-variant enum's tuple pattern in a let statement", () => {
@@ -1621,7 +1622,7 @@ describe("semantic analysis", (): void => {
         fn f(p: Point) -> i32 { let Point { x, y } = p; y = 5; x + y }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "cannot assign to immutable binding",
       );
     });
@@ -1632,7 +1633,7 @@ describe("semantic analysis", (): void => {
         fn f(opt: MyOption) { let MyOption::MySome(v) = opt; }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match",
       );
     });
@@ -1643,7 +1644,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("x + y;");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "only function, struct, enum, const, and static declarations are allowed at the top level",
       );
     });
@@ -1651,7 +1652,7 @@ describe("semantic analysis", (): void => {
     it("let statement at top level is an error", () => {
       const result = diagnose("let x = 1;");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "only function, struct, enum, const, and static declarations are allowed at the top level",
       );
     });
@@ -1659,7 +1660,7 @@ describe("semantic analysis", (): void => {
     it("block at top level is an error", () => {
       const result = diagnose("{ 1; }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "only function, struct, enum, const, and static declarations are allowed at the top level",
       );
     });
@@ -1677,7 +1678,7 @@ describe("semantic analysis", (): void => {
     it("names enum among the allowed top-level declarations in the restriction message", () => {
       const result = diagnose("x + y;");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("enum");
+      expect(messageOf(result.diagnostics[0])).toContain("enum");
     });
 
     it("const declaration at top level is accepted", () => {
@@ -1846,7 +1847,7 @@ describe("semantic analysis", (): void => {
       it("rejects a self-referencing const as a cycle, not a stack overflow", () => {
         const result = diagnose("const A: i32 = A;");
         expect(result.diagnostics).toHaveLength(1);
-        expect(result.diagnostics[0]?.message).toContain("itself");
+        expect(messageOf(result.diagnostics[0])).toContain("itself");
       });
 
       it("rejects a mutually cyclic pair of consts with exactly one diagnostic", () => {
@@ -1857,7 +1858,7 @@ describe("semantic analysis", (): void => {
       it("rejects a call to a non-const function as a non-const-foldable initializer", () => {
         const result = diagnose("fn one() -> i32 { 1 } const N: i32 = one();");
         expect(result.diagnostics).toHaveLength(1);
-        expect(result.diagnostics[0]?.message).toContain(
+        expect(messageOf(result.diagnostics[0])).toContain(
           "compile-time constant expression",
         );
       });
@@ -1865,7 +1866,7 @@ describe("semantic analysis", (): void => {
       it("rejects a reference to a static in a const initializer as non-const-foldable", () => {
         const result = diagnose("static COUNT: i32 = 0; const N: i32 = COUNT;");
         expect(result.diagnostics).toHaveLength(1);
-        expect(result.diagnostics[0]?.message).toContain(
+        expect(messageOf(result.diagnostics[0])).toContain(
           "compile-time constant expression",
         );
       });
@@ -1873,13 +1874,13 @@ describe("semantic analysis", (): void => {
       it("rejects a reference to an undeclared name in a const initializer", () => {
         const result = diagnose("const N: i32 = MISSING;");
         expect(result.diagnostics).toHaveLength(1);
-        expect(result.diagnostics[0]?.message).toContain("MISSING");
+        expect(messageOf(result.diagnostics[0])).toContain("MISSING");
       });
 
       it("rejects string concatenation as non-const-foldable, since it is not primitive arithmetic", () => {
         const result = diagnose('const N: str = "a" + "b";');
         expect(result.diagnostics).toHaveLength(1);
-        expect(result.diagnostics[0]?.message).toContain(
+        expect(messageOf(result.diagnostics[0])).toContain(
           "compile-time constant expression",
         );
       });
@@ -1887,19 +1888,19 @@ describe("semantic analysis", (): void => {
       it("rejects a const whose folded value doesn't match its declared type", () => {
         const result = diagnose("const N: bool = 1 + 2;");
         expect(result.diagnostics).toHaveLength(1);
-        expect(result.diagnostics[0]?.message).toContain("declared type");
+        expect(messageOf(result.diagnostics[0])).toContain("declared type");
       });
 
       it("rejects division by zero in a const initializer as a diagnostic, not a crash", () => {
         const result = diagnose("const N: i32 = 1 / 0;");
         expect(result.diagnostics).toHaveLength(1);
-        expect(result.diagnostics[0]?.message).toContain("divide by zero");
+        expect(messageOf(result.diagnostics[0])).toContain("divide by zero");
       });
 
       it("rejects a negative shift amount in a const initializer as a diagnostic, not a crash", () => {
         const result = diagnose("const N: i32 = 1 << -1;");
         expect(result.diagnostics).toHaveLength(1);
-        expect(result.diagnostics[0]?.message).toContain("shift");
+        expect(messageOf(result.diagnostics[0])).toContain("shift");
       });
 
       it("rejects an excessively large shift amount in a const initializer as a diagnostic, not a crash", () => {
@@ -1909,13 +1910,13 @@ describe("semantic analysis", (): void => {
         // after, or it throws instead of diagnosing.
         const result = diagnose("const N: i32 = 1 << 100000000000;");
         expect(result.diagnostics).toHaveLength(1);
-        expect(result.diagnostics[0]?.message).toContain("shift");
+        expect(messageOf(result.diagnostics[0])).toContain("shift");
       });
 
       it("rejects an out-of-range shift amount via >> the same way as <<", () => {
         const result = diagnose("const N: i32 = 1 >> 100000000000;");
         expect(result.diagnostics).toHaveLength(1);
-        expect(result.diagnostics[0]?.message).toContain("shift");
+        expect(messageOf(result.diagnostics[0])).toContain("shift");
       });
 
       it("accepts a shift amount at the boundary of a 64-bit width", () => {
@@ -1932,7 +1933,7 @@ describe("semantic analysis", (): void => {
         // to 0 at compile time but runs to 256, a real determinism break.
         const result = diagnose("const N: i32 = 1 << 40;");
         expect(result.diagnostics).toHaveLength(1);
-        expect(result.diagnostics[0]?.message).toContain("shift");
+        expect(messageOf(result.diagnostics[0])).toContain("shift");
       });
 
       it("does not cascade past the one diagnostic for a broken const referenced elsewhere", () => {
@@ -1951,15 +1952,15 @@ describe("semantic analysis", (): void => {
         const result = diagnose("const X: i32 = 100; fn X() -> i32 { 1 }");
         expect(result.diagnostics).toHaveLength(1);
         assert(result.diagnostics[0] !== undefined, "Expected diagnostics");
-        expect(result.diagnostics[0].message).toContain("collides");
+        expect(messageOf(result.diagnostics[0])).toContain("collides");
       });
 
       it("rejects a const/static name collision with exactly one correctly-labeled diagnostic, const declared first", () => {
         const result = diagnose("const X: i32 = 1; static X: i32 = 0;");
         expect(result.diagnostics).toHaveLength(1);
         assert(result.diagnostics[0] !== undefined, "Expected diagnostics");
-        expect(result.diagnostics[0].message).toContain("collides");
-        expect(result.diagnostics[0].message).not.toContain("function");
+        expect(messageOf(result.diagnostics[0])).toContain("collides");
+        expect(messageOf(result.diagnostics[0])).not.toContain("function");
       });
 
       it("rejects a const/static name collision with exactly one correctly-labeled diagnostic, static declared first", () => {
@@ -1971,8 +1972,8 @@ describe("semantic analysis", (): void => {
         const result = diagnose("static X: i32 = 0; const X: i32 = 1;");
         expect(result.diagnostics).toHaveLength(1);
         assert(result.diagnostics[0] !== undefined, "Expected diagnostics");
-        expect(result.diagnostics[0].message).toContain("collides");
-        expect(result.diagnostics[0].message).not.toContain("function");
+        expect(messageOf(result.diagnostics[0])).toContain("collides");
+        expect(messageOf(result.diagnostics[0])).not.toContain("function");
       });
     });
   });
@@ -1993,7 +1994,7 @@ describe("semantic analysis", (): void => {
     it("rejects a reference to an undeclared name in a static initializer", () => {
       const result = diagnose("static X: i32 = MISSING;");
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("MISSING");
+      expect(messageOf(result.diagnostics[0])).toContain("MISSING");
     });
 
     it("rejects a static whose initializer doesn't match its declared type", () => {
@@ -2005,14 +2006,14 @@ describe("semantic analysis", (): void => {
       const result = diagnose("pub static X: i32 = 0;");
       expect(result.diagnostics).toHaveLength(1);
       assert(result.diagnostics[0] !== undefined, "Expected diagnostic");
-      expect(result.diagnostics[0].message).toContain("pub");
+      expect(messageOf(result.diagnostics[0])).toContain("pub");
     });
 
     it("rejects a static whose name collides with an existing top-level function", () => {
       const result = diagnose("fn foo() {} static foo: i32 = 0;");
       expect(result.diagnostics).toHaveLength(1);
       assert(result.diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(result.diagnostics[0].message).toContain("collides");
+      expect(messageOf(result.diagnostics[0])).toContain("collides");
     });
 
     it("a reference to a static lowers to a zero-argument call to its own name", () => {
@@ -2063,14 +2064,16 @@ describe("semantic analysis", (): void => {
       );
       expect(result.diagnostics).toHaveLength(1);
       assert(result.diagnostics[0] !== undefined, "Expected diagnostic");
-      expect(result.diagnostics[0].message).toContain("defined more than once");
+      expect(messageOf(result.diagnostics[0])).toContain(
+        "defined more than once",
+      );
     });
 
     it("rejects a static declared inside a function body", () => {
       const result = parse(tokenize("fn f() { static X: i32 = 0; }").tokens);
       expect(result.program).toEqual(none());
       assert(result.diagnostics[0] !== undefined, "expected a diagnostic");
-      expect(result.diagnostics[0].message).toContain("Static");
+      expect(messageOf(result.diagnostics[0])).toContain("Static");
     });
 
     it("lets a function parameter shadow an outer const of the same name", () => {
@@ -2105,7 +2108,7 @@ describe("semantic analysis", (): void => {
       );
       expect(result.diagnostics).toHaveLength(1);
       assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(result.diagnostics[0].message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "compile-time constant expression",
       );
     });
@@ -2135,7 +2138,7 @@ describe("semantic analysis", (): void => {
     const result = diagnose("fn f(x: UnknownType) {}");
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "cannot find type `UnknownType` in this scope",
     );
   });
@@ -2144,7 +2147,7 @@ describe("semantic analysis", (): void => {
     const result = diagnose("fn f(x: i32::Foo) {}");
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.severity).toBe("error");
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "qualified type paths are not supported yet",
     );
   });
@@ -2153,11 +2156,13 @@ describe("semantic analysis", (): void => {
     const undeclared = diagnose("fn f(x: UnknownType) {}").diagnostics[0];
     const unbuilt = diagnose("fn f(x: i32::Foo) {}").diagnostics[0];
     expect(undeclared?.code).toBe("HEDGE-NAME-001");
-    expect(undeclared?.message).toBe(
+    expect(messageOf(undeclared)).toBe(
       "cannot find type `UnknownType` in this scope",
     );
     expect(unbuilt?.code).toBe("HEDGE-UNSUPPORTED-001");
-    expect(unbuilt?.message).toBe("qualified type paths are not supported yet");
+    expect(messageOf(unbuilt)).toBe(
+      "qualified type paths are not supported yet",
+    );
   });
 
   it("unsupported param type diagnostic span points at the type token", (): void => {
@@ -2191,7 +2196,9 @@ describe("semantic analysis", (): void => {
       it("rejects a negated literal below i8 min in a comparison", () => {
         const result = diagnose("fn f(x: i8) { print(-0x81 == x); }");
         expect(result.diagnostics).toHaveLength(1);
-        expect(result.diagnostics[0]?.message).toContain("out of range for i8");
+        expect(messageOf(result.diagnostics[0])).toContain(
+          "out of range for i8",
+        );
       });
 
       it("accepts a negated literal at exactly i8 min in a comparison", () => {
@@ -2203,70 +2210,68 @@ describe("semantic analysis", (): void => {
 
   it("rejects comparisons with right-side boolean", (): void => {
     const result = diagnose("fn main() { let x = 1 < (2 < 3); }");
-    expect(result.diagnostics).toMatchObject([
-      {
-        severity: "error",
-        message: "type does not support ordering comparison",
-      },
-    ]);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "type does not support ordering comparison",
+    );
   });
 
   it("rejects comparisons with left-side boolean", (): void => {
     const result = diagnose("fn main() { let x = (1 < 2) < 3; }");
-    expect(result.diagnostics).toMatchObject([
-      {
-        severity: "error",
-        message: "type does not support ordering comparison",
-      },
-    ]);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "type does not support ordering comparison",
+    );
   });
 
   it("rejects ordering comparison between two booleans", (): void => {
     const result = diagnose("fn main() { let x = true < false; }");
-    expect(result.diagnostics).toMatchObject([
-      {
-        severity: "error",
-        message: "type does not support ordering comparison",
-      },
-    ]);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "type does not support ordering comparison",
+    );
   });
 
   it("rejects arithmetic on unit-typed operands", (): void => {
     const result = diagnose('fn main() { let x = print("hi") + 1; }');
     const numericError = result.diagnostics.find((d) =>
-      d.message.includes("arithmetic operands must be numeric"),
+      messageOf(d).includes("arithmetic operands must be numeric"),
     );
     assert(numericError !== undefined, "Expected a numeric-operand error");
     expect(numericError.severity).toBe("error");
-    expect(numericError.message).toContain("()");
+    expect(messageOf(numericError)).toContain("()");
   });
 
   it.each(["=", "+=", "-=", "*=", "/=", "%=", "<<=", ">>="])(
     "rejects `%s` assignment to immutable let binding",
     (op): void => {
       const result = diagnose(`fn main() { let x = 1; x ${op} 1; print(x); }`);
-      expect(result.diagnostics).toMatchObject([
-        { severity: "error", message: "cannot assign to immutable binding" },
-      ]);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.severity).toBe("error");
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "cannot assign to immutable binding",
+      );
     },
   );
 
   it("rejects field assignment to immutable binding (inherited mutability)", (): void => {
     const result = diagnose("fn f(s: Point) { s.x = 1; }");
-    expect(result.diagnostics).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          severity: "error",
-          message: "cannot assign to immutable binding",
-        }),
-      ]),
-    );
+    expect(
+      result.diagnostics.some(
+        (d) =>
+          d.severity === "error" &&
+          messageOf(d) === "cannot assign to immutable binding",
+      ),
+    ).toBe(true);
   });
 
   it("emits exactly one diagnostic for an unsupported param type on a block-local fn", (): void => {
     const result = diagnose("fn main() { fn f(x: unknownType) {} }");
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "cannot find type `unknownType` in this scope",
     );
   });
@@ -2283,7 +2288,7 @@ describe("semantic analysis", (): void => {
     const { diagnostics } = diagnose("fn main() { let x: i32 = missing_var; }");
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("missing_var");
+    expect(messageOf(diagnostics[0])).toContain("missing_var");
   });
 
   it("rejects a genuinely unit-typed let initializer against a non-unit annotation", (): void => {
@@ -2291,7 +2296,7 @@ describe("semantic analysis", (): void => {
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
     expect(diagnostics[0].severity).toBe("error");
-    expect(diagnostics[0].message).toContain("type mismatch");
+    expect(messageOf(diagnostics[0])).toContain("type mismatch");
   });
 
   describe("range expression analysis", () => {
@@ -2300,8 +2305,8 @@ describe("semantic analysis", (): void => {
         "fn main() { let x = missing_start..missing_end; }",
       );
       expect(diagnostics).toHaveLength(2);
-      expect(diagnostics[0]?.message).toContain("missing_start");
-      expect(diagnostics[1]?.message).toContain("missing_end");
+      expect(messageOf(diagnostics[0])).toContain("missing_start");
+      expect(messageOf(diagnostics[1])).toContain("missing_end");
     });
 
     it("does not cascade a spurious type-mismatch when used as a mismatched-type let initializer (UnitType is ambiguous, not genuine)", (): void => {
@@ -2316,9 +2321,9 @@ describe("semantic analysis", (): void => {
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
       expect(diagnostics[0].severity).toBe("error");
-      expect(diagnostics[0].message).toContain("return type mismatch");
-      expect(diagnostics[0].message).toContain("i32");
-      expect(diagnostics[0].message).toContain("str");
+      expect(messageOf(diagnostics[0])).toContain("return type mismatch");
+      expect(messageOf(diagnostics[0])).toContain("i32");
+      expect(messageOf(diagnostics[0])).toContain("str");
     });
 
     it("return type mismatch diagnostic span points at the trailing expression", (): void => {
@@ -2370,13 +2375,15 @@ describe("semantic analysis", (): void => {
       it("range-checks each operand against the coerced type", () => {
         const result = diagnose("fn main() { let v: i8 = 200 + 1; }");
         expect(result.diagnostics).toHaveLength(1);
-        expect(result.diagnostics[0]?.message).toContain("out of range for i8");
+        expect(messageOf(result.diagnostics[0])).toContain(
+          "out of range for i8",
+        );
       });
 
       it("does not coerce through a comparison operator, whose result is always bool", () => {
         const result = diagnose("fn main() { let v: i8 = 1 < 2; }");
         expect(result.diagnostics).toHaveLength(1);
-        expect(result.diagnostics[0]?.message).toContain("type mismatch");
+        expect(messageOf(result.diagnostics[0])).toContain("type mismatch");
       });
 
       it("still accepts a comparison expression bound to bool", () => {
@@ -2389,7 +2396,7 @@ describe("semantic analysis", (): void => {
       const { diagnostics } = diagnose("fn f() -> u8 { 300 }");
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].message).toContain("out of range for u8");
+      expect(messageOf(diagnostics[0])).toContain("out of range for u8");
     });
 
     it("accepts a negated literal at exactly i8 min as the return value", (): void => {
@@ -2401,14 +2408,14 @@ describe("semantic analysis", (): void => {
       const { diagnostics } = diagnose("fn f() -> i8 { -0x81 }");
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].message).toContain("out of range for i8");
+      expect(messageOf(diagnostics[0])).toContain("out of range for i8");
     });
 
     it("does not cascade a return-type-mismatch diagnostic for an unresolved trailing name", (): void => {
       const { diagnostics } = diagnose("fn bad() -> i32 { unknown_name }");
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].message).toContain("unknown_name");
+      expect(messageOf(diagnostics[0])).toContain("unknown_name");
     });
 
     it("rejects a genuinely unit-typed trailing expression against a non-unit return type", (): void => {
@@ -2416,9 +2423,9 @@ describe("semantic analysis", (): void => {
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
       expect(diagnostics[0].severity).toBe("error");
-      expect(diagnostics[0].message).toContain("return type mismatch");
-      expect(diagnostics[0].message).toContain("i32");
-      expect(diagnostics[0].message).toContain("()");
+      expect(messageOf(diagnostics[0])).toContain("return type mismatch");
+      expect(messageOf(diagnostics[0])).toContain("i32");
+      expect(messageOf(diagnostics[0])).toContain("()");
     });
 
     it("accepts a body with no trailing expression when the return type is implicit unit", (): void => {
@@ -2431,8 +2438,8 @@ describe("semantic analysis", (): void => {
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
       expect(diagnostics[0].severity).toBe("error");
-      expect(diagnostics[0].message).toContain("missing return value");
-      expect(diagnostics[0].message).toContain("i32");
+      expect(messageOf(diagnostics[0])).toContain("missing return value");
+      expect(messageOf(diagnostics[0])).toContain("i32");
     });
 
     it("accepts a matching if/else trailing expression as the return value", (): void => {
@@ -2448,14 +2455,14 @@ describe("semantic analysis", (): void => {
       );
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].message).toContain("return type mismatch");
+      expect(messageOf(diagnostics[0])).toContain("return type mismatch");
     });
 
     it("checks the return type of a block-local function", (): void => {
       const { diagnostics } = diagnose('fn main() { fn bad() -> i32 { "x" } }');
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].message).toContain("return type mismatch");
+      expect(messageOf(diagnostics[0])).toContain("return type mismatch");
     });
   });
 
@@ -2467,7 +2474,7 @@ describe("semantic analysis", (): void => {
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
       expect(diagnostics[0].code).toBe("HEDGE-LIFETIME-002");
-      expect(diagnostics[0].message).toContain("x");
+      expect(messageOf(diagnostics[0])).toContain("x");
     });
 
     it("rejects a bare returned reference to a fresh borrow of a by-value parameter", (): void => {
@@ -2488,7 +2495,7 @@ describe("semantic analysis", (): void => {
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
       expect(diagnostics[0].code).toBe("HEDGE-LIFETIME-002");
-      expect(diagnostics[0].message).toContain("s");
+      expect(messageOf(diagnostics[0])).toContain("s");
     });
 
     it("accepts a bare parameter of reference type passed straight through, since no fresh borrow is taken", (): void => {
@@ -2515,7 +2522,7 @@ describe("semantic analysis", (): void => {
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
       expect(diagnostics[0].code).toBe("HEDGE-LIFETIME-002");
-      expect(diagnostics[0].message).toContain("x");
+      expect(messageOf(diagnostics[0])).toContain("x");
     });
 
     it("rejects a dangling reference in the final else of an if/else-if/else chain", (): void => {
@@ -2534,7 +2541,7 @@ describe("semantic analysis", (): void => {
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
       expect(diagnostics[0].code).toBe("HEDGE-LIFETIME-002");
-      expect(diagnostics[0].message).toContain("x");
+      expect(messageOf(diagnostics[0])).toContain("x");
     });
 
     it("rejects a dangling reference returned through a nested block's own trailing expression", (): void => {
@@ -2549,7 +2556,7 @@ describe("semantic analysis", (): void => {
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
       expect(diagnostics[0].code).toBe("HEDGE-LIFETIME-002");
-      expect(diagnostics[0].message).toContain("x");
+      expect(messageOf(diagnostics[0])).toContain("x");
     });
 
     it("accepts an if/else trailing expression when both branches pass a reference parameter through cleanly", (): void => {
@@ -2569,7 +2576,7 @@ describe("semantic analysis", (): void => {
       const { diagnostics } = diagnose("fn f() -> &() { &missing_name }");
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].message).toContain("missing_name");
+      expect(messageOf(diagnostics[0])).toContain("missing_name");
       expect(diagnostics[0].code).toBe("HEDGE-NAME-001");
     });
 
@@ -2606,9 +2613,9 @@ describe("semantic analysis", (): void => {
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
       expect(diagnostics[0].severity).toBe("error");
-      expect(diagnostics[0].message).toContain("x");
-      expect(diagnostics[0].message).toContain("i32");
-      expect(diagnostics[0].message).toContain("str");
+      expect(messageOf(diagnostics[0])).toContain("x");
+      expect(messageOf(diagnostics[0])).toContain("i32");
+      expect(messageOf(diagnostics[0])).toContain("str");
     });
 
     it("field type mismatch diagnostic span points at the field value", (): void => {
@@ -2645,7 +2652,7 @@ describe("semantic analysis", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].message).toContain("out of range for u8");
+      expect(messageOf(diagnostics[0])).toContain("out of range for u8");
     });
 
     it("reports each mismatched field independently", (): void => {
@@ -2663,7 +2670,7 @@ describe("semantic analysis", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].message).toContain("unknown_name");
+      expect(messageOf(diagnostics[0])).toContain("unknown_name");
     });
 
     it("rejects a genuinely unit-typed field value against a non-unit field type", (): void => {
@@ -2674,7 +2681,7 @@ describe("semantic analysis", (): void => {
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
       expect(diagnostics[0].severity).toBe("error");
-      expect(diagnostics[0].message).toContain("type mismatch");
+      expect(messageOf(diagnostics[0])).toContain("type mismatch");
     });
 
     it("leaves a shorthand field untouched", (): void => {
@@ -2695,7 +2702,7 @@ describe("semantic analysis", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].message).toContain("x");
+      expect(messageOf(diagnostics[0])).toContain("x");
     });
   });
 
@@ -2704,7 +2711,7 @@ describe("semantic analysis", (): void => {
     (stmt) => {
       const result = diagnose(`${stmt}; fn main() {}`);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain(
+      expect(messageOf(result.diagnostics[0])).toContain(
         "only function, struct, enum, const, and static declarations are allowed at the top level",
       );
     },
@@ -2728,16 +2735,16 @@ describe("reference types", (): void => {
     const result = diagnose("fn f(x: &'a i32) -> &'a mut i32 { x }");
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("return type mismatch");
-    expect(result.diagnostics[0].message).toContain("&mut i32");
-    expect(result.diagnostics[0].message).toContain("&i32");
+    expect(messageOf(result.diagnostics[0])).toContain("return type mismatch");
+    expect(messageOf(result.diagnostics[0])).toContain("&mut i32");
+    expect(messageOf(result.diagnostics[0])).toContain("&i32");
   });
 
   it("rejects a referent-type mismatch between a &i32 parameter and a &str return type", (): void => {
     const result = diagnose("fn f(x: &'a i32) -> &'a str { x }");
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("return type mismatch");
+    expect(messageOf(result.diagnostics[0])).toContain("return type mismatch");
   });
 
   it("accepts a & expression operator borrowing a bare local, with no diagnostics", (): void => {
@@ -2788,7 +2795,7 @@ describe("reference types", (): void => {
     );
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain(
+    expect(messageOf(result.diagnostics[0])).toContain(
       "only a local binding, a parameter, or a field, index, or dereference of one can be borrowed directly",
     );
   });
@@ -2799,10 +2806,12 @@ describe("reference types", (): void => {
     );
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain(
+    expect(messageOf(result.diagnostics[0])).toContain(
       "only a local binding, a parameter, or a field, index, or dereference of one can be borrowed directly",
     );
-    expect(result.diagnostics[0].message).not.toContain("field or index place");
+    expect(messageOf(result.diagnostics[0])).not.toContain(
+      "field or index place",
+    );
   });
 
   it("type-checks *x as the referent type of a &i32 parameter, with no diagnostics", (): void => {
@@ -2819,7 +2828,7 @@ describe("reference types", (): void => {
     const result = diagnose("fn f(x: &'a i32) { *x = 1; }");
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain(
+    expect(messageOf(result.diagnostics[0])).toContain(
       "cannot assign through a shared reference",
     );
   });
@@ -2828,7 +2837,7 @@ describe("reference types", (): void => {
     const result = diagnose("fn f(x: i32) { *x; }");
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain(
+    expect(messageOf(result.diagnostics[0])).toContain(
       "cannot dereference a non-reference type",
     );
   });
@@ -2837,7 +2846,7 @@ describe("reference types", (): void => {
     const result = diagnose("fn f() { *missing; }");
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("missing");
+    expect(messageOf(result.diagnostics[0])).toContain("missing");
   });
 
   it("resolves a field read through a shared reference to the referent struct's field type", (): void => {
@@ -2867,7 +2876,7 @@ describe("reference types", (): void => {
     );
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain(
+    expect(messageOf(result.diagnostics[0])).toContain(
       "cannot assign through a shared reference",
     );
   });
@@ -2878,7 +2887,7 @@ describe("reference types", (): void => {
     );
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain(
+    expect(messageOf(result.diagnostics[0])).toContain(
       "cannot assign through a shared reference",
     );
   });
@@ -2907,7 +2916,7 @@ describe("reference types", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain(
+    expect(messageOf(result.diagnostics[0])).toContain(
       "cannot assign through a shared reference",
     );
   });
@@ -2924,7 +2933,7 @@ describe("match binding modes over a reference scrutinee", () => {
   it("still binds a plain name by value (not a reference) when the scrutinee is owned", () => {
     const result = diagnose("fn f(x: i32) { match x { name => *name }; }");
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "cannot dereference a non-reference type",
     );
   });
@@ -2978,7 +2987,7 @@ describe("match binding modes over a reference scrutinee", () => {
       "fn f(x: i32) -> i32 { match x { name => { name = name + 1; name } } }",
     );
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "cannot assign to immutable binding",
     );
   });
@@ -2991,7 +3000,7 @@ describe("binding-mode &mut-override legality", () => {
       fn f(p: Point) { match &p { Point { x: &mut bx, y } => { *bx; y } }; }
     `);
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "cannot bind `bx` as `&mut` through a shared reference",
     );
   });
@@ -3010,7 +3019,7 @@ describe("binding-mode &mut-override legality", () => {
       fn f(p: Point) { match p { Point { x: &mut bx, y } => { *bx; y } }; }
     `);
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "cannot bind `bx` as `&mut` because the underlying place is not mutable",
     );
   });
@@ -3029,7 +3038,7 @@ describe("binding-mode &mut-override legality", () => {
       fn f(Point { x: &mut bx, y }: Point) -> i32 { *bx + y }
     `);
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "cannot bind `bx` as `&mut` because the underlying place is not mutable",
     );
   });
@@ -3072,10 +3081,10 @@ describe("slice patterns over fixed-length arrays", () => {
       fn f(arr: [i32; 3]) { let [a, b] = arr; }
     `);
     expect(result.diagnostics).toHaveLength(2);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "array has 3 element(s), but the pattern requires exactly 2",
     );
-    expect(result.diagnostics[1]?.message).toBe(
+    expect(messageOf(result.diagnostics[1])).toBe(
       "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match",
     );
   });
@@ -3085,10 +3094,10 @@ describe("slice patterns over fixed-length arrays", () => {
       fn f(arr: [i32; 2]) { let [a, b, c, ..rest] = arr; }
     `);
     expect(result.diagnostics).toHaveLength(2);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "array has 2 element(s), but the pattern requires at least 3",
     );
-    expect(result.diagnostics[1]?.message).toBe(
+    expect(messageOf(result.diagnostics[1])).toBe(
       "refutable patterns are not allowed in `let`/parameter position; use `if let` for a pattern that might not match",
     );
   });
@@ -3134,7 +3143,7 @@ describe("slice patterns over fixed-length arrays", () => {
       fn f(arr: [i32; 5]) { let [a, .., b, .., c] = arr; }
     `);
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "a slice pattern can have at most one `..` rest, but this one has 2",
     );
   });
@@ -3156,10 +3165,10 @@ describe("slice patterns over fixed-length arrays", () => {
       fn f(arr: [i32; 3]) { match arr { [a, b] => { print(a); print(b); } }; }
     `);
     expect(result.diagnostics).toHaveLength(2);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "array has 3 element(s), but the pattern requires exactly 2",
     );
-    expect(result.diagnostics[1]?.message).toContain("non-exhaustive");
+    expect(messageOf(result.diagnostics[1])).toContain("non-exhaustive");
   });
 
   it("does not treat an arity-mismatched slice-pattern arm as a catch-all that suppresses a later, correctly-shaped arm", () => {
@@ -3167,7 +3176,7 @@ describe("slice patterns over fixed-length arrays", () => {
       fn f(arr: [i32; 3]) -> i32 { match arr { [a, b] => 1, [c, d, e] => 2 } }
     `);
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "array has 3 element(s), but the pattern requires exactly 2",
     );
   });
@@ -3186,7 +3195,7 @@ describe("slice patterns over fixed-length arrays", () => {
       }
     `);
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "cannot bind `rest` as `&mut` through a shared reference",
     );
   });
@@ -3217,7 +3226,7 @@ describe("or-pattern binding consistency", () => {
     expect(result.diagnostics.length).toBeGreaterThan(0);
     expect(
       result.diagnostics.some((d) =>
-        d.message.startsWith(
+        messageOf(d).startsWith(
           "or-pattern alternatives must bind the same names",
         ),
       ),
@@ -3230,7 +3239,7 @@ describe("or-pattern binding consistency", () => {
       fn f(r: Res) { match r { Res::Ok(x) | Res::Err(x) => { print(x); } }; }
     `);
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "or-pattern alternatives must bind `x` with the same type and mode in every alternative",
     );
   });
@@ -3241,7 +3250,7 @@ describe("or-pattern binding consistency", () => {
       fn f(r: Res) { match r { Res::Ok(x) | Res::Err(mut x) => { print(x); } }; }
     `);
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "or-pattern alternatives must bind `x` with the same type and mode in every alternative",
     );
   });
@@ -3261,7 +3270,7 @@ describe("or-pattern binding consistency", () => {
     `);
     expect(
       result.diagnostics.some((d) =>
-        d.message.startsWith(
+        messageOf(d).startsWith(
           "or-pattern alternatives must bind the same names",
         ),
       ),
@@ -3289,7 +3298,7 @@ describe("array types", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("type mismatch");
+    expect(messageOf(result.diagnostics[0])).toContain("type mismatch");
   });
 
   it("rejects an array literal whose element type does not match the declared element type", (): void => {
@@ -3340,7 +3349,7 @@ describe("array types", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("Copy");
+    expect(messageOf(result.diagnostics[0])).toContain("Copy");
   });
 
   it("rejects a repeat-form count that is a runtime variable, not a compile-time constant", (): void => {
@@ -3360,7 +3369,7 @@ describe("array types", (): void => {
     // substring that happens to match by coincidence (a prior version of
     // this assertion checked for the literal character "n", which passes
     // against "consta**n**t" regardless of what the diagnostic says).
-    expect(result.diagnostics[0].message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "array length must be a compile-time constant expression",
     );
   });
@@ -3374,7 +3383,7 @@ describe("array types", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("exceeds the maximum");
+    expect(messageOf(result.diagnostics[0])).toContain("exceeds the maximum");
   });
 
   it("rejects an array type annotation whose length exceeds the maximum", (): void => {
@@ -3389,7 +3398,7 @@ describe("array types", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("exceeds the maximum");
+    expect(messageOf(result.diagnostics[0])).toContain("exceeds the maximum");
   });
 
   describe("const-length arrays", (): void => {
@@ -3441,7 +3450,7 @@ describe("array types", (): void => {
       `);
       expect(result.diagnostics).toHaveLength(1);
       assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(result.diagnostics[0].message).toContain("integer");
+      expect(messageOf(result.diagnostics[0])).toContain("integer");
     });
 
     it("rejects a negative const array length", (): void => {
@@ -3451,7 +3460,7 @@ describe("array types", (): void => {
       `);
       expect(result.diagnostics).toHaveLength(1);
       assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(result.diagnostics[0].message).toContain("negative");
+      expect(messageOf(result.diagnostics[0])).toContain("negative");
     });
 
     it("rejects a [T; N] array length referencing an undeclared name", (): void => {
@@ -3460,7 +3469,7 @@ describe("array types", (): void => {
       `);
       expect(result.diagnostics).toHaveLength(1);
       assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(result.diagnostics[0].message).toContain("MISSING");
+      expect(messageOf(result.diagnostics[0])).toContain("MISSING");
     });
   });
 
@@ -3473,7 +3482,7 @@ describe("array types", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain(
+    expect(messageOf(result.diagnostics[0])).toContain(
       "array elements must all have the same type",
     );
   });
@@ -3487,7 +3496,7 @@ describe("array types", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("infer");
+    expect(messageOf(result.diagnostics[0])).toContain("infer");
   });
 
   it("accepts an empty array literal with an explicit [i32; 0] annotation", (): void => {
@@ -3533,7 +3542,7 @@ describe("array types", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("usize");
+    expect(messageOf(result.diagnostics[0])).toContain("usize");
   });
 
   it("rejects an i32-typed variable index, since indices must specifically be usize, not just any integer type", (): void => {
@@ -3547,7 +3556,7 @@ describe("array types", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("usize");
+    expect(messageOf(result.diagnostics[0])).toContain("usize");
   });
 
   it("rejects indexing a non-array type", (): void => {
@@ -3560,7 +3569,7 @@ describe("array types", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("cannot index");
+    expect(messageOf(result.diagnostics[0])).toContain("cannot index");
   });
 
   it("accepts a literal index equal to the last valid position (length - 1)", (): void => {
@@ -3584,7 +3593,7 @@ describe("array types", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("out of bounds");
+    expect(messageOf(result.diagnostics[0])).toContain("out of bounds");
   });
 
   it("rejects a literal negative index as a compile-time error", (): void => {
@@ -3649,7 +3658,7 @@ describe("array types", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toContain("immutable");
+    expect(messageOf(result.diagnostics[0])).toContain("immutable");
   });
 });
 
@@ -3658,7 +3667,7 @@ describe("Self as a type", (): void => {
     const result = diagnose("fn f() -> Self::Item { }");
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "`Self` can only be used inside a trait or impl block",
     );
   });
@@ -3667,7 +3676,7 @@ describe("Self as a type", (): void => {
     const result = diagnose("fn f() -> Self { }");
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(result.diagnostics[0].message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "`Self` can only be used inside a trait or impl block",
     );
   });
@@ -3715,7 +3724,7 @@ describe("associated types and trait projections", (): void => {
         }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "cannot find associated type `Bogus` on trait `Iterator`",
       );
     });
@@ -3769,7 +3778,7 @@ describe("associated types and trait projections", (): void => {
         impl Iterator for Counter { fn next(&mut self) -> i32 { 0 } }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "impl of trait `Iterator` for `Counter` is missing associated type `Item`",
       );
     });
@@ -3781,7 +3790,7 @@ describe("associated types and trait projections", (): void => {
         impl Map for Dict {}
       `);
       expect(result.diagnostics).toHaveLength(2);
-      expect(result.diagnostics.map((d) => d.message)).toEqual([
+      expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
         "impl of trait `Map` for `Dict` is missing associated type `Key`",
         "impl of trait `Map` for `Dict` is missing associated type `Value`",
       ]);
@@ -3794,7 +3803,7 @@ describe("associated types and trait projections", (): void => {
         impl<T: A> Iterator for T {}
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "impl of trait `Iterator` for `T` is missing associated type `Item`",
       );
     });
@@ -3818,7 +3827,7 @@ describe("associated types and trait projections", (): void => {
         impl Iterator for Counter { type Item = Bogus; }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "cannot find type `Bogus` in this scope",
       );
     });
@@ -3833,7 +3842,7 @@ describe("associated types and trait projections", (): void => {
         }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "impl of trait `Iterator` for `Counter` defines associated type `Bogus`, which trait `Iterator` does not declare",
       );
     });
@@ -3849,7 +3858,7 @@ describe("associated types and trait projections", (): void => {
         }
       `);
       expect(result.diagnostics).toHaveLength(2);
-      expect(result.diagnostics.map((d) => d.message)).toEqual([
+      expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
         "impl of trait `Iterator` for `Counter` defines associated type `Bogus`, which trait `Iterator` does not declare",
         "cannot find associated type `Bogus` on `Counter`",
       ]);
@@ -3862,7 +3871,7 @@ describe("associated types and trait projections", (): void => {
         impl Iterator for Counter {}
       `);
       expect(result.diagnostics).toHaveLength(2);
-      expect(result.diagnostics.map((d) => d.message).sort()).toEqual([
+      expect(result.diagnostics.map((d) => messageOf(d)).sort()).toEqual([
         "impl of trait `Iterator` for `Counter` is missing associated type `Item`",
         "impl of trait `Iterator` for `Counter` is missing method `next`",
       ]);
@@ -3936,7 +3945,7 @@ describe("associated types and trait projections", (): void => {
         }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "cannot find associated type `Bogus` on `Counter`",
       );
     });
@@ -4043,7 +4052,7 @@ describe("associated types and trait projections", (): void => {
         }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "type mismatch: explicit annotation does not match initializer type",
       );
     });
@@ -4053,7 +4062,7 @@ describe("associated types and trait projections", (): void => {
         fn f<T>(x: T::Item) {}
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "qualified type paths are not supported yet",
       );
     });
@@ -4064,7 +4073,7 @@ describe("associated types and trait projections", (): void => {
         fn f<T: Draw>(x: T::Item) {}
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "cannot find associated type `Item` among the trait bounds of `T`",
       );
     });
@@ -4076,7 +4085,7 @@ describe("associated types and trait projections", (): void => {
         fn f<T: Iterator + OtherIter>(x: T::Item) {}
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "associated type `Item` is ambiguous between traits `Iterator`, `OtherIter`",
       );
     });
@@ -4124,7 +4133,7 @@ describe("dyn Trait as a type", (): void => {
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].code).toBe("HEDGE-NAME-001");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       `cannot find trait \`${traitName}\` in this scope`,
     );
   }
@@ -4189,7 +4198,7 @@ describe("dyn Trait as a type", (): void => {
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].code).toBe("HEDGE-NAME-001");
-    expect(diagnostics[0].message).toBe(`\`${name}\` is not a trait`);
+    expect(messageOf(diagnostics[0])).toBe(`\`${name}\` is not a trait`);
   }
 
   it("rejects dyn Draw naming a struct, with no cascade", (): void => {
@@ -4263,7 +4272,7 @@ describe("dyn Trait as a type", (): void => {
       "trait Draw {} trait Paint {} fn f(x: dyn Draw) -> dyn Paint { x }",
     );
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "return type mismatch: expected `dyn Paint`, found `dyn Draw`",
     );
   });
@@ -4304,7 +4313,7 @@ describe("dyn Trait object safety", (): void => {
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].code).toBe("HEDGE-TRAIT-008");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       `trait \`${traitName}\` cannot be made into a \`dyn\` object: method \`${methodName}\` takes \`Self\` as a non-receiver argument`,
     );
   }
@@ -4411,7 +4420,7 @@ describe("dyn Trait object safety", (): void => {
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].code).toBe("HEDGE-TRAIT-008");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       `trait \`${traitName}\` cannot be made into a \`dyn\` object: supertrait \`${supertraitName}\`'s method \`${methodName}\` takes \`Self\` as a non-receiver argument`,
     );
   }
@@ -4666,7 +4675,7 @@ describe("bodiless function signatures", (): void => {
   it("rejects a top-level bodiless function signature, since extern/trait are its only legal containers and neither parses yet", (): void => {
     const result = diagnose("fn f();");
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "a function signature with no body is not allowed as a top-level item",
     );
     expect(result.diagnostics[0]?.code).toBe("HEDGE-ITEM-001");
@@ -4675,7 +4684,7 @@ describe("bodiless function signatures", (): void => {
   it("rejects a block-local bodiless function signature the same way, with context-specific wording", (): void => {
     const result = diagnose("fn main() { fn f(); }");
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "a function signature with no body is not allowed inside a block",
     );
     expect(result.diagnostics[0]?.code).toBe("HEDGE-ITEM-001");
@@ -4684,10 +4693,10 @@ describe("bodiless function signatures", (): void => {
   it("still reports a bad parameter type on a bodiless signature, alongside the position restriction", (): void => {
     const result = diagnose("fn f(x: NotAType);");
     expect(result.diagnostics).toHaveLength(2);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "a function signature with no body is not allowed as a top-level item",
     );
-    expect(result.diagnostics[1]?.message).toBe(
+    expect(messageOf(result.diagnostics[1])).toBe(
       "cannot find type `NotAType` in this scope",
     );
   });
@@ -4695,7 +4704,7 @@ describe("bodiless function signatures", (): void => {
   it("still skips the missing-return-value check for a bodiless signature with a non-unit return type, alongside the position restriction", (): void => {
     const result = diagnose("fn f() -> i32;");
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "a function signature with no body is not allowed as a top-level item",
     );
   });
@@ -4703,14 +4712,14 @@ describe("bodiless function signatures", (): void => {
   it("still rejects the equivalent bodied function for missing return value, unaffected", (): void => {
     const result = diagnose("fn f() -> i32 {}");
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "missing return value: expected `i32`",
     );
   });
 
   it("reports both the position restriction (once per declaration) and the duplicate-name diagnostic for two same-named bodiless signatures", (): void => {
     const result = diagnose("fn f(); fn f();");
-    expect(result.diagnostics.map((d) => d.message)).toEqual([
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
       "function `f` is defined more than once",
       "a function signature with no body is not allowed as a top-level item",
       "a function signature with no body is not allowed as a top-level item",
@@ -4735,7 +4744,7 @@ describe("trait and impl declarations", (): void => {
       impl Draw for Point { fn draw(&self) -> str { "b" } }
     `);
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "trait `Draw` is already implemented for type `Point`",
     );
   });
@@ -4748,7 +4757,7 @@ describe("trait and impl declarations", (): void => {
       impl<T: A> B for T { fn f(&self) -> str { "b" } }
     `);
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "conflicting implementations of trait `B`",
     );
   });
@@ -4762,7 +4771,7 @@ describe("trait and impl declarations", (): void => {
       impl B for Point { fn f(&self) -> str { "a" } }
     `);
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "conflicting implementations of trait `B` for type `Point`",
     );
   });
@@ -4824,7 +4833,7 @@ describe("trait and impl declarations", (): void => {
         fn main() { draw_all(Point { x: 0, y: 0 }); }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "the trait bound `Point: Draw` is not satisfied",
       );
     });
@@ -4850,7 +4859,7 @@ describe("trait and impl declarations", (): void => {
         fn main() { show(Point { x: 0, y: 0 }); }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "the trait bound `Point: Describe` is not satisfied",
       );
     });
@@ -4878,7 +4887,7 @@ describe("trait and impl declarations", (): void => {
         fn main() { pair(Point { x: 0, y: 0 }, Circle { r: 1 }); }
       `);
       expect(result.diagnostics).toHaveLength(2);
-      expect(result.diagnostics.map((d) => d.message)).toEqual([
+      expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
         "the trait bound `Point: Draw` is not satisfied",
         "the trait bound `Circle: Describe` is not satisfied",
       ]);
@@ -4895,7 +4904,7 @@ describe("trait and impl declarations", (): void => {
         }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "the trait bound `Point: Draw` is not satisfied",
       );
     });
@@ -4917,7 +4926,7 @@ describe("trait and impl declarations", (): void => {
         fn outer<T: Describe>(x: T) { inner(x); }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "the trait bound `T: Draw` is not satisfied",
       );
     });
@@ -4951,7 +4960,7 @@ describe("trait and impl declarations", (): void => {
         fn main() { needs_draw(Point { x: 0, y: 0 }); }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "the trait bound `Point: Draw` is not satisfied",
       );
     });
@@ -4981,7 +4990,7 @@ describe("trait and impl declarations", (): void => {
         fn main() { needs_b(Point { x: 0, y: 0 }); }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "the trait bound `Point: B` is not satisfied",
       );
     });
@@ -5005,7 +5014,7 @@ describe("trait and impl declarations", (): void => {
         impl Ord for Point {}
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "the trait bound `Point: Eq` is not satisfied",
       );
     });
@@ -5033,7 +5042,7 @@ describe("trait and impl declarations", (): void => {
         fn main() { needs_b(Point { x: 0, y: 0 }); }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "the trait bound `Point: B` is not satisfied",
       );
     });
@@ -5047,7 +5056,7 @@ describe("trait and impl declarations", (): void => {
         impl Draw for Point {}
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "impl of trait `Draw` for `Point` is missing method `draw`",
       );
     });
@@ -5059,7 +5068,7 @@ describe("trait and impl declarations", (): void => {
         impl Shape for Point {}
       `);
       expect(result.diagnostics).toHaveLength(2);
-      expect(result.diagnostics.map((d) => d.message)).toEqual([
+      expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
         "impl of trait `Shape` for `Point` is missing method `draw`",
         "impl of trait `Shape` for `Point` is missing method `area`",
       ]);
@@ -5211,7 +5220,7 @@ describe("trait and impl declarations", (): void => {
         fn main() { show(Point { x: 0, y: 0 }); }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "the trait bound `Point: Describe` is not satisfied",
       );
       expect(result.witnesses.size).toBe(0);
@@ -5247,7 +5256,7 @@ describe("trait and impl declarations", (): void => {
       // visibility lint below - expected here, not a resolution failure.
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("warning");
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "impl of trait `Draw` for `Point` takes effect everywhere in the program, not just this scope",
       );
     });
@@ -5271,7 +5280,7 @@ describe("trait and impl declarations", (): void => {
       `);
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("warning");
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "impl of trait `Draw` for `Point` takes effect everywhere in the program, not just this scope",
       );
     });
@@ -5286,7 +5295,7 @@ describe("trait and impl declarations", (): void => {
       `);
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("warning");
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "blanket impl of trait `B` takes effect everywhere in the program, not just this scope",
       );
     });
@@ -5314,7 +5323,7 @@ describe("trait and impl declarations", (): void => {
       `);
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("warning");
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "impl of trait `Draw` for `Point` takes effect everywhere in the program, not just this scope",
       );
     });
@@ -5330,7 +5339,7 @@ describe("trait and impl declarations", (): void => {
         fn main() { needs_a(Point { x: 0, y: 0 }); }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "the trait bound `Point: A` is not satisfied",
       );
     });
@@ -5346,7 +5355,7 @@ describe("trait and impl declarations", (): void => {
         fn main() { needs_a(Point { x: 0, y: 0 }); }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "the trait bound `Point: A` is not satisfied",
       );
     });
@@ -5381,7 +5390,7 @@ describe("trait and impl declarations", (): void => {
       `);
       expect(result.diagnostics).toHaveLength(2);
       expect(result.diagnostics[0]?.code).toBe("HEDGE-LINT-004");
-      expect(result.diagnostics[1]?.message).toBe(
+      expect(messageOf(result.diagnostics[1])).toBe(
         "the trait bound `P: Draw` is not satisfied",
       );
     });
@@ -5407,7 +5416,7 @@ describe("trait and impl declarations", (): void => {
         impl Missing for P {}
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "cannot find trait `Missing` in this scope",
       );
     });
@@ -5420,10 +5429,10 @@ describe("trait and impl declarations", (): void => {
         fn needs<T: Missing2>(x: T) {}
         fn main() { needs(P { x: 0 }); }
       `);
-      expect(result.diagnostics.map((d) => d.message)).toContain(
+      expect(result.diagnostics.map((d) => messageOf(d))).toContain(
         "cannot find trait `Missing` in this scope",
       );
-      expect(result.diagnostics.map((d) => d.message)).toContain(
+      expect(result.diagnostics.map((d) => messageOf(d))).toContain(
         "the trait bound `P: Missing2` is not satisfied",
       );
     });
@@ -5434,7 +5443,7 @@ describe("trait and impl declarations", (): void => {
         impl<T: Missing> B for T { fn f(&self) -> str { "a" } }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "cannot find trait `Missing` in this scope",
       );
     });
@@ -5444,7 +5453,7 @@ describe("trait and impl declarations", (): void => {
         trait B: Missing {}
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "cannot find trait `Missing` in this scope",
       );
     });
@@ -5462,7 +5471,7 @@ describe("trait and impl declarations", (): void => {
         fn f<T: Missing>(x: T) {}
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "cannot find trait `Missing` in this scope",
       );
     });
@@ -5472,7 +5481,7 @@ describe("trait and impl declarations", (): void => {
         fn f<T>(x: T) where T: Missing {}
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "cannot find trait `Missing` in this scope",
       );
     });
@@ -5485,7 +5494,7 @@ describe("trait and impl declarations", (): void => {
         trait Draw {}
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "trait `Draw` is defined more than once",
       );
     });
@@ -5497,10 +5506,10 @@ describe("trait and impl declarations", (): void => {
         trait Draw {}
       `);
       expect(result.diagnostics).toHaveLength(2);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "trait `Draw` is defined more than once",
       );
-      expect(result.diagnostics[1]?.message).toBe(
+      expect(messageOf(result.diagnostics[1])).toBe(
         "trait `Draw` is defined more than once",
       );
     });
@@ -5513,7 +5522,7 @@ describe("trait and impl declarations", (): void => {
         }
       `);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "trait `Draw` is defined more than once",
       );
     });
@@ -5527,7 +5536,7 @@ describe("trait and impl declarations", (): void => {
       `);
       expect(
         result.diagnostics.filter(
-          (d) => d.message === "trait `Draw` is defined more than once",
+          (d) => messageOf(d) === "trait `Draw` is defined more than once",
         ),
       ).toHaveLength(0);
     });
@@ -5567,7 +5576,7 @@ describe("trait and impl declarations", (): void => {
       `);
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.code).toBe("HEDGE-TYPE-001");
-      expect(result.diagnostics[0]?.message).toBe(
+      expect(messageOf(result.diagnostics[0])).toBe(
         "type mismatch: explicit annotation does not match initializer type",
       );
     });
@@ -5589,7 +5598,7 @@ describe("trait and impl declarations", (): void => {
       expect(result.diagnostics).toHaveLength(2);
       expect(result.diagnostics[0]?.code).toBe("HEDGE-LINT-003");
       expect(result.diagnostics[1]?.code).toBe("HEDGE-TRAIT-002");
-      expect(result.diagnostics[1]?.message).toBe(
+      expect(messageOf(result.diagnostics[1])).toBe(
         "the trait bound `Circle: Draw` is not satisfied",
       );
     });
@@ -5651,7 +5660,7 @@ describe("std prelude traits", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.code).toBe("HEDGE-TRAIT-003");
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "impl of trait `Clone` for `Counter` is missing method `clone`",
     );
   });
@@ -5663,7 +5672,7 @@ describe("std prelude traits", (): void => {
       fn main() {}
     `);
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "impl of trait `Default` for `Counter` is missing method `default`",
     );
   });
@@ -5675,7 +5684,7 @@ describe("std prelude traits", (): void => {
       fn main() {}
     `);
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "impl of trait `Drop` for `Handle` is missing method `drop`",
     );
   });
@@ -5688,7 +5697,7 @@ describe("std prelude traits", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.code).toBe("HEDGE-TRAIT-002");
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "the trait bound `Counter: PartialEq` is not satisfied",
     );
   });
@@ -5702,7 +5711,7 @@ describe("std prelude traits", (): void => {
     `);
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.code).toBe("HEDGE-TRAIT-001");
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "trait `Clone` is already implemented for type `Counter`",
     );
   });
@@ -5713,7 +5722,7 @@ describe("std prelude traits", (): void => {
       fn main() {}
     `);
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "trait `Clone` is defined more than once",
     );
   });

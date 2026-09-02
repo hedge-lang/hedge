@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { messageOf } from "../diagnostics/index.js";
 
 import { none, some } from "../option.js";
 import { tokenize } from "./lexer.js";
@@ -152,15 +153,17 @@ describe("lexer", (): void => {
         const tokens = tokenize(
           `/* this is a block comment without a closing delimiter`,
         );
-        expect(tokens.diagnostics).toMatchObject([
-          { severity: "error", message: "Unterminated block comment" },
-        ]);
+        expect(tokens.diagnostics).toHaveLength(1);
+        expect(tokens.diagnostics[0]?.severity).toBe("error");
+        expect(messageOf(tokens.diagnostics[0])).toBe(
+          "Unterminated block comment",
+        );
       });
 
       it("emits exactly one diagnostic for an unterminated block comment (no cascade)", () => {
         const result = tokenize("/* unclosed\nlet x = 1;");
         expect(result.diagnostics).toHaveLength(1);
-        expect(result.diagnostics[0]?.message).toContain("Unterminated");
+        expect(messageOf(result.diagnostics[0])).toContain("Unterminated");
       });
 
       it("includes block comments with a /** starter", () => {
@@ -443,7 +446,9 @@ describe("lexer", (): void => {
       const result = tokenize("'");
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.severity).toBe("error");
-      expect(result.diagnostics[0]?.message).toContain("Unexpected character");
+      expect(messageOf(result.diagnostics[0])).toContain(
+        "Unexpected character",
+      );
       expect(result.tokens).toMatchObject([
         { kind: "error", text: "'" },
         { kind: "eof" },
@@ -451,7 +456,9 @@ describe("lexer", (): void => {
 
       const result2 = tokenize("' ");
       expect(result2.diagnostics).toHaveLength(1);
-      expect(result2.diagnostics[0]?.message).toContain("Unexpected character");
+      expect(messageOf(result2.diagnostics[0])).toContain(
+        "Unexpected character",
+      );
     });
   });
 
@@ -563,7 +570,7 @@ describe("lexer", (): void => {
           text: "r#",
           span: { start: 0, end: 2 },
         });
-        expect(diagnostics[0]?.message).toContain("r#");
+        expect(messageOf(diagnostics[0])).toContain("r#");
         expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
       });
 
@@ -575,7 +582,7 @@ describe("lexer", (): void => {
           span: { start: 0, end: 2 },
         });
         expect(tokens[1]).toMatchObject({ kind: "int", text: "1" });
-        expect(diagnostics[0]?.message).toContain("r#");
+        expect(messageOf(diagnostics[0])).toContain("r#");
         expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
       });
 
@@ -587,7 +594,7 @@ describe("lexer", (): void => {
           span: { start: 0, end: 2 },
         });
         expect(diagnostics).toHaveLength(1);
-        expect(diagnostics[0]?.message).toContain("r#");
+        expect(messageOf(diagnostics[0])).toContain("r#");
         expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
       });
 
@@ -913,7 +920,7 @@ describe("string literals", () => {
   it("unterminated string produces an error token and a diagnostic", () => {
     const { tokens, diagnostics } = tokenize('"hello');
     expect(tokens[0]).toMatchObject({ kind: "error" });
-    expect(diagnostics[0]?.message).toContain("Unterminated");
+    expect(messageOf(diagnostics[0])).toContain("Unterminated");
     expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
   });
 
@@ -964,27 +971,27 @@ describe("string literals", () => {
     it("invalid escape \\q produces an error token and diagnostic", () => {
       const { tokens, diagnostics } = tokenize('"\\q"');
       expect(tokens[0]).toMatchObject({ kind: "error" });
-      expect(diagnostics[0]?.message).toContain("escape");
+      expect(messageOf(diagnostics[0])).toContain("escape");
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
 
     it("invalid escape \\q does not produce a second 'unterminated' diagnostic", () => {
       const { diagnostics } = tokenize('"\\q"');
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0]?.message).toContain("escape");
+      expect(messageOf(diagnostics[0])).toContain("escape");
     });
 
     it("\\x escape needs exactly 2 hex digits", () => {
       const { tokens, diagnostics } = tokenize('"\\x4"');
       expect(tokens[0]).toMatchObject({ kind: "error" });
-      expect(diagnostics[0]?.message).toContain("hex");
+      expect(messageOf(diagnostics[0])).toContain("hex");
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
 
     it("\\u{} with no digits is an error", () => {
       const { tokens, diagnostics } = tokenize('"\\u{}"');
       expect(tokens[0]).toMatchObject({ kind: "error" });
-      expect(diagnostics[0]?.message).toContain("unicode");
+      expect(messageOf(diagnostics[0])).toContain("unicode");
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
 
@@ -997,28 +1004,28 @@ describe("string literals", () => {
       it("\\u{110000} (above max) is a lex error", () => {
         const { tokens, diagnostics } = tokenize('"\\u{110000}"');
         expect(tokens[0]).toMatchObject({ kind: "error" });
-        expect(diagnostics[0]?.message).toContain("range");
+        expect(messageOf(diagnostics[0])).toContain("range");
         expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
       });
 
       it("\\u{D800} (low surrogate) is a lex error", () => {
         const { tokens, diagnostics } = tokenize('"\\u{D800}"');
         expect(tokens[0]).toMatchObject({ kind: "error" });
-        expect(diagnostics[0]?.message).toContain("surrogate");
+        expect(messageOf(diagnostics[0])).toContain("surrogate");
         expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
       });
 
       it("\\u{DFFF} (high surrogate) is a lex error", () => {
         const { tokens, diagnostics } = tokenize('"\\u{DFFF}"');
         expect(tokens[0]).toMatchObject({ kind: "error" });
-        expect(diagnostics[0]?.message).toContain("surrogate");
+        expect(messageOf(diagnostics[0])).toContain("surrogate");
         expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
       });
 
       it("\\u{1234567} (too many digits) is a lex error", () => {
         const { tokens, diagnostics } = tokenize('"\\u{1234567}"');
         expect(tokens[0]).toMatchObject({ kind: "error" });
-        expect(diagnostics[0]?.message).toContain("too many digits");
+        expect(messageOf(diagnostics[0])).toContain("too many digits");
         expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
       });
     });
@@ -1068,7 +1075,7 @@ describe("string literals", () => {
     it('r##"unclosed"# emits an unterminated error (closing delimiter needs two hashes)', () => {
       const { tokens, diagnostics } = tokenize('r##"unclosed"#');
       expect(tokens[0]).toMatchObject({ kind: "error" });
-      expect(diagnostics[0]?.message).toContain("Unterminated raw string");
+      expect(messageOf(diagnostics[0])).toContain("Unterminated raw string");
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
   });
@@ -1172,21 +1179,21 @@ describe("integer literals", () => {
         kind: "error",
         span: { start: 0, end: 2 },
       });
-      expect(diagnostics[0]?.message).toContain("hex literal");
+      expect(messageOf(diagnostics[0])).toContain("hex literal");
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
 
     it("0x_ (leading separator) is a lex error", () => {
       const { tokens, diagnostics } = tokenize("0x_F");
       expect(tokens[0]).toMatchObject({ kind: "error" });
-      expect(diagnostics[0]?.message).toContain("hex");
+      expect(messageOf(diagnostics[0])).toContain("hex");
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
 
     it("0x_ with nothing after is a lex error", () => {
       const { tokens, diagnostics } = tokenize("0x_");
       expect(tokens[0]).toMatchObject({ kind: "error" });
-      expect(diagnostics[0]?.message).toContain("hex");
+      expect(messageOf(diagnostics[0])).toContain("hex");
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
   });
@@ -1209,21 +1216,21 @@ describe("integer literals", () => {
     it("0o with no digits is a lex error", () => {
       const { tokens, diagnostics } = tokenize("0o");
       expect(tokens[0]).toMatchObject({ kind: "error" });
-      expect(diagnostics[0]?.message).toContain("octal literal");
+      expect(messageOf(diagnostics[0])).toContain("octal literal");
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
 
     it("digit 8 in octal is a lex error", () => {
       const { tokens, diagnostics } = tokenize("0o9");
       expect(tokens[0]).toMatchObject({ kind: "error" });
-      expect(diagnostics[0]?.message).toContain("octal");
+      expect(messageOf(diagnostics[0])).toContain("octal");
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
 
     it("0o_ (leading separator) is a lex error", () => {
       const { tokens, diagnostics } = tokenize("0o_7");
       expect(tokens[0]).toMatchObject({ kind: "error" });
-      expect(diagnostics[0]?.message).toContain("octal");
+      expect(messageOf(diagnostics[0])).toContain("octal");
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
   });
@@ -1246,21 +1253,21 @@ describe("integer literals", () => {
     it("0b with no digits is a lex error", () => {
       const { tokens, diagnostics } = tokenize("0b");
       expect(tokens[0]).toMatchObject({ kind: "error" });
-      expect(diagnostics[0]?.message).toContain("binary literal");
+      expect(messageOf(diagnostics[0])).toContain("binary literal");
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
 
     it("digit 2 in binary is a lex error", () => {
       const { tokens, diagnostics } = tokenize("0b2");
       expect(tokens[0]).toMatchObject({ kind: "error" });
-      expect(diagnostics[0]?.message).toContain("binary");
+      expect(messageOf(diagnostics[0])).toContain("binary");
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
 
     it("0b_ (leading separator) is a lex error", () => {
       const { tokens, diagnostics } = tokenize("0b_1");
       expect(tokens[0]).toMatchObject({ kind: "error" });
-      expect(diagnostics[0]?.message).toContain("binary");
+      expect(messageOf(diagnostics[0])).toContain("binary");
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
   });
@@ -1440,14 +1447,14 @@ describe("float literals", () => {
     it("1e with no digits is a lex error", () => {
       const { tokens, diagnostics } = tokenize("1e");
       expect(tokens[0]).toMatchObject({ kind: "error" });
-      expect(diagnostics[0]?.message).toContain("exponent");
+      expect(messageOf(diagnostics[0])).toContain("exponent");
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
 
     it("1.0e with no digits is a lex error", () => {
       const { tokens, diagnostics } = tokenize("1.0e");
       expect(tokens[0]).toMatchObject({ kind: "error" });
-      expect(diagnostics[0]?.message).toContain("exponent");
+      expect(messageOf(diagnostics[0])).toContain("exponent");
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
 
@@ -1598,34 +1605,34 @@ describe("char literals", () => {
     it("empty char literal '' is a lex error", () => {
       const { tokens, diagnostics } = tokenize("''");
       expect(tokens[0]).toMatchObject({ kind: "error" });
-      expect(diagnostics[0]?.message).toContain("empty char");
+      expect(messageOf(diagnostics[0])).toContain("empty char");
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
 
     it("unknown escape sequence is a lex error", () => {
       const { tokens, diagnostics } = tokenize("'\\q'");
       expect(tokens[0]).toMatchObject({ kind: "error" });
-      expect(diagnostics[0]?.message).toContain("escape");
+      expect(messageOf(diagnostics[0])).toContain("escape");
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
 
     it("unknown escape in char literal does not produce a second error", () => {
       const { diagnostics } = tokenize("'\\q'");
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0]?.message).toContain("escape");
+      expect(messageOf(diagnostics[0])).toContain("escape");
     });
 
     it("\\x escape in a char literal needs exactly 2 hex digits", () => {
       const { tokens, diagnostics } = tokenize("'\\x4'");
       expect(tokens[0]).toMatchObject({ kind: "error" });
-      expect(diagnostics[0]?.message).toContain("hex");
+      expect(messageOf(diagnostics[0])).toContain("hex");
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
 
     it("'\\u{110000}' (above max code point) is a lex error", () => {
       const { tokens, diagnostics } = tokenize("'\\u{110000}'");
       expect(tokens[0]).toMatchObject({ kind: "error" });
-      expect(diagnostics[0]?.message).toContain("range");
+      expect(messageOf(diagnostics[0])).toContain("range");
       expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
     });
 
@@ -1652,7 +1659,7 @@ describe("char literals", () => {
     it("reports an unterminated char literal when a valid escape has no closing quote", () => {
       const { tokens, diagnostics } = tokenize("'\\n");
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0]?.message).toBe(
+      expect(messageOf(diagnostics[0])).toBe(
         "unterminated char literal at offset 0",
       );
       expect(tokens).toMatchObject([
@@ -1664,7 +1671,7 @@ describe("char literals", () => {
     it("resumes lexing after the real closing quote once a bad escape's own error span falls short of it", () => {
       const { tokens, diagnostics } = tokenize("'\\x1qq' 42");
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0]?.message).toBe(
+      expect(messageOf(diagnostics[0])).toBe(
         "hex escape \\x needs exactly 2 hex digits at offset 1",
       );
       expect(tokens).toMatchObject([
@@ -1677,7 +1684,7 @@ describe("char literals", () => {
     it("recovers to end of source when a bad escape is never followed by a closing quote", () => {
       const { tokens, diagnostics } = tokenize("'\\qabc");
       expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0]?.message).toBe(
+      expect(messageOf(diagnostics[0])).toBe(
         "unknown escape sequence '\\q' at offset 1",
       );
       expect(tokens).toMatchObject([
@@ -1717,14 +1724,14 @@ describe("symbol tokens", () => {
   it("unrecognized character ~ produces an error token and diagnostic", () => {
     const { tokens, diagnostics } = tokenize("~");
     expect(tokens[0]).toMatchObject({ kind: "error", text: "~" });
-    expect(diagnostics[0]?.message).toContain("Unexpected");
+    expect(messageOf(diagnostics[0])).toContain("Unexpected");
     expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
   });
 
   it("unrecognized character ` produces an error token and diagnostic", () => {
     const { tokens, diagnostics } = tokenize("`");
     expect(tokens[0]).toMatchObject({ kind: "error", text: "`" });
-    expect(diagnostics[0]?.message).toContain("Unexpected");
+    expect(messageOf(diagnostics[0])).toContain("Unexpected");
     expect(tokens.at(-1)).toMatchObject({ kind: "eof" });
   });
 
@@ -1863,7 +1870,7 @@ describe("comment edge cases", () => {
 
   it("block comment with unclosed inner comment is unterminated", () => {
     const { diagnostics } = tokenize("/* a /* */");
-    expect(diagnostics[0]?.message).toContain("Unterminated");
+    expect(messageOf(diagnostics[0])).toContain("Unterminated");
   });
 
   it("CRLF after a line comment still tokenizes the following code", () => {

@@ -1,4 +1,8 @@
-import { type Diagnostic, errorDiagnostic } from "../diagnostics/index.js";
+import {
+  type Diagnostic,
+  errorDiagnosticRaw,
+  messageOf,
+} from "../diagnostics/index.js";
 import { resolveEscape } from "../lexer/escape.js";
 import type {
   FloatToken,
@@ -32,7 +36,7 @@ export function tokenAt(tokens: readonly Token[], pos: number): PR<Token> {
   const token = tokens[pos];
   if (token === undefined) {
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-002",
         `Unexpected end of input at token ${pos}`,
         none(),
@@ -77,7 +81,7 @@ export function expect(
   const token = tokenAtResult.value;
   if (token.kind !== kind) {
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-001",
         `Expected ${kind}, found "${token.kind}" at offset ${token.span.start}`,
         some(token.span),
@@ -105,7 +109,7 @@ export function expectKeyword(
   if (token.kind !== "keyword" || token.text !== text) {
     const found = token.kind === "keyword" ? token.text : token.kind;
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-001",
         `Expected keyword "${text}", found "${found}" at offset ${token.span.start}`,
         some(token.span),
@@ -476,7 +480,7 @@ export function skipBalancedBraceBlock(
   const openBraceToken = tokens[openBrace];
   if (openBraceToken?.kind !== "lbrace") {
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-001",
         `expected \`{\` to start block, found \`${openBraceToken?.kind ?? "MISSING"}\``,
         openBraceToken ? some(openBraceToken.span) : none(),
@@ -489,7 +493,7 @@ export function skipBalancedBraceBlock(
     const tok = tokens[cursor];
     if (tok === undefined || tok.kind === "eof") {
       return err(
-        errorDiagnostic(
+        errorDiagnosticRaw(
           "HEDGE-PARSE-002",
           "expected `}` to close block, found end of input",
           some(openBraceToken.span),
@@ -645,7 +649,7 @@ export function skipUnsupportedTopLevelItem(
   pos: number,
   message: string,
 ): PR<{ diagnostic: Diagnostic; next: number }> {
-  const diagnostic = errorDiagnostic(
+  const diagnostic = errorDiagnosticRaw(
     "HEDGE-PARSE-004",
     message,
     some(keyword.span),
@@ -654,7 +658,7 @@ export function skipUnsupportedTopLevelItem(
   const bodyStart = findTopLevelItemBodyStart(tokens, pos);
   if (bodyStart === undefined) {
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-002",
         `${message}; expected a body for \`${keyword.text}\`, found end of input`,
         some(keyword.span),
@@ -668,7 +672,11 @@ export function skipUnsupportedTopLevelItem(
   if (isErr(nextResult)) {
     return err({
       ...nextResult.error,
-      message: `${message}; ${nextResult.error.message}`,
+      kind: {
+        kind: "Raw",
+        code: nextResult.error.code,
+        text: `${message}; ${messageOf(nextResult.error)}`,
+      },
       span: some(keyword.span),
     });
   }
@@ -695,7 +703,7 @@ export function parseIdentifier(
   const token = tokenAtResult.value;
   if (token.kind === "keyword" && token.text === "mut") {
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-004",
         MUT_MESSAGE,
         some({ start: token.span.start, end: token.span.end }),
@@ -707,7 +715,7 @@ export function parseIdentifier(
     const found =
       token.kind === "keyword" ? `keyword "${token.text}"` : `"${token.kind}"`;
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-001",
         `Expected an identifier, found ${found} at offset ${token.span.start}`,
         some(token.span),

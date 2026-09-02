@@ -2,17 +2,18 @@ import type { Span } from "../lexer/token.js";
 import type { Option } from "../option.js";
 
 import type { DiagnosticCode } from "./code.js";
+import { codeOf, type DiagnosticKind, type RelatedLabelKind } from "./kind.js";
 
 /** A secondary source location a diagnostic refers to, alongside its own `span`. */
 export interface RelatedSpan {
   readonly span: Span;
-  readonly label: string;
+  readonly label: RelatedLabelKind;
 }
 
 /** A compiler diagnostic. */
 export interface Diagnostic {
   readonly severity: "error" | "warning";
-  readonly message: string;
+  readonly kind: DiagnosticKind;
   /** Source span the diagnostic points at, if known. */
   readonly span: Option<Span>;
   readonly code: DiagnosticCode;
@@ -20,23 +21,58 @@ export interface Diagnostic {
 }
 
 /**
- * Build an error. `code` comes first so it is answered rather than trailed
- * off the end, and so the signature barely moves once it stops being
- * optional. The lexer and parser build every diagnostic through these; the
- * analyzer has its own `emitError`, which pushes onto its context.
+ * Build an error. `code` is derived from `kind`, never passed, so a call
+ * site cannot pair a diagnostic with the wrong code. The lexer and parser
+ * build every diagnostic through these; the analyzer has its own
+ * `emitError`, which pushes onto its context.
  */
 export function errorDiagnostic(
-  code: DiagnosticCode,
-  message: string,
+  kind: DiagnosticKind,
   span: Option<Span>,
 ): Diagnostic {
-  return { severity: "error", message, span, code, relatedSpans: [] };
+  return {
+    severity: "error",
+    kind,
+    span,
+    code: codeOf(kind),
+    relatedSpans: [],
+  };
 }
 
 export function warningDiagnostic(
-  code: DiagnosticCode,
-  message: string,
+  kind: DiagnosticKind,
   span: Option<Span>,
 ): Diagnostic {
-  return { severity: "warning", message, span, code, relatedSpans: [] };
+  return {
+    severity: "warning",
+    kind,
+    span,
+    code: codeOf(kind),
+    relatedSpans: [],
+  };
+}
+
+/**
+ * Transitional wrappers preserving the old `(code, message, span)` shape
+ * while emission sites migrate to structured `DiagnosticKind`s. Removed once
+ * no site calls them.
+ */
+export function errorDiagnosticRaw(
+  code: DiagnosticCode,
+  text: string,
+  span: Option<Span>,
+): Diagnostic {
+  return errorDiagnostic({ kind: "Raw", code, text }, span);
+}
+
+export function warningDiagnosticRaw(
+  code: DiagnosticCode,
+  text: string,
+  span: Option<Span>,
+): Diagnostic {
+  return warningDiagnostic({ kind: "Raw", code, text }, span);
+}
+
+export function rawLabel(text: string): RelatedLabelKind {
+  return { kind: "RawLabel", text };
 }

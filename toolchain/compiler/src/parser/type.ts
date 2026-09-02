@@ -1,4 +1,4 @@
-import { errorDiagnostic } from "../diagnostics/index.js";
+import { errorDiagnosticRaw } from "../diagnostics/index.js";
 import type { Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
@@ -104,7 +104,7 @@ function parseTypeWithCloseState(
 
   if (token.kind === "lt") {
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-004",
         unsupportedGenericsMessage("generic type arguments"),
         some(token.span),
@@ -122,7 +122,7 @@ function parseTypeWithCloseState(
 
   if (token.kind === "bang") {
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-004",
         "the never type (`!`) is not yet supported",
         some(token.span),
@@ -132,7 +132,7 @@ function parseTypeWithCloseState(
 
   if (token.kind === "lifetime") {
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-004",
         unsupportedLifetimeMessage("lifetime annotations"),
         some(token.span),
@@ -145,7 +145,7 @@ function parseTypeWithCloseState(
   }
 
   return err(
-    errorDiagnostic(
+    errorDiagnosticRaw(
       "HEDGE-PARSE-004",
       `expected a type, found \`${token.kind}\``,
       some(token.span),
@@ -174,7 +174,7 @@ function parseUnitOrTupleType(
   }
   if (next.kind === "eof") {
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-002",
         "expected `)` to close type, found end of input",
         some(openParen.span),
@@ -182,7 +182,7 @@ function parseUnitOrTupleType(
     );
   }
   return err(
-    errorDiagnostic(
+    errorDiagnosticRaw(
       "HEDGE-PARSE-004",
       "tuple types are not yet supported",
       some(openParen.span),
@@ -204,7 +204,7 @@ function parseDynTypeWithCloseState(
   const nextToken = tokens[afterDyn];
   if (nextToken?.kind === "lifetime") {
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-004",
         "`dyn` must name a trait, not a lifetime",
         some(nextToken.span),
@@ -302,7 +302,7 @@ function parseNamedTypeWithCloseState(
   if (genericToken?.kind === "lt") {
     if (isLifetimeGenericsStart(tokens, pathResult.value.next)) {
       return err(
-        errorDiagnostic(
+        errorDiagnosticRaw(
           "HEDGE-PARSE-004",
           unsupportedLifetimeMessage("lifetime arguments"),
           some(genericToken.span),
@@ -331,7 +331,7 @@ function parseNamedTypeWithCloseState(
       ? unsupportedLifetimeMessage("lifetime arguments")
       : unsupportedGenericsMessage("generic type arguments");
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-004",
         message,
         some(pathSepMatch.value.span),
@@ -414,7 +414,7 @@ function parseArrayType(
   const afterElementToken = tokens[afterElement];
   if (afterElementToken?.kind === "rbracket") {
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-004",
         "slice types (`[T]`) are not yet supported",
         some(openBracket.span),
@@ -423,7 +423,7 @@ function parseArrayType(
   }
   if (afterElementToken?.kind !== "semi") {
     return err(
-      errorDiagnostic(
+      errorDiagnosticRaw(
         "HEDGE-PARSE-001",
         `expected ';' or ']' in array type, found "${afterElementToken?.kind ?? "eof"}"`,
         afterElementToken !== undefined
@@ -526,7 +526,7 @@ export function parseTypeArgumentList(
   }
   const badToken = tokens[cursor];
   return err(
-    errorDiagnostic(
+    errorDiagnosticRaw(
       "HEDGE-PARSE-001",
       `expected ',' or '>' in type argument list, found "${badToken?.kind ?? "end of input"}"`,
       badToken !== undefined ? some(badToken.span) : none(),

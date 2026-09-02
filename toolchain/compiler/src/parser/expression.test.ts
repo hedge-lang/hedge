@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { messageOf } from "../diagnostics/index.js";
 import { assert } from "../assert.js";
 import { isSome, none, some } from "../option.js";
 import { parse } from "./parser.js";
@@ -8,7 +9,7 @@ import type { Program } from "./ast.js";
 function parseProgram(source: string): Program {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
-  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  assert(isSome(program), messageOf(diagnostics[0], "Parse failed"));
   return program.value;
 }
 
@@ -485,15 +486,15 @@ describe("non-associative operators - comparison", (): void => {
     (source, op) => {
       const result = parse(tokenize(source).tokens);
       expect(result.program).toEqual(none());
-      expect(result.diagnostics[0]?.message).toContain("cannot chain");
-      expect(result.diagnostics[0]?.message).toContain(op);
+      expect(messageOf(result.diagnostics[0])).toContain("cannot chain");
+      expect(messageOf(result.diagnostics[0])).toContain(op);
     },
   );
 
   it("a < b > c is a syntax error - chaining different comparison operators", (): void => {
     const result = parse(tokenize("a < b > c").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain(
+    expect(messageOf(result.diagnostics[0])).toContain(
       "cannot chain '<' with '>'",
     );
   });
@@ -501,7 +502,7 @@ describe("non-associative operators - comparison", (): void => {
   it("a < b == c is a syntax error - mixing non-associative operators at the same precedence level", (): void => {
     const result = parse(tokenize("a < b == c").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain(
+    expect(messageOf(result.diagnostics[0])).toContain(
       "cannot chain '<' with '=='",
     );
   });
@@ -509,7 +510,7 @@ describe("non-associative operators - comparison", (): void => {
   it("a == b != c is a syntax error", (): void => {
     const result = parse(tokenize("a == b != c").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain(
+    expect(messageOf(result.diagnostics[0])).toContain(
       "cannot chain '==' with '!='",
     );
   });
@@ -980,8 +981,8 @@ describe("ranges", (): void => {
     const { program, diagnostics } = parse(tokenize("a..b..c").tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("cannot chain");
-    expect(diagnostics[0].message).toContain("..");
+    expect(messageOf(diagnostics[0])).toContain("cannot chain");
+    expect(messageOf(diagnostics[0])).toContain("..");
   });
 
   it("a.. parses as RangeExpression with no end (RangeFrom)", (): void => {
@@ -1044,14 +1045,14 @@ describe("ranges", (): void => {
     const { program, diagnostics } = parse(tokenize("..=").tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("..=");
+    expect(messageOf(diagnostics[0])).toContain("..=");
   });
 
   it("a..= is a syntax error (inclusive range requires an end)", (): void => {
     const { program, diagnostics } = parse(tokenize("a..=").tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("..=");
+    expect(messageOf(diagnostics[0])).toContain("..=");
   });
 
   it("0..0 (empty range, equal bounds) parses fine", (): void => {
@@ -1099,7 +1100,7 @@ describe("ranges", (): void => {
     const { program, diagnostics } = parse(tokenize(source).tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toContain("cannot chain");
+    expect(messageOf(diagnostics[0])).toContain("cannot chain");
   });
 
   it("(a..b)..c parses as nested Range via parens, consistent with (a < b) < c today", (): void => {
@@ -1296,7 +1297,7 @@ describe("adversarial / edge cases", (): void => {
   it("trailing binary operator with no RHS is an error", (): void => {
     const result = parse(tokenize("1 +").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("Expected");
+    expect(messageOf(result.diagnostics[0])).toContain("Expected");
   });
 
   it("a = b < c parses as Assign(a, Lt(b, c)) - lvalue check is semantic, not syntactic", (): void => {
@@ -1364,13 +1365,13 @@ describe("adversarial / edge cases", (): void => {
   it("a. with no field name is an error that mentions identifier", (): void => {
     const result = parse(tokenize("a.").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("identifier");
+    expect(messageOf(result.diagnostics[0])).toContain("identifier");
   });
 
   it("(1 + 2 with no closing paren is an error that mentions )", (): void => {
     const result = parse(tokenize("(1 + 2").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain(")");
+    expect(messageOf(result.diagnostics[0])).toContain(")");
   });
 });
 
@@ -1621,7 +1622,7 @@ describe("if expressions", (): void => {
   it("if cond is missing then-block - error", (): void => {
     const result = parse(tokenize("if cond").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("{");
+    expect(messageOf(result.diagnostics[0])).toContain("{");
   });
 
   it("if cond { a } else with no block - error", (): void => {
@@ -1731,7 +1732,7 @@ describe("match expressions", (): void => {
   it("rejects a missing comma between two expression-bodied arms with a parse error (`match x { a => 1 b => 2 }`)", (): void => {
     const result = parse(tokenize("match x { a => 1 b => 2 }").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain(",");
+    expect(messageOf(result.diagnostics[0])).toContain(",");
   });
 
   it("treats the comma as optional after a block-bodied arm (`match x { a => { 1 } b => 2 }`)", (): void => {
@@ -1823,19 +1824,19 @@ describe("match expressions", (): void => {
   it("produces a clear parse error for a missing '=>' (`match x { y z }`)", (): void => {
     const result = parse(tokenize("match x { y z }").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("=>");
+    expect(messageOf(result.diagnostics[0])).toContain("=>");
   });
 
   it("produces a clear parse error for a missing '=>' on a later arm (`match x { a => 1, b c }`)", (): void => {
     const result = parse(tokenize("match x { a => 1, b c }").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("=>");
+    expect(messageOf(result.diagnostics[0])).toContain("=>");
   });
 
   it("produces a clear parse error for a second `if` where '=>' was expected (`match x { y if a if b => y }`)", (): void => {
     const result = parse(tokenize("match x { y if a if b => y }").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("=>");
+    expect(messageOf(result.diagnostics[0])).toContain("=>");
   });
 
   it("produces a parse error for a missing arm body (`match x { y => }`)", (): void => {
@@ -1853,7 +1854,7 @@ describe("match expressions", (): void => {
   it("produces a parse error for a match with no closing brace (`match x { y => 1`)", (): void => {
     const result = parse(tokenize("match x { y => 1").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("}");
+    expect(messageOf(result.diagnostics[0])).toContain("}");
   });
 
   it("does not require a semicolon for a match used as a mid-block statement (`fn f() { match x {} let done = true; }`)", (): void => {
@@ -2667,7 +2668,7 @@ describe("if let expressions", (): void => {
   it("produces a parse error for an if-let with a missing block (`if let y = expr;`)", (): void => {
     const result = parse(tokenize("if let y = expr;").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("{");
+    expect(messageOf(result.diagnostics[0])).toContain("{");
   });
 
   it("produces a parse error for an if-let with a missing '=' (`if let y expr { }`)", (): void => {
@@ -2865,7 +2866,9 @@ describe("bare `while`/`loop`/`for` regression after while-let support", (): voi
     const { tokens } = tokenize("fn f() { while true { } } fn g() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    expect(diagnostics[0]?.message).toBe("`while` loops are not yet supported");
+    expect(messageOf(diagnostics[0])).toBe(
+      "`while` loops are not yet supported",
+    );
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
@@ -2889,7 +2892,9 @@ describe("bare `while`/`loop`/`for` regression after while-let support", (): voi
     );
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    expect(diagnostics[0]?.message).toBe("`while` loops are not yet supported");
+    expect(messageOf(diagnostics[0])).toBe(
+      "`while` loops are not yet supported",
+    );
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
@@ -2910,7 +2915,7 @@ describe("bare `while`/`loop`/`for` regression after while-let support", (): voi
     const { tokens } = tokenize("fn f() { loop { } } fn g() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
-    expect(diagnostics[0]?.message).toContain("loop");
+    expect(messageOf(diagnostics[0])).toContain("loop");
     expect(program.value.items).toMatchObject([
       {
         kind: "Function",
@@ -3034,7 +3039,7 @@ describe("block expressions", (): void => {
   it("{ 1 with no closing brace is an error", (): void => {
     const result = parse(tokenize("{ 1").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("}");
+    expect(messageOf(result.diagnostics[0])).toContain("}");
   });
 });
 
@@ -3149,12 +3154,11 @@ describe("tuple expressions and unit", (): void => {
   it("(1 2) - missing comma between tuple elements is an error", (): void => {
     const result = parse(tokenize("(1 2)").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics).toMatchObject([
-      {
-        severity: "error",
-        message: "Expected ',' or ')' after expression in parentheses",
-      },
-    ]);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.severity).toBe("error");
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "Expected ',' or ')' after expression in parentheses",
+    );
   });
 });
 
@@ -3366,7 +3370,7 @@ describe("index expressions", (): void => {
   it("a[ with no closing bracket is an error", (): void => {
     const result = parse(tokenize("a[").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("]");
+    expect(messageOf(result.diagnostics[0])).toContain("]");
   });
 
   it("a[] - empty index expression is an error", (): void => {
@@ -3489,7 +3493,7 @@ describe("method call expressions", (): void => {
   it("a.method( with unclosed args is an error", (): void => {
     const result = parse(tokenize("a.method(").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain(")");
+    expect(messageOf(result.diagnostics[0])).toContain(")");
   });
 });
 
@@ -3648,7 +3652,7 @@ describe("turbofish", (): void => {
     const { program, diagnostics } = parse(tokenize("first::<'a>();").tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "lifetime annotations are not yet supported",
     );
   });
@@ -3659,7 +3663,7 @@ describe("turbofish", (): void => {
     );
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "lifetime annotations are not yet supported",
     );
   });
@@ -3668,7 +3672,7 @@ describe("turbofish", (): void => {
     const { program, diagnostics } = parse(tokenize("a.field::<T>;").tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("generic arguments");
+    expect(messageOf(diagnostics[0])).toContain("generic arguments");
   });
 
   it("rejects a stray extra > merged into the closing >> token (first::<T>>(x)), rather than silently consuming it", (): void => {
@@ -3678,7 +3682,7 @@ describe("turbofish", (): void => {
     const { program, diagnostics } = parse(tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("unexpected extra");
+    expect(messageOf(diagnostics[0])).toContain("unexpected extra");
     expect(diagnostics[0].span).toEqual(some(gtGt.span));
   });
 });
@@ -3695,7 +3699,7 @@ describe("comparison expressions unaffected by turbofish guardrail", (): void =>
     const { program, diagnostics } = parse(tokenize("a < b > c").tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected diagnostics");
-    expect(diagnostics[0].message).toBe("cannot chain '<' with '>'");
+    expect(messageOf(diagnostics[0])).toBe("cannot chain '<' with '>'");
   });
 
   it("if x < y { } - comparison in condition position is unaffected", (): void => {
@@ -3836,7 +3840,9 @@ describe("struct expressions", (): void => {
   it("Foo { x: 1, ..base } - struct update spread emits a not-yet-supported diagnostic", (): void => {
     const result = parse(tokenize("Foo { x: 1, ..base }").tokens);
     expect(
-      result.diagnostics.some((d) => d.message.toLowerCase().includes("not")),
+      result.diagnostics.some((d) =>
+        messageOf(d).toLowerCase().includes("not"),
+      ),
     ).toBe(true);
   });
 
@@ -3860,7 +3866,7 @@ describe("struct expressions", (): void => {
   it("Foo { x: 1 with no closing brace is an error", (): void => {
     const result = parse(tokenize("Foo { x: 1").tokens);
     expect(result.program).toEqual(none());
-    expect(result.diagnostics[0]?.message).toContain("}");
+    expect(messageOf(result.diagnostics[0])).toContain("}");
   });
 });
 

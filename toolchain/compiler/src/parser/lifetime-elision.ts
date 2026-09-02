@@ -1,6 +1,6 @@
 import { assertNever } from "../assert.js";
 import type { Diagnostic } from "../diagnostics/index.js";
-import { errorDiagnostic } from "../diagnostics/index.js";
+import { errorDiagnosticRaw } from "../diagnostics/index.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import type {
@@ -145,7 +145,7 @@ function resolveNestedReferenceTypes(
         return { ...type, referent };
       }
       diagnostics.push(
-        errorDiagnostic(
+        errorDiagnosticRaw(
           "HEDGE-LIFETIME-001",
           NO_ELISION_RULE_MESSAGE,
           spanOf(tokens, type.tokenId),
@@ -410,7 +410,7 @@ function elideFunctionSignature(
         lifetime = soleReferenceParamLifetime;
       } else {
         diagnostics.push(
-          errorDiagnostic(
+          errorDiagnosticRaw(
             "HEDGE-LIFETIME-001",
             ambiguousReturnLifetimeMessage(referenceParamCount),
             spanOf(tokens, returnType.tokenId),

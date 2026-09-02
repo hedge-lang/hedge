@@ -1,4 +1,8 @@
-import type { Diagnostic } from "@hedge-lang/compiler";
+import {
+  type Diagnostic,
+  messageOf,
+  renderRelatedLabel,
+} from "@hedge-lang/compiler";
 
 /**
  * Render diagnostics as one `severity[code]: message` line each (the code
@@ -13,9 +17,11 @@ export function renderDiagnostics(diagnostics: readonly Diagnostic[]): string {
 
 function renderDiagnostic(diagnostic: Diagnostic): string {
   const code = `[${diagnostic.code}]`;
-  const lines = [`${diagnostic.severity}${code}: ${diagnostic.message}`];
+  const lines = [`${diagnostic.severity}${code}: ${messageOf(diagnostic)}`];
   for (const related of diagnostic.relatedSpans) {
-    lines.push(`  = note: ${related.label} at offset ${related.span.start}`);
+    lines.push(
+      `  = note: ${renderRelatedLabel(related.label)} at offset ${related.span.start}`,
+    );
   }
   return lines.join("\n");
 }
