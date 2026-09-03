@@ -40,9 +40,9 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
     case "LexInvalidRadixDigit":
       return `invalid ${kind.radix} digit '${kind.character}' at offset ${kind.offset}`;
     case "LexHexEscapeNeedsTwoDigits":
-      return `hex escape \\x needs exactly 2 hex digits at offset ${kind.offset}`;
+      return String.raw`hex escape \x needs exactly 2 hex digits at offset ${kind.offset}`;
     case "LexUnicodeEscapeNoOpeningBrace":
-      return `unicode escape \\u must be followed by '{' at offset ${kind.offset}`;
+      return String.raw`unicode escape \u must be followed by '{' at offset ${kind.offset}`;
     case "LexUnicodeEscapeNoDigits":
       return `unicode escape has no digits at offset ${kind.offset}`;
     case "LexUnicodeEscapeNoClosingBrace":
