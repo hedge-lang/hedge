@@ -222,6 +222,8 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return `field \`${kind.field}\` specified more than once in struct literal`;
     case "SemSelfOutsideTraitOrImpl":
       return "`Self` can only be used inside a trait or impl block";
+    case "SemSelfWithoutReceiver":
+      return "`self` is only valid in a method that has a `self` receiver";
     case "SemGenericParamShadowsType":
       return `generic parameter \`${kind.name}\` shadows an existing type of the same name`;
     case "SemBlanketImplGlobalScope":

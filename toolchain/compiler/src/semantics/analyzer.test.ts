@@ -4397,6 +4397,141 @@ describe("associated types and trait projections", (): void => {
     });
   });
 
+  describe("method-body analysis: self and Self in expression position", (): void => {
+    it("resolves a bare `self` and its field to the receiver's field type", (): void => {
+      const result = diagnose(`
+        struct P { x: i32 }
+        impl P { fn get(&self) -> i32 { self.x } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves `self.field` through a by-value receiver", (): void => {
+      const result = diagnose(`
+        struct P { x: i32 }
+        impl P { fn into_x(self) -> i32 { self.x } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("reports a return-type mismatch when `self.field` has the wrong type", (): void => {
+      const result = diagnose(`
+        struct P { x: i32 }
+        impl P { fn get(&self) -> str { self.x } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "return type mismatch: expected `str`, found `i32`",
+      );
+    });
+
+    it("rejects an unknown field on `self`", (): void => {
+      const result = diagnose(`
+        struct P { x: i32 }
+        impl P { fn get(&self) -> i32 { self.y } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "no field `y` on struct `P`",
+      );
+    });
+
+    it("resolves a `Self { .. }` struct literal to the impl target type", (): void => {
+      const result = diagnose(`
+        struct P { x: i32, y: i32 }
+        impl P { fn origin(&self) -> P { Self { x: 0, y: 0 } } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects an unknown field in a `Self { .. }` literal", (): void => {
+      const result = diagnose(`
+        struct P { x: i32 }
+        impl P { fn bad(&self) -> P { Self { z: 0 } } }
+      `);
+      expect(result.diagnostics.length).toBeGreaterThanOrEqual(1);
+      expect(result.diagnostics.some((d) => messageOf(d).includes("z"))).toBe(
+        true,
+      );
+    });
+
+    it("resolves a `Self(..)` tuple-struct literal to the impl target type", (): void => {
+      const result = diagnose(`
+        struct Pair(i32, i32);
+        impl Pair { fn zero(&self) -> Pair { Self(0, 0) } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a `Self(..)` literal with the wrong arity", (): void => {
+      const result = diagnose(`
+        struct Pair(i32, i32);
+        impl Pair { fn bad(&self) -> Pair { Self(0) } }
+      `);
+      expect(result.diagnostics.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("analyzes a method-local `let` binding normally", (): void => {
+      const result = diagnose(`
+        struct P { x: i32 }
+        impl P { fn get(&self) -> i32 { let n = self.x; n } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves `self` referenced from a nested block in the body", (): void => {
+      const result = diagnose(`
+        struct P { x: i32 }
+        impl P { fn get(&self) -> i32 { if true { self.x } else { 0 } } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects `self` in a method that has no receiver", (): void => {
+      const result = diagnose(`
+        struct P { x: i32 }
+        impl P { fn make() -> i32 { self.x } }
+      `);
+      expect(result.diagnostics.length).toBeGreaterThanOrEqual(1);
+      expect(
+        result.diagnostics.some((d) => messageOf(d).includes("self")),
+      ).toBe(true);
+    });
+
+    it("analyzes a trait default-method body with an abstract Self", (): void => {
+      const result = diagnose(`
+        trait Counter { fn base(&self) -> i32 { 0 } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects `self.field` in a trait default-method body (abstract Self has no fields)", (): void => {
+      const result = diagnose(`
+        trait Counter { fn peek(&self) -> i32 { self.n } }
+      `);
+      expect(result.diagnostics.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("still resolves a method call on `self` inside a method body", (): void => {
+      const result = diagnose(`
+        struct P { x: i32 }
+        impl P {
+          fn a(&self) -> i32 { 0 }
+          fn b(&self) -> i32 { self.a() }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("does not cascade a second diagnostic when a `self` field is unknown", (): void => {
+      const result = diagnose(`
+        struct P { x: i32 }
+        impl P { fn get(&self) -> i32 { self.missing } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+    });
+  });
+
   describe("an ordinary generic function's own projection", (): void => {
     function findFn(
       result: AnalysisResult,

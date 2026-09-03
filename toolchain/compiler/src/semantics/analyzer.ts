@@ -963,6 +963,17 @@ function isSelfType(type: Parser.Type): boolean {
   );
 }
 
+/** True for any `Self`-rooted return type (`Self`, `Self::Item`, and under
+ * `&`/`&mut`) - a method body cannot be structurally checked against an
+ * abstract `Self` or an associated-type projection, so the return-type
+ * mismatch is suppressed rather than cascading a spurious diagnostic. */
+function returnTypeResistsBodyCheck(type: Parser.Type): boolean {
+  if (type.kind === "ReferenceType") {
+    return returnTypeResistsBodyCheck(type.referent);
+  }
+  return type.kind === "NamedType" && type.path.segments[0] === "Self";
+}
+
 /** Shared by both `validateProjectionType` branches that search a set of
  * bound traits for one declaring `assocName` - two or more matches is
  * ambiguous either way, worded identically regardless of whether the search
@@ -2025,10 +2036,10 @@ function mergedGenericScope(
   };
 }
 
-/** Shared by `resolveTraitMethodSignature`/`resolveImplMethodSignature` -
- * both need exactly this pair, resolved the same way (against the merged
- * outer-item/method generic scope), differing only in which other fields
- * their own `Semantics` shape carries alongside it. */
+/** A method signature's `params`/`returnType`, resolved against the merged
+ * outer-item/method generic scope. `resolveType` defaults to the emitting
+ * `validateSlice1Type`; the trait-registry prepass passes the quiet
+ * `resolveSlice1Type` so it doesn't double-report with `analyzeTraitDecl`. */
 function resolveMethodSignatureTypes(
   ctx: AnalysisContext,
   outerGenerics: readonly Parser.GenericParam[],
@@ -2103,6 +2114,84 @@ function resolveTraitMethodSignature(
  * `Self::Assoc` resolving against this trait's own abstract `SelfContext`,
  * and each method's own generics merged alongside the trait's own (see
  * `mergedGenericScope`). */
+/** The concrete struct/enum name of the innermost open impl's `Self` target,
+ * or `undefined` in a trait body (abstract `Self`) or a non-nominal impl
+ * target. Used to resolve `Self { .. }` / `Self(..)` in a method body. */
+function selfTargetName(ctx: AnalysisContext): string | undefined {
+  const self = currentSelfContext(ctx);
+  if (self?.kind !== "Impl") return undefined;
+  const target = self.targetType;
+  return target.kind === "StructType" || target.kind === "EnumType"
+    ? bareTypeName(target.name)
+    : undefined;
+}
+
+/** Resolves a trait/impl method's signature types and, for a bodied method,
+ * analyzes its body with `self` bound to the receiver type
+ * (`Target`/`&Target`/`&mut Target` for an impl, an abstract `Self` for a
+ * trait default method). One frame per method, like `analyzeFunction`, so the
+ * signature and body share a scope. The caller owns the enclosing
+ * `SelfContext`. */
+function analyzeMethodItem(
+  ctx: AnalysisContext,
+  method: Parser.FunctionDef | Parser.FunctionSignature,
+  outerGenerics: readonly Parser.GenericParam[],
+  outerWhereClause: Option<Parser.WhereClause>,
+  selfBaseType: Semantics.Type,
+): { params: readonly Semantics.Type[]; returnType: Semantics.Type } {
+  const sig = method.kind === "Function" ? method.signature : method;
+  pushFrame(ctx);
+  const merged = mergedGenericScope(
+    outerGenerics,
+    outerWhereClause,
+    sig.generics,
+    sig.whereClause,
+  );
+  pushGenericParams(ctx, merged.generics, merged.whereClause);
+  const { signature, expectedReturnType, suppressReturnTypeMismatch } =
+    buildFunctionSignature(ctx, sig);
+  if (method.kind === "Function") {
+    if (isSome(sig.receiver)) {
+      const receiver = sig.receiver.value;
+      bind(ctx, "self", {
+        type: receiver.byRef
+          ? {
+              kind: "ReferenceType",
+              tokenId: sig.tokenId,
+              mutable: receiver.mutable,
+              referent: selfBaseType,
+            }
+          : selfBaseType,
+        mutable: receiver.mutable && !receiver.byRef,
+      });
+    }
+    checkFunctionReturnType(
+      ctx,
+      analyzeBlock(
+        ctx,
+        method.body,
+        isSome(sig.returnType) && !suppressReturnTypeMismatch
+          ? expectedReturnType
+          : undefined,
+      ),
+      expectedReturnType,
+      suppressReturnTypeMismatch,
+    );
+  }
+  popGenericParams(ctx);
+  popFrame(ctx);
+  return {
+    params: signature.params.map((p) => p.type),
+    returnType: expectedReturnType,
+  };
+}
+
+const ABSTRACT_SELF = (tokenId: number): Semantics.Type => ({
+  kind: "NamedType",
+  tokenId,
+  path: { absolute: false, segments: ["Self"] },
+});
+
 function analyzeTraitDecl(
   ctx: AnalysisContext,
   item: Parser.TraitDecl,
@@ -2113,28 +2202,39 @@ function analyzeTraitDecl(
     traitName: shallow.traitId,
     associatedTypes: shallow.associatedTypes,
   });
+  const abstractSelf = ABSTRACT_SELF(item.tokenId);
   const methods = item.items.flatMap(
     (decl): readonly Semantics.TraitMethod[] => {
       if (decl.kind === "FunctionSignature") {
         return [
-          resolveTraitMethodSignature(
-            ctx,
-            item.generics,
-            item.whereClause,
-            decl,
-            false,
-          ),
+          {
+            name: decl.name.text,
+            isDefault: false,
+            receiver: toMethodReceiver(decl.receiver),
+            ...analyzeMethodItem(
+              ctx,
+              decl,
+              item.generics,
+              item.whereClause,
+              abstractSelf,
+            ),
+          },
         ];
       }
       if (decl.kind === "Function") {
         return [
-          resolveTraitMethodSignature(
-            ctx,
-            item.generics,
-            item.whereClause,
-            decl.signature,
-            true,
-          ),
+          {
+            name: decl.signature.name.text,
+            isDefault: true,
+            receiver: toMethodReceiver(decl.signature.receiver),
+            ...analyzeMethodItem(
+              ctx,
+              decl,
+              item.generics,
+              item.whereClause,
+              abstractSelf,
+            ),
+          },
         ];
       }
       return [];
@@ -2170,24 +2270,6 @@ function resolveImplSelfTargetType(
       tokenId: shallow.tokenId,
     }
   );
-}
-
-function resolveImplMethodSignature(
-  ctx: AnalysisContext,
-  outerGenerics: readonly Parser.GenericParam[],
-  outerWhereClause: Option<Parser.WhereClause>,
-  signature: Parser.FunctionSignature,
-): Semantics.ImplMethod {
-  return {
-    name: signature.name.text,
-    receiver: toMethodReceiver(signature.receiver),
-    ...resolveMethodSignatureTypes(
-      ctx,
-      outerGenerics,
-      outerWhereClause,
-      signature,
-    ),
-  };
 }
 
 /** The real, diagnostic-emitting counterpart to `buildImplDecl` - resolves
@@ -2248,12 +2330,17 @@ function analyzeImplDecl(
     (decl): readonly Semantics.ImplMethod[] =>
       decl.kind === "Function"
         ? [
-            resolveImplMethodSignature(
-              ctx,
-              item.generics,
-              item.whereClause,
-              decl.signature,
-            ),
+            {
+              name: decl.signature.name.text,
+              receiver: toMethodReceiver(decl.signature.receiver),
+              ...analyzeMethodItem(
+                ctx,
+                decl,
+                item.generics,
+                item.whereClause,
+                targetType,
+              ),
+            },
           ]
         : [],
   );
@@ -5432,7 +5519,8 @@ function buildFunctionSignature(
     tokenId: decl.tokenId,
   });
   const suppressReturnTypeMismatch =
-    isSome(decl.returnType) && isSelfType(decl.returnType.value);
+    isSome(decl.returnType) &&
+    returnTypeResistsBodyCheck(decl.returnType.value);
   const signature: Semantics.FunctionSignature = {
     kind: "FunctionSignature",
     tokenId: decl.tokenId,
@@ -7392,8 +7480,8 @@ function analyzeStructExpression(
       type: UNIT,
     };
   }
-  const structName = structExpression.path.segments[0];
-  if (structName === undefined) {
+  const rawStructName = structExpression.path.segments[0];
+  if (rawStructName === undefined) {
     return {
       ...structExpression,
       fields: analyzedFields,
@@ -7401,6 +7489,10 @@ function analyzeStructExpression(
       type: UNIT,
     };
   }
+  const structName =
+    rawStructName === "Self"
+      ? (selfTargetName(ctx) ?? rawStructName)
+      : rawStructName;
 
   const structDecl = lookupStruct(ctx, structName);
   if (structDecl === undefined) {
@@ -8466,8 +8558,12 @@ function analyzeTupleStructCallConstruction(
   if (call.callee.kind !== "PathExpression") return none();
   const { segments } = call.callee.path;
   if (segments.length !== 1) return none();
-  const [structName] = segments;
-  if (structName === undefined) return none();
+  const [rawStructName] = segments;
+  if (rawStructName === undefined) return none();
+  const structName =
+    rawStructName === "Self"
+      ? (selfTargetName(ctx) ?? rawStructName)
+      : rawStructName;
   if (isSome(resolve(ctx, structName))) return none();
   const structDecl = lookupStruct(ctx, structName);
   if (structDecl === undefined) return none();
@@ -8569,7 +8665,13 @@ function analyzePath(
   if (isSome(resolvedType)) {
     return { ...path, type: resolvedType.value.type };
   }
-  emitError(ctx, { kind: "SemCannotFindName", name }, path.tokenId);
+  // Post-parser-gate, a bare `self` can only appear inside a trait/impl method
+  // body; unbound there means the method has no receiver.
+  const unresolvedKind: DiagnosticKind =
+    name === "self"
+      ? { kind: "SemSelfWithoutReceiver" }
+      : { kind: "SemCannotFindName", name };
+  emitError(ctx, unresolvedKind, path.tokenId);
   return { ...path, type: { kind: "UnitType", tokenId: path.tokenId } };
 }
 
