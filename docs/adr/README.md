@@ -31,3 +31,4 @@ settle a real fork between alternatives. Routine choices do not get an ADR.
 | [0010](0010-documentation-architecture.md)               | Documentation architecture and living-spec process                  | Accepted |
 | [0011](0011-mut-replaces-bind-write.md)                  | `&mut`/`let mut` replace `&write`/`let bind`                        | Accepted |
 | [0012](0012-unification-based-generic-call-inference.md) | Unification-based inference for generic call and construction sites | Accepted |
+| [0013](0013-derive-deferred-to-macro-system.md)          | `#[derive]` deferred to the macro system; standard traits not magic | Accepted |
