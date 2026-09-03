@@ -3589,10 +3589,9 @@ function lastPathSegment(path: Parser.Path): string {
  * a struct this context never registered - callers treat both the same way,
  * falling back to enum resolution or the generic pattern-kind guardrail.
  * Mirrors `resolveEnumDecl` structurally, but a struct pattern has no variant
- * layer to delegate its own name-check to, so `resolveTupleStructForPattern`/
- * `resolveStructForPattern` (below) must separately verify the pattern's own
- * path names this exact struct, not just any struct sharing its field
- * shape. */
+ * layer to delegate its own name-check to, so `resolvePlainStructForPattern`
+ * (below) must separately verify the pattern's own path names this exact
+ * struct, not just any struct sharing its field shape. */
 function resolveStructDecl(
   ctx: AnalysisContext,
   scrutineeType: Semantics.Type,
@@ -3603,22 +3602,41 @@ function resolveStructDecl(
   return decl === undefined ? none() : some(decl);
 }
 
-interface ResolvedTupleVariant {
-  readonly fields: readonly Semantics.TupleField[];
+/** The three things that differ between resolving a `Foo(..)` tuple pattern
+ * and a `Foo { .. }` named pattern against an enum variant or a plain
+ * struct: which body shape counts as a match, and the two "wrong shape"
+ * diagnostics. Everything else in the resolution is identical. */
+interface PatternFieldSpec<F> {
+  readonly bodyFields: (body: Semantics.StructBody) => Option<readonly F[]>;
+  readonly notVariant: (variant: string) => DiagnosticKind;
+  readonly notPlainStruct: (name: string) => DiagnosticKind;
 }
 
-interface ResolvedStructVariant {
-  readonly fields: readonly Semantics.StructField[];
-}
+const TUPLE_PATTERN_SPEC: PatternFieldSpec<Semantics.TupleField> = {
+  bodyFields: (body) =>
+    body.kind === "TupleFields" ? some(body.fields) : none(),
+  notVariant: (variant) => ({ kind: "SemVariantNotTupleVariant", variant }),
+  notPlainStruct: (name) => ({ kind: "SemStructNotTupleStruct", name }),
+};
+
+const NAMED_PATTERN_SPEC: PatternFieldSpec<Semantics.StructField> = {
+  bodyFields: (body) =>
+    body.kind === "NamedFields" ? some(body.fields) : none(),
+  notVariant: (variant) => ({ kind: "SemVariantNotStructVariant", variant }),
+  notPlainStruct: (name) => ({ kind: "SemStructNoNamedFields", name }),
+};
+
+type PathRootedPattern = Parser.TupleStructPattern | Parser.StructPattern;
 
 // A qualified path in enum-scrutinee position is genuinely supported syntax
 // now, so a wrong variant name/shape here gets its own real diagnostic
 // rather than falling back to `analyzePatternGuardrail`'s generic one.
-function resolveTupleVariantForPattern(
+function resolveEnumVariantForPattern<F>(
   ctx: AnalysisContext,
-  pattern: Parser.TupleStructPattern,
+  pattern: PathRootedPattern,
   scrutineeType: Semantics.Type,
-): Option<ResolvedTupleVariant> {
+  spec: PatternFieldSpec<F>,
+): Option<readonly F[]> {
   const enumDecl = resolveEnumDecl(ctx, scrutineeType);
   if (!isSome(enumDecl)) return none();
   const variantName = lastPathSegment(pattern.path);
@@ -3637,55 +3655,14 @@ function resolveTupleVariantForPattern(
     );
     return none();
   }
-  if (!isSome(variant.body) || variant.body.value.kind !== "TupleFields") {
-    emitError(
-      ctx,
-      {
-        kind: "SemVariantNotTupleVariant",
-        variant: variantName,
-      },
-      pattern.tokenId,
-    );
+  const fields = isSome(variant.body)
+    ? spec.bodyFields(variant.body.value)
+    : none<readonly F[]>();
+  if (!isSome(fields)) {
+    emitError(ctx, spec.notVariant(variantName), pattern.tokenId);
     return none();
   }
-  return some({ fields: variant.body.value.fields });
-}
-
-function resolveStructVariantForPattern(
-  ctx: AnalysisContext,
-  pattern: Parser.StructPattern,
-  scrutineeType: Semantics.Type,
-): Option<ResolvedStructVariant> {
-  const enumDecl = resolveEnumDecl(ctx, scrutineeType);
-  if (!isSome(enumDecl)) return none();
-  const variantName = lastPathSegment(pattern.path);
-  const variant = enumDecl.value.variants.find(
-    (v) => v.name.text === variantName,
-  );
-  if (variant === undefined) {
-    emitError(
-      ctx,
-      {
-        kind: "SemNoVariantOnEnum",
-        variant: variantName,
-        enumName: describeType(scrutineeType),
-      },
-      pattern.tokenId,
-    );
-    return none();
-  }
-  if (!isSome(variant.body) || variant.body.value.kind !== "NamedFields") {
-    emitError(
-      ctx,
-      {
-        kind: "SemVariantNotStructVariant",
-        variant: variantName,
-      },
-      pattern.tokenId,
-    );
-    return none();
-  }
-  return some({ fields: variant.body.value.fields });
+  return fields;
 }
 
 interface ResolvedPatternFields<F> {
@@ -3705,19 +3682,20 @@ interface ResolvedPatternFields<F> {
   readonly alreadyErrored: boolean;
 }
 
-/** Plain-struct counterpart to `resolveTupleVariantForPattern` - only
- * reachable when `scrutineeType` isn't an enum (the enum resolver already
- * ran first and returned `none()`). Unlike an enum variant, a struct has no
- * name-disambiguating layer of its own, so the pattern's path must be
- * checked directly against the struct named by `scrutineeType` itself
- * (never trusting the pattern's own path as a lookup key) - otherwise a
- * pattern naming an unrelated, differently-typed struct that merely shares
- * a field shape would silently "resolve". */
-function resolveTupleStructForPattern(
+/** Plain-struct arm of pattern resolution - only reachable when
+ * `scrutineeType` isn't an enum (the enum resolver already ran and returned
+ * `none()`). Unlike an enum variant, a struct has no name-disambiguating
+ * layer of its own, so the pattern's path is checked directly against the
+ * struct named by `scrutineeType` itself, never trusting the pattern's own
+ * path as a lookup key - otherwise a pattern naming an unrelated,
+ * differently-typed struct that merely shares a field shape would silently
+ * "resolve". */
+function resolvePlainStructForPattern<F>(
   ctx: AnalysisContext,
-  pattern: Parser.TupleStructPattern,
+  pattern: PathRootedPattern,
   scrutineeType: Semantics.Type,
-): Option<ResolvedPatternFields<Semantics.TupleField>> {
+  spec: PatternFieldSpec<F>,
+): Option<ResolvedPatternFields<F>> {
   const structDecl = resolveStructDecl(ctx, scrutineeType);
   if (!isSome(structDecl)) return none();
   const patternName = lastPathSegment(pattern.path);
@@ -3734,104 +3712,53 @@ function resolveTupleStructForPattern(
     );
     return some({ fields: [], label, alreadyErrored: true });
   }
-  if (structDecl.value.body.kind !== "TupleFields") {
-    emitError(
-      ctx,
-      { kind: "SemStructNotTupleStruct", name: patternName },
-      pattern.tokenId,
-    );
+  const fields = spec.bodyFields(structDecl.value.body);
+  if (!isSome(fields)) {
+    emitError(ctx, spec.notPlainStruct(patternName), pattern.tokenId);
     return some({ fields: [], label, alreadyErrored: true });
   }
-  return some({
-    fields: structDecl.value.body.fields,
-    label,
-    alreadyErrored: false,
-  });
-}
-
-/** Plain-struct counterpart to `resolveStructVariantForPattern` - see
- * `resolveTupleStructForPattern`'s doc comment for why the pattern's own
- * path must be checked against the scrutinee-derived struct name. */
-function resolveStructForPattern(
-  ctx: AnalysisContext,
-  pattern: Parser.StructPattern,
-  scrutineeType: Semantics.Type,
-): Option<ResolvedPatternFields<Semantics.StructField>> {
-  const structDecl = resolveStructDecl(ctx, scrutineeType);
-  if (!isSome(structDecl)) return none();
-  const patternName = lastPathSegment(pattern.path);
-  const label = `struct \`${patternName}\``;
-  if (patternName !== structDecl.value.name.text) {
-    emitError(
-      ctx,
-      {
-        kind: "SemPatternExpectedStruct",
-        expected: structDecl.value.name.text,
-        found: patternName,
-      },
-      pattern.tokenId,
-    );
-    return some({ fields: [], label, alreadyErrored: true });
-  }
-  if (structDecl.value.body.kind !== "NamedFields") {
-    emitError(
-      ctx,
-      { kind: "SemStructNoNamedFields", name: patternName },
-      pattern.tokenId,
-    );
-    return some({ fields: [], label, alreadyErrored: true });
-  }
-  return some({
-    fields: structDecl.value.body.fields,
-    label,
-    alreadyErrored: false,
-  });
+  return some({ fields: fields.value, label, alreadyErrored: false });
 }
 
 /** Tries enum-variant resolution first, then plain-struct resolution -
  * mutually exclusive since a scrutinee type is never both `EnumType` and
  * `StructType`, so trying both never risks a duplicate diagnostic. */
+function resolvePatternFields<F>(
+  ctx: AnalysisContext,
+  pattern: PathRootedPattern,
+  scrutineeType: Semantics.Type,
+  spec: PatternFieldSpec<F>,
+): Option<ResolvedPatternFields<F>> {
+  const variantFields = resolveEnumVariantForPattern(
+    ctx,
+    pattern,
+    scrutineeType,
+    spec,
+  );
+  if (isSome(variantFields)) {
+    return some({
+      fields: variantFields.value,
+      label: `variant \`${lastPathSegment(pattern.path)}\``,
+      alreadyErrored: false,
+    });
+  }
+  return resolvePlainStructForPattern(ctx, pattern, scrutineeType, spec);
+}
+
 function resolveTupleFieldsForPattern(
   ctx: AnalysisContext,
   pattern: Parser.TupleStructPattern,
   scrutineeType: Semantics.Type,
 ): Option<ResolvedPatternFields<Semantics.TupleField>> {
-  const patternName = lastPathSegment(pattern.path);
-  const enumVariant = resolveTupleVariantForPattern(
-    ctx,
-    pattern,
-    scrutineeType,
-  );
-  if (isSome(enumVariant)) {
-    return some({
-      fields: enumVariant.value.fields,
-      label: `variant \`${patternName}\``,
-      alreadyErrored: false,
-    });
-  }
-  return resolveTupleStructForPattern(ctx, pattern, scrutineeType);
+  return resolvePatternFields(ctx, pattern, scrutineeType, TUPLE_PATTERN_SPEC);
 }
 
-/** Struct-pattern counterpart to `resolveTupleFieldsForPattern` above. */
 function resolveNamedFieldsForPattern(
   ctx: AnalysisContext,
   pattern: Parser.StructPattern,
   scrutineeType: Semantics.Type,
 ): Option<ResolvedPatternFields<Semantics.StructField>> {
-  const patternName = lastPathSegment(pattern.path);
-  const enumVariant = resolveStructVariantForPattern(
-    ctx,
-    pattern,
-    scrutineeType,
-  );
-  if (isSome(enumVariant)) {
-    return some({
-      fields: enumVariant.value.fields,
-      label: `variant \`${patternName}\``,
-      alreadyErrored: false,
-    });
-  }
-  return resolveStructForPattern(ctx, pattern, scrutineeType);
+  return resolvePatternFields(ctx, pattern, scrutineeType, NAMED_PATTERN_SPEC);
 }
 
 // eslint-disable-next-line complexity -- Routing function
