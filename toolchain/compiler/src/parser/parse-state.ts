@@ -10,6 +10,11 @@
  * mark once per function and clears it, so a method sees `self` in scope but a
  * free `fn` nested inside its body does not, and a method of an `impl` nested
  * inside a method body sees it again.
+ *
+ * The mutable module bindings are a deliberate trade against threading a
+ * parse-context object through every expression/statement parser. At self-host
+ * this becomes a module-level `static` that a save/restore wrapper mutates - a
+ * `Cell` or a small `unsafe` block, decided then.
  */
 let selfKeywordAllowed = false;
 let insideMethodBodyItems = false;

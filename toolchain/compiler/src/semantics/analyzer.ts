@@ -192,6 +192,10 @@ interface RegisteredTrait {
   readonly supertraits: readonly string[];
   readonly methods: readonly Semantics.TraitMethod[];
   readonly associatedTypes: readonly string[];
+  /** This trait's own declared type-parameter names - a call-site argument
+   * against one of them can't be type-checked (no trait-argument
+   * substitution yet), only arity-checked. */
+  readonly genericParams: readonly string[];
   /** `none()` when the trait is object-safe, accounting for its supertraits
    * (see `propagateSupertraitObjectSafety`). */
   readonly notObjectSafe: Option<SelfArgMethod>;
@@ -2114,11 +2118,6 @@ function resolveTraitMethodSignature(
   };
 }
 
-/** The real, diagnostic-emitting counterpart to `buildTraitDecl` - resolves
- * every method's own `params`/`returnType` for real, with `Self`/
- * `Self::Assoc` resolving against this trait's own abstract `SelfContext`,
- * and each method's own generics merged alongside the trait's own (see
- * `mergedGenericScope`). */
 /** The concrete struct/enum name of the innermost open impl's `Self` target,
  * or `undefined` in a trait body (abstract `Self`) or a non-nominal impl
  * target. Used to resolve `Self { .. }` / `Self(..)` in a method body. */
@@ -2131,12 +2130,6 @@ function selfTargetName(ctx: AnalysisContext): string | undefined {
     : undefined;
 }
 
-/** Resolves a trait/impl method's signature types and, for a bodied method,
- * analyzes its body with `self` bound to the receiver type
- * (`Target`/`&Target`/`&mut Target` for an impl, an abstract `Self` for a
- * trait default method). One frame per method, like `analyzeFunction`, so the
- * signature and body share a scope. The caller owns the enclosing
- * `SelfContext`. */
 interface AnalyzedMethod {
   readonly params: readonly Semantics.Type[];
   readonly returnType: Semantics.Type;
@@ -2175,6 +2168,12 @@ function syntheticSelfParam(
   };
 }
 
+/** Resolves a trait/impl method's signature types and, for a bodied method,
+ * analyzes its body with `self` bound to the receiver type
+ * (`Target`/`&Target`/`&mut Target` for an impl, an abstract `Self` for a
+ * trait default method). One frame per method, like `analyzeFunction`, so the
+ * signature and body share a scope. The caller owns the enclosing
+ * `SelfContext`. */
 function analyzeMethodItem(
   ctx: AnalysisContext,
   method: Parser.FunctionDef | Parser.FunctionSignature,
@@ -2238,12 +2237,19 @@ function analyzeMethodItem(
   };
 }
 
-const ABSTRACT_SELF = (tokenId: number): Semantics.Type => ({
-  kind: "NamedType",
-  tokenId,
-  path: { absolute: false, segments: ["Self"] },
-});
+/** The abstract `Self` type a trait default-method body is analyzed against. */
+function abstractSelfType(tokenId: number): Semantics.Type {
+  return {
+    kind: "NamedType",
+    tokenId,
+    path: { absolute: false, segments: ["Self"] },
+  };
+}
 
+/** The real, diagnostic-emitting counterpart to `buildTraitDecl` - resolves
+ * every method's own `params`/`returnType` for real (and analyzes each
+ * default method's body), with `Self`/`Self::Assoc` resolving against this
+ * trait's own abstract `SelfContext`. */
 function analyzeTraitDecl(
   ctx: AnalysisContext,
   item: Parser.TraitDecl,
@@ -2254,7 +2260,7 @@ function analyzeTraitDecl(
     traitName: shallow.traitId,
     associatedTypes: shallow.associatedTypes,
   });
-  const abstractSelf = ABSTRACT_SELF(item.tokenId);
+  const abstractSelf = abstractSelfType(item.tokenId);
   const methodBodies: Semantics.FunctionDef[] = [];
   const methods = item.items.flatMap(
     (decl): readonly Semantics.TraitMethod[] => {
@@ -2850,6 +2856,7 @@ function registerTraits(
       ),
       methods: decl.methods,
       associatedTypes: decl.associatedTypes,
+      genericParams: genericParamNames(item.generics),
       notObjectSafe: ownSelfArgMethod(item),
     });
     traitItems.push(item);
@@ -6575,6 +6582,11 @@ interface IndexedMethod {
   readonly receiver: Option<Semantics.MethodReceiver>;
   readonly params: readonly Semantics.Type[];
   readonly returnType: Semantics.Type;
+  /** Every type-parameter name in scope for this method's signature (the
+   * enclosing impl/trait's plus the method's own). A call-site argument
+   * against one of them is arity-checked but not type-checked - unification
+   * for method calls isn't implemented. */
+  readonly genericParams: readonly string[];
   readonly origin:
     | { readonly kind: "inherent" }
     | { readonly kind: "trait"; readonly traitId: string };
@@ -6595,6 +6607,7 @@ function traitMethodSet(
     receiver: m.receiver,
     params: m.params,
     returnType: m.returnType,
+    genericParams: trait.genericParams,
     origin: { kind: "trait", traitId },
   }));
   const inherited = trait.supertraits.flatMap((s) =>
@@ -6666,6 +6679,7 @@ function indexInherentMethods(
     traitName: none(),
     associatedTypes: new Map(),
   });
+  const implGenerics = genericParamNames(item.generics);
   const methods = item.items.flatMap((decl): readonly IndexedMethod[] => {
     if (decl.kind !== "Function") return [];
     const { params, returnType } = resolveMethodSignatureTypes(
@@ -6681,6 +6695,10 @@ function indexInherentMethods(
         receiver: toMethodReceiver(decl.signature.receiver),
         params,
         returnType,
+        genericParams: [
+          ...implGenerics,
+          ...genericParamNames(decl.signature.generics),
+        ],
         origin: { kind: "inherent" },
       },
     ];
@@ -6763,6 +6781,7 @@ function checkMethodCallArgs(
   callTokenId: number,
   methodName: string,
   params: readonly Semantics.Type[],
+  genericParams: readonly string[],
   args: readonly Semantics.Expression[],
 ): readonly Semantics.Expression[] {
   if (params.length !== args.length) {
@@ -6779,9 +6798,11 @@ function checkMethodCallArgs(
     );
     return args;
   }
+  const genericNames = new Set(genericParams);
   return args.map((arg, i) => {
     const param = params[i];
     if (param === undefined) return arg;
+    if (involvesGenericParam(param, genericNames)) return arg;
     const { expr, mismatch } = reconcileExpressionType(
       ctx,
       arg,
@@ -6828,8 +6849,9 @@ function analyzeMethodCallExpression(
     type: unit,
   };
   // A shared borrow is transparent for method lookup; look through it (and
-  // through a `&mut`) to the referent. Autoderef past one level, and the
-  // receiver-form/mutable-place check, are Layer 4's job.
+  // through a `&mut`) to the referent. Autoderef past one level, and checking
+  // the receiver place actually permits `&mut`, are left to the ownership
+  // passes, which walk the method body separately.
   const lookupType =
     receiver.type.kind === "ReferenceType"
       ? receiver.type.referent
@@ -6852,6 +6874,7 @@ function analyzeMethodCallExpression(
         expression.tokenId,
         expression.method.text,
         method.params,
+        method.genericParams,
         args,
       ),
     ],
@@ -6928,7 +6951,14 @@ function analyzeAssociatedCall(
       return some({ type: { kind: "UnitType", tokenId: call.tokenId } });
     }
     // UFCS: the first argument is the receiver, the rest match the signature.
-    checkMethodCallArgs(ctx, call.tokenId, name, method.params, args.slice(1));
+    checkMethodCallArgs(
+      ctx,
+      call.tokenId,
+      name,
+      method.params,
+      method.genericParams,
+      args.slice(1),
+    );
     return some({ type: method.returnType });
   }
 
@@ -6937,7 +6967,14 @@ function analyzeAssociatedCall(
   );
   const assocFn = candidates.find((m) => !isSome(m.receiver));
   if (assocFn !== undefined) {
-    checkMethodCallArgs(ctx, call.tokenId, name, assocFn.params, args);
+    checkMethodCallArgs(
+      ctx,
+      call.tokenId,
+      name,
+      assocFn.params,
+      assocFn.genericParams,
+      args,
+    );
     return some({ type: assocFn.returnType });
   }
   const instanceMethod = candidates.find((m) => isSome(m.receiver));
@@ -6947,6 +6984,7 @@ function analyzeAssociatedCall(
       call.tokenId,
       name,
       instanceMethod.params,
+      instanceMethod.genericParams,
       args.slice(1),
     );
     return some({ type: instanceMethod.returnType });
@@ -8842,6 +8880,10 @@ function analyzeEnumVariantPathConstruction(
 ): Option<Semantics.PathExpression> {
   const [enumName, variantName] = segments;
   if (enumName === undefined || variantName === undefined) return none();
+  // A `Self`-headed path in a trait body is an associated-item reference
+  // against an abstract `Self`, not an enum variant - don't claim it with a
+  // misleading "cannot find enum `Self`".
+  if (enumName === "Self") return none();
   const enumDecl = lookupEnum(ctx, enumName);
   if (enumDecl === undefined) {
     emitError(ctx, { kind: "SemCannotFindEnum", name: enumName }, path.tokenId);

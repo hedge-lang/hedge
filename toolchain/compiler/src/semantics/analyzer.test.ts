@@ -25,6 +25,26 @@ function traitIdOf(result: AnalysisResult, name: string): string {
   return trait.traitId;
 }
 
+/** The inferred type of `let <bindingName> = ...;` in `fn main`. */
+function mainLetType(
+  result: AnalysisResult,
+  bindingName: string,
+): SemanticsType {
+  const main = result.program.items.find(
+    (item) => item.kind === "Function" && item.signature.name.text === "main",
+  );
+  assert(main?.kind === "Function", "expected a `main` function");
+  const letStmt = main.body.statements.find(
+    (s) =>
+      s.kind === "LetStatement" &&
+      s.pattern.kind === "BindingPattern" &&
+      s.pattern.name.text === bindingName,
+  );
+  assert(letStmt?.kind === "LetStatement", `expected \`let ${bindingName}\``);
+  assert(isSome(letStmt.initializer), "expected an initializer");
+  return letStmt.initializer.value.type;
+}
+
 function analyzeWithTokens(source: string): {
   result: AnalysisResult;
   tokens: ReturnType<typeof tokenize>["tokens"];
@@ -4086,30 +4106,6 @@ describe("associated types and trait projections", (): void => {
   });
 
   describe("method-call resolution", (): void => {
-    /** The inferred type of `let <bindingName> = ...;` in `fn main`. */
-    function mainLetType(
-      result: AnalysisResult,
-      bindingName: string,
-    ): SemanticsType {
-      const main = result.program.items.find(
-        (item) =>
-          item.kind === "Function" && item.signature.name.text === "main",
-      );
-      assert(main?.kind === "Function", "expected a `main` function");
-      const letStmt = main.body.statements.find(
-        (s) =>
-          s.kind === "LetStatement" &&
-          s.pattern.kind === "BindingPattern" &&
-          s.pattern.name.text === bindingName,
-      );
-      assert(
-        letStmt?.kind === "LetStatement",
-        `expected \`let ${bindingName}\``,
-      );
-      assert(isSome(letStmt.initializer), "expected an initializer");
-      return letStmt.initializer.value.type;
-    }
-
     it("resolves an inherent method and takes its return type", (): void => {
       const result = diagnose(`
         struct P { v: i32 }
@@ -4395,6 +4391,42 @@ describe("associated types and trait projections", (): void => {
       `);
       expect(result.diagnostics).toEqual([]);
     });
+
+    it("does not type-check an argument passed for a method's own generic parameter", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn m<U>(&self, u: U) -> i32 { 0 } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.m(5);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("does not type-check an argument passed for an impl-level generic parameter", (): void => {
+      const result = diagnose(`
+        struct Wrapper<T> { inner: T }
+        impl<T> Wrapper<T> { fn set(&self, value: T) {} }
+        fn use_it(w: Wrapper<i32>) { w.set(5); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still checks arity for a generic method", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn m<U>(&self, u: U) -> i32 { 0 } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.m();
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "method `m` takes 1 argument(s), but 0 were supplied",
+      );
+    });
   });
 
   describe("method-body analysis: self and Self in expression position", (): void => {
@@ -4512,6 +4544,17 @@ describe("associated types and trait projections", (): void => {
       expect(result.diagnostics.length).toBeGreaterThanOrEqual(1);
     });
 
+    it("does not misreport `Self::` in a trait default-method body as a missing enum", (): void => {
+      const result = diagnose(`
+        trait Counter { fn make(&self) -> i32 { Self::zero() } }
+      `);
+      expect(
+        result.diagnostics.some((d) =>
+          messageOf(d).includes("cannot find enum"),
+        ),
+      ).toBe(false);
+    });
+
     it("still resolves a method call on `self` inside a method body", (): void => {
       const result = diagnose(`
         struct P { x: i32 }
@@ -4533,29 +4576,6 @@ describe("associated types and trait projections", (): void => {
   });
 
   describe("associated-function and associated-const calls", (): void => {
-    function mainLetType(
-      result: AnalysisResult,
-      bindingName: string,
-    ): SemanticsType {
-      const main = result.program.items.find(
-        (item) =>
-          item.kind === "Function" && item.signature.name.text === "main",
-      );
-      assert(main?.kind === "Function", "expected a `main` function");
-      const letStmt = main.body.statements.find(
-        (s) =>
-          s.kind === "LetStatement" &&
-          s.pattern.kind === "BindingPattern" &&
-          s.pattern.name.text === bindingName,
-      );
-      assert(
-        letStmt?.kind === "LetStatement",
-        `expected \`let ${bindingName}\``,
-      );
-      assert(isSome(letStmt.initializer), "expected an initializer");
-      return letStmt.initializer.value.type;
-    }
-
     it("resolves a concrete `Type::assoc()` call and takes its return type", (): void => {
       const result = diagnose(`
         struct P { v: i32 }
