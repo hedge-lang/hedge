@@ -4506,10 +4506,10 @@ describe("associated types and trait projections", (): void => {
         struct P { x: i32 }
         impl P { fn bad(&self) -> P { Self { z: 0 } } }
       `);
-      expect(result.diagnostics.length).toBeGreaterThanOrEqual(1);
-      expect(result.diagnostics.some((d) => messageOf(d).includes("z"))).toBe(
-        true,
-      );
+      expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+        "unknown field `z` for struct `P`",
+        "missing required field `x` in struct literal of type `P`",
+      ]);
     });
 
     it("resolves a `Self(..)` tuple-struct literal to the impl target type", (): void => {
@@ -4525,7 +4525,10 @@ describe("associated types and trait projections", (): void => {
         struct Pair(i32, i32);
         impl Pair { fn bad(&self) -> Pair { Self(0) } }
       `);
-      expect(result.diagnostics.length).toBeGreaterThanOrEqual(1);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "struct `Pair` takes 2 argument(s), but 1 was supplied",
+      );
     });
 
     it("analyzes a method-local `let` binding normally", (): void => {
@@ -4549,10 +4552,10 @@ describe("associated types and trait projections", (): void => {
         struct P { x: i32 }
         impl P { fn make() -> i32 { self.x } }
       `);
-      expect(result.diagnostics.length).toBeGreaterThanOrEqual(1);
-      expect(
-        result.diagnostics.some((d) => messageOf(d).includes("self")),
-      ).toBe(true);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "`self` is only valid in a method that has a `self` receiver",
+      );
     });
 
     it("analyzes a trait default-method body with an abstract Self", (): void => {
@@ -4566,7 +4569,10 @@ describe("associated types and trait projections", (): void => {
       const result = diagnose(`
         trait Counter { fn peek(&self) -> i32 { self.n } }
       `);
-      expect(result.diagnostics.length).toBeGreaterThanOrEqual(1);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "field access on non-struct type",
+      );
     });
 
     it("does not misreport `Self::` in a trait default-method body as a missing enum", (): void => {
