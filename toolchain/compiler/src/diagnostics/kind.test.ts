@@ -4,7 +4,7 @@ import { none } from "../option.js";
 
 import type { DiagnosticCode } from "./code.js";
 import { errorDiagnostic, warningDiagnostic } from "./diagnostic.js";
-import { codeOf, type DiagnosticKind } from "./kind.js";
+import { CODE_BY_KIND, codeOf, type DiagnosticKind } from "./kind.js";
 import { renderDiagnosticMessage } from "./message.js";
 
 /**
@@ -380,5 +380,11 @@ describe("DiagnosticKind registry", (): void => {
         : errorDiagnostic;
       expect(severity(kind, none()).code).toBe(codeOf(kind));
     }
+  });
+
+  it("has a code entry and a sample for every variant, in sync", (): void => {
+    const sampledTags = new Set(SAMPLE_KINDS.map((kind) => kind.kind));
+    expect(sampledTags.size).toBe(SAMPLE_KINDS.length);
+    expect(CODE_BY_KIND.size).toBe(sampledTags.size);
   });
 });
