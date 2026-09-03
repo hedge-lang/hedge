@@ -131,6 +131,12 @@ interface AnalysisContext {
    * these are facts about the trait itself, not about where it happens to
    * be declared. */
   readonly traitRegistry: Map<string, RegisteredTrait>;
+  /** Every method callable on a concrete struct/enum type, keyed by that
+   * type's `typeIdentity` - inherent-impl methods and trait-impl methods
+   * together, resolved eagerly (a call site can precede the impl in source).
+   * A `dyn Trait` or bounded-generic receiver resolves against
+   * `traitRegistry` instead. */
+  readonly methodIndex: Map<string, readonly IndexedMethod[]>;
   /** Mutable build-up of `AnalysisResult.witnesses`, keyed by call-site
    * `tokenId`. */
   readonly witnessTable: Map<number, WitnessRef[]>;
@@ -2028,6 +2034,11 @@ function resolveMethodSignatureTypes(
   outerGenerics: readonly Parser.GenericParam[],
   outerWhereClause: Option<Parser.WhereClause>,
   signature: Parser.FunctionSignature,
+  resolveType: (
+    ctx: AnalysisContext,
+    type: Parser.Type,
+    fallbackTokenId: number,
+  ) => Semantics.Type = validateSlice1Type,
 ): { params: readonly Semantics.Type[]; returnType: Semantics.Type } {
   const merged = mergedGenericScope(
     outerGenerics,
@@ -2041,10 +2052,10 @@ function resolveMethodSignatureTypes(
     returnType: Semantics.Type;
   } = {
     params: signature.params.map((p) =>
-      validateSlice1Type(ctx, p.type, p.type.tokenId),
+      resolveType(ctx, p.type, p.type.tokenId),
     ),
     returnType: isSome(signature.returnType)
-      ? validateSlice1Type(
+      ? resolveType(
           ctx,
           signature.returnType.value,
           signature.returnType.value.tokenId,
@@ -2067,6 +2078,11 @@ function resolveTraitMethodSignature(
   outerWhereClause: Option<Parser.WhereClause>,
   signature: Parser.FunctionSignature,
   isDefault: boolean,
+  resolveType?: (
+    ctx: AnalysisContext,
+    type: Parser.Type,
+    fallbackTokenId: number,
+  ) => Semantics.Type,
 ): Semantics.TraitMethod {
   return {
     name: signature.name.text,
@@ -2077,6 +2093,7 @@ function resolveTraitMethodSignature(
       outerGenerics,
       outerWhereClause,
       signature,
+      resolveType,
     ),
   };
 }
@@ -2704,7 +2721,63 @@ function registerTraits(
   for (const item of traitItems) {
     validateTraitBoundNames(ctx, item.supertraits);
   }
+  // A third pass, once every trait name is registered, resolves each method's
+  // real signature (quietly - `analyzeTraitDecl` re-resolves and owns the
+  // diagnostics) so a call site or `dyn Trait` can read a trait method's
+  // actual return type instead of `buildTraitDecl`'s unit placeholder.
+  for (const item of traitItems) {
+    const traitId = scopedTypeName(item.name.tokenId, item.name.text);
+    const existing = ctx.traitRegistry.get(traitId);
+    if (existing === undefined) continue;
+    ctx.traitRegistry.set(traitId, {
+      ...existing,
+      methods: resolveTraitMethodsQuiet(ctx, item, traitId),
+    });
+  }
   propagateSupertraitObjectSafety(ctx);
+}
+
+function resolveTraitMethodsQuiet(
+  ctx: AnalysisContext,
+  item: Parser.TraitDecl,
+  traitId: string,
+): readonly Semantics.TraitMethod[] {
+  pushSelfContext(ctx, {
+    kind: "Trait",
+    traitName: traitId,
+    associatedTypes: requiredAssociatedTypeNames(item.items),
+  });
+  const methods = item.items.flatMap(
+    (decl): readonly Semantics.TraitMethod[] => {
+      if (decl.kind === "FunctionSignature") {
+        return [
+          resolveTraitMethodSignature(
+            ctx,
+            item.generics,
+            item.whereClause,
+            decl,
+            false,
+            resolveSlice1Type,
+          ),
+        ];
+      }
+      if (decl.kind === "Function") {
+        return [
+          resolveTraitMethodSignature(
+            ctx,
+            item.generics,
+            item.whereClause,
+            decl.signature,
+            true,
+            resolveSlice1Type,
+          ),
+        ];
+      }
+      return [];
+    },
+  );
+  popSelfContext(ctx);
+  return methods;
 }
 
 /**
@@ -6358,20 +6431,265 @@ function analyzeUnaryExpression(
   return { ...expression, operand, type };
 }
 
+/** One method callable on a receiver type, from an inherent impl
+ * (`origin.kind === "inherent"`) or via a trait the type implements. */
+interface IndexedMethod {
+  readonly name: string;
+  readonly receiver: Option<Semantics.MethodReceiver>;
+  readonly params: readonly Semantics.Type[];
+  readonly returnType: Semantics.Type;
+  readonly origin:
+    | { readonly kind: "inherent" }
+    | { readonly kind: "trait"; readonly traitId: string };
+}
+
+/** Every method of `traitId` and, transitively, of its supertraits. */
+function traitMethodSet(
+  ctx: AnalysisContext,
+  traitId: string,
+  visiting: ReadonlySet<string> = new Set(),
+): readonly IndexedMethod[] {
+  if (visiting.has(traitId)) return [];
+  const trait = ctx.traitRegistry.get(traitId);
+  if (trait === undefined) return [];
+  const nextVisiting = new Set(visiting).add(traitId);
+  const own = trait.methods.map((m): IndexedMethod => ({
+    name: m.name,
+    receiver: m.receiver,
+    params: m.params,
+    returnType: m.returnType,
+    origin: { kind: "trait", traitId },
+  }));
+  const inherited = trait.supertraits.flatMap((s) =>
+    traitMethodSet(ctx, s, nextVisiting),
+  );
+  return [...own, ...inherited];
+}
+
+function buildMethodIndex(
+  ctx: AnalysisContext,
+  allItems: readonly DepthedItem[],
+): void {
+  for (const { item } of allItems) {
+    if (item.kind !== "Impl") continue;
+    const shallow = buildImplDecl(item);
+    if (!isSome(shallow.targetTypeName) || shallow.isBlanket) continue;
+    const targetType = resolveImplSelfTargetType(ctx, shallow);
+    const targetId = typeIdentity(targetType);
+    const entries = [...(ctx.methodIndex.get(targetId) ?? [])];
+    if (isSome(shallow.traitRef)) {
+      const traitId =
+        lookupTrait(ctx, shallow.traitRef.value.name) ??
+        shallow.traitRef.value.name;
+      entries.push(...traitMethodSet(ctx, traitId));
+    } else {
+      entries.push(...indexInherentMethods(ctx, item, targetType));
+    }
+    ctx.methodIndex.set(targetId, entries);
+  }
+}
+
+function indexInherentMethods(
+  ctx: AnalysisContext,
+  item: Parser.ImplDecl,
+  targetType: Semantics.Type,
+): readonly IndexedMethod[] {
+  pushSelfContext(ctx, {
+    kind: "Impl",
+    targetType,
+    traitName: none(),
+    associatedTypes: new Map(),
+  });
+  const methods = item.items.flatMap((decl): readonly IndexedMethod[] => {
+    if (decl.kind !== "Function") return [];
+    const { params, returnType } = resolveMethodSignatureTypes(
+      ctx,
+      item.generics,
+      item.whereClause,
+      decl.signature,
+      resolveSlice1Type,
+    );
+    return [
+      {
+        name: decl.signature.name.text,
+        receiver: toMethodReceiver(decl.signature.receiver),
+        params,
+        returnType,
+        origin: { kind: "inherent" },
+      },
+    ];
+  });
+  popSelfContext(ctx);
+  return methods;
+}
+
+/** The method candidates for a receiver type: concrete struct/enum types
+ * consult `methodIndex`, a `dyn Trait` or bounded generic parameter consults
+ * the trait method set directly. */
+function methodCandidates(
+  ctx: AnalysisContext,
+  receiverType: Semantics.Type,
+): readonly IndexedMethod[] {
+  if (receiverType.kind === "DynType") {
+    return traitMethodSet(ctx, receiverType.traitId);
+  }
+  if (
+    receiverType.kind === "NamedType" &&
+    receiverType.path.segments.length === 1
+  ) {
+    const name = receiverType.path.segments[0] ?? "";
+    if (isDeclaredGenericParam(ctx, name)) {
+      return declaredGenericParamBounds(ctx, name).flatMap((traitId) =>
+        traitMethodSet(ctx, traitId),
+      );
+    }
+  }
+  return ctx.methodIndex.get(typeIdentity(receiverType)) ?? [];
+}
+
+/** Rust's method-resolution precedence: an inherent method shadows a
+ * same-named trait method silently; a name shared by two or more implemented
+ * traits with no inherent method is ambiguous. */
+function resolveMethodCall(
+  ctx: AnalysisContext,
+  receiverType: Semantics.Type,
+  methodName: string,
+  tokenId: number,
+): IndexedMethod | undefined {
+  const named = methodCandidates(ctx, receiverType).filter(
+    (m) => m.name === methodName,
+  );
+  const inherent = named.find((m) => m.origin.kind === "inherent");
+  if (inherent !== undefined) return inherent;
+  const traitMatches = named.filter((m) => m.origin.kind === "trait");
+  const traitIds = [
+    ...new Set(
+      traitMatches.map((m) =>
+        m.origin.kind === "trait" ? m.origin.traitId : "",
+      ),
+    ),
+  ];
+  if (traitIds.length === 1) return traitMatches[0];
+  const typeName = bareTypeName(typeIdentity(receiverType));
+  if (traitIds.length === 0) {
+    emitError(
+      ctx,
+      { kind: "SemNoMethodOnType", method: methodName, typeName },
+      tokenId,
+    );
+    return undefined;
+  }
+  emitError(
+    ctx,
+    {
+      kind: "SemAmbiguousMethod",
+      method: methodName,
+      typeName,
+      traits: traitIds.map((id) => bareTypeName(id)).sort(),
+    },
+    tokenId,
+  );
+  return undefined;
+}
+
+function checkMethodCallArgs(
+  ctx: AnalysisContext,
+  expression: Parser.MethodCallExpression,
+  methodName: string,
+  params: readonly Semantics.Type[],
+  args: readonly Semantics.Expression[],
+): readonly Semantics.Expression[] {
+  if (params.length !== args.length) {
+    emitError(
+      ctx,
+      {
+        kind: "SemConstructorArgCountMismatch",
+        calleeKind: "method",
+        name: methodName,
+        expected: params.length,
+        count: args.length,
+      },
+      expression.tokenId,
+    );
+    return args;
+  }
+  return args.map((arg, i) => {
+    const param = params[i];
+    if (param === undefined) return arg;
+    const { expr, mismatch } = reconcileExpressionType(
+      ctx,
+      arg,
+      param,
+      arg.tokenId,
+    );
+    if (expr.kind === "IntLiteral") checkPosLiteralRange(ctx, expr, param);
+    if (mismatch) {
+      emitError(
+        ctx,
+        {
+          kind: "SemArgumentTypeMismatch",
+          argIndex: i + 1,
+          calleeKind: "method",
+          calleeName: methodName,
+          expected: describeType(param),
+          found: describeType(getType(arg)),
+        },
+        arg.tokenId,
+      );
+    }
+    return expr;
+  });
+}
+
 function analyzeMethodCallExpression(
   ctx: AnalysisContext,
   expression: Parser.MethodCallExpression,
 ): Semantics.MethodCallExpression {
   const receiver = analyzeExpression(ctx, expression.receiver);
-  return {
+  const args = expression.arguments.map((arg) => analyzeExpression(ctx, arg));
+  const unit: Semantics.Type = {
+    kind: "UnitType",
+    tokenId: expression.tokenId,
+  };
+  const base: Semantics.MethodCallExpression = {
     ...expression,
     receiver,
     method: {
       ...expression.method,
       type: { kind: "UnitType", tokenId: expression.method.tokenId },
     },
-    arguments: expression.arguments.map((arg) => analyzeExpression(ctx, arg)),
-    type: { kind: "UnitType", tokenId: expression.tokenId },
+    arguments: args,
+    type: unit,
+  };
+  // A shared borrow is transparent for method lookup; look through it (and
+  // through a `&mut`) to the referent. Autoderef past one level, and the
+  // receiver-form/mutable-place check, are Layer 4's job.
+  const lookupType =
+    receiver.type.kind === "ReferenceType"
+      ? receiver.type.referent
+      : receiver.type;
+  if (lookupType.kind === "UnitType" && isAmbiguousUnitExpr(receiver)) {
+    return base;
+  }
+  const method = resolveMethodCall(
+    ctx,
+    lookupType,
+    expression.method.text,
+    expression.tokenId,
+  );
+  if (method === undefined) return base;
+  return {
+    ...base,
+    arguments: [
+      ...checkMethodCallArgs(
+        ctx,
+        expression,
+        expression.method.text,
+        method.params,
+        args,
+      ),
+    ],
+    type: method.returnType,
   };
 }
 
@@ -8278,6 +8596,7 @@ export function analyze(
     genericParamBoundStack: [],
     implRegistry: [],
     traitRegistry: new Map(),
+    methodIndex: new Map(),
     witnessTable: new Map(),
     selfContextStack: [],
   };
@@ -8286,6 +8605,7 @@ export function analyze(
   const allItems = collectAllItems(program.items, 0);
   registerTraits(ctx, allItems);
   registerImpls(ctx, allItems);
+  buildMethodIndex(ctx, allItems);
   const topLevelFunctionNames = new Set<string>();
   for (const item of program.items) {
     if (item.kind !== "Function" && item.kind !== "FunctionSignature") {

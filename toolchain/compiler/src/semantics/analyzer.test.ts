@@ -284,7 +284,7 @@ describe("semantic analysis", (): void => {
     });
   });
 
-  describe("method call and tuple expressions (Slice 1 placeholders)", () => {
+  describe("method call and tuple expressions", () => {
     it("still resolves an undeclared name inside a method call's receiver", () => {
       const result = diagnose("fn main() { missing.foo(); }");
       expect(result.diagnostics).toHaveLength(1);
@@ -294,17 +294,23 @@ describe("semantic analysis", (): void => {
     });
 
     it("still resolves an undeclared name inside a method call's arguments", () => {
-      const result = diagnose(
-        "fn main() { let x: i32 = 1; x.foo(missing_arg); }",
-      );
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn foo(&self, x: i32) {} }
+        fn main() { let p = P { v: 1 }; p.foo(missing_arg); }
+      `);
       expect(result.diagnostics).toHaveLength(1);
       expect(messageOf(result.diagnostics[0])).toBe(
         'Cannot find name "missing_arg" in this scope.',
       );
     });
 
-    it("accepts a method call with no diagnostics when receiver and arguments are well-formed", () => {
-      const result = diagnose("fn main() { let x: i32 = 1; x.foo(); }");
+    it("accepts a resolvable method call with no diagnostics", () => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn foo(&self) {} }
+        fn main() { let p = P { v: 1 }; p.foo(); }
+      `);
       expect(result.diagnostics).toEqual([]);
     });
 
@@ -4076,6 +4082,318 @@ describe("associated types and trait projections", (): void => {
       const method = trait.methods.find((m) => m.name === "c");
       assert(method !== undefined, "expected a resolved `c`");
       expect(method.receiver).toEqual(some({ byRef: false, mutable: false }));
+    });
+  });
+
+  describe("method-call resolution", (): void => {
+    /** The inferred type of `let <bindingName> = ...;` in `fn main`. */
+    function mainLetType(
+      result: AnalysisResult,
+      bindingName: string,
+    ): SemanticsType {
+      const main = result.program.items.find(
+        (item) =>
+          item.kind === "Function" && item.signature.name.text === "main",
+      );
+      assert(main?.kind === "Function", "expected a `main` function");
+      const letStmt = main.body.statements.find(
+        (s) =>
+          s.kind === "LetStatement" &&
+          s.pattern.kind === "BindingPattern" &&
+          s.pattern.name.text === bindingName,
+      );
+      assert(
+        letStmt?.kind === "LetStatement",
+        `expected \`let ${bindingName}\``,
+      );
+      assert(isSome(letStmt.initializer), "expected an initializer");
+      return letStmt.initializer.value.type;
+    }
+
+    it("resolves an inherent method and takes its return type", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn get(&self) -> i32 { 0 } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.get();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveI32Type" });
+    });
+
+    it("resolves an inherent method that takes an argument", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn add(&self, other: i32) -> i32 { 0 } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.add(2);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveI32Type" });
+    });
+
+    it("resolves a method from a trait the receiver's type implements", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct P { v: i32 }
+        impl Draw for P { fn draw(&self) -> str { "" } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.draw();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveStringType" });
+    });
+
+    it("resolves a supertrait method through the supertrait's own separate impl", (): void => {
+      const result = diagnose(`
+        trait A { fn a(&self) -> i32; }
+        trait B: A { fn b(&self) -> i32; }
+        struct X { n: i32 }
+        impl A for X { fn a(&self) -> i32 { 0 } }
+        impl B for X { fn b(&self) -> i32 { 0 } }
+        fn main() {
+          let x = X { n: 1 };
+          let r = x.a();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveI32Type" });
+    });
+
+    it("resolves a method on a `dyn Trait` receiver against the trait's method set", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        fn main(d: &dyn Draw) {
+          let r = d.draw();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveStringType" });
+    });
+
+    it("resolves a supertrait method on a `dyn Trait` receiver", (): void => {
+      const result = diagnose(`
+        trait A { fn a(&self) -> i32; }
+        trait B: A { fn b(&self) -> i32; }
+        fn main(d: &dyn B) {
+          let r = d.a();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveI32Type" });
+    });
+
+    it("resolves a method on a generic parameter through its trait bound", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        fn render<T: Draw>(x: T) -> str { x.draw() }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("takes the bound method's real return type for a generic-parameter receiver", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        fn render<T: Draw>(x: T) -> i32 { x.draw() }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "return type mismatch: expected `i32`, found `str`",
+      );
+    });
+
+    it("rejects a method call on an unbounded generic parameter as not found", (): void => {
+      const result = diagnose("fn f<T>(x: T) -> i32 { x.draw() }");
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "no method `draw` found for type `T`",
+      );
+    });
+
+    it("does not cascade a not-found diagnostic on top of a wrong-arity one", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn get(&self) -> i32 { 0 } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.get(1, 2, 3);
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "method `get` takes 0 argument(s), but 3 were supplied",
+      );
+    });
+
+    it("rejects a call to a method that does not exist on the receiver's type", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn get(&self) -> i32 { 0 } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.nope();
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "no method `nope` found for type `P`",
+      );
+    });
+
+    it("rejects a bare-primitive receiver method call as not found", (): void => {
+      const result = diagnose(`
+        fn main() {
+          let r = 5.foo();
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "no method `foo` found for type `i32`",
+      );
+    });
+
+    it("rejects a method call with too many arguments", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn get(&self) -> i32 { 0 } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.get(1);
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "method `get` takes 0 argument(s), but 1 was supplied",
+      );
+    });
+
+    it("rejects a method call with too few arguments", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn add(&self, other: i32) -> i32 { 0 } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.add();
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "method `add` takes 1 argument(s), but 0 were supplied",
+      );
+    });
+
+    it("rejects a method call whose argument type does not match", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn add(&self, other: i32) -> i32 { 0 } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.add("x");
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "argument 1 to method `add` type mismatch: expected `i32`, found `str`",
+      );
+    });
+
+    it("resolves an inherent method in preference to a same-named trait method", (): void => {
+      const result = diagnose(`
+        trait Draw { fn m(&self) -> str; }
+        struct P { v: i32 }
+        impl P { fn m(&self) -> i32 { 0 } }
+        impl Draw for P { fn m(&self) -> str { "" } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.m();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveI32Type" });
+    });
+
+    it("rejects an ambiguous method name shared by two implemented traits", (): void => {
+      const result = diagnose(`
+        trait A { fn m(&self) -> i32; }
+        trait B { fn m(&self) -> str; }
+        struct P { v: i32 }
+        impl A for P { fn m(&self) -> i32 { 0 } }
+        impl B for P { fn m(&self) -> str { "" } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.m();
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "method `m` on `P` is ambiguous between traits `A` and `B`",
+      );
+    });
+
+    it("auto-borrows a by-value receiver for a `&self` method", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn get(&self) -> i32 { 0 } }
+        fn take(p: P) -> i32 { p.get() }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a `&self` method called on a reference receiver", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn get(&self) -> i32 { 0 } }
+        fn take(p: &P) -> i32 { p.get() }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a chained method call", (): void => {
+      const result = diagnose(`
+        struct A { n: i32 }
+        struct B { n: i32 }
+        impl A { fn to_b(&self) -> B { B { n: 0 } } }
+        impl B { fn val(&self) -> i32 { 0 } }
+        fn main() {
+          let a = A { n: 1 };
+          let r = a.to_b().val();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveI32Type" });
+    });
+
+    it("does not cascade a second diagnostic onto a let annotation when the method is not found", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn get(&self) -> i32 { 0 } }
+        fn main() {
+          let p = P { v: 1 };
+          let r: i32 = p.nope();
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "no method `nope` found for type `P`",
+      );
+    });
+
+    it("coerces an unsuffixed integer-literal argument to the parameter type", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn add(&self, other: i32) -> i32 { 0 } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.add(2);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
     });
   });
 

@@ -311,6 +311,12 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return `argument ${kind.argIndex} to ${kind.calleeKind} \`${kind.calleeName}\` type mismatch: expected \`${kind.expected}\`, found \`${kind.found}\``;
     case "SemCallReturnTypeMismatch":
       return `call to \`${kind.calleeName}\` type mismatch: expected \`${kind.expected}\`, found \`${kind.found}\``;
+    case "SemNoMethodOnType":
+      return `no method \`${kind.method}\` found for type \`${kind.typeName}\``;
+    case "SemAmbiguousMethod":
+      return `method \`${kind.method}\` on \`${kind.typeName}\` is ambiguous between traits ${kind.traits
+        .map((t) => `\`${t}\``)
+        .join(" and ")}`;
     case "SemLogicalOperandsMustBeBool":
       return "logical operator operands must be `bool`";
     case "SemBitwiseRequiresInteger":

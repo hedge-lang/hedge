@@ -346,7 +346,9 @@ describe("buildControlFlowGraph", (): void => {
 
     it("records a method call's receiver and arguments as uses", (): void => {
       const graph = mainGraph(`
-        fn main(p: i32, q: i32) {
+        struct P { v: i32 }
+        impl P { fn foo(&self, x: i32) -> i32 { 0 } }
+        fn main(p: P, q: i32) {
           let r = p.foo(q);
           print(r);
         }
