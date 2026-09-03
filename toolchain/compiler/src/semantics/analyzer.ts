@@ -6620,23 +6620,33 @@ function buildMethodIndex(
   ctx: AnalysisContext,
   allItems: readonly DepthedItem[],
 ): void {
-  for (const { item } of allItems) {
+  for (const { item, scope } of allItems) {
     if (item.kind !== "Impl") continue;
     const shallow = buildImplDecl(item);
     if (!isSome(shallow.targetTypeName) || shallow.isBlanket) continue;
+    // Resolve the target identity through the structural scope, not live
+    // frames - block-local struct/enum declarations aren't in scope yet
+    // during this prepass. Matches `registerOneImpl`'s own resolution, so
+    // the key equals what `typeIdentity` produces for the analyzed type.
+    const targetId = resolveStructOrEnumIdentity(
+      shallow.targetTypeName.value,
+      scope,
+    );
+    if (!isSome(targetId)) continue;
     const targetType = resolveImplSelfTargetType(ctx, shallow);
-    const targetId = typeIdentity(targetType);
-    const entries = [...(ctx.methodIndex.get(targetId) ?? [])];
+    const entries = [...(ctx.methodIndex.get(targetId.value) ?? [])];
     if (isSome(shallow.traitRef)) {
-      const traitId =
-        lookupTrait(ctx, shallow.traitRef.value.name) ??
-        shallow.traitRef.value.name;
-      entries.push(...traitMethodSet(ctx, traitId));
+      entries.push(
+        ...traitMethodSet(
+          ctx,
+          resolveTraitIdentity(shallow.traitRef.value.name, scope),
+        ),
+      );
     } else {
       entries.push(...indexInherentMethods(ctx, item, targetType));
     }
-    ctx.methodIndex.set(targetId, entries);
-    indexAssociatedConsts(ctx, item, targetType, targetId);
+    ctx.methodIndex.set(targetId.value, entries);
+    indexAssociatedConsts(ctx, item, targetType, targetId.value);
   }
 }
 
@@ -6748,8 +6758,8 @@ function resolveMethodCall(
   const traitMatches = named.filter((m) => m.origin.kind === "trait");
   const traitIds = [
     ...new Set(
-      traitMatches.map((m) =>
-        m.origin.kind === "trait" ? m.origin.traitId : "",
+      traitMatches.flatMap((m) =>
+        m.origin.kind === "trait" ? [m.origin.traitId] : [],
       ),
     ),
   ];
@@ -6826,6 +6836,40 @@ function checkMethodCallArgs(
     }
     return expr;
   });
+}
+
+/** A UFCS call (`Trait::m(receiver, ...rest)` / `Type::m(receiver, ...rest)`):
+ * the receiver fills the first argument slot, so the total expected count is
+ * one more than the signature's own parameters. */
+function checkUfcsCallArgs(
+  ctx: AnalysisContext,
+  callTokenId: number,
+  methodName: string,
+  method: IndexedMethod,
+  args: readonly Semantics.Expression[],
+): void {
+  if (args.length !== method.params.length + 1) {
+    emitError(
+      ctx,
+      {
+        kind: "SemConstructorArgCountMismatch",
+        calleeKind: "method",
+        name: methodName,
+        expected: method.params.length + 1,
+        count: args.length,
+      },
+      callTokenId,
+    );
+    return;
+  }
+  checkMethodCallArgs(
+    ctx,
+    callTokenId,
+    methodName,
+    method.params,
+    method.genericParams,
+    args.slice(1),
+  );
 }
 
 function analyzeMethodCallExpression(
@@ -6950,15 +6994,7 @@ function analyzeAssociatedCall(
       );
       return some({ type: { kind: "UnitType", tokenId: call.tokenId } });
     }
-    // UFCS: the first argument is the receiver, the rest match the signature.
-    checkMethodCallArgs(
-      ctx,
-      call.tokenId,
-      name,
-      method.params,
-      method.genericParams,
-      args.slice(1),
-    );
+    checkUfcsCallArgs(ctx, call.tokenId, name, method, args);
     return some({ type: method.returnType });
   }
 
@@ -6979,14 +7015,7 @@ function analyzeAssociatedCall(
   }
   const instanceMethod = candidates.find((m) => isSome(m.receiver));
   if (instanceMethod !== undefined) {
-    checkMethodCallArgs(
-      ctx,
-      call.tokenId,
-      name,
-      instanceMethod.params,
-      instanceMethod.genericParams,
-      args.slice(1),
-    );
+    checkUfcsCallArgs(ctx, call.tokenId, name, instanceMethod, args);
     return some({ type: instanceMethod.returnType });
   }
   emitError(

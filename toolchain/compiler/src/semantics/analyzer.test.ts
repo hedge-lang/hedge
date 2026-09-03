@@ -4365,6 +4365,31 @@ describe("associated types and trait projections", (): void => {
       expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveI32Type" });
     });
 
+    it("resolves a method call on a block-local struct", (): void => {
+      const result = diagnose(`
+        fn f() -> i32 {
+          struct P { v: i32 }
+          impl P { fn m(&self) -> i32 { 0 } }
+          let p = P { v: 1 };
+          p.m()
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a trait method on a block-local struct and trait", (): void => {
+      const result = diagnose(`
+        fn f() -> i32 {
+          trait Get { fn get(&self) -> i32; }
+          struct P { v: i32 }
+          impl Get for P { fn get(&self) -> i32 { 0 } }
+          let p = P { v: 1 };
+          p.get()
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("does not cascade a second diagnostic onto a let annotation when the method is not found", (): void => {
       const result = diagnose(`
         struct P { v: i32 }
@@ -4643,6 +4668,19 @@ describe("associated types and trait projections", (): void => {
       `);
       expect(result.diagnostics).toEqual([]);
       expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveStringType" });
+    });
+
+    it("rejects a `Trait::method()` UFCS call with no receiver argument", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct P { v: i32 }
+        impl Draw for P { fn draw(&self) -> str { "" } }
+        fn main() { let r = Draw::draw(); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "method `draw` takes 1 argument(s), but 0 were supplied",
+      );
     });
 
     it("resolves `Trait::method(x)` where a plain `x.method()` would be ambiguous", (): void => {
