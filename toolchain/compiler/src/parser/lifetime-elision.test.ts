@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { messageOf } from "../diagnostics/index.js";
 import { assert } from "../assert.js";
 import { isSome, some } from "../option.js";
 import { tokenize } from "../lexer/lexer.js";
@@ -46,14 +47,14 @@ describe("lifetime elision - ambiguity rejection", (): void => {
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].severity).toBe("error");
-    expect(diagnostics[0].message).toContain("missing lifetime specifier");
+    expect(messageOf(diagnostics[0])).toContain("missing lifetime specifier");
   });
 
   it("rejects a signature with zero reference parameters as ambiguous (boundary case)", (): void => {
     const { tokens } = tokenize('fn f() -> &str { "x" }');
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("missing lifetime specifier");
+    expect(messageOf(diagnostics[0])).toContain("missing lifetime specifier");
   });
 
   it("tags an ambiguous-return-lifetime diagnostic with the HEDGE-LIFETIME-001 code", (): void => {
@@ -141,7 +142,9 @@ describe("lifetime elision - synthesized-name collision avoidance", (): void => 
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     assert(
-      diagnostics.some((d) => d.message.includes("missing lifetime specifier")),
+      diagnostics.some((d) =>
+        messageOf(d).includes("missing lifetime specifier"),
+      ),
       "Expected the elided let annotation to still be rejected",
     );
     const fn = program.value.items[0];
@@ -165,7 +168,9 @@ describe("lifetime elision - synthesized-name collision avoidance", (): void => 
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     assert(
-      diagnostics.some((d) => d.message.includes("missing lifetime specifier")),
+      diagnostics.some((d) =>
+        messageOf(d).includes("missing lifetime specifier"),
+      ),
       "Expected the elided let annotation to still be rejected",
     );
     const fn = program.value.items[0];
@@ -199,14 +204,14 @@ describe("lifetime elision - nested declarations", (): void => {
     const { tokens } = tokenize("fn outer() { struct Ref { source: &i32 } }");
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("missing lifetime specifier");
+    expect(messageOf(diagnostics[0])).toContain("missing lifetime specifier");
   });
 
   it("rejects an elided lifetime on a let-bound reference type declared inside a fn's body", (): void => {
     const { tokens } = tokenize("fn outer() { let x: &i32; }");
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("missing lifetime specifier");
+    expect(messageOf(diagnostics[0])).toContain("missing lifetime specifier");
   });
 
   it("rejects an ambiguous fn declared inside a Block expression used as a let initializer, the same as at top level or in statement position", (): void => {
@@ -220,7 +225,9 @@ describe("lifetime elision - nested declarations", (): void => {
     `);
     const { diagnostics } = parse(tokens);
     expect(
-      diagnostics.some((d) => d.message.includes("missing lifetime specifier")),
+      diagnostics.some((d) =>
+        messageOf(d).includes("missing lifetime specifier"),
+      ),
     ).toBe(true);
   });
 
@@ -252,7 +259,9 @@ describe("lifetime elision - nested references", (): void => {
     const { tokens } = tokenize("fn f(x: &'a mut &i32) -> &'a mut &i32 { x }");
     const { diagnostics } = parse(tokens);
     expect(
-      diagnostics.some((d) => d.message.includes("missing lifetime specifier")),
+      diagnostics.some((d) =>
+        messageOf(d).includes("missing lifetime specifier"),
+      ),
     ).toBe(true);
   });
 
@@ -260,7 +269,9 @@ describe("lifetime elision - nested references", (): void => {
     const { tokens } = tokenize("fn f(x: Vec<&T>) {}");
     const { program, diagnostics } = parse(tokens);
     expect(
-      diagnostics.some((d) => d.message.includes("missing lifetime specifier")),
+      diagnostics.some((d) =>
+        messageOf(d).includes("missing lifetime specifier"),
+      ),
     ).toBe(true);
     assert(isSome(program), "Expected a program to come back");
     const fn = program.value.items[0];
@@ -288,7 +299,9 @@ describe("lifetime elision - nested references", (): void => {
     const { tokens } = tokenize("fn f(x: [&T; 3]) {}");
     const { program, diagnostics } = parse(tokens);
     expect(
-      diagnostics.some((d) => d.message.includes("missing lifetime specifier")),
+      diagnostics.some((d) =>
+        messageOf(d).includes("missing lifetime specifier"),
+      ),
     ).toBe(true);
     assert(isSome(program), "Expected a program to come back");
     const fn = program.value.items[0];
@@ -312,7 +325,9 @@ describe("lifetime elision - no rule outside a function signature", (): void => 
     const { tokens } = tokenize("let mut x: &i32;");
     const { diagnostics } = parse(tokens);
     expect(
-      diagnostics.some((d) => d.message.includes("missing lifetime specifier")),
+      diagnostics.some((d) =>
+        messageOf(d).includes("missing lifetime specifier"),
+      ),
     ).toBe(true);
   });
 
@@ -355,7 +370,7 @@ describe("lifetime elision - no rule outside a function signature", (): void => 
     const { tokens } = tokenize("struct Cursor { source: &str }");
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("missing lifetime specifier");
+    expect(messageOf(diagnostics[0])).toContain("missing lifetime specifier");
   });
 });
 
@@ -422,14 +437,14 @@ describe("lifetime elision reaches trait/impl bodies", (): void => {
     const { tokens } = tokenize("trait T { type Item = &i32; }");
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("missing lifetime specifier");
+    expect(messageOf(diagnostics[0])).toContain("missing lifetime specifier");
   });
 
   it("rejects an elided reference on an impl's own target type, since no elision rule applies to an impl target", (): void => {
     const { tokens } = tokenize("impl &Foo {}");
     const { program, diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("missing lifetime specifier");
+    expect(messageOf(diagnostics[0])).toContain("missing lifetime specifier");
     assert(isSome(program), "Expected a program to still come back");
     const impl = program.value.items[0];
     assert(impl?.kind === "Impl", "Expected an Impl item");
@@ -457,7 +472,7 @@ describe("lifetime elision reaches trait/impl bodies", (): void => {
     const { tokens } = tokenize("type Foo = &i32;");
     const { diagnostics } = parse(tokens);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("missing lifetime specifier");
+    expect(messageOf(diagnostics[0])).toContain("missing lifetime specifier");
   });
 });
 
@@ -492,7 +507,9 @@ describe("lifetime elision - dyn types", (): void => {
     const { tokens } = tokenize("fn f(x: dyn From<&T>) {}");
     const { program, diagnostics } = parse(tokens);
     assert(
-      diagnostics.some((d) => d.message.includes("missing lifetime specifier")),
+      diagnostics.some((d) =>
+        messageOf(d).includes("missing lifetime specifier"),
+      ),
       "Expected the elided reference inside the dyn bound to be rejected",
     );
     assert(isSome(program), "Expected a program to come back");

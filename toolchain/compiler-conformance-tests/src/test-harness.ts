@@ -1,4 +1,9 @@
-import { compile, type CompileResult, isSome } from "@hedge-lang/compiler";
+import {
+  compile,
+  type CompileResult,
+  isSome,
+  messageOf,
+} from "@hedge-lang/compiler";
 import { expect } from "vitest";
 
 /**
@@ -88,7 +93,7 @@ export function hasCompileErrors(result: CompileResult): boolean {
 function getErrorMessages(result: CompileResult): string[] {
   return result.diagnostics
     .filter((d) => d.severity === "error")
-    .map((d) => d.message);
+    .map((d) => messageOf(d));
 }
 
 export function assertRunsTo(source: string, expectedStdout: string[]): void {

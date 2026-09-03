@@ -1,0 +1,16 @@
+[
+  {
+    "code": "HEDGE-TRAIT-001",
+    "kind": {
+      "kind": "SemTraitAlreadyImplementedForType",
+      "trait": "Clone",
+      "typeName": "Counter"
+    },
+    "relatedSpans": [
+      {
+        "labelKind": "LabelFirstImplementedHere",
+        "spanStart": 30
+      }
+    ]
+  }
+]

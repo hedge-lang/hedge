@@ -1,5 +1,5 @@
-import type { Diagnostic } from "../diagnostics.js";
-import { errorDiagnostic } from "../diagnostics.js";
+import type { Diagnostic, DiagnosticKind } from "../diagnostics/index.js";
+import { errorDiagnostic } from "../diagnostics/index.js";
 import { some } from "../option.js";
 import { isHexDigit } from "./int.js";
 import type { Token } from "./token.js";
@@ -10,11 +10,9 @@ function escapeError(
   source: string,
   tokenStart: number,
   end: number,
-  message: string,
+  kind: DiagnosticKind,
 ): null {
-  diagnostics.push(
-    errorDiagnostic("HEDGE-LEX-008", message, some({ start: tokenStart, end })),
-  );
+  diagnostics.push(errorDiagnostic(kind, some({ start: tokenStart, end })));
   tokens.push({
     kind: "error",
     span: { start: tokenStart, end },
@@ -33,14 +31,10 @@ function scanHexEscape(
   const h1 = source[pos + 2] ?? "";
   const h2 = source[pos + 3] ?? "";
   if (!isHexDigit(h1) || !isHexDigit(h2)) {
-    return escapeError(
-      tokens,
-      diagnostics,
-      source,
-      tokenStart,
-      pos + 4,
-      String.raw`hex escape \x needs exactly 2 hex digits at offset ${pos}`,
-    );
+    return escapeError(tokens, diagnostics, source, tokenStart, pos + 4, {
+      kind: "LexHexEscapeNeedsTwoDigits",
+      offset: pos,
+    });
   }
   return pos + 4;
 }
@@ -53,69 +47,47 @@ function scanUnicodeEscape(
   pos: number,
 ): number | null {
   if (source[pos + 2] !== "{") {
-    return escapeError(
-      tokens,
-      diagnostics,
-      source,
-      tokenStart,
-      pos + 3,
-      String.raw`unicode escape \u must be followed by '{' at offset ${pos}`,
-    );
+    return escapeError(tokens, diagnostics, source, tokenStart, pos + 3, {
+      kind: "LexUnicodeEscapeNoOpeningBrace",
+      offset: pos,
+    });
   }
   let j = pos + 3;
   const hexStart = j;
   while (isHexDigit(source[j] ?? "")) j++;
   if (j === hexStart) {
-    return escapeError(
-      tokens,
-      diagnostics,
-      source,
-      tokenStart,
-      j + 1,
-      `unicode escape has no digits at offset ${pos}`,
-    );
+    return escapeError(tokens, diagnostics, source, tokenStart, j + 1, {
+      kind: "LexUnicodeEscapeNoDigits",
+      offset: pos,
+    });
   }
   if (source[j] !== "}") {
-    return escapeError(
-      tokens,
-      diagnostics,
-      source,
-      tokenStart,
-      j + 1,
-      `unicode escape missing closing '}' at offset ${j}`,
-    );
+    return escapeError(tokens, diagnostics, source, tokenStart, j + 1, {
+      kind: "LexUnicodeEscapeNoClosingBrace",
+      offset: j,
+    });
   }
   const hexStr = source.slice(hexStart, j);
   if (hexStr.length > 6) {
-    return escapeError(
-      tokens,
-      diagnostics,
-      source,
-      tokenStart,
-      j + 1,
-      `unicode escape has too many digits at offset ${pos}`,
-    );
+    return escapeError(tokens, diagnostics, source, tokenStart, j + 1, {
+      kind: "LexUnicodeEscapeTooManyDigits",
+      offset: pos,
+    });
   }
   const codePoint = Number.parseInt(hexStr, 16);
   if (codePoint > 0x10ffff) {
-    return escapeError(
-      tokens,
-      diagnostics,
-      source,
-      tokenStart,
-      j + 1,
-      `unicode escape U+${hexStr.toUpperCase()} is out of range (max U+10FFFF) at offset ${pos}`,
-    );
+    return escapeError(tokens, diagnostics, source, tokenStart, j + 1, {
+      kind: "LexUnicodeEscapeOutOfRange",
+      codepoint: hexStr.toUpperCase(),
+      offset: pos,
+    });
   }
   if (codePoint >= 0xd800 && codePoint <= 0xdfff) {
-    return escapeError(
-      tokens,
-      diagnostics,
-      source,
-      tokenStart,
-      j + 1,
-      `unicode escape U+${hexStr.toUpperCase()} is a surrogate code point at offset ${pos}`,
-    );
+    return escapeError(tokens, diagnostics, source, tokenStart, j + 1, {
+      kind: "LexUnicodeEscapeSurrogate",
+      codepoint: hexStr.toUpperCase(),
+      offset: pos,
+    });
   }
   return j + 1;
 }
@@ -177,13 +149,10 @@ export function scanEscapeSeq(
     case "u":
       return scanUnicodeEscape(tokens, diagnostics, source, tokenStart, pos);
     default:
-      return escapeError(
-        tokens,
-        diagnostics,
-        source,
-        tokenStart,
-        pos + 2,
-        `unknown escape sequence '\\${next}' at offset ${pos}`,
-      );
+      return escapeError(tokens, diagnostics, source, tokenStart, pos + 2, {
+        kind: "LexUnknownEscapeSequence",
+        sequence: next,
+        offset: pos,
+      });
   }
 }

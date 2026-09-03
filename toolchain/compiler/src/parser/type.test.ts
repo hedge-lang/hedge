@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { messageOf } from "../diagnostics/index.js";
 import { assert } from "../assert.js";
 import { none, some } from "../option.js";
 import { isErr } from "../result.js";
@@ -59,14 +60,14 @@ describe("parseType - reference types", (): void => {
     const { tokens } = tokenize("&&i32");
     const result = parseType(tokens, 0);
     assert(isErr(result), "Expected an error result");
-    expect(result.error.message).toBe("expected a type, found `amp_amp`");
+    expect(messageOf(result.error)).toBe("expected a type, found `amp_amp`");
   });
 
   it("still rejects a bare lifetime with no leading & in type position", (): void => {
     const { tokens } = tokenize("'a");
     const result = parseType(tokens, 0);
     assert(isErr(result), "Expected an error result");
-    expect(result.error.message).toBe(
+    expect(messageOf(result.error)).toBe(
       "lifetime annotations are not yet supported",
     );
   });
@@ -89,7 +90,7 @@ describe("parseType - array types", (): void => {
     const { tokens } = tokenize("[i32]");
     const result = parseType(tokens, 0);
     assert(isErr(result), "Expected an error result");
-    expect(result.error.message).toBe(
+    expect(messageOf(result.error)).toBe(
       "slice types (`[T]`) are not yet supported",
     );
   });
@@ -173,7 +174,7 @@ describe("parseType - generic type arguments", (): void => {
     assert(lt !== undefined, "Expected to find a lt token");
     const result = parseType(tokens, 0);
     assert(isErr(result), "Expected an error result");
-    expect(result.error.message).toBe(
+    expect(messageOf(result.error)).toBe(
       "lifetime arguments are not yet supported",
     );
     expect(result.error.span).toEqual(some(lt.span));
@@ -411,7 +412,7 @@ describe("parseType - dyn types", (): void => {
     assert(lifetimeToken !== undefined, "Expected to find a lifetime token");
     const result = parseType(tokens, 0);
     assert(isErr(result), "Expected an error result");
-    expect(result.error.message).toContain("trait");
+    expect(messageOf(result.error)).toContain("trait");
     expect(result.error.span).toEqual(some(lifetimeToken.span));
   });
 
@@ -428,6 +429,6 @@ describe("parseType - a token that cannot begin a type", (): void => {
     const result = parseType(tokens, 0);
     assert(isErr(result), "Expected an error result");
     expect(result.error.code).toBe("HEDGE-PARSE-004");
-    expect(result.error.message).toBe("expected a type, found `colon`");
+    expect(messageOf(result.error)).toBe("expected a type, found `colon`");
   });
 });

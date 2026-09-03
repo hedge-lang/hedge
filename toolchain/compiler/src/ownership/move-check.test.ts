@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { messageOf } from "../diagnostics/index.js";
 
 import { assert } from "../assert.js";
 import { tokenize } from "../lexer/lexer.js";
@@ -26,7 +27,7 @@ function check(
 function checkLoose(source: string): OwnershipCheckResult {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
-  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  assert(isSome(program), messageOf(diagnostics[0], "Parse failed"));
   const analysis = analyze(program.value, tokens);
   return analyzeOwnership(analysis.program, tokens);
 }
@@ -64,7 +65,7 @@ describe("move-check", (): void => {
     `);
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("uninitialized");
+    expect(messageOf(diagnostics[0])).toContain("uninitialized");
   });
 
   it("assigning before use clears the uninitialized state", (): void => {
@@ -122,8 +123,8 @@ describe("move-check", (): void => {
     );
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("moved");
-    expect(diagnostics[0].message).toContain("x");
+    expect(messageOf(diagnostics[0])).toContain("moved");
+    expect(messageOf(diagnostics[0])).toContain("x");
   });
 
   it("move in one match arm does not invalidate an independent use of the same value in another arm", (): void => {
@@ -166,8 +167,8 @@ describe("move-check", (): void => {
     );
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("moved");
-    expect(diagnostics[0].message).toContain("x");
+    expect(messageOf(diagnostics[0])).toContain("moved");
+    expect(messageOf(diagnostics[0])).toContain("x");
   });
 
   it("move in one branch invalidates use after merge, naming the move", (): void => {
@@ -187,8 +188,8 @@ describe("move-check", (): void => {
     );
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("moved");
-    expect(diagnostics[0].message).toContain("x");
+    expect(messageOf(diagnostics[0])).toContain("moved");
+    expect(messageOf(diagnostics[0])).toContain("x");
   });
 
   it("resolves a struct that is moved on only one branch and never used again via static duplication, without using a runtime flag", (): void => {
@@ -257,8 +258,8 @@ describe("move-check", (): void => {
     );
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("moved");
-    expect(diagnostics[0].message).not.toContain("possibly");
+    expect(messageOf(diagnostics[0])).toContain("moved");
+    expect(messageOf(diagnostics[0])).not.toContain("possibly");
   });
 
   it("a value moved on every branch and never used again needs no drop of any kind, static or flagged", (): void => {
@@ -439,7 +440,7 @@ describe("move-check", (): void => {
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(diagnostics[0].code).toBe("HEDGE-MOVE-003");
-    expect(diagnostics[0].message).toBe(
+    expect(messageOf(diagnostics[0])).toBe(
       "`x` may or may not have been initialized depending on the branch taken, and conditional drops are not yet supported",
     );
   });
@@ -458,7 +459,7 @@ describe("move-check", (): void => {
     );
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("x");
+    expect(messageOf(diagnostics[0])).toContain("x");
   });
 
   it("drop annotation: an owned struct with no move is present at its scope's exit", (): void => {
@@ -711,7 +712,7 @@ describe("move-check", (): void => {
     );
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("moved");
+    expect(messageOf(diagnostics[0])).toContain("moved");
   });
 
   it("borrowing a non-Copy struct binding with &mut is a use, not a move", (): void => {
@@ -752,7 +753,7 @@ describe("move-check", (): void => {
     );
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("cannot move");
+    expect(messageOf(diagnostics[0])).toContain("cannot move");
   });
 
   it("rejects moving a non-Copy value out through a &mut reference too, not just &", (): void => {
@@ -767,7 +768,7 @@ describe("move-check", (): void => {
     );
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("cannot move");
+    expect(messageOf(diagnostics[0])).toContain("cannot move");
   });
 
   it("does not reject reading a field through a dereferenced non-Copy value", (): void => {
@@ -820,7 +821,7 @@ describe("move-check", (): void => {
     );
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toContain("moved");
+    expect(messageOf(diagnostics[0])).toContain("moved");
   });
 
   it("reading a nested struct field does not attempt partial-move tracking", (): void => {
@@ -906,7 +907,7 @@ describe("move-check", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(diagnostics[0].message).toBe("use of moved value `a`");
+      expect(messageOf(diagnostics[0])).toBe("use of moved value `a`");
     });
 
     it("rejects using an array after passing it by value into a function call", (): void => {
@@ -920,7 +921,7 @@ describe("move-check", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(diagnostics[0].message).toBe("use of moved value `a`");
+      expect(messageOf(diagnostics[0])).toBe("use of moved value `a`");
     });
 
     it("accepts reassigning an array binding after it was moved away", (): void => {
@@ -948,7 +949,7 @@ describe("move-check", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(diagnostics[0].message).toBe("use of moved value `arr`");
+      expect(messageOf(diagnostics[0])).toBe("use of moved value `arr`");
     });
 
     it("rejects binding a non-Copy array element to a new variable by value out of an index", (): void => {
@@ -962,7 +963,7 @@ describe("move-check", (): void => {
         `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(diagnostics[0].message).toContain("cannot move");
+      expect(messageOf(diagnostics[0])).toContain("cannot move");
     });
 
     it("rejects binding a non-Copy struct field to a new variable by value", (): void => {
@@ -977,7 +978,9 @@ describe("move-check", (): void => {
         `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(diagnostics[0].message).toContain("cannot move out of `o.inner`");
+      expect(messageOf(diagnostics[0])).toContain(
+        "cannot move out of `o.inner`",
+      );
     });
 
     it("still allows borrowing a non-Copy field rather than moving it", (): void => {
@@ -1036,7 +1039,7 @@ describe("move-check", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(diagnostics[0].message).toBe("use of moved value `p`");
+      expect(messageOf(diagnostics[0])).toBe("use of moved value `p`");
     });
 
     it("does not move the scrutinee when every match-arm sub-binding is byRef", (): void => {
@@ -1063,7 +1066,7 @@ describe("move-check", (): void => {
       `);
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(diagnostics[0].message).toBe("use of moved value `p`");
+      expect(messageOf(diagnostics[0])).toBe("use of moved value `p`");
     });
   });
 
@@ -1082,6 +1085,6 @@ describe("move-check", (): void => {
     `);
     expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].message).toBe("use of moved value `x`");
+    expect(messageOf(diagnostics[0])).toBe("use of moved value `x`");
   });
 });

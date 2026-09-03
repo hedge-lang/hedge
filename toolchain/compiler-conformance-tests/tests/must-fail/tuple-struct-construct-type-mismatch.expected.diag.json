@@ -1,0 +1,14 @@
+[
+  {
+    "code": "HEDGE-TYPE-001",
+    "kind": {
+      "kind": "SemArgumentTypeMismatch",
+      "argIndex": 1,
+      "calleeKind": "struct",
+      "calleeName": "Pair",
+      "expected": "i32",
+      "found": "bool"
+    },
+    "relatedSpans": []
+  }
+]

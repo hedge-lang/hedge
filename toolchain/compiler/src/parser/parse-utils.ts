@@ -1,4 +1,10 @@
-import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
+import {
+  type Diagnostic,
+  type DiagnosticKind,
+  errorDiagnostic,
+  messageOf,
+  renderDiagnosticMessage,
+} from "../diagnostics/index.js";
 import { resolveEscape } from "../lexer/escape.js";
 import type {
   FloatToken,
@@ -33,8 +39,7 @@ export function tokenAt(tokens: readonly Token[], pos: number): PR<Token> {
   if (token === undefined) {
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-002",
-        `Unexpected end of input at token ${pos}`,
+        { kind: "ParseUnexpectedEndOfInputAtToken", token: pos },
         none(),
       ),
     );
@@ -78,8 +83,12 @@ export function expect(
   if (token.kind !== kind) {
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `Expected ${kind}, found "${token.kind}" at offset ${token.span.start}`,
+        {
+          kind: "ParseExpectedFound",
+          expected: kind,
+          found: token.kind,
+          offset: token.span.start,
+        },
         some(token.span),
       ),
     );
@@ -106,8 +115,12 @@ export function expectKeyword(
     const found = token.kind === "keyword" ? token.text : token.kind;
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `Expected keyword "${text}", found "${found}" at offset ${token.span.start}`,
+        {
+          kind: "ParseExpectedKeyword",
+          keyword: text,
+          found,
+          offset: token.span.start,
+        },
         some(token.span),
       ),
     );
@@ -124,9 +137,6 @@ function stripUnderscores(text: string): string {
   return text.replaceAll("_", "");
 }
 
-export const MUT_MESSAGE: string =
-  "The keyword `mut` is reserved and cannot be used as an identifier. For a mutable binding, use `let mut`; for a mutable borrow, use `&mut`.";
-
 /**
  * True for a deliberate, permanent, fail-fast rejection of syntax that is
  * recognized but not yet implemented, or reserved (`mut` as an identifier,
@@ -137,12 +147,6 @@ export const MUT_MESSAGE: string =
  */
 export function isGuardrailDiagnostic(diagnostic: Diagnostic): boolean {
   return diagnostic.code === "HEDGE-PARSE-004";
-}
-
-export function unsupportedLoopMessage(keyword: string): string {
-  return keyword === "loop"
-    ? "`loop` expressions are not yet supported"
-    : `\`${keyword}\` loops are not yet supported`;
 }
 
 const LOOP_KEYWORDS: ReadonlySet<string> = new Set(["loop", "while", "for"]);
@@ -199,10 +203,6 @@ export function isWhileLetAt(tokens: readonly Token[], pos: number): boolean {
   );
 }
 
-export function unsupportedPathKeywordMessage(keyword: string): string {
-  return `\`${keyword}\` is not yet supported`;
-}
-
 const PATH_KEYWORDS: ReadonlySet<string> = new Set(["self", "super", "Self"]);
 
 /**
@@ -217,14 +217,6 @@ export function pathKeywordAt(
     return some(token);
   }
   return none();
-}
-
-export function unsupportedGenericsMessage(construct: string): string {
-  return `${construct} are not yet supported`;
-}
-
-export function unsupportedLifetimeMessage(construct: string): string {
-  return `${construct} are not yet supported`;
 }
 
 /**
@@ -477,8 +469,10 @@ export function skipBalancedBraceBlock(
   if (openBraceToken?.kind !== "lbrace") {
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `expected \`{\` to start block, found \`${openBraceToken?.kind ?? "MISSING"}\``,
+        {
+          kind: "ParseExpectedBraceToStartBlockFound",
+          found: openBraceToken?.kind ?? "MISSING",
+        },
         openBraceToken ? some(openBraceToken.span) : none(),
       ),
     );
@@ -490,8 +484,7 @@ export function skipBalancedBraceBlock(
     if (tok === undefined || tok.kind === "eof") {
       return err(
         errorDiagnostic(
-          "HEDGE-PARSE-002",
-          "expected `}` to close block, found end of input",
+          { kind: "ParseExpectedCloseBraceEofInBlock" },
           some(openBraceToken.span),
         ),
       );
@@ -591,10 +584,6 @@ export function skipToStructBody(
   }
 }
 
-export function unsupportedAsyncMessage(): string {
-  return "`async` is not yet supported";
-}
-
 interface TopLevelBodyStart {
   readonly kind: "brace" | "semi";
   readonly pos: number;
@@ -643,20 +632,19 @@ export function skipUnsupportedTopLevelItem(
   tokens: readonly Token[],
   keyword: KeywordToken,
   pos: number,
-  message: string,
+  guardrail: DiagnosticKind,
 ): PR<{ diagnostic: Diagnostic; next: number }> {
-  const diagnostic = errorDiagnostic(
-    "HEDGE-PARSE-004",
-    message,
-    some(keyword.span),
-  );
+  const diagnostic = errorDiagnostic(guardrail, some(keyword.span));
 
   const bodyStart = findTopLevelItemBodyStart(tokens, pos);
   if (bodyStart === undefined) {
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-002",
-        `${message}; expected a body for \`${keyword.text}\`, found end of input`,
+        {
+          kind: "ParseGuardrailThen",
+          guardrail: renderDiagnosticMessage(guardrail),
+          rest: `expected a body for \`${keyword.text}\`, found end of input`,
+        },
         some(keyword.span),
       ),
     );
@@ -668,7 +656,11 @@ export function skipUnsupportedTopLevelItem(
   if (isErr(nextResult)) {
     return err({
       ...nextResult.error,
-      message: `${message}; ${nextResult.error.message}`,
+      kind: {
+        kind: "ParseGuardrailThen",
+        guardrail: renderDiagnosticMessage(guardrail),
+        rest: messageOf(nextResult.error),
+      },
       span: some(keyword.span),
     });
   }
@@ -696,8 +688,7 @@ export function parseIdentifier(
   if (token.kind === "keyword" && token.text === "mut") {
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-004",
-        MUT_MESSAGE,
+        { kind: "ParseMutReservedIdentifier" },
         some({ start: token.span.start, end: token.span.end }),
       ),
     );
@@ -708,8 +699,11 @@ export function parseIdentifier(
       token.kind === "keyword" ? `keyword "${token.text}"` : `"${token.kind}"`;
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `Expected an identifier, found ${found} at offset ${token.span.start}`,
+        {
+          kind: "ParseExpectedIdentifierFound",
+          found,
+          offset: token.span.start,
+        },
         some(token.span),
       ),
     );

@@ -10,7 +10,11 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { Diagnostic } from "@hedge-lang/compiler";
+import {
+  type Diagnostic,
+  messageOf,
+  renderRelatedLabel,
+} from "@hedge-lang/compiler";
 import { isSome } from "@hedge-lang/compiler";
 
 import { compileHedgeCode } from "./test-harness.js";
@@ -36,6 +40,8 @@ export interface MustFailFixture {
   readonly name: string;
   readonly sourcePath: string;
   readonly expectedPath: string;
+  /** Structured `[{code, kind, relatedSpans}]` snapshot, reword-proof. */
+  readonly expectedDiagPath: string;
 }
 
 const TESTS_DIR = fileURLToPath(new URL("../tests", import.meta.url));
@@ -82,7 +88,7 @@ export function runExecutionFixture(fixture: ExecutionFixture): {
   if (!isSome(result.code) || !isSome(result.code.value.javascript)) {
     throw new Error(
       `execution fixture "${fixture.name}" failed to compile: ${result.diagnostics
-        .map((d) => d.message)
+        .map((d) => messageOf(d))
         .join("; ")}`,
     );
   }
@@ -120,7 +126,35 @@ export function runExecutionFixture(fixture: ExecutionFixture): {
 }
 
 export function discoverMustFailFixtures(): MustFailFixture[] {
-  return discoverFixtures(join(TESTS_DIR, "must-fail"), ".expected.stderr");
+  return discoverFixtures(join(TESTS_DIR, "must-fail"), ".expected.stderr").map(
+    (fixture) => ({
+      ...fixture,
+      expectedDiagPath: fixture.expectedPath.replace(
+        /\.expected\.stderr$/,
+        ".expected.diag.json",
+      ),
+    }),
+  );
+}
+
+/**
+ * The reword-proof view of a rejection: each diagnostic's `code`, its
+ * structured `kind`, and its related spans reduced to `{labelKind, spanStart}`.
+ * A wording change never touches this; only a change to the diagnostic a
+ * fixture actually produces does.
+ */
+export function structuredDiagnostics(
+  diagnostics: readonly Diagnostic[],
+): string {
+  const structured = diagnostics.map((diagnostic) => ({
+    code: diagnostic.code,
+    kind: diagnostic.kind,
+    relatedSpans: diagnostic.relatedSpans.map((related) => ({
+      labelKind: related.label.kind,
+      spanStart: related.span.start,
+    })),
+  }));
+  return `${JSON.stringify(structured, null, 2)}\n`;
 }
 
 /**
@@ -133,9 +167,11 @@ export function renderDiagnostics(diagnostics: readonly Diagnostic[]): string {
 
 function renderDiagnostic(diagnostic: Diagnostic): string {
   const code = `[${diagnostic.code}]`;
-  const lines = [`${diagnostic.severity}${code}: ${diagnostic.message}`];
+  const lines = [`${diagnostic.severity}${code}: ${messageOf(diagnostic)}`];
   for (const related of diagnostic.relatedSpans) {
-    lines.push(`  = note: ${related.label} at offset ${related.span.start}`);
+    lines.push(
+      `  = note: ${renderRelatedLabel(related.label)} at offset ${related.span.start}`,
+    );
   }
   return lines.join("\n");
 }

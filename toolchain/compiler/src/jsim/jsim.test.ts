@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { messageOf } from "../diagnostics/index.js";
 import { assert } from "../assert.js";
 import { generate } from "../codegen/generator.js";
 import { isSome, none, some } from "../option.js";
@@ -28,7 +29,7 @@ import type * as JSIM from "./ast.js";
 function jsimSource(source: string): JSIM.Program {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
-  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  assert(isSome(program), messageOf(diagnostics[0], "Parse failed"));
   const analysis = analyze(program.value, tokens);
   return toJsim(analysis.program, tokens);
 }
@@ -40,16 +41,16 @@ function jsimSource(source: string): JSIM.Program {
 function jsimSourceWithOwnership(source: string): JSIM.Program {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
-  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  assert(isSome(program), messageOf(diagnostics[0], "Parse failed"));
   const analysis = analyze(program.value, tokens);
   assert(
     analysis.diagnostics.every((d) => d.severity !== "error"),
-    analysis.diagnostics.map((d) => d.message).join("; "),
+    analysis.diagnostics.map((d) => messageOf(d)).join("; "),
   );
   const ownership = analyzeOwnership(analysis.program, tokens);
   assert(
     ownership.diagnostics.every((d) => d.severity !== "error"),
-    ownership.diagnostics.map((d) => d.message).join("; "),
+    ownership.diagnostics.map((d) => messageOf(d)).join("; "),
   );
   return toJsim(analysis.program, tokens, ownership.functions);
 }
@@ -1200,11 +1201,11 @@ describe("conditional-drop-flag codegen (synthetic ownership)", () => {
   function synthesizeConditionalDrop(source: string): string {
     const { tokens } = tokenize(source);
     const { program, diagnostics: parseDiagnostics } = parse(tokens);
-    assert(isSome(program), parseDiagnostics[0]?.message ?? "Parse failed");
+    assert(isSome(program), messageOf(parseDiagnostics[0], "Parse failed"));
     const analysis = analyze(program.value, tokens);
     assert(
       analysis.diagnostics.every((d) => d.severity !== "error"),
-      analysis.diagnostics.map((d) => d.message).join("; "),
+      analysis.diagnostics.map((d) => messageOf(d)).join("; "),
     );
 
     const mainFn = analysis.program.items.find(

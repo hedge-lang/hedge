@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { messageOf } from "../diagnostics/index.js";
 import { assert } from "../assert.js";
 
 import { tokenize } from "../lexer/lexer.js";
@@ -25,7 +26,7 @@ function gen(source: string): Code {
 function genLoose(source: string): Code {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
-  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  assert(isSome(program), messageOf(diagnostics[0], "Parse failed"));
   const analysis = analyze(program.value, tokens);
   return generate(toJsim(analysis.program, tokens));
 }
@@ -40,7 +41,7 @@ function genWithOwnership(source: string): Code {
   const ownership = analyzeOwnership(program, tokens);
   assert(
     ownership.diagnostics.every((d) => d.severity !== "error"),
-    ownership.diagnostics.map((d) => d.message).join("; "),
+    ownership.diagnostics.map((d) => messageOf(d)).join("; "),
   );
   return generate(toJsim(program, tokens, ownership.functions));
 }

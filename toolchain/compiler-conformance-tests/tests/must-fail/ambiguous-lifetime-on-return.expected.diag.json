@@ -1,0 +1,10 @@
+[
+  {
+    "code": "HEDGE-LIFETIME-001",
+    "kind": {
+      "kind": "ElisionAmbiguousReturnLifetime",
+      "referenceParamCount": 2
+    },
+    "relatedSpans": []
+  }
+]

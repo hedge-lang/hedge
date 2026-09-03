@@ -26,11 +26,12 @@
 import { assert, assertNever } from "../assert.js";
 import {
   type Diagnostic,
+  type DiagnosticKind,
   type RelatedSpan,
-  type DiagnosticCode,
   errorDiagnostic,
+  renderDiagnosticMessage,
   warningDiagnostic,
-} from "../diagnostics.js";
+} from "../diagnostics/index.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { hasCapability } from "../semantics/type-capabilities.js";
@@ -183,31 +184,19 @@ function diagnosticSpan(
 
 function emitDiagnostic(
   ctx: Ctx,
-  message: string,
+  kind: DiagnosticKind,
   tokenId: number,
-  extra: {
-    readonly code: DiagnosticCode;
-    readonly relatedSpans?: readonly RelatedSpan[];
-  },
+  relatedSpans?: readonly RelatedSpan[],
 ): void {
   ctx.diagnostics.push({
-    ...errorDiagnostic(
-      extra.code,
-      message,
-      diagnosticSpan(ctx.tokens, tokenId),
-    ),
-    relatedSpans: extra.relatedSpans ?? [],
+    ...errorDiagnostic(kind, diagnosticSpan(ctx.tokens, tokenId)),
+    relatedSpans: relatedSpans ?? [],
   });
 }
 
-function emitWarning(
-  ctx: Ctx,
-  message: string,
-  tokenId: number,
-  code: DiagnosticCode,
-): void {
+function emitWarning(ctx: Ctx, kind: DiagnosticKind, tokenId: number): void {
   ctx.diagnostics.push(
-    warningDiagnostic(code, message, diagnosticSpan(ctx.tokens, tokenId)),
+    warningDiagnostic(kind, diagnosticSpan(ctx.tokens, tokenId)),
   );
 }
 
@@ -219,7 +208,7 @@ function emitWarning(
  * ConditionalDrop's own doc comment.
  */
 export function conditionalDropFlagWarning(name: string): string {
-  return `\`${name}\` needs a runtime drop flag to decide whether it is still owned at scope exit`;
+  return renderDiagnosticMessage({ kind: "OwnConditionalDropFlag", name });
 }
 
 /**
@@ -322,34 +311,33 @@ function useOrMove(
     case "Uninitialized":
       emitDiagnostic(
         ctx,
-        `use of uninitialized binding \`${name}\``,
+        { kind: "OwnUseOfUninitializedBinding", name },
         pathExpr.tokenId,
-        { code: "HEDGE-MOVE-001" },
       );
       state.set(id, { kind: "Owned" });
       return;
     case "Unbound":
-      emitDiagnostic(ctx, `use of moved value \`${name}\``, pathExpr.tokenId, {
-        code: "HEDGE-BORROW-CHECK-003",
-        relatedSpans: [{ span: current.moveSite, label: "moved here" }],
-      });
+      emitDiagnostic(
+        ctx,
+        { kind: "OwnUseOfMovedValue", name },
+        pathExpr.tokenId,
+        [{ span: current.moveSite, label: { kind: "LabelMovedHere" } }],
+      );
       state.set(id, { kind: "Owned" });
       return;
     case "ConditionallyMoved":
       emitDiagnostic(
         ctx,
-        `use of possibly-moved value \`${name}\`: moved on some paths but not others`,
+        { kind: "OwnUseOfPossiblyMovedValue", name },
         pathExpr.tokenId,
-        { code: "HEDGE-BORROW-CHECK-003" },
       );
       state.set(id, { kind: "Owned" });
       return;
     case "PossiblyUninitialized":
       emitDiagnostic(
         ctx,
-        `use of possibly-uninitialized binding \`${name}\`: initialized on some paths but not others`,
+        { kind: "OwnUseOfPossiblyUninitializedBinding", name },
         pathExpr.tokenId,
-        { code: "HEDGE-MOVE-001" },
       );
       state.set(id, { kind: "Owned" });
       return;
@@ -637,9 +625,8 @@ function checkProjectionMove(
   const place = projectionDescription(expression);
   emitDiagnostic(
     ctx,
-    `cannot move out of \`${place}\`; borrow it with \`&${place}\` instead`,
+    { kind: "OwnCannotMoveOutBorrowInstead", place },
     expression.tokenId,
-    { code: "HEDGE-MOVE-002" },
   );
 }
 
@@ -755,9 +742,11 @@ function walkExpression(
       if (!hasCapability(expression.type, "copy")) {
         emitDiagnostic(
           ctx,
-          `cannot move ${derefPlaceDescription(expression.operand)} out of a reference`,
+          {
+            kind: "OwnCannotMoveOutOfReference",
+            place: derefPlaceDescription(expression.operand),
+          },
           expression.tokenId,
-          { code: "HEDGE-MOVE-002" },
         );
       }
       walkExpression(ctx, expression.operand, state, scopeStack);
@@ -1294,16 +1283,16 @@ function dropDecision(state: MoveState | undefined): DropDecision {
  * Only ever called for `PossiblyUninitialized` -- `recordDrops` routes
  * `ConditionallyMoved` to a flag-guarded drop instead (see `dropDecision`).
  */
-function ambiguousDropMessage(name: string, state: MoveState): string {
+function ambiguousDropKind(name: string, state: MoveState): DiagnosticKind {
   switch (state.kind) {
     case "PossiblyUninitialized":
-      return `\`${name}\` may or may not have been initialized depending on the branch taken, and conditional drops are not yet supported`;
+      return { kind: "OwnAmbiguousDrop", name };
     case "Owned":
     case "Uninitialized":
     case "Unbound":
     case "ConditionallyMoved":
       throw new Error(
-        `ICE: ambiguousDropMessage called with non-ambiguous state ${state.kind}`,
+        `ICE: ambiguousDropKind called with non-ambiguous state ${state.kind}`,
       );
     default:
       return assertNever(state);
@@ -1375,9 +1364,8 @@ function recordDrops(
         if (ctx.warnDropFlags) {
           emitWarning(
             ctx,
-            conditionalDropFlagWarning(declaration.name),
+            { kind: "OwnConditionalDropFlag", name: declaration.name },
             declaration.tokenId,
-            "HEDGE-MOVE-004",
           );
         }
         break;
@@ -1386,9 +1374,8 @@ function recordDrops(
         assert(declState !== undefined, "Ambiguous implies a known state");
         emitDiagnostic(
           ctx,
-          ambiguousDropMessage(declaration.name, declState),
+          ambiguousDropKind(declaration.name, declState),
           declaration.tokenId,
-          { code: "HEDGE-MOVE-003" },
         );
         break;
       }

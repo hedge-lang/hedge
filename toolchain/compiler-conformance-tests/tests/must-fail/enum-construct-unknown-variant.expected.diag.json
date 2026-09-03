@@ -1,0 +1,11 @@
+[
+  {
+    "code": "HEDGE-NAME-004",
+    "kind": {
+      "kind": "SemNoVariantOnEnum",
+      "variant": "Bogus",
+      "enumName": "Message"
+    },
+    "relatedSpans": []
+  }
+]

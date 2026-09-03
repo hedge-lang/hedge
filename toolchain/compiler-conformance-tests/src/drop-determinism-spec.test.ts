@@ -1,4 +1,4 @@
-import { compile, isSome } from "@hedge-lang/compiler";
+import { compile, isSome, messageOf } from "@hedge-lang/compiler";
 import { describe, expect, it } from "vitest";
 
 function requireJavascript(source: string): string {
@@ -353,7 +353,9 @@ describe("drop determinism and RAII spec", (): void => {
       }
     `);
     expect(
-      result.diagnostics.some((d) => d.message.toLowerCase().includes("drop")),
+      result.diagnostics.some((d) =>
+        messageOf(d).toLowerCase().includes("drop"),
+      ),
     ).toBe(true);
   });
 

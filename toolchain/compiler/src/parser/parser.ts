@@ -1,4 +1,4 @@
-import { type Diagnostic, warningDiagnostic } from "../diagnostics.js";
+import { type Diagnostic, warningDiagnostic } from "../diagnostics/index.js";
 import type { Span, Token } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
 import { isErr } from "../result.js";
@@ -135,8 +135,7 @@ export function parse(tokens: readonly Token[]): ParseResult {
       const token = tokens[node.value.tokenId];
       diagnostics.push(
         warningDiagnostic(
-          "HEDGE-LINT-001",
-          "immutable binding declared without a value can never be used",
+          { kind: "ParseImmutableBindingNeverUsed" },
           token !== undefined ? some(token.span) : none(),
         ),
       );

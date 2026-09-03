@@ -1,5 +1,5 @@
 import type { Diagnostic } from "@hedge-lang/compiler";
-import { compile } from "@hedge-lang/compiler";
+import { compile, messageOf } from "@hedge-lang/compiler";
 import { describe, expect, it } from "vitest";
 
 const DIAGNOSTIC_CODE_PATTERN = /^HEDGE-[A-Z][A-Z0-9-]*-\d{3,}$/u;
@@ -49,7 +49,7 @@ describe("diagnostic code ID conformance", (): void => {
         const code = extractDiagnosticCode(diagnostic);
         expect(
           code,
-          `uncoded diagnostic: ${diagnostic.message}`,
+          `uncoded diagnostic: ${messageOf(diagnostic)}`,
         ).not.toBeNull();
         if (code === null) {
           return;

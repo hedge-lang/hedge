@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { messageOf, renderRelatedLabel } from "@hedge-lang/compiler";
 import {
   executeHedgeCode,
   compileHedgeCode,
@@ -1093,10 +1094,15 @@ describe("execution tests", (): void => {
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
-      expect(errors[0]?.message).toBe(
+      expect(messageOf(errors[0])).toBe(
         "argument 2 to function `same` type mismatch: expected `i32`, found `str`",
       );
-      expect(errors[0]?.relatedSpans).toEqual([
+      expect(
+        errors[0]?.relatedSpans.map((r) => ({
+          span: r.span,
+          label: renderRelatedLabel(r.label),
+        })),
+      ).toEqual([
         { span: { start: 57, end: 58 }, label: "inferred as `i32` here" },
       ]);
     });
@@ -1111,10 +1117,15 @@ describe("execution tests", (): void => {
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
-      expect(errors[0]?.message).toBe(
+      expect(messageOf(errors[0])).toBe(
         "argument 2 to function `samer` type mismatch: expected `&i32`, found `&str`",
       );
-      expect(errors[0]?.relatedSpans).toEqual([
+      expect(
+        errors[0]?.relatedSpans.map((r) => ({
+          span: r.span,
+          label: renderRelatedLabel(r.label),
+        })),
+      ).toEqual([
         { span: { start: 114, end: 115 }, label: "inferred as `i32` here" },
       ]);
     });
@@ -1136,7 +1147,7 @@ describe("execution tests", (): void => {
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
-      expect(errors[0]?.message).toBe(
+      expect(messageOf(errors[0])).toBe(
         "argument 1 to function `identity` type mismatch: expected `i32`, found `str`",
       );
     });
@@ -1158,7 +1169,7 @@ describe("execution tests", (): void => {
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-011");
-      expect(errors[0]?.message).toBe(
+      expect(messageOf(errors[0])).toBe(
         "`identity` declares 1 generic parameter(s), but the turbofish supplies 2",
       );
     });
@@ -1186,7 +1197,7 @@ describe("execution tests", (): void => {
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
-      expect(errors[0]?.message).toBe(
+      expect(messageOf(errors[0])).toBe(
         "argument 1 to function `identity` type mismatch: expected `str`, found `i32`",
       );
     });
@@ -1202,7 +1213,7 @@ describe("execution tests", (): void => {
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-001");
-      expect(errors[0]?.message).toBe(
+      expect(messageOf(errors[0])).toBe(
         "field `v` type mismatch: expected `str`, found `i32`",
       );
     });
@@ -1229,7 +1240,7 @@ describe("execution tests", (): void => {
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
-      expect(errors[0]?.message).toBe(
+      expect(messageOf(errors[0])).toBe(
         "argument 1 to function `identity` type mismatch: expected `str`, found `i32`",
       );
     });
@@ -1241,7 +1252,7 @@ describe("execution tests", (): void => {
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-006");
-      expect(errors[0]?.message).toBe(
+      expect(messageOf(errors[0])).toBe(
         "cannot infer type of generic parameter `T` without an explicit type annotation or turbofish",
       );
     });
@@ -1273,7 +1284,7 @@ describe("execution tests", (): void => {
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-005");
-      expect(errors[0]?.message).toBe("out of range for i8");
+      expect(messageOf(errors[0])).toBe("out of range for i8");
     });
 
     it("reports a structural mismatch (non-reference argument for a reference-hop parameter) as an ordinary type mismatch, not an unsolved variable", (): void => {
@@ -1286,7 +1297,7 @@ describe("execution tests", (): void => {
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-001");
-      expect(errors[0]?.message).toBe(
+      expect(messageOf(errors[0])).toBe(
         "argument 1 to function `borrow` type mismatch: expected `&T`, found `i32`",
       );
     });
@@ -1301,7 +1312,7 @@ describe("execution tests", (): void => {
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-001");
-      expect(errors[0]?.message).toBe(
+      expect(messageOf(errors[0])).toBe(
         "argument 1 to function `borrowmut` type mismatch: expected `&mut T`, found `&i32`",
       );
     });
@@ -1346,7 +1357,7 @@ describe("execution tests", (): void => {
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
-      expect(errors[0]?.message).toBe(
+      expect(messageOf(errors[0])).toBe(
         "call to `identity` type mismatch: expected `i32`, found `str`",
       );
     });
@@ -1362,7 +1373,7 @@ describe("execution tests", (): void => {
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
-      expect(errors[0]?.message).toBe(
+      expect(messageOf(errors[0])).toBe(
         "call to `identity` type mismatch: expected `i32`, found `str`",
       );
     });
@@ -1386,7 +1397,7 @@ describe("execution tests", (): void => {
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
-      expect(errors[0]?.message).toBe(
+      expect(messageOf(errors[0])).toBe(
         "argument 1 to variant `Value` type mismatch: expected `str`, found `i32`",
       );
     });
@@ -1398,7 +1409,7 @@ describe("execution tests", (): void => {
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-006");
-      expect(errors[0]?.message).toBe(
+      expect(messageOf(errors[0])).toBe(
         "cannot infer type of generic parameter `B` without an explicit type annotation or turbofish",
       );
     });
@@ -1422,11 +1433,11 @@ describe("execution tests", (): void => {
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(2);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
-      expect(errors[0]?.message).toBe(
+      expect(messageOf(errors[0])).toBe(
         "argument 1 to struct `Pair` type mismatch: expected `i32`, found `str`",
       );
       expect(errors[1]?.code).toBe("HEDGE-TYPE-010");
-      expect(errors[1]?.message).toBe(
+      expect(messageOf(errors[1])).toBe(
         "argument 2 to struct `Pair` type mismatch: expected `i32`, found `str`",
       );
     });
@@ -1437,7 +1448,7 @@ describe("execution tests", (): void => {
       const result = compileHedgeCode(`struct Triple<A, B, C> { a: A, c: C }`);
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
-      expect(errors[0]?.message).toBe(
+      expect(messageOf(errors[0])).toBe(
         "type parameter `B` is declared but never used",
       );
     });
@@ -1445,7 +1456,7 @@ describe("execution tests", (): void => {
     it("reports each unused type parameter separately", (): void => {
       const result = compileHedgeCode(`struct Foo<X, Y> {}`);
       const errors = result.diagnostics.filter((d) => d.severity === "error");
-      expect(errors.map((e) => e.message)).toEqual([
+      expect(errors.map((e) => messageOf(e))).toEqual([
         "type parameter `X` is declared but never used",
         "type parameter `Y` is declared but never used",
       ]);
@@ -1461,7 +1472,7 @@ describe("execution tests", (): void => {
       );
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
-      expect(errors[0]?.message).toBe(
+      expect(messageOf(errors[0])).toBe(
         "type parameter `U` is declared but never used",
       );
     });
@@ -1469,7 +1480,7 @@ describe("execution tests", (): void => {
     it("does not reject a type parameter used only as an array element type", (): void => {
       const result = compileHedgeCode(`struct Foo<T> { a: [T; 3] }`);
       const unusedErrors = result.diagnostics.filter((d) =>
-        d.message.includes("never used"),
+        messageOf(d).includes("never used"),
       );
       expect(unusedErrors).toEqual([]);
     });

@@ -1,4 +1,4 @@
-import { type Diagnostic } from "../diagnostics.js";
+import { type Diagnostic } from "../diagnostics/index.js";
 import { none, type Option, some } from "../option.js";
 import { isIdentContinue, isIdentStart } from "./ident.js";
 import { scanWhile } from "./scan-while.js";

@@ -1,4 +1,8 @@
-import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
+import {
+  type Diagnostic,
+  type DiagnosticKind,
+  errorDiagnostic,
+} from "../diagnostics/index.js";
 import type { Token, TokenKind } from "../lexer/token.js";
 import { isSome, none, some, unwrapSomeOr, type Option } from "../option.js";
 import { err, isErr, ok } from "../result.js";
@@ -50,8 +54,6 @@ import {
   spanAt,
   tokenAt,
   tryCloseAngleList,
-  unsupportedAsyncMessage,
-  unsupportedPathKeywordMessage,
   type GenericsCursor,
   type PR,
 } from "./parse-utils.js";
@@ -93,8 +95,7 @@ function parseVisibility(
       if (scope !== "package") {
         return err(
           errorDiagnostic(
-            "HEDGE-PARSE-004",
-            `\`pub(${scope})\` visibility is not yet supported`,
+            { kind: "ParsePubScopeNotSupported", scope },
             some(scopeToken.span),
           ),
         );
@@ -134,8 +135,7 @@ function parseParam(tokens: readonly Token[], pos: number): PR<Parsed<Param>> {
     const name = unwrapSomeOr(patternBindingName(pattern), "_");
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `expected ':' after parameter name '${name}'`,
+        { kind: "ParseExpectedColonAfterParamName", name },
         spanAt(tokens, cursor),
       ),
     );
@@ -225,8 +225,7 @@ function parseLeadingReceiver(
   }
   return err(
     errorDiagnostic(
-      "HEDGE-PARSE-001",
-      "expected ',' or ')' after receiver",
+      { kind: "ParseExpectedCommaOrParenAfterReceiver" },
       spanAt(tokens, next),
     ),
   );
@@ -523,8 +522,10 @@ function parseGenericParamList(
     const badToken = tokens[afterParam.next];
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `expected ',' or '>' in generic parameter list, found "${badToken?.kind ?? "end of input"}"`,
+        {
+          kind: "ParseExpectedCommaOrCloseAngleInGenericParams",
+          found: badToken?.kind ?? "end of input",
+        },
         badToken !== undefined ? some(badToken.span) : none(),
       ),
     );
@@ -557,8 +558,7 @@ function parseDeclarationGenerics(
     const strayToken = tokens[listResult.value.cursor.next];
     diagnostics.push(
       errorDiagnostic(
-        "HEDGE-PARSE-005",
-        "unexpected extra '>' after generic parameter list",
+        { kind: "ParseStrayAngleBracket", context: "generic parameter list" },
         strayToken !== undefined ? some(strayToken.span) : none(),
       ),
     );
@@ -613,8 +613,7 @@ function parseWherePredicate(
     const strayToken = tokens[next];
     diagnostics.push(
       errorDiagnostic(
-        "HEDGE-PARSE-005",
-        "unexpected extra '>' after trait bound",
+        { kind: "ParseStrayAngleBracket", context: "trait bound" },
         strayToken !== undefined ? some(strayToken.span) : none(),
       ),
     );
@@ -839,8 +838,7 @@ function parseNamedField(
     const token = tokens[cursor];
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `expected ':' after field name '${fieldName.text}'`,
+        { kind: "ParseExpectedColonAfterFieldName", name: fieldName.text },
         token !== undefined ? some(token.span) : none(),
       ),
     );
@@ -1001,8 +999,10 @@ function parseStructBody(
   }
   return err(
     errorDiagnostic(
-      "HEDGE-PARSE-001",
-      `expected struct body (\`{\`, \`(\`, or \`;\`), found "${bodyToken?.kind ?? "end of input"}"`,
+      {
+        kind: "ParseExpectedStructBody",
+        found: bodyToken?.kind ?? "end of input",
+      },
       bodyToken !== undefined ? some(bodyToken.span) : none(),
     ),
   );
@@ -1468,8 +1468,7 @@ function parseTraitItem(
     token.kind === "keyword" ? `keyword "${token.text}"` : `"${token.kind}"`;
   return err(
     errorDiagnostic(
-      "HEDGE-PARSE-001",
-      `expected a function, associated type, or const in trait body, found ${found}`,
+      { kind: "ParseExpectedTraitBodyItem", found },
       some(token.span),
     ),
   );
@@ -1560,8 +1559,7 @@ function parseTrait(
       const strayToken = tokens[cursor];
       diagnostics.push(
         errorDiagnostic(
-          "HEDGE-PARSE-005",
-          "unexpected extra '>' after supertrait bound",
+          { kind: "ParseStrayAngleBracket", context: "supertrait bound" },
           strayToken !== undefined ? some(strayToken.span) : none(),
         ),
       );
@@ -1622,8 +1620,7 @@ function validateImplBodyItem(tokens: readonly Token[], node: Item): PR<Item> {
   const token = tokens[node.tokenId];
   return err(
     errorDiagnostic(
-      "HEDGE-PARSE-006",
-      `unexpected item kind '${node.kind}' in impl body`,
+      { kind: "ParseUnexpectedItemKindInImplBody", itemKind: node.kind },
       token !== undefined ? some(token.span) : none(),
     ),
   );
@@ -1789,8 +1786,7 @@ function parsePathLedImplTarget(
     const strayToken = tokens[next];
     diagnostics.push(
       errorDiagnostic(
-        "HEDGE-PARSE-005",
-        "unexpected extra '>' after impl target type",
+        { kind: "ParseStrayAngleBracket", context: "impl target type" },
         strayToken !== undefined ? some(strayToken.span) : none(),
       ),
     );
@@ -1881,22 +1877,30 @@ function parseImpl(
   return ok({ node: decl, next: itemsResult.value.next });
 }
 
-const UNSUPPORTED_TOP_LEVEL_KEYWORD_MESSAGES: ReadonlyMap<string, string> =
-  new Map([
-    ["export", "`export` declarations are not yet supported"],
-    ["extern", "`extern` declarations are not yet supported"],
-    ["use", unsupportedPathKeywordMessage("use")],
-    ["mod", unsupportedPathKeywordMessage("mod")],
-    ["async", unsupportedAsyncMessage()],
+const UNSUPPORTED_TOP_LEVEL_KEYWORDS: ReadonlyMap<string, DiagnosticKind> =
+  new Map<string, DiagnosticKind>([
+    [
+      "export",
+      { kind: "ParseDeclarationKeywordNotSupported", keyword: "export" },
+    ],
+    [
+      "extern",
+      { kind: "ParseDeclarationKeywordNotSupported", keyword: "extern" },
+    ],
+    ["use", { kind: "ParseKeywordNotSupported", keyword: "use" }],
+    ["mod", { kind: "ParseKeywordNotSupported", keyword: "mod" }],
+    ["async", { kind: "ParseAsyncNotSupported" }],
   ]);
 
 /**
- * @returns the guardrail diagnostic message for a rejected top-level
+ * @returns the guardrail diagnostic kind for a rejected top-level
  * declaration keyword, or `none()` if `keyword` isn't one of them.
  */
-function unsupportedTopLevelKeywordMessage(keyword: string): Option<string> {
-  const messageFor = UNSUPPORTED_TOP_LEVEL_KEYWORD_MESSAGES.get(keyword);
-  return messageFor === undefined ? none() : some(messageFor);
+function unsupportedTopLevelKeywordKind(
+  keyword: string,
+): Option<DiagnosticKind> {
+  const kind = UNSUPPORTED_TOP_LEVEL_KEYWORDS.get(keyword);
+  return kind === undefined ? none() : some(kind);
 }
 
 /** Bubbles a per-element parse's own error, or wraps its success as the `Option<Item>` shape every branch below needs. */
@@ -1917,7 +1921,7 @@ function rejectVisibility(
   tokens: readonly Token[],
   cursor: number,
   afterVis: number,
-  message: string,
+  location: string,
 ): PR<undefined> {
   if (afterVis <= cursor) {
     return ok(undefined);
@@ -1925,8 +1929,7 @@ function rejectVisibility(
   const visToken = tokens[cursor];
   return err(
     errorDiagnostic(
-      "HEDGE-PARSE-006",
-      message,
+      { kind: "ParseVisibilityNotAllowed", location },
       visToken !== undefined ? some(visToken.span) : none(),
     ),
   );
@@ -1984,7 +1987,7 @@ type NoVisibilityParser = (
 ) => PR<Parsed<Item>>;
 
 interface NoVisibilityEntry {
-  readonly rejectionMessage: string;
+  readonly visibilityRejectionLocation: string;
   readonly parse: NoVisibilityParser;
 }
 
@@ -1993,22 +1996,21 @@ const NO_VISIBILITY_PARSERS = new Map<string, NoVisibilityEntry>([
   [
     "type",
     {
-      rejectionMessage: "visibility qualifiers are not allowed on a type alias",
+      visibilityRejectionLocation: "on a type alias",
       parse: parseTypeAlias,
     },
   ],
   [
     "impl",
     {
-      rejectionMessage: "visibility qualifiers are not allowed on impl blocks",
+      visibilityRejectionLocation: "on impl blocks",
       parse: parseImpl,
     },
   ],
   [
     "let",
     {
-      rejectionMessage:
-        "visibility qualifiers are not allowed on let statements",
+      visibilityRejectionLocation: "on let statements",
       parse: parseLetStatement,
     },
   ],
@@ -2037,7 +2039,7 @@ function parseNoVisibilityItem(
     tokens,
     cursor,
     afterVis,
-    entry.rejectionMessage,
+    entry.visibilityRejectionLocation,
   );
   return some(
     isErr(rejected)
@@ -2059,13 +2061,13 @@ function parseUnsupportedOrExpressionItem(
   token: Token | undefined,
 ): PR<Parsed<Option<Item>>> {
   if (token?.kind === "keyword") {
-    const message = unsupportedTopLevelKeywordMessage(token.text);
-    if (isSome(message)) {
+    const guardrail = unsupportedTopLevelKeywordKind(token.text);
+    if (isSome(guardrail)) {
       const skipResult = skipUnsupportedTopLevelItem(
         tokens,
         token,
         afterVis,
-        message.value,
+        guardrail.value,
       );
       if (isErr(skipResult)) {
         return skipResult;
@@ -2074,12 +2076,7 @@ function parseUnsupportedOrExpressionItem(
       return ok({ node: none(), next: skipResult.value.next });
     }
   }
-  const rejected = rejectVisibility(
-    tokens,
-    cursor,
-    afterVis,
-    "visibility qualifiers are not allowed here",
-  );
+  const rejected = rejectVisibility(tokens, cursor, afterVis, "here");
   if (isErr(rejected)) {
     return rejected;
   }

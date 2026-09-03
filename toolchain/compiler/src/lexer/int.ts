@@ -1,5 +1,5 @@
-import type { Diagnostic } from "../diagnostics.js";
-import { errorDiagnostic } from "../diagnostics.js";
+import type { Diagnostic, DiagnosticKind } from "../diagnostics/index.js";
+import { errorDiagnostic } from "../diagnostics/index.js";
 import { none, some, type Option } from "../option.js";
 import { isIdentContinue } from "./ident.js";
 import type { IntSuffix, Token } from "./token.js";
@@ -57,11 +57,9 @@ function numError(
   source: string,
   start: number,
   end: number,
-  message: string,
+  kind: DiagnosticKind,
 ): number {
-  diagnostics.push(
-    errorDiagnostic("HEDGE-LEX-006", message, some({ start, end })),
-  );
+  diagnostics.push(errorDiagnostic(kind, some({ start, end })));
   tokens.push({
     kind: "error",
     span: { start, end },
@@ -79,12 +77,16 @@ export function scanHexLiteral(
   let i = start + 2;
   const firstChar = source[i] ?? "";
   if (!isHexDigit(firstChar)) {
-    const msg =
+    const kind: DiagnosticKind =
       firstChar === "_"
-        ? `hex literal must begin with a hex digit, not '_' at offset ${start}`
-        : `hex literal has no digits at offset ${start}`;
+        ? {
+            kind: "LexRadixLiteralLeadingUnderscore",
+            radix: "hex",
+            offset: start,
+          }
+        : { kind: "LexRadixLiteralNoDigits", radix: "hex", offset: start };
     const end = firstChar !== "" ? i + 1 : i;
-    return numError(tokens, diagnostics, source, start, end, msg);
+    return numError(tokens, diagnostics, source, start, end, kind);
   }
   while (isHexDigit(source[i] ?? "") || source[i] === "_") i++;
   const { end, suffix } = matchIntSuffix(source, i);
@@ -107,14 +109,23 @@ export function scanOctLiteral(
   let i = start + 2;
   const ch = source[i] ?? "";
   if (!isOctDigit(ch)) {
-    const msg =
+    const kind: DiagnosticKind =
       ch === "_"
-        ? `octal literal must begin with an octal digit, not '_' at offset ${start}`
+        ? {
+            kind: "LexRadixLiteralLeadingUnderscore",
+            radix: "octal",
+            offset: start,
+          }
         : isDigit(ch)
-          ? `invalid octal digit '${ch}' at offset ${i}`
-          : `octal literal has no digits at offset ${start}`;
+          ? {
+              kind: "LexInvalidRadixDigit",
+              radix: "octal",
+              character: ch,
+              offset: i,
+            }
+          : { kind: "LexRadixLiteralNoDigits", radix: "octal", offset: start };
     const end = ch !== "" ? i + 1 : i;
-    return numError(tokens, diagnostics, source, start, end, msg);
+    return numError(tokens, diagnostics, source, start, end, kind);
   }
   while (isOctDigit(source[i] ?? "") || source[i] === "_") i++;
   const { end, suffix } = matchIntSuffix(source, i);
@@ -137,14 +148,23 @@ export function scanBinLiteral(
   let i = start + 2;
   const ch = source[i] ?? "";
   if (!isBinDigit(ch)) {
-    const msg =
+    const kind: DiagnosticKind =
       ch === "_"
-        ? `binary literal must begin with a binary digit, not '_' at offset ${start}`
+        ? {
+            kind: "LexRadixLiteralLeadingUnderscore",
+            radix: "binary",
+            offset: start,
+          }
         : isDigit(ch)
-          ? `invalid binary digit '${ch}' at offset ${i}`
-          : `binary literal has no digits at offset ${start}`;
+          ? {
+              kind: "LexInvalidRadixDigit",
+              radix: "binary",
+              character: ch,
+              offset: i,
+            }
+          : { kind: "LexRadixLiteralNoDigits", radix: "binary", offset: start };
     const end = ch !== "" ? i + 1 : i;
-    return numError(tokens, diagnostics, source, start, end, msg);
+    return numError(tokens, diagnostics, source, start, end, kind);
   }
   while (isBinDigit(source[i] ?? "") || source[i] === "_") i++;
   const { end, suffix } = matchIntSuffix(source, i);

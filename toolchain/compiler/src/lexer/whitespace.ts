@@ -1,4 +1,4 @@
-import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
+import { type Diagnostic, errorDiagnostic } from "../diagnostics/index.js";
 import { none, type Option, some } from "../option.js";
 import { err, isErr, ok, type Result } from "../result.js";
 import { type Token } from "./token.js";
@@ -21,8 +21,7 @@ export function isWhitespace(
   if (ch === undefined) {
     return err(
       errorDiagnostic(
-        "HEDGE-LEX-009",
-        `Attempted to read beyond end of source at index ${index} of ${source.length}`,
+        { kind: "LexReadPastEnd", index, sourceLength: source.length },
         none(),
       ),
     );

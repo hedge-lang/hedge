@@ -1,0 +1,15 @@
+[
+  {
+    "code": "HEDGE-BORROW-CHECK-003",
+    "kind": {
+      "kind": "OwnUseOfMovedValue",
+      "name": "x"
+    },
+    "relatedSpans": [
+      {
+        "labelKind": "LabelMovedHere",
+        "spanStart": 84
+      }
+    ]
+  }
+]

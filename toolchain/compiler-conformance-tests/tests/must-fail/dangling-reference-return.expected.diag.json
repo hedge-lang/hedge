@@ -1,0 +1,10 @@
+[
+  {
+    "code": "HEDGE-LIFETIME-002",
+    "kind": {
+      "kind": "SemReturnsReferenceToLocal",
+      "name": "x"
+    },
+    "relatedSpans": []
+  }
+]

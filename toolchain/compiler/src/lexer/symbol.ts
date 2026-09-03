@@ -1,4 +1,4 @@
-import { type Diagnostic, errorDiagnostic } from "../diagnostics.js";
+import { type Diagnostic, errorDiagnostic } from "../diagnostics/index.js";
 import { some } from "../option.js";
 import { type Token } from "./token.js";
 
@@ -391,8 +391,11 @@ export function tokenizeSymbol(
       const end = start + 1;
       diagnostics.push(
         errorDiagnostic(
-          "HEDGE-LEX-005",
-          `Unexpected character "${ch}" at offset ${start}`,
+          {
+            kind: "LexUnexpectedCharacter",
+            character: String(ch),
+            offset: start,
+          },
           some({ start, end }),
         ),
       );

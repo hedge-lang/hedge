@@ -1,0 +1,13 @@
+[
+  {
+    "code": "HEDGE-TYPE-008",
+    "kind": {
+      "kind": "SemConstructorArgCountMismatch",
+      "calleeKind": "struct",
+      "name": "Pair",
+      "expected": 2,
+      "count": 1
+    },
+    "relatedSpans": []
+  }
+]

@@ -1,0 +1,11 @@
+[
+  {
+    "code": "HEDGE-PATTERN-004",
+    "kind": {
+      "kind": "SemOrPatternInconsistentNames",
+      "names": "n`, `m",
+      "single": false
+    },
+    "relatedSpans": []
+  }
+]

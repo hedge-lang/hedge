@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { messageOf } from "./diagnostics/index.js";
 
 import { assert } from "./assert.js";
 import { isNone, isSome } from "./option.js";
@@ -87,7 +88,7 @@ describe("driver", (): void => {
     const result = compile("fn main() { print(missing); }");
     expect(isNone(result.code)).toBe(true);
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toContain("missing");
+    expect(messageOf(result.diagnostics[0])).toContain("missing");
   });
 
   it("reports a borrow error and produces no code", (): void => {
@@ -96,7 +97,7 @@ describe("driver", (): void => {
     );
     expect(isNone(result.code)).toBe(true);
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toContain("not declared mut");
+    expect(messageOf(result.diagnostics[0])).toContain("not declared mut");
   });
 
   it("reports a use-after-move error and produces no code", (): void => {
@@ -111,14 +112,14 @@ describe("driver", (): void => {
     `);
     expect(isNone(result.code)).toBe(true);
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toContain("moved");
+    expect(messageOf(result.diagnostics[0])).toContain("moved");
   });
 
   it("does not run ownership checking when semantic analysis already reported an error", (): void => {
     const result = compile("fn main() { print(missing); }");
     expect(isNone(result.code)).toBe(true);
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toContain("missing");
+    expect(messageOf(result.diagnostics[0])).toContain("missing");
   });
 
   it("reports a syntax error and produces no code", (): void => {
@@ -151,7 +152,7 @@ describe("driver", (): void => {
       `);
       expect(isNone(result.code)).toBe(true);
       const conflicts = result.diagnostics.filter((d) =>
-        d.message.includes("Conflicting borrows"),
+        messageOf(d).includes("Conflicting borrows"),
       );
       expect(conflicts).toHaveLength(2);
     });
@@ -171,12 +172,12 @@ describe("driver", (): void => {
         }
       `);
       expect(isNone(result.code)).toBe(true);
-      expect(result.diagnostics.some((d) => d.message.includes("moved"))).toBe(
-        true,
-      );
+      expect(
+        result.diagnostics.some((d) => messageOf(d).includes("moved")),
+      ).toBe(true);
       expect(
         result.diagnostics.some((d) =>
-          d.message.includes("Conflicting borrows"),
+          messageOf(d).includes("Conflicting borrows"),
         ),
       ).toBe(true);
     });
@@ -195,12 +196,12 @@ describe("driver", (): void => {
       expect(isNone(result.code)).toBe(true);
       expect(
         result.diagnostics.some((d) =>
-          d.message.includes("missing lifetime specifier"),
+          messageOf(d).includes("missing lifetime specifier"),
         ),
       ).toBe(true);
       expect(
         result.diagnostics.some((d) =>
-          d.message.includes("Conflicting borrows"),
+          messageOf(d).includes("Conflicting borrows"),
         ),
       ).toBe(true);
     });
@@ -235,7 +236,7 @@ describe("driver", (): void => {
         expect(isNone(result.code)).toBe(true);
         expect(
           result.diagnostics.some(
-            (d) => d.severity === "error" && d.message === message,
+            (d) => d.severity === "error" && messageOf(d) === message,
           ),
         ).toBe(true);
       },
@@ -256,8 +257,8 @@ describe("driver", (): void => {
         fn other() { print(undefined_name); }
       `);
       const errors = result.diagnostics.filter((d) => d.severity === "error");
-      expect(errors.some((e) => e.message.includes("loop"))).toBe(true);
-      expect(errors.some((e) => e.message.includes("undefined_name"))).toBe(
+      expect(errors.some((e) => messageOf(e).includes("loop"))).toBe(true);
+      expect(errors.some((e) => messageOf(e).includes("undefined_name"))).toBe(
         true,
       );
     });
@@ -272,7 +273,7 @@ describe("driver", (): void => {
       expect(isNone(result.code)).toBe(true);
       expect(
         result.diagnostics.some(
-          (d) => d.severity === "error" && d.message.includes(":"),
+          (d) => d.severity === "error" && messageOf(d).includes(":"),
         ),
       ).toBe(true);
     });
@@ -299,7 +300,7 @@ describe("driver", (): void => {
       expect(isNone(result.code)).toBe(true);
       expect(
         result.diagnostics.some((d) =>
-          d.message.includes("missing lifetime specifier"),
+          messageOf(d).includes("missing lifetime specifier"),
         ),
       ).toBe(true);
     });
@@ -373,7 +374,7 @@ describe("bodiless function signatures", (): void => {
   it("rejects a program containing only a top-level bodiless function, without crashing the compiler", (): void => {
     const result = compile("fn f(x: i32) -> i32;");
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "a function signature with no body is not allowed as a top-level item",
     );
     expect(isNone(result.code)).toBe(true);
@@ -382,7 +383,7 @@ describe("bodiless function signatures", (): void => {
   it("rejects a bodiless main the same way, without crashing the compiler - so the auto-generated main() call never reaches codegen at all", (): void => {
     const result = compile("fn main();");
     expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.message).toBe(
+    expect(messageOf(result.diagnostics[0])).toBe(
       "a function signature with no body is not allowed as a top-level item",
     );
     expect(isNone(result.code)).toBe(true);
@@ -441,7 +442,7 @@ describe("a rejected construct is named without an internal roadmap slice", (): 
     ["fn f() -> Nope { 0 }", "cannot find type `Nope` in this scope"],
   ])("%j is rejected with a slice-free message", (source, message): void => {
     const { diagnostics } = compile(source);
-    expect(diagnostics[0]?.message).toBe(message);
+    expect(messageOf(diagnostics[0])).toBe(message);
   });
 });
 
@@ -489,9 +490,11 @@ describe("std prelude", (): void => {
       fn main() {}
     `);
     expect(isNone(result.code)).toBe(true);
-    expect(result.diagnostics.map((d) => `${d.code}: ${d.message}`)).toEqual([
-      "HEDGE-TRAIT-002: the trait bound `Counter: PartialEq` is not satisfied",
-    ]);
+    expect(result.diagnostics.map((d) => `${d.code}: ${messageOf(d)}`)).toEqual(
+      [
+        "HEDGE-TRAIT-002: the trait bound `Counter: PartialEq` is not satisfied",
+      ],
+    );
   });
 
   it("still recovers a missing-item-name error whose source offset collides with a prelude token", (): void => {

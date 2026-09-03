@@ -3,7 +3,7 @@ import {
   type Diagnostic,
   errorDiagnostic,
   warningDiagnostic,
-} from "../diagnostics.js";
+} from "../diagnostics/index.js";
 import { resolveEscape } from "../lexer/escape.js";
 import type { Token, TokenKind } from "../lexer/token.js";
 import { isSome, none, some, type Option } from "../option.js";
@@ -44,7 +44,6 @@ import {
   pathKeywordAt,
   pathSepBeforeLt,
   tokenAt,
-  unsupportedLoopMessage,
   type PR,
 } from "./parse-utils.js";
 import { parsePath } from "./path.js";
@@ -516,8 +515,7 @@ function parseTupleOrGroup(
     const tok = tokens[cursor];
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `Expected ',' or ')' after expression in parentheses`,
+        { kind: "ParseExpectedCommaOrParenInParens" },
         tok !== undefined ? some(tok.span) : none(),
       ),
     );
@@ -591,8 +589,7 @@ function parseArrayListForm(
     const tok = tokens[cursor];
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `Expected ',', ';', or ']' after expression in array literal`,
+        { kind: "ParseExpectedSeparatorInArrayLiteral" },
         tok !== undefined ? some(tok.span) : none(),
       ),
     );
@@ -748,8 +745,7 @@ function parseElseClause(
   }
   return err(
     errorDiagnostic(
-      "HEDGE-PARSE-001",
-      `Expected 'if' or '{' after 'else'`,
+      { kind: "ParseExpectedIfOrBraceAfterElse" },
       afterElse !== undefined ? some(afterElse.span) : none(),
     ),
   );
@@ -772,8 +768,7 @@ function parseIfExpression(
   if (thenTok === undefined || thenTok.kind !== "lbrace") {
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `Expected '{' to start if body`,
+        { kind: "ParseExpectedBraceToStartIfBody" },
         thenTok !== undefined ? some(thenTok.span) : none(),
       ),
     );
@@ -833,8 +828,7 @@ function parseWhileExpression(
   if (bodyTok?.kind !== "lbrace") {
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `Expected '{' to start while body`,
+        { kind: "ParseExpectedBraceToStartWhileBody" },
         bodyTok !== undefined ? some(bodyTok.span) : none(),
       ),
     );
@@ -881,8 +875,7 @@ function parseMatchArm(
   if (arrowTok?.kind !== "fat_arrow") {
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `Expected '=>' in match arm`,
+        { kind: "ParseExpectedArrowInMatchArm" },
         arrowTok !== undefined ? some(arrowTok.span) : none(),
       ),
     );
@@ -938,11 +931,7 @@ function parseMatchExpression(
     const tok = tokens[cursor];
     if (tok === undefined || tok.kind === "eof") {
       return err(
-        errorDiagnostic(
-          "HEDGE-PARSE-002",
-          "Expected '}' to close match expression, found end of input",
-          none(),
-        ),
+        errorDiagnostic({ kind: "ParseExpectedCloseBraceEofInMatch" }, none()),
       );
     }
 
@@ -964,17 +953,12 @@ function parseMatchExpression(
     const nextTok = tokens[cursor];
     if (nextTok === undefined || nextTok.kind === "eof") {
       return err(
-        errorDiagnostic(
-          "HEDGE-PARSE-002",
-          "Expected '}' to close match expression, found end of input",
-          none(),
-        ),
+        errorDiagnostic({ kind: "ParseExpectedCloseBraceEofInMatch" }, none()),
       );
     }
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `Expected ',' between match arms`,
+        { kind: "ParseExpectedCommaBetweenMatchArms" },
         some(nextTok.span),
       ),
     );
@@ -1013,8 +997,7 @@ function parseStructUpdateSpread(
   cursor = baseResult.value.next;
   diagnostics.push(
     warningDiagnostic(
-      "HEDGE-UNSUPPORTED-001",
-      "struct update expression (`..base`) is not yet supported in semantic analysis",
+      { kind: "ParseStructUpdateUnsupportedInSemantics" },
       some(spreadTok.span),
     ),
   );
@@ -1023,8 +1006,7 @@ function parseStructUpdateSpread(
     const tok = tokens[cursor];
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `Expected '}' after struct update expression; spread must be last`,
+        { kind: "ParseExpectedBraceAfterStructUpdate" },
         tok !== undefined ? some(tok.span) : none(),
       ),
     );
@@ -1109,8 +1091,7 @@ function parseStructExpression(
   if (closeTok?.kind !== "rbrace") {
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `Expected '}' to close struct expression`,
+        { kind: "ParseExpectedBraceToCloseStructExpr" },
         closeTok !== undefined ? some(closeTok.span) : none(),
       ),
     );
@@ -1167,8 +1148,10 @@ function parseTurbofishTypeArguments(
     const strayToken = tokens[argsResult.value.cursor.next];
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-005",
-        "unexpected extra '>' after turbofish type argument list",
+        {
+          kind: "ParseStrayAngleBracket",
+          context: "turbofish type argument list",
+        },
         strayToken !== undefined ? some(strayToken.span) : none(),
       ),
     );
@@ -1325,8 +1308,10 @@ function parsePrimary(
   if (isSome(loopKeyword)) {
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-004",
-        unsupportedLoopMessage(loopKeyword.value.token.text),
+        {
+          kind: "ParseLoopNotSupported",
+          keyword: loopKeyword.value.token.text,
+        },
         some(loopKeyword.value.token.span),
       ),
     );
@@ -1390,8 +1375,12 @@ function parsePrimary(
 
   return err(
     errorDiagnostic(
-      "HEDGE-PARSE-001",
-      `Expected an expression, found "${token.kind}" at offset ${token.span.start}`,
+      {
+        kind: "ParseExpectedFound",
+        expected: "an expression",
+        found: token.kind,
+        offset: token.span.start,
+      },
       some(token.span),
     ),
   );
@@ -1421,8 +1410,7 @@ function parseArguments(
     if (cur === undefined || cur.kind === "eof") {
       return err(
         errorDiagnostic(
-          "HEDGE-PARSE-001",
-          "Expected ')' to close argument list",
+          { kind: "ParseExpectedParenToCloseArgumentList" },
           none(),
         ),
       );
@@ -1511,8 +1499,10 @@ function parseInfixField(
     const badToken = tokens[afterTurbofish];
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `expected '(' after generic arguments in method position, found "${badToken?.kind ?? "end of input"}"`,
+        {
+          kind: "ParseExpectedParenAfterMethodGenerics",
+          found: badToken?.kind ?? "end of input",
+        },
         badToken !== undefined ? some(badToken.span) : none(),
       ),
     );
@@ -1541,8 +1531,7 @@ function parseInfixIndex(
   if (tok === undefined || tok.kind === "eof" || tok.kind === "rbracket") {
     return err(
       errorDiagnostic(
-        "HEDGE-PARSE-001",
-        `Expected an expression inside '[...]'`,
+        { kind: "ParseExpectedExpressionInBrackets" },
         tok !== undefined && tok.kind !== "eof" ? some(tok.span) : none(),
       ),
     );
@@ -1607,8 +1596,11 @@ function parseInfixBinary(
       ) {
         return err(
           errorDiagnostic(
-            "HEDGE-PARSE-003",
-            `cannot chain '${infix.sigil}' with '${nextInfix.sigil}'`,
+            {
+              kind: "ParseCannotChainOperators",
+              left: infix.sigil,
+              right: nextInfix.sigil,
+            },
             some(peek.span),
           ),
         );
@@ -1671,8 +1663,7 @@ function parseRangeEnd(
     if (inclusive) {
       return err(
         errorDiagnostic(
-          "HEDGE-PARSE-001",
-          "Expected an expression after '..='",
+          { kind: "ParseExpectedExpressionAfterInclusiveRange" },
           afterOp !== undefined && afterOp.kind !== "eof"
             ? some(afterOp.span)
             : none(),
@@ -1706,8 +1697,11 @@ function checkNoChainedRange(
   const sigil = inclusive ? "..=" : "..";
   return err(
     errorDiagnostic(
-      "HEDGE-PARSE-003",
-      `cannot chain '${sigil}' with '${nextInfix.sigil}'`,
+      {
+        kind: "ParseCannotChainOperators",
+        left: sigil,
+        right: nextInfix.sigil,
+      },
       some(peek.span),
     ),
   );

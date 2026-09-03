@@ -1,6 +1,6 @@
 import type { Code } from "./codegen/output.js";
 import { generate } from "./codegen/generator.js";
-import type { Diagnostic } from "./diagnostics.js";
+import type { Diagnostic } from "./diagnostics/index.js";
 import { toJsim } from "./jsim/jsim.js";
 import { optimize } from "./optimization/optimizer.js";
 import { none, some, type Option, isSome } from "./option.js";

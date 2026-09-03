@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { messageOf } from "../diagnostics/index.js";
 import { assert } from "../assert.js";
 import { isErr } from "../result.js";
 import { tokenize } from "../lexer/lexer.js";
@@ -15,15 +16,15 @@ describe("skipBalancedBraceBlock", (): void => {
     const { tokens } = tokenize("foo }");
     const result = skipBalancedBraceBlock(tokens, 0);
     assert(isErr(result), "Expected an error result");
-    expect(result.error.message).toContain("expected `{` to start block");
-    expect(result.error.message).toContain("found `ident`");
+    expect(messageOf(result.error)).toContain("expected `{` to start block");
+    expect(messageOf(result.error)).toContain("found `ident`");
   });
 
   it("errors instead of hanging when EOF is reached without a matching `}`", (): void => {
     const { tokens } = tokenize("{ foo(); { bar();");
     const result = skipBalancedBraceBlock(tokens, 0);
     assert(isErr(result), "Expected an error result");
-    expect(result.error.message).toContain(
+    expect(messageOf(result.error)).toContain(
       "expected `}` to close block, found end of input",
     );
   });

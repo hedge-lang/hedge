@@ -1,5 +1,5 @@
-import { errorDiagnostic } from "../diagnostics.js";
-import type { Diagnostic } from "../diagnostics.js";
+import { errorDiagnostic } from "../diagnostics/index.js";
+import type { Diagnostic } from "../diagnostics/index.js";
 import { isSome, some } from "../option.js";
 import type { Token } from "./token.js";
 import { tokenizeComment } from "./comments.js";
@@ -131,8 +131,10 @@ function tokenizeRString(
   const end = start + 1 + hashCount;
   diagnostics.push(
     errorDiagnostic(
-      "HEDGE-LEX-007",
-      `raw string prefix \`r${"#".repeat(hashCount || 1)}\` must be followed by '"'`,
+      {
+        kind: "LexRawStringPrefixIncomplete",
+        prefix: `r${"#".repeat(hashCount || 1)}`,
+      },
       some({ start, end }),
     ),
   );

@@ -1,4 +1,5 @@
 import { assert } from "../assert.js";
+import { messageOf } from "../diagnostics/index.js";
 import { tokenize } from "../lexer/lexer.js";
 import type { Token } from "../lexer/token.js";
 import { isSome } from "../option.js";
@@ -15,11 +16,14 @@ export interface AnalyzedSource {
 export function analyzeSource(source: string): AnalyzedSource {
   const { tokens } = tokenize(source);
   const { program, diagnostics } = parse(tokens);
-  assert(isSome(program), diagnostics[0]?.message ?? "Parse failed");
+  assert(
+    isSome(program),
+    diagnostics[0] === undefined ? "Parse failed" : messageOf(diagnostics[0]),
+  );
   const analysis = analyze(program.value, tokens);
   assert(
     analysis.diagnostics.every((d) => d.severity !== "error"),
-    analysis.diagnostics.map((d) => d.message).join("; "),
+    analysis.diagnostics.map((d) => messageOf(d)).join("; "),
   );
   return { tokens, program: analysis.program };
 }

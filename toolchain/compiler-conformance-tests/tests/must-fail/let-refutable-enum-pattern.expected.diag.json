@@ -1,0 +1,9 @@
+[
+  {
+    "code": "HEDGE-PATTERN-001",
+    "kind": {
+      "kind": "SemRefutableLetOrParamPattern"
+    },
+    "relatedSpans": []
+  }
+]
