@@ -1368,6 +1368,12 @@ function checkItem(
 ): void {
   if (item.kind === "Function") {
     checkFunction(item, diagnostics, tokens);
+    return;
+  }
+  if (item.kind === "Impl" || item.kind === "Trait") {
+    for (const method of item.methodBodies) {
+      checkFunction(method, diagnostics, tokens);
+    }
   }
 }
 

@@ -1468,11 +1468,8 @@ export function analyzeOwnership(
 ): OwnershipCheckResult {
   const diagnostics: Diagnostic[] = [];
   const functions = new Map<string, FunctionOwnership>();
-  for (const item of program.items) {
-    if (item.kind !== "Function") {
-      continue;
-    }
-    const graph = buildControlFlowGraph(item);
+  const ownershipOf = (fn: Semantics.FunctionDef): FunctionOwnership => {
+    const graph = buildControlFlowGraph(fn);
     const drops = new Map<number, Declaration[]>();
     const conditionalDrops = new Map<number, ConditionalDrop[]>();
     const branchDrops: BranchDrop[] = [];
@@ -1485,15 +1482,19 @@ export function analyzeOwnership(
       branchDrops,
       declarationsById,
       warnDropFlags: options.warnDropFlags ?? false,
-      currentStatementTokenId: item.tokenId,
+      currentStatementTokenId: fn.tokenId,
     };
-    walkFunction(ctx, item);
-    functions.set(item.signature.name.text, {
-      graph,
-      drops,
-      conditionalDrops,
-      branchDrops,
-    });
+    walkFunction(ctx, fn);
+    return { graph, drops, conditionalDrops, branchDrops };
+  };
+  for (const item of program.items) {
+    if (item.kind === "Function") {
+      functions.set(item.signature.name.text, ownershipOf(item));
+    } else if (item.kind === "Impl" || item.kind === "Trait") {
+      // Diagnostics only - a method's own `FunctionOwnership` has no consumer
+      // until witness codegen exists, and two impls can share a method name.
+      for (const method of item.methodBodies) ownershipOf(method);
+    }
   }
   return { diagnostics, functions };
 }

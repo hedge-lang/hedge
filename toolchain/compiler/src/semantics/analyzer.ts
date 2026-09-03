@@ -1952,6 +1952,7 @@ function buildImplDecl(item: Parser.ImplDecl): Semantics.ImplDecl {
     ),
     resolvedMethods: [],
     associatedTypeDefs: new Map(),
+    methodBodies: [],
   };
 }
 
@@ -2002,6 +2003,7 @@ function buildTraitDecl(item: Parser.TraitDecl): Semantics.TraitDecl {
       return [];
     }),
     associatedTypes: requiredAssociatedTypeNames(item.items),
+    methodBodies: [],
   };
 }
 
@@ -2132,13 +2134,51 @@ function selfTargetName(ctx: AnalysisContext): string | undefined {
  * trait default method). One frame per method, like `analyzeFunction`, so the
  * signature and body share a scope. The caller owns the enclosing
  * `SelfContext`. */
+interface AnalyzedMethod {
+  readonly params: readonly Semantics.Type[];
+  readonly returnType: Semantics.Type;
+  /** A `FunctionDef` view of a bodied method with `self` prepended as a
+   * parameter, for the ownership passes to walk; `none()` for a bodiless
+   * trait method. */
+  readonly ownershipView: Option<Semantics.FunctionDef>;
+}
+
+function syntheticSelfParam(
+  receiver: Parser.Receiver,
+  selfBaseType: Semantics.Type,
+  tokenId: number,
+): Semantics.Param {
+  const selfType: Semantics.Type = receiver.byRef
+    ? {
+        kind: "ReferenceType",
+        tokenId,
+        mutable: receiver.mutable,
+        referent: selfBaseType,
+      }
+    : selfBaseType;
+  return {
+    kind: "Param",
+    tokenId,
+    type: selfType,
+    pattern: {
+      kind: "BindingPattern",
+      tokenId,
+      type: selfType,
+      mutable: receiver.mutable && !receiver.byRef,
+      byRef: false,
+      name: { kind: "Identifier", tokenId, type: UNIT, text: "self" },
+      subpattern: none(),
+    },
+  };
+}
+
 function analyzeMethodItem(
   ctx: AnalysisContext,
   method: Parser.FunctionDef | Parser.FunctionSignature,
   outerGenerics: readonly Parser.GenericParam[],
   outerWhereClause: Option<Parser.WhereClause>,
   selfBaseType: Semantics.Type,
-): { params: readonly Semantics.Type[]; returnType: Semantics.Type } {
+): AnalyzedMethod {
   const sig = method.kind === "Function" ? method.signature : method;
   pushFrame(ctx);
   const merged = mergedGenericScope(
@@ -2150,22 +2190,21 @@ function analyzeMethodItem(
   pushGenericParams(ctx, merged.generics, merged.whereClause);
   const { signature, expectedReturnType, suppressReturnTypeMismatch } =
     buildFunctionSignature(ctx, sig);
+  const selfParam = isSome(sig.receiver)
+    ? syntheticSelfParam(sig.receiver.value, selfBaseType, sig.tokenId)
+    : undefined;
+  let ownershipView: Option<Semantics.FunctionDef> = none();
   if (method.kind === "Function") {
-    if (isSome(sig.receiver)) {
-      const receiver = sig.receiver.value;
+    if (selfParam !== undefined) {
       bind(ctx, "self", {
-        type: receiver.byRef
-          ? {
-              kind: "ReferenceType",
-              tokenId: sig.tokenId,
-              mutable: receiver.mutable,
-              referent: selfBaseType,
-            }
-          : selfBaseType,
-        mutable: receiver.mutable && !receiver.byRef,
+        type: selfParam.type,
+        mutable:
+          selfParam.pattern.kind === "BindingPattern"
+            ? selfParam.pattern.mutable
+            : false,
       });
     }
-    checkFunctionReturnType(
+    const body = checkFunctionReturnType(
       ctx,
       analyzeBlock(
         ctx,
@@ -2177,12 +2216,22 @@ function analyzeMethodItem(
       expectedReturnType,
       suppressReturnTypeMismatch,
     );
+    ownershipView = some({
+      kind: "Function",
+      tokenId: method.tokenId,
+      signature: {
+        ...signature,
+        params: selfParam ? [selfParam, ...signature.params] : signature.params,
+      },
+      body,
+    });
   }
   popGenericParams(ctx);
   popFrame(ctx);
   return {
     params: signature.params.map((p) => p.type),
     returnType: expectedReturnType,
+    ownershipView,
   };
 }
 
@@ -2203,45 +2252,36 @@ function analyzeTraitDecl(
     associatedTypes: shallow.associatedTypes,
   });
   const abstractSelf = ABSTRACT_SELF(item.tokenId);
+  const methodBodies: Semantics.FunctionDef[] = [];
   const methods = item.items.flatMap(
     (decl): readonly Semantics.TraitMethod[] => {
-      if (decl.kind === "FunctionSignature") {
-        return [
-          {
-            name: decl.name.text,
-            isDefault: false,
-            receiver: toMethodReceiver(decl.receiver),
-            ...analyzeMethodItem(
-              ctx,
-              decl,
-              item.generics,
-              item.whereClause,
-              abstractSelf,
-            ),
-          },
-        ];
+      if (decl.kind !== "FunctionSignature" && decl.kind !== "Function") {
+        return [];
       }
-      if (decl.kind === "Function") {
-        return [
-          {
-            name: decl.signature.name.text,
-            isDefault: true,
-            receiver: toMethodReceiver(decl.signature.receiver),
-            ...analyzeMethodItem(
-              ctx,
-              decl,
-              item.generics,
-              item.whereClause,
-              abstractSelf,
-            ),
-          },
-        ];
+      const sig = decl.kind === "Function" ? decl.signature : decl;
+      const analyzed = analyzeMethodItem(
+        ctx,
+        decl,
+        item.generics,
+        item.whereClause,
+        abstractSelf,
+      );
+      if (isSome(analyzed.ownershipView)) {
+        methodBodies.push(analyzed.ownershipView.value);
       }
-      return [];
+      return [
+        {
+          name: sig.name.text,
+          isDefault: decl.kind === "Function",
+          receiver: toMethodReceiver(sig.receiver),
+          params: analyzed.params,
+          returnType: analyzed.returnType,
+        },
+      ];
     },
   );
   popSelfContext(ctx);
-  return { ...shallow, methods };
+  return { ...shallow, methods, methodBodies };
 }
 
 /** The impl's own concrete `Self` type - a blanket impl's target is its own
@@ -2326,27 +2366,33 @@ function analyzeImplDecl(
     traitName,
     associatedTypes: associatedTypeDefs,
   });
+  const methodBodies: Semantics.FunctionDef[] = [];
   const resolvedMethods = item.items.flatMap(
-    (decl): readonly Semantics.ImplMethod[] =>
-      decl.kind === "Function"
-        ? [
-            {
-              name: decl.signature.name.text,
-              receiver: toMethodReceiver(decl.signature.receiver),
-              ...analyzeMethodItem(
-                ctx,
-                decl,
-                item.generics,
-                item.whereClause,
-                targetType,
-              ),
-            },
-          ]
-        : [],
+    (decl): readonly Semantics.ImplMethod[] => {
+      if (decl.kind !== "Function") return [];
+      const analyzed = analyzeMethodItem(
+        ctx,
+        decl,
+        item.generics,
+        item.whereClause,
+        targetType,
+      );
+      if (isSome(analyzed.ownershipView)) {
+        methodBodies.push(analyzed.ownershipView.value);
+      }
+      return [
+        {
+          name: decl.signature.name.text,
+          receiver: toMethodReceiver(decl.signature.receiver),
+          params: analyzed.params,
+          returnType: analyzed.returnType,
+        },
+      ];
+    },
   );
   popSelfContext(ctx);
 
-  return { ...shallow, resolvedMethods, associatedTypeDefs };
+  return { ...shallow, resolvedMethods, associatedTypeDefs, methodBodies };
 }
 
 /**

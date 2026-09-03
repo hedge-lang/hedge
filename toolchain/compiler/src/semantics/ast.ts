@@ -286,6 +286,9 @@ export interface TraitDecl extends AstNode {
   readonly supertraits: readonly string[];
   readonly methods: readonly TraitMethod[];
   readonly associatedTypes: readonly string[];
+  /** A `FunctionDef` view of each bodied (default) method, `self` prepended
+   * as a parameter, for the ownership passes to walk. */
+  readonly methodBodies: readonly FunctionDef[];
 }
 
 /** One impl-provided method's own resolved signature - mirrors `TraitMethod`
@@ -329,6 +332,9 @@ export interface ImplDecl extends AstNode {
   readonly providedAssociatedTypes: readonly string[];
   readonly resolvedMethods: readonly ImplMethod[];
   readonly associatedTypeDefs: ReadonlyMap<string, Type>;
+  /** A `FunctionDef` view of each bodied method, `self` prepended as a
+   * parameter, for the ownership passes to walk. */
+  readonly methodBodies: readonly FunctionDef[];
 }
 
 /** Carries no semantic content yet - a type alias's own value type is still
