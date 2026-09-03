@@ -4532,6 +4532,149 @@ describe("associated types and trait projections", (): void => {
     });
   });
 
+  describe("associated-function and associated-const calls", (): void => {
+    function mainLetType(
+      result: AnalysisResult,
+      bindingName: string,
+    ): SemanticsType {
+      const main = result.program.items.find(
+        (item) =>
+          item.kind === "Function" && item.signature.name.text === "main",
+      );
+      assert(main?.kind === "Function", "expected a `main` function");
+      const letStmt = main.body.statements.find(
+        (s) =>
+          s.kind === "LetStatement" &&
+          s.pattern.kind === "BindingPattern" &&
+          s.pattern.name.text === bindingName,
+      );
+      assert(
+        letStmt?.kind === "LetStatement",
+        `expected \`let ${bindingName}\``,
+      );
+      assert(isSome(letStmt.initializer), "expected an initializer");
+      return letStmt.initializer.value.type;
+    }
+
+    it("resolves a concrete `Type::assoc()` call and takes its return type", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn make() -> i32 { 0 } }
+        fn main() { let r = P::make(); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveI32Type" });
+    });
+
+    it("resolves `Self::assoc()` inside a method body", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P {
+          fn zero() -> i32 { 0 }
+          fn get(&self) -> i32 { Self::zero() }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves an associated function that takes arguments", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn add(a: i32, b: i32) -> i32 { 0 } }
+        fn main() { let r = P::add(1, 2); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveI32Type" });
+    });
+
+    it("rejects a call to an associated item that does not exist", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn make() -> i32 { 0 } }
+        fn main() { let r = P::nope(); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "no associated item `nope` found for `P`",
+      );
+    });
+
+    it("rejects an associated-function call with the wrong arity", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn make() -> i32 { 0 } }
+        fn main() { let r = P::make(1); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "method `make` takes 0 argument(s), but 1 was supplied",
+      );
+    });
+
+    it("resolves a `Trait::method(receiver)` UFCS call", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct P { v: i32 }
+        impl Draw for P { fn draw(&self) -> str { "" } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = Draw::draw(p);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveStringType" });
+    });
+
+    it("resolves `Trait::method(x)` where a plain `x.method()` would be ambiguous", (): void => {
+      const result = diagnose(`
+        trait A { fn m(&self) -> i32; }
+        trait B { fn m(&self) -> str; }
+        struct P { v: i32 }
+        impl A for P { fn m(&self) -> i32 { 0 } }
+        impl B for P { fn m(&self) -> str { "" } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = A::m(p);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveI32Type" });
+    });
+
+    it("resolves a concrete `Type::CONST` associated constant", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { const N: i32 = 5; }
+        fn main() { let r = P::N; }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveI32Type" });
+    });
+
+    it("resolves `Self::CONST` inside a method body", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P {
+          const N: i32 = 5;
+          fn get(&self) -> i32 { Self::N }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a reference to an associated constant that does not exist", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { const N: i32 = 5; }
+        fn main() { let r = P::MISSING; }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "no associated item `MISSING` found for `P`",
+      );
+    });
+  });
+
   describe("an ordinary generic function's own projection", (): void => {
     function findFn(
       result: AnalysisResult,

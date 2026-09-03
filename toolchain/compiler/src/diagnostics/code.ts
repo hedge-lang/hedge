@@ -46,6 +46,7 @@ export type DiagnosticCode =
   | "HEDGE-TYPE-011" // turbofish argument count does not match declared generics
   | "HEDGE-TYPE-012" // no method with the given name on the receiver type
   | "HEDGE-TYPE-013" // method name resolves to more than one applicable trait method
+  | "HEDGE-TYPE-014" // no associated function or constant with the given name
   // Patterns.
   | "HEDGE-PATTERN-001" // refutable pattern in an irrefutable position
   | "HEDGE-PATTERN-002" // non-exhaustive match

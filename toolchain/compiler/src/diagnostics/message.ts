@@ -319,6 +319,8 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return `method \`${kind.method}\` on \`${kind.typeName}\` is ambiguous between traits ${kind.traits
         .map((t) => `\`${t}\``)
         .join(" and ")}`;
+    case "SemNoAssociatedItem":
+      return `no associated item \`${kind.name}\` found for \`${kind.typeName}\``;
     case "SemLogicalOperandsMustBeBool":
       return "logical operator operands must be `bool`";
     case "SemBitwiseRequiresInteger":

@@ -387,6 +387,11 @@ export type DiagnosticKind =
       readonly typeName: string;
       readonly traits: readonly string[];
     }
+  | {
+      readonly kind: "SemNoAssociatedItem";
+      readonly name: string;
+      readonly typeName: string;
+    }
   | { readonly kind: "SemLogicalOperandsMustBeBool" }
   | { readonly kind: "SemBitwiseRequiresInteger" }
   | {
@@ -734,6 +739,7 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemCallReturnTypeMismatch", "HEDGE-TYPE-010"],
   ["SemNoMethodOnType", "HEDGE-TYPE-012"],
   ["SemAmbiguousMethod", "HEDGE-TYPE-013"],
+  ["SemNoAssociatedItem", "HEDGE-TYPE-014"],
   ["SemLogicalOperandsMustBeBool", "HEDGE-TYPE-002"],
   ["SemBitwiseRequiresInteger", "HEDGE-TYPE-002"],
   ["SemArithmeticOperandNotNumeric", "HEDGE-TYPE-002"],

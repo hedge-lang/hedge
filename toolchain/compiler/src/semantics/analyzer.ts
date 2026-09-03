@@ -137,6 +137,9 @@ interface AnalysisContext {
    * A `dyn Trait` or bounded-generic receiver resolves against
    * `traitRegistry` instead. */
   readonly methodIndex: Map<string, readonly IndexedMethod[]>;
+  /** Each concrete type's associated constants (`impl T { const N: U = ...; }`),
+   * keyed by `typeIdentity` then constant name, holding the declared type. */
+  readonly assocConstIndex: Map<string, Map<string, Semantics.Type>>;
   /** Mutable build-up of `AnalysisResult.witnesses`, keyed by call-site
    * `tokenId`. */
   readonly witnessTable: Map<number, WitnessRef[]>;
@@ -6620,7 +6623,36 @@ function buildMethodIndex(
       entries.push(...indexInherentMethods(ctx, item, targetType));
     }
     ctx.methodIndex.set(targetId, entries);
+    indexAssociatedConsts(ctx, item, targetType, targetId);
   }
+}
+
+function indexAssociatedConsts(
+  ctx: AnalysisContext,
+  item: Parser.ImplDecl,
+  targetType: Semantics.Type,
+  targetId: string,
+): void {
+  const consts = item.items.filter(
+    (decl): decl is Parser.ConstDecl => decl.kind === "Const",
+  );
+  if (consts.length === 0) return;
+  pushSelfContext(ctx, {
+    kind: "Impl",
+    targetType,
+    traitName: none(),
+    associatedTypes: new Map(),
+  });
+  const byName =
+    ctx.assocConstIndex.get(targetId) ?? new Map<string, Semantics.Type>();
+  for (const decl of consts) {
+    byName.set(
+      decl.name.text,
+      resolveSlice1Type(ctx, decl.type, decl.type.tokenId),
+    );
+  }
+  ctx.assocConstIndex.set(targetId, byName);
+  popSelfContext(ctx);
 }
 
 function indexInherentMethods(
@@ -6728,7 +6760,7 @@ function resolveMethodCall(
 
 function checkMethodCallArgs(
   ctx: AnalysisContext,
-  expression: Parser.MethodCallExpression,
+  callTokenId: number,
   methodName: string,
   params: readonly Semantics.Type[],
   args: readonly Semantics.Expression[],
@@ -6743,7 +6775,7 @@ function checkMethodCallArgs(
         expected: params.length,
         count: args.length,
       },
-      expression.tokenId,
+      callTokenId,
     );
     return args;
   }
@@ -6817,7 +6849,7 @@ function analyzeMethodCallExpression(
     arguments: [
       ...checkMethodCallArgs(
         ctx,
-        expression,
+        expression.tokenId,
         expression.method.text,
         method.params,
         args,
@@ -6825,6 +6857,133 @@ function analyzeMethodCallExpression(
     ],
     type: method.returnType,
   };
+}
+
+type AssocHead =
+  | {
+      readonly kind: "type";
+      readonly typeId: string;
+      readonly bareName: string;
+    }
+  | {
+      readonly kind: "trait";
+      readonly traitId: string;
+      readonly bareName: string;
+    };
+
+/** Resolves a 2-segment path's head segment for associated-item lookup: a
+ * struct name, `Self` (when the enclosing impl targets a struct), or a trait
+ * name. An enum head is left to enum-variant resolution - `Enum::assoc` is not
+ * yet distinguished from `Enum::Variant`. */
+function resolveAssocHead(
+  ctx: AnalysisContext,
+  head: string,
+): AssocHead | undefined {
+  const bare = head === "Self" ? selfTargetName(ctx) : head;
+  if (bare !== undefined) {
+    const structDecl = lookupStruct(ctx, bare);
+    if (structDecl !== undefined) {
+      const typeId = typeIdentity(structDecl.type);
+      return { kind: "type", typeId, bareName: bareTypeName(typeId) };
+    }
+  }
+  const traitId = lookupTrait(ctx, head);
+  if (traitId !== undefined) {
+    return { kind: "trait", traitId, bareName: bareTypeName(traitId) };
+  }
+  return undefined;
+}
+
+/** `Type::f(...)` / `Self::f(...)` / `Trait::f(receiver, ...)`. Runs before
+ * `analyzeCall`'s ordinary callee analysis so a struct/trait head doesn't
+ * surface a misleading "cannot find enum" from enum-variant resolution. */
+function analyzeAssociatedCall(
+  ctx: AnalysisContext,
+  call: Parser.CallExpression,
+  args: readonly Semantics.Expression[],
+): Option<{ readonly type: Semantics.Type }> {
+  if (call.callee.kind !== "PathExpression") return none();
+  const { segments } = call.callee.path;
+  if (segments.length !== 2) return none();
+  const [head, name] = segments;
+  if (head === undefined || name === undefined) return none();
+  const resolved = resolveAssocHead(ctx, head);
+  if (resolved === undefined) return none();
+
+  if (resolved.kind === "trait") {
+    const matches = traitMethodSet(ctx, resolved.traitId).filter(
+      (m) => m.name === name,
+    );
+    const method = matches[0];
+    if (method === undefined) {
+      emitError(
+        ctx,
+        {
+          kind: "SemNoAssociatedItem",
+          name,
+          typeName: resolved.bareName,
+        },
+        call.tokenId,
+      );
+      return some({ type: { kind: "UnitType", tokenId: call.tokenId } });
+    }
+    // UFCS: the first argument is the receiver, the rest match the signature.
+    checkMethodCallArgs(ctx, call.tokenId, name, method.params, args.slice(1));
+    return some({ type: method.returnType });
+  }
+
+  const candidates = (ctx.methodIndex.get(resolved.typeId) ?? []).filter(
+    (m) => m.name === name,
+  );
+  const assocFn = candidates.find((m) => !isSome(m.receiver));
+  if (assocFn !== undefined) {
+    checkMethodCallArgs(ctx, call.tokenId, name, assocFn.params, args);
+    return some({ type: assocFn.returnType });
+  }
+  const instanceMethod = candidates.find((m) => isSome(m.receiver));
+  if (instanceMethod !== undefined) {
+    checkMethodCallArgs(
+      ctx,
+      call.tokenId,
+      name,
+      instanceMethod.params,
+      args.slice(1),
+    );
+    return some({ type: instanceMethod.returnType });
+  }
+  emitError(
+    ctx,
+    { kind: "SemNoAssociatedItem", name, typeName: resolved.bareName },
+    call.tokenId,
+  );
+  return some({ type: { kind: "UnitType", tokenId: call.tokenId } });
+}
+
+/** `Type::CONST` / `Self::CONST` in value position (no call). */
+function analyzeAssociatedItemPath(
+  ctx: AnalysisContext,
+  path: Parser.PathExpression,
+  segments: readonly string[],
+): Option<Semantics.PathExpression> {
+  const [head, name] = segments;
+  if (head === undefined || name === undefined) return none();
+  const resolved = resolveAssocHead(ctx, head);
+  if (resolved === undefined || resolved.kind !== "type") return none();
+  const constType = ctx.assocConstIndex.get(resolved.typeId)?.get(name);
+  const semanticPath: Semantics.PathExpression = {
+    kind: "PathExpression",
+    tokenId: path.tokenId,
+    path: path.path,
+    type: constType ?? { kind: "UnitType", tokenId: path.tokenId },
+  };
+  if (constType === undefined) {
+    emitError(
+      ctx,
+      { kind: "SemNoAssociatedItem", name, typeName: resolved.bareName },
+      path.tokenId,
+    );
+  }
+  return some(semanticPath);
 }
 
 function analyzeTupleExpression(
@@ -7914,6 +8073,21 @@ function analyzeCall(
       type: structConstruction.value.type,
     };
   }
+  const associated = analyzeAssociatedCall(ctx, call, args);
+  if (isSome(associated) && call.callee.kind === "PathExpression") {
+    const associatedCallee: Semantics.PathExpression = {
+      kind: "PathExpression",
+      tokenId: call.callee.tokenId,
+      path: call.callee.path,
+      type: { kind: "UnitType", tokenId: call.callee.tokenId },
+    };
+    return {
+      ...call,
+      callee: associatedCallee,
+      arguments: args,
+      type: associated.value.type,
+    };
+  }
   const callee = analyzeExpression(ctx, call.callee);
   const enumConstruction = analyzeEnumVariantCallConstruction(ctx, call, args);
   if (isSome(enumConstruction)) {
@@ -8692,6 +8866,8 @@ function analyzePath(
 ): Semantics.PathExpression {
   const { segments } = path.path;
   if (segments.length === 2) {
+    const associated = analyzeAssociatedItemPath(ctx, path, segments);
+    if (isSome(associated)) return associated.value;
     const construction = analyzeEnumVariantPathConstruction(
       ctx,
       path,
@@ -8745,6 +8921,7 @@ export function analyze(
     implRegistry: [],
     traitRegistry: new Map(),
     methodIndex: new Map(),
+    assocConstIndex: new Map(),
     witnessTable: new Map(),
     selfContextStack: [],
   };
