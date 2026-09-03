@@ -3579,8 +3579,10 @@ function resolveEnumDecl(
   return decl === undefined ? none() : some(decl);
 }
 
-function lastPathSegment(path: Parser.Path): string | undefined {
-  return path.segments.at(-1);
+function lastPathSegment(path: Parser.Path): string {
+  const segment = path.segments.at(-1);
+  assert(segment !== undefined, "ICE: path pattern has no segments");
+  return segment;
 }
 
 /** `none()` if `scrutineeType` isn't a plain (non-enum) `StructType`, or names
@@ -3628,7 +3630,7 @@ function resolveTupleVariantForPattern(
       ctx,
       {
         kind: "SemNoVariantOnEnum",
-        variant: variantName ?? "undefined",
+        variant: variantName,
         enumName: describeType(scrutineeType),
       },
       pattern.tokenId,
@@ -3640,7 +3642,7 @@ function resolveTupleVariantForPattern(
       ctx,
       {
         kind: "SemVariantNotTupleVariant",
-        variant: variantName ?? "undefined",
+        variant: variantName,
       },
       pattern.tokenId,
     );
@@ -3665,7 +3667,7 @@ function resolveStructVariantForPattern(
       ctx,
       {
         kind: "SemNoVariantOnEnum",
-        variant: variantName ?? "undefined",
+        variant: variantName,
         enumName: describeType(scrutineeType),
       },
       pattern.tokenId,
@@ -3677,7 +3679,7 @@ function resolveStructVariantForPattern(
       ctx,
       {
         kind: "SemVariantNotStructVariant",
-        variant: variantName ?? "undefined",
+        variant: variantName,
       },
       pattern.tokenId,
     );
@@ -3726,7 +3728,7 @@ function resolveTupleStructForPattern(
       {
         kind: "SemPatternExpectedStruct",
         expected: structDecl.value.name.text,
-        found: patternName ?? "undefined",
+        found: patternName,
       },
       pattern.tokenId,
     );
@@ -3765,7 +3767,7 @@ function resolveStructForPattern(
       {
         kind: "SemPatternExpectedStruct",
         expected: structDecl.value.name.text,
-        found: patternName ?? "undefined",
+        found: patternName,
       },
       pattern.tokenId,
     );
@@ -4082,7 +4084,7 @@ function analyzePathPattern(
       ctx,
       {
         kind: "SemNoVariantOnEnum",
-        variant: variantName ?? "undefined",
+        variant: variantName,
         enumName: describeType(scrutineeType),
       },
       pattern.tokenId,
@@ -4094,7 +4096,7 @@ function analyzePathPattern(
       ctx,
       {
         kind: "SemVariantHasFieldsPattern",
-        variant: variantName ?? "undefined",
+        variant: variantName,
       },
       pattern.tokenId,
     );
@@ -4545,7 +4547,6 @@ function isIrrefutablePattern(
  * own base rule, and every other kind either doesn't apply to an enum
  * scrutinee or (once `analyzePattern` resolves it) can only ever name a
  * real variant of it). */
-// eslint-disable-next-line complexity -- Routing function over the full Pattern union
 function collectCoveredVariantNames(
   pattern: Semantics.Pattern,
   out: Set<string>,
@@ -4554,8 +4555,7 @@ function collectCoveredVariantNames(
     case "PathPattern":
     case "TupleStructPattern":
     case "StructPattern": {
-      const name = lastPathSegment(pattern.path);
-      if (name !== undefined) out.add(name);
+      out.add(lastPathSegment(pattern.path));
       return;
     }
     case "OrPattern":
