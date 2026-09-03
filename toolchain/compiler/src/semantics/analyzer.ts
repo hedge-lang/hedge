@@ -1965,6 +1965,7 @@ function buildTraitDecl(item: Parser.TraitDecl): Semantics.TraitDecl {
           {
             name: decl.name.text,
             isDefault: false,
+            receiver: toMethodReceiver(decl.receiver),
             params: [],
             returnType: unitType,
           },
@@ -1975,6 +1976,7 @@ function buildTraitDecl(item: Parser.TraitDecl): Semantics.TraitDecl {
           {
             name: decl.signature.name.text,
             isDefault: true,
+            receiver: toMethodReceiver(decl.signature.receiver),
             params: [],
             returnType: unitType,
           },
@@ -2053,6 +2055,12 @@ function resolveMethodSignatureTypes(
   return result;
 }
 
+function toMethodReceiver(
+  receiver: Option<Parser.Receiver>,
+): Option<Semantics.MethodReceiver> {
+  return mapSome(receiver, (r) => ({ byRef: r.byRef, mutable: r.mutable }));
+}
+
 function resolveTraitMethodSignature(
   ctx: AnalysisContext,
   outerGenerics: readonly Parser.GenericParam[],
@@ -2063,6 +2071,7 @@ function resolveTraitMethodSignature(
   return {
     name: signature.name.text,
     isDefault,
+    receiver: toMethodReceiver(signature.receiver),
     ...resolveMethodSignatureTypes(
       ctx,
       outerGenerics,
@@ -2154,6 +2163,7 @@ function resolveImplMethodSignature(
 ): Semantics.ImplMethod {
   return {
     name: signature.name.text,
+    receiver: toMethodReceiver(signature.receiver),
     ...resolveMethodSignatureTypes(
       ctx,
       outerGenerics,

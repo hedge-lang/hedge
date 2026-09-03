@@ -243,16 +243,24 @@ export interface StaticDecl extends DecoratedAstNode {
   readonly attributes: readonly Attribute[];
 }
 
+/** A method's receiver, mirroring `Parser.Receiver`: `byRef` is true for
+ * `&self`/`&mut self`, `mutable` for `mut self`/`&mut self`. `none()` for an
+ * associated function with no receiver. */
+export interface MethodReceiver {
+  readonly byRef: boolean;
+  readonly mutable: boolean;
+}
+
 /** One of a trait's own methods, in declaration order. `isDefault` is true
  * for a method with a body in the trait declaration (needs no override) and
  * false for a bodiless required one (an impl must provide it). `params`/
  * `returnType` are the method's own resolved signature types - a `Self`/
  * `Self::Assoc` mention resolves within this trait's own abstract Self
- * context (see analyzer.ts's `SelfContext`), stored here even though nothing
- * consumes it yet. */
+ * context (see analyzer.ts's `SelfContext`). */
 export interface TraitMethod {
   readonly name: string;
   readonly isDefault: boolean;
+  readonly receiver: Option<MethodReceiver>;
   readonly params: readonly Type[];
   readonly returnType: Type;
 }
@@ -284,6 +292,7 @@ export interface TraitDecl extends AstNode {
  * minus `isDefault`, since every entry here is impl-provided by definition. */
 export interface ImplMethod {
   readonly name: string;
+  readonly receiver: Option<MethodReceiver>;
   readonly params: readonly Type[];
   readonly returnType: Type;
 }

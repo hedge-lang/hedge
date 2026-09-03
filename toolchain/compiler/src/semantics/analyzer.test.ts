@@ -3,7 +3,7 @@ import { messageOf } from "../diagnostics/index.js";
 import { assert } from "../assert.js";
 
 import { tokenize } from "../lexer/lexer.js";
-import { isSome, none } from "../option.js";
+import { isSome, none, some } from "../option.js";
 import { parse } from "../parser/parser.js";
 import { assembleProgram } from "../prelude.js";
 import type { AnalysisResult } from "./analyzer.js";
@@ -3996,6 +3996,86 @@ describe("associated types and trait projections", (): void => {
         }
       `);
       expect(result.diagnostics).toEqual([]);
+    });
+  });
+
+  describe("resolved method signatures carry the receiver form", (): void => {
+    function inherentMethodReceiver(
+      source: string,
+      methodName: string,
+    ): unknown {
+      const result = diagnose(source);
+      expect(result.diagnostics).toEqual([]);
+      const impl = result.program.items.find((item) => item.kind === "Impl");
+      assert(impl?.kind === "Impl", "expected an Impl item");
+      const method = impl.resolvedMethods.find((m) => m.name === methodName);
+      assert(method !== undefined, `expected a resolved \`${methodName}\``);
+      return method.receiver;
+    }
+
+    it("records a shared-borrow `&self` receiver", (): void => {
+      expect(
+        inherentMethodReceiver(
+          "struct P { x: i32 } impl P { fn m(&self) -> i32 { 0 } }",
+          "m",
+        ),
+      ).toEqual(some({ byRef: true, mutable: false }));
+    });
+
+    it("records a mutable-borrow `&mut self` receiver", (): void => {
+      expect(
+        inherentMethodReceiver(
+          "struct P { x: i32 } impl P { fn m(&mut self) -> i32 { 0 } }",
+          "m",
+        ),
+      ).toEqual(some({ byRef: true, mutable: true }));
+    });
+
+    it("records a by-value `self` receiver", (): void => {
+      expect(
+        inherentMethodReceiver(
+          "struct P { x: i32 } impl P { fn m(self) -> i32 { 0 } }",
+          "m",
+        ),
+      ).toEqual(some({ byRef: false, mutable: false }));
+    });
+
+    it("records a by-value `mut self` receiver", (): void => {
+      expect(
+        inherentMethodReceiver(
+          "struct P { x: i32 } impl P { fn m(mut self) -> i32 { 0 } }",
+          "m",
+        ),
+      ).toEqual(some({ byRef: false, mutable: true }));
+    });
+
+    it("records no receiver for an associated function", (): void => {
+      expect(
+        inherentMethodReceiver(
+          "struct P { x: i32 } impl P { fn make() -> i32 { 0 } }",
+          "make",
+        ),
+      ).toEqual(none());
+    });
+
+    it("records the receiver form on a trait's own required method", (): void => {
+      const result = diagnose("trait T { fn m(&self) -> str; }");
+      expect(result.diagnostics).toEqual([]);
+      const trait = result.program.items.find((item) => item.kind === "Trait");
+      assert(trait?.kind === "Trait", "expected a Trait item");
+      const method = trait.methods.find((m) => m.name === "m");
+      assert(method !== undefined, "expected a resolved `m`");
+      expect(method.receiver).toEqual(some({ byRef: true, mutable: false }));
+    });
+
+    it("records the receiver form on a trait's own default method", (): void => {
+      const result = diagnose("trait T { fn c(self) -> i32 { 0 } }");
+      expect(result.diagnostics).toEqual([]);
+      const trait = result.program.items.find((item) => item.kind === "Trait");
+      assert(trait?.kind === "Trait", "expected a Trait item");
+      const method = trait.methods.find((m) => m.name === "c");
+      assert(method !== undefined, "expected a resolved `c`");
+      expect(method.receiver).toEqual(some({ byRef: false, mutable: false }));
     });
   });
 
