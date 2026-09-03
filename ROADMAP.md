@@ -53,9 +53,11 @@ Spec: `0014-enums`, `0016-pattern-matching`.
 ### Slice 4 — Generics & traits
 
 Erased generics with **witness passing**, `dyn Trait` value layout, trait
-resolution, coherence/orphan rule, `where` clauses, `#[derive]`, associated
-types, selective monomorphization. **Design the witness/dyn/closure ABI here.**
-Generic enums (`Option<T>`) follow once this lands.
+resolution, coherence/orphan rule, `where` clauses, associated types, selective
+monomorphization. **Design the witness/dyn/closure ABI here.** Generic enums
+(`Option<T>`) follow once this lands. `#[derive]` is deferred to the macro system
+(see [ADR 0013](docs/adr/0013-derive-deferred-to-macro-system.md)); standard-trait
+implementations are written explicitly until then.
 Spec: `0013-generics-and-traits` (renumbered `0015`).
 
 ### Slice 5 — Collections, strings

@@ -115,10 +115,18 @@ struct Point { x: i32, y: i32 }
 `Default`, deferred from construction, lives here alongside `Clone`, `Eq`, `Copy`,
 and others.
 
+`derive` is sugar provided by the macro system: `#[derive(Clone)]` expands to an
+ordinary `impl Clone for Point { ... }` block, checked for coherence like any
+hand-written implementation. Because the macro system is deferred (see
+[the index](0000-index.md) and
+[ADR 0013](../docs/adr/0013-derive-deferred-to-macro-system.md)), `derive` is not
+yet available; until it lands, these implementations are written explicitly. The
+traits `derive` targets are ordinary traits with no special status.
+
 ## Equality, ordering, and hashing
 
-`==` is structural: it compares values rather than references, desugars to
-`PartialEq::eq`, and is generated field by field by `derive`. It is never
+`==` is structural: it compares values rather than references and desugars to
+`PartialEq::eq`, whose implementation compares field by field. It is never
 JavaScript's `===`, so two structurally equal values compare equal even though they
 are distinct objects at runtime. The comparison traits come in the usual pairs.
 `PartialEq` and `Eq` differ in that `Eq` is a full, reflexive equivalence; `f32` and
