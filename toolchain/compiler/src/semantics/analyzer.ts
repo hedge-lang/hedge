@@ -2130,6 +2130,28 @@ function selfTargetName(ctx: AnalysisContext): string | undefined {
     : undefined;
 }
 
+/** Substitutes a raw path-head name that's literally `Self` for the concrete
+ * struct/enum name it stands for; any other name passes through unchanged.
+ * `undefined` only for a `Self` with no concrete target in scope (a trait
+ * body, or a non-nominal impl target) - callers decide their own fallback. */
+function resolveSelfAwareName(
+  ctx: AnalysisContext,
+  rawName: string,
+): string | undefined {
+  return rawName === "Self" ? selfTargetName(ctx) : rawName;
+}
+
+/** The `SelfContext` a bodied inherent-impl item (a method, an associated
+ * const) resolves `Self` against - no trait, no associated-type definitions. */
+function inherentSelfContext(targetType: Semantics.Type): SelfContext {
+  return {
+    kind: "Impl",
+    targetType,
+    traitName: none(),
+    associatedTypes: new Map(),
+  };
+}
+
 interface AnalyzedMethod {
   readonly params: readonly Semantics.Type[];
   readonly returnType: Semantics.Type;
@@ -6660,12 +6682,7 @@ function indexAssociatedConsts(
     (decl): decl is Parser.ConstDecl => decl.kind === "Const",
   );
   if (consts.length === 0) return;
-  pushSelfContext(ctx, {
-    kind: "Impl",
-    targetType,
-    traitName: none(),
-    associatedTypes: new Map(),
-  });
+  pushSelfContext(ctx, inherentSelfContext(targetType));
   const byName =
     ctx.assocConstIndex.get(targetId) ?? new Map<string, Semantics.Type>();
   for (const decl of consts) {
@@ -6683,12 +6700,7 @@ function indexInherentMethods(
   item: Parser.ImplDecl,
   targetType: Semantics.Type,
 ): readonly IndexedMethod[] {
-  pushSelfContext(ctx, {
-    kind: "Impl",
-    targetType,
-    traitName: none(),
-    associatedTypes: new Map(),
-  });
+  pushSelfContext(ctx, inherentSelfContext(targetType));
   const implGenerics = genericParamNames(item.generics);
   const methods = item.items.flatMap((decl): readonly IndexedMethod[] => {
     if (decl.kind !== "Function") return [];
@@ -6946,7 +6958,7 @@ function resolveAssocHead(
   ctx: AnalysisContext,
   head: string,
 ): AssocHead | undefined {
-  const bare = head === "Self" ? selfTargetName(ctx) : head;
+  const bare = resolveSelfAwareName(ctx, head);
   if (bare !== undefined) {
     const structDecl = lookupStruct(ctx, bare);
     if (structDecl !== undefined) {
@@ -7761,10 +7773,7 @@ function analyzeStructExpression(
       type: UNIT,
     };
   }
-  const structName =
-    rawStructName === "Self"
-      ? (selfTargetName(ctx) ?? rawStructName)
-      : rawStructName;
+  const structName = resolveSelfAwareName(ctx, rawStructName) ?? rawStructName;
 
   const structDecl = lookupStruct(ctx, structName);
   if (structDecl === undefined) {
@@ -8847,10 +8856,7 @@ function analyzeTupleStructCallConstruction(
   if (segments.length !== 1) return none();
   const [rawStructName] = segments;
   if (rawStructName === undefined) return none();
-  const structName =
-    rawStructName === "Self"
-      ? (selfTargetName(ctx) ?? rawStructName)
-      : rawStructName;
+  const structName = resolveSelfAwareName(ctx, rawStructName) ?? rawStructName;
   if (isSome(resolve(ctx, structName))) return none();
   const structDecl = lookupStruct(ctx, structName);
   if (structDecl === undefined) return none();
