@@ -4493,6 +4493,32 @@ describe("associated types and trait projections", (): void => {
       );
     });
 
+    it("reports a return-type mismatch on a concrete `-> Self` method body", (): void => {
+      const result = diagnose(`
+        struct P { x: i32 }
+        impl P { fn bad(&self) -> Self { 1 } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "return type mismatch: expected `P`, found `i32`",
+      );
+    });
+
+    it("still suppresses the cascade for a `-> Self::Bogus` method whose projection does not resolve", (): void => {
+      const result = diagnose(`
+        trait Iterator { type Item; }
+        struct Counter { n: i32 }
+        impl Iterator for Counter {
+          type Item = i32;
+          fn peek(&self) -> Self::Bogus { 0 }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "cannot find associated type `Bogus` on `Counter`",
+      );
+    });
+
     it("resolves a `Self { .. }` struct literal to the impl target type", (): void => {
       const result = diagnose(`
         struct P { x: i32, y: i32 }

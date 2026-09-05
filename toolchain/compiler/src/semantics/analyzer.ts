@@ -971,14 +971,29 @@ function isSelfType(type: Parser.Type): boolean {
 }
 
 /** True for any `Self`-rooted return type (`Self`, `Self::Item`, and under
- * `&`/`&mut`) - a method body cannot be structurally checked against an
- * abstract `Self` or an associated-type projection, so the return-type
- * mismatch is suppressed rather than cascading a spurious diagnostic. */
-function returnTypeResistsBodyCheck(type: Parser.Type): boolean {
+ * `&`/`&mut`). */
+function isSelfRootedType(type: Parser.Type): boolean {
   if (type.kind === "ReferenceType") {
-    return returnTypeResistsBodyCheck(type.referent);
+    return isSelfRootedType(type.referent);
   }
   return type.kind === "NamedType" && type.path.segments[0] === "Self";
+}
+
+/** A method body's trailing expression can't be structurally checked against
+ * an abstract `Self` or an unresolved `Self::Assoc` projection, so the
+ * return-type mismatch is suppressed rather than cascading. Inside a concrete
+ * impl where the `Self`-rooted type did resolve (`resolvedReturnType` is not
+ * the error-recovery `UnitType`), the check runs normally. */
+function returnTypeResistsBodyCheck(
+  ctx: AnalysisContext,
+  declaredReturnType: Parser.Type,
+  resolvedReturnType: Semantics.Type,
+): boolean {
+  if (!isSelfRootedType(declaredReturnType)) return false;
+  const resolvedConcretely =
+    currentSelfContext(ctx)?.kind === "Impl" &&
+    resolvedReturnType.kind !== "UnitType";
+  return !resolvedConcretely;
 }
 
 /** Shared by both `validateProjectionType` branches that search a set of
@@ -5598,7 +5613,7 @@ function buildFunctionSignature(
   });
   const suppressReturnTypeMismatch =
     isSome(decl.returnType) &&
-    returnTypeResistsBodyCheck(decl.returnType.value);
+    returnTypeResistsBodyCheck(ctx, decl.returnType.value, expectedReturnType);
   const signature: Semantics.FunctionSignature = {
     kind: "FunctionSignature",
     tokenId: decl.tokenId,
