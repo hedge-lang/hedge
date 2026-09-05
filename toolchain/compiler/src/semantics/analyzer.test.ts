@@ -4876,6 +4876,30 @@ describe("associated types and trait projections", (): void => {
       expect(call.arguments[0]?.type).toEqual({ kind: "PrimitiveI64Type" });
     });
 
+    it("coerces a UFCS call's rest argument, leaving the receiver slot untouched", (): void => {
+      const result = diagnose(`
+        trait Adder { fn add(&self, x: i64) -> i32; }
+        struct P { v: i32 }
+        impl Adder for P { fn add(&self, x: i64) -> i32 { 0 } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = Adder::add(p, 2);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const main = result.program.items.find(
+        (item) =>
+          item.kind === "Function" && item.signature.name.text === "main",
+      );
+      assert(main?.kind === "Function", "expected a `main` function");
+      const letStmt = main.body.statements[1];
+      assert(letStmt?.kind === "LetStatement", "expected a let statement");
+      assert(isSome(letStmt.initializer), "expected an initializer");
+      const call = letStmt.initializer.value;
+      assert(call.kind === "CallExpression", "expected a call expression");
+      expect(call.arguments[1]?.type).toEqual({ kind: "PrimitiveI64Type" });
+    });
+
     it("rejects a `Trait::method(x)` UFCS call whose receiver does not implement the trait", (): void => {
       const result = diagnose(`
         trait Draw { fn draw(&self) -> str; }

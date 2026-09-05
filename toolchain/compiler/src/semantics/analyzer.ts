@@ -6710,7 +6710,9 @@ interface IndexedMethod {
 /** Rewrites a trait method's abstract signature against a concrete impl: a
  * bare `Self` (also under `&`/`&mut`) becomes the impl target, and a
  * `Self::Assoc` projection becomes the impl's own `type Assoc = ...`
- * definition. `Self` nested in a generic argument keeps its abstract form. */
+ * definition. `Self` inside a generic argument (`-> Option<Self>`) is left
+ * abstract: `Semantics.NamedType` carries no resolved type-argument list to
+ * rewrite, so there is nothing to recurse into. */
 function substituteSelfType(
   type: Semantics.Type,
   target: Semantics.Type,
