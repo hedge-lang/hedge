@@ -4448,6 +4448,19 @@ describe("associated types and trait projections", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
+    it("resolves a `-> Self` method on a block-local impl to the concrete target", (): void => {
+      const result = diagnose(`
+        fn main() {
+          struct P { v: i32 }
+          impl P { fn dup(&self) -> Self { P { v: 0 } } }
+          let p = P { v: 1 };
+          let d = p.dup();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "d").kind).toBe("StructType");
+    });
+
     it("does not cascade a second diagnostic onto a let annotation when the method is not found", (): void => {
       const result = diagnose(`
         struct P { v: i32 }

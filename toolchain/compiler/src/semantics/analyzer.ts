@@ -3068,6 +3068,26 @@ function resolveStructOrEnumIdentity(
   return none();
 }
 
+/** The concrete `StructType`/`EnumType` for a name resolved through the
+ * structural scope rather than live frames - the prepass's stand-in for
+ * `lookupStructOrEnumType` when a block-local target isn't registered yet,
+ * so a nested impl's `Self`-typed method signatures still index concretely.
+ * `typeIdentity` of the result equals `resolveStructOrEnumIdentity(name)`. */
+function structuralStructOrEnumType(
+  name: string,
+  scope: StructuralScope,
+): Semantics.Type | undefined {
+  const structTokenId = scope.structs.get(name);
+  if (structTokenId !== undefined) {
+    return { kind: "StructType", name: scopedTypeName(structTokenId, name) };
+  }
+  const enumTokenId = scope.enums.get(name);
+  if (enumTokenId !== undefined) {
+    return { kind: "EnumType", name: scopedTypeName(enumTokenId, name) };
+  }
+  return undefined;
+}
+
 /** `resolveStructOrEnumIdentity`'s trait counterpart, for the prepass sites
  * that resolve a trait reference against a `StructuralScope` rather than
  * live frames - falls back to the bare name so a genuinely undeclared
@@ -6760,7 +6780,12 @@ function buildMethodIndex(
       scope,
     );
     if (!isSome(targetId)) continue;
-    const targetType = resolveImplSelfTargetType(ctx, shallow);
+    const liveTargetType = resolveImplSelfTargetType(ctx, shallow);
+    const targetType =
+      liveTargetType.kind === "UnitType"
+        ? (structuralStructOrEnumType(shallow.targetTypeName.value, scope) ??
+          liveTargetType)
+        : liveTargetType;
     const entries = [...(ctx.methodIndex.get(targetId.value) ?? [])];
     if (isSome(shallow.traitRef)) {
       const traitId = resolveTraitIdentity(shallow.traitRef.value.name, scope);
@@ -6777,8 +6802,8 @@ function buildMethodIndex(
 
 /** A trait impl's methods, with the trait's abstract `Self` / `Self::Assoc`
  * rewritten against this impl's concrete target and its own associated-type
- * definitions. A non-nominal target (a block-local type unresolved in the
- * prepass) leaves the signatures abstract. */
+ * definitions. A target the structural scope can't resolve to a struct/enum
+ * leaves the signatures abstract. */
 function indexTraitImplMethods(
   ctx: AnalysisContext,
   traitId: string,
