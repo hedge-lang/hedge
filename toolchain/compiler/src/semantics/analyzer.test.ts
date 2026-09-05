@@ -4705,6 +4705,46 @@ describe("associated types and trait projections", (): void => {
       expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveI32Type" });
     });
 
+    it("resolves a concrete `Enum::assoc()` call", (): void => {
+      const result = diagnose(`
+        enum E { A, B }
+        impl E { fn make() -> i32 { 0 } }
+        fn main() { let r = E::make(); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveI32Type" });
+    });
+
+    it("still resolves an enum variant path when the enum also has associated functions", (): void => {
+      const result = diagnose(`
+        enum E { A, B }
+        impl E { fn make() -> i32 { 0 } }
+        fn main() { let x = E::A; }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves `Self::assoc()` inside an enum impl method body", (): void => {
+      const result = diagnose(`
+        enum E { A, B }
+        impl E {
+          fn zero() -> i32 { 0 }
+          fn get(&self) -> i32 { Self::zero() }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves `Self::assoc()` inside a trait default-method body", (): void => {
+      const result = diagnose(`
+        trait Factory {
+          fn zero() -> i32;
+          fn doubled() -> i32 { Self::zero() }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("rejects a call to an associated item that does not exist", (): void => {
       const result = diagnose(`
         struct P { v: i32 }

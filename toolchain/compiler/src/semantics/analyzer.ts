@@ -7074,6 +7074,10 @@ type AssocHead =
       readonly kind: "type";
       readonly typeId: string;
       readonly bareName: string;
+      /** An enum head with no matching associated item is most likely a
+       * variant, so the caller yields to enum-variant resolution instead of
+       * reporting a missing associated item. */
+      readonly isEnum: boolean;
     }
   | {
       readonly kind: "trait";
@@ -7081,20 +7085,28 @@ type AssocHead =
       readonly bareName: string;
     };
 
-/** Resolves a 2-segment path's head segment for associated-item lookup: a
- * struct name, `Self` (when the enclosing impl targets a struct), or a trait
- * name. An enum head is left to enum-variant resolution - `Enum::assoc` is not
- * yet distinguished from `Enum::Variant`. */
+/** Resolves a 2-segment path's head for associated-item lookup: a struct or
+ * enum name, `Self` (the enclosing impl's concrete target, or the enclosing
+ * trait itself), or a trait name. */
 function resolveAssocHead(
   ctx: AnalysisContext,
   head: string,
 ): AssocHead | undefined {
+  const selfContext = currentSelfContext(ctx);
+  if (head === "Self" && selfContext?.kind === "Trait") {
+    return { kind: "trait", traitId: selfContext.traitName, bareName: "Self" };
+  }
   const bare = resolveSelfAwareName(ctx, head);
   if (bare !== undefined) {
-    const structDecl = lookupStruct(ctx, bare);
-    if (structDecl !== undefined) {
-      const typeId = typeIdentity(structDecl.type);
-      return { kind: "type", typeId, bareName: bareTypeName(typeId) };
+    const decl = lookupStruct(ctx, bare) ?? lookupEnum(ctx, bare);
+    if (decl !== undefined) {
+      const typeId = typeIdentity(decl.type);
+      return {
+        kind: "type",
+        typeId,
+        bareName: bareTypeName(typeId),
+        isEnum: decl.kind === "Enum",
+      };
     }
   }
   const traitId = lookupTrait(ctx, head);
@@ -7132,6 +7144,7 @@ function analyzeAssociatedCall(
           (m) => m.name === name,
         );
   if (method === undefined) {
+    if (resolved.kind === "type" && resolved.isEnum) return none();
     emitError(
       ctx,
       { kind: "SemNoAssociatedItem", name, typeName: resolved.bareName },
@@ -7159,6 +7172,7 @@ function analyzeAssociatedItemPath(
   const resolved = resolveAssocHead(ctx, head);
   if (resolved?.kind !== "type") return none();
   const constType = ctx.assocConstIndex.get(resolved.typeId)?.get(name);
+  if (constType === undefined && resolved.isEnum) return none();
   const semanticPath: Semantics.PathExpression = {
     kind: "PathExpression",
     tokenId: path.tokenId,
