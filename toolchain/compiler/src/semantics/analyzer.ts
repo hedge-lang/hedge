@@ -6791,7 +6791,9 @@ function resolveMethodCall(
       kind: "SemAmbiguousMethod",
       method: methodName,
       typeName,
-      traits: traitIds.map((id) => bareTypeName(id)).sort(),
+      traits: traitIds
+        .map((id) => bareTypeName(id))
+        .sort((a, b) => a.localeCompare(b)),
     },
     tokenId,
   );
@@ -6990,10 +6992,9 @@ function analyzeAssociatedCall(
   if (resolved === undefined) return none();
 
   if (resolved.kind === "trait") {
-    const matches = traitMethodSet(ctx, resolved.traitId).filter(
+    const method = traitMethodSet(ctx, resolved.traitId).find(
       (m) => m.name === name,
     );
-    const method = matches[0];
     if (method === undefined) {
       emitError(
         ctx,
@@ -7047,7 +7048,7 @@ function analyzeAssociatedItemPath(
   const [head, name] = segments;
   if (head === undefined || name === undefined) return none();
   const resolved = resolveAssocHead(ctx, head);
-  if (resolved === undefined || resolved.kind !== "type") return none();
+  if (resolved?.kind !== "type") return none();
   const constType = ctx.assocConstIndex.get(resolved.typeId)?.get(name);
   const semanticPath: Semantics.PathExpression = {
     kind: "PathExpression",
