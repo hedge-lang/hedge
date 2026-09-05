@@ -4842,6 +4842,23 @@ describe("associated types and trait projections", (): void => {
       expect(call.arguments[0]?.type).toEqual({ kind: "PrimitiveI64Type" });
     });
 
+    it("rejects a `Trait::method(x)` UFCS call whose receiver does not implement the trait", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct P { v: i32 }
+        impl Draw for P { fn draw(&self) -> str { "" } }
+        struct Q { v: i32 }
+        fn main() {
+          let q = Q { v: 1 };
+          let r = Draw::draw(q);
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `Q: Draw` is not satisfied",
+      );
+    });
+
     it("resolves `Trait::method(x)` where a plain `x.method()` would be ambiguous", (): void => {
       const result = diagnose(`
         trait A { fn m(&self) -> i32; }

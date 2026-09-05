@@ -7153,6 +7153,40 @@ interface AssociatedCallResult {
   readonly args: readonly Semantics.Expression[];
 }
 
+/** `Trait::method(x, ...)` names its trait explicitly, so the receiver `x`
+ * must actually implement it - checked only for a concrete nominal receiver
+ * type (a generic parameter or `dyn` receiver is out of scope). */
+function checkUfcsReceiverImplementsTrait(
+  ctx: AnalysisContext,
+  traitId: string,
+  receiverArg: Semantics.Expression | undefined,
+  callTokenId: number,
+): void {
+  if (receiverArg === undefined) return;
+  const receiverType =
+    receiverArg.type.kind === "ReferenceType"
+      ? receiverArg.type.referent
+      : receiverArg.type;
+  if (receiverType.kind !== "StructType" && receiverType.kind !== "EnumType") {
+    return;
+  }
+  if (
+    !isSome(
+      resolveTraitBoundForTypeName(ctx, typeIdentity(receiverType), traitId),
+    )
+  ) {
+    emitError(
+      ctx,
+      {
+        kind: "SemTraitBoundNotSatisfied",
+        typeName: describeType(receiverType),
+        trait: bareTypeName(traitId),
+      },
+      callTokenId,
+    );
+  }
+}
+
 function analyzeAssociatedCall(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
@@ -7166,12 +7200,27 @@ function analyzeAssociatedCall(
   const resolved = resolveAssocHead(ctx, head);
   if (resolved === undefined) return none();
 
-  const method =
-    resolved.kind === "trait"
-      ? traitMethodSet(ctx, resolved.traitId).find((m) => m.name === name)
-      : (ctx.methodIndex.get(resolved.typeId) ?? []).find(
-          (m) => m.name === name,
-        );
+  return resolveAssociatedCallMethod(ctx, call, resolved, name, args);
+}
+
+function findAssociatedItem(
+  ctx: AnalysisContext,
+  resolved: AssocHead,
+  name: string,
+): IndexedMethod | undefined {
+  return resolved.kind === "trait"
+    ? traitMethodSet(ctx, resolved.traitId).find((m) => m.name === name)
+    : (ctx.methodIndex.get(resolved.typeId) ?? []).find((m) => m.name === name);
+}
+
+function resolveAssociatedCallMethod(
+  ctx: AnalysisContext,
+  call: Parser.CallExpression,
+  resolved: AssocHead,
+  name: string,
+  args: readonly Semantics.Expression[],
+): Option<AssociatedCallResult> {
+  const method = findAssociatedItem(ctx, resolved, name);
   if (method === undefined) {
     if (resolved.kind === "type" && resolved.isEnum) return none();
     emitError(
@@ -7179,10 +7228,15 @@ function analyzeAssociatedCall(
       { kind: "SemNoAssociatedItem", name, typeName: resolved.bareName },
       call.tokenId,
     );
-    return some({
-      type: { kind: "UnitType", tokenId: call.tokenId },
-      args,
-    });
+    return some({ type: { kind: "UnitType", tokenId: call.tokenId }, args });
+  }
+  if (resolved.kind === "trait" && isSome(method.receiver)) {
+    checkUfcsReceiverImplementsTrait(
+      ctx,
+      resolved.traitId,
+      args[0],
+      call.tokenId,
+    );
   }
   return some({
     type: method.returnType,
