@@ -4254,6 +4254,31 @@ describe("associated types and trait projections", (): void => {
       );
     });
 
+    it("rejects a dot-call to a receiverless associated function", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn make() -> i32 { 0 } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.make();
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "no method `make` found for type `P`",
+      );
+    });
+
+    it("resolves a call to a sibling method through an abstract `self` in a trait default body", (): void => {
+      const result = diagnose(`
+        trait Counter {
+          fn base(&self) -> i32;
+          fn doubled(&self) -> i32 { self.base() }
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("rejects a method call with too many arguments", (): void => {
       const result = diagnose(`
         struct P { v: i32 }

@@ -6759,6 +6759,10 @@ function methodCandidates(
     receiverType.path.segments.length === 1
   ) {
     const name = receiverType.path.segments[0] ?? "";
+    const selfContext = currentSelfContext(ctx);
+    if (name === "Self" && selfContext?.kind === "Trait") {
+      return traitMethodSet(ctx, selfContext.traitName);
+    }
     if (isDeclaredGenericParam(ctx, name)) {
       return declaredGenericParamBounds(ctx, name).flatMap((traitId) =>
         traitMethodSet(ctx, traitId),
@@ -6778,7 +6782,7 @@ function resolveMethodCall(
   tokenId: number,
 ): IndexedMethod | undefined {
   const named = methodCandidates(ctx, receiverType).filter(
-    (m) => m.name === methodName,
+    (m) => m.name === methodName && isSome(m.receiver),
   );
   const inherent = named.find((m) => m.origin.kind === "inherent");
   if (inherent !== undefined) return inherent;
