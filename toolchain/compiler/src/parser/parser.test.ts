@@ -550,30 +550,33 @@ describe("self/Self in expression position inside a method body", (): void => {
     });
   });
 
-  it("still rejects `super` inside a method body", (): void => {
-    const { tokens } = tokenize("impl Point { fn m(&self) { super; } }");
+  it.each([
+    {
+      scenario: "`super` inside a method body",
+      src: "impl Point { fn m(&self) { super; } }",
+      message: "`super` is not yet supported",
+    },
+    {
+      scenario: "`self` as a non-first segment inside a method body",
+      src: "impl Point { fn m(&self) { foo::self; } }",
+      message: "`self` is not yet supported",
+    },
+    {
+      scenario: "`self` in a free function nested inside a method body",
+      src: "impl Point { fn m(&self) { fn nested() { self; } } }",
+      message: "`self` is not yet supported",
+    },
+    {
+      scenario: "bare `self` in a free top-level function body",
+      src: "fn m() { self; }",
+      message: "`self` is not yet supported",
+    },
+  ])("still rejects $scenario", ({ src, message }): void => {
+    const { tokens } = tokenize(src);
     const { program, diagnostics } = parse(tokens);
     expect(program).toEqual(none());
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(messageOf(diagnostics[0])).toBe("`super` is not yet supported");
-  });
-
-  it("still rejects `self` as a non-first segment inside a method body", (): void => {
-    const { tokens } = tokenize("impl Point { fn m(&self) { foo::self; } }");
-    const { program, diagnostics } = parse(tokens);
-    expect(program).toEqual(none());
-    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(messageOf(diagnostics[0])).toBe("`self` is not yet supported");
-  });
-
-  it("rejects `self` in a free function nested inside a method body", (): void => {
-    const { tokens } = tokenize(
-      "impl Point { fn m(&self) { fn nested() { self; } } }",
-    );
-    const { program, diagnostics } = parse(tokens);
-    expect(program).toEqual(none());
-    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(messageOf(diagnostics[0])).toBe("`self` is not yet supported");
+    expect(messageOf(diagnostics[0])).toBe(message);
   });
 
   it("allows `self` again in a method of an impl nested inside a method body", (): void => {
@@ -601,14 +604,6 @@ describe("self/Self in expression position inside a method body", (): void => {
       kind: "ExpressionStatement",
       expression: { kind: "PathExpression", path: { segments: ["self"] } },
     });
-  });
-
-  it("still rejects bare `self` in a free top-level function body", (): void => {
-    const { tokens } = tokenize("fn m() { self; }");
-    const { program, diagnostics } = parse(tokens);
-    expect(program).toEqual(none());
-    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(messageOf(diagnostics[0])).toBe("`self` is not yet supported");
   });
 
   it("parses a deeply nested expression containing `self` in a method body", (): void => {
