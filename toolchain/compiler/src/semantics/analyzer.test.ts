@@ -4162,6 +4162,22 @@ describe("associated types and trait projections", (): void => {
       expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveI32Type" });
     });
 
+    it("instantiates a trait method's `-> Self` return to the concrete impl target", (): void => {
+      const result = diagnose(`
+        trait Dup { fn dup(&self) -> Self; }
+        struct P { v: i32 }
+        impl Dup for P { fn dup(&self) -> Self { P { v: 0 } } }
+        fn main() {
+          let p = P { v: 1 };
+          let c = p.dup();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const cType = mainLetType(result, "c");
+      assert(cType.kind === "StructType", "expected `c` to be a struct type");
+      expect(cType.name.split("::").pop()).toBe("P");
+    });
+
     it("resolves a method on a `dyn Trait` receiver against the trait's method set", (): void => {
       const result = diagnose(`
         trait Draw { fn draw(&self) -> str; }

@@ -5281,6 +5281,14 @@ function resolveNamedType(
   if (type.path.segments.length === 1) {
     const name = type.path.segments[0];
     assert(name !== undefined, "Name segment missing");
+    if (name === "Self") {
+      const self = currentSelfContext(ctx);
+      if (self?.kind === "Impl") return self.targetType;
+      if (self?.kind === "Trait") {
+        return { kind: "NamedType", tokenId: fallbackTokenId, path: type.path };
+      }
+      return { kind: "UnitType", tokenId: fallbackTokenId };
+    }
     if (isDeclaredGenericParam(ctx, name) && type.typeArguments.length === 0) {
       return { kind: "NamedType", tokenId: fallbackTokenId, path: type.path };
     }
@@ -6629,6 +6637,28 @@ interface IndexedMethod {
     | { readonly kind: "trait"; readonly traitId: string };
 }
 
+/** Replaces a bare `Self` (also under `&`/`&mut`) with the concrete impl
+ * target, so a trait method declared `-> Self` lands in the concrete type
+ * index as `-> P` rather than staying abstract. `Self::Assoc` and `Self`
+ * nested in a generic argument keep their abstract form - resolving those
+ * needs the impl's own analysis pass. */
+function substituteSelfType(
+  type: Semantics.Type,
+  target: Semantics.Type,
+): Semantics.Type {
+  if (
+    type.kind === "NamedType" &&
+    type.path.segments.length === 1 &&
+    type.path.segments[0] === "Self"
+  ) {
+    return target;
+  }
+  if (type.kind === "ReferenceType") {
+    return { ...type, referent: substituteSelfType(type.referent, target) };
+  }
+  return type;
+}
+
 /** Every method of `traitId` and, transitively, of its supertraits. */
 function traitMethodSet(
   ctx: AnalysisContext,
@@ -6673,11 +6703,24 @@ function buildMethodIndex(
     const targetType = resolveImplSelfTargetType(ctx, shallow);
     const entries = [...(ctx.methodIndex.get(targetId.value) ?? [])];
     if (isSome(shallow.traitRef)) {
+      const traitMethods = traitMethodSet(
+        ctx,
+        resolveTraitIdentity(shallow.traitRef.value.name, scope),
+      );
+      const concreteTarget =
+        targetType.kind === "StructType" || targetType.kind === "EnumType"
+          ? targetType
+          : undefined;
       entries.push(
-        ...traitMethodSet(
-          ctx,
-          resolveTraitIdentity(shallow.traitRef.value.name, scope),
-        ),
+        ...(concreteTarget === undefined
+          ? traitMethods
+          : traitMethods.map((m): IndexedMethod => ({
+              ...m,
+              params: m.params.map((p) =>
+                substituteSelfType(p, concreteTarget),
+              ),
+              returnType: substituteSelfType(m.returnType, concreteTarget),
+            }))),
       );
     } else {
       entries.push(...indexInherentMethods(ctx, item, targetType));
