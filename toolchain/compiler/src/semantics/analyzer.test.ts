@@ -4740,6 +4740,35 @@ describe("associated types and trait projections", (): void => {
       );
     });
 
+    it("resolves a receiverless `Trait::assoc()` call without demanding a receiver argument", (): void => {
+      const result = diagnose(`
+        trait Factory { fn zero() -> i32; }
+        fn main() { let r = Factory::zero(); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveI32Type" });
+    });
+
+    it("stores the coerced arguments on an associated-call node", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn take(a: i64) -> i32 { 0 } }
+        fn main() { let r = P::take(2); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const main = result.program.items.find(
+        (item) =>
+          item.kind === "Function" && item.signature.name.text === "main",
+      );
+      assert(main?.kind === "Function", "expected a `main` function");
+      const letStmt = main.body.statements[0];
+      assert(letStmt?.kind === "LetStatement", "expected a let statement");
+      assert(isSome(letStmt.initializer), "expected an initializer");
+      const call = letStmt.initializer.value;
+      assert(call.kind === "CallExpression", "expected a call expression");
+      expect(call.arguments[0]?.type).toEqual({ kind: "PrimitiveI64Type" });
+    });
+
     it("resolves `Trait::method(x)` where a plain `x.method()` would be ambiguous", (): void => {
       const result = diagnose(`
         trait A { fn m(&self) -> i32; }

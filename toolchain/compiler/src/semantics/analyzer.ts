@@ -6873,14 +6873,16 @@ function checkMethodCallArgs(
 
 /** A UFCS call (`Trait::m(receiver, ...rest)` / `Type::m(receiver, ...rest)`):
  * the receiver fills the first argument slot, so the total expected count is
- * one more than the signature's own parameters. */
+ * one more than the signature's own parameters. The receiver argument itself
+ * is not type-checked here (verifying it implements the trait is a separate
+ * concern); the rest are checked and coerced. */
 function checkUfcsCallArgs(
   ctx: AnalysisContext,
   callTokenId: number,
   methodName: string,
   method: IndexedMethod,
   args: readonly Semantics.Expression[],
-): void {
+): readonly Semantics.Expression[] {
   if (args.length !== method.params.length + 1) {
     emitError(
       ctx,
@@ -6893,16 +6895,39 @@ function checkUfcsCallArgs(
       },
       callTokenId,
     );
-    return;
+    return args;
   }
-  checkMethodCallArgs(
+  const [receiverArg, ...rest] = args;
+  const checkedRest = checkMethodCallArgs(
     ctx,
     callTokenId,
     methodName,
     method.params,
     method.genericParams,
-    args.slice(1),
+    rest,
   );
+  return receiverArg === undefined ? args : [receiverArg, ...checkedRest];
+}
+
+/** Checks a resolved associated call's arguments, treating a method (one with
+ * a receiver) as a UFCS call and an associated function as a plain call. */
+function checkAssociatedCallArgs(
+  ctx: AnalysisContext,
+  callTokenId: number,
+  name: string,
+  method: IndexedMethod,
+  args: readonly Semantics.Expression[],
+): readonly Semantics.Expression[] {
+  return isSome(method.receiver)
+    ? checkUfcsCallArgs(ctx, callTokenId, name, method, args)
+    : checkMethodCallArgs(
+        ctx,
+        callTokenId,
+        name,
+        method.params,
+        method.genericParams,
+        args,
+      );
 }
 
 function analyzeMethodCallExpression(
@@ -6997,11 +7022,16 @@ function resolveAssocHead(
 /** `Type::f(...)` / `Self::f(...)` / `Trait::f(receiver, ...)`. Runs before
  * `analyzeCall`'s ordinary callee analysis so a struct/trait head doesn't
  * surface a misleading "cannot find enum" from enum-variant resolution. */
+interface AssociatedCallResult {
+  readonly type: Semantics.Type;
+  readonly args: readonly Semantics.Expression[];
+}
+
 function analyzeAssociatedCall(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
   args: readonly Semantics.Expression[],
-): Option<{ readonly type: Semantics.Type }> {
+): Option<AssociatedCallResult> {
   if (call.callee.kind !== "PathExpression") return none();
   const { segments } = call.callee.path;
   if (segments.length !== 2) return none();
@@ -7010,52 +7040,27 @@ function analyzeAssociatedCall(
   const resolved = resolveAssocHead(ctx, head);
   if (resolved === undefined) return none();
 
-  if (resolved.kind === "trait") {
-    const method = traitMethodSet(ctx, resolved.traitId).find(
-      (m) => m.name === name,
-    );
-    if (method === undefined) {
-      emitError(
-        ctx,
-        {
-          kind: "SemNoAssociatedItem",
-          name,
-          typeName: resolved.bareName,
-        },
-        call.tokenId,
-      );
-      return some({ type: { kind: "UnitType", tokenId: call.tokenId } });
-    }
-    checkUfcsCallArgs(ctx, call.tokenId, name, method, args);
-    return some({ type: method.returnType });
-  }
-
-  const candidates = (ctx.methodIndex.get(resolved.typeId) ?? []).filter(
-    (m) => m.name === name,
-  );
-  const assocFn = candidates.find((m) => !isSome(m.receiver));
-  if (assocFn !== undefined) {
-    checkMethodCallArgs(
+  const method =
+    resolved.kind === "trait"
+      ? traitMethodSet(ctx, resolved.traitId).find((m) => m.name === name)
+      : (ctx.methodIndex.get(resolved.typeId) ?? []).find(
+          (m) => m.name === name,
+        );
+  if (method === undefined) {
+    emitError(
       ctx,
+      { kind: "SemNoAssociatedItem", name, typeName: resolved.bareName },
       call.tokenId,
-      name,
-      assocFn.params,
-      assocFn.genericParams,
-      args,
     );
-    return some({ type: assocFn.returnType });
+    return some({
+      type: { kind: "UnitType", tokenId: call.tokenId },
+      args,
+    });
   }
-  const instanceMethod = candidates.find((m) => isSome(m.receiver));
-  if (instanceMethod !== undefined) {
-    checkUfcsCallArgs(ctx, call.tokenId, name, instanceMethod, args);
-    return some({ type: instanceMethod.returnType });
-  }
-  emitError(
-    ctx,
-    { kind: "SemNoAssociatedItem", name, typeName: resolved.bareName },
-    call.tokenId,
-  );
-  return some({ type: { kind: "UnitType", tokenId: call.tokenId } });
+  return some({
+    type: method.returnType,
+    args: checkAssociatedCallArgs(ctx, call.tokenId, name, method, args),
+  });
 }
 
 /** `Type::CONST` / `Self::CONST` in value position (no call). */
@@ -8180,7 +8185,7 @@ function analyzeCall(
     return {
       ...call,
       callee: associatedCallee,
-      arguments: args,
+      arguments: [...associated.value.args],
       type: associated.value.type,
     };
   }
