@@ -7063,6 +7063,7 @@ function analyzeMethodCallExpression(
     },
     arguments: args,
     type: unit,
+    receiverKind: none(),
   };
   // A shared borrow is transparent for method lookup; look through it (and
   // through a `&mut`) to the referent. Autoderef past one level, and checking
@@ -7082,6 +7083,22 @@ function analyzeMethodCallExpression(
     expression.tokenId,
   );
   if (method === undefined) return base;
+  if (
+    isSome(method.receiver) &&
+    method.receiver.value.byRef &&
+    method.receiver.value.mutable &&
+    receiver.type.kind === "ReferenceType" &&
+    !receiver.type.mutable
+  ) {
+    emitError(
+      ctx,
+      {
+        kind: "SemMutMethodThroughSharedRef",
+        method: expression.method.text,
+      },
+      expression.tokenId,
+    );
+  }
   return {
     ...base,
     arguments: [
@@ -7095,6 +7112,7 @@ function analyzeMethodCallExpression(
       ),
     ],
     type: method.returnType,
+    receiverKind: method.receiver,
   };
 }
 

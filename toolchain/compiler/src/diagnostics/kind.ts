@@ -234,6 +234,7 @@ export type DiagnosticKind =
   | { readonly kind: "SemFieldSpecifiedMoreThanOnce"; readonly field: string }
   | { readonly kind: "SemSelfOutsideTraitOrImpl" }
   | { readonly kind: "SemSelfWithoutReceiver" }
+  | { readonly kind: "SemMutMethodThroughSharedRef"; readonly method: string }
   | { readonly kind: "SemGenericParamShadowsType"; readonly name: string }
   | { readonly kind: "SemBlanketImplGlobalScope"; readonly trait: string }
   | {
@@ -692,6 +693,7 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemFieldSpecifiedMoreThanOnce", "HEDGE-NAME-005"],
   ["SemSelfOutsideTraitOrImpl", "HEDGE-NAME-006"],
   ["SemSelfWithoutReceiver", "HEDGE-NAME-007"],
+  ["SemMutMethodThroughSharedRef", "HEDGE-BORROW-CHECK-007"],
   ["SemGenericParamShadowsType", "HEDGE-LINT-002"],
   ["SemBlanketImplGlobalScope", "HEDGE-LINT-003"],
   ["SemImplGlobalScope", "HEDGE-LINT-003"],

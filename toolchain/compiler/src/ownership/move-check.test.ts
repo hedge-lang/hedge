@@ -1107,6 +1107,36 @@ describe("move-check", (): void => {
       expect(messageOf(diagnostics[0])).toBe("use of moved value `self`");
     });
 
+    it("moves the receiver of a by-value method call", (): void => {
+      const { diagnostics } = check(`
+        struct P { v: i32 }
+        fn take(p: P) {}
+        impl P { fn consume(self) {} }
+        fn main() {
+          let p = P { v: 1 };
+          p.consume();
+          take(p);
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(messageOf(diagnostics[0])).toBe("use of moved value `p`");
+    });
+
+    it("does not move the receiver of a `&self` method call", (): void => {
+      const { diagnostics } = check(`
+        struct P { v: i32 }
+        fn take(p: P) {}
+        impl P { fn peek(&self) {} }
+        fn main() {
+          let p = P { v: 1 };
+          p.peek();
+          take(p);
+        }
+      `);
+      expect(diagnostics).toEqual([]);
+    });
+
     it("rejects using a by-value `self` receiver after it is moved", (): void => {
       const { diagnostics } = check(`
         struct P { v: i32 }

@@ -224,6 +224,8 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return "`Self` can only be used inside a trait or impl block";
     case "SemSelfWithoutReceiver":
       return "`self` is only valid in a method that has a `self` receiver";
+    case "SemMutMethodThroughSharedRef":
+      return `cannot call \`&mut self\` method \`${kind.method}\` through a shared reference`;
     case "SemGenericParamShadowsType":
       return `generic parameter \`${kind.name}\` shadows an existing type of the same name`;
     case "SemBlanketImplGlobalScope":

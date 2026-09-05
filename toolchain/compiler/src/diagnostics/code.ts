@@ -66,6 +66,7 @@ export type DiagnosticCode =
   | "HEDGE-BORROW-CHECK-003"
   | "HEDGE-BORROW-CHECK-005" // expression is not a borrowable place
   | "HEDGE-BORROW-CHECK-006" // cannot assign through an immutable binding
+  | "HEDGE-BORROW-CHECK-007" // `&mut self` method called through a shared reference
   | "HEDGE-LIFETIME-001"
   | "HEDGE-LIFETIME-002"
   // Moves and drops.

@@ -818,6 +818,10 @@ export interface MethodCallExpression extends DecoratedAstNode {
   readonly receiver: Expression;
   readonly method: Identifier;
   readonly arguments: Expression[];
+  /** The resolved method's receiver form (`self` / `&self` / `&mut self`),
+   * so the ownership passes can treat the receiver as a move or a borrow.
+   * `none()` when the call did not resolve. */
+  readonly receiverKind: Option<MethodReceiver>;
 }
 
 export interface IndexExpression extends DecoratedAstNode {

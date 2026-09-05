@@ -4510,6 +4510,27 @@ describe("associated types and trait projections", (): void => {
         "method `m` takes 1 argument(s), but 0 were supplied",
       );
     });
+
+    it("rejects calling an `&mut self` method through a shared reference", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn bump(&mut self) {} }
+        fn poke(p: &P) { p.bump(); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "cannot call `&mut self` method `bump` through a shared reference",
+      );
+    });
+
+    it("accepts calling an `&mut self` method through a mutable reference", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { fn bump(&mut self) {} }
+        fn poke(p: &mut P) { p.bump(); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
   });
 
   describe("method-body analysis: self and Self in expression position", (): void => {

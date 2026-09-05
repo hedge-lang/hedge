@@ -752,12 +752,25 @@ function walkExpression(
       }
       walkExpression(ctx, expression.operand, state, scopeStack);
       return;
-    case "MethodCallExpression":
-      walkExpression(ctx, expression.receiver, state, scopeStack);
+    case "MethodCallExpression": {
+      // A `self` (by-value) receiver moves the place it names, exactly like
+      // passing it to a function; a `&self`/`&mut self` receiver only borrows
+      // it. An unresolved call (`receiverKind` is `none()`) is treated as a
+      // borrow so a prior resolution diagnostic doesn't cascade a move error.
+      const byValueReceiver =
+        isSome(expression.receiverKind) && !expression.receiverKind.value.byRef;
+      if (byValueReceiver && expression.receiver.kind === "PathExpression") {
+        useOrMove(ctx, expression.receiver, state, scopeStack, true);
+      } else if (byValueReceiver) {
+        walkExpression(ctx, expression.receiver, state, scopeStack);
+      } else {
+        walkNonMovingPlace(ctx, expression.receiver, state, scopeStack);
+      }
       for (const argument of expression.arguments) {
         walkExpression(ctx, argument, state, scopeStack);
       }
       return;
+    }
     case "IndexExpression":
       // The object is a *use*, not a move, mirroring FieldAccessExpression's
       // own treatment above: `arr[i]` reads through the array, it doesn't
