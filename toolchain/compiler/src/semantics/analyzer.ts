@@ -5299,11 +5299,6 @@ function resolveProjectionType(
     : undefined;
 }
 
-/**
- * Must resolve user-declared names too, not just primitives, or every
- * struct and enum in a signature becomes `()` and call-site checking
- * silently passes. Non-emitting counterpart to `validateNamedType`.
- */
 /** Non-emitting `Self` resolution: concrete impl target inside an impl,
  * abstract `Self` inside a trait, error-recovery unit elsewhere (the
  * emitting `validateNamedType` reports the last case). */
@@ -5320,6 +5315,11 @@ function resolveSelfNamedType(
   return { kind: "UnitType", tokenId: fallbackTokenId };
 }
 
+/**
+ * Must resolve user-declared names too, not just primitives, or every
+ * struct and enum in a signature becomes `()` and call-site checking
+ * silently passes. Non-emitting counterpart to `validateNamedType`.
+ */
 function resolveNamedType(
   ctx: AnalysisContext,
   type: Parser.NamedType,
