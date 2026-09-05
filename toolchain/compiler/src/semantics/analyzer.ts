@@ -5282,13 +5282,21 @@ function resolveProjectionType(
 ): Semantics.Type | undefined {
   const baseName = type.path.segments[0];
   const assocName = type.path.segments[1];
-  if (
-    baseName === undefined ||
-    assocName === undefined ||
-    !isDeclaredGenericParam(ctx, baseName)
-  ) {
+  if (baseName === undefined || assocName === undefined) return undefined;
+  if (baseName === "Self") {
+    const self = currentSelfContext(ctx);
+    if (self?.kind === "Impl") return self.associatedTypes.get(assocName);
+    if (self?.kind === "Trait" && self.associatedTypes.includes(assocName)) {
+      return makeProjectionType(
+        fallbackTokenId,
+        self.traitName,
+        assocName,
+        "Self",
+      );
+    }
     return undefined;
   }
+  if (!isDeclaredGenericParam(ctx, baseName)) return undefined;
   const result = resolveAssociatedTypeTrait(
     ctx,
     declaredGenericParamBounds(ctx, baseName),
@@ -6679,14 +6687,14 @@ interface IndexedMethod {
     | { readonly kind: "trait"; readonly traitId: string };
 }
 
-/** Replaces a bare `Self` (also under `&`/`&mut`) with the concrete impl
- * target, so a trait method declared `-> Self` lands in the concrete type
- * index as `-> P` rather than staying abstract. `Self::Assoc` and `Self`
- * nested in a generic argument keep their abstract form - resolving those
- * needs the impl's own analysis pass. */
+/** Rewrites a trait method's abstract signature against a concrete impl: a
+ * bare `Self` (also under `&`/`&mut`) becomes the impl target, and a
+ * `Self::Assoc` projection becomes the impl's own `type Assoc = ...`
+ * definition. `Self` nested in a generic argument keeps its abstract form. */
 function substituteSelfType(
   type: Semantics.Type,
   target: Semantics.Type,
+  associatedTypes: ReadonlyMap<string, Semantics.Type>,
 ): Semantics.Type {
   if (
     type.kind === "NamedType" &&
@@ -6695,8 +6703,18 @@ function substituteSelfType(
   ) {
     return target;
   }
+  if (
+    type.kind === "Projection" &&
+    type.selfType.kind === "NamedType" &&
+    type.selfType.path.segments[0] === "Self"
+  ) {
+    return associatedTypes.get(type.assocName) ?? type;
+  }
   if (type.kind === "ReferenceType") {
-    return { ...type, referent: substituteSelfType(type.referent, target) };
+    return {
+      ...type,
+      referent: substituteSelfType(type.referent, target, associatedTypes),
+    };
   }
   return type;
 }
@@ -6745,24 +6763,9 @@ function buildMethodIndex(
     const targetType = resolveImplSelfTargetType(ctx, shallow);
     const entries = [...(ctx.methodIndex.get(targetId.value) ?? [])];
     if (isSome(shallow.traitRef)) {
-      const traitMethods = traitMethodSet(
-        ctx,
-        resolveTraitIdentity(shallow.traitRef.value.name, scope),
-      );
-      const concreteTarget =
-        targetType.kind === "StructType" || targetType.kind === "EnumType"
-          ? targetType
-          : undefined;
+      const traitId = resolveTraitIdentity(shallow.traitRef.value.name, scope);
       entries.push(
-        ...(concreteTarget === undefined
-          ? traitMethods
-          : traitMethods.map((m): IndexedMethod => ({
-              ...m,
-              params: m.params.map((p) =>
-                substituteSelfType(p, concreteTarget),
-              ),
-              returnType: substituteSelfType(m.returnType, concreteTarget),
-            }))),
+        ...indexTraitImplMethods(ctx, traitId, targetId.value, targetType),
       );
     } else {
       entries.push(...indexInherentMethods(ctx, item, targetType));
@@ -6770,6 +6773,32 @@ function buildMethodIndex(
     ctx.methodIndex.set(targetId.value, entries);
     indexAssociatedConsts(ctx, item, targetType, targetId.value);
   }
+}
+
+/** A trait impl's methods, with the trait's abstract `Self` / `Self::Assoc`
+ * rewritten against this impl's concrete target and its own associated-type
+ * definitions. A non-nominal target (a block-local type unresolved in the
+ * prepass) leaves the signatures abstract. */
+function indexTraitImplMethods(
+  ctx: AnalysisContext,
+  traitId: string,
+  targetId: string,
+  targetType: Semantics.Type,
+): readonly IndexedMethod[] {
+  const traitMethods = traitMethodSet(ctx, traitId);
+  if (targetType.kind !== "StructType" && targetType.kind !== "EnumType") {
+    return traitMethods;
+  }
+  const associatedTypes =
+    findRegisteredImpl(ctx, targetId, traitId)?.associatedTypeDefs ??
+    new Map<string, Semantics.Type>();
+  return traitMethods.map((m): IndexedMethod => ({
+    ...m,
+    params: m.params.map((p) =>
+      substituteSelfType(p, targetType, associatedTypes),
+    ),
+    returnType: substituteSelfType(m.returnType, targetType, associatedTypes),
+  }));
 }
 
 function indexAssociatedConsts(
