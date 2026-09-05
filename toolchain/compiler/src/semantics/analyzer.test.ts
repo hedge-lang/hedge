@@ -4811,6 +4811,17 @@ describe("associated types and trait projections", (): void => {
       expect(mainLetType(result, "r")).toEqual({ kind: "PrimitiveI32Type" });
     });
 
+    it("rejects an associated constant whose initializer does not match its type", (): void => {
+      const result = diagnose(`
+        struct P { v: i32 }
+        impl P { const N: i32 = "x"; }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "const `N`'s initializer does not match its declared type i32",
+      );
+    });
+
     it("resolves `Self::CONST` inside a method body", (): void => {
       const result = diagnose(`
         struct P { v: i32 }

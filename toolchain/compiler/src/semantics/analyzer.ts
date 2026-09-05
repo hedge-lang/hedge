@@ -2436,9 +2436,40 @@ function analyzeImplDecl(
       ];
     },
   );
+  for (const decl of item.items) {
+    if (decl.kind === "Const") checkAssociatedConst(ctx, decl);
+  }
   popSelfContext(ctx);
 
   return { ...shallow, resolvedMethods, associatedTypeDefs, methodBodies };
+}
+
+/** Type-checks an `impl T { const N: U = ...; }` initializer against its
+ * declared type, under the impl's `Self`-context. The index publishes `T::N`
+ * from the declared type regardless (recover-as-declared), so a bad
+ * initializer is one diagnostic, not two. */
+function checkAssociatedConst(
+  ctx: AnalysisContext,
+  decl: Parser.ConstDecl,
+): void {
+  const declaredType = validateSlice1Type(ctx, decl.type, decl.type.tokenId);
+  const { mismatch } = reconcileExpressionType(
+    ctx,
+    analyzeExpression(ctx, decl.value),
+    declaredType,
+    decl.value.tokenId,
+  );
+  if (mismatch) {
+    emitError(
+      ctx,
+      {
+        kind: "SemConstInitializerTypeMismatch",
+        name: decl.name.text,
+        declaredType: describeType(declaredType),
+      },
+      decl.value.tokenId,
+    );
+  }
 }
 
 /**
