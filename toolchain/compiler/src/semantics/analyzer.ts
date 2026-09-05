@@ -5304,6 +5304,22 @@ function resolveProjectionType(
  * struct and enum in a signature becomes `()` and call-site checking
  * silently passes. Non-emitting counterpart to `validateNamedType`.
  */
+/** Non-emitting `Self` resolution: concrete impl target inside an impl,
+ * abstract `Self` inside a trait, error-recovery unit elsewhere (the
+ * emitting `validateNamedType` reports the last case). */
+function resolveSelfNamedType(
+  ctx: AnalysisContext,
+  type: Parser.NamedType,
+  fallbackTokenId: number,
+): Semantics.Type {
+  const self = currentSelfContext(ctx);
+  if (self?.kind === "Impl") return self.targetType;
+  if (self?.kind === "Trait") {
+    return { kind: "NamedType", tokenId: fallbackTokenId, path: type.path };
+  }
+  return { kind: "UnitType", tokenId: fallbackTokenId };
+}
+
 function resolveNamedType(
   ctx: AnalysisContext,
   type: Parser.NamedType,
@@ -5313,12 +5329,7 @@ function resolveNamedType(
     const name = type.path.segments[0];
     assert(name !== undefined, "Name segment missing");
     if (name === "Self") {
-      const self = currentSelfContext(ctx);
-      if (self?.kind === "Impl") return self.targetType;
-      if (self?.kind === "Trait") {
-        return { kind: "NamedType", tokenId: fallbackTokenId, path: type.path };
-      }
-      return { kind: "UnitType", tokenId: fallbackTokenId };
+      return resolveSelfNamedType(ctx, type, fallbackTokenId);
     }
     if (isDeclaredGenericParam(ctx, name) && type.typeArguments.length === 0) {
       return { kind: "NamedType", tokenId: fallbackTokenId, path: type.path };

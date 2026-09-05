@@ -1089,6 +1089,24 @@ describe("move-check", (): void => {
   });
 
   describe("method bodies", (): void => {
+    it("checks a method body of an impl nested inside a function", (): void => {
+      const { diagnostics } = check(`
+        struct P { v: i32 }
+        fn take(p: P) {}
+        fn outer() {
+          impl P {
+            fn consume(self) {
+              take(self);
+              take(self);
+            }
+          }
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(messageOf(diagnostics[0])).toBe("use of moved value `self`");
+    });
+
     it("rejects using a by-value `self` receiver after it is moved", (): void => {
       const { diagnostics } = check(`
         struct P { v: i32 }

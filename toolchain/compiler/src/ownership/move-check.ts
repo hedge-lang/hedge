@@ -42,6 +42,7 @@ import type {
   Declaration,
 } from "./control-flow-graph.js";
 import { buildControlFlowGraph } from "./control-flow-graph.js";
+import { collectOwnedFunctions } from "./owned-functions.js";
 
 /**
  * A binding's move state within one function body. This vocabulary is
@@ -1487,13 +1488,17 @@ export function analyzeOwnership(
     walkFunction(ctx, fn);
     return { graph, drops, conditionalDrops, branchDrops };
   };
-  for (const item of program.items) {
-    if (item.kind === "Function") {
-      functions.set(item.signature.name.text, ownershipOf(item));
-    } else if (item.kind === "Impl" || item.kind === "Trait") {
-      // Diagnostics only - a method's own `FunctionOwnership` has no consumer
-      // until witness codegen exists, and two impls can share a method name.
-      for (const method of item.methodBodies) ownershipOf(method);
+  // Only top-level functions land in the returned `functions` map (keyed by
+  // name, for codegen); a method body's own `FunctionOwnership` has no
+  // consumer yet and two impls can share a method name. Every function still
+  // gets walked for diagnostics.
+  const topLevel = new Set(
+    program.items.filter((item) => item.kind === "Function"),
+  );
+  for (const fn of collectOwnedFunctions(program)) {
+    const ownership = ownershipOf(fn);
+    if (topLevel.has(fn)) {
+      functions.set(fn.signature.name.text, ownership);
     }
   }
   return { diagnostics, functions };

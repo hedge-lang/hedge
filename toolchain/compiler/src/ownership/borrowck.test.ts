@@ -747,6 +747,24 @@ describe("pattern-derived &/&mut sub-bindings", (): void => {
   });
 
   describe("method bodies", (): void => {
+    it("checks a method body of an impl nested inside a function", (): void => {
+      const diagnostics = check(`
+        fn outer() {
+          struct P { x: i32 }
+          impl P {
+            fn bad(&self) {
+              let r = &mut self.x;
+              print(r);
+            }
+          }
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      expect(messageOf(diagnostics[0])).toBe(
+        "cannot borrow `self.x` as mutable because `self` is a shared reference.",
+      );
+    });
+
     it("accepts a mutable borrow of a field through a `&mut self` receiver", (): void => {
       const diagnostics = check(`
         struct P { x: i32, y: i32 }
