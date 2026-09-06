@@ -4625,6 +4625,13 @@ describe("associated types and trait projections", (): void => {
       );
     });
 
+    it("suppresses the return check for a `-> Self` body in a trait default method", (): void => {
+      const result = diagnose(`
+        trait Dup { fn dup(&self) -> Self { self.dup() } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("reports a return-type mismatch on a `-> Self::Assoc` body when the impl defines the projection as `()`", (): void => {
       const result = diagnose(`
         trait It { type Item; fn first(&self) -> Self::Item; }

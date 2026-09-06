@@ -970,12 +970,15 @@ function isSelfType(type: Parser.Type): boolean {
   );
 }
 
-/** A `Self`-rooted type (`Self`, `Self::Assoc`, under any `&`/`&mut`),
- * reported as `{ assoc }` - `assoc` is the projected name for `Self::Assoc`,
- * `undefined` for a bare `Self`. `undefined` return means not `Self`-rooted. */
-function selfRootedProjection(
-  type: Parser.Type,
-): { readonly assoc: string | undefined } | undefined {
+/** A `Self`-rooted type decomposed: `assoc` is the projected name for
+ * `Self::Assoc`, `undefined` for a bare `Self`. */
+interface SelfRootedReturn {
+  readonly assoc: string | undefined;
+}
+
+/** `Self`, `Self::Assoc`, or either under any number of `&`/`&mut` wrappers;
+ * `undefined` for anything else. */
+function selfRootedProjection(type: Parser.Type): SelfRootedReturn | undefined {
   if (type.kind === "ReferenceType") {
     return selfRootedProjection(type.referent);
   }
@@ -999,11 +1002,7 @@ function returnTypeResistsBodyCheck(
   const rooted = selfRootedProjection(declaredReturnType);
   if (rooted === undefined) return false;
   const self = currentSelfContext(ctx);
-  if (self?.kind !== "Impl") return true;
-  const targetIsNominal =
-    self.targetType.kind === "StructType" ||
-    self.targetType.kind === "EnumType";
-  if (!targetIsNominal) return true;
+  if (self?.kind !== "Impl" || !isNominalType(self.targetType)) return true;
   return rooted.assoc !== undefined && !self.associatedTypes.has(rooted.assoc);
 }
 
@@ -2152,11 +2151,9 @@ function resolveTraitMethodSignature(
  * target. Used to resolve `Self { .. }` / `Self(..)` in a method body. */
 function selfTargetName(ctx: AnalysisContext): string | undefined {
   const self = currentSelfContext(ctx);
-  if (self?.kind !== "Impl") return undefined;
-  const target = self.targetType;
-  return target.kind === "StructType" || target.kind === "EnumType"
-    ? bareTypeName(target.name)
-    : undefined;
+  if (self?.kind !== "Impl" || !isNominalType(self.targetType))
+    return undefined;
+  return bareTypeName(self.targetType.name);
 }
 
 /** Substitutes a raw path-head name that's literally `Self` for the concrete
@@ -2579,6 +2576,14 @@ function boundsImplyTrait(
   });
 }
 
+/** A struct or enum type - the one shape a `Self` target, an impl target, or
+ * a UFCS receiver ever resolves to nominally. */
+function isNominalType(
+  type: Semantics.Type,
+): type is Semantics.StructType | Semantics.EnumType {
+  return type.kind === "StructType" || type.kind === "EnumType";
+}
+
 /**
  * A concrete type's own real identity for registry lookup - the full
  * scoped name for a struct/enum (matching what `resolveStructOrEnumIdentity`
@@ -2588,9 +2593,7 @@ function boundsImplyTrait(
  * for anything else, which carries no shadowing ambiguity to begin with.
  */
 function typeIdentity(type: Semantics.Type): string {
-  return type.kind === "StructType" || type.kind === "EnumType"
-    ? type.name
-    : describeType(type);
+  return isNominalType(type) ? type.name : describeType(type);
 }
 
 /**
@@ -6819,7 +6822,7 @@ function indexTraitImplMethods(
   targetType: Semantics.Type,
 ): readonly IndexedMethod[] {
   const traitMethods = traitMethodSet(ctx, traitId);
-  if (targetType.kind !== "StructType" && targetType.kind !== "EnumType") {
+  if (!isNominalType(targetType)) {
     return traitMethods;
   }
   const associatedTypes =
@@ -7219,9 +7222,7 @@ function checkUfcsReceiverImplementsTrait(
     receiverArg.type.kind === "ReferenceType"
       ? receiverArg.type.referent
       : receiverArg.type;
-  if (receiverType.kind !== "StructType" && receiverType.kind !== "EnumType") {
-    return;
-  }
+  if (!isNominalType(receiverType)) return;
   if (
     !isSome(
       resolveTraitBoundForTypeName(ctx, typeIdentity(receiverType), traitId),
