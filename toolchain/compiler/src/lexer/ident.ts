@@ -51,7 +51,7 @@ function getIdent(source: string, start: number, offset: number): Token {
  * Tokenize an identifier starting at `start` in `source`, appending it to `tokens`.
  *
  * @param tokens The token list to append to.
- * @param diagnostics The diagnostic list to append to.
+ * @param _diagnostics The diagnostic list to append to.
  * @param source The source to scan.
  * @param start The index to start scanning at.
  *
@@ -60,11 +60,10 @@ function getIdent(source: string, start: number, offset: number): Token {
  */
 export function tokenizeIdent(
   tokens: Token[],
-  diagnostics: Diagnostic[],
+  _diagnostics: Diagnostic[],
   source: string,
   start: number,
 ): Option<number> {
-  void diagnostics;
   const ch = source.at(start);
   if (ch === undefined || !isIdentStart(ch)) return none();
   const token = getIdent(source, start, 0);

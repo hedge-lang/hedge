@@ -102,21 +102,19 @@ export function isLineComment(
 /**
  * Parse a line comment starting at `start` in `source`, appending it to `tokens`.
  *
- * @param tokens The token list to append to.
- * @param diagnostics The diagnostic list to append to.
+ * @param _tokens The token list to append to.
+ * @param _diagnostics The diagnostic list to append to.
  * @param source The source to scan.
  * @param start The index to start scanning at.
  *
  * @returns `Some(index)` with the index of the first character after the comment.
  */
 export function tokenizeLineComment(
-  tokens: Token[],
-  diagnostics: Diagnostic[],
+  _tokens: Token[],
+  _diagnostics: Diagnostic[],
   source: string,
   start: number,
 ): Option<number> {
-  void tokens;
-  void diagnostics;
   for (let i = start + 2; i < source.length; i++) {
     const ch = source[i];
     if (ch === "\n" || ch === "\r") {
@@ -160,7 +158,7 @@ export function isBlockComment(
 /**
  * Parse a block comment starting at `start` in `source`, appending it to `tokens`.
  *
- * @param tokens The token list to append to.
+ * @param _tokens The token list to append to.
  * @param diagnostics The diagnostic list to append to.
  * @param source The source to scan.
  * @param start The index to start scanning at.
@@ -168,14 +166,13 @@ export function isBlockComment(
  * @returns `Some(index)` with the index of the first character after the comment.
  */
 export function tokenizeBlockComment(
-  tokens: Token[],
+  _tokens: Token[],
   diagnostics: Diagnostic[],
   source: string,
   start: number,
 ): Option<number> {
   const OFFSET_START = 2;
   const OFFSET_END = 2;
-  void tokens;
 
   let nesting = 0;
   for (let i = start + OFFSET_START; i < source.length; i++) {

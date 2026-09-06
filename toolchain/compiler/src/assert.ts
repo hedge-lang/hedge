@@ -7,7 +7,6 @@ export function assert(
   }
 }
 
-export function assertNever(shouldBeNever: never, message?: string): never {
-  void shouldBeNever;
+export function assertNever(_shouldBeNever: never, message?: string): never {
   throw new Error(message ?? "Expected value to be of type 'never'");
 }
