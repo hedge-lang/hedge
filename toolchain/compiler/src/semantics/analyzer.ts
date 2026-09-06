@@ -3069,10 +3069,10 @@ function resolveStructOrEnumIdentity(
 }
 
 /** The concrete `StructType`/`EnumType` for a name resolved through the
- * structural scope rather than live frames - the prepass's stand-in for
- * `lookupStructOrEnumType` when a block-local target isn't registered yet,
- * so a nested impl's `Self`-typed method signatures still index concretely.
- * `typeIdentity` of the result equals `resolveStructOrEnumIdentity(name)`. */
+ * structural scope rather than live frames - the prepass resolution, since a
+ * block-local target isn't in scope yet. `typeIdentity` of the result equals
+ * `resolveStructOrEnumIdentity(name)` and matches the analyzed decl's own
+ * `.type`, so a `methodIndex` key built from it lines up at every call site. */
 function structuralStructOrEnumType(
   name: string,
   scope: StructuralScope,
@@ -6773,32 +6773,23 @@ function buildMethodIndex(
     if (item.kind !== "Impl") continue;
     const shallow = buildImplDecl(item);
     if (!isSome(shallow.targetTypeName) || shallow.isBlanket) continue;
-    // Resolve the target identity through the structural scope, not live
-    // frames - block-local struct/enum declarations aren't in scope yet
-    // during this prepass. Matches `registerOneImpl`'s own resolution, so
-    // the key equals what `typeIdentity` produces for the analyzed type.
-    const targetId = resolveStructOrEnumIdentity(
+    const targetType = structuralStructOrEnumType(
       shallow.targetTypeName.value,
       scope,
     );
-    if (!isSome(targetId)) continue;
-    const liveTargetType = resolveImplSelfTargetType(ctx, shallow);
-    const targetType =
-      liveTargetType.kind === "UnitType"
-        ? (structuralStructOrEnumType(shallow.targetTypeName.value, scope) ??
-          liveTargetType)
-        : liveTargetType;
-    const entries = [...(ctx.methodIndex.get(targetId.value) ?? [])];
+    if (targetType === undefined) continue;
+    const targetId = typeIdentity(targetType);
+    const entries = [...(ctx.methodIndex.get(targetId) ?? [])];
     if (isSome(shallow.traitRef)) {
       const traitId = resolveTraitIdentity(shallow.traitRef.value.name, scope);
       entries.push(
-        ...indexTraitImplMethods(ctx, traitId, targetId.value, targetType),
+        ...indexTraitImplMethods(ctx, traitId, targetId, targetType),
       );
     } else {
       entries.push(...indexInherentMethods(ctx, item, targetType));
     }
-    ctx.methodIndex.set(targetId.value, entries);
-    indexAssociatedConsts(ctx, item, targetType, targetId.value);
+    ctx.methodIndex.set(targetId, entries);
+    indexAssociatedConsts(ctx, item, targetType, targetId);
   }
 }
 
@@ -7039,6 +7030,10 @@ function checkUfcsCallArgs(
     return args;
   }
   const [receiverArg, ...rest] = args;
+  assert(
+    receiverArg !== undefined,
+    "arity check guarantees a receiver argument",
+  );
   const checkedRest = checkMethodCallArgs(
     ctx,
     callTokenId,
@@ -7047,7 +7042,7 @@ function checkUfcsCallArgs(
     method.genericParams,
     rest,
   );
-  return receiverArg === undefined ? args : [receiverArg, ...checkedRest];
+  return [receiverArg, ...checkedRest];
 }
 
 /** Checks a resolved associated call's arguments, treating a method (one with
@@ -7190,9 +7185,6 @@ function resolveAssocHead(
   return undefined;
 }
 
-/** `Type::f(...)` / `Self::f(...)` / `Trait::f(receiver, ...)`. Runs before
- * `analyzeCall`'s ordinary callee analysis so a struct/trait head doesn't
- * surface a misleading "cannot find enum" from enum-variant resolution. */
 interface AssociatedCallResult {
   readonly type: Semantics.Type;
   readonly args: readonly Semantics.Expression[];
@@ -7232,6 +7224,9 @@ function checkUfcsReceiverImplementsTrait(
   }
 }
 
+/** `Type::f(...)` / `Self::f(...)` / `Trait::f(receiver, ...)`. Runs before
+ * `analyzeCall`'s ordinary callee analysis so a struct/trait head doesn't
+ * surface a misleading "cannot find enum" from enum-variant resolution. */
 function analyzeAssociatedCall(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
