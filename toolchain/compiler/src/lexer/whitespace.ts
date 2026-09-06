@@ -33,7 +33,7 @@ export function isWhitespace(
 /**
  * Consumes whitespace starting at `start` in `source` (whitespace is skipped; no tokens are emitted).
  *
- * @param tokens The token list to append to.
+ * @param _tokens The token list to append to.
  * @param diagnostics The diagnostic list to append to.
  * @param source The source to scan.
  * @param start The index to start scanning at.
@@ -42,13 +42,11 @@ export function isWhitespace(
  * @returns `None` if the source does not start with whitespace.
  */
 export function tokenizeWhitespace(
-  tokens: Token[],
+  _tokens: Token[],
   diagnostics: Diagnostic[],
   source: string,
   start: number,
 ): Option<number> {
-  void tokens;
-
   let index = start;
   while (index < source.length) {
     const maybeWhitespace = isWhitespace(source, index);

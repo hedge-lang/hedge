@@ -960,8 +960,8 @@ function parseStaticDecl(
   };
 }
 
-function parseStruct(struct: Semantics.StructDecl): JSIM.Item[] {
-  void struct;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- This is here as a placeholder
+function parseStruct(_struct: Semantics.StructDecl): JSIM.Item[] {
   // TODO(Hedge-90): Implement how structs are represented in JS (interface for .d.ts)
   return [];
 }
