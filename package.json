@@ -29,7 +29,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@eslint/json": "^2.0.1",
+    "@eslint/json": "^2.1.0",
     "@eslint/markdown": "^8.0.3",
     "@types/node": "^26.4.0",
     "@vitest/coverage-v8": "^4.1.11",
@@ -37,7 +37,7 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-boundaries": "^7.2.0",
     "jsonc-eslint-parser": "^3.3.0",
-    "knip": "^6.33.0",
+    "knip": "^6.34.0",
     "npm-run-all2": "^9.0.3",
     "prettier": "^3.9.6",
     "rimraf": "^6.1.3",

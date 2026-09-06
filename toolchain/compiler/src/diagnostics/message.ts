@@ -222,6 +222,10 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return `field \`${kind.field}\` specified more than once in struct literal`;
     case "SemSelfOutsideTraitOrImpl":
       return "`Self` can only be used inside a trait or impl block";
+    case "SemSelfWithoutReceiver":
+      return "`self` is only valid in a method that has a `self` receiver";
+    case "SemMutMethodThroughSharedRef":
+      return `cannot call \`&mut self\` method \`${kind.method}\` through a shared reference`;
     case "SemGenericParamShadowsType":
       return `generic parameter \`${kind.name}\` shadows an existing type of the same name`;
     case "SemBlanketImplGlobalScope":
@@ -311,6 +315,14 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return `argument ${kind.argIndex} to ${kind.calleeKind} \`${kind.calleeName}\` type mismatch: expected \`${kind.expected}\`, found \`${kind.found}\``;
     case "SemCallReturnTypeMismatch":
       return `call to \`${kind.calleeName}\` type mismatch: expected \`${kind.expected}\`, found \`${kind.found}\``;
+    case "SemNoMethodOnType":
+      return `no method \`${kind.method}\` found for type \`${kind.typeName}\``;
+    case "SemAmbiguousMethod":
+      return `method \`${kind.method}\` on \`${kind.typeName}\` is ambiguous between traits ${kind.traits
+        .map((t) => `\`${t}\``)
+        .join(" and ")}`;
+    case "SemNoAssociatedItem":
+      return `no associated item \`${kind.name}\` found for \`${kind.typeName}\``;
     case "SemLogicalOperandsMustBeBool":
       return "logical operator operands must be `bool`";
     case "SemBitwiseRequiresInteger":

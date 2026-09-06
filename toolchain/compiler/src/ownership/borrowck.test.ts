@@ -745,4 +745,84 @@ describe("pattern-derived &/&mut sub-bindings", (): void => {
     const diagnostics = check("fn f(x: &mut i32); fn main() {}");
     expect(diagnostics).toEqual([]);
   });
+
+  describe("method bodies", (): void => {
+    it("checks a method body of an impl nested inside a function", (): void => {
+      const diagnostics = check(`
+        fn outer() {
+          struct P { x: i32 }
+          impl P {
+            fn bad(&self) {
+              let r = &mut self.x;
+              print(r);
+            }
+          }
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      expect(messageOf(diagnostics[0])).toBe(
+        "cannot borrow `self.x` as mutable because `self` is a shared reference.",
+      );
+    });
+
+    it("accepts a mutable borrow of a field through a `&mut self` receiver", (): void => {
+      const diagnostics = check(`
+        struct P { x: i32, y: i32 }
+        impl P {
+          fn bump(&mut self) {
+            let r = &mut self.x;
+            print(r);
+          }
+        }
+      `);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("rejects a mutable borrow of a field through a `&self` receiver", (): void => {
+      const diagnostics = check(`
+        struct P { x: i32 }
+        impl P {
+          fn bad(&self) {
+            let r = &mut self.x;
+            print(r);
+          }
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      expect(messageOf(diagnostics[0])).toBe(
+        "cannot borrow `self.x` as mutable because `self` is a shared reference.",
+      );
+    });
+
+    it("rejects two overlapping mutable borrows of the same field of `self`", (): void => {
+      const diagnostics = check(`
+        struct P { x: i32 }
+        impl P {
+          fn bad(&mut self) {
+            let a = &mut self.x;
+            let b = &mut self.x;
+            print(a);
+            print(b);
+          }
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      expect(messageOf(diagnostics[0])).toContain("Conflicting borrows");
+    });
+
+    it("accepts disjoint mutable borrows of two fields of `self`", (): void => {
+      const diagnostics = check(`
+        struct P { x: i32, y: i32 }
+        impl P {
+          fn ok(&mut self) {
+            let a = &mut self.x;
+            let b = &mut self.y;
+            print(a);
+            print(b);
+          }
+        }
+      `);
+      expect(diagnostics).toEqual([]);
+    });
+  });
 });

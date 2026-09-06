@@ -243,18 +243,30 @@ export interface StaticDecl extends DecoratedAstNode {
   readonly attributes: readonly Attribute[];
 }
 
+/** A method's receiver, mirroring `Parser.Receiver`: `byRef` is true for
+ * `&self`/`&mut self`, `mutable` for `mut self`/`&mut self`. `none()` for an
+ * associated function with no receiver. */
+export interface MethodReceiver {
+  readonly byRef: boolean;
+  readonly mutable: boolean;
+}
+
 /** One of a trait's own methods, in declaration order. `isDefault` is true
  * for a method with a body in the trait declaration (needs no override) and
  * false for a bodiless required one (an impl must provide it). `params`/
  * `returnType` are the method's own resolved signature types - a `Self`/
  * `Self::Assoc` mention resolves within this trait's own abstract Self
- * context (see analyzer.ts's `SelfContext`), stored here even though nothing
- * consumes it yet. */
+ * context (see analyzer.ts's `SelfContext`). */
 export interface TraitMethod {
   readonly name: string;
   readonly isDefault: boolean;
+  readonly receiver: Option<MethodReceiver>;
   readonly params: readonly Type[];
   readonly returnType: Type;
+  /** This method's own declared type-parameter names (`fn map<U>` -> `["U"]`),
+   * not the trait's - so a call site can skip type-checking an argument bound
+   * to one, the same way an inherent generic method's are skipped. */
+  readonly genericParams: readonly string[];
 }
 
 /**
@@ -278,12 +290,16 @@ export interface TraitDecl extends AstNode {
   readonly supertraits: readonly string[];
   readonly methods: readonly TraitMethod[];
   readonly associatedTypes: readonly string[];
+  /** A `FunctionDef` view of each bodied (default) method, `self` prepended
+   * as a parameter, for the ownership passes to walk. */
+  readonly methodBodies: readonly FunctionDef[];
 }
 
 /** One impl-provided method's own resolved signature - mirrors `TraitMethod`
  * minus `isDefault`, since every entry here is impl-provided by definition. */
 export interface ImplMethod {
   readonly name: string;
+  readonly receiver: Option<MethodReceiver>;
   readonly params: readonly Type[];
   readonly returnType: Type;
 }
@@ -320,6 +336,9 @@ export interface ImplDecl extends AstNode {
   readonly providedAssociatedTypes: readonly string[];
   readonly resolvedMethods: readonly ImplMethod[];
   readonly associatedTypeDefs: ReadonlyMap<string, Type>;
+  /** A `FunctionDef` view of each bodied method, `self` prepended as a
+   * parameter, for the ownership passes to walk. */
+  readonly methodBodies: readonly FunctionDef[];
 }
 
 /** Carries no semantic content yet - a type alias's own value type is still
@@ -724,12 +743,12 @@ interface PrimitiveStringType {
   readonly kind: "PrimitiveStringType";
 }
 
-interface StructType {
+export interface StructType {
   readonly kind: "StructType";
   readonly name: string;
 }
 
-interface EnumType {
+export interface EnumType {
   readonly kind: "EnumType";
   readonly name: string;
 }
@@ -803,6 +822,10 @@ export interface MethodCallExpression extends DecoratedAstNode {
   readonly receiver: Expression;
   readonly method: Identifier;
   readonly arguments: Expression[];
+  /** The resolved method's receiver form (`self` / `&self` / `&mut self`),
+   * so the ownership passes can treat the receiver as a move or a borrow.
+   * `none()` when the call did not resolve. */
+  readonly receiverKind: Option<MethodReceiver>;
 }
 
 export interface IndexExpression extends DecoratedAstNode {
