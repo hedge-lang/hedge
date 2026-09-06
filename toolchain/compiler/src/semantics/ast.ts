@@ -263,6 +263,10 @@ export interface TraitMethod {
   readonly receiver: Option<MethodReceiver>;
   readonly params: readonly Type[];
   readonly returnType: Type;
+  /** This method's own declared type-parameter names (`fn map<U>` -> `["U"]`),
+   * not the trait's - so a call site can skip type-checking an argument bound
+   * to one, the same way an inherent generic method's are skipped. */
+  readonly genericParams: readonly string[];
 }
 
 /**

@@ -2019,6 +2019,7 @@ function buildTraitDecl(item: Parser.TraitDecl): Semantics.TraitDecl {
             receiver: toMethodReceiver(decl.receiver),
             params: [],
             returnType: unitType,
+            genericParams: genericParamNames(decl.generics),
           },
         ];
       }
@@ -2030,6 +2031,7 @@ function buildTraitDecl(item: Parser.TraitDecl): Semantics.TraitDecl {
             receiver: toMethodReceiver(decl.signature.receiver),
             params: [],
             returnType: unitType,
+            genericParams: genericParamNames(decl.signature.generics),
           },
         ];
       }
@@ -2134,6 +2136,7 @@ function resolveTraitMethodSignature(
     name: signature.name.text,
     isDefault,
     receiver: toMethodReceiver(signature.receiver),
+    genericParams: genericParamNames(signature.generics),
     ...resolveMethodSignatureTypes(
       ctx,
       outerGenerics,
@@ -2333,6 +2336,7 @@ function analyzeTraitDecl(
           receiver: toMethodReceiver(sig.receiver),
           params: analyzed.params,
           returnType: analyzed.returnType,
+          genericParams: genericParamNames(sig.generics),
         },
       ];
     },
@@ -6767,7 +6771,7 @@ function traitMethodSet(
     receiver: m.receiver,
     params: m.params,
     returnType: m.returnType,
-    genericParams: trait.genericParams,
+    genericParams: [...trait.genericParams, ...m.genericParams],
     origin: { kind: "trait", traitId },
   }));
   const inherited = trait.supertraits.flatMap((s) =>

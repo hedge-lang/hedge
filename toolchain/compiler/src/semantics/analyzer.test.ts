@@ -4524,6 +4524,35 @@ describe("associated types and trait projections", (): void => {
       );
     });
 
+    it("does not type-check an argument passed for a trait method's own generic parameter", (): void => {
+      const result = diagnose(`
+        trait Mapper { fn map<U>(&self, value: U); }
+        struct P { v: i32 }
+        impl Mapper for P { fn map<U>(&self, value: U) {} }
+        fn main() {
+          let p = P { v: 1 };
+          p.map(1);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still checks arity for a trait method with its own generic parameter", (): void => {
+      const result = diagnose(`
+        trait Mapper { fn map<U>(&self, value: U); }
+        struct P { v: i32 }
+        impl Mapper for P { fn map<U>(&self, value: U) {} }
+        fn main() {
+          let p = P { v: 1 };
+          p.map();
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "method `map` takes 1 argument(s), but 0 were supplied",
+      );
+    });
+
     it("rejects calling an `&mut self` method through a shared reference", (): void => {
       const result = diagnose(`
         struct P { v: i32 }
