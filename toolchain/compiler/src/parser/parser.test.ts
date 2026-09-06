@@ -5,7 +5,7 @@ import { isNone, isSome, none, some } from "../option.js";
 import { parse } from "./parser.js";
 import { tokenize } from "../lexer/lexer.js";
 import { HARD_KEYWORDS } from "../lexer/keywords.js";
-import type { Program } from "./ast.js";
+import type { Expression, Program, Statement } from "./ast.js";
 
 function parseProgram(source: string): Program {
   const { tokens } = tokenize(source);
@@ -437,6 +437,194 @@ describe("self/super/Self path segment diagnostics", (): void => {
 
   it("rejects as not yet supported: `self` as the second segment of a `Self`-headed type path", (): void => {
     assertUnsupportedKeyword("let x: Self::self;", "self");
+  });
+});
+
+describe("self/Self in expression position inside a method body", (): void => {
+  function parseCleanly(source: string): Program {
+    const { tokens } = tokenize(source);
+    const { program, diagnostics } = parse(tokens);
+    expect(diagnostics).toEqual([]);
+    assert(isSome(program), messageOf(diagnostics[0], "Parse failed"));
+    return program.value;
+  }
+
+  function firstMethodBodyStatement(program: Program): Statement {
+    const impl = program.items[0];
+    assert(
+      impl !== undefined && impl.kind === "Impl",
+      "expected an impl item first",
+    );
+    const method = impl.items[0];
+    assert(
+      method !== undefined && method.kind === "Function",
+      "expected a bodied method first",
+    );
+    const statement = method.body.statements[0];
+    assert(statement !== undefined, "expected a method-body statement");
+    return statement;
+  }
+
+  function firstMethodBodyExpression(program: Program): Expression {
+    const statement = firstMethodBodyStatement(program);
+    assert(
+      statement.kind === "ExpressionStatement",
+      "expected an expression statement first",
+    );
+    return statement.expression;
+  }
+
+  it("parses bare `self` in an inherent impl method body", (): void => {
+    const program = parseCleanly("impl Point { fn m(&self) { self; } }");
+    expect(firstMethodBodyExpression(program)).toMatchObject({
+      kind: "PathExpression",
+      path: { absolute: false, segments: ["self"] },
+    });
+  });
+
+  it("parses bare `self` in a trait default-method body", (): void => {
+    const { tokens } = tokenize("trait T { fn m(&self) { self; } }");
+    const { program, diagnostics } = parse(tokens);
+    expect(diagnostics).toEqual([]);
+    assert(isSome(program), "Parse failed");
+    const trait = program.value.items[0];
+    assert(
+      trait !== undefined && trait.kind === "Trait",
+      "expected a trait first",
+    );
+    const method = trait.items[0];
+    assert(
+      method !== undefined && method.kind === "Function",
+      "expected a bodied method",
+    );
+    expect(method.body.statements[0]).toMatchObject({
+      kind: "ExpressionStatement",
+      expression: { kind: "PathExpression", path: { segments: ["self"] } },
+    });
+  });
+
+  it("parses `self.field` in a method body", (): void => {
+    const program = parseCleanly("impl Point { fn m(&self) { self.x; } }");
+    expect(firstMethodBodyExpression(program)).toMatchObject({
+      kind: "FieldAccessExpression",
+      object: { kind: "PathExpression", path: { segments: ["self"] } },
+      field: { text: "x" },
+    });
+  });
+
+  it("parses `self.method()` in a method body", (): void => {
+    const program = parseCleanly("impl Point { fn m(&self) { self.len(); } }");
+    expect(firstMethodBodyExpression(program)).toMatchObject({
+      kind: "MethodCallExpression",
+      receiver: { kind: "PathExpression", path: { segments: ["self"] } },
+      method: { text: "len" },
+    });
+  });
+
+  it("parses `Self { .. }` as a struct literal in a method body", (): void => {
+    const program = parseCleanly(
+      "impl Point { fn m(&self) { Self { x: 1, y: 2 }; } }",
+    );
+    expect(firstMethodBodyExpression(program)).toMatchObject({
+      kind: "StructExpression",
+      path: { segments: ["Self"] },
+    });
+  });
+
+  it("parses `Self(..)` as a call in a method body", (): void => {
+    const program = parseCleanly("impl Pair { fn m(&self) { Self(1, 2); } }");
+    expect(firstMethodBodyExpression(program)).toMatchObject({
+      kind: "CallExpression",
+      callee: { kind: "PathExpression", path: { segments: ["Self"] } },
+    });
+  });
+
+  it("parses `Self::new()` as a path call in a method body", (): void => {
+    const program = parseCleanly("impl Point { fn m(&self) { Self::new(); } }");
+    expect(firstMethodBodyExpression(program)).toMatchObject({
+      kind: "CallExpression",
+      callee: {
+        kind: "PathExpression",
+        path: { segments: ["Self", "new"] },
+      },
+    });
+  });
+
+  it.each([
+    {
+      scenario: "`super` inside a method body",
+      src: "impl Point { fn m(&self) { super; } }",
+      message: "`super` is not yet supported",
+    },
+    {
+      scenario: "`self` as a non-first segment inside a method body",
+      src: "impl Point { fn m(&self) { foo::self; } }",
+      message: "`self` is not yet supported",
+    },
+    {
+      scenario: "`self` in a free function nested inside a method body",
+      src: "impl Point { fn m(&self) { fn nested() { self; } } }",
+      message: "`self` is not yet supported",
+    },
+    {
+      scenario: "bare `self` in a free top-level function body",
+      src: "fn m() { self; }",
+      message: "`self` is not yet supported",
+    },
+  ])("still rejects $scenario", ({ src, message }): void => {
+    const { tokens } = tokenize(src);
+    const { program, diagnostics } = parse(tokens);
+    expect(program).toEqual(none());
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(messageOf(diagnostics[0])).toBe(message);
+  });
+
+  it("allows `self` again in a method of an impl nested inside a method body", (): void => {
+    const program = parseCleanly(
+      "impl Point { fn m(&self) { impl Inner { fn n(&self) { self; } } } }",
+    );
+    const outer = program.items[0];
+    assert(outer !== undefined && outer.kind === "Impl", "expected outer impl");
+    const outerMethod = outer.items[0];
+    assert(
+      outerMethod !== undefined && outerMethod.kind === "Function",
+      "expected outer method",
+    );
+    const innerImpl = outerMethod.body.statements[0];
+    assert(
+      innerImpl !== undefined && innerImpl.kind === "Impl",
+      "expected a nested impl statement",
+    );
+    const innerMethod = innerImpl.items[0];
+    assert(
+      innerMethod !== undefined && innerMethod.kind === "Function",
+      "expected the nested impl's method",
+    );
+    expect(innerMethod.body.statements[0]).toMatchObject({
+      kind: "ExpressionStatement",
+      expression: { kind: "PathExpression", path: { segments: ["self"] } },
+    });
+  });
+
+  it("parses a deeply nested expression containing `self` in a method body", (): void => {
+    const program = parseCleanly(
+      "impl Point { fn m(&self) { let a = self.x + self.y; } }",
+    );
+    const stmt = firstMethodBodyStatement(program);
+    assert(stmt.kind === "LetStatement", "expected a let statement");
+    expect(stmt).toMatchObject({
+      initializer: some({
+        kind: "BinaryExpression",
+        left: {
+          kind: "FieldAccessExpression",
+          object: { path: { segments: ["self"] } },
+        },
+        right: {
+          kind: "FieldAccessExpression",
+          object: { path: { segments: ["self"] } },
+        },
+      }),
+    });
   });
 });
 

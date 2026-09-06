@@ -10,6 +10,7 @@ import {
   tokenAt,
   type PR,
 } from "./parse-utils.js";
+import { isSelfKeywordAllowed } from "./parse-state.js";
 
 /**
  * Parses a path (absolute or relative, one or more `::` separated segments).
@@ -20,13 +21,16 @@ import {
  *
  * `allowSelfHead` permits a leading `Self` instead of guardrail-rejecting it:
  * spec 0025's `Type` production allows `Self`, and `Self::Item` is just a
- * `Path` headed by the `Self` segment. `self`/`super` stay rejected either way.
+ * `Path` headed by the `Self` segment. `allowSelfExprHead` additionally permits
+ * a leading lowercase `self` - expression position inside a method body, where
+ * `self` names the receiver. `super` stays rejected either way.
  */
 // eslint-disable-next-line complexity -- Result-threading adds an isErr branch per step; extracting helpers would obscure the grammar structure.
 function parsePathSegmentsWithSelfHead(
   tokens: readonly Token[],
   pos: number,
   allowSelfHead: boolean,
+  allowSelfExprHead: boolean = false,
 ): PR<Parsed<Path>> {
   let cursor = pos;
   let absolute = false;
@@ -43,7 +47,10 @@ function parsePathSegmentsWithSelfHead(
 
   const firstKeyword = pathKeywordAt(tokens, cursor);
   if (isSome(firstKeyword)) {
-    const selfHeadAllowed = allowSelfHead && firstKeyword.value.text === "Self";
+    const head = firstKeyword.value.text;
+    const selfHeadAllowed =
+      (allowSelfHead && head === "Self") ||
+      (allowSelfExprHead && (head === "self" || head === "Self"));
     if (!selfHeadAllowed) {
       return err(
         errorDiagnostic(
@@ -158,7 +165,12 @@ export function parsePath(
   tokens: readonly Token[],
   pos: number,
 ): PR<Parsed<PathExpression>> {
-  const pathResult = parsePathSegments(tokens, pos);
+  const pathResult = parsePathSegmentsWithSelfHead(
+    tokens,
+    pos,
+    false,
+    isSelfKeywordAllowed(),
+  );
   if (isErr(pathResult)) {
     return pathResult;
   }

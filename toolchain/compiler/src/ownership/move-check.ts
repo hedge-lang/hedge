@@ -42,6 +42,7 @@ import type {
   Declaration,
 } from "./control-flow-graph.js";
 import { buildControlFlowGraph } from "./control-flow-graph.js";
+import { collectOwnedFunctions } from "./owned-functions.js";
 
 /**
  * A binding's move state within one function body. This vocabulary is
@@ -751,12 +752,25 @@ function walkExpression(
       }
       walkExpression(ctx, expression.operand, state, scopeStack);
       return;
-    case "MethodCallExpression":
-      walkExpression(ctx, expression.receiver, state, scopeStack);
+    case "MethodCallExpression": {
+      // A `self` (by-value) receiver moves the place it names, exactly like
+      // passing it to a function; a `&self`/`&mut self` receiver only borrows
+      // it. An unresolved call (`receiverKind` is `none()`) is treated as a
+      // borrow so a prior resolution diagnostic doesn't cascade a move error.
+      const byValueReceiver =
+        isSome(expression.receiverKind) && !expression.receiverKind.value.byRef;
+      if (byValueReceiver && expression.receiver.kind === "PathExpression") {
+        useOrMove(ctx, expression.receiver, state, scopeStack, true);
+      } else if (byValueReceiver) {
+        walkExpression(ctx, expression.receiver, state, scopeStack);
+      } else {
+        walkNonMovingPlace(ctx, expression.receiver, state, scopeStack);
+      }
       for (const argument of expression.arguments) {
         walkExpression(ctx, argument, state, scopeStack);
       }
       return;
+    }
     case "IndexExpression":
       // The object is a *use*, not a move, mirroring FieldAccessExpression's
       // own treatment above: `arr[i]` reads through the array, it doesn't
@@ -1468,11 +1482,8 @@ export function analyzeOwnership(
 ): OwnershipCheckResult {
   const diagnostics: Diagnostic[] = [];
   const functions = new Map<string, FunctionOwnership>();
-  for (const item of program.items) {
-    if (item.kind !== "Function") {
-      continue;
-    }
-    const graph = buildControlFlowGraph(item);
+  const ownershipOf = (fn: Semantics.FunctionDef): FunctionOwnership => {
+    const graph = buildControlFlowGraph(fn);
     const drops = new Map<number, Declaration[]>();
     const conditionalDrops = new Map<number, ConditionalDrop[]>();
     const branchDrops: BranchDrop[] = [];
@@ -1485,15 +1496,23 @@ export function analyzeOwnership(
       branchDrops,
       declarationsById,
       warnDropFlags: options.warnDropFlags ?? false,
-      currentStatementTokenId: item.tokenId,
+      currentStatementTokenId: fn.tokenId,
     };
-    walkFunction(ctx, item);
-    functions.set(item.signature.name.text, {
-      graph,
-      drops,
-      conditionalDrops,
-      branchDrops,
-    });
+    walkFunction(ctx, fn);
+    return { graph, drops, conditionalDrops, branchDrops };
+  };
+  // Only top-level functions land in the returned `functions` map (keyed by
+  // name, for codegen); a method body's own `FunctionOwnership` has no
+  // consumer yet and two impls can share a method name. Every function still
+  // gets walked for diagnostics.
+  const topLevel = new Set(
+    program.items.filter((item) => item.kind === "Function"),
+  );
+  for (const fn of collectOwnedFunctions(program)) {
+    const ownership = ownershipOf(fn);
+    if (topLevel.has(fn)) {
+      functions.set(fn.signature.name.text, ownership);
+    }
   }
   return { diagnostics, functions };
 }

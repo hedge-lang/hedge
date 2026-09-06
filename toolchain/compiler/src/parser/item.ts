@@ -59,6 +59,7 @@ import {
 } from "./parse-utils.js";
 import { collectOuterAttributes } from "./attribute.js";
 import { parseExpression } from "./expression.js";
+import { withFunctionBody, withMethodBodyItems } from "./parse-state.js";
 import { parsePathSegments } from "./path.js";
 import { parsePattern } from "./pattern.js";
 import {
@@ -785,7 +786,9 @@ function parseFunction(
   if (tokens[whereResult.next]?.kind === "semi") {
     return ok({ node: signature, next: whereResult.next + 1 });
   }
-  const bodyResult = parseBlock(tokens, diagnostics, whereResult.next);
+  const bodyResult = withFunctionBody(() =>
+    parseBlock(tokens, diagnostics, whereResult.next),
+  );
   if (isErr(bodyResult)) {
     return bodyResult;
   }
@@ -1498,7 +1501,9 @@ function parseTraitItemList(
     ) {
       break;
     }
-    const itemResult = parseTraitItem(tokens, diagnostics, cursor);
+    const itemResult = withMethodBodyItems(() =>
+      parseTraitItem(tokens, diagnostics, cursor),
+    );
     if (isErr(itemResult)) {
       return itemResult;
     }
@@ -1655,7 +1660,9 @@ function parseItemList(
       cursor += 1;
       continue;
     }
-    const itemResult = parseItem(tokens, diagnostics, cursor);
+    const itemResult = withMethodBodyItems(() =>
+      parseItem(tokens, diagnostics, cursor),
+    );
     if (isErr(itemResult)) {
       return itemResult;
     }

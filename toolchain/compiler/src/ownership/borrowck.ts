@@ -33,6 +33,7 @@ import {
   declarationsOf,
 } from "./control-flow-graph.js";
 import { computeLiveness, type Liveness } from "./liveness.js";
+import { collectOwnedFunctions } from "./owned-functions.js";
 
 /**
  * A single step in a place's projection chain, applied outward from the
@@ -1361,16 +1362,6 @@ function checkFunction(
   checkExclusivity(borrows, blockById, liveness, diagnostics, tokens);
 }
 
-function checkItem(
-  item: Semantics.Item,
-  diagnostics: Diagnostic[],
-  tokens: readonly Token[],
-): void {
-  if (item.kind === "Function") {
-    checkFunction(item, diagnostics, tokens);
-  }
-}
-
 /**
  * NLL ownership analysis: enforces `&mut` capability and borrow exclusivity
  * (at most one `&mut` xor any number of `&`) using per-function CFG/liveness
@@ -1387,8 +1378,8 @@ export function checkBorrows(
   tokens: readonly Token[],
 ): readonly Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
-  for (const item of program.items) {
-    checkItem(item, diagnostics, tokens);
+  for (const fn of collectOwnedFunctions(program)) {
+    checkFunction(fn, diagnostics, tokens);
   }
   return diagnostics;
 }

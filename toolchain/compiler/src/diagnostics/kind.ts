@@ -233,6 +233,8 @@ export type DiagnosticKind =
     }
   | { readonly kind: "SemFieldSpecifiedMoreThanOnce"; readonly field: string }
   | { readonly kind: "SemSelfOutsideTraitOrImpl" }
+  | { readonly kind: "SemSelfWithoutReceiver" }
+  | { readonly kind: "SemMutMethodThroughSharedRef"; readonly method: string }
   | { readonly kind: "SemGenericParamShadowsType"; readonly name: string }
   | { readonly kind: "SemBlanketImplGlobalScope"; readonly trait: string }
   | {
@@ -374,6 +376,22 @@ export type DiagnosticKind =
       readonly calleeName: string;
       readonly expected: string;
       readonly found: string;
+    }
+  | {
+      readonly kind: "SemNoMethodOnType";
+      readonly method: string;
+      readonly typeName: string;
+    }
+  | {
+      readonly kind: "SemAmbiguousMethod";
+      readonly method: string;
+      readonly typeName: string;
+      readonly traits: readonly string[];
+    }
+  | {
+      readonly kind: "SemNoAssociatedItem";
+      readonly name: string;
+      readonly typeName: string;
     }
   | { readonly kind: "SemLogicalOperandsMustBeBool" }
   | { readonly kind: "SemBitwiseRequiresInteger" }
@@ -674,6 +692,8 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemNoVariantOnEnum", "HEDGE-NAME-004"],
   ["SemFieldSpecifiedMoreThanOnce", "HEDGE-NAME-005"],
   ["SemSelfOutsideTraitOrImpl", "HEDGE-NAME-006"],
+  ["SemSelfWithoutReceiver", "HEDGE-NAME-007"],
+  ["SemMutMethodThroughSharedRef", "HEDGE-BORROW-CHECK-007"],
   ["SemGenericParamShadowsType", "HEDGE-LINT-002"],
   ["SemBlanketImplGlobalScope", "HEDGE-LINT-003"],
   ["SemImplGlobalScope", "HEDGE-LINT-003"],
@@ -719,6 +739,9 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemArgumentTypeMismatch", "HEDGE-TYPE-001"],
   ["SemArgumentTypeMismatchConflict", "HEDGE-TYPE-010"],
   ["SemCallReturnTypeMismatch", "HEDGE-TYPE-010"],
+  ["SemNoMethodOnType", "HEDGE-TYPE-012"],
+  ["SemAmbiguousMethod", "HEDGE-TYPE-013"],
+  ["SemNoAssociatedItem", "HEDGE-TYPE-014"],
   ["SemLogicalOperandsMustBeBool", "HEDGE-TYPE-002"],
   ["SemBitwiseRequiresInteger", "HEDGE-TYPE-002"],
   ["SemArithmeticOperandNotNumeric", "HEDGE-TYPE-002"],

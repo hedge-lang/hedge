@@ -1087,4 +1087,118 @@ describe("move-check", (): void => {
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(messageOf(diagnostics[0])).toBe("use of moved value `x`");
   });
+
+  describe("method bodies", (): void => {
+    it("checks a method body of an impl nested inside a function", (): void => {
+      const { diagnostics } = check(`
+        struct P { v: i32 }
+        fn take(p: P) {}
+        fn outer() {
+          impl P {
+            fn consume(self) {
+              take(self);
+              take(self);
+            }
+          }
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(messageOf(diagnostics[0])).toBe("use of moved value `self`");
+    });
+
+    it("moves the receiver of a by-value method call", (): void => {
+      const { diagnostics } = check(`
+        struct P { v: i32 }
+        fn take(p: P) {}
+        impl P { fn consume(self) {} }
+        fn main() {
+          let p = P { v: 1 };
+          p.consume();
+          take(p);
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(messageOf(diagnostics[0])).toBe("use of moved value `p`");
+    });
+
+    it("does not move the receiver of a `&self` method call", (): void => {
+      const { diagnostics } = check(`
+        struct P { v: i32 }
+        fn take(p: P) {}
+        impl P { fn peek(&self) {} }
+        fn main() {
+          let p = P { v: 1 };
+          p.peek();
+          take(p);
+        }
+      `);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("rejects using a by-value `self` receiver after it is moved", (): void => {
+      const { diagnostics } = check(`
+        struct P { v: i32 }
+        fn take(p: P) {}
+        impl P {
+          fn consume(self) {
+            take(self);
+            take(self);
+          }
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(messageOf(diagnostics[0])).toBe("use of moved value `self`");
+    });
+
+    it("rejects moving a non-Copy field out of a `&self` receiver", (): void => {
+      const { diagnostics } = check(`
+        struct Inner { v: i32 }
+        struct P { inner: Inner }
+        fn take(i: Inner) {}
+        impl P {
+          fn leak(&self) {
+            take(self.inner);
+          }
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(messageOf(diagnostics[0])).toBe(
+        "cannot move out of `self.inner`; borrow it with `&self.inner` instead",
+      );
+    });
+
+    it("treats a by-value `self` receiver like any owned parameter for field moves", (): void => {
+      // A partial move out of an owned parameter is not yet supported (same as
+      // `fn f(p: P) { take(p.inner); }`); `self` gets exactly that treatment.
+      const { diagnostics } = check(`
+        struct Inner { v: i32 }
+        struct P { inner: Inner }
+        fn take(i: Inner) {}
+        impl P {
+          fn into_inner(self) {
+            take(self.inner);
+          }
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(messageOf(diagnostics[0])).toBe(
+        "cannot move out of `self.inner`; borrow it with `&self.inner` instead",
+      );
+    });
+
+    it("does not flag a `&self` method that only reads `self`", (): void => {
+      const { diagnostics } = check(`
+        struct P { v: i32 }
+        impl P {
+          fn get(&self) -> i32 { self.v }
+        }
+      `);
+      expect(diagnostics).toEqual([]);
+    });
+  });
 });
