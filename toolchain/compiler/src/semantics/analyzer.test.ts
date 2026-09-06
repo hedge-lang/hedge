@@ -4596,6 +4596,33 @@ describe("associated types and trait projections", (): void => {
       );
     });
 
+    it("reports a return-type mismatch on a `-> Self::Assoc` body when the impl defines the projection as `()`", (): void => {
+      const result = diagnose(`
+        trait It { type Item; fn first(&self) -> Self::Item; }
+        struct P { v: i32 }
+        impl It for P {
+          type Item = ();
+          fn first(&self) -> Self::Item { 1 }
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "return type mismatch: expected `()`, found `i32`",
+      );
+    });
+
+    it("accepts a `-> Self::Assoc` body that matches an impl's `type Item = ();`", (): void => {
+      const result = diagnose(`
+        trait It { type Item; fn first(&self) -> Self::Item; }
+        struct P { v: i32 }
+        impl It for P {
+          type Item = ();
+          fn first(&self) -> Self::Item {}
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("still suppresses the cascade for a `-> Self::Bogus` method whose projection does not resolve", (): void => {
       const result = diagnose(`
         trait Iterator { type Item; }
