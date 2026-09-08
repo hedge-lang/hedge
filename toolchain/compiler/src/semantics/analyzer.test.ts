@@ -6769,3 +6769,238 @@ describe("std prelude traits", (): void => {
     );
   });
 });
+
+describe("== / != resolving through a PartialEq/Eq impl", (): void => {
+  it("accepts `==` on a struct with a hand-written `impl PartialEq`, typing the result `bool`", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl PartialEq for Point { fn eq(&self, other: &Self) -> bool { true } }
+      fn main() {
+        let a = Point { x: 1 };
+        let b = Point { x: 2 };
+        let c = a == b;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(mainLetType(result, "c").kind).toBe("PrimitiveBooleanType");
+  });
+
+  it("accepts `==` on an enum with a hand-written `impl PartialEq`", (): void => {
+    const result = diagnoseWithPrelude(`
+      enum Dir { N, S }
+      impl PartialEq for Dir { fn eq(&self, other: &Self) -> bool { true } }
+      fn main() {
+        let a = Dir::N;
+        let b = Dir::S;
+        let c = a == b;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(mainLetType(result, "c").kind).toBe("PrimitiveBooleanType");
+  });
+
+  it("accepts `!=` on a struct with a hand-written `impl PartialEq`", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl PartialEq for Point { fn eq(&self, other: &Self) -> bool { true } }
+      fn main() {
+        let a = Point { x: 1 };
+        let b = Point { x: 2 };
+        let c = a != b;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(mainLetType(result, "c").kind).toBe("PrimitiveBooleanType");
+  });
+
+  it("accepts `==` with only `impl PartialEq` present and no `impl Eq`", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl PartialEq for Point { fn eq(&self, other: &Self) -> bool { true } }
+      fn main() {
+        let a = Point { x: 1 };
+        let b = Point { x: 1 };
+        let c = a == b;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts `==` on a generic parameter bound by `PartialEq`", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn same<T: PartialEq>(a: T, b: T) -> bool { a == b }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts `==` on a generic parameter bound by `Eq`, via the `Eq: PartialEq` supertrait", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn same<T: Eq>(a: T, b: T) -> bool { a == b }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("still rejects `==` on a struct with no `PartialEq` impl", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      fn main() {
+        let a = Point { x: 1 };
+        let b = Point { x: 2 };
+        let c = a == b;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "type does not support equality comparison",
+    );
+  });
+
+  it("still rejects `!=` on a struct with no `PartialEq` impl", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      fn main() {
+        let a = Point { x: 1 };
+        let b = Point { x: 2 };
+        let c = a != b;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "type does not support equality comparison",
+    );
+  });
+
+  it("still rejects `==` on an unbounded generic parameter", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn same<T>(a: T, b: T) -> bool { a == b }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "type does not support equality comparison",
+    );
+  });
+
+  it("reports differently-typed struct operands as a same-type error, not a capability error", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct A { x: i32 }
+      struct B { y: i32 }
+      impl PartialEq for A { fn eq(&self, other: &Self) -> bool { true } }
+      impl PartialEq for B { fn eq(&self, other: &Self) -> bool { true } }
+      fn main() {
+        let a = A { x: 1 };
+        let b = B { y: 2 };
+        let c = a == b;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "comparison operands must have the same type",
+    );
+  });
+
+  it("does not extend the fallback to ordering: `<` on a struct with `impl PartialEq` is still rejected", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl PartialEq for Point { fn eq(&self, other: &Self) -> bool { true } }
+      fn main() {
+        let a = Point { x: 1 };
+        let b = Point { x: 2 };
+        let c = a < b;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "type does not support ordering comparison",
+    );
+  });
+
+  it("leaves primitive equality unaffected", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn main() {
+        let a = 1 == 2;
+        let b = true == false;
+        let c = 'x' == 'y';
+        let d = 1.5 == 2.5;
+        let e = "s" == "t";
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("emits exactly one diagnostic for a rejected struct `==` used downstream", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      fn main() {
+        let a = Point { x: 1 };
+        let b = Point { x: 2 };
+        let c = a == b;
+        let d = c;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("accepts `==` on `&Point` operands when `Point` implements `PartialEq`", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl PartialEq for Point { fn eq(&self, other: &Self) -> bool { true } }
+      fn eq_refs(a: &Point, b: &Point) -> bool { a == b }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts `==` on `&mut Point` operands when `Point` implements `PartialEq`", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl PartialEq for Point { fn eq(&self, other: &Self) -> bool { true } }
+      fn eq_refs(a: &mut Point, b: &mut Point) -> bool { a == b }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("reports `&Point == Point` as a same-type error, not a capability error", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl PartialEq for Point { fn eq(&self, other: &Self) -> bool { true } }
+      fn cmp(a: &Point) -> bool {
+        let b = Point { x: 1 };
+        a == b
+      }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "comparison operands must have the same type",
+    );
+  });
+
+  it("still rejects `==` on `&Point` operands when `Point` has no `PartialEq` impl", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      fn eq_refs(a: &Point, b: &Point) -> bool { a == b }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "type does not support equality comparison",
+    );
+  });
+
+  it("accepts a struct `==` as an `if` condition", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl PartialEq for Point { fn eq(&self, other: &Self) -> bool { true } }
+      fn main() {
+        let a = Point { x: 1 };
+        let b = Point { x: 2 };
+        if a == b { let done = true; }
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+});

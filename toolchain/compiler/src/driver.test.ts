@@ -414,6 +414,85 @@ describe("trait/impl declarations", (): void => {
   });
 });
 
+describe("== / != on a type with a PartialEq impl", (): void => {
+  const program = (op: "==" | "!="): string => `
+    struct Point { x: i32 }
+    impl PartialEq for Point {
+      fn eq(&self, other: &Self) -> bool { true }
+    }
+    fn main() {
+      let a = Point { x: 1 };
+      let b = Point { x: 2 };
+      let c = a ${op} b;
+      print("done");
+    }
+  `;
+
+  it("lowers `==` on a struct to a call of the impl's `eq` method", (): void => {
+    const result = compile(program("=="));
+    expect(result.diagnostics).toEqual([]);
+    assert(isSome(result.code), "Expected the program to compile");
+    const { javascript } = result.code.value;
+    assert(isSome(javascript), "Expected emitted JavaScript");
+    expect(javascript.value).toContain("a.eq(b)");
+    expect(javascript.value).not.toContain("a === b");
+  });
+
+  it("lowers `!=` on a struct to a negated call of the impl's `eq` method", (): void => {
+    const result = compile(program("!="));
+    expect(result.diagnostics).toEqual([]);
+    assert(isSome(result.code), "Expected the program to compile");
+    const { javascript } = result.code.value;
+    assert(isSome(javascript), "Expected emitted JavaScript");
+    expect(javascript.value).toContain("!a.eq(b)");
+    expect(javascript.value).not.toContain("a !== b");
+  });
+
+  it("lowers `==` on an enum to a call of the impl's `eq` method", (): void => {
+    const result = compile(`
+      enum Dir { N, S }
+      impl PartialEq for Dir { fn eq(&self, other: &Self) -> bool { true } }
+      fn main() {
+        let a = Dir::N;
+        let b = Dir::S;
+        let c = a == b;
+        print("done");
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    assert(isSome(result.code), "Expected the program to compile");
+    const { javascript } = result.code.value;
+    assert(isSome(javascript), "Expected emitted JavaScript");
+    expect(javascript.value).toContain("a.eq(b)");
+  });
+
+  it("lowers `==` on `&Point` operands to a call of `eq`", (): void => {
+    const result = compile(`
+      struct Point { x: i32 }
+      impl PartialEq for Point { fn eq(&self, other: &Self) -> bool { true } }
+      fn eq_refs(a: &Point, b: &Point) -> bool { a == b }
+      fn main() { print("done"); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    assert(isSome(result.code), "Expected the program to compile");
+    const { javascript } = result.code.value;
+    assert(isSome(javascript), "Expected emitted JavaScript");
+    expect(javascript.value).toContain("a.eq(b)");
+  });
+
+  it("lowers `==` on a `PartialEq`-bound generic parameter to a call of `eq`", (): void => {
+    const result = compile(`
+      fn same<T: PartialEq>(a: T, b: T) -> bool { a == b }
+      fn main() { print("done"); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    assert(isSome(result.code), "Expected the program to compile");
+    const { javascript } = result.code.value;
+    assert(isSome(javascript), "Expected emitted JavaScript");
+    expect(javascript.value).toContain("a.eq(b)");
+  });
+});
+
 describe("a rejected construct is named without an internal roadmap slice", (): void => {
   it.each([
     ["fn main() { loop {} }", "`loop` expressions are not yet supported"],

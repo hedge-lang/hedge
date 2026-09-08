@@ -676,10 +676,13 @@ function walkNonMovingPlace(
  * same `asMove: true` path a bare `PathExpression` gets (see `useOrMove`).
  * This is safe to apply almost uniformly because Hedge's type-capability
  * system already restricts which types can appear where: only `Copy` types
- * can be arithmetic/comparison operands, so walking `x` inside `x + 1` as a
- * "move" is a no-op - `useOrMove` only actually transitions a binding to
- * `Unbound` when its type has no `copy` capability, and a non-`Copy` struct
- * could never legally reach a `BinaryExpression` operand in the first place.
+ * can be an operand of an arithmetic, bitwise, or logical operator, so
+ * walking `x` inside `x + 1` as a "move" is a no-op - `useOrMove` only
+ * actually transitions a binding to `Unbound` when its type has no `copy`
+ * capability. `==`/`!=` are the exception among operators: a struct or enum
+ * operand reaches them (dispatching through `PartialEq::eq`), so
+ * `walkExpression`'s `BinaryExpression` case routes those two operators'
+ * operands through `walkNonMovingPlace` - `eq` borrows, never moves.
  * `FieldAccessExpression`/`ReferenceExpression`/`AssignExpression`/
  * `IndexExpression` are deliberate exceptions, routed through
  * `walkNonMovingPlace` instead: the object/operand/lhs being accessed is a
@@ -721,6 +724,12 @@ function walkExpression(
       walkExpression(ctx, expression.lhs, state, scopeStack);
       return;
     case "BinaryExpression":
+      if (expression.operator === "Eq" || expression.operator === "Ne") {
+        // `==`/`!=` borrow their operands (see this function's doc comment).
+        walkNonMovingPlace(ctx, expression.left, state, scopeStack);
+        walkNonMovingPlace(ctx, expression.right, state, scopeStack);
+        return;
+      }
       walkExpression(ctx, expression.left, state, scopeStack);
       walkExpression(ctx, expression.right, state, scopeStack);
       return;
