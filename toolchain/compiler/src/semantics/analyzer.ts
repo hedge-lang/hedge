@@ -6381,6 +6381,32 @@ interface ComparisonOperand {
 interface ComparisonSpec {
   readonly capability: TypeCapability;
   readonly errorKind: DiagnosticKind;
+  /** `Eq`/`Ne` only: an operand with no `equality` capability is still
+   * comparable when its type has a resolved `PartialEq` impl (directly, or
+   * a generic parameter bound by `PartialEq`/`Eq`). Ordering has no such
+   * fallback yet - see the `TODO(Hedge-279)` below. */
+  readonly equalityTraitFallback: boolean;
+}
+
+/** Whether one operand may take part in this comparison - via its own
+ * capability-table entry, or (equality only) a resolved `PartialEq` impl on
+ * the operand's type or, through one borrow, its referent (`&Point ==
+ * &Point` when `Point: PartialEq`). */
+function comparisonOperandResolves(
+  ctx: AnalysisContext,
+  spec: ComparisonSpec,
+  operand: ComparisonOperand,
+): boolean {
+  if (!operand.isValid) return true;
+  if (hasCapability(operand.type, spec.capability)) return true;
+  if (!spec.equalityTraitFallback) return false;
+  const partialEq = lookupTrait(ctx, "PartialEq");
+  if (partialEq === undefined) return false;
+  const referent =
+    operand.type.kind === "ReferenceType"
+      ? operand.type.referent
+      : operand.type;
+  return isSome(resolveTraitBound(ctx, referent, partialEq));
 }
 
 /**
@@ -6397,12 +6423,11 @@ function inferComparisonType(
   right: ComparisonOperand,
   tokenId: number,
 ): Semantics.Type {
-  const leftOk = !left.isValid || hasCapability(left.type, spec.capability);
-  const rightOk = !right.isValid || hasCapability(right.type, spec.capability);
+  const leftOk = comparisonOperandResolves(ctx, spec, left);
+  const rightOk = comparisonOperandResolves(ctx, spec, right);
   if (!leftOk || !rightOk) {
-    // TODO(Hedge-265): equality should fall through to a resolved
-    // PartialEq/Eq impl here instead of rejecting outright.
-    // TODO(Hedge-279): same gap for ordering (PartialOrd/Ord).
+    // TODO(Hedge-279): ordering should fall through to a resolved
+    // PartialOrd/Ord impl here, the same way equality now does.
     emitError(ctx, spec.errorKind, tokenId);
   } else if (
     left.isValid &&
@@ -6546,6 +6571,7 @@ function inferBinaryType(
             kind: "SemComparisonNotSupported",
             relation: "equality",
           },
+          equalityTraitFallback: true,
         },
         { type: leftType, isValid: isLeftTypeValid },
         { type: rightType, isValid: isRightTypeValid },
@@ -6563,6 +6589,7 @@ function inferBinaryType(
             kind: "SemComparisonNotSupported",
             relation: "ordering",
           },
+          equalityTraitFallback: false,
         },
         { type: leftType, isValid: isLeftTypeValid },
         { type: rightType, isValid: isRightTypeValid },

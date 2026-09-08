@@ -1201,4 +1201,26 @@ describe("move-check", (): void => {
       expect(diagnostics).toEqual([]);
     });
   });
+
+  describe("== / != operands are borrowed, not moved", (): void => {
+    const PARTIAL_EQ =
+      "trait PartialEq { fn eq(&self, other: &Self) -> bool; }\n";
+
+    it("does not move a struct operand of `==`", (): void => {
+      const { diagnostics } = check(`
+        ${PARTIAL_EQ}
+        struct P { v: i32 }
+        impl PartialEq for P { fn eq(&self, other: &Self) -> bool { true } }
+        fn main() {
+          let a = P { v: 1 };
+          let b = P { v: 2 };
+          let first = a == b;
+          let second = a != b;
+          print(a.v);
+          print(b.v);
+        }
+      `);
+      expect(diagnostics).toEqual([]);
+    });
+  });
 });

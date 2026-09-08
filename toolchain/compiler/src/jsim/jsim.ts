@@ -2966,10 +2966,51 @@ function shiftAmount(
   };
 }
 
+/** A struct/enum operand, a reference to one, or a generic parameter, that
+ * reached lowering under `==`/`!=` resolved through a `PartialEq` impl - the
+ * capability table covers no such type, so a clean analysis leaves no other
+ * possibility. */
+function isTraitEqualityOperand(type: Semantics.Type): boolean {
+  const operandType = type.kind === "ReferenceType" ? type.referent : type;
+  return (
+    operandType.kind === "StructType" ||
+    operandType.kind === "EnumType" ||
+    (operandType.kind === "NamedType" && operandType.path.segments.length === 1)
+  );
+}
+
+function parseTraitEqualityComparison(
+  ctx: JsimContext,
+  binExp: Semantics.BinaryExpression,
+): JSIM.Expression {
+  const call: JSIM.Expression = {
+    kind: "MethodCallExpression",
+    receiver: parseExpression(ctx, binExp.left),
+    method: "eq",
+    arguments: [parseExpression(ctx, binExp.right)],
+  };
+  if (binExp.operator === "Ne") {
+    return {
+      kind: "UnaryExpression",
+      operator: "Not",
+      operand: call,
+      numericKind: none(),
+    };
+  }
+  return call;
+}
+
 function parseBinaryExpression(
   ctx: JsimContext,
   binExp: Semantics.BinaryExpression,
 ): JSIM.Expression {
+  if (
+    (binExp.operator === "Eq" || binExp.operator === "Ne") &&
+    (isTraitEqualityOperand(binExp.left.type) ||
+      isTraitEqualityOperand(binExp.right.type))
+  ) {
+    return parseTraitEqualityComparison(ctx, binExp);
+  }
   const numericKind: Option<JSIM.NumericKind> = ARITHMETIC_OPS.has(
     binExp.operator,
   )
