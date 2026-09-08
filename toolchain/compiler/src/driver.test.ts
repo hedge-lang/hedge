@@ -391,7 +391,7 @@ describe("bodiless function signatures", (): void => {
 });
 
 describe("trait/impl declarations", (): void => {
-  it("compiles a trait and impl declaration cleanly, erasing both from the emitted JavaScript", (): void => {
+  it("erases the trait declaration but emits the impl's method body as a free function", (): void => {
     const result = compile(`
       trait Draw {
         fn draw(&self) -> str;
@@ -409,87 +409,424 @@ describe("trait/impl declarations", (): void => {
     const { javascript } = result.code.value;
     assert(isSome(javascript), "Expected emitted JavaScript");
     expect(javascript.value).toContain("function main()");
-    expect(javascript.value).not.toContain("Draw");
-    expect(javascript.value).not.toContain("draw");
+    expect(javascript.value).toContain("function Point$Draw$draw(self)");
+    expect(javascript.value).toContain('return "point";');
+    expect(javascript.value).not.toContain("trait Draw");
+  });
+});
+
+/**
+ * Runs emitted Slice-1/4 JavaScript in a `new Function` sandbox with a mock
+ * `print`, mirroring the conformance suite's `executeHedgeCode`, and returns
+ * the captured `print` lines. For the runtime-worded acceptance criteria that
+ * a `toContain` shape check alone cannot pin.
+ */
+function runEmittedJs(javascript: string): string[] {
+  const stdout: string[] = [];
+  const env = {
+    print: (...args: unknown[]): void => {
+      stdout.push(args.join(""));
+    },
+  };
+  const body = javascript.startsWith("#!") ? `// ${javascript}` : javascript;
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  const fn = new Function(...Object.keys(env), body);
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+  fn(...Object.values(env));
+  return stdout;
+}
+
+function emittedJs(source: string): string {
+  const result = compile(source);
+  expect(result.diagnostics).toEqual([]);
+  assert(isSome(result.code), "Expected the program to compile");
+  const { javascript } = result.code.value;
+  assert(isSome(javascript), "Expected emitted JavaScript");
+  return javascript.value;
+}
+
+describe("method-call codegen", (): void => {
+  it("emits an inherent `&self` method as a free function and lowers the call to it", (): void => {
+    const js = emittedJs(`
+      struct Point { x: i32 }
+      impl Point {
+        fn get(&self) -> i32 { self.x }
+      }
+      fn main() {
+        let p = Point { x: 7 };
+        print(p.get());
+      }
+    `);
+    expect(js).toContain("function Point$get(self)");
+    expect(js).toContain("return self.x;");
+    expect(js).toContain("Point$get(p)");
+    expect(js).not.toContain("p.get()");
+    expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
+  it("passes a method's own arguments after the receiver", (): void => {
+    const js = emittedJs(`
+      struct Point { x: i32 }
+      impl Point {
+        fn add(&self, n: i32) -> i32 { self.x + n }
+      }
+      fn main() {
+        let p = Point { x: 7 };
+        print(p.add(5));
+      }
+    `);
+    expect(js).toContain("function Point$add(self, n)");
+    expect(js).toContain("Point$add(p, 5)");
+    expect(runEmittedJs(js)).toEqual(["12"]);
+  });
+
+  it("dispatches a trait method on a concrete receiver to the impl's free function", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct Point { x: i32 }
+      impl Draw for Point {
+        fn draw(&self) -> i32 { self.x }
+      }
+      fn main() {
+        let p = Point { x: 9 };
+        print(p.draw());
+      }
+    `);
+    expect(js).toContain("function Point$Draw$draw(self)");
+    expect(js).toContain("Point$Draw$draw(p)");
+    expect(js).not.toContain("p.draw()");
+    expect(runEmittedJs(js)).toEqual(["9"]);
+  });
+
+  it("suffixes a generated method free-function name that collides with a user function", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct Point { x: i32 }
+      impl Draw for Point { fn draw(&self) -> i32 { self.x } }
+      fn Point$Draw$draw() -> i32 { 0 }
+      fn main() {
+        let p = Point { x: 7 };
+        print(p.draw());
+        print(Point$Draw$draw());
+      }
+    `);
+    // The user function keeps its name; the generated one is suffixed and the
+    // call site follows it.
+    expect(js).toMatch(/function Point\$Draw\$draw\(\) \{\s*\n\s*return 0;/);
+    expect(js).toContain("function Point$Draw$draw_2(self)");
+    expect(js).toContain("Point$Draw$draw_2(p)");
+    expect(runEmittedJs(js)).toEqual(["7", "0"]);
+  });
+
+  it("keeps an inherent method and a trait method on the same type as distinct free functions", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn describe(&self) -> i32; }
+      struct Point { x: i32 }
+      impl Point { fn raw(&self) -> i32 { self.x } }
+      impl Draw for Point { fn describe(&self) -> i32 { self.x + 1 } }
+      fn main() {
+        let p = Point { x: 10 };
+        print(p.raw());
+        print(p.describe());
+      }
+    `);
+    expect(js).toContain("function Point$raw(self)");
+    expect(js).toContain("function Point$Draw$describe(self)");
+    expect(js).toContain("Point$raw(p)");
+    expect(js).toContain("Point$Draw$describe(p)");
+    expect(runEmittedJs(js)).toEqual(["10", "11"]);
+  });
+
+  it("passes a by-value `self` receiver directly and moves the caller's binding", (): void => {
+    const src = `
+      struct Point { x: i32 }
+      impl Point {
+        fn consume(self) -> i32 { self.x }
+      }
+      fn main() {
+        let p = Point { x: 5 };
+        print(p.consume());
+      }
+    `;
+    const js = emittedJs(src);
+    expect(js).toContain("function Point$consume(self)");
+    expect(js).toContain("Point$consume(p)");
+    expect(runEmittedJs(js)).toEqual(["5"]);
+
+    const moved = compile(`
+      struct Point { x: i32 }
+      impl Point { fn consume(self) -> i32 { self.x } }
+      fn main() {
+        let p = Point { x: 5 };
+        let a = p.consume();
+        let b = p.consume();
+        print(a);
+      }
+    `);
+    expect(
+      moved.diagnostics.filter((d) => d.severity === "error"),
+    ).toHaveLength(1);
+  });
+
+  it("passes an accessor cell for a `&mut self` receiver and mutates the caller's binding", (): void => {
+    const js = emittedJs(`
+      struct Point { x: i32 }
+      impl Point {
+        fn bump(&mut self, n: i32) { self.x = self.x + n; }
+      }
+      fn main() {
+        let mut p = Point { x: 1 };
+        p.bump(3);
+        print(p.x);
+      }
+    `);
+    expect(js).toContain("function Point$bump(self, n)");
+    expect(js).toContain("self.v.x = ((self.v.x + n)|0);");
+    expect(js).toMatch(/Point\$bump\(\(\{ get v\(\) \{ return p; \}/);
+    expect(runEmittedJs(js)).toEqual(["4"]);
+  });
+
+  it("chains a method call on a struct another method returned", (): void => {
+    const js = emittedJs(`
+      struct Point { x: i32 }
+      impl Point {
+        fn twin(&self) -> Point { Point { x: self.x } }
+        fn val(&self) -> i32 { self.x }
+      }
+      fn main() {
+        let p = Point { x: 6 };
+        print(p.twin().val());
+      }
+    `);
+    expect(js).toContain("Point$val(Point$twin(p))");
+    expect(runEmittedJs(js)).toEqual(["6"]);
+  });
+
+  it("emits one free function however many sites call the method", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct Point { x: i32 }
+      impl Draw for Point { fn draw(&self) -> i32 { self.x } }
+      fn main() {
+        let p = Point { x: 1 };
+        let q = Point { x: 2 };
+        print(p.draw());
+        print(q.draw());
+      }
+    `);
+    expect(js.match(/function Point\$Draw\$draw\b/g)).toHaveLength(1);
+  });
+
+  it("does not emit a broken call for an unresolved method, reporting one error", (): void => {
+    const result = compile(`
+      struct Point { x: i32 }
+      fn main() {
+        let p = Point { x: 1 };
+        print(p.nope());
+      }
+    `);
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.code).toBe("HEDGE-TYPE-012");
+    expect(isNone(result.code)).toBe(true);
+  });
+
+  it("lowers a method call nested in an `if` branch and a struct field initializer", (): void => {
+    const js = emittedJs(`
+      struct Point { x: i32 }
+      struct Wrap { p: Point }
+      impl Point { fn get(&self) -> i32 { self.x } }
+      fn main() {
+        let p = Point { x: 4 };
+        let w = Wrap { p: Point { x: p.get() } };
+        if p.get() == 4 { print(w.p.x); }
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["4"]);
+  });
+
+  it("lowers a method that reads a `$`-containing field name", (): void => {
+    const js = emittedJs(`
+      struct P { x$1: i32 }
+      impl P { fn get(&self) -> i32 { self.x$1 } }
+      fn main() {
+        let p = P { x$1: 8 };
+        print(p.get());
+      }
+    `);
+    expect(js).toContain("return self.x$1;");
+    expect(runEmittedJs(js)).toEqual(["8"]);
+  });
+
+  it("emits a block-local impl's method as a top-level free function", (): void => {
+    const js = emittedJs(`
+      struct Widget { n: i32 }
+      fn build() -> i32 {
+        impl Widget { fn size(&self) -> i32 { self.n } }
+        let w = Widget { n: 3 };
+        w.size()
+      }
+      fn main() { print(build()); }
+    `);
+    expect(js).toContain("function Widget$size(self)");
+    expect(js).toContain("Widget$size(w)");
+    expect(runEmittedJs(js)).toEqual(["3"]);
+  });
+
+  it("keeps a block-local struct's method distinct from a shadowed top-level struct's", (): void => {
+    const result = compile(`
+      struct Point { x: i32 }
+      impl Point { fn get(&self) -> i32 { self.x } }
+      fn inner() -> i32 {
+        struct Point { y: i32 }
+        impl Point { fn get(&self) -> i32 { self.y } }
+        let p = Point { y: 9 };
+        p.get()
+      }
+      fn main() {
+        let p = Point { x: 4 };
+        print(p.get());
+        print(inner());
+      }
+    `);
+    assert(isSome(result.code), "Expected the program to compile");
+    const { javascript } = result.code.value;
+    assert(isSome(javascript), "Expected emitted JavaScript");
+    const js = javascript.value;
+    expect(js).toContain("function Point$get(self)");
+    expect(js).toContain("function Point$get_2(self)");
+    expect(runEmittedJs(js)).toEqual(["4", "9"]);
+  });
+
+  it("disposes an owned local declared inside a method body at method-scope end", (): void => {
+    const js = emittedJs(`
+      struct Res { fd: i32 }
+      struct Holder { x: i32 }
+      impl Holder {
+        fn work(&self) -> i32 { let r = Res { fd: 1 }; self.x }
+      }
+      fn main() { let h = Holder { x: 5 }; print(h.work()); }
+    `);
+    expect(js).toMatch(/function Holder\$work\(self\) \{\s*\n\s*using r = /);
+    expect(runEmittedJs(js)).toEqual(["5"]);
+  });
+
+  it("does not emit a free-function call for a trait default method the impl does not override", (): void => {
+    const js = emittedJs(`
+      trait Greet { fn hello(&self) -> i32 { 42 } }
+      struct P { x: i32 }
+      impl Greet for P {}
+      fn main() { let p = P { x: 1 }; print(p.hello()); }
+    `);
+    // Default-method bodies are not emitted yet; the call keeps the plain
+    // method-call shape rather than referencing an unemitted free function.
+    expect(js).toContain("p.hello()");
+    expect(js).not.toContain("P$Greet$hello");
+  });
+
+  it("keeps method free functions out of the emitted `.d.ts`", (): void => {
+    const result = compile(`
+      struct Counter { n: i32 }
+      impl Counter { fn value(&self) -> i32 { self.n } }
+      pub fn read(c: Counter) -> i32 { c.value() }
+      fn main() { print(read(Counter { n: 1 })); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    assert(isSome(result.code), "Expected the program to compile");
+    const { typedef } = result.code.value;
+    assert(isSome(typedef), "Expected an emitted .d.ts");
+    expect(typedef.value).toContain("read");
+    expect(typedef.value).not.toContain("Counter$value");
+    expect(typedef.value).not.toContain("$");
   });
 });
 
 describe("== / != on a type with a PartialEq impl", (): void => {
-  const program = (op: "==" | "!="): string => `
-    struct Point { x: i32 }
-    impl PartialEq for Point {
-      fn eq(&self, other: &Self) -> bool { true }
-    }
-    fn main() {
-      let a = Point { x: 1 };
-      let b = Point { x: 2 };
-      let c = a ${op} b;
-      print("done");
-    }
-  `;
-
-  it("lowers `==` on a struct to a call of the impl's `eq` method", (): void => {
-    const result = compile(program("=="));
-    expect(result.diagnostics).toEqual([]);
-    assert(isSome(result.code), "Expected the program to compile");
-    const { javascript } = result.code.value;
-    assert(isSome(javascript), "Expected emitted JavaScript");
-    expect(javascript.value).toContain("a.eq(b)");
-    expect(javascript.value).not.toContain("a === b");
+  it("lowers `==` on a struct to a call of the impl's `eq` free function and runs it", (): void => {
+    const js = emittedJs(`
+      struct Point { x: i32 }
+      impl PartialEq for Point {
+        fn eq(&self, other: &Self) -> bool { self.x == other.x }
+      }
+      fn main() {
+        let a = Point { x: 3 };
+        let b = Point { x: 3 };
+        if a == b { print("equal"); }
+      }
+    `);
+    expect(js).toContain("Point$PartialEq$eq(a, b)");
+    expect(js).not.toContain("a.eq(b)");
+    expect(js).not.toContain("a === b");
+    expect(runEmittedJs(js)).toEqual(["equal"]);
   });
 
-  it("lowers `!=` on a struct to a negated call of the impl's `eq` method", (): void => {
-    const result = compile(program("!="));
-    expect(result.diagnostics).toEqual([]);
-    assert(isSome(result.code), "Expected the program to compile");
-    const { javascript } = result.code.value;
-    assert(isSome(javascript), "Expected emitted JavaScript");
-    expect(javascript.value).toContain("!a.eq(b)");
-    expect(javascript.value).not.toContain("a !== b");
+  it("lowers `!=` on a struct to a negated call of the impl's `eq` free function and runs it", (): void => {
+    const js = emittedJs(`
+      struct Point { x: i32 }
+      impl PartialEq for Point {
+        fn eq(&self, other: &Self) -> bool { self.x == other.x }
+      }
+      fn main() {
+        let a = Point { x: 3 };
+        let b = Point { x: 4 };
+        if a != b { print("different"); }
+      }
+    `);
+    expect(js).toContain("!Point$PartialEq$eq(a, b)");
+    expect(js).not.toContain("a.eq(b)");
+    expect(runEmittedJs(js)).toEqual(["different"]);
   });
 
-  it("lowers `==` on an enum to a call of the impl's `eq` method", (): void => {
-    const result = compile(`
+  it("lowers `==` on an enum to a call of the impl's `eq` free function and runs it", (): void => {
+    const js = emittedJs(`
       enum Dir { N, S }
-      impl PartialEq for Dir { fn eq(&self, other: &Self) -> bool { true } }
+      impl PartialEq for Dir {
+        fn eq(&self, other: &Self) -> bool { true }
+      }
       fn main() {
         let a = Dir::N;
         let b = Dir::S;
-        let c = a == b;
-        print("done");
+        if a == b { print("same tag"); }
       }
     `);
-    expect(result.diagnostics).toEqual([]);
-    assert(isSome(result.code), "Expected the program to compile");
-    const { javascript } = result.code.value;
-    assert(isSome(javascript), "Expected emitted JavaScript");
-    expect(javascript.value).toContain("a.eq(b)");
+    expect(js).toContain("Dir$PartialEq$eq(a, b)");
+    expect(js).not.toContain("a.eq(b)");
+    expect(runEmittedJs(js)).toEqual(["same tag"]);
   });
 
-  it("lowers `==` on `&Point` operands to a call of `eq`", (): void => {
-    const result = compile(`
+  it("lowers `==` on `&Point` operands to a call of the `eq` free function", (): void => {
+    const js = emittedJs(`
       struct Point { x: i32 }
       impl PartialEq for Point { fn eq(&self, other: &Self) -> bool { true } }
       fn eq_refs(a: &Point, b: &Point) -> bool { a == b }
       fn main() { print("done"); }
     `);
-    expect(result.diagnostics).toEqual([]);
-    assert(isSome(result.code), "Expected the program to compile");
-    const { javascript } = result.code.value;
-    assert(isSome(javascript), "Expected emitted JavaScript");
-    expect(javascript.value).toContain("a.eq(b)");
+    expect(js).toContain("Point$PartialEq$eq(a, b)");
+    expect(js).not.toContain("a.eq(b)");
   });
 
-  it("lowers `==` on a `PartialEq`-bound generic parameter to a call of `eq`", (): void => {
-    const result = compile(`
+  it("leaves `==` on a `PartialEq`-bound generic parameter as a method call until witnessed dispatch lands", (): void => {
+    const js = emittedJs(`
       fn same<T: PartialEq>(a: T, b: T) -> bool { a == b }
       fn main() { print("done"); }
     `);
-    expect(result.diagnostics).toEqual([]);
-    assert(isSome(result.code), "Expected the program to compile");
-    const { javascript } = result.code.value;
-    assert(isSome(javascript), "Expected emitted JavaScript");
-    expect(javascript.value).toContain("a.eq(b)");
+    expect(js).toContain("a.eq(b)");
+  });
+
+  it("leaves `==` on a type whose `PartialEq` comes only from a blanket impl as a method call", (): void => {
+    const js = emittedJs(`
+      trait Marker {}
+      struct W { n: i32 }
+      impl Marker for W {}
+      impl<T: Marker> PartialEq for T { fn eq(&self, other: &Self) -> bool { true } }
+      fn main() {
+        let a = W { n: 1 };
+        let b = W { n: 2 };
+        if a == b { print("done"); }
+      }
+    `);
+    expect(js).toContain("a.eq(b)");
+    expect(js).not.toContain("W$PartialEq$eq");
   });
 });
 

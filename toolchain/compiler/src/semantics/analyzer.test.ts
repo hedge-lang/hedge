@@ -6282,6 +6282,74 @@ describe("trait and impl declarations", (): void => {
     });
   });
 
+  describe("method-call targets", (): void => {
+    it("records an inherent method call's resolved type and method, and no trait", (): void => {
+      const result = diagnose(`
+        struct Point { x: i32 }
+        impl Point { fn get(&self) -> i32 { self.x } }
+        fn main() { let p = Point { x: 1 }; print(p.get()); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [target] = [...result.methodTargets.values()];
+      expect(target).toMatchObject({
+        typeName: "Point",
+        traitName: none(),
+        methodName: "get",
+      });
+      expect(target?.typeId).toContain("Point");
+    });
+
+    it("records the trait for a trait-impl method call", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> i32; }
+        struct Point { x: i32 }
+        impl Draw for Point { fn draw(&self) -> i32 { self.x } }
+        fn main() { let p = Point { x: 1 }; print(p.draw()); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [target] = [...result.methodTargets.values()];
+      expect(target).toMatchObject({
+        typeName: "Point",
+        traitName: some("Draw"),
+        methodName: "draw",
+      });
+    });
+
+    it("records a `PartialEq`-dispatched `==` against the operator token", (): void => {
+      const { program, tokens } = assembleProgram(`
+        struct P { x: i32 }
+        impl PartialEq for P { fn eq(&self, other: &Self) -> bool { true } }
+        fn main() {
+          let a = P { x: 1 };
+          let b = P { x: 2 };
+          if a == b { print(1); }
+        }
+      `);
+      assert(isSome(program), "Parse failed");
+      const result = analyze(program.value, tokens);
+      expect(result.diagnostics).toEqual([]);
+      const entry = [...result.methodTargets.entries()][0];
+      assert(entry !== undefined, "expected one method target");
+      const [tokenId, target] = entry;
+      expect(tokens[tokenId]?.kind).toBe("eq_eq");
+      expect(target).toMatchObject({
+        typeName: "P",
+        traitName: some("PartialEq"),
+        methodName: "eq",
+      });
+    });
+
+    it("records no target for a method call on a bound generic parameter", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> i32; }
+        fn run<T: Draw>(t: &T) -> i32 { t.draw() }
+        fn main() { print(0); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(result.methodTargets.size).toBe(0);
+    });
+  });
+
   describe("nested impl registration and visibility", (): void => {
     it("resolves a generic call against an impl declared inside another function's body", (): void => {
       const result = diagnose(`

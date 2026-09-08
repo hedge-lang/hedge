@@ -5,12 +5,17 @@ import {
   type BindingId,
   type Declaration,
 } from "../ownership/control-flow-graph.js";
-import type {
-  BranchDrop,
-  ConditionalDrop,
-  FunctionOwnership,
+import {
+  methodOwnershipKey,
+  type BranchDrop,
+  type ConditionalDrop,
+  type FunctionOwnership,
 } from "../ownership/move-check.js";
-import { constValueToLiteralExpression } from "../semantics/analyzer.js";
+import { collectAllImpls } from "../ownership/owned-functions.js";
+import {
+  constValueToLiteralExpression,
+  type MethodTarget,
+} from "../semantics/analyzer.js";
 import type * as Semantics from "../semantics/ast.js";
 import { hasCapability } from "../semantics/type-capabilities.js";
 import type * as JSIM from "./ast.js";
@@ -83,12 +88,26 @@ interface JsimContext {
    * static's hidden backing variable from colliding with any of these.
    */
   readonly topLevelNames: Set<string>;
+  /** `AnalysisResult.methodTargets` - the free function each resolved method
+   * call (keyed by method-name token) and trait-dispatched `==` (keyed by
+   * operator token) lowers to. */
+  readonly methodTargets: ReadonlyMap<number, MethodTarget>;
+  /** `AnalysisResult.implMethodTargets` - one entry per impl-provided method
+   * to emit, keyed by its body tokenId. */
+  readonly implMethodTargets: ReadonlyMap<number, MethodTarget>;
+  /** Each emitted method free function's `methodKey` mapped to the name
+   * actually emitted - identical to the readable `methodFreeFnName` unless it
+   * collided with a user top-level binding. Both the emission and call sites
+   * resolve through this so they agree. */
+  readonly methodFreeFnNames: Map<string, string>;
 }
 
 function createJsimContext(
   tokens: readonly Token[],
   ownership: ReadonlyMap<string, FunctionOwnership>,
   topLevelNames: Set<string>,
+  methodTargets: ReadonlyMap<number, MethodTarget>,
+  implMethodTargets: ReadonlyMap<number, MethodTarget>,
 ): JsimContext {
   return {
     tokens,
@@ -101,6 +120,9 @@ function createJsimContext(
     allConditionalDrops: [],
     emittedNameByBindingId: [],
     topLevelNames,
+    methodTargets,
+    implMethodTargets,
+    methodFreeFnNames: new Map(),
   };
 }
 
@@ -756,6 +778,8 @@ export function toJsim(
   program: Semantics.Program,
   tokens: readonly Token[],
   ownership: ReadonlyMap<string, FunctionOwnership> = new Map(),
+  methodTargets: ReadonlyMap<number, MethodTarget> = new Map(),
+  implMethodTargets: ReadonlyMap<number, MethodTarget> = new Map(),
 ): JSIM.Program {
   const topLevelNames = new Set<string>();
   for (const item of program.items) {
@@ -768,11 +792,22 @@ export function toJsim(
       topLevelNames.add(item.name.text);
     }
   }
-  const ctx = createJsimContext(tokens, ownership, topLevelNames);
+  const ctx = createJsimContext(
+    tokens,
+    ownership,
+    topLevelNames,
+    methodTargets,
+    implMethodTargets,
+  );
+  const impls = collectAllImpls(program);
+  reserveMethodFreeFnNames(ctx, impls);
   return {
     kind: "Program",
     docComment: toDocComment(program.attributes),
-    items: program.items.flatMap((i) => parseItem(ctx, i)),
+    items: [
+      ...impls.flatMap((impl) => parseImplMethods(ctx, impl)),
+      ...program.items.flatMap((i) => parseItem(ctx, i)),
+    ],
   };
 }
 
@@ -894,6 +929,86 @@ function hedgeTypeToNumericKind(
   }
 }
 
+/** The readable `<Type>$<method>` (inherent) / `<Type>$<Trait>$<method>`
+ * (trait impl) name a method's free function emits under, before collision
+ * resolution. Uses the bare `typeName`; two shadowed types share it, which
+ * is what `methodKey` disambiguates. */
+function methodFreeFnName(target: MethodTarget): string {
+  const traitSegment = isSome(target.traitName)
+    ? `${target.traitName.value}$`
+    : "";
+  return `${target.typeName}$${traitSegment}${target.methodName}`;
+}
+
+/** The per-declaration identity of a method free function - scope-qualified,
+ * so a block-local type shadowing a top-level one keeps a distinct entry in
+ * `ctx.methodFreeFnNames`. */
+function methodKey(target: MethodTarget): string {
+  const trait = isSome(target.traitName) ? target.traitName.value : "";
+  return `${target.typeId} ${trait} ${target.methodName}`;
+}
+
+/** The name a method's free function actually emits and every call site
+ * calls - the readable name unless it collided with a user top-level binding
+ * and was suffixed (`reserveMethodFreeFnNames`). */
+function resolvedMethodFreeFnName(
+  ctx: JsimContext,
+  target: MethodTarget,
+): string {
+  return (
+    ctx.methodFreeFnNames.get(methodKey(target)) ?? methodFreeFnName(target)
+  );
+}
+
+interface EmittableMethod {
+  readonly method: Semantics.FunctionDef;
+  readonly target: MethodTarget;
+}
+
+/** Each of an impl's own method bodies the analyzer marked for emission
+ * (`AnalysisResult.implMethodTargets` - receiver-taking, nominal target),
+ * paired with its `MethodTarget`. */
+function emittableImplMethods(
+  ctx: JsimContext,
+  impl: Semantics.ImplDecl,
+): readonly EmittableMethod[] {
+  return impl.methodBodies.flatMap((method): readonly EmittableMethod[] => {
+    const target = ctx.implMethodTargets.get(method.tokenId);
+    return target === undefined ? [] : [{ method, target }];
+  });
+}
+
+/** Claims a top-level JS name for every method free function before any item
+ * is lowered, so a readable name that collides with a user function gets a
+ * suffix and every call site resolves to the same suffixed name. */
+function reserveMethodFreeFnNames(
+  ctx: JsimContext,
+  impls: readonly Semantics.ImplDecl[],
+): void {
+  for (const impl of impls) {
+    for (const { target } of emittableImplMethods(ctx, impl)) {
+      ctx.methodFreeFnNames.set(
+        methodKey(target),
+        reserveTopLevelName(ctx, methodFreeFnName(target)),
+      );
+    }
+  }
+}
+
+/** Lowers each of an impl's own marked method bodies to a top-level free
+ * function with `self` as the first parameter. */
+function parseImplMethods(
+  ctx: JsimContext,
+  impl: Semantics.ImplDecl,
+): JSIM.Item[] {
+  return emittableImplMethods(ctx, impl).map(
+    ({ method, target }): JSIM.Item => ({
+      ...parseFunction(ctx, method, methodOwnershipKey(method.tokenId)),
+      name: resolvedMethodFreeFnName(ctx, target),
+    }),
+  );
+}
+
 // eslint-disable-next-line complexity -- Routing function over the full Item union
 function parseItem(
   ctx: JsimContext,
@@ -932,6 +1047,9 @@ function parseItem(
     ];
   }
   if (item.kind === "Static") return parseStaticDecl(ctx, item);
+  // Impl methods emit as top-level free functions from `toJsim` (via
+  // `collectAllImpls`), so a block-local impl's methods are reachable too;
+  // the item itself erases at its own position.
   if (
     item.kind === "Trait" ||
     item.kind === "Impl" ||
@@ -1033,8 +1151,9 @@ function emitFunctionParams(
 function parseFunction(
   ctx: JsimContext,
   fn: Semantics.FunctionDef,
+  ownershipKey: string = fn.signature.name.text,
 ): JSIM.FunctionDef {
-  return withFunctionCtx(ctx, fn.signature.name.text, () => {
+  return withFunctionCtx(ctx, ownershipKey, () => {
     const emittedParams = emitFunctionParams(ctx, fn.signature.params);
     return parseFunctionBody(ctx, fn, emittedParams);
   });
@@ -1518,17 +1637,53 @@ function parseExpression(
   }
 }
 
+/** The receiver, lowered as the free function's first argument. A `&mut self`
+ * method needs an accessor cell so writes to `self` reach the caller's
+ * binding - unless the receiver is already a `&mut` reference, in which case
+ * it is that cell already. `&self` erases and by-value `self` is passed
+ * (and moved) directly. */
+function selfArgument(
+  ctx: JsimContext,
+  call: Semantics.MethodCallExpression,
+): JSIM.Expression {
+  const receiver = parseExpression(ctx, call.receiver);
+  const wantsMutCell =
+    isSome(call.receiverKind) &&
+    call.receiverKind.value.byRef &&
+    call.receiverKind.value.mutable &&
+    call.receiver.type.kind !== "ReferenceType";
+  return wantsMutCell
+    ? { kind: "RefCellExpression", place: receiver }
+    : receiver;
+}
+
 function jsimMethodCallExpression(
   ctx: JsimContext,
   methodCallExpression: Semantics.MethodCallExpression,
 ): JSIM.Expression {
+  const loweredArgs = methodCallExpression.arguments.map((arg) =>
+    parseExpression(ctx, arg),
+  );
+  const target = ctx.methodTargets.get(methodCallExpression.method.tokenId);
+  if (target !== undefined) {
+    return {
+      kind: "CallExpression",
+      callee: {
+        kind: "Identifier",
+        value: resolvedMethodFreeFnName(ctx, target),
+        type: none(),
+      },
+      arguments: [selfArgument(ctx, methodCallExpression), ...loweredArgs],
+    };
+  }
+  // No resolved target: a `dyn`/generic-parameter receiver, whose witnessed
+  // dispatch is a later slice of this work. Left as a JS method call, as
+  // before.
   return {
     kind: "MethodCallExpression",
     receiver: parseExpression(ctx, methodCallExpression.receiver),
     method: methodCallExpression.method.text,
-    arguments: methodCallExpression.arguments.map((arg) =>
-      parseExpression(ctx, arg),
-    ),
+    arguments: loweredArgs,
   };
 }
 
@@ -2983,12 +3138,28 @@ function parseTraitEqualityComparison(
   ctx: JsimContext,
   binExp: Semantics.BinaryExpression,
 ): JSIM.Expression {
-  const call: JSIM.Expression = {
-    kind: "MethodCallExpression",
-    receiver: parseExpression(ctx, binExp.left),
-    method: "eq",
-    arguments: [parseExpression(ctx, binExp.right)],
-  };
+  const target = ctx.methodTargets.get(binExp.tokenId);
+  const left = parseExpression(ctx, binExp.left);
+  const right = parseExpression(ctx, binExp.right);
+  const call: JSIM.Expression =
+    target !== undefined
+      ? {
+          kind: "CallExpression",
+          callee: {
+            kind: "Identifier",
+            value: resolvedMethodFreeFnName(ctx, target),
+            type: none(),
+          },
+          arguments: [left, right],
+        }
+      : {
+          // No resolved impl: a generic-parameter operand, whose witnessed
+          // `eq` dispatch is a later slice of this work.
+          kind: "MethodCallExpression",
+          receiver: left,
+          method: "eq",
+          arguments: [right],
+        };
   if (binExp.operator === "Ne") {
     return {
       kind: "UnaryExpression",

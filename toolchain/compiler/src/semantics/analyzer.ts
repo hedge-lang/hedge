@@ -36,6 +36,30 @@ export interface AnalysisResult {
    * to turn into a hidden witness argument later. A call with unresolved
    * bounds carries no entry (analysis already reported the diagnostic). */
   readonly witnesses: ReadonlyMap<number, readonly WitnessRef[]>;
+  /** Where codegen finds the free function backing a resolved method call
+   * (keyed by the method-name token) and a trait-dispatched `==`/`!=` (keyed
+   * by the operator token). Absent when the call/operator did not resolve
+   * through a concrete impl. */
+  readonly methodTargets: ReadonlyMap<number, MethodTarget>;
+  /** The same `MethodTarget` for each impl-provided method that should emit
+   * as a free function, keyed by its own body `tokenId`. Produced here (not
+   * re-derived in codegen) so an emission and its call sites always agree,
+   * shadowed local types included. */
+  readonly implMethodTargets: ReadonlyMap<number, MethodTarget>;
+}
+
+/** The resolved impl a method call dispatches to, in the form codegen needs
+ * to name its emitted free function: `<typeName>$<methodName>` for an
+ * inherent method, `<typeName>$<traitName>$<methodName>` for a trait impl.
+ * `traitName` is `none()` for an inherent method. `typeId` is the scope-
+ * qualified identity (`StructType`/`EnumType` `name`) - distinct per
+ * declaration even when two types share `typeName`, so codegen keys its
+ * name-reservation map on it rather than the collision-prone readable name. */
+export interface MethodTarget {
+  readonly typeId: string;
+  readonly typeName: string;
+  readonly traitName: Option<string>;
+  readonly methodName: string;
 }
 
 /** One trait method a witness carries, and where its implementation comes
@@ -143,6 +167,10 @@ interface AnalysisContext {
   /** Mutable build-up of `AnalysisResult.witnesses`, keyed by call-site
    * `tokenId`. */
   readonly witnessTable: Map<number, WitnessRef[]>;
+  /** Mutable build-up of `AnalysisResult.methodTargets`. */
+  readonly methodTargetTable: Map<number, MethodTarget>;
+  /** Mutable build-up of `AnalysisResult.implMethodTargets`. */
+  readonly implMethodTargetTable: Map<number, MethodTarget>;
   /**
    * What `Self` means at the innermost currently-open trait or impl body -
    * only the top is ever consulted, same lifecycle as `genericParamStack`. A
@@ -2449,6 +2477,7 @@ function analyzeImplDecl(
       );
       if (isSome(analyzed.ownershipView)) {
         methodBodies.push(analyzed.ownershipView.value);
+        recordImplMethodTarget(ctx, decl, targetType, traitName);
       }
       return [
         {
@@ -6447,8 +6476,39 @@ function inferComparisonType(
     !typesEqual(left.type, right.type)
   ) {
     emitError(ctx, { kind: "SemComparisonOperandsSameType" }, tokenId);
+  } else {
+    recordEqualityTarget(ctx, spec, left, tokenId);
   }
   return { kind: "PrimitiveBooleanType" };
+}
+
+/** For an `==`/`!=` that resolves through a concrete `impl PartialEq for
+ * <operand type>` (not the native `equality` capability, not a generic
+ * parameter, not a blanket impl), records the impl's `eq` free function so
+ * `jsim.ts`'s `parseTraitEqualityComparison` calls it directly. Anything
+ * else dispatches through a witness (a later slice) and keeps the interim
+ * `a.eq(b)` shape. */
+function recordEqualityTarget(
+  ctx: AnalysisContext,
+  spec: ComparisonSpec,
+  left: ComparisonOperand,
+  tokenId: number,
+): void {
+  if (!spec.equalityTraitFallback || !left.isValid) return;
+  const operandType =
+    left.type.kind === "ReferenceType" ? left.type.referent : left.type;
+  if (!isNominalType(operandType)) return;
+  if (hasCapability(operandType, "equality")) return;
+  const partialEq = lookupPreludeTrait(ctx, "PartialEq");
+  if (partialEq === undefined) return;
+  const impl = findRegisteredImpl(ctx, operandType.name, partialEq);
+  if (impl === undefined || impl.isBlanket) return;
+  ctx.methodTargetTable.set(tokenId, {
+    typeId: operandType.name,
+    typeName: bareTypeName(operandType.name),
+    traitName: some(bareTypeName(partialEq)),
+    methodName: "eq",
+  });
 }
 
 function inferLogicalType(
@@ -7123,6 +7183,64 @@ function checkAssociatedCallArgs(
       );
 }
 
+/** Records the free-function `MethodTarget` for an impl-provided method
+ * codegen should emit (`AnalysisResult.implMethodTargets`), keyed by the
+ * method body's own tokenId. A receiver-less associated function and a
+ * non-nominal impl target both emit nothing. */
+function recordImplMethodTarget(
+  ctx: AnalysisContext,
+  decl: Parser.FunctionDef,
+  targetType: Semantics.Type,
+  traitName: Option<string>,
+): void {
+  if (!isSome(decl.signature.receiver) || !isNominalType(targetType)) return;
+  ctx.implMethodTargetTable.set(decl.tokenId, {
+    typeId: targetType.name,
+    typeName: bareTypeName(targetType.name),
+    traitName: mapSome(traitName, bareTypeName),
+    methodName: decl.signature.name.text,
+  });
+}
+
+/** Records how a resolved call dispatches, for codegen's free-function naming
+ * (`AnalysisResult.methodTargets`). Keyed by the *method name* token, not the
+ * call's own tokenId - a chained call (`x.a().b()`) shares the receiver token
+ * both call nodes carry as their tokenId. Nominal receivers only - a `dyn` or
+ * bounded-generic receiver dispatches through a witness, not a named free
+ * function. A trait method whose body comes from the trait's own default (the
+ * impl does not override it) is left unrecorded: no free function is emitted
+ * for it yet, so codegen keeps the plain method-call shape. */
+function recordMethodTarget(
+  ctx: AnalysisContext,
+  methodTokenId: number,
+  receiverType: Semantics.StructType | Semantics.EnumType,
+  method: IndexedMethod,
+  methodName: string,
+): void {
+  let traitName: Option<string> = none();
+  if (method.origin.kind === "trait") {
+    const witness = resolveTraitBoundForTypeName(
+      ctx,
+      receiverType.name,
+      method.origin.traitId,
+    );
+    const witnessMethod =
+      isSome(witness) && witness.value.kind === "Impl"
+        ? witness.value.methods.find((m) => m.name === methodName)
+        : undefined;
+    if (witnessMethod === undefined || witnessMethod.source === "default") {
+      return;
+    }
+    traitName = some(bareTypeName(method.origin.traitId));
+  }
+  ctx.methodTargetTable.set(methodTokenId, {
+    typeId: receiverType.name,
+    typeName: bareTypeName(receiverType.name),
+    traitName,
+    methodName,
+  });
+}
+
 function analyzeMethodCallExpression(
   ctx: AnalysisContext,
   expression: Parser.MethodCallExpression,
@@ -7176,6 +7294,15 @@ function analyzeMethodCallExpression(
         method: expression.method.text,
       },
       expression.tokenId,
+    );
+  }
+  if (isNominalType(lookupType)) {
+    recordMethodTarget(
+      ctx,
+      expression.method.tokenId,
+      lookupType,
+      method,
+      expression.method.text,
     );
   }
   return {
@@ -9302,6 +9429,8 @@ export function analyze(
     methodIndex: new Map(),
     assocConstIndex: new Map(),
     witnessTable: new Map(),
+    methodTargetTable: new Map(),
+    implMethodTargetTable: new Map(),
     selfContextStack: [],
   };
   // Before functions, so a signature can name any declared type.
@@ -9360,5 +9489,7 @@ export function analyze(
     diagnostics: ctx.diagnostics,
     program: { ...program, attributes, items },
     witnesses: ctx.witnessTable,
+    methodTargets: ctx.methodTargetTable,
+    implMethodTargets: ctx.implMethodTargetTable,
   };
 }

@@ -629,7 +629,6 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
     ],
     expectedFailTestIds: [
       "resolves `Self` to the enclosing impl's own type and compiles cleanly",
-      "resolves `Self::Item` to the trait's own associated type and compiles cleanly",
     ],
   },
   {

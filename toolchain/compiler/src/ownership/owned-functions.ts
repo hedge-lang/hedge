@@ -29,3 +29,32 @@ export function collectOwnedFunctions(
   visit(program.items);
   return functions;
 }
+
+/**
+ * Every `impl` block in the program, at any nesting depth (top-level, or
+ * inside a function/method body's direct statements). Coherence makes a
+ * block-local `impl` program-wide, so codegen emits its methods as top-level
+ * free functions the same as a top-level `impl`'s. Same `if`/`match`-block
+ * gap as {@link collectOwnedFunctions}.
+ */
+export function collectAllImpls(
+  program: Semantics.Program,
+): readonly Semantics.ImplDecl[] {
+  const impls: Semantics.ImplDecl[] = [];
+  const visit = (
+    nodes: readonly (Semantics.Item | Semantics.Statement)[],
+  ): void => {
+    for (const node of nodes) {
+      if (node.kind === "Function") {
+        visit(node.body.statements);
+      } else if (node.kind === "Impl") {
+        impls.push(node);
+        for (const method of node.methodBodies) visit(method.body.statements);
+      } else if (node.kind === "Trait") {
+        for (const method of node.methodBodies) visit(method.body.statements);
+      }
+    }
+  };
+  visit(program.items);
+  return impls;
+}

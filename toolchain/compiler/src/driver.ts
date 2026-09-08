@@ -74,7 +74,15 @@ export function compile(
   return {
     diagnostics,
     code: some(
-      generate(toJsim(optimize(analysis.program), tokens, ownership.functions)),
+      generate(
+        toJsim(
+          optimize(analysis.program),
+          tokens,
+          ownership.functions,
+          analysis.methodTargets,
+          analysis.implMethodTargets,
+        ),
+      ),
     ),
   };
 }

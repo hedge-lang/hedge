@@ -834,12 +834,9 @@ describe("execution tests", (): void => {
       },
     );
 
-    // TODO(Hedge-54): resolve Self::Item to the trait's real associated type.
-    it.fails(
-      "resolves `Self::Item` to the trait's own associated type and compiles cleanly",
-      (): void => {
-        assertRunsTo(
-          `
+    it("resolves `Self::Item` to the trait's own associated type and compiles cleanly", (): void => {
+      assertRunsTo(
+        `
           trait Container {
             type Item;
             fn get(&self) -> Self::Item;
@@ -854,10 +851,9 @@ describe("execution tests", (): void => {
             print(b.get());
           }
           `,
-          ["42"],
-        );
-      },
-    );
+        ["42"],
+      );
+    });
   });
 
   describe("generic parameters in type position", (): void => {
