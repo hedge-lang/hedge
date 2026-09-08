@@ -142,6 +142,66 @@ tuple, which is an object at runtime and which JavaScript would otherwise key by
 reference identity — gives a real hash map that buckets by `Hash` and compares with
 `Eq`, rather than a naive `Map` of objects.
 
+## Arithmetic and bitwise operators
+
+Each arithmetic, bitwise, and shift operator desugars to a trait method call, on
+the same model as `==` and `PartialEq::eq`. The binary operators map one to one
+onto the `std::ops` traits:
+
+| Operator | Trait         | Method   |
+| -------- | ------------- | -------- |
+| `a + b`  | `Add<Rhs>`    | `add`    |
+| `a - b`  | `Sub<Rhs>`    | `sub`    |
+| `a * b`  | `Mul<Rhs>`    | `mul`    |
+| `a / b`  | `Div<Rhs>`    | `div`    |
+| `a % b`  | `Rem<Rhs>`    | `rem`    |
+| `a & b`  | `BitAnd<Rhs>` | `bitand` |
+| `a \| b` | `BitOr<Rhs>`  | `bitor`  |
+| `a ^ b`  | `BitXor<Rhs>` | `bitxor` |
+| `a << b` | `Shl<Rhs>`    | `shl`    |
+| `a >> b` | `Shr<Rhs>`    | `shr`    |
+| `-a`     | `Neg`         | `neg`    |
+| `!a`     | `Not`         | `not`    |
+
+Each binary trait is generic over the right-hand operand `Rhs`, which defaults to
+`Self`, and carries an associated `Output` for the result, so an implementation
+may take a foreign right-hand type and produce a third:
+
+```hedge
+trait Add<Rhs = Self> {
+  type Output;
+  fn add(self, rhs: Rhs) -> Self::Output;
+}
+```
+
+The unary traits `Neg` and `Not` take only `self` and likewise carry an `Output`.
+`a + b` desugars to `Add::add(a, b)`, `-a` to `Neg::neg(a)`, and so on; `!` is
+`Not::not` on both `bool` and the integers, matching its two roles.
+
+The compound-assignment operators map onto a parallel `Assign` family — `AddAssign`,
+`SubAssign`, `MulAssign`, `DivAssign`, `RemAssign`, `BitAndAssign`, `BitOrAssign`,
+`BitXorAssign`, `ShlAssign`, `ShrAssign` — each taking `&mut self` and carrying no
+`Output`:
+
+```hedge
+trait AddAssign<Rhs = Self> {
+  fn add_assign(&mut self, rhs: Rhs);
+}
+```
+
+`a += b` desugars to `AddAssign::add_assign(&mut a, b)`. Implementing `Add` does
+not imply `AddAssign`, or the reverse; they are independent, ordinary traits.
+
+As with `==`, the primitive operators are not routed through these traits. An
+`i32 + i32`, and every other primitive combination, is compiled directly, with the
+overflow and division semantics fixed in
+[Primitive Types](0010-primitive-types.md); the traits are consulted only for a
+type the primitive rules do not cover — a struct, an enum, or a generic parameter
+bound by the operator trait. The operator traits carry no coherence rule of their
+own beyond the orphan rule that governs every trait, and an operator binds to the
+standard-library trait of that name, so a locally declared trait sharing the name
+does not capture the operator.
+
 ## Copy, Clone, and Drop
 
 `Copy` marks a type that is duplicated rather than moved on assignment, which is
