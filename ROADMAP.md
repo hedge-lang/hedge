@@ -118,7 +118,7 @@ specifying ahead of implementation:
 - **Witness / `dyn Trait` / closure runtime ABI** (slice 4).
 - **Name resolution algorithm** — shadowing, glob conflicts, prelude injection (slice 7).
 - **Coercions list** — deref coercion, closure → `fn`, lifetime subtyping.
-- **Operator → trait mapping table.**
+- **Operator → trait mapping table** — written; see `0015` "Arithmetic and bitwise operators".
 - **Formal typing / inference rules**, and the precise meaning of `unsafe` / `unchecked`.
 
 ## First action
