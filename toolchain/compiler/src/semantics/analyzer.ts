@@ -629,6 +629,18 @@ function lookupTrait(ctx: AnalysisContext, name: string): string | undefined {
   return undefined;
 }
 
+/** The scope-qualified key of a trait declared in the program's own top
+ * scope - where the std prelude registers. Used to bind an operator to its
+ * language trait (`==` to `PartialEq`) so a lexically closer user trait of
+ * the same name can't hijack or break it. */
+function lookupPreludeTrait(
+  ctx: AnalysisContext,
+  name: string,
+): string | undefined {
+  const tokenId = ctx.frames[0]?.traits.get(name);
+  return tokenId === undefined ? undefined : scopedTypeName(tokenId, name);
+}
+
 /** A bare name's own resolved type if it names a struct or enum in scope -
  * `undefined` for anything else, leaving the caller to decide what "not a
  * struct or enum" means for it (an error, a further fallback, ...). */
@@ -6400,7 +6412,7 @@ function comparisonOperandResolves(
   if (!operand.isValid) return true;
   if (hasCapability(operand.type, spec.capability)) return true;
   if (!spec.equalityTraitFallback) return false;
-  const partialEq = lookupTrait(ctx, "PartialEq");
+  const partialEq = lookupPreludeTrait(ctx, "PartialEq");
   if (partialEq === undefined) return false;
   const referent =
     operand.type.kind === "ReferenceType"
