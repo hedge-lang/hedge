@@ -7003,4 +7003,38 @@ describe("== / != resolving through a PartialEq/Eq impl", (): void => {
     `);
     expect(result.diagnostics).toEqual([]);
   });
+
+  it("rejects `==` on a struct whose only `PartialEq` impl is against a shadowing block-local trait", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      fn main() {
+        trait PartialEq {}
+        impl PartialEq for Point {}
+        let a = Point { x: 1 };
+        let b = Point { x: 2 };
+        let c = a == b;
+      }
+    `);
+    // The block-scoped `impl` also draws a HEDGE-LINT-003 warning, unrelated
+    // to which `PartialEq` `==` binds to.
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toHaveLength(1);
+    expect(messageOf(errors[0])).toBe(
+      "type does not support equality comparison",
+    );
+  });
+
+  it("accepts `==` on a struct with a top-level `impl PartialEq` even when a block-local `PartialEq` trait shadows the prelude", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl PartialEq for Point { fn eq(&self, other: &Self) -> bool { true } }
+      fn main() {
+        trait PartialEq {}
+        let a = Point { x: 1 };
+        let b = Point { x: 2 };
+        let c = a == b;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
 });
