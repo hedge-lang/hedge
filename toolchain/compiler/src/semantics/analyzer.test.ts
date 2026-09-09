@@ -6231,6 +6231,49 @@ describe("trait and impl declarations", (): void => {
       ]);
     });
 
+    it("flattens supertrait methods into one witness, each tagged with its defining trait", (): void => {
+      const { result } = analyzeWithTokens(`
+        trait Base { fn base(&self) -> i32; }
+        trait Ext: Base { fn ext(&self) -> i32; }
+        struct S { n: i32 }
+        impl Base for S { fn base(&self) -> i32 { self.n } }
+        impl Ext for S { fn ext(&self) -> i32 { self.n } }
+        fn run<T: Ext>(x: T) {}
+        fn main() { run(S { n: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      const witness = witnesses?.[0];
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(witness.methods).toEqual([
+        { name: "ext", source: "impl", definingTrait: "Ext" },
+        { name: "base", source: "impl", definingTrait: "Base" },
+      ]);
+    });
+
+    it("records a diamond supertrait's shared ancestor method once in the witness", (): void => {
+      const { result } = analyzeWithTokens(`
+        trait A { fn a(&self) -> i32; }
+        trait B: A { fn b(&self) -> i32; }
+        trait C: A { fn c(&self) -> i32; }
+        trait D: B + C {}
+        struct S { n: i32 }
+        impl A for S { fn a(&self) -> i32 { self.n } }
+        impl B for S { fn b(&self) -> i32 { self.n } }
+        impl C for S { fn c(&self) -> i32 { self.n } }
+        impl D for S {}
+        fn run<T: D>(x: T) {}
+        fn main() { run(S { n: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      const witness = witnesses?.[0];
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(witness.methods.filter((m) => m.name === "a")).toEqual([
+        { name: "a", source: "impl", definingTrait: "A" },
+      ]);
+    });
+
     it("preserves a trait's own interleaved declaration order in the witness method list, not a required-then-default order", (): void => {
       const { result } = analyzeWithTokens(`
         trait Shape {
@@ -7068,6 +7111,29 @@ describe("== / != resolving through a PartialEq/Eq impl", (): void => {
       fn main() {}
     `);
     expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts `*self == *other` in a trait default body when the trait's supertrait chain implies `PartialEq`", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Same: PartialEq {
+        fn same_as(&self, other: &Self) -> bool { *self == *other }
+      }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("still rejects `*self == *other` in a trait default body when the trait does not imply `PartialEq`", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Plain {
+        fn same_as(&self, other: &Self) -> bool { *self == *other }
+      }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "type does not support equality comparison",
+    );
   });
 
   it("still rejects `==` on a struct with no `PartialEq` impl", (): void => {

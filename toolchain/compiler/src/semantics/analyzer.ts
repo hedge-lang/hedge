@@ -2831,13 +2831,26 @@ function witnessMethods(
   ctx: AnalysisContext,
   traitId: string,
   typeName: string,
-  seen: Set<string> = new Set(),
-  byName: Map<string, WitnessMethod> = new Map(),
 ): readonly WitnessMethod[] {
-  if (seen.has(traitId)) return [...byName.values()];
+  const byName = new Map<string, WitnessMethod>();
+  collectWitnessMethods(ctx, traitId, typeName, new Set(), byName);
+  return [...byName.values()];
+}
+
+/** Walks one supertrait DAG, filling `byName`. `seen` and `byName` are shared
+ * across the whole walk - not copied per branch - so a diamond's shared
+ * ancestor is visited (and its methods recorded) exactly once. */
+function collectWitnessMethods(
+  ctx: AnalysisContext,
+  traitId: string,
+  typeName: string,
+  seen: Set<string>,
+  byName: Map<string, WitnessMethod>,
+): void {
+  if (seen.has(traitId)) return;
   seen.add(traitId);
   const trait = ctx.traitRegistry.get(traitId);
-  if (trait === undefined) return [...byName.values()];
+  if (trait === undefined) return;
   const impl = findRegisteredImpl(ctx, typeName, traitId);
   const bareTrait = bareTypeName(traitId);
   for (const method of trait.methods) {
@@ -2853,9 +2866,8 @@ function witnessMethods(
     });
   }
   for (const supertrait of trait.supertraits) {
-    witnessMethods(ctx, supertrait, typeName, seen, byName);
+    collectWitnessMethods(ctx, supertrait, typeName, seen, byName);
   }
-  return [...byName.values()];
 }
 
 /**
