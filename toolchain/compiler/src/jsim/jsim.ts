@@ -945,7 +945,7 @@ function methodFreeFnName(target: MethodTarget): string {
  * `ctx.methodFreeFnNames`. */
 function methodKey(target: MethodTarget): string {
   const trait = isSome(target.traitName) ? target.traitName.value : "";
-  return `${target.typeId} ${trait} ${target.methodName}`;
+  return `${target.typeId}#${trait}#${target.methodName}`;
 }
 
 /** The name a method's free function actually emits and every call site
