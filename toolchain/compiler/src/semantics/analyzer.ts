@@ -108,12 +108,16 @@ interface WitnessMethodTarget {
 
 export type MethodTarget = FreeMethodTarget | WitnessMethodTarget;
 
-/** One trait method a witness carries, and where its implementation comes
- * from: the impl's own override, or the trait's own default body when the
- * impl doesn't override it. */
+/** One trait method a witness carries, flattened across the trait's
+ * supertrait chain. `definingTrait` is the bare name of the trait that
+ * actually declares the method (so codegen names its free function
+ * `<Type>$<definingTrait>$<name>` / `<definingTrait>$<name>$default`);
+ * `source` is whether the relevant impl provides it or it falls back to a
+ * default body. */
 export interface WitnessMethod {
   readonly name: string;
   readonly source: "impl" | "default";
+  readonly definingTrait: string;
 }
 
 /**
@@ -2789,7 +2793,7 @@ function resolveTraitBoundForTypeName(
     typeName: bareTypeName(typeName),
     typeId: typeName,
     implTokenId: impl.tokenId,
-    methods: witnessMethods(ctx, impl),
+    methods: witnessMethods(ctx, traitName, typeName),
   });
 }
 
@@ -2819,24 +2823,39 @@ function resolveAssociatedTypeViaSupertrait(
   return impl?.associatedTypeDefs.get(assocName);
 }
 
-/** An impl's own witness method list: every one of its trait's methods, in
- * the trait's own interleaved declaration order (source order, not grouped
- * by required-vs-default), each marked `"impl"` when this impl provides or
- * overrides it and `"default"` when it falls back to the trait's own
- * default body. */
+/** Every method a `typeName: traitId` witness carries, flattened across
+ * `traitId`'s supertrait chain (cycle-guarded, deduplicated by method name -
+ * the nearest trait in the chain wins). A supertrait method's `source`
+ * consults *that* supertrait's own impl for `typeName`. */
 function witnessMethods(
   ctx: AnalysisContext,
-  impl: RegisteredImpl,
+  traitId: string,
+  typeName: string,
+  seen: Set<string> = new Set(),
+  byName: Map<string, WitnessMethod> = new Map(),
 ): readonly WitnessMethod[] {
-  const trait = ctx.traitRegistry.get(impl.traitName);
-  if (trait === undefined) return [];
-  return trait.methods.map((method): WitnessMethod => ({
-    name: method.name,
-    source:
-      !method.isDefault || impl.providedMethods.includes(method.name)
-        ? "impl"
-        : "default",
-  }));
+  if (seen.has(traitId)) return [...byName.values()];
+  seen.add(traitId);
+  const trait = ctx.traitRegistry.get(traitId);
+  if (trait === undefined) return [...byName.values()];
+  const impl = findRegisteredImpl(ctx, typeName, traitId);
+  const bareTrait = bareTypeName(traitId);
+  for (const method of trait.methods) {
+    if (byName.has(method.name)) continue;
+    byName.set(method.name, {
+      name: method.name,
+      source:
+        !method.isDefault ||
+        (impl?.providedMethods.includes(method.name) ?? false)
+          ? "impl"
+          : "default",
+      definingTrait: bareTrait,
+    });
+  }
+  for (const supertrait of trait.supertraits) {
+    witnessMethods(ctx, supertrait, typeName, seen, byName);
+  }
+  return [...byName.values()];
 }
 
 /**
@@ -6589,6 +6608,19 @@ function comparisonOperandResolves(
     operand.type.kind === "ReferenceType"
       ? operand.type.referent
       : operand.type;
+  if (
+    referent.kind === "NamedType" &&
+    referent.path.segments.length === 1 &&
+    referent.path.segments[0] === "Self"
+  ) {
+    const selfContext = currentSelfContext(ctx);
+    if (
+      selfContext?.kind === "Trait" &&
+      boundsImplyTrait(ctx, [selfContext.traitName], partialEq)
+    ) {
+      return true;
+    }
+  }
   return isSome(resolveTraitBound(ctx, referent, partialEq));
 }
 
@@ -6681,8 +6713,16 @@ function equalityWitnessName(
     return undefined;
   }
   const name = operandType.path.segments[0];
-  if (name === undefined || !isDeclaredGenericParam(ctx, name))
-    return undefined;
+  if (name === undefined) return undefined;
+  const selfContext = currentSelfContext(ctx);
+  if (
+    name === "Self" &&
+    selfContext?.kind === "Trait" &&
+    boundsImplyTrait(ctx, [selfContext.traitName], partialEq)
+  ) {
+    return witnessParamName("Self", bareTypeName(selfContext.traitName));
+  }
+  if (!isDeclaredGenericParam(ctx, name)) return undefined;
   for (const bound of declaredGenericParamBounds(ctx, name)) {
     if (bound === partialEq || boundsImplyTrait(ctx, [bound], partialEq)) {
       return witnessParamName(name, bareTypeName(bound));
@@ -7432,10 +7472,11 @@ function recordMethodTarget(
 }
 
 /** The witness parameter a method call on `receiverType` dispatches through
- * inside a generic body: `_witness_<T>_<Trait>` for a bounded type parameter
- * `T`, `_witness_Self_<Trait>` for an abstract `Self` in a trait default body
- * calling one of that *same* trait's own methods (a supertrait method is a
- * later slice). `undefined` when `receiverType` is anything else. */
+ * inside a generic body: `_witness_<T>_<Trait>` for a bounded type parameter,
+ * `_witness_Self_<EnclosingTrait>` for an abstract `Self` in a trait default
+ * body calling a method of that trait or any of its supertraits (the
+ * enclosing trait's witness carries them all - see `witnessMethods`).
+ * `undefined` when `receiverType` is anything else. */
 function witnessNameForReceiver(
   ctx: AnalysisContext,
   receiverType: Semantics.Type,
@@ -7449,18 +7490,21 @@ function witnessNameForReceiver(
   }
   const name = receiverType.path.segments[0];
   if (name === undefined) return undefined;
-  const trait = bareTypeName(traitId);
   const selfContext = currentSelfContext(ctx);
   if (
     name === "Self" &&
     selfContext?.kind === "Trait" &&
-    selfContext.traitName === traitId
+    boundsImplyTrait(ctx, [selfContext.traitName], traitId)
   ) {
-    return witnessParamName("Self", trait);
+    return witnessParamName("Self", bareTypeName(selfContext.traitName));
   }
-  return isDeclaredGenericParam(ctx, name)
-    ? witnessParamName(name, trait)
-    : undefined;
+  if (!isDeclaredGenericParam(ctx, name)) return undefined;
+  for (const bound of declaredGenericParamBounds(ctx, name)) {
+    if (bound === traitId || boundsImplyTrait(ctx, [bound], traitId)) {
+      return witnessParamName(name, bareTypeName(bound));
+    }
+  }
+  return undefined;
 }
 
 /** Records how a resolved method call lowers: a `free` target for a concrete

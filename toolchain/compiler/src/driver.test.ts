@@ -1152,7 +1152,7 @@ describe("trait default method codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["105", "105"]);
   });
 
-  it("leaves a default body's supertrait call as a plain method call (supertrait dispatch is a later slice)", (): void => {
+  it("dispatches a default body's supertrait call through the enclosing trait's witness, and runs", (): void => {
     const js = emittedJs(`
       trait Base { fn base(&self) -> i32; }
       trait Ext: Base {
@@ -1161,13 +1161,75 @@ describe("trait default method codegen", (): void => {
       struct S { n: i32 }
       impl Base for S { fn base(&self) -> i32 { self.n } }
       impl Ext for S {}
-      fn main() { print(0); }
+      fn run<T: Ext>(t: &T) -> i32 { t.ext() }
+      fn main() {
+        let s = S { n: 10 };
+        print(s.ext());
+        print(run(&s));
+      }
     `);
-    // `self.base()` in `Ext`'s default resolves to `Base`, not `Ext` - no
-    // `_witness_Self_Base` param exists, so it stays a plain method call.
+    // `self.base()` in `Ext`'s default resolves to `Base` (a supertrait), so it
+    // dispatches through `_witness_Self_Ext`, whose flattened slots carry `base`.
     expect(js).toContain("function Ext$ext$default(self, _witness_Self_Ext)");
-    expect(js).toContain("self.base()");
-    expect(js).not.toContain("_witness_Self_Base");
+    expect(js).toContain("_witness_Self_Ext.base(self)");
+    expect(js).toMatch(
+      /const __witness_Ext_S = \(\(\) => \{ const w = \{base: S\$Base\$base\};/,
+    );
+    expect(runEmittedJs(js)).toEqual(["11", "11"]);
+  });
+
+  it("dispatches `==` on an `Eq`-bounded struct type parameter through the flattened witness, and runs", (): void => {
+    const js = emittedJs(`
+      struct P { x: i32 }
+      impl PartialEq for P { fn eq(&self, other: &Self) -> bool { self.x == other.x } }
+      impl Eq for P {}
+      fn same<T: Eq>(a: T, b: T) -> bool { a == b }
+      fn main() {
+        let a = P { x: 3 };
+        let b = P { x: 3 };
+        if same(a, b) { print("equal"); }
+      }
+    `);
+    expect(js).toContain("_witness_T_Eq.eq(a, b)");
+    expect(js).toContain("const __witness_Eq_P = {eq: P$PartialEq$eq};");
+    expect(runEmittedJs(js)).toEqual(["equal"]);
+  });
+
+  it("dispatches `==` in a supertrait default body through the enclosing trait's witness, and runs", (): void => {
+    const js = emittedJs(`
+      trait Same: PartialEq {
+        fn same_as(&self, other: &Self) -> bool { *self == *other }
+      }
+      struct P { x: i32 }
+      impl PartialEq for P { fn eq(&self, other: &Self) -> bool { self.x == other.x } }
+      impl Same for P {}
+      fn main() {
+        let a = P { x: 5 };
+        let b = P { x: 5 };
+        if a.same_as(&b) { print("yes"); }
+      }
+    `);
+    expect(js).toContain("_witness_Self_Same.eq(");
+    expect(runEmittedJs(js)).toEqual(["yes"]);
+  });
+
+  it("flattens a multi-level supertrait chain into one witness, deduplicating a diamond", (): void => {
+    const js = emittedJs(`
+      trait A { fn a(&self) -> i32; }
+      trait B: A { fn b(&self) -> i32; }
+      trait C: A { fn c(&self) -> i32; }
+      trait D: B + C {}
+      struct S { n: i32 }
+      impl A for S { fn a(&self) -> i32 { self.n } }
+      impl B for S { fn b(&self) -> i32 { self.n + 1 } }
+      impl C for S { fn c(&self) -> i32 { self.n + 2 } }
+      impl D for S {}
+      fn run<T: D>(t: &T) -> i32 { t.a() + t.b() + t.c() }
+      fn main() { let s = S { n: 10 }; print(run(&s)); }
+    `);
+    // `a` appears once in the D witness despite the B/C diamond.
+    expect(js.match(/a: S\$A\$a/g)).toHaveLength(1);
+    expect(runEmittedJs(js)).toEqual(["33"]);
   });
 });
 

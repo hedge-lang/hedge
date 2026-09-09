@@ -6226,8 +6226,8 @@ describe("trait and impl declarations", (): void => {
       const witness = witnesses?.[0];
       assert(witness?.kind === "Impl", "expected an Impl witness");
       expect(witness.methods).toEqual([
-        { name: "draw", source: "impl" },
-        { name: "describe", source: "default" },
+        { name: "draw", source: "impl", definingTrait: "Shape" },
+        { name: "describe", source: "default", definingTrait: "Shape" },
       ]);
     });
 
@@ -6247,8 +6247,8 @@ describe("trait and impl declarations", (): void => {
       const witness = witnesses?.[0];
       assert(witness?.kind === "Impl", "expected an Impl witness");
       expect(witness.methods).toEqual([
-        { name: "describe", source: "default" },
-        { name: "draw", source: "impl" },
+        { name: "describe", source: "default", definingTrait: "Shape" },
+        { name: "draw", source: "impl", definingTrait: "Shape" },
       ]);
     });
 

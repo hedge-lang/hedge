@@ -1003,7 +1003,9 @@ function resolvedMethodFreeFnName(
 const PRIMITIVE_EQ_WITNESS = "__witnessPrimitiveEq";
 
 /** The `FreeMethodTarget` for one method a `(typeId, trait)` witness carries,
- * used to resolve the free-function name the slot points at. */
+ * used to resolve the free-function name the slot points at. Keyed on the
+ * method's *defining* trait, not the witness's - a flattened supertrait
+ * method's free function is named for the trait that declared it. */
 function witnessSlotTarget(
   witness: HoistedWitness,
   method: WitnessMethod,
@@ -1012,7 +1014,7 @@ function witnessSlotTarget(
     kind: "free",
     typeId: witness.typeId,
     typeName: witness.typeName,
-    traitName: some(witness.traitName),
+    traitName: some(method.definingTrait),
     methodName: method.name,
     isDefaultBody: method.source === "default",
   };
