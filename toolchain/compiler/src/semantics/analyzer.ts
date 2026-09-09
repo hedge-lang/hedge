@@ -6007,9 +6007,13 @@ function analyzeBlock(
     analyzeStatement(ctx, statement),
   );
   const analyzedTrailing = mapSome(block.trailingExpression, (expr) =>
-    expr.kind === "CallExpression" && expectedType !== undefined
-      ? analyzeCall(ctx, expr, expectedType)
-      : analyzeExpression(ctx, expr),
+    checkExpression(
+      ctx,
+      expr,
+      expectedType === undefined
+        ? { kind: "None" }
+        : { kind: "HasType", type: expectedType },
+    ),
   );
   const type: Semantics.Type = isSome(analyzedTrailing)
     ? getType(analyzedTrailing.value)
@@ -6109,11 +6113,13 @@ function analyzeLetStatement(
   const analyzedInitializer: Option<Semantics.Expression> = mapSome(
     statement.initializer,
     (initializer) =>
-      initializer.kind === "CallExpression" &&
-      isSome(annotation) &&
-      !annotation.value.isSelf
-        ? analyzeCall(ctx, initializer, annotation.value.type)
-        : analyzeExpression(ctx, initializer),
+      checkExpression(
+        ctx,
+        initializer,
+        isSome(annotation) && !annotation.value.isSelf
+          ? { kind: "HasType", type: annotation.value.type }
+          : { kind: "None" },
+      ),
   );
 
   let coercedInitializer: Option<Semantics.Expression> = analyzedInitializer;
@@ -6511,6 +6517,34 @@ const AMBIGUOUS_UNIT_EXPR_KINDS: ReadonlySet<Semantics.ExpressionKind> =
 
 function isAmbiguousUnitExpr(expr: Semantics.Expression): boolean {
   return AMBIGUOUS_UNIT_EXPR_KINDS.has(expr.kind);
+}
+
+/**
+ * What a position expects of the expression that fills it. The `HasType` type
+ * is carried into analysis so a nested construct can be checked against it
+ * rather than synthesised in isolation. Left open for a third variant if a
+ * coercion-vs-exact distinction is ever needed.
+ */
+type Expectation =
+  | { readonly kind: "None" }
+  | { readonly kind: "HasType"; readonly type: Semantics.Type };
+
+/**
+ * Check-mode expression analysis. A directly-nested call is analysed against
+ * the expected type so generic-parameter inference can seed from it (see
+ * `analyzeCall`); every other expression is synthesised. Callers still run
+ * {@link reconcileExpressionType} on the result for scalar coercion and the
+ * mismatch flag.
+ */
+function checkExpression(
+  ctx: AnalysisContext,
+  expr: Parser.Expression,
+  expectation: Expectation,
+): Semantics.Expression {
+  if (expectation.kind === "HasType" && expr.kind === "CallExpression") {
+    return analyzeCall(ctx, expr, expectation.type);
+  }
+  return analyzeExpression(ctx, expr);
 }
 
 /**
