@@ -5204,6 +5204,7 @@ function analyzeMatchArm(
   effectiveScrutineeType: Semantics.Type,
   defaultMode: PatternBindingMode,
   rootMutable: boolean,
+  expected?: Semantics.Type,
 ): Semantics.MatchArm {
   pushFrame(ctx);
   try {
@@ -5215,7 +5216,10 @@ function analyzeMatchArm(
       rootMutable,
     );
     const guard = mapSome(arm.guard, (g) => analyzeExpression(ctx, g));
-    const body = analyzeExpression(ctx, arm.body);
+    const body =
+      expected === undefined
+        ? analyzeExpression(ctx, arm.body)
+        : checkExpressionAgainst(ctx, arm.body, expected);
     return { ...arm, pattern, guard, body };
   } finally {
     popFrame(ctx);
@@ -5225,6 +5229,7 @@ function analyzeMatchArm(
 function analyzeMatchExpression(
   ctx: AnalysisContext,
   matchExpr: Parser.MatchExpression,
+  expected?: Semantics.Type,
 ): Semantics.MatchExpression {
   const scrutinee = analyzeExpression(ctx, matchExpr.scrutinee);
   const scrutineeType = getType(scrutinee);
@@ -5237,7 +5242,14 @@ function analyzeMatchExpression(
   // (`defaultMode` itself already captures that).
   const rootMutable = !isSome(placeMutabilityViolation(ctx, scrutinee, true));
   const arms = matchExpr.arms.map((arm) =>
-    analyzeMatchArm(ctx, arm, effectiveType, defaultMode, rootMutable),
+    analyzeMatchArm(
+      ctx,
+      arm,
+      effectiveType,
+      defaultMode,
+      rootMutable,
+      expected,
+    ),
   );
 
   // A `UnitType` scrutinee is ambiguous (see `isAmbiguousUnitExpr`'s doc
@@ -5253,6 +5265,25 @@ function analyzeMatchExpression(
   if (!(scrutineeType.kind === "UnitType" && isAmbiguousUnitExpr(scrutinee))) {
     checkUnreachableArms(ctx, arms, effectiveType);
     checkMatchExhaustiveness(ctx, matchExpr, arms, effectiveType);
+  }
+
+  if (expected !== undefined) {
+    // Each arm body was already checked against `expected` in
+    // `analyzeMatchArm`, replacing the arm-to-arm agreement check below. One
+    // diagnostic for the first arm that doesn't fit.
+    const bad = arms.find((arm) => checkedValueViolates(arm.body, expected));
+    if (bad !== undefined) {
+      emitError(
+        ctx,
+        {
+          kind: "SemCheckedBranchTypeMismatch",
+          expected: describeType(expected),
+          found: describeType(getType(bad.body)),
+        },
+        bad.body.tokenId,
+      );
+    }
+    return { ...matchExpr, scrutinee, arms, type: expected };
   }
 
   let resultType: Semantics.Type = {
@@ -6530,21 +6561,61 @@ type Expectation =
   | { readonly kind: "HasType"; readonly type: Semantics.Type };
 
 /**
- * Check-mode expression analysis. A directly-nested call is analysed against
- * the expected type so generic-parameter inference can seed from it (see
- * `analyzeCall`); every other expression is synthesised. Callers still run
- * {@link reconcileExpressionType} on the result for scalar coercion and the
- * mismatch flag.
+ * Check-mode expression analysis. Given a `HasType` expectation, a construct
+ * whose type is otherwise synthesised from its parts is checked against the
+ * expected type instead: a call seeds generic inference from it; an array's
+ * elements and an if/match's branches are each checked against it
+ * independently, replacing the "siblings must agree with each other" rule
+ * (they need only agree with the expectation). Every other expression is
+ * synthesised. Callers still run {@link reconcileExpressionType} on the
+ * result for scalar coercion and the mismatch flag.
  */
 function checkExpression(
   ctx: AnalysisContext,
   expr: Parser.Expression,
   expectation: Expectation,
 ): Semantics.Expression {
-  if (expectation.kind === "HasType" && expr.kind === "CallExpression") {
-    return analyzeCall(ctx, expr, expectation.type);
+  if (expectation.kind === "None") return analyzeExpression(ctx, expr);
+  const type = expectation.type;
+  switch (expr.kind) {
+    case "CallExpression":
+      return analyzeCall(ctx, expr, type);
+    case "ArrayExpression":
+      return analyzeArrayExpression(ctx, expr, type);
+    case "IfExpression":
+      return analyzeIfExpression(ctx, expr, type);
+    case "MatchExpression":
+      return analyzeMatchExpression(ctx, expr, type);
+    case "Block":
+      return analyzeBlock(ctx, expr, type);
+    default:
+      return analyzeExpression(ctx, expr);
   }
-  return analyzeExpression(ctx, expr);
+}
+
+/**
+ * One child of a checked array / match: analysed against `expected`
+ * (kind-directed) then reconciled and range-checked. Does not emit - a
+ * checked construct reports at most one child mismatch, so its callers emit
+ * once against the first violating child rather than per child.
+ */
+function checkExpressionAgainst(
+  ctx: AnalysisContext,
+  child: Parser.Expression,
+  expected: Semantics.Type,
+): Semantics.Expression {
+  const analyzed = checkExpression(ctx, child, {
+    kind: "HasType",
+    type: expected,
+  });
+  const { expr } = reconcileExpressionType(
+    ctx,
+    analyzed,
+    expected,
+    child.tokenId,
+  );
+  if (expr.kind === "IntLiteral") checkPosLiteralRange(ctx, expr, expected);
+  return expr;
 }
 
 /**
@@ -8040,7 +8111,37 @@ const USIZE_TYPE: Semantics.PrimitiveType = { kind: "PrimitiveUsizeType" };
 function analyzeArrayExpression(
   ctx: AnalysisContext,
   expression: Parser.ArrayExpression,
+  expected?: Semantics.Type,
 ): Semantics.ArrayExpression {
+  if (expected?.kind === "ArrayType") {
+    // Checked against `[E; N]`: each element is reconciled against `E`
+    // independently (no "all elements agree" rule), and the literal's type is
+    // `[E; k]` even when `k != N` - the outer reconcile still reports the
+    // length mismatch. One diagnostic for the first element that doesn't fit.
+    const elementType = expected.elementType;
+    const elements = expression.elements.map((elem) =>
+      checkExpressionAgainst(ctx, elem, elementType),
+    );
+    const bad = elements.find((elem) =>
+      checkedValueViolates(elem, elementType),
+    );
+    if (bad !== undefined) {
+      emitError(
+        ctx,
+        {
+          kind: "SemArrayElementsSameType",
+          expected: describeType(elementType),
+          found: describeType(bad.type),
+        },
+        bad.tokenId,
+      );
+    }
+    return {
+      ...expression,
+      elements,
+      type: { kind: "ArrayType", elementType, length: elements.length },
+    };
+  }
   const elements = expression.elements.map((elem) =>
     analyzeExpression(ctx, elem),
   );
@@ -8686,19 +8787,120 @@ function checkBranchTypesAgree(
   }
 }
 
+/**
+ * Coerces a checked `Block` branch's trailing expression toward `expected`,
+ * threading the possibly-coerced form back in. Does not emit - the caller
+ * reports at most one branch mismatch per `if` (see `checkExpressionAgainst`
+ * for why a checked construct caps its own diagnostics).
+ */
+function coerceBranchTrailing(
+  ctx: AnalysisContext,
+  branch: Semantics.Block,
+  expected: Semantics.Type,
+): Semantics.Block {
+  if (!isSome(branch.trailingExpression)) return branch;
+  const original = branch.trailingExpression.value;
+  const { expr } = reconcileExpressionType(
+    ctx,
+    original,
+    expected,
+    original.tokenId,
+  );
+  if (expr.kind === "IntLiteral") checkPosLiteralRange(ctx, expr, expected);
+  return expr === original
+    ? branch
+    : { ...branch, trailingExpression: some(expr), type: getType(expr) };
+}
+
+/** Whether a checked branch / arm produced a value that isn't `expected` -
+ * an empty block, or a trailing type that neither equals nor coerced to
+ * `expected` (an already-diagnosed error-recovery `UnitType` doesn't count). */
+function checkedValueViolates(
+  value: Semantics.Block | Semantics.Expression,
+  expected: Semantics.Type,
+): boolean {
+  if (
+    value.kind === "Block" &&
+    !isSome(value.trailingExpression) &&
+    expected.kind !== "UnitType"
+  ) {
+    return true;
+  }
+  if (typesEqual(value.type, expected)) return false;
+  return !(
+    value.type.kind === "UnitType" &&
+    (value.kind === "Block"
+      ? branchUnitIsAmbiguous(value)
+      : isAmbiguousUnitExpr(value))
+  );
+}
+
+function checkIfBranches(
+  ctx: AnalysisContext,
+  ifTokenId: number,
+  thenBranch: Semantics.Block,
+  elseBranch: Option<Semantics.IfExpression | Semantics.Block>,
+  expected: Semantics.Type,
+): {
+  readonly thenBranch: Semantics.Block;
+  readonly elseBranch: Option<Semantics.IfExpression | Semantics.Block>;
+} {
+  const checkedThen = coerceBranchTrailing(ctx, thenBranch, expected);
+  const checkedElse = mapSome(elseBranch, (b) =>
+    b.kind === "IfExpression" ? b : coerceBranchTrailing(ctx, b, expected),
+  );
+  // A value is expected, so an `if` with no `else` can't satisfy it - the
+  // missing branch yields no value. Otherwise report the first branch that
+  // doesn't fit.
+  if (!isSome(checkedElse) && expected.kind !== "UnitType") {
+    emitError(
+      ctx,
+      {
+        kind: "SemCheckedBranchTypeMismatch",
+        expected: describeType(expected),
+        found: describeType({ kind: "UnitType", tokenId: ifTokenId }),
+      },
+      ifTokenId,
+    );
+  } else {
+    const bad = [
+      checkedThen,
+      ...(isSome(checkedElse) ? [checkedElse.value] : []),
+    ].find((branch) => checkedValueViolates(branch, expected));
+    if (bad !== undefined) {
+      emitError(
+        ctx,
+        {
+          kind: "SemCheckedBranchTypeMismatch",
+          expected: describeType(expected),
+          found: describeType(bad.type),
+        },
+        bad.tokenId,
+      );
+    }
+  }
+  return { thenBranch: checkedThen, elseBranch: checkedElse };
+}
+
 function analyzeIfExpression(
   ctx: AnalysisContext,
   ifExpression: Parser.IfExpression,
+  expected?: Semantics.Type,
 ): Semantics.IfExpression {
   if (ifExpression.condition.kind === "LetExpression") {
-    return analyzeIfLetExpression(ctx, ifExpression, ifExpression.condition);
+    return analyzeIfLetExpression(
+      ctx,
+      ifExpression,
+      ifExpression.condition,
+      expected,
+    );
   }
   const condition = analyzeExpression(ctx, ifExpression.condition);
-  const thenBranch = analyzeBlock(ctx, ifExpression.thenBranch);
-  const elseBranch = mapSome(ifExpression.elseBranch, (elseBranch) =>
+  const rawThen = analyzeBlock(ctx, ifExpression.thenBranch, expected);
+  const rawElse = mapSome(ifExpression.elseBranch, (elseBranch) =>
     elseBranch.kind === "IfExpression"
-      ? analyzeIfExpression(ctx, elseBranch)
-      : analyzeBlock(ctx, elseBranch),
+      ? analyzeIfExpression(ctx, elseBranch, expected)
+      : analyzeBlock(ctx, elseBranch, expected),
   );
 
   const condType = getType(condition);
@@ -8708,6 +8910,25 @@ function analyzeIfExpression(
   ) {
     emitError(ctx, { kind: "SemIfConditionMustBeBool" }, ifExpression.tokenId);
   }
+
+  if (expected !== undefined) {
+    const { thenBranch, elseBranch } = checkIfBranches(
+      ctx,
+      ifExpression.tokenId,
+      rawThen,
+      rawElse,
+      expected,
+    );
+    return {
+      ...ifExpression,
+      condition,
+      thenBranch,
+      elseBranch,
+      type: expected,
+    };
+  }
+  const thenBranch = rawThen;
+  const elseBranch = rawElse;
 
   if (isSome(elseBranch)) {
     checkBranchTypesAgree(
@@ -8741,6 +8962,7 @@ function analyzeIfLetExpression(
   ctx: AnalysisContext,
   ifExpression: Parser.IfExpression,
   letExpression: Parser.LetExpression,
+  expected?: Semantics.Type,
 ): Semantics.IfExpression {
   const scrutinee = analyzeExpression(ctx, letExpression.scrutinee);
   const scrutineeType = getType(scrutinee);
@@ -8765,16 +8987,34 @@ function analyzeIfLetExpression(
       scrutinee,
       type: { kind: "PrimitiveBooleanType" },
     };
-    thenBranch = analyzeBlock(ctx, ifExpression.thenBranch);
+    thenBranch = analyzeBlock(ctx, ifExpression.thenBranch, expected);
   } finally {
     popFrame(ctx);
   }
 
-  const elseBranch = mapSome(ifExpression.elseBranch, (elseBranch) =>
+  const rawElse = mapSome(ifExpression.elseBranch, (elseBranch) =>
     elseBranch.kind === "IfExpression"
-      ? analyzeIfExpression(ctx, elseBranch)
-      : analyzeBlock(ctx, elseBranch),
+      ? analyzeIfExpression(ctx, elseBranch, expected)
+      : analyzeBlock(ctx, elseBranch, expected),
   );
+
+  if (expected !== undefined) {
+    const checked = checkIfBranches(
+      ctx,
+      ifExpression.tokenId,
+      thenBranch,
+      rawElse,
+      expected,
+    );
+    return {
+      ...ifExpression,
+      condition,
+      thenBranch: checked.thenBranch,
+      elseBranch: checked.elseBranch,
+      type: expected,
+    };
+  }
+  const elseBranch = rawElse;
 
   if (isSome(elseBranch)) {
     checkBranchTypesAgree(

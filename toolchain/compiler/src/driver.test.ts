@@ -1233,6 +1233,40 @@ describe("trait default method codegen", (): void => {
   });
 });
 
+describe("expected-type threading codegen", (): void => {
+  it("coerces array-literal elements to the declared element type and runs", (): void => {
+    const js = emittedJs(`
+      fn main() {
+        let xs: [i64; 3] = [1, 2, 3];
+        print(xs[0] + xs[2]);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["4"]);
+  });
+
+  it("coerces `if` branches to the declared binding type and runs", (): void => {
+    const js = emittedJs(`
+      fn main() {
+        let c = true;
+        let x: i64 = if c { 10 } else { 20 };
+        print(x + 5);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["15"]);
+  });
+
+  it("coerces `match` arms to the declared binding type and runs", (): void => {
+    const js = emittedJs(`
+      fn main() {
+        let n = 1;
+        let x: i64 = match n { 0 => 100, _ => 200 };
+        print(x + 1);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["201"]);
+  });
+});
+
 describe("a rejected construct is named without an internal roadmap slice", (): void => {
   it.each([
     ["fn main() { loop {} }", "`loop` expressions are not yet supported"],

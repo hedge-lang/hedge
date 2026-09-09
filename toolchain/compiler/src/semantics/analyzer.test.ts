@@ -398,14 +398,26 @@ describe("semantic analysis", (): void => {
       const result = diagnose(
         "fn main() { let c: bool = true; let x: i32 = if c { 1 } else { }; }",
       );
+      // The `i32` annotation is checked into each branch, so the empty `else`
+      // is reported against the expectation, not against the `then` branch.
       expect(messageOf(result.diagnostics[0])).toContain(
-        "if expression branches have incompatible types",
+        "expected `i32`, found `()`",
       );
     });
 
     it("rejects branches of differing value types", () => {
       const result = diagnose(
         'fn main() { let c: bool = true; let x: i32 = if c { 1 } else { "a" }; }',
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toContain(
+        "expected `i32`, found `str`",
+      );
+    });
+
+    it("still rejects branches that disagree with each other when there is no annotation", () => {
+      const result = diagnose(
+        'fn main() { let c: bool = true; let x = if c { 1 } else { "a" }; print(x); }',
       );
       expect(result.diagnostics).toHaveLength(1);
       expect(messageOf(result.diagnostics[0])).toContain(
@@ -2481,7 +2493,11 @@ describe("semantic analysis", (): void => {
       );
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(messageOf(diagnostics[0])).toContain("return type mismatch");
+      // The `bool` return type is checked into the branches, so the report
+      // points at the first branch that can't produce it.
+      expect(messageOf(diagnostics[0])).toContain(
+        "expected `bool`, found `i32`",
+      );
     });
 
     it("checks the return type of a block-local function", (): void => {
@@ -3685,6 +3701,145 @@ describe("array types", (): void => {
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(messageOf(result.diagnostics[0])).toContain("immutable");
+  });
+});
+
+describe("expected-type threading into a let initializer / trailing expression", (): void => {
+  it("coerces each element of an array literal to a declared non-default element type", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let xs: [i64; 3] = [1, 2, 3];
+        print(xs);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(mainLetType(result, "xs")).toEqual({
+      kind: "ArrayType",
+      elementType: { kind: "PrimitiveI64Type" },
+      length: 3,
+    });
+  });
+
+  it("coerces each branch of an `if` expression to the declared binding type", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let cond = true;
+        let x: i64 = if cond { 1 } else { 2 };
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(mainLetType(result, "x")).toEqual({ kind: "PrimitiveI64Type" });
+  });
+
+  it("coerces each arm of a `match` expression to the declared binding type", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let n = 0;
+        let x: i64 = match n { 0 => 1, _ => 2 };
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(mainLetType(result, "x")).toEqual({ kind: "PrimitiveI64Type" });
+  });
+
+  it("threads the expectation through a nested array literal", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let xs: [[i64; 2]; 2] = [[1, 2], [3, 4]];
+        print(xs);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(mainLetType(result, "xs")).toEqual({
+      kind: "ArrayType",
+      elementType: {
+        kind: "ArrayType",
+        elementType: { kind: "PrimitiveI64Type" },
+        length: 2,
+      },
+      length: 2,
+    });
+  });
+
+  it("threads the expectation through an `else if` chain", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let a = true;
+        let b = false;
+        let x: i64 = if a { 1 } else if b { 2 } else { 3 };
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(mainLetType(result, "x")).toEqual({ kind: "PrimitiveI64Type" });
+  });
+
+  it("threads the declared return type through a trailing `if` expression", (): void => {
+    const result = diagnose(`
+      fn pick(c: bool) -> i64 { if c { 1 } else { 2 } }
+      fn main() { print(pick(true)); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("reports one mismatch on the offending `if` branch, without cascading", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let c = true;
+        let x: i64 = if c { 1 } else { true };
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("reports one mismatch on the offending array element, without cascading", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let xs: [i64; 2] = [1, true];
+        print(xs);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("reports one mismatch on the offending `match` arm, without cascading", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let n = 0;
+        let x: i64 = match n { 0 => 1, _ => "s" };
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("still requires the branches of an unannotated `if` to agree with each other", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let c = true;
+        let x = if c { 1i32 } else { 2i64 };
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("rejects an `if` with no `else` against a non-unit binding type", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let a = true;
+        let b = false;
+        let x: i64 = if a { 1 } else if b { 2 };
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toContain(
+      "expected `i64`, found `()`",
+    );
   });
 });
 

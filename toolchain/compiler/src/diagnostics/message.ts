@@ -353,6 +353,8 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return "match arms have incompatible types";
     case "SemIfBranchesIncompatible":
       return "if expression branches have incompatible types";
+    case "SemCheckedBranchTypeMismatch":
+      return `expected \`${kind.expected}\`, found \`${kind.found}\``;
     case "SemLiteralOutOfRange":
       return `out of range for ${kind.typeName}`;
     case "SemUnexpectedIntLiteralRangeCheck":

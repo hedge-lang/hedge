@@ -218,6 +218,7 @@ const SAMPLE_KINDS: readonly DiagnosticKind[] = [
   { kind: "SemArrayElementsSameType", expected: "i32", found: "str" },
   { kind: "SemMatchArmsIncompatible" },
   { kind: "SemIfBranchesIncompatible" },
+  { kind: "SemCheckedBranchTypeMismatch", expected: "i64", found: "bool" },
   { kind: "SemLiteralOutOfRange", typeName: "u8" },
   { kind: "SemUnexpectedIntLiteralRangeCheck", typeName: "u8" },
   { kind: "SemUnexpectedFloatLiteralRangeCheck", typeName: "f64" },
