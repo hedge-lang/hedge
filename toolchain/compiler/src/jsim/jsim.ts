@@ -14,7 +14,11 @@ import {
 import { collectAllImpls } from "../ownership/owned-functions.js";
 import {
   constValueToLiteralExpression,
+  type FreeMethodTarget,
   type MethodTarget,
+  type WitnessMethod,
+  type WitnessParam,
+  type WitnessRef,
 } from "../semantics/analyzer.js";
 import type * as Semantics from "../semantics/ast.js";
 import { hasCapability } from "../semantics/type-capabilities.js";
@@ -94,20 +98,39 @@ interface JsimContext {
   readonly methodTargets: ReadonlyMap<number, MethodTarget>;
   /** `AnalysisResult.implMethodTargets` - one entry per impl-provided method
    * to emit, keyed by its body tokenId. */
-  readonly implMethodTargets: ReadonlyMap<number, MethodTarget>;
+  readonly implMethodTargets: ReadonlyMap<number, FreeMethodTarget>;
+  /** `AnalysisResult.witnessParams` - the hidden witness parameters a generic
+   * function body carries, keyed by its own tokenId. */
+  readonly witnessParams: ReadonlyMap<number, readonly WitnessParam[]>;
+  /** `AnalysisResult.witnesses` - the resolved trait bounds a generic call
+   * site passes, keyed by the call's tokenId. */
+  readonly witnesses: ReadonlyMap<number, readonly WitnessRef[]>;
   /** Each emitted method free function's `methodKey` mapped to the name
    * actually emitted - identical to the readable `methodFreeFnName` unless it
    * collided with a user top-level binding. Both the emission and call sites
    * resolve through this so they agree. */
   readonly methodFreeFnNames: Map<string, string>;
+  /** Every `(typeId, trait)` witness object referenced while lowering,
+   * allocated on first use and emitted as a hoisted `const` afterwards. */
+  readonly hoistedWitnesses: Map<string, HoistedWitness>;
+  /** Set once a `Primitive` witness is referenced, so the shared
+   * `__witnessPrimitiveEq` const is emitted. */
+  readonly primitiveEqWitnessUsed: { used: boolean };
+}
+
+interface HoistedWitness {
+  readonly name: string;
+  readonly typeId: string;
+  readonly typeName: string;
+  readonly traitName: string;
+  readonly methods: readonly WitnessMethod[];
 }
 
 function createJsimContext(
   tokens: readonly Token[],
   ownership: ReadonlyMap<string, FunctionOwnership>,
   topLevelNames: Set<string>,
-  methodTargets: ReadonlyMap<number, MethodTarget>,
-  implMethodTargets: ReadonlyMap<number, MethodTarget>,
+  info: JsimInfo,
 ): JsimContext {
   return {
     tokens,
@@ -120,9 +143,13 @@ function createJsimContext(
     allConditionalDrops: [],
     emittedNameByBindingId: [],
     topLevelNames,
-    methodTargets,
-    implMethodTargets,
+    methodTargets: info.methodTargets ?? new Map(),
+    implMethodTargets: info.implMethodTargets ?? new Map(),
+    witnessParams: info.witnessParams ?? new Map(),
+    witnesses: info.witnesses ?? new Map(),
     methodFreeFnNames: new Map(),
+    hoistedWitnesses: new Map(),
+    primitiveEqWitnessUsed: { used: false },
   };
 }
 
@@ -774,12 +801,20 @@ function emittedNameForBinding(
   return name;
 }
 
+/** The analyzer-produced tables codegen consults, all optional so a test can
+ * lower a program with none of them. */
+export interface JsimInfo {
+  readonly methodTargets?: ReadonlyMap<number, MethodTarget>;
+  readonly implMethodTargets?: ReadonlyMap<number, FreeMethodTarget>;
+  readonly witnessParams?: ReadonlyMap<number, readonly WitnessParam[]>;
+  readonly witnesses?: ReadonlyMap<number, readonly WitnessRef[]>;
+}
+
 export function toJsim(
   program: Semantics.Program,
   tokens: readonly Token[],
   ownership: ReadonlyMap<string, FunctionOwnership> = new Map(),
-  methodTargets: ReadonlyMap<number, MethodTarget> = new Map(),
-  implMethodTargets: ReadonlyMap<number, MethodTarget> = new Map(),
+  info: JsimInfo = {},
 ): JSIM.Program {
   const topLevelNames = new Set<string>();
   for (const item of program.items) {
@@ -792,22 +827,17 @@ export function toJsim(
       topLevelNames.add(item.name.text);
     }
   }
-  const ctx = createJsimContext(
-    tokens,
-    ownership,
-    topLevelNames,
-    methodTargets,
-    implMethodTargets,
-  );
+  const ctx = createJsimContext(tokens, ownership, topLevelNames, info);
   const impls = collectAllImpls(program);
   reserveMethodFreeFnNames(ctx, impls);
+  const bodyItems = [
+    ...impls.flatMap((impl) => parseImplMethods(ctx, impl)),
+    ...program.items.flatMap((i) => parseItem(ctx, i)),
+  ];
   return {
     kind: "Program",
     docComment: toDocComment(program.attributes),
-    items: [
-      ...impls.flatMap((impl) => parseImplMethods(ctx, impl)),
-      ...program.items.flatMap((i) => parseItem(ctx, i)),
-    ],
+    items: [...hoistedWitnessDecls(ctx), ...bodyItems],
   };
 }
 
@@ -933,7 +963,10 @@ function hedgeTypeToNumericKind(
  * (trait impl) name a method's free function emits under, before collision
  * resolution. Uses the bare `typeName`; two shadowed types share it, which
  * is what `methodKey` disambiguates. */
-function methodFreeFnName(target: MethodTarget): string {
+function methodFreeFnName(target: FreeMethodTarget): string {
+  if (target.isDefaultBody && isSome(target.traitName)) {
+    return `${target.traitName.value}$${target.methodName}$default`;
+  }
   const traitSegment = isSome(target.traitName)
     ? `${target.traitName.value}$`
     : "";
@@ -943,9 +976,9 @@ function methodFreeFnName(target: MethodTarget): string {
 /** The per-declaration identity of a method free function - scope-qualified,
  * so a block-local type shadowing a top-level one keeps a distinct entry in
  * `ctx.methodFreeFnNames`. */
-function methodKey(target: MethodTarget): string {
+function methodKey(target: FreeMethodTarget): string {
   const trait = isSome(target.traitName) ? target.traitName.value : "";
-  return `${target.typeId}#${trait}#${target.methodName}`;
+  return `${target.typeId}#${trait}#${target.methodName}#${target.isDefaultBody}`;
 }
 
 /** The name a method's free function actually emits and every call site
@@ -953,16 +986,126 @@ function methodKey(target: MethodTarget): string {
  * and was suffixed (`reserveMethodFreeFnNames`). */
 function resolvedMethodFreeFnName(
   ctx: JsimContext,
-  target: MethodTarget,
+  target: FreeMethodTarget,
 ): string {
   return (
     ctx.methodFreeFnNames.get(methodKey(target)) ?? methodFreeFnName(target)
   );
 }
 
+const PRIMITIVE_EQ_WITNESS = "__witnessPrimitiveEq";
+
+/** The `FreeMethodTarget` for one method a `(typeId, trait)` witness carries,
+ * used to resolve the free-function name the slot points at. */
+function witnessSlotTarget(
+  witness: HoistedWitness,
+  method: WitnessMethod,
+): FreeMethodTarget {
+  return {
+    kind: "free",
+    typeId: witness.typeId,
+    typeName: witness.typeName,
+    traitName: some(witness.traitName),
+    methodName: method.name,
+    isDefaultBody: method.source === "default",
+  };
+}
+
+/** The hoisted `const` name for the `(typeId, trait)` witness object,
+ * allocated (collision-safe) and remembered on first reference. */
+function witnessConstName(
+  ctx: JsimContext,
+  typeId: string,
+  typeName: string,
+  traitName: string,
+  methods: readonly WitnessMethod[],
+): string {
+  const key = `${typeId}#${traitName}`;
+  const existing = ctx.hoistedWitnesses.get(key);
+  if (existing !== undefined) return existing.name;
+  const name = reserveTopLevelName(ctx, `__witness_${traitName}_${typeName}`);
+  ctx.hoistedWitnesses.set(key, {
+    name,
+    typeId,
+    typeName,
+    traitName,
+    methods,
+  });
+  return name;
+}
+
+/** The witness argument for one resolved bound at a generic call site. */
+function witnessArgExpression(
+  ctx: JsimContext,
+  ref: WitnessRef,
+): JSIM.Expression {
+  let name: string;
+  if (ref.kind === "Impl") {
+    name = witnessConstName(
+      ctx,
+      ref.typeId,
+      ref.typeName,
+      ref.traitName,
+      ref.methods,
+    );
+  } else if (ref.kind === "Forwarded") {
+    name = `_witness_${ref.paramName}_${ref.traitName}`;
+  } else {
+    ctx.primitiveEqWitnessUsed.used = true;
+    name = PRIMITIVE_EQ_WITNESS;
+  }
+  return { kind: "Identifier", value: name, type: none() };
+}
+
+/** The hidden witness arguments a generic call at `callTokenId` passes,
+ * appended after the real arguments. */
+function witnessArguments(
+  ctx: JsimContext,
+  callTokenId: number,
+): readonly JSIM.Expression[] {
+  return (ctx.witnesses.get(callTokenId) ?? []).map((ref) =>
+    witnessArgExpression(ctx, ref),
+  );
+}
+
+/** The hoisted witness-object and primitive-eq-witness declarations, built
+ * from what was referenced during lowering - prepended to the program. */
+function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
+  const decls: JSIM.Item[] = [];
+  if (ctx.primitiveEqWitnessUsed.used) {
+    decls.push({
+      kind: "WitnessObjectDecl",
+      name: PRIMITIVE_EQ_WITNESS,
+      directSlots: [{ method: "eq", fnName: "(a, b) => a === b" }],
+      closureSlots: [],
+    });
+  }
+  for (const witness of ctx.hoistedWitnesses.values()) {
+    const direct: JSIM.WitnessSlot[] = [];
+    const closure: JSIM.WitnessSlot[] = [];
+    for (const method of witness.methods) {
+      const slot: JSIM.WitnessSlot = {
+        method: method.name,
+        fnName: resolvedMethodFreeFnName(
+          ctx,
+          witnessSlotTarget(witness, method),
+        ),
+      };
+      (method.source === "default" ? closure : direct).push(slot);
+    }
+    decls.push({
+      kind: "WitnessObjectDecl",
+      name: witness.name,
+      directSlots: direct,
+      closureSlots: closure,
+    });
+  }
+  return decls;
+}
+
 interface EmittableMethod {
   readonly method: Semantics.FunctionDef;
-  readonly target: MethodTarget;
+  readonly target: FreeMethodTarget;
 }
 
 /** Each of an impl's own method bodies the analyzer marked for emission
@@ -1323,6 +1466,14 @@ function parseFunctionBody(
     fn.signature,
     emittedParams,
   );
+  const witnessParams: readonly JSIM.FunctionParam[] = (
+    ctx.witnessParams.get(fn.tokenId) ?? []
+  ).map((wp) => ({
+    kind: "FunctionParam",
+    name: wp.name,
+    type: none(),
+    synthetic: true,
+  }));
   const block = fn.body;
   const innerDoc = toDocComment(block.innerAttributes);
   const outerDoc = toDocComment(fn.signature.attributes);
@@ -1366,7 +1517,7 @@ function parseFunctionBody(
     kind: "Function",
     scope,
     name: fn.signature.name.text,
-    params,
+    params: [...params, ...witnessParams],
     returnType,
     span: resolveSpan(
       ctx.tokens,
@@ -1577,7 +1728,10 @@ function parseExpression(
       return {
         kind: "CallExpression",
         callee: parseExpression(ctx, expression.callee),
-        arguments: expression.arguments.map((arg) => parseExpression(ctx, arg)),
+        arguments: [
+          ...expression.arguments.map((arg) => parseExpression(ctx, arg)),
+          ...witnessArguments(ctx, expression.tokenId),
+        ],
       };
     case "ReferenceExpression":
       // A shared borrow is transparent in JS - emit the operand directly. A
@@ -1665,7 +1819,7 @@ function jsimMethodCallExpression(
     parseExpression(ctx, arg),
   );
   const target = ctx.methodTargets.get(methodCallExpression.method.tokenId);
-  if (target !== undefined) {
+  if (target?.kind === "free") {
     return {
       kind: "CallExpression",
       callee: {
@@ -1676,9 +1830,16 @@ function jsimMethodCallExpression(
       arguments: [selfArgument(ctx, methodCallExpression), ...loweredArgs],
     };
   }
-  // No resolved target: a `dyn`/generic-parameter receiver, whose witnessed
-  // dispatch is a later slice of this work. Left as a JS method call, as
-  // before.
+  if (target?.kind === "witness") {
+    return {
+      kind: "MethodCallExpression",
+      receiver: { kind: "Identifier", value: target.witnessName, type: none() },
+      method: target.methodName,
+      arguments: [selfArgument(ctx, methodCallExpression), ...loweredArgs],
+    };
+  }
+  // No resolved target: a `dyn` receiver, whose witnessed dispatch is a
+  // later slice. Left as a JS method call, as before.
   return {
     kind: "MethodCallExpression",
     receiver: parseExpression(ctx, methodCallExpression.receiver),
@@ -3142,7 +3303,7 @@ function parseTraitEqualityComparison(
   const left = parseExpression(ctx, binExp.left);
   const right = parseExpression(ctx, binExp.right);
   const call: JSIM.Expression =
-    target !== undefined
+    target?.kind === "free"
       ? {
           kind: "CallExpression",
           callee: {

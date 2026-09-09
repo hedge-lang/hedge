@@ -49,27 +49,58 @@ export interface AnalysisResult {
    * as a free function, keyed by its own body `tokenId`. Produced here (not
    * re-derived in codegen) so an emission and its call sites always agree,
    * shadowed local types included. */
-  readonly implMethodTargets: ReadonlyMap<number, MethodTarget>;
+  readonly implMethodTargets: ReadonlyMap<number, FreeMethodTarget>;
+  /** The hidden witness parameters a generic function body carries, keyed by
+   * the function body's `tokenId`, one per resolved trait bound in
+   * `(param-declaration, bound)` order - the shape codegen appends after the
+   * real parameters. Absent for a function with no bounded type parameter. */
+  readonly witnessParams: ReadonlyMap<number, readonly WitnessParam[]>;
 }
 
-/** The resolved impl a method call dispatches to, in the form codegen needs
- * to name its emitted free function: `<typeName>$<methodName>` for an
- * inherent method, `<typeName>$<traitName>$<methodName>` for a trait impl.
- * `traitName` is `none()` for an inherent method. `typeId` is the scope-
- * qualified identity (`StructType`/`EnumType` `name`) - distinct per
- * declaration even when two types share `typeName`, so codegen keys its
- * name-reservation map on it rather than the collision-prone readable name. */
-export interface MethodTarget {
+/** One hidden witness parameter of a generic function: `_witness_T_Draw` for
+ * a `T: Draw` bound. */
+export interface WitnessParam {
+  readonly name: string;
+  readonly paramName: string;
+  readonly traitName: string;
+}
+
+/**
+ * How a resolved method call (or trait-dispatched `==`) lowers.
+ *
+ * `free` - a call on a concrete type, to an emitted free function:
+ * `<typeName>$<methodName>` for an inherent method,
+ * `<typeName>$<traitName>$<methodName>` for a trait impl,
+ * `<traitName>$<methodName>$default` when `isDefaultBody`. `typeId` is the
+ * scope-qualified `StructType`/`EnumType` identity - distinct per declaration
+ * even when two types share `typeName`, so codegen keys its name-reservation
+ * map on it rather than the collision-prone readable name.
+ *
+ * `witness` - a call inside a generic body, dispatched through the witness
+ * parameter `witnessName` (`_witness_T_Draw`, or `_witness_Self_Foo` in a
+ * trait default body).
+ */
+export interface FreeMethodTarget {
+  readonly kind: "free";
   readonly typeId: string;
   readonly typeName: string;
   readonly traitName: Option<string>;
   readonly methodName: string;
+  readonly isDefaultBody: boolean;
 }
+
+interface WitnessMethodTarget {
+  readonly kind: "witness";
+  readonly witnessName: string;
+  readonly methodName: string;
+}
+
+export type MethodTarget = FreeMethodTarget | WitnessMethodTarget;
 
 /** One trait method a witness carries, and where its implementation comes
  * from: the impl's own override, or the trait's own default body when the
  * impl doesn't override it. */
-interface WitnessMethod {
+export interface WitnessMethod {
   readonly name: string;
   readonly source: "impl" | "default";
 }
@@ -85,11 +116,16 @@ interface WitnessMethod {
  * `Primitive` covers a primitive argument satisfying `PartialEq`/`Eq`, which
  * has no impl - codegen synthesizes the witness.
  */
-type WitnessRef =
+export type WitnessRef =
   | {
       readonly kind: "Impl";
       readonly traitName: string;
+      /** Bare readable type name (`Point`). */
       readonly typeName: string;
+      /** Scope-qualified type identity, matching `FreeMethodTarget.typeId` -
+       * so codegen resolves the same collision-safe free-function names the
+       * impl's own methods emitted under. */
+      readonly typeId: string;
       readonly implTokenId: number;
       readonly methods: readonly WitnessMethod[];
     }
@@ -180,7 +216,9 @@ interface AnalysisContext {
   /** Mutable build-up of `AnalysisResult.methodTargets`. */
   readonly methodTargetTable: Map<number, MethodTarget>;
   /** Mutable build-up of `AnalysisResult.implMethodTargets`. */
-  readonly implMethodTargetTable: Map<number, MethodTarget>;
+  readonly implMethodTargetTable: Map<number, FreeMethodTarget>;
+  /** Mutable build-up of `AnalysisResult.witnessParams`. */
+  readonly witnessParamTable: Map<number, readonly WitnessParam[]>;
   /**
    * What `Self` means at the innermost currently-open trait or impl body -
    * only the top is ever consulted, same lifecycle as `genericParamStack`. A
@@ -2709,6 +2747,7 @@ function resolveTraitBoundForTypeName(
     kind: "Impl",
     traitName: bareTypeName(traitName),
     typeName: bareTypeName(typeName),
+    typeId: typeName,
     implTokenId: impl.tokenId,
     methods: witnessMethods(ctx, impl),
   });
@@ -5818,12 +5857,43 @@ function analyzeFunctionSignature(
   return signature;
 }
 
+/** Records a generic function's hidden witness parameters
+ * (`AnalysisResult.witnessParams`) - one per declared trait bound, in
+ * `(param-declaration, bound)` order, named `_witness_<Param>_<Trait>`. */
+function recordWitnessParams(
+  ctx: AnalysisContext,
+  fnTokenId: number,
+  generics: readonly Parser.GenericParam[],
+  whereClause: Option<Parser.WhereClause>,
+): void {
+  const params: WitnessParam[] = [];
+  for (const [paramName, traitNames] of genericParamBoundNames(
+    generics,
+    whereClause,
+  )) {
+    for (const traitName of traitNames) {
+      params.push({
+        name: `_witness_${paramName}_${traitName}`,
+        paramName,
+        traitName,
+      });
+    }
+  }
+  if (params.length > 0) ctx.witnessParamTable.set(fnTokenId, params);
+}
+
 function analyzeFunction(
   ctx: AnalysisContext,
   decl: Parser.FunctionDef,
 ): Semantics.FunctionDef {
   pushFrame(ctx);
   pushGenericParams(ctx, decl.signature.generics);
+  recordWitnessParams(
+    ctx,
+    decl.tokenId,
+    decl.signature.generics,
+    decl.signature.whereClause,
+  );
   const { signature, expectedReturnType, suppressReturnTypeMismatch } =
     buildFunctionSignature(ctx, decl.signature);
   const body = checkFunctionReturnType(
@@ -6536,10 +6606,12 @@ function recordEqualityTarget(
   const impl = findRegisteredImpl(ctx, operandType.name, partialEq);
   if (impl === undefined || impl.isBlanket) return;
   ctx.methodTargetTable.set(tokenId, {
+    kind: "free",
     typeId: operandType.name,
     typeName: bareTypeName(operandType.name),
     traitName: some(bareTypeName(partialEq)),
     methodName: "eq",
+    isDefaultBody: false,
   });
 }
 
@@ -7227,10 +7299,12 @@ function recordImplMethodTarget(
 ): void {
   if (!isSome(decl.signature.receiver) || !isNominalType(targetType)) return;
   ctx.implMethodTargetTable.set(decl.tokenId, {
+    kind: "free",
     typeId: targetType.name,
     typeName: bareTypeName(targetType.name),
     traitName: mapSome(traitName, bareTypeName),
     methodName: decl.signature.name.text,
+    isDefaultBody: false,
   });
 }
 
@@ -7266,9 +7340,64 @@ function recordMethodTarget(
     traitName = some(bareTypeName(method.origin.traitId));
   }
   ctx.methodTargetTable.set(methodTokenId, {
+    kind: "free",
     typeId: receiverType.name,
     typeName: bareTypeName(receiverType.name),
     traitName,
+    methodName,
+    isDefaultBody: false,
+  });
+}
+
+/** The witness parameter a method call on `receiverType` dispatches through
+ * inside a generic body: `_witness_<T>_<Trait>` for a bounded type parameter
+ * `T`, `_witness_Self_<Trait>` for an abstract `Self` in a trait default
+ * body. `undefined` when `receiverType` is anything else. */
+function witnessNameForReceiver(
+  ctx: AnalysisContext,
+  receiverType: Semantics.Type,
+  traitId: string,
+): string | undefined {
+  if (
+    receiverType.kind !== "NamedType" ||
+    receiverType.path.segments.length !== 1
+  ) {
+    return undefined;
+  }
+  const name = receiverType.path.segments[0];
+  if (name === undefined) return undefined;
+  const trait = bareTypeName(traitId);
+  if (name === "Self" && currentSelfContext(ctx)?.kind === "Trait") {
+    return `_witness_Self_${trait}`;
+  }
+  return isDeclaredGenericParam(ctx, name)
+    ? `_witness_${name}_${trait}`
+    : undefined;
+}
+
+/** Records how a resolved method call lowers: a `free` target for a concrete
+ * receiver, a `witness` target for a call inside a generic body. */
+function recordMethodDispatch(
+  ctx: AnalysisContext,
+  methodTokenId: number,
+  receiverType: Semantics.Type,
+  method: IndexedMethod,
+  methodName: string,
+): void {
+  if (isNominalType(receiverType)) {
+    recordMethodTarget(ctx, methodTokenId, receiverType, method, methodName);
+    return;
+  }
+  if (method.origin.kind !== "trait") return;
+  const witnessName = witnessNameForReceiver(
+    ctx,
+    receiverType,
+    method.origin.traitId,
+  );
+  if (witnessName === undefined) return;
+  ctx.methodTargetTable.set(methodTokenId, {
+    kind: "witness",
+    witnessName,
     methodName,
   });
 }
@@ -7328,15 +7457,13 @@ function analyzeMethodCallExpression(
       expression.tokenId,
     );
   }
-  if (isNominalType(lookupType)) {
-    recordMethodTarget(
-      ctx,
-      expression.method.tokenId,
-      lookupType,
-      method,
-      expression.method.text,
-    );
-  }
+  recordMethodDispatch(
+    ctx,
+    expression.method.tokenId,
+    lookupType,
+    method,
+    expression.method.text,
+  );
   return {
     ...base,
     arguments: [
@@ -9463,6 +9590,7 @@ export function analyze(
     witnessTable: new Map(),
     methodTargetTable: new Map(),
     implMethodTargetTable: new Map(),
+    witnessParamTable: new Map(),
     selfContextStack: [],
   };
   // Before functions, so a signature can name any declared type.
@@ -9523,5 +9651,6 @@ export function analyze(
     witnesses: ctx.witnessTable,
     methodTargets: ctx.methodTargetTable,
     implMethodTargets: ctx.implMethodTargetTable,
+    witnessParams: ctx.witnessParamTable,
   };
 }

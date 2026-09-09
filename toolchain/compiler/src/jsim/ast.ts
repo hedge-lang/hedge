@@ -13,7 +13,28 @@ export type Item =
   | StaticDecl
   | ConstDecl
   | EnumDecl
+  | WitnessObjectDecl
   | Statement;
+
+/**
+ * A hoisted `const <name> = { ... }` holding a trait witness for a
+ * `(concrete type, trait)` pair. `directSlots` map a method name straight to
+ * an emitted free function; `closureSlots` are trait-default slots that must
+ * close over the witness so the default body can dispatch through it, forcing
+ * an imperative build. Not `export`ed and carries no `[Symbol.dispose]`,
+ * unlike a `ConstDecl` / `StructExpression`.
+ */
+export interface WitnessObjectDecl {
+  readonly kind: "WitnessObjectDecl";
+  readonly name: string;
+  readonly directSlots: readonly WitnessSlot[];
+  readonly closureSlots: readonly WitnessSlot[];
+}
+
+export interface WitnessSlot {
+  readonly method: string;
+  readonly fnName: string;
+}
 
 /**
  * Contributes nothing to emitted JS - a variant's tagged object already
@@ -264,6 +285,9 @@ export interface FunctionParam {
    * type annotation yet.
    */
   readonly type: Option<Type>;
+  /** A compiler-synthesized parameter (a generic function's hidden witness
+   * argument) - emitted in JS, omitted from `.d.ts`. */
+  readonly synthetic?: boolean;
 }
 
 type Type = PrimitiveType;

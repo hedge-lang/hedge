@@ -75,13 +75,12 @@ export function compile(
     diagnostics,
     code: some(
       generate(
-        toJsim(
-          optimize(analysis.program),
-          tokens,
-          ownership.functions,
-          analysis.methodTargets,
-          analysis.implMethodTargets,
-        ),
+        toJsim(optimize(analysis.program), tokens, ownership.functions, {
+          methodTargets: analysis.methodTargets,
+          implMethodTargets: analysis.implMethodTargets,
+          witnessParams: analysis.witnessParams,
+          witnesses: analysis.witnesses,
+        }),
       ),
     ),
   };

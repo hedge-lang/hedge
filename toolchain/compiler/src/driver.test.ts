@@ -830,6 +830,179 @@ describe("== / != on a type with a PartialEq impl", (): void => {
   });
 });
 
+describe("generic witness codegen", (): void => {
+  it("appends a hidden witness parameter for each of a generic function's trait bounds", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      fn draw_all<T: Draw>(t: &T) -> i32 { t.draw() }
+      fn main() { print(0); }
+    `);
+    expect(js).toContain("function draw_all(t, _witness_T_Draw)");
+  });
+
+  it("dispatches a trait method on a bound type parameter through its witness", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      fn draw_all<T: Draw>(t: &T) -> i32 { t.draw() }
+      fn main() { print(0); }
+    `);
+    expect(js).toContain("return _witness_T_Draw.draw(t);");
+    expect(js).not.toContain("t.draw()");
+  });
+
+  it("passes a hoisted witness object at a generic call site and runs end-to-end", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { x: i32 }
+      impl Draw for P { fn draw(&self) -> i32 { self.x } }
+      fn draw_all<T: Draw>(t: &T) -> i32 { t.draw() }
+      fn main() {
+        let p = P { x: 7 };
+        print(draw_all(&p));
+      }
+    `);
+    expect(js).toContain("const __witness_Draw_P = {draw: P$Draw$draw};");
+    expect(js).toContain("draw_all(p, __witness_Draw_P)");
+    expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
+  it("appends one witness parameter per bound, in bound order", (): void => {
+    const js = emittedJs(`
+      trait A { fn a(&self) -> i32; }
+      trait B { fn b(&self) -> i32; }
+      fn use_both<T: A + B>(t: &T) -> i32 { t.a() + t.b() }
+      fn main() { print(0); }
+    `);
+    expect(js).toContain("function use_both(t, _witness_T_A, _witness_T_B)");
+    expect(js).toContain("_witness_T_A.a(t)");
+    expect(js).toContain("_witness_T_B.b(t)");
+  });
+
+  it("orders witness parameters by type parameter, then bound", (): void => {
+    const js = emittedJs(`
+      trait A { fn a(&self) -> i32; }
+      trait B { fn b(&self) -> i32; }
+      fn pair<T: A, U: B>(t: &T, u: &U) -> i32 { t.a() + u.b() }
+      fn main() { print(0); }
+    `);
+    expect(js).toContain("function pair(t, u, _witness_T_A, _witness_U_B)");
+  });
+
+  it("forwards a caller's own witness to a nested generic call", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { x: i32 }
+      impl Draw for P { fn draw(&self) -> i32 { self.x } }
+      fn inner<U: Draw>(u: &U) -> i32 { u.draw() }
+      fn outer<T: Draw>(t: &T) -> i32 { inner(t) }
+      fn main() { let p = P { x: 5 }; print(outer(&p)); }
+    `);
+    expect(js).toContain("function outer(t, _witness_T_Draw)");
+    expect(js).toContain("inner(t, _witness_T_Draw)");
+    expect(runEmittedJs(js)).toEqual(["5"]);
+  });
+
+  it("forwards a witness two hops through nested generic calls", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { x: i32 }
+      impl Draw for P { fn draw(&self) -> i32 { self.x } }
+      fn deepest<A: Draw>(a: &A) -> i32 { a.draw() }
+      fn middle<B: Draw>(b: &B) -> i32 { deepest(b) }
+      fn top<C: Draw>(c: &C) -> i32 { middle(c) }
+      fn main() { let p = P { x: 3 }; print(top(&p)); }
+    `);
+    expect(js).toContain("middle(b, _witness_B_Draw)");
+    expect(js).toContain("deepest(b, _witness_B_Draw)");
+    expect(runEmittedJs(js)).toEqual(["3"]);
+  });
+
+  it("emits one JS function for a bounded generic instantiated at two concrete types", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct A { n: i32 }
+      struct B { n: i32 }
+      impl Draw for A { fn draw(&self) -> i32 { self.n } }
+      impl Draw for B { fn draw(&self) -> i32 { self.n + 1 } }
+      fn run<T: Draw>(t: &T) -> i32 { t.draw() }
+      fn main() {
+        let a = A { n: 10 };
+        let b = B { n: 20 };
+        print(run(&a));
+        print(run(&b));
+      }
+    `);
+    expect(js.match(/function run\b/g)).toHaveLength(1);
+    expect(runEmittedJs(js)).toEqual(["10", "21"]);
+  });
+
+  it("emits one JS function with no witness parameter for an unbounded generic at two types", (): void => {
+    const js = emittedJs(`
+      fn id<T>(x: T) -> T { x }
+      fn main() { print(id(1)); print(id(2)); }
+    `);
+    expect(js).toContain("function id(x)");
+    expect(js).not.toContain("_witness");
+    expect(js.match(/function id\b/g)).toHaveLength(1);
+    expect(runEmittedJs(js)).toEqual(["1", "2"]);
+  });
+
+  it("keeps witness parameters out of a `pub` generic function's `.d.ts`", (): void => {
+    const result = compile(`
+      trait Draw { fn draw(&self) -> i32; }
+      pub fn draw_all<T: Draw>(t: &T) -> i32 { t.draw() }
+      fn main() { print(0); }
+    `);
+    assert(isSome(result.code), "Expected the program to compile");
+    const { typedef } = result.code.value;
+    assert(isSome(typedef), "Expected a .d.ts");
+    expect(typedef.value).not.toContain("_witness");
+  });
+
+  it("does not emit witness codegen for an unsatisfied bound", (): void => {
+    const result = compile(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { x: i32 }
+      fn draw_all<T: Draw>(t: &T) -> i32 { t.draw() }
+      fn main() { let p = P { x: 1 }; print(draw_all(&p)); }
+    `);
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+    expect(isNone(result.code)).toBe(true);
+  });
+
+  it("rejects a method call on an unbounded type parameter without emitting a witness", (): void => {
+    const result = compile(`
+      trait Draw { fn draw(&self) -> i32; }
+      fn draw_all<T>(t: &T) -> i32 { t.draw() }
+      fn main() { print(0); }
+    `);
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.code).toBe("HEDGE-TYPE-012");
+  });
+
+  it("dispatches a `&mut self` trait method through a witness and mutates the caller's value", (): void => {
+    const js = emittedJs(`
+      trait Bump { fn bump(&mut self); }
+      struct C { n: i32 }
+      impl Bump for C { fn bump(&mut self) { self.n = self.n + 1; } }
+      fn bump_it<T: Bump>(t: &mut T) { t.bump() }
+      fn main() {
+        let mut c = C { n: 4 };
+        bump_it(&mut c);
+        print(c.n);
+      }
+    `);
+    // `t` is already a `&mut T` cell here, so it passes through unwrapped;
+    // the wrap happens at `bump_it(&mut c)` in `main`.
+    expect(js).toContain("_witness_T_Bump.bump(t)");
+    expect(js).toMatch(/bump_it\(\(\{ get v\(\) \{ return c; \}/);
+    expect(runEmittedJs(js)).toEqual(["5"]);
+  });
+});
+
 describe("a rejected construct is named without an internal roadmap slice", (): void => {
   it.each([
     ["fn main() { loop {} }", "`loop` expressions are not yet supported"],

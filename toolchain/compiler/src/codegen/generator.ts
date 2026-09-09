@@ -15,6 +15,7 @@ import type {
   RangeExpression,
   RefCellExpression,
   StructExpression,
+  WitnessObjectDecl,
   UnaryExpression,
   UnaryOperator,
   BlockStatement,
@@ -806,6 +807,17 @@ function emitStaticPart(decl: StaticDecl): EmittedPart {
  * comment for why this exists (a plain-JS consumer needs a real binding,
  * unlike an in-Hedge reference site, which is already inlined).
  */
+function emitWitnessObjectDecl(decl: WitnessObjectDecl): string {
+  const direct = decl.directSlots.map((s) => `${s.method}: ${s.fnName}`);
+  if (decl.closureSlots.length === 0) {
+    return `const ${decl.name} = {${direct.join(", ")}};`;
+  }
+  const closures = decl.closureSlots.map(
+    (s) => `w.${s.method} = (self, ...args) => ${s.fnName}(w, self, ...args);`,
+  );
+  return `const ${decl.name} = (() => { const w = {${direct.join(", ")}}; ${closures.join(" ")} return w; })();`;
+}
+
 function emitConstPart(decl: ConstDecl): EmittedPart {
   const text = `export const ${decl.name} = ${emitExpression(decl.value)};`;
   return {
@@ -832,6 +844,8 @@ function emitItem(item: Item): string {
       return emitStaticPart(item).text;
     case "ConstDecl":
       return emitConstPart(item).text;
+    case "WitnessObjectDecl":
+      return emitWitnessObjectDecl(item);
     case "LetStatement":
       return emitLet(item);
     case "BlockStatement":
@@ -884,6 +898,7 @@ function emitDtsFunction(
   scope: "public" | "package",
 ): string {
   const params = decl.params
+    .filter((p) => p.synthetic !== true)
     .map((p) => `${p.name}: ${isSome(p.type) ? p.type.value.value : "unknown"}`)
     .join(", ");
   const returnType = isSome(decl.returnType)

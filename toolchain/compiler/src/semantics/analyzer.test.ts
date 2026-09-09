@@ -6282,6 +6282,33 @@ describe("trait and impl declarations", (): void => {
     });
   });
 
+  describe("witness parameters", (): void => {
+    it("records one witness parameter per trait bound, in declaration order", (): void => {
+      const result = diagnose(`
+        trait A { fn a(&self) -> i32; }
+        trait B { fn b(&self) -> i32; }
+        fn f<T: A + B, U: A>(t: &T, u: &U) -> i32 { t.a() }
+        fn main() { print(0); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [params] = [...result.witnessParams.values()];
+      expect(params).toEqual([
+        { name: "_witness_T_A", paramName: "T", traitName: "A" },
+        { name: "_witness_T_B", paramName: "T", traitName: "B" },
+        { name: "_witness_U_A", paramName: "U", traitName: "A" },
+      ]);
+    });
+
+    it("records no witness parameters for a function with no bounded type parameter", (): void => {
+      const result = diagnose(`
+        fn id<T>(x: T) -> T { x }
+        fn main() { print(0); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(result.witnessParams.size).toBe(0);
+    });
+  });
+
   describe("primitive trait bounds", (): void => {
     it("resolves a `T: PartialEq` bound satisfied by a primitive argument", (): void => {
       const result = diagnoseWithPrelude(`
@@ -6409,12 +6436,13 @@ describe("trait and impl declarations", (): void => {
       `);
       expect(result.diagnostics).toEqual([]);
       const [target] = [...result.methodTargets.values()];
+      assert(target?.kind === "free", "expected a free method target");
       expect(target).toMatchObject({
         typeName: "Point",
         traitName: none(),
         methodName: "get",
       });
-      expect(target?.typeId).toContain("Point");
+      expect(target.typeId).toContain("Point");
     });
 
     it("records the trait for a trait-impl method call", (): void => {
@@ -6457,10 +6485,24 @@ describe("trait and impl declarations", (): void => {
       });
     });
 
-    it("records no target for a method call on a bound generic parameter", (): void => {
+    it("records a witness target for a method call on a bound generic parameter", (): void => {
       const result = diagnose(`
         trait Draw { fn draw(&self) -> i32; }
         fn run<T: Draw>(t: &T) -> i32 { t.draw() }
+        fn main() { print(0); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [target] = [...result.methodTargets.values()];
+      expect(target).toEqual({
+        kind: "witness",
+        witnessName: "_witness_T_Draw",
+        methodName: "draw",
+      });
+    });
+
+    it("records no target for a method call on an unbounded generic parameter", (): void => {
+      const result = diagnose(`
+        fn run<T>(t: &T) { }
         fn main() { print(0); }
       `);
       expect(result.diagnostics).toEqual([]);
