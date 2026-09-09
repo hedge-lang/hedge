@@ -3295,6 +3295,43 @@ function isTraitEqualityOperand(type: Semantics.Type): boolean {
   );
 }
 
+/** The `x.eq(y)`-shaped call a trait-dispatched `==` lowers to: a concrete
+ * free function, a generic body's witness slot, or (no resolved target - a
+ * type whose `PartialEq` is not yet reachable) the interim `left.eq(right)`
+ * method call. */
+function traitEqualityCall(
+  ctx: JsimContext,
+  target: MethodTarget | undefined,
+  left: JSIM.Expression,
+  right: JSIM.Expression,
+): JSIM.Expression {
+  if (target?.kind === "free") {
+    return {
+      kind: "CallExpression",
+      callee: {
+        kind: "Identifier",
+        value: resolvedMethodFreeFnName(ctx, target),
+        type: none(),
+      },
+      arguments: [left, right],
+    };
+  }
+  if (target?.kind === "witness") {
+    return {
+      kind: "MethodCallExpression",
+      receiver: { kind: "Identifier", value: target.witnessName, type: none() },
+      method: "eq",
+      arguments: [left, right],
+    };
+  }
+  return {
+    kind: "MethodCallExpression",
+    receiver: left,
+    method: "eq",
+    arguments: [right],
+  };
+}
+
 function parseTraitEqualityComparison(
   ctx: JsimContext,
   binExp: Semantics.BinaryExpression,
@@ -3302,25 +3339,7 @@ function parseTraitEqualityComparison(
   const target = ctx.methodTargets.get(binExp.tokenId);
   const left = parseExpression(ctx, binExp.left);
   const right = parseExpression(ctx, binExp.right);
-  const call: JSIM.Expression =
-    target?.kind === "free"
-      ? {
-          kind: "CallExpression",
-          callee: {
-            kind: "Identifier",
-            value: resolvedMethodFreeFnName(ctx, target),
-            type: none(),
-          },
-          arguments: [left, right],
-        }
-      : {
-          // No resolved impl: a generic-parameter operand, whose witnessed
-          // `eq` dispatch is a later slice of this work.
-          kind: "MethodCallExpression",
-          receiver: left,
-          method: "eq",
-          arguments: [right],
-        };
+  const call = traitEqualityCall(ctx, target, left, right);
   if (binExp.operator === "Ne") {
     return {
       kind: "UnaryExpression",

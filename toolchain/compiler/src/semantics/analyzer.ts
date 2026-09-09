@@ -5887,7 +5887,7 @@ function analyzeFunction(
   decl: Parser.FunctionDef,
 ): Semantics.FunctionDef {
   pushFrame(ctx);
-  pushGenericParams(ctx, decl.signature.generics);
+  pushGenericParams(ctx, decl.signature.generics, decl.signature.whereClause);
   recordWitnessParams(
     ctx,
     decl.tokenId,
@@ -6599,20 +6599,56 @@ function recordEqualityTarget(
   if (!spec.equalityTraitFallback || !left.isValid) return;
   const operandType =
     left.type.kind === "ReferenceType" ? left.type.referent : left.type;
-  if (!isNominalType(operandType)) return;
   if (hasCapability(operandType, "equality")) return;
   const partialEq = lookupPreludeTrait(ctx, "PartialEq");
   if (partialEq === undefined) return;
-  const impl = findRegisteredImpl(ctx, operandType.name, partialEq);
-  if (impl === undefined || impl.isBlanket) return;
-  ctx.methodTargetTable.set(tokenId, {
-    kind: "free",
-    typeId: operandType.name,
-    typeName: bareTypeName(operandType.name),
-    traitName: some(bareTypeName(partialEq)),
-    methodName: "eq",
-    isDefaultBody: false,
-  });
+  if (isNominalType(operandType)) {
+    const impl = findRegisteredImpl(ctx, operandType.name, partialEq);
+    if (impl === undefined || impl.isBlanket) return;
+    ctx.methodTargetTable.set(tokenId, {
+      kind: "free",
+      typeId: operandType.name,
+      typeName: bareTypeName(operandType.name),
+      traitName: some(bareTypeName(partialEq)),
+      methodName: "eq",
+      isDefaultBody: false,
+    });
+    return;
+  }
+  const witnessName = equalityWitnessName(ctx, operandType, partialEq);
+  if (witnessName !== undefined) {
+    ctx.methodTargetTable.set(tokenId, {
+      kind: "witness",
+      witnessName,
+      methodName: "eq",
+    });
+  }
+}
+
+/** The witness a `==` on `operandType` dispatches through inside a generic
+ * body: the declared bound of the type parameter that is or implies the
+ * prelude `PartialEq`. `undefined` for anything but a bounded type parameter
+ * (abstract `Self` in a trait default body is a later slice). */
+function equalityWitnessName(
+  ctx: AnalysisContext,
+  operandType: Semantics.Type,
+  partialEq: string,
+): string | undefined {
+  if (
+    operandType.kind !== "NamedType" ||
+    operandType.path.segments.length !== 1
+  ) {
+    return undefined;
+  }
+  const name = operandType.path.segments[0];
+  if (name === undefined || !isDeclaredGenericParam(ctx, name))
+    return undefined;
+  for (const bound of declaredGenericParamBounds(ctx, name)) {
+    if (bound === partialEq || boundsImplyTrait(ctx, [bound], partialEq)) {
+      return `_witness_${name}_${bareTypeName(bound)}`;
+    }
+  }
+  return undefined;
 }
 
 function inferLogicalType(

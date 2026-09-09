@@ -805,12 +805,13 @@ describe("== / != on a type with a PartialEq impl", (): void => {
     expect(js).not.toContain("a.eq(b)");
   });
 
-  it("leaves `==` on a `PartialEq`-bound generic parameter as a method call until witnessed dispatch lands", (): void => {
+  it("dispatches `==` on a `PartialEq`-bound generic parameter through the witness", (): void => {
     const js = emittedJs(`
       fn same<T: PartialEq>(a: T, b: T) -> bool { a == b }
       fn main() { print("done"); }
     `);
-    expect(js).toContain("a.eq(b)");
+    expect(js).toContain("_witness_T_PartialEq.eq(a, b)");
+    expect(js).not.toContain("a.eq(b)");
   });
 
   it("leaves `==` on a type whose `PartialEq` comes only from a blanket impl as a method call", (): void => {
@@ -1000,6 +1001,71 @@ describe("generic witness codegen", (): void => {
     expect(js).toContain("_witness_T_Bump.bump(t)");
     expect(js).toMatch(/bump_it\(\(\{ get v\(\) \{ return c; \}/);
     expect(runEmittedJs(js)).toEqual(["5"]);
+  });
+
+  it("dispatches `==` on a `PartialEq`-bound parameter through the witness", (): void => {
+    const js = emittedJs(`
+      fn same<T: PartialEq>(a: T, b: T) -> bool { a == b }
+      fn main() { print(0); }
+    `);
+    expect(js).toContain("function same(a, b, _witness_T_PartialEq)");
+    expect(js).toContain("return _witness_T_PartialEq.eq(a, b);");
+    expect(js).not.toContain("a.eq(b)");
+  });
+
+  it("passes the shared primitive-eq witness at a `T: PartialEq` call with an integer, and runs", (): void => {
+    const js = emittedJs(`
+      fn same<T: PartialEq>(a: T, b: T) -> bool { a == b }
+      fn main() {
+        if same(2, 2) { print("eq"); }
+        if same(2, 3) { print("ne"); }
+      }
+    `);
+    expect(js).toContain(
+      "const __witnessPrimitiveEq = {eq: (a, b) => a === b};",
+    );
+    expect(js).toContain("same(2, 2, __witnessPrimitiveEq)");
+    expect(js.match(/const __witnessPrimitiveEq\b/g)).toHaveLength(1);
+    expect(runEmittedJs(js)).toEqual(["eq"]);
+  });
+
+  it("shares one primitive-eq witness between `T: PartialEq` and `T: Eq` calls", (): void => {
+    const js = emittedJs(`
+      fn peq<T: PartialEq>(a: T, b: T) -> bool { a == b }
+      fn teq<T: Eq>(a: T, b: T) -> bool { a == b }
+      fn main() {
+        if peq(1, 1) { print("p"); }
+        if teq('x', 'x') { print("t"); }
+      }
+    `);
+    expect(js).toContain("_witness_T_Eq.eq(a, b)");
+    expect(js.match(/const __witnessPrimitiveEq\b/g)).toHaveLength(1);
+    expect(js).toContain('teq("x", "x", __witnessPrimitiveEq)');
+    expect(runEmittedJs(js)).toEqual(["p", "t"]);
+  });
+
+  it("compiles and runs a generic `PartialEq` equality check on a boolean argument", (): void => {
+    const js = emittedJs(`
+      fn eq_check<T: PartialEq>(a: T, b: T) -> bool { a == b }
+      fn main() {
+        let ok = eq_check(true, true);
+        if ok { print("yes"); }
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["yes"]);
+  });
+
+  it("threads a witness for a bound declared in a `where` clause", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { x: i32 }
+      impl Draw for P { fn draw(&self) -> i32 { self.x } }
+      fn run<T>(t: &T) -> i32 where T: Draw { t.draw() }
+      fn main() { let p = P { x: 8 }; print(run(&p)); }
+    `);
+    expect(js).toContain("function run(t, _witness_T_Draw)");
+    expect(js).toContain("_witness_T_Draw.draw(t)");
+    expect(runEmittedJs(js)).toEqual(["8"]);
   });
 });
 
