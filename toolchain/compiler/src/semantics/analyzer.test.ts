@@ -6282,6 +6282,124 @@ describe("trait and impl declarations", (): void => {
     });
   });
 
+  describe("primitive trait bounds", (): void => {
+    it("resolves a `T: PartialEq` bound satisfied by a primitive argument", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn eq_check<T: PartialEq>(a: T, b: T) -> bool { a == b }
+        fn main() { if eq_check(1, 2) { print(1); } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("records a synthesized `Primitive` witness for the satisfied `PartialEq` bound", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn eq_check<T: PartialEq>(a: T, b: T) -> bool { a == b }
+        fn main() { let ok = eq_check(1, 2); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      expect(witnesses).toEqual([
+        { kind: "Primitive", traitName: "PartialEq" },
+      ]);
+    });
+
+    it.each([
+      ["fn use_bool<T: PartialEq>(x: T) {} fn main() { use_bool(true); }"],
+      ["fn use_char<T: PartialEq>(x: T) {} fn main() { use_char('c'); }"],
+      ['fn use_str<T: PartialEq>(x: T) {} fn main() { use_str("s"); }'],
+      ["fn use_f64<T: PartialEq>(x: T) {} fn main() { use_f64(1.5); }"],
+    ])(
+      "resolves a `PartialEq` bound for every equality-capable primitive (%s)",
+      (source): void => {
+        const result = diagnoseWithPrelude(source);
+        expect(result.diagnostics).toEqual([]);
+        const [witnesses] = [...result.witnesses.values()];
+        expect(witnesses).toEqual([
+          { kind: "Primitive", traitName: "PartialEq" },
+        ]);
+      },
+    );
+
+    it("resolves a `T: Eq` bound for a non-float primitive and records an `Eq` witness", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn total<T: Eq>(x: T) {}
+        fn main() { total(1); total(true); total('c'); total("s"); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const all = [...result.witnesses.values()].flat();
+      expect(all).toEqual([
+        { kind: "Primitive", traitName: "Eq" },
+        { kind: "Primitive", traitName: "Eq" },
+        { kind: "Primitive", traitName: "Eq" },
+        { kind: "Primitive", traitName: "Eq" },
+      ]);
+    });
+
+    it("rejects a `T: Eq` bound for a float argument, since a raw float is only `PartialEq`", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn total<T: Eq>(x: T) {}
+        fn main() { total(1.5); }
+      `);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+    });
+
+    it("still resolves a `T: PartialEq` bound for a float argument", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn cmp<T: PartialEq>(x: T) {}
+        fn main() { cmp(1.5); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("records one `Primitive` witness per bound for a `T: PartialEq + Eq` parameter", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn both<T: PartialEq + Eq>(x: T) {}
+        fn main() { both(1); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      expect(witnesses).toEqual([
+        { kind: "Primitive", traitName: "PartialEq" },
+        { kind: "Primitive", traitName: "Eq" },
+      ]);
+    });
+
+    it("still rejects a `T: PartialEq` bound for a struct with no `PartialEq` impl", (): void => {
+      const result = diagnoseWithPrelude(`
+        struct P { x: i32 }
+        fn eq_check<T: PartialEq>(x: T) {}
+        fn main() { eq_check(P { x: 1 }); }
+      `);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+    });
+
+    it("still rejects a `T: PartialEq` bound for a reference to a primitive", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn eq_check<T: PartialEq>(x: T) {}
+        fn main() { let n = 1; eq_check(&n); }
+      `);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+    });
+
+    it("does not add a spurious trait-bound error when the argument name is undefined", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn eq_check<T: PartialEq>(x: T) {}
+        fn main() { eq_check(missing); }
+      `);
+      const codes = result.diagnostics
+        .filter((d) => d.severity === "error")
+        .map((d) => d.code);
+      expect(codes).not.toContain("HEDGE-TRAIT-002");
+      expect(codes).toContain("HEDGE-NAME-001");
+    });
+  });
+
   describe("method-call targets", (): void => {
     it("records an inherent method call's resolved type and method, and no trait", (): void => {
       const result = diagnose(`

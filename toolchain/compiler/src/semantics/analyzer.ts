@@ -25,7 +25,11 @@ import {
   type ConstFoldOutcome,
   type FoldWidth,
 } from "./const-eval.js";
-import { hasCapability, type TypeCapability } from "./type-capabilities.js";
+import {
+  hasCapability,
+  primitiveImplementsEq,
+  type TypeCapability,
+} from "./type-capabilities.js";
 
 export interface AnalysisResult {
   readonly diagnostics: readonly Diagnostic[];
@@ -78,6 +82,8 @@ interface WitnessMethod {
  * since the concrete type isn't known until whatever calls the enclosing
  * function supplies it; codegen forwards the enclosing function's own
  * received witness for `paramName` instead of resolving a new one.
+ * `Primitive` covers a primitive argument satisfying `PartialEq`/`Eq`, which
+ * has no impl - codegen synthesizes the witness.
  */
 type WitnessRef =
   | {
@@ -91,6 +97,10 @@ type WitnessRef =
       readonly kind: "Forwarded";
       readonly traitName: string;
       readonly paramName: string;
+    }
+  | {
+      readonly kind: "Primitive";
+      readonly traitName: string;
     };
 
 /**
@@ -2589,7 +2599,29 @@ function resolveTraitBound(
         : none();
     }
   }
+  const primitiveWitness = resolvePrimitiveTraitBound(ctx, type, traitName);
+  if (isSome(primitiveWitness)) return primitiveWitness;
   return resolveTraitBoundForTypeName(ctx, typeIdentity(type), traitName);
+}
+
+/** A primitive argument satisfies the prelude `PartialEq` (any type
+ * comparable with `==`) and `Eq` (all but the floats - see
+ * `primitiveImplementsEq`) with no impl, via a codegen-synthesized witness.
+ * Only the prelude's own `PartialEq`/`Eq` count - a block-local trait of the
+ * same name resolves through the normal impl path. */
+function resolvePrimitiveTraitBound(
+  ctx: AnalysisContext,
+  type: Semantics.Type,
+  traitName: string,
+): Option<WitnessRef> {
+  const satisfies =
+    (traitName === lookupPreludeTrait(ctx, "PartialEq") &&
+      hasCapability(type, "equality")) ||
+    (traitName === lookupPreludeTrait(ctx, "Eq") &&
+      primitiveImplementsEq(type));
+  return satisfies
+    ? some({ kind: "Primitive", traitName: bareTypeName(traitName) })
+    : none();
 }
 
 /**
