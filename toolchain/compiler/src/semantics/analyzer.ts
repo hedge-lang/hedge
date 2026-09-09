@@ -69,6 +69,13 @@ export interface WitnessParam {
   readonly traitName: string;
 }
 
+/** The one place the `_witness_<param>_<trait>` naming scheme is defined -
+ * `param` is a type-parameter name or `Self` (a trait default body), `trait`
+ * is a bare trait name. */
+export function witnessParamName(param: string, trait: string): string {
+  return `_witness_${param}_${trait}`;
+}
+
 /**
  * How a resolved method call (or trait-dispatched `==`) lowers.
  *
@@ -2406,7 +2413,11 @@ function recordDefaultMethodTarget(
     isDefaultBody: true,
   });
   ctx.witnessParamTable.set(decl.tokenId, [
-    { name: `_witness_Self_${trait}`, paramName: "Self", traitName: trait },
+    {
+      name: witnessParamName("Self", trait),
+      paramName: "Self",
+      traitName: trait,
+    },
   ]);
 }
 
@@ -5902,7 +5913,7 @@ function recordWitnessParams(
   )) {
     for (const traitName of traitNames) {
       params.push({
-        name: `_witness_${paramName}_${traitName}`,
+        name: witnessParamName(paramName, traitName),
         paramName,
         traitName,
       });
@@ -6674,7 +6685,7 @@ function equalityWitnessName(
     return undefined;
   for (const bound of declaredGenericParamBounds(ctx, name)) {
     if (bound === partialEq || boundsImplyTrait(ctx, [bound], partialEq)) {
-      return `_witness_${name}_${bareTypeName(bound)}`;
+      return witnessParamName(name, bareTypeName(bound));
     }
   }
   return undefined;
@@ -7403,11 +7414,11 @@ function recordMethodTarget(
     receiverType.name,
     method.origin.traitId,
   );
-  const witnessMethod =
-    isSome(witness) && witness.value.kind === "Impl"
-      ? witness.value.methods.find((m) => m.name === methodName)
-      : undefined;
-  if (witnessMethod === undefined || !isSome(witness)) return;
+  if (!isSome(witness) || witness.value.kind !== "Impl") return;
+  const witnessMethod = witness.value.methods.find(
+    (m) => m.name === methodName,
+  );
+  if (witnessMethod === undefined) return;
   const isDefaultBody = witnessMethod.source === "default";
   if (isDefaultBody) ctx.extraWitnessRefs.push(witness.value);
   ctx.methodTargetTable.set(methodTokenId, {
@@ -7445,10 +7456,10 @@ function witnessNameForReceiver(
     selfContext?.kind === "Trait" &&
     selfContext.traitName === traitId
   ) {
-    return `_witness_Self_${trait}`;
+    return witnessParamName("Self", trait);
   }
   return isDeclaredGenericParam(ctx, name)
-    ? `_witness_${name}_${trait}`
+    ? witnessParamName(name, trait)
     : undefined;
 }
 

@@ -16,6 +16,7 @@ import {
   constValueToLiteralExpression,
   type FreeMethodTarget,
   type MethodTarget,
+  witnessParamName,
   type WitnessMethod,
   type WitnessParam,
   type WitnessRef,
@@ -1045,22 +1046,27 @@ function witnessArgExpression(
   ctx: JsimContext,
   ref: WitnessRef,
 ): JSIM.Expression {
-  let name: string;
-  if (ref.kind === "Impl") {
-    name = witnessConstName(
-      ctx,
-      ref.typeId,
-      ref.typeName,
-      ref.traitName,
-      ref.methods,
-    );
-  } else if (ref.kind === "Forwarded") {
-    name = `_witness_${ref.paramName}_${ref.traitName}`;
-  } else {
-    ctx.primitiveEqWitnessUsed.used = true;
-    name = PRIMITIVE_EQ_WITNESS;
+  return { kind: "Identifier", value: witnessRefName(ctx, ref), type: none() };
+}
+
+function witnessRefName(ctx: JsimContext, ref: WitnessRef): string {
+  switch (ref.kind) {
+    case "Impl":
+      return witnessConstName(
+        ctx,
+        ref.typeId,
+        ref.typeName,
+        ref.traitName,
+        ref.methods,
+      );
+    case "Forwarded":
+      return witnessParamName(ref.paramName, ref.traitName);
+    case "Primitive":
+      ctx.primitiveEqWitnessUsed.used = true;
+      return PRIMITIVE_EQ_WITNESS;
+    default:
+      return assertNever(ref, `witness ref: ${JSON.stringify(ref)}`);
   }
-  return { kind: "Identifier", value: name, type: none() };
 }
 
 /** The hidden witness arguments a generic call at `callTokenId` passes,
@@ -1082,12 +1088,13 @@ function defaultBodyWitnessArg(
   target: FreeMethodTarget,
 ): readonly JSIM.Expression[] {
   if (!target.isDefaultBody || !isSome(target.traitName)) return [];
-  const witness = ctx.hoistedWitnesses.get(
-    `${target.typeId}#${target.traitName.value}`,
+  const key = `${target.typeId}#${target.traitName.value}`;
+  const witness = ctx.hoistedWitnesses.get(key);
+  assert(
+    witness !== undefined,
+    `ICE: no witness const for default-method call \`${key}\``,
   );
-  return witness === undefined
-    ? []
-    : [{ kind: "Identifier", value: witness.name, type: none() }];
+  return [{ kind: "Identifier", value: witness.name, type: none() }];
 }
 
 /** Pre-reserves the hoisted `const` name for every `extraWitnesses` object -
@@ -1115,7 +1122,7 @@ function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
     decls.push({
       kind: "WitnessObjectDecl",
       name: PRIMITIVE_EQ_WITNESS,
-      directSlots: [{ method: "eq", fnName: "(a, b) => a === b" }],
+      directSlots: [{ method: "eq", value: "(a, b) => a === b" }],
       closureSlots: [],
     });
   }
@@ -1125,7 +1132,7 @@ function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
     for (const method of witness.methods) {
       const slot: JSIM.WitnessSlot = {
         method: method.name,
-        fnName: resolvedMethodFreeFnName(
+        value: resolvedMethodFreeFnName(
           ctx,
           witnessSlotTarget(witness, method),
         ),

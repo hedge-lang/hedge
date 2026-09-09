@@ -808,12 +808,12 @@ function emitStaticPart(decl: StaticDecl): EmittedPart {
  * unlike an in-Hedge reference site, which is already inlined).
  */
 function emitWitnessObjectDecl(decl: WitnessObjectDecl): string {
-  const direct = decl.directSlots.map((s) => `${s.method}: ${s.fnName}`);
+  const direct = decl.directSlots.map((s) => `${s.method}: ${s.value}`);
   if (decl.closureSlots.length === 0) {
     return `const ${decl.name} = {${direct.join(", ")}};`;
   }
   const closures = decl.closureSlots.map(
-    (s) => `w.${s.method} = (self, ...args) => ${s.fnName}(self, ...args, w);`,
+    (s) => `w.${s.method} = (self, ...args) => ${s.value}(self, ...args, w);`,
   );
   return `const ${decl.name} = (() => { const w = {${direct.join(", ")}}; ${closures.join(" ")} return w; })();`;
 }

@@ -33,7 +33,9 @@ export interface WitnessObjectDecl {
 
 export interface WitnessSlot {
   readonly method: string;
-  readonly fnName: string;
+  /** The slot's emitted value: a free-function name, or an inline expression
+   * for the synthesized primitive-equality witness. */
+  readonly value: string;
 }
 
 /**
