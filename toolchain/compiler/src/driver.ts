@@ -80,6 +80,7 @@ export function compile(
           implMethodTargets: analysis.implMethodTargets,
           witnessParams: analysis.witnessParams,
           witnesses: analysis.witnesses,
+          extraWitnesses: analysis.extraWitnesses,
         }),
       ),
     ),

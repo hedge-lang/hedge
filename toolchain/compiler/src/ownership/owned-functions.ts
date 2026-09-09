@@ -31,30 +31,28 @@ export function collectOwnedFunctions(
 }
 
 /**
- * Every `impl` block in the program, at any nesting depth (top-level, or
- * inside a function/method body's direct statements). Coherence makes a
- * block-local `impl` program-wide, so codegen emits its methods as top-level
- * free functions the same as a top-level `impl`'s. Same `if`/`match`-block
- * gap as {@link collectOwnedFunctions}.
+ * Every `impl` and `trait` in the program with methods codegen must emit
+ * (an impl's provided methods, a trait's default bodies), at any nesting
+ * depth. Coherence makes a block-local `impl` program-wide, so its methods
+ * emit as top-level free functions the same as a top-level `impl`'s. Same
+ * `if`/`match`-block gap as {@link collectOwnedFunctions}.
  */
-export function collectAllImpls(
+export function collectMethodOwners(
   program: Semantics.Program,
-): readonly Semantics.ImplDecl[] {
-  const impls: Semantics.ImplDecl[] = [];
+): readonly (Semantics.ImplDecl | Semantics.TraitDecl)[] {
+  const owners: (Semantics.ImplDecl | Semantics.TraitDecl)[] = [];
   const visit = (
     nodes: readonly (Semantics.Item | Semantics.Statement)[],
   ): void => {
     for (const node of nodes) {
       if (node.kind === "Function") {
         visit(node.body.statements);
-      } else if (node.kind === "Impl") {
-        impls.push(node);
-        for (const method of node.methodBodies) visit(method.body.statements);
-      } else if (node.kind === "Trait") {
+      } else if (node.kind === "Impl" || node.kind === "Trait") {
+        owners.push(node);
         for (const method of node.methodBodies) visit(method.body.statements);
       }
     }
   };
   visit(program.items);
-  return impls;
+  return owners;
 }

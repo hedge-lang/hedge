@@ -711,17 +711,16 @@ describe("method-call codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["5"]);
   });
 
-  it("does not emit a free-function call for a trait default method the impl does not override", (): void => {
+  it("calls `Trait$m$default` for a trait default method the impl does not override, and runs", (): void => {
     const js = emittedJs(`
       trait Greet { fn hello(&self) -> i32 { 42 } }
       struct P { x: i32 }
       impl Greet for P {}
       fn main() { let p = P { x: 1 }; print(p.hello()); }
     `);
-    // Default-method bodies are not emitted yet; the call keeps the plain
-    // method-call shape rather than referencing an unemitted free function.
-    expect(js).toContain("p.hello()");
-    expect(js).not.toContain("P$Greet$hello");
+    expect(js).toContain("Greet$hello$default(p, __witness_Greet_P)");
+    expect(js).not.toContain("p.hello()");
+    expect(runEmittedJs(js)).toEqual(["42"]);
   });
 
   it("keeps method free functions out of the emitted `.d.ts`", (): void => {
@@ -1066,6 +1065,109 @@ describe("generic witness codegen", (): void => {
     expect(js).toContain("function run(t, _witness_T_Draw)");
     expect(js).toContain("_witness_T_Draw.draw(t)");
     expect(runEmittedJs(js)).toEqual(["8"]);
+  });
+});
+
+describe("trait default method codegen", (): void => {
+  const greetTrait = `
+    trait Greet {
+      fn name(&self) -> i32;
+      fn hello(&self) -> i32 { self.name() }
+    }
+    struct En { who: i32 }
+    impl Greet for En { fn name(&self) -> i32 { self.who } }
+  `;
+
+  it("emits a default method as `Trait$m$default` with a trailing witness parameter", (): void => {
+    const js = emittedJs(`
+      ${greetTrait}
+      fn main() { print(0); }
+    `);
+    expect(js).toContain(
+      "function Greet$hello$default(self, _witness_Self_Greet)",
+    );
+    expect(js).toContain("return _witness_Self_Greet.name(self);");
+  });
+
+  it("calls `Trait$m$default` with the hoisted witness for a concrete receiver, and runs", (): void => {
+    const js = emittedJs(`
+      ${greetTrait}
+      fn main() { let e = En { who: 42 }; print(e.hello()); }
+    `);
+    expect(js).toContain("Greet$hello$default(e, __witness_Greet_En)");
+    expect(js).toMatch(
+      /const __witness_Greet_En = \(\(\) => \{ const w = \{name: En\$Greet\$name\}; w\.hello = \(self, \.\.\.args\) => Greet\$hello\$default\(self, \.\.\.args, w\); return w; \}\)\(\);/,
+    );
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
+  it("dispatches a default method through a witness in a generic body, and runs", (): void => {
+    const js = emittedJs(`
+      ${greetTrait}
+      fn greet<T: Greet>(t: &T) -> i32 { t.hello() }
+      fn main() { let e = En { who: 7 }; print(greet(&e)); }
+    `);
+    expect(js).toContain("_witness_T_Greet.hello(t)");
+    expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
+  it("passes a default method's own arguments before the witness", (): void => {
+    const js = emittedJs(`
+      trait Scale {
+        fn base(&self) -> i32;
+        fn scaled(&self, k: i32) -> i32 { self.base() * k }
+      }
+      struct N { v: i32 }
+      impl Scale for N { fn base(&self) -> i32 { self.v } }
+      fn main() { let n = N { v: 3 }; print(n.scaled(4)); }
+    `);
+    expect(js).toContain(
+      "function Scale$scaled$default(self, k, _witness_Self_Scale)",
+    );
+    expect(js).toContain("Scale$scaled$default(n, 4, __witness_Scale_N)");
+    expect(runEmittedJs(js)).toEqual(["12"]);
+  });
+
+  it("uses an impl's override, not `Trait$m$default`, when the impl provides the method", (): void => {
+    const js = emittedJs(`
+      trait Greet {
+        fn name(&self) -> i32;
+        fn hello(&self) -> i32 { self.name() }
+      }
+      struct En { who: i32 }
+      impl Greet for En {
+        fn name(&self) -> i32 { self.who }
+        fn hello(&self) -> i32 { self.who + 100 }
+      }
+      fn greet<T: Greet>(t: &T) -> i32 { t.hello() }
+      fn main() {
+        let e = En { who: 5 };
+        print(e.hello());
+        print(greet(&e));
+      }
+    `);
+    expect(js).toContain("hello: En$Greet$hello");
+    expect(js).not.toMatch(/w\.hello = /);
+    expect(js).toContain("En$Greet$hello(e)");
+    expect(runEmittedJs(js)).toEqual(["105", "105"]);
+  });
+
+  it("leaves a default body's supertrait call as a plain method call (supertrait dispatch is a later slice)", (): void => {
+    const js = emittedJs(`
+      trait Base { fn base(&self) -> i32; }
+      trait Ext: Base {
+        fn ext(&self) -> i32 { self.base() + 1 }
+      }
+      struct S { n: i32 }
+      impl Base for S { fn base(&self) -> i32 { self.n } }
+      impl Ext for S {}
+      fn main() { print(0); }
+    `);
+    // `self.base()` in `Ext`'s default resolves to `Base`, not `Ext` - no
+    // `_witness_Self_Base` param exists, so it stays a plain method call.
+    expect(js).toContain("function Ext$ext$default(self, _witness_Self_Ext)");
+    expect(js).toContain("self.base()");
+    expect(js).not.toContain("_witness_Self_Base");
   });
 });
 

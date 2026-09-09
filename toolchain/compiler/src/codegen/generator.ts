@@ -813,7 +813,7 @@ function emitWitnessObjectDecl(decl: WitnessObjectDecl): string {
     return `const ${decl.name} = {${direct.join(", ")}};`;
   }
   const closures = decl.closureSlots.map(
-    (s) => `w.${s.method} = (self, ...args) => ${s.fnName}(w, self, ...args);`,
+    (s) => `w.${s.method} = (self, ...args) => ${s.fnName}(self, ...args, w);`,
   );
   return `const ${decl.name} = (() => { const w = {${direct.join(", ")}}; ${closures.join(" ")} return w; })();`;
 }

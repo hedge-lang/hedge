@@ -55,6 +55,10 @@ export interface AnalysisResult {
    * `(param-declaration, bound)` order - the shape codegen appends after the
    * real parameters. Absent for a function with no bounded type parameter. */
   readonly witnessParams: ReadonlyMap<number, readonly WitnessParam[]>;
+  /** Witness objects codegen must still hoist even though no generic *call*
+   * site referenced them - a concrete receiver calling a trait default
+   * method needs the `(type, trait)` witness passed to `Trait$m$default`. */
+  readonly extraWitnesses: readonly WitnessRef[];
 }
 
 /** One hidden witness parameter of a generic function: `_witness_T_Draw` for
@@ -219,6 +223,7 @@ interface AnalysisContext {
   readonly implMethodTargetTable: Map<number, FreeMethodTarget>;
   /** Mutable build-up of `AnalysisResult.witnessParams`. */
   readonly witnessParamTable: Map<number, readonly WitnessParam[]>;
+  readonly extraWitnessRefs: WitnessRef[];
   /**
    * What `Self` means at the innermost currently-open trait or impl body -
    * only the top is ever consulted, same lifecycle as `genericParamStack`. A
@@ -2382,6 +2387,29 @@ function abstractSelfType(tokenId: number): Semantics.Type {
   };
 }
 
+/** A bodied trait method emits as `Trait$m$default(self, ...args,
+ * _witness_Self_<Trait>)` - a `free` `MethodTarget` codegen keys on
+ * (`isDefaultBody`), plus a trailing witness parameter its own `self.other()`
+ * sibling calls dispatch through. */
+function recordDefaultMethodTarget(
+  ctx: AnalysisContext,
+  decl: Parser.FunctionDef,
+  traitId: string,
+): void {
+  const trait = bareTypeName(traitId);
+  ctx.implMethodTargetTable.set(decl.tokenId, {
+    kind: "free",
+    typeId: traitId,
+    typeName: trait,
+    traitName: some(trait),
+    methodName: decl.signature.name.text,
+    isDefaultBody: true,
+  });
+  ctx.witnessParamTable.set(decl.tokenId, [
+    { name: `_witness_Self_${trait}`, paramName: "Self", traitName: trait },
+  ]);
+}
+
 /** The real, diagnostic-emitting counterpart to `buildTraitDecl` - resolves
  * every method's own `params`/`returnType` for real (and analyzes each
  * default method's body), with `Self`/`Self::Assoc` resolving against this
@@ -2411,8 +2439,9 @@ function analyzeTraitDecl(
         item.whereClause,
         abstractSelf,
       );
-      if (isSome(analyzed.ownershipView)) {
+      if (decl.kind === "Function" && isSome(analyzed.ownershipView)) {
         methodBodies.push(analyzed.ownershipView.value);
+        recordDefaultMethodTarget(ctx, decl, shallow.traitId);
       }
       return [
         {
@@ -7344,14 +7373,13 @@ function recordImplMethodTarget(
   });
 }
 
-/** Records how a resolved call dispatches, for codegen's free-function naming
- * (`AnalysisResult.methodTargets`). Keyed by the *method name* token, not the
- * call's own tokenId - a chained call (`x.a().b()`) shares the receiver token
- * both call nodes carry as their tokenId. Nominal receivers only - a `dyn` or
- * bounded-generic receiver dispatches through a witness, not a named free
- * function. A trait method whose body comes from the trait's own default (the
- * impl does not override it) is left unrecorded: no free function is emitted
- * for it yet, so codegen keeps the plain method-call shape. */
+/** Records how a resolved call on a concrete receiver dispatches, for
+ * codegen's free-function naming (`AnalysisResult.methodTargets`). Keyed by
+ * the *method name* token, not the call's own tokenId - a chained call
+ * (`x.a().b()`) shares the receiver token both call nodes carry as their
+ * tokenId. A trait method the impl does not override dispatches to the
+ * trait's `Trait$m$default` free function, which needs the `(type, trait)`
+ * witness (recorded in `extraWitnesses` for codegen to hoist). */
 function recordMethodTarget(
   ctx: AnalysisContext,
   methodTokenId: number,
@@ -7359,36 +7387,44 @@ function recordMethodTarget(
   method: IndexedMethod,
   methodName: string,
 ): void {
-  let traitName: Option<string> = none();
-  if (method.origin.kind === "trait") {
-    const witness = resolveTraitBoundForTypeName(
-      ctx,
-      receiverType.name,
-      method.origin.traitId,
-    );
-    const witnessMethod =
-      isSome(witness) && witness.value.kind === "Impl"
-        ? witness.value.methods.find((m) => m.name === methodName)
-        : undefined;
-    if (witnessMethod === undefined || witnessMethod.source === "default") {
-      return;
-    }
-    traitName = some(bareTypeName(method.origin.traitId));
+  if (method.origin.kind !== "trait") {
+    ctx.methodTargetTable.set(methodTokenId, {
+      kind: "free",
+      typeId: receiverType.name,
+      typeName: bareTypeName(receiverType.name),
+      traitName: none(),
+      methodName,
+      isDefaultBody: false,
+    });
+    return;
   }
+  const witness = resolveTraitBoundForTypeName(
+    ctx,
+    receiverType.name,
+    method.origin.traitId,
+  );
+  const witnessMethod =
+    isSome(witness) && witness.value.kind === "Impl"
+      ? witness.value.methods.find((m) => m.name === methodName)
+      : undefined;
+  if (witnessMethod === undefined || !isSome(witness)) return;
+  const isDefaultBody = witnessMethod.source === "default";
+  if (isDefaultBody) ctx.extraWitnessRefs.push(witness.value);
   ctx.methodTargetTable.set(methodTokenId, {
     kind: "free",
     typeId: receiverType.name,
     typeName: bareTypeName(receiverType.name),
-    traitName,
+    traitName: some(bareTypeName(method.origin.traitId)),
     methodName,
-    isDefaultBody: false,
+    isDefaultBody,
   });
 }
 
 /** The witness parameter a method call on `receiverType` dispatches through
  * inside a generic body: `_witness_<T>_<Trait>` for a bounded type parameter
- * `T`, `_witness_Self_<Trait>` for an abstract `Self` in a trait default
- * body. `undefined` when `receiverType` is anything else. */
+ * `T`, `_witness_Self_<Trait>` for an abstract `Self` in a trait default body
+ * calling one of that *same* trait's own methods (a supertrait method is a
+ * later slice). `undefined` when `receiverType` is anything else. */
 function witnessNameForReceiver(
   ctx: AnalysisContext,
   receiverType: Semantics.Type,
@@ -7403,7 +7439,12 @@ function witnessNameForReceiver(
   const name = receiverType.path.segments[0];
   if (name === undefined) return undefined;
   const trait = bareTypeName(traitId);
-  if (name === "Self" && currentSelfContext(ctx)?.kind === "Trait") {
+  const selfContext = currentSelfContext(ctx);
+  if (
+    name === "Self" &&
+    selfContext?.kind === "Trait" &&
+    selfContext.traitName === traitId
+  ) {
     return `_witness_Self_${trait}`;
   }
   return isDeclaredGenericParam(ctx, name)
@@ -9627,6 +9668,7 @@ export function analyze(
     methodTargetTable: new Map(),
     implMethodTargetTable: new Map(),
     witnessParamTable: new Map(),
+    extraWitnessRefs: [],
     selfContextStack: [],
   };
   // Before functions, so a signature can name any declared type.
@@ -9688,5 +9730,6 @@ export function analyze(
     methodTargets: ctx.methodTargetTable,
     implMethodTargets: ctx.implMethodTargetTable,
     witnessParams: ctx.witnessParamTable,
+    extraWitnesses: ctx.extraWitnessRefs,
   };
 }

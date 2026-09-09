@@ -11,7 +11,7 @@ import {
   type ConditionalDrop,
   type FunctionOwnership,
 } from "../ownership/move-check.js";
-import { collectAllImpls } from "../ownership/owned-functions.js";
+import { collectMethodOwners } from "../ownership/owned-functions.js";
 import {
   constValueToLiteralExpression,
   type FreeMethodTarget,
@@ -105,6 +105,9 @@ interface JsimContext {
   /** `AnalysisResult.witnesses` - the resolved trait bounds a generic call
    * site passes, keyed by the call's tokenId. */
   readonly witnesses: ReadonlyMap<number, readonly WitnessRef[]>;
+  /** `AnalysisResult.extraWitnesses` - witness objects to hoist that no
+   * generic call site referenced (a concrete trait-default-method call). */
+  readonly extraWitnesses: readonly WitnessRef[];
   /** Each emitted method free function's `methodKey` mapped to the name
    * actually emitted - identical to the readable `methodFreeFnName` unless it
    * collided with a user top-level binding. Both the emission and call sites
@@ -147,6 +150,7 @@ function createJsimContext(
     implMethodTargets: info.implMethodTargets ?? new Map(),
     witnessParams: info.witnessParams ?? new Map(),
     witnesses: info.witnesses ?? new Map(),
+    extraWitnesses: info.extraWitnesses ?? [],
     methodFreeFnNames: new Map(),
     hoistedWitnesses: new Map(),
     primitiveEqWitnessUsed: { used: false },
@@ -808,6 +812,7 @@ export interface JsimInfo {
   readonly implMethodTargets?: ReadonlyMap<number, FreeMethodTarget>;
   readonly witnessParams?: ReadonlyMap<number, readonly WitnessParam[]>;
   readonly witnesses?: ReadonlyMap<number, readonly WitnessRef[]>;
+  readonly extraWitnesses?: readonly WitnessRef[];
 }
 
 export function toJsim(
@@ -828,10 +833,11 @@ export function toJsim(
     }
   }
   const ctx = createJsimContext(tokens, ownership, topLevelNames, info);
-  const impls = collectAllImpls(program);
-  reserveMethodFreeFnNames(ctx, impls);
+  const methodOwners = collectMethodOwners(program);
+  reserveMethodFreeFnNames(ctx, methodOwners);
+  reserveExtraWitnessConsts(ctx);
   const bodyItems = [
-    ...impls.flatMap((impl) => parseImplMethods(ctx, impl)),
+    ...methodOwners.flatMap((owner) => parseMethodBodies(ctx, owner)),
     ...program.items.flatMap((i) => parseItem(ctx, i)),
   ];
   return {
@@ -1068,6 +1074,39 @@ function witnessArguments(
   );
 }
 
+/** The trailing witness argument a concrete-receiver call to `Trait$m$default`
+ * passes - the `(type, trait)` witness object (pre-reserved from
+ * `AnalysisResult.extraWitnesses`). */
+function defaultBodyWitnessArg(
+  ctx: JsimContext,
+  target: FreeMethodTarget,
+): readonly JSIM.Expression[] {
+  if (!target.isDefaultBody || !isSome(target.traitName)) return [];
+  const witness = ctx.hoistedWitnesses.get(
+    `${target.typeId}#${target.traitName.value}`,
+  );
+  return witness === undefined
+    ? []
+    : [{ kind: "Identifier", value: witness.name, type: none() }];
+}
+
+/** Pre-reserves the hoisted `const` name for every `extraWitnesses` object -
+ * a concrete trait-default-method call needs the name during body lowering,
+ * before `hoistedWitnessDecls` runs. */
+function reserveExtraWitnessConsts(ctx: JsimContext): void {
+  for (const ref of ctx.extraWitnesses) {
+    if (ref.kind === "Impl") {
+      witnessConstName(
+        ctx,
+        ref.typeId,
+        ref.typeName,
+        ref.traitName,
+        ref.methods,
+      );
+    }
+  }
+}
+
 /** The hoisted witness-object and primitive-eq-witness declarations, built
  * from what was referenced during lowering - prepended to the program. */
 function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
@@ -1108,14 +1147,13 @@ interface EmittableMethod {
   readonly target: FreeMethodTarget;
 }
 
-/** Each of an impl's own method bodies the analyzer marked for emission
- * (`AnalysisResult.implMethodTargets` - receiver-taking, nominal target),
- * paired with its `MethodTarget`. */
-function emittableImplMethods(
+/** Each of an `impl`/`trait` method body the analyzer marked for emission
+ * (`AnalysisResult.implMethodTargets`), paired with its `MethodTarget`. */
+function emittableMethods(
   ctx: JsimContext,
-  impl: Semantics.ImplDecl,
+  owner: Semantics.ImplDecl | Semantics.TraitDecl,
 ): readonly EmittableMethod[] {
-  return impl.methodBodies.flatMap((method): readonly EmittableMethod[] => {
+  return owner.methodBodies.flatMap((method): readonly EmittableMethod[] => {
     const target = ctx.implMethodTargets.get(method.tokenId);
     return target === undefined ? [] : [{ method, target }];
   });
@@ -1126,10 +1164,10 @@ function emittableImplMethods(
  * suffix and every call site resolves to the same suffixed name. */
 function reserveMethodFreeFnNames(
   ctx: JsimContext,
-  impls: readonly Semantics.ImplDecl[],
+  owners: readonly (Semantics.ImplDecl | Semantics.TraitDecl)[],
 ): void {
-  for (const impl of impls) {
-    for (const { target } of emittableImplMethods(ctx, impl)) {
+  for (const owner of owners) {
+    for (const { target } of emittableMethods(ctx, owner)) {
       ctx.methodFreeFnNames.set(
         methodKey(target),
         reserveTopLevelName(ctx, methodFreeFnName(target)),
@@ -1138,18 +1176,17 @@ function reserveMethodFreeFnNames(
   }
 }
 
-/** Lowers each of an impl's own marked method bodies to a top-level free
- * function with `self` as the first parameter. */
-function parseImplMethods(
+/** Lowers each marked method body to a top-level free function with `self` as
+ * the first parameter (a trait default method also gets a trailing
+ * `_witness_Self_<Trait>` parameter from `witnessParams`). */
+function parseMethodBodies(
   ctx: JsimContext,
-  impl: Semantics.ImplDecl,
+  owner: Semantics.ImplDecl | Semantics.TraitDecl,
 ): JSIM.Item[] {
-  return emittableImplMethods(ctx, impl).map(
-    ({ method, target }): JSIM.Item => ({
-      ...parseFunction(ctx, method, methodOwnershipKey(method.tokenId)),
-      name: resolvedMethodFreeFnName(ctx, target),
-    }),
-  );
+  return emittableMethods(ctx, owner).map(({ method, target }): JSIM.Item => ({
+    ...parseFunction(ctx, method, methodOwnershipKey(method.tokenId)),
+    name: resolvedMethodFreeFnName(ctx, target),
+  }));
 }
 
 // eslint-disable-next-line complexity -- Routing function over the full Item union
@@ -1827,7 +1864,11 @@ function jsimMethodCallExpression(
         value: resolvedMethodFreeFnName(ctx, target),
         type: none(),
       },
-      arguments: [selfArgument(ctx, methodCallExpression), ...loweredArgs],
+      arguments: [
+        selfArgument(ctx, methodCallExpression),
+        ...loweredArgs,
+        ...defaultBodyWitnessArg(ctx, target),
+      ],
     };
   }
   if (target?.kind === "witness") {
