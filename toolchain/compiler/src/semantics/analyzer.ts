@@ -6699,7 +6699,7 @@ function recordEqualityTarget(
     });
     return;
   }
-  const witnessName = equalityWitnessName(ctx, operandType, partialEq);
+  const witnessName = abstractWitnessParamName(ctx, operandType, partialEq);
   if (witnessName !== undefined) {
     ctx.methodTargetTable.set(tokenId, {
       kind: "witness",
@@ -6709,34 +6709,37 @@ function recordEqualityTarget(
   }
 }
 
-/** The witness a `==` on `operandType` dispatches through inside a generic
- * body: the declared bound of the type parameter that is or implies the
- * prelude `PartialEq`. `undefined` for anything but a bounded type parameter
- * (abstract `Self` in a trait default body is a later slice). */
-function equalityWitnessName(
+/** The witness parameter an abstract receiver (a `==` operand or a method
+ * call's receiver) dispatches a `requiredTrait` method through inside a
+ * generic body: the bounded type parameter's own declared bound - or, for
+ * `Self` in a trait default body, the enclosing trait - that is or
+ * transitively implies `requiredTrait`. That bound's flattened witness carries
+ * the method (see `witnessMethods`). `undefined` unless `type` is a
+ * single-segment abstract name with such a bound in scope. */
+function abstractWitnessParamName(
   ctx: AnalysisContext,
-  operandType: Semantics.Type,
-  partialEq: string,
+  type: Semantics.Type,
+  requiredTrait: string,
 ): string | undefined {
-  if (
-    operandType.kind !== "NamedType" ||
-    operandType.path.segments.length !== 1
-  ) {
+  if (type.kind !== "NamedType" || type.path.segments.length !== 1) {
     return undefined;
   }
-  const name = operandType.path.segments[0];
+  const name = type.path.segments[0];
   if (name === undefined) return undefined;
   const selfContext = currentSelfContext(ctx);
   if (
     name === "Self" &&
     selfContext?.kind === "Trait" &&
-    boundsImplyTrait(ctx, [selfContext.traitName], partialEq)
+    boundsImplyTrait(ctx, [selfContext.traitName], requiredTrait)
   ) {
     return witnessParamName("Self", bareTypeName(selfContext.traitName));
   }
   if (!isDeclaredGenericParam(ctx, name)) return undefined;
   for (const bound of declaredGenericParamBounds(ctx, name)) {
-    if (bound === partialEq || boundsImplyTrait(ctx, [bound], partialEq)) {
+    if (
+      bound === requiredTrait ||
+      boundsImplyTrait(ctx, [bound], requiredTrait)
+    ) {
       return witnessParamName(name, bareTypeName(bound));
     }
   }
@@ -7483,42 +7486,6 @@ function recordMethodTarget(
   });
 }
 
-/** The witness parameter a method call on `receiverType` dispatches through
- * inside a generic body: `_witness_<T>_<Trait>` for a bounded type parameter,
- * `_witness_Self_<EnclosingTrait>` for an abstract `Self` in a trait default
- * body calling a method of that trait or any of its supertraits (the
- * enclosing trait's witness carries them all - see `witnessMethods`).
- * `undefined` when `receiverType` is anything else. */
-function witnessNameForReceiver(
-  ctx: AnalysisContext,
-  receiverType: Semantics.Type,
-  traitId: string,
-): string | undefined {
-  if (
-    receiverType.kind !== "NamedType" ||
-    receiverType.path.segments.length !== 1
-  ) {
-    return undefined;
-  }
-  const name = receiverType.path.segments[0];
-  if (name === undefined) return undefined;
-  const selfContext = currentSelfContext(ctx);
-  if (
-    name === "Self" &&
-    selfContext?.kind === "Trait" &&
-    boundsImplyTrait(ctx, [selfContext.traitName], traitId)
-  ) {
-    return witnessParamName("Self", bareTypeName(selfContext.traitName));
-  }
-  if (!isDeclaredGenericParam(ctx, name)) return undefined;
-  for (const bound of declaredGenericParamBounds(ctx, name)) {
-    if (bound === traitId || boundsImplyTrait(ctx, [bound], traitId)) {
-      return witnessParamName(name, bareTypeName(bound));
-    }
-  }
-  return undefined;
-}
-
 /** Records how a resolved method call lowers: a `free` target for a concrete
  * receiver, a `witness` target for a call inside a generic body. */
 function recordMethodDispatch(
@@ -7533,7 +7500,7 @@ function recordMethodDispatch(
     return;
   }
   if (method.origin.kind !== "trait") return;
-  const witnessName = witnessNameForReceiver(
+  const witnessName = abstractWitnessParamName(
     ctx,
     receiverType,
     method.origin.traitId,
