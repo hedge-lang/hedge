@@ -1415,6 +1415,16 @@ describe("dyn Trait runtime", (): void => {
     assert(isSome(typedef), "expected .d.ts");
     expect(typedef.value).toContain("unknown");
   });
+
+  it("does not hoist a witness const for a `dyn`-typed associated const, which nothing boxes", (): void => {
+    const js = emittedJs(`
+      ${draw}
+      struct Holder {}
+      impl Holder { const N: dyn Draw = Circle { r: 1 }; }
+      fn main() { print(1); }
+    `);
+    expect(js).not.toContain("__witness");
+  });
 });
 
 describe("Drop::drop dispose body", (): void => {

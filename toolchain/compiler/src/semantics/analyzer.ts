@@ -2627,6 +2627,7 @@ function checkAssociatedConst(
     analyzeExpression(ctx, decl.value),
     declaredType,
     decl.value.tokenId,
+    false,
   );
   if (mismatch) {
     emitError(
@@ -6624,15 +6625,16 @@ function checkExpression(
  * and returns `expr` retyped as the `dyn` target. Ref-ness must agree on both
  * sides. `undefined` when no such coercion applies.
  *
- * Recording into `ctx.unsizeCoercionTable` is a side effect - it fires even
- * for the few `reconcileExpressionType` callers that drop the returned
- * `.expr` (const/static initializers), but those positions never carry a
- * `dyn` value in practice, and codegen keys the box off the tokenId anyway.
+ * `record` is `false` for a caller that discards the returned `.expr` and
+ * whose position never reaches codegen (an `impl` associated const): the
+ * coercion still suppresses the type-mismatch diagnostic, but recording it
+ * would emit a `__witness_<Trait>_<Type>` const that nothing boxes against.
  */
 function tryUnsizeCoercion(
   ctx: AnalysisContext,
   expr: Semantics.Expression,
   expectedType: Semantics.Type,
+  record: boolean,
 ): Semantics.Expression | undefined {
   const targetDyn = dynTypeOf(expectedType);
   if (targetDyn === undefined) return undefined;
@@ -6659,8 +6661,12 @@ function tryUnsizeCoercion(
     // functions that don't exist - reject the coercion instead.
     return undefined;
   }
-  ctx.unsizeCoercionTable.set(expr.tokenId, witness.value);
-  if (witness.value.kind === "Impl") ctx.extraWitnessRefs.push(witness.value);
+  if (record) {
+    ctx.unsizeCoercionTable.set(expr.tokenId, witness.value);
+    if (witness.value.kind === "Impl") {
+      ctx.extraWitnessRefs.push(witness.value);
+    }
+  }
   return { ...expr, type: expectedType };
 }
 
@@ -6724,6 +6730,7 @@ function reconcileExpressionType(
   expr: Semantics.Expression,
   expectedType: Semantics.Type,
   tokenId: number,
+  recordUnsizeCoercion: boolean = true,
 ): { expr: Semantics.Expression; mismatch: boolean } {
   let result = expr;
   let suppressed = false;
@@ -6765,7 +6772,12 @@ function reconcileExpressionType(
   }
 
   if (!suppressed) {
-    const unsized = tryUnsizeCoercion(ctx, result, expectedType);
+    const unsized = tryUnsizeCoercion(
+      ctx,
+      result,
+      expectedType,
+      recordUnsizeCoercion,
+    );
     if (unsized !== undefined) {
       result = unsized;
       suppressed = true;
