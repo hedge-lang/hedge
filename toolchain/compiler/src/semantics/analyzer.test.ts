@@ -3817,6 +3817,19 @@ describe("expected-type threading into a let initializer / trailing expression",
     expect(result.diagnostics).toHaveLength(1);
   });
 
+  it("names the declared element type and the offending element when an annotated array element does not fit", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let xs: [i64; 2] = [1, true];
+        print(xs);
+      }
+    `);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "array element type mismatch: expected `i64`, found `bool`",
+    );
+  });
+
   it("reports one mismatch on the offending `match` arm, without cascading", (): void => {
     const result = diagnose(`
       fn main() {

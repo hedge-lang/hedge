@@ -8281,7 +8281,7 @@ function analyzeArrayExpression(
       emitError(
         ctx,
         {
-          kind: "SemArrayElementsSameType",
+          kind: "SemCheckedArrayElementTypeMismatch",
           expected: describeType(elementType),
           found: describeType(bad.type),
         },

@@ -220,6 +220,11 @@ const SAMPLE_KINDS: readonly DiagnosticKind[] = [
   { kind: "SemMatchArmsIncompatible" },
   { kind: "SemIfBranchesIncompatible" },
   { kind: "SemCheckedBranchTypeMismatch", expected: "i64", found: "bool" },
+  {
+    kind: "SemCheckedArrayElementTypeMismatch",
+    expected: "i64",
+    found: "bool",
+  },
   { kind: "SemLiteralOutOfRange", typeName: "u8" },
   { kind: "SemUnexpectedIntLiteralRangeCheck", typeName: "u8" },
   { kind: "SemUnexpectedFloatLiteralRangeCheck", typeName: "f64" },

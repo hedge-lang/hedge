@@ -425,6 +425,11 @@ export type DiagnosticKind =
       readonly expected: string;
       readonly found: string;
     }
+  | {
+      readonly kind: "SemCheckedArrayElementTypeMismatch";
+      readonly expected: string;
+      readonly found: string;
+    }
   | { readonly kind: "SemLiteralOutOfRange"; readonly typeName: string }
   | {
       readonly kind: "SemUnexpectedIntLiteralRangeCheck";
@@ -766,6 +771,7 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemMatchArmsIncompatible", "HEDGE-TYPE-004"],
   ["SemIfBranchesIncompatible", "HEDGE-TYPE-004"],
   ["SemCheckedBranchTypeMismatch", "HEDGE-TYPE-004"],
+  ["SemCheckedArrayElementTypeMismatch", "HEDGE-TYPE-003"],
   ["SemLiteralOutOfRange", "HEDGE-TYPE-005"],
   ["SemUnexpectedIntLiteralRangeCheck", "HEDGE-TYPE-005"],
   ["SemUnexpectedFloatLiteralRangeCheck", "HEDGE-TYPE-005"],
