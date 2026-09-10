@@ -1111,6 +1111,23 @@ describe("trait default method codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["7"]);
   });
 
+  it("follows the suffixed default-body name at the call site when it collides with a user function", (): void => {
+    const js = emittedJs(`
+      ${greetTrait}
+      fn Greet$hello$default() -> i32 { 0 }
+      fn main() {
+        let e = En { who: 8 };
+        print(e.hello());
+        print(Greet$hello$default());
+      }
+    `);
+    expect(js).toContain(
+      "function Greet$hello$default_2(self, _witness_Self_Greet)",
+    );
+    expect(js).toContain("Greet$hello$default_2(e, __witness_Greet_En)");
+    expect(runEmittedJs(js)).toEqual(["8", "0"]);
+  });
+
   it("passes a default method's own arguments before the witness", (): void => {
     const js = emittedJs(`
       trait Scale {

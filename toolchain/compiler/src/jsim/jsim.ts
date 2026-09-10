@@ -991,12 +991,16 @@ function methodFreeFnName(target: FreeMethodTarget): string {
   return `${target.typeName}$${traitSegment}${target.methodName}`;
 }
 
-/** The per-declaration identity of a method free function - scope-qualified,
- * so a block-local type shadowing a top-level one keeps a distinct entry in
- * `ctx.methodFreeFnNames`. */
+/** The per-declaration identity of a method free function, used to look up
+ * its collision-resolved name. Scope-qualified by `typeId` for an inherent
+ * or override method (a block-local type shadowing a top-level one keeps a
+ * distinct entry), but a default body has no owning type - there is one per
+ * trait - so it keys on the bare trait name alone, which every site (the
+ * emission, a concrete call, a witness slot) agrees on. */
 function methodKey(target: FreeMethodTarget): string {
   const trait = isSome(target.traitName) ? target.traitName.value : "";
-  return `${target.typeId}#${trait}#${target.methodName}#${target.isDefaultBody}`;
+  if (target.isDefaultBody) return `default#${trait}#${target.methodName}`;
+  return `${target.typeId}#${trait}#${target.methodName}#false`;
 }
 
 /** The name a method's free function actually emits and every call site
