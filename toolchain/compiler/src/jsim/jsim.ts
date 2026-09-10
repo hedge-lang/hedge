@@ -112,6 +112,9 @@ interface JsimContext {
   /** `AnalysisResult.unsizeCoercions` - each expression unsize-coerced to
    * `dyn Trait`, keyed by its tokenId, mapped to the impl witness. */
   readonly unsizeCoercions: ReadonlyMap<number, WitnessRef>;
+  /** `AnalysisResult.dropImpls` - struct/enum type ids with a `Drop` impl,
+   * mapped to the `drop` free-function target. */
+  readonly dropImpls: ReadonlyMap<string, FreeMethodTarget>;
   /** Each emitted method free function's `methodKey` mapped to the name
    * actually emitted - identical to the readable `methodFreeFnName` unless it
    * collided with a user top-level binding. Both the emission and call sites
@@ -156,6 +159,7 @@ function createJsimContext(
     witnesses: info.witnesses ?? new Map(),
     extraWitnesses: info.extraWitnesses ?? [],
     unsizeCoercions: info.unsizeCoercions ?? new Map(),
+    dropImpls: info.dropImpls ?? new Map(),
     methodFreeFnNames: new Map(),
     hoistedWitnesses: new Map(),
     primitiveEqWitnessUsed: { used: false },
@@ -819,6 +823,7 @@ export interface JsimInfo {
   readonly witnesses?: ReadonlyMap<number, readonly WitnessRef[]>;
   readonly extraWitnesses?: readonly WitnessRef[];
   readonly unsizeCoercions?: ReadonlyMap<number, WitnessRef>;
+  readonly dropImpls?: ReadonlyMap<string, FreeMethodTarget>;
 }
 
 export function toJsim(
@@ -1809,7 +1814,11 @@ function parseExpressionDispatch(
         expression.callee.kind === "PathExpression" &&
         expression.callee.type.kind === "StructType"
       ) {
-        return jsimTupleStructConstruction(ctx, expression.arguments);
+        return jsimTupleStructConstruction(
+          ctx,
+          expression.arguments,
+          expression.callee.type,
+        );
       }
       return {
         kind: "CallExpression",
@@ -2372,6 +2381,16 @@ function jsimRangeExpression(
   };
 }
 
+/** The free-function name of a struct type's `Drop::drop` body.
+ * Enum `Drop` is not wired yet (a later ticket). */
+function structDropFn(ctx: JsimContext, type: Semantics.Type): Option<string> {
+  if (type.kind !== "StructType") return none();
+  const target = ctx.dropImpls.get(type.name);
+  return target === undefined
+    ? none()
+    : some(resolvedMethodFreeFnName(ctx, target));
+}
+
 function jsimStructExpression(
   ctx: JsimContext,
   { base, fields, path, type }: Semantics.StructExpression,
@@ -2393,12 +2412,19 @@ function jsimStructExpression(
           kind: "StructExpression",
           fields: ownFields,
           disposableFields,
+          dropFn: none(),
         }),
       ],
       disposableFields: ENUM_PAYLOAD_DISPOSABLE_FIELDS,
+      dropFn: none(),
     };
   }
-  return { kind: "StructExpression", fields: ownFields, disposableFields };
+  return {
+    kind: "StructExpression",
+    fields: ownFields,
+    disposableFields,
+    dropFn: structDropFn(ctx, type),
+  };
 }
 
 /** A tagged object with no `data` payload - a unit variant has no fields. */
@@ -2411,6 +2437,7 @@ function jsimEnumUnitVariantConstruction(
     kind: "StructExpression",
     fields: [jsimEnumTagField(variantName)],
     disposableFields: [],
+    dropFn: none(),
   };
 }
 
@@ -2436,6 +2463,7 @@ function jsimEnumTupleVariantConstruction(
       }),
     ],
     disposableFields: ENUM_PAYLOAD_DISPOSABLE_FIELDS,
+    dropFn: none(),
   };
 }
 
@@ -2445,6 +2473,7 @@ function jsimEnumTupleVariantConstruction(
 function jsimTupleStructConstruction(
   ctx: JsimContext,
   args: readonly Semantics.Expression[],
+  type: Semantics.Type,
 ): JSIM.Expression {
   return {
     kind: "StructExpression",
@@ -2457,6 +2486,7 @@ function jsimTupleStructConstruction(
       .map((arg, i) => ({ arg, name: String(i) }))
       .filter(({ arg }) => !hasCapability(arg.type, "copy"))
       .map(({ name }) => name),
+    dropFn: structDropFn(ctx, type),
   };
 }
 

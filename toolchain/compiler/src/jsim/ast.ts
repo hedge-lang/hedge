@@ -475,6 +475,12 @@ export interface StructExpression {
    * same no-op disposer it always did.
    */
   readonly disposableFields: readonly string[];
+  /**
+   * The free-function name of the type's `Drop::drop` body, when it has one -
+   * the disposer calls it (with `this` in a `&mut self` cell) before
+   * releasing the fields.
+   */
+  readonly dropFn: Option<string>;
 }
 
 /**

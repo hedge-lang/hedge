@@ -1,4 +1,5 @@
 import { assert, assertNever } from "../assert.js";
+import type { Option } from "../option.js";
 import { isSome, mapSome, none, some, unwrapSomeOr } from "../option.js";
 import type {
   AssignExpression,
@@ -240,11 +241,22 @@ function ownFieldAccess(name: string): string {
  * The bindings are numbered rather than named after their fields, since a
  * field name need not be a legal JS binding (`default`, or a tuple struct's
  * `0`).
+ *
+ * A `Drop` impl's `drop(&mut self)` body runs first (matching the spec's
+ * "the value's own drop glue, then its fields" order), passed `this` in a
+ * `&mut self` accessor cell.
  */
-function structDisposer(disposableFields: readonly string[]): string {
-  const body = disposableFields
+function structDisposer(
+  disposableFields: readonly string[],
+  dropFn: Option<string>,
+): string {
+  const dropCall = isSome(dropFn)
+    ? `let _s = this; ${dropFn.value}({ get v() { return _s; }, set v(nv) { _s = nv; } }); `
+    : "";
+  const fieldReleases = disposableFields
     .map((name, i) => `using _d${String(i)} = ${ownFieldAccess(name)};`)
     .join(" ");
+  const body = `${dropCall}${fieldReleases}`;
   const disposeBody = body === "" ? "" : ` ${body} `;
   return `[Symbol.dispose]() {${disposeBody}}`;
 }
@@ -470,7 +482,7 @@ function emitStructExpression(expression: StructExpression): string {
           f.name,
         ),
   );
-  return `({${[...fields, structDisposer(expression.disposableFields)].join(", ")}})`;
+  return `({${[...fields, structDisposer(expression.disposableFields, expression.dropFn)].join(", ")}})`;
 }
 
 /**

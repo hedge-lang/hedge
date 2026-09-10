@@ -1417,6 +1417,57 @@ describe("dyn Trait runtime", (): void => {
   });
 });
 
+describe("Drop::drop dispose body", (): void => {
+  it("runs the resolved `drop` body at scope end", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud {
+        fn drop(&mut self) { print(self.id); }
+      }
+      fn main() {
+        let a = Loud { id: 1 };
+        print(0);
+      }
+    `);
+    expect(js).toContain("Loud$Drop$drop(");
+    expect(runEmittedJs(js)).toEqual(["0", "1"]);
+  });
+
+  it("runs `drop` before releasing the struct's own fields", (): void => {
+    const js = emittedJs(`
+      struct Inner { tag: i32 }
+      impl Drop for Inner { fn drop(&mut self) { print(self.tag); } }
+      struct Outer { inner: Inner }
+      impl Drop for Outer { fn drop(&mut self) { print(99); } }
+      fn main() {
+        let o = Outer { inner: Inner { tag: 7 } };
+        print(0);
+      }
+    `);
+    // Outer's drop (99) runs, then its `inner` field is released (7).
+    expect(runEmittedJs(js)).toEqual(["0", "99", "7"]);
+  });
+
+  it("keeps the no-op disposer for a struct with no `Drop` impl", (): void => {
+    const js = emittedJs(`
+      struct Plain { x: i32 }
+      fn main() { let p = Plain { x: 1 }; print(p.x); }
+    `);
+    expect(js).not.toContain("$Drop$drop");
+    expect(js).toContain("[Symbol.dispose]() {}");
+  });
+
+  it("runs `drop` for a tuple struct too", (): void => {
+    const js = emittedJs(`
+      struct Res(i32);
+      impl Drop for Res { fn drop(&mut self) { print(42); } }
+      fn main() { let r = Res(5); print(0); }
+    `);
+    expect(js).toContain("Res$Drop$drop(");
+    expect(runEmittedJs(js)).toEqual(["0", "42"]);
+  });
+});
+
 describe("std prelude", (): void => {
   it("resolves a user `impl Drop for X` against the prelude without a local trait declaration", (): void => {
     const result = compile(`

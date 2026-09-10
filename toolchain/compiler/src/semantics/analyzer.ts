@@ -64,6 +64,10 @@ export interface AnalysisResult {
    * the concrete type's trait impl. Codegen wraps the expression as
    * `{ value, witness }`. */
   readonly unsizeCoercions: ReadonlyMap<number, WitnessRef>;
+  /** Struct/enum scope-qualified type ids that have a `Drop` impl, mapped to
+   * the `drop` method's free-function target. Codegen calls it from the
+   * type's `[Symbol.dispose]` before releasing the fields. */
+  readonly dropImpls: ReadonlyMap<string, FreeMethodTarget>;
 }
 
 /** One hidden witness parameter of a generic function: `_witness_T_Draw` for
@@ -252,6 +256,8 @@ interface AnalysisContext {
   readonly extraWitnessRefs: WitnessRef[];
   /** Mutable build-up of `AnalysisResult.unsizeCoercions`. */
   readonly unsizeCoercionTable: Map<number, WitnessRef>;
+  /** Mutable build-up of `AnalysisResult.dropImpls`. */
+  readonly dropImplTable: Map<string, FreeMethodTarget>;
   /**
    * What `Self` means at the innermost currently-open trait or impl body -
    * only the top is ever consulted, same lifecycle as `genericParamStack`. A
@@ -2587,6 +2593,7 @@ function analyzeImplDecl(
       if (isSome(analyzed.ownershipView)) {
         methodBodies.push(analyzed.ownershipView.value);
         recordImplMethodTarget(ctx, decl, targetType, traitName);
+        recordDropImpl(ctx, decl, targetType, traitName);
       }
       return [
         {
@@ -7626,6 +7633,33 @@ function recordImplMethodTarget(
   });
 }
 
+/** Indexes a `impl Drop for T`'s `drop` method so codegen can call its free
+ * function from `T`'s `[Symbol.dispose]`. Only the prelude `Drop` counts. */
+function recordDropImpl(
+  ctx: AnalysisContext,
+  decl: Parser.FunctionDef,
+  targetType: Semantics.Type,
+  traitName: Option<string>,
+): void {
+  if (
+    decl.signature.name.text !== "drop" ||
+    !isSome(decl.signature.receiver) ||
+    !isNominalType(targetType) ||
+    !isSome(traitName) ||
+    traitName.value !== lookupPreludeTrait(ctx, "Drop")
+  ) {
+    return;
+  }
+  ctx.dropImplTable.set(targetType.name, {
+    kind: "free",
+    typeId: targetType.name,
+    typeName: bareTypeName(targetType.name),
+    traitName: some("Drop"),
+    methodName: "drop",
+    isDefaultBody: false,
+  });
+}
+
 /** Records how a resolved call on a concrete receiver dispatches, for
  * codegen's free-function naming (`AnalysisResult.methodTargets`). Keyed by
  * the *method name* token, not the call's own tokenId - a chained call
@@ -10084,6 +10118,7 @@ export function analyze(
     witnessParamTable: new Map(),
     extraWitnessRefs: [],
     unsizeCoercionTable: new Map(),
+    dropImplTable: new Map(),
     selfContextStack: [],
   };
   // Before functions, so a signature can name any declared type.
@@ -10147,5 +10182,6 @@ export function analyze(
     witnessParams: ctx.witnessParamTable,
     extraWitnesses: ctx.extraWitnessRefs,
     unsizeCoercions: ctx.unsizeCoercionTable,
+    dropImpls: ctx.dropImplTable,
   };
 }
