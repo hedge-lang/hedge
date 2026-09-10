@@ -6616,6 +6616,11 @@ function checkExpression(
  * that trait, records the unsize coercion (`AnalysisResult.unsizeCoercions`)
  * and returns `expr` retyped as the `dyn` target. Ref-ness must agree on both
  * sides. `undefined` when no such coercion applies.
+ *
+ * Recording into `ctx.unsizeCoercionTable` is a side effect - it fires even
+ * for the few `reconcileExpressionType` callers that drop the returned
+ * `.expr` (const/static initializers), but those positions never carry a
+ * `dyn` value in practice, and codegen keys the box off the tokenId anyway.
  */
 function tryUnsizeCoercion(
   ctx: AnalysisContext,
@@ -6636,6 +6641,17 @@ function tryUnsizeCoercion(
   if (sourceType.kind === "DynType") return undefined;
   const witness = resolveTraitBound(ctx, sourceType, targetDyn.traitId);
   if (!isSome(witness)) return undefined;
+  if (
+    witness.value.kind === "Impl" &&
+    (findRegisteredImpl(ctx, witness.value.typeId, targetDyn.traitId)
+      ?.isBlanket ??
+      false)
+  ) {
+    // A blanket impl's method bodies aren't emitted as free functions
+    // (`buildMethodIndex` skips them), so its witness slots would reference
+    // functions that don't exist - reject the coercion instead.
+    return undefined;
+  }
   ctx.unsizeCoercionTable.set(expr.tokenId, witness.value);
   if (witness.value.kind === "Impl") ctx.extraWitnessRefs.push(witness.value);
   return { ...expr, type: expectedType };

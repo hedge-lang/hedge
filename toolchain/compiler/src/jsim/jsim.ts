@@ -2002,11 +2002,13 @@ function jsimDynDispatch(
   };
 }
 
-/** Whether lowering `expr` twice is safe - a bare place with no computed
- * index (see the `dyn` dispatch double-emit note in the compiler CLAUDE.md). */
+/** Whether lowering `expr` twice is safe - side-effect-free, so `d.witness`
+ * and `d.value` can each re-emit it (see the `dyn` dispatch double-emit note
+ * in the compiler CLAUDE.md). */
 function isRepeatablePlace(expr: Semantics.Expression): boolean {
   switch (expr.kind) {
     case "PathExpression":
+      // A local, a const path, or an enum-variant path - never side-effecting.
       return true;
     case "FieldAccessExpression":
       return isRepeatablePlace(expr.object);

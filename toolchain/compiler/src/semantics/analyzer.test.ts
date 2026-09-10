@@ -5771,6 +5771,30 @@ describe("dyn Trait unsize coercion", (): void => {
     expect(result.diagnostics).toHaveLength(1);
   });
 
+  it("rejects a `dyn` coercion satisfied only by a blanket impl, whose method bodies are not emitted", (): void => {
+    const result = diagnose(`
+      trait Draw { fn draw(&self) -> i32; }
+      trait Marker {}
+      impl<T: Marker> Draw for T { fn draw(&self) -> i32 { 0 } }
+      struct Point { x: i32 }
+      impl Marker for Point {}
+      fn render(d: dyn Draw) -> i32 { d.draw() }
+      fn main() { print(render(Point { x: 1 })); }
+    `);
+    expect(
+      result.diagnostics.filter((d) => d.severity === "error"),
+    ).toHaveLength(1);
+  });
+
+  it("coerces a bounded generic parameter to `dyn Trait`, forwarding the caller's witness", (): void => {
+    const result = diagnose(`
+      ${draw}
+      fn erase<T: Draw>(x: T) -> dyn Draw { x }
+      fn main() { print(erase(Point { x: 1 }).draw()); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
   it("rejects assigning through a dereferenced `dyn Trait` place", (): void => {
     const result = diagnose(`
       ${draw}

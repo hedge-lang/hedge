@@ -1350,6 +1350,16 @@ describe("dyn Trait runtime", (): void => {
     expect(runEmittedJs(js)).toEqual(["7"]);
   });
 
+  it("coerces a bounded generic parameter to `dyn Trait` and dispatches on it", (): void => {
+    const js = emittedJs(`
+      ${draw}
+      fn erase<T: Draw>(x: T) -> dyn Draw { x }
+      fn main() { print(erase(Circle { r: 6 }).draw()); }
+    `);
+    expect(js).toContain("_witness_T_Draw");
+    expect(runEmittedJs(js)).toEqual(["6"]);
+  });
+
   it("re-wraps a `-> Self` method result as a fresh `dyn` value", (): void => {
     const js = emittedJs(`
       trait Grow { fn grown(&self) -> Self; fn size(&self) -> i32; }
