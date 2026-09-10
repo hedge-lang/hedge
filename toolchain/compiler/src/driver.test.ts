@@ -1425,6 +1425,38 @@ describe("dyn Trait runtime", (): void => {
     `);
     expect(js).not.toContain("__witness");
   });
+
+  it("runs the wrapped value's `drop` at scope end for a by-value `dyn` binding", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct Loud { id: i32 }
+      impl Draw for Loud { fn draw(&self) -> i32 { self.id } }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      fn main() {
+        let d: dyn Draw = Loud { id: 5 };
+        print(d.draw());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["5", "5"]);
+  });
+
+  it("does not dispose a borrowed `&dyn` box, since the caller still owns the value", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct Loud { id: i32 }
+      impl Draw for Loud { fn draw(&self) -> i32 { self.id } }
+      impl Drop for Loud { fn drop(&mut self) { print(99); } }
+      fn show(d: &dyn Draw) -> i32 { d.draw() }
+      fn main() {
+        let v = Loud { id: 3 };
+        print(show(&v));
+        print(0);
+      }
+    `);
+    // Loud's drop (99) runs once, at main's scope end after 0 - not again
+    // when the borrowed box in show goes out of scope.
+    expect(runEmittedJs(js)).toEqual(["3", "0", "99"]);
+  });
 });
 
 describe("Drop::drop dispose body", (): void => {

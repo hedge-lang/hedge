@@ -509,11 +509,17 @@ function emitRefCellExpression(expression: RefCellExpression): string {
 
 function emitDynBoxExpression(expression: DynBoxExpression): string {
   const witness = emitExpression(expression.witness);
+  // An owned box disposes the concrete value it carries when the box's own
+  // binding goes out of scope (`using`); a primitive value has no disposer,
+  // hence the optional chain.
+  const disposer = expression.owned
+    ? ", [Symbol.dispose]() { this.value?.[Symbol.dispose]?.(); }"
+    : "";
   if (!expression.mutableCell) {
-    return `({ value: ${emitExpression(expression.place)}, witness: ${witness} })`;
+    return `({ value: ${emitExpression(expression.place)}, witness: ${witness}${disposer} })`;
   }
   const place = emitExpression(expression.place);
-  return `({ get value() { return ${place}; }, set value(nv) { ${place} = nv; }, witness: ${witness} })`;
+  return `({ get value() { return ${place}; }, set value(nv) { ${place} = nv; }, witness: ${witness}${disposer} })`;
 }
 
 function emitRangeExpression(expression: RangeExpression): string {

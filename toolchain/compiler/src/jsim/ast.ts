@@ -506,12 +506,19 @@ export interface RefCellExpression {
  * `mutableCell` is set (a `&mut T -> &mut dyn Trait` coercion), `value` is a
  * getter/setter over `place` so a whole-value write through the trait object
  * reaches the caller's binding; otherwise `value` is `place` read once.
+ *
+ * `owned` is set for a by-value coercion (`T -> dyn`, or a `-> Self` method
+ * result): the box owns the concrete value, so it carries a
+ * `[Symbol.dispose]` that disposes `value` and the binding gets a scope-end
+ * `using`. A `&T`/`&mut T -> &dyn` box borrows the value and disposes
+ * nothing.
  */
 export interface DynBoxExpression {
   readonly kind: "DynBoxExpression";
   readonly place: Expression;
   readonly witness: Expression;
   readonly mutableCell: boolean;
+  readonly owned: boolean;
 }
 
 type StructExpressionField = StructField | SpreadExpression;

@@ -16,6 +16,7 @@ import {
   constValueToLiteralExpression,
   type FreeMethodTarget,
   type MethodTarget,
+  type UnsizeCoercion,
   witnessParamName,
   type WitnessMethod,
   type WitnessParam,
@@ -111,7 +112,7 @@ interface JsimContext {
   readonly extraWitnesses: readonly WitnessRef[];
   /** `AnalysisResult.unsizeCoercions` - each expression unsize-coerced to
    * `dyn Trait`, keyed by its tokenId, mapped to the impl witness. */
-  readonly unsizeCoercions: ReadonlyMap<number, WitnessRef>;
+  readonly unsizeCoercions: ReadonlyMap<number, UnsizeCoercion>;
   /** `AnalysisResult.dropImpls` - struct/enum type ids with a `Drop` impl,
    * mapped to the `drop` free-function target. */
   readonly dropImpls: ReadonlyMap<string, FreeMethodTarget>;
@@ -822,7 +823,7 @@ export interface JsimInfo {
   readonly witnessParams?: ReadonlyMap<number, readonly WitnessParam[]>;
   readonly witnesses?: ReadonlyMap<number, readonly WitnessRef[]>;
   readonly extraWitnesses?: readonly WitnessRef[];
-  readonly unsizeCoercions?: ReadonlyMap<number, WitnessRef>;
+  readonly unsizeCoercions?: ReadonlyMap<number, UnsizeCoercion>;
   readonly dropImpls?: ReadonlyMap<string, FreeMethodTarget>;
 }
 
@@ -1731,9 +1732,9 @@ function parseExpression(
   ctx: JsimContext,
   expression: Semantics.Expression,
 ): JSIM.Expression {
-  const unsizeRef = ctx.unsizeCoercions.get(expression.tokenId);
-  if (unsizeRef !== undefined) {
-    return jsimUnsizeBox(ctx, expression, unsizeRef);
+  const coercion = ctx.unsizeCoercions.get(expression.tokenId);
+  if (coercion !== undefined) {
+    return jsimUnsizeBox(ctx, expression, coercion);
   }
   return parseExpressionDispatch(ctx, expression);
 }
@@ -1742,24 +1743,34 @@ function parseExpression(
  * `{ value, witness }` (see `AnalysisResult.unsizeCoercions`). A
  * `&mut T -> &mut dyn` coercion (`ReferenceExpression`, `mutable`) makes
  * `value` a getter/setter cell over the borrowed place so a whole-value write
- * through the trait object propagates. */
+ * through the trait object propagates. `expression.type` is the `dyn` target
+ * by now, so `sourceType` is restored on the wrapped node for struct/enum
+ * lowering (drop glue, the tagged-object shape). */
 function jsimUnsizeBox(
   ctx: JsimContext,
   expression: Semantics.Expression,
-  ref: WitnessRef,
+  coercion: UnsizeCoercion,
 ): JSIM.Expression {
   const witness: JSIM.Expression = {
     kind: "Identifier",
-    value: witnessRefName(ctx, ref),
+    value: witnessRefName(ctx, coercion.witness),
     type: none(),
   };
-  const mutableCell =
-    expression.kind === "ReferenceExpression" && expression.mutable;
-  const place =
-    expression.kind === "ReferenceExpression"
-      ? parseExpression(ctx, expression.operand)
-      : parseExpressionDispatch(ctx, expression);
-  return { kind: "DynBoxExpression", place, witness, mutableCell };
+  const isBorrow = expression.kind === "ReferenceExpression";
+  const mutableCell = isBorrow && expression.mutable;
+  const place = isBorrow
+    ? parseExpression(ctx, expression.operand)
+    : parseExpressionDispatch(ctx, {
+        ...expression,
+        type: coercion.sourceType,
+      });
+  return {
+    kind: "DynBoxExpression",
+    place,
+    witness,
+    mutableCell,
+    owned: !isBorrow,
+  };
 }
 
 // eslint-disable-next-line complexity -- This is a routing function
@@ -1986,6 +1997,10 @@ function jsimDynDispatch(
           place: inner,
           witness: jsimField(box, "witness"),
           mutableCell: false,
+          // `-> Self` may be `-> &Self` (the `&` erases), so the re-wrapped
+          // value isn't necessarily owned; leave disposal to the concrete
+          // value's own binding rather than risk a double drop.
+          owned: false,
         }
       : inner;
   };

@@ -1322,16 +1322,14 @@ function ambiguousDropKind(name: string, state: MoveState): DiagnosticKind {
   }
 }
 
-/** A type that is move-only for tracking purposes but has no witness-based
- * `Drop` to call, so it can't get a scope-end `using` (which would throw at
- * runtime). A bare generic parameter (`T`), an unresolved trait projection
- * (`T::Item`), and a `dyn Trait` value are all this abstract-type case. */
+/** A type that is move-only for tracking purposes but has no scope-end
+ * `using` to emit (which would throw at runtime for a value with no
+ * disposer). A bare generic parameter (`T`) and an unresolved trait
+ * projection (`T::Item`) are this abstract-type case. A `dyn Trait` binding
+ * is always an owned box carrying a `[Symbol.dispose]` (`&dyn`/`&mut dyn` are
+ * `ReferenceType`, already skipped), so it does get one. */
 function hasNoScopeEndDrop(type: Semantics.Type): boolean {
-  return (
-    type.kind === "NamedType" ||
-    type.kind === "Projection" ||
-    type.kind === "DynType"
-  );
+  return type.kind === "NamedType" || type.kind === "Projection";
 }
 
 /**

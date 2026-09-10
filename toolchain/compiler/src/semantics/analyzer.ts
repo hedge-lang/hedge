@@ -60,10 +60,11 @@ export interface AnalysisResult {
    * method needs the `(type, trait)` witness passed to `Trait$m$default`. */
   readonly extraWitnesses: readonly WitnessRef[];
   /** Each expression that is unsize-coerced to `dyn Trait` in the position it
-   * fills, keyed by the expression's own `tokenId`, mapped to the witness for
-   * the concrete type's trait impl. Codegen wraps the expression as
-   * `{ value, witness }`. */
-  readonly unsizeCoercions: ReadonlyMap<number, WitnessRef>;
+   * fills, keyed by the expression's own `tokenId`. Codegen wraps the
+   * expression as `{ value, witness }` using `witness`, and restores
+   * `sourceType` on the wrapped node (its own `.type` was rewritten to the
+   * `dyn` target here) so struct/enum lowering still sees the concrete type. */
+  readonly unsizeCoercions: ReadonlyMap<number, UnsizeCoercion>;
   /** Struct/enum scope-qualified type ids that have a `Drop` impl, mapped to
    * the `drop` method's free-function target. Codegen calls it from the
    * type's `[Symbol.dispose]` before releasing the fields. */
@@ -173,6 +174,14 @@ export type WitnessRef =
       readonly traitName: string;
     };
 
+/** A recorded unsize coercion of a concrete value to `dyn Trait`: the
+ * resolved impl witness, plus the pre-coercion concrete type (the coerced
+ * node's own `.type` is rewritten to the `dyn` target). */
+export interface UnsizeCoercion {
+  readonly witness: WitnessRef;
+  readonly sourceType: Semantics.Type;
+}
+
 /**
  * Everything one lexical scope owns, in a single object so a scope is pushed
  * and popped as one unit. Frame *indices* are compared across these maps
@@ -255,7 +264,7 @@ interface AnalysisContext {
   readonly witnessParamTable: Map<number, readonly WitnessParam[]>;
   readonly extraWitnessRefs: WitnessRef[];
   /** Mutable build-up of `AnalysisResult.unsizeCoercions`. */
-  readonly unsizeCoercionTable: Map<number, WitnessRef>;
+  readonly unsizeCoercionTable: Map<number, UnsizeCoercion>;
   /** Mutable build-up of `AnalysisResult.dropImpls`. */
   readonly dropImplTable: Map<string, FreeMethodTarget>;
   /**
@@ -6662,7 +6671,10 @@ function tryUnsizeCoercion(
     return undefined;
   }
   if (record) {
-    ctx.unsizeCoercionTable.set(expr.tokenId, witness.value);
+    ctx.unsizeCoercionTable.set(expr.tokenId, {
+      witness: witness.value,
+      sourceType,
+    });
     if (witness.value.kind === "Impl") {
       ctx.extraWitnessRefs.push(witness.value);
     }
