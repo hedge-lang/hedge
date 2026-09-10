@@ -8816,7 +8816,7 @@ function coerceBranchTrailing(
  * an empty block, or a trailing type that neither equals nor coerced to
  * `expected` (an already-diagnosed error-recovery `UnitType` doesn't count). */
 function checkedValueViolates(
-  value: Semantics.Block | Semantics.Expression,
+  value: Semantics.Expression,
   expected: Semantics.Type,
 ): boolean {
   if (
@@ -8858,7 +8858,7 @@ function checkIfBranches(
       {
         kind: "SemCheckedBranchTypeMismatch",
         expected: describeType(expected),
-        found: describeType({ kind: "UnitType", tokenId: ifTokenId }),
+        found: describeType(UNIT),
       },
       ifTokenId,
     );
@@ -8880,6 +8880,52 @@ function checkIfBranches(
     }
   }
   return { thenBranch: checkedThen, elseBranch: checkedElse };
+}
+
+/**
+ * Shared tail for `analyzeIfExpression` / `analyzeIfLetExpression` once the
+ * condition and both raw branches are analyzed: checked mode
+ * (`expected` given) coerces each branch toward `expected` and takes that as
+ * the result type; unchecked mode keeps the infer-from-`then`, require-agreement
+ * behavior, and yields `()` for an `else`-less `if`.
+ */
+function finishIfExpression(
+  ctx: AnalysisContext,
+  ifExpression: Parser.IfExpression,
+  condition: Semantics.Expression,
+  rawThen: Semantics.Block,
+  rawElse: Option<Semantics.IfExpression | Semantics.Block>,
+  expected: Semantics.Type | undefined,
+): Semantics.IfExpression {
+  if (expected !== undefined) {
+    const { thenBranch, elseBranch } = checkIfBranches(
+      ctx,
+      ifExpression.tokenId,
+      rawThen,
+      rawElse,
+      expected,
+    );
+    return {
+      ...ifExpression,
+      condition,
+      thenBranch,
+      elseBranch,
+      type: expected,
+    };
+  }
+  if (isSome(rawElse)) {
+    checkBranchTypesAgree(ctx, rawThen, rawElse.value, ifExpression.tokenId);
+  }
+  const type: Semantics.Type = isSome(rawElse)
+    ? rawThen.type
+    : { kind: "UnitType", tokenId: ifExpression.tokenId };
+  return {
+    ...ifExpression,
+    condition,
+    thenBranch: rawThen,
+    elseBranch: rawElse,
+    type,
+  };
 }
 
 function analyzeIfExpression(
@@ -8911,44 +8957,14 @@ function analyzeIfExpression(
     emitError(ctx, { kind: "SemIfConditionMustBeBool" }, ifExpression.tokenId);
   }
 
-  if (expected !== undefined) {
-    const { thenBranch, elseBranch } = checkIfBranches(
-      ctx,
-      ifExpression.tokenId,
-      rawThen,
-      rawElse,
-      expected,
-    );
-    return {
-      ...ifExpression,
-      condition,
-      thenBranch,
-      elseBranch,
-      type: expected,
-    };
-  }
-  const thenBranch = rawThen;
-  const elseBranch = rawElse;
-
-  if (isSome(elseBranch)) {
-    checkBranchTypesAgree(
-      ctx,
-      thenBranch,
-      elseBranch.value,
-      ifExpression.tokenId,
-    );
-  }
-
-  const type: Semantics.Type = isSome(elseBranch)
-    ? thenBranch.type
-    : { kind: "UnitType", tokenId: ifExpression.tokenId };
-  return {
-    ...ifExpression,
+  return finishIfExpression(
+    ctx,
+    ifExpression,
     condition,
-    thenBranch,
-    elseBranch,
-    type,
-  };
+    rawThen,
+    rawElse,
+    expected,
+  );
 }
 
 /**
@@ -8998,43 +9014,14 @@ function analyzeIfLetExpression(
       : analyzeBlock(ctx, elseBranch, expected),
   );
 
-  if (expected !== undefined) {
-    const checked = checkIfBranches(
-      ctx,
-      ifExpression.tokenId,
-      thenBranch,
-      rawElse,
-      expected,
-    );
-    return {
-      ...ifExpression,
-      condition,
-      thenBranch: checked.thenBranch,
-      elseBranch: checked.elseBranch,
-      type: expected,
-    };
-  }
-  const elseBranch = rawElse;
-
-  if (isSome(elseBranch)) {
-    checkBranchTypesAgree(
-      ctx,
-      thenBranch,
-      elseBranch.value,
-      ifExpression.tokenId,
-    );
-  }
-
-  const type: Semantics.Type = isSome(elseBranch)
-    ? thenBranch.type
-    : { kind: "UnitType", tokenId: ifExpression.tokenId };
-  return {
-    ...ifExpression,
+  return finishIfExpression(
+    ctx,
+    ifExpression,
     condition,
     thenBranch,
-    elseBranch,
-    type,
-  };
+    rawElse,
+    expected,
+  );
 }
 
 function analyzeIdentifier(

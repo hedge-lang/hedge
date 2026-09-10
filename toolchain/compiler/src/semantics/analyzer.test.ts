@@ -3784,6 +3784,18 @@ describe("expected-type threading into a let initializer / trailing expression",
     expect(result.diagnostics).toEqual([]);
   });
 
+  it("threads the expectation through a bare block whose trailing is an `if`", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let c = true;
+        let x: i64 = { if c { 1 } else { 2 } };
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(mainLetType(result, "x")).toEqual({ kind: "PrimitiveI64Type" });
+  });
+
   it("reports one mismatch on the offending `if` branch, without cascading", (): void => {
     const result = diagnose(`
       fn main() {

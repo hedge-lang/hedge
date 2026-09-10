@@ -1241,6 +1241,9 @@ describe("expected-type threading codegen", (): void => {
         print(xs[0] + xs[2]);
       }
     `);
+    // i64 elements emit as bigint literals - a dropped coercion would emit
+    // `1`/`2`/`3` and the sum would still be "4", so pin the shape too.
+    expect(js).toContain("3n");
     expect(runEmittedJs(js)).toEqual(["4"]);
   });
 
