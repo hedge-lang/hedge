@@ -81,6 +81,7 @@ export function compile(
           witnessParams: analysis.witnessParams,
           witnesses: analysis.witnesses,
           extraWitnesses: analysis.extraWitnesses,
+          unsizeCoercions: analysis.unsizeCoercions,
         }),
       ),
     ),

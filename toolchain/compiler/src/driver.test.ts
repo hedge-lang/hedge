@@ -1302,29 +1302,108 @@ describe("a rejected construct is named without an internal roadmap slice", (): 
   });
 });
 
-describe("dyn Trait as a type", (): void => {
-  it("throws at JSIM lowering for a semantically clean program that uses a dyn type, since dispatch codegen is not implemented yet", (): void => {
-    expect(() =>
-      compile(`
-        trait Draw {
-          fn draw(&self) -> str;
-        }
-        fn f(x: dyn Draw) {}
-        fn main() {
-          print("done");
-        }
-      `),
-    ).toThrow("dyn Trait code generation is not implemented yet");
+describe("dyn Trait runtime", (): void => {
+  const draw = `
+    trait Draw { fn draw(&self) -> i32; }
+    struct Circle { r: i32 }
+    struct Square { s: i32 }
+    impl Draw for Circle { fn draw(&self) -> i32 { self.r } }
+    impl Draw for Square { fn draw(&self) -> i32 { self.s } }
+  `;
+
+  it("unsize-coerces a concrete value at a `dyn` argument and dispatches through its witness", (): void => {
+    const js = emittedJs(`
+      ${draw}
+      fn render(d: dyn Draw) -> i32 { d.draw() }
+      fn main() { print(render(Circle { r: 7 })); }
+    `);
+    expect(js).toContain("witness: __witness_Draw_Circle");
+    expect(js).toContain(".witness.draw(");
+    expect(runEmittedJs(js)).toEqual(["7"]);
   });
 
-  it("throws at JSIM lowering for a dyn type nested inside an array parameter", (): void => {
-    expect(() =>
-      compile(`
-        trait Draw { fn draw(&self) -> str; }
-        fn f(xs: [dyn Draw; 2]) {}
-        fn main() { print("done"); }
-      `),
-    ).toThrow("dyn Trait code generation is not implemented yet");
+  it("dispatches heterogeneously through each element's own witness", (): void => {
+    const js = emittedJs(`
+      ${draw}
+      fn render(d: &dyn Draw) -> i32 { d.draw() }
+      fn main() {
+        let a = Circle { r: 3 };
+        let b = Square { s: 5 };
+        print(render(&a) + render(&b));
+      }
+    `);
+    expect(js).toContain("__witness_Draw_Circle");
+    expect(js).toContain("__witness_Draw_Square");
+    expect(runEmittedJs(js)).toEqual(["8"]);
+  });
+
+  it("holds heterogeneous concrete values in a `[dyn Trait; N]` and dispatches per element", (): void => {
+    const js = emittedJs(`
+      ${draw}
+      fn main() {
+        let xs: [dyn Draw; 3] = [Circle { r: 1 }, Square { s: 2 }, Circle { r: 4 }];
+        print(xs[0].draw() + xs[1].draw() + xs[2].draw());
+      }
+    `);
+    expect(js).toContain("__witness_Draw_Circle");
+    expect(js).toContain("__witness_Draw_Square");
+    expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
+  it("re-wraps a `-> Self` method result as a fresh `dyn` value", (): void => {
+    const js = emittedJs(`
+      trait Grow { fn grown(&self) -> Self; fn size(&self) -> i32; }
+      struct Box2 { w: i32 }
+      impl Grow for Box2 {
+        fn grown(&self) -> Self { Box2 { w: self.w + 1 } }
+        fn size(&self) -> i32 { self.w }
+      }
+      fn main() {
+        let d: dyn Grow = Box2 { w: 5 };
+        print(d.grown().size());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["6"]);
+  });
+
+  it("coerces a `dyn` return value and dispatches on the result", (): void => {
+    const js = emittedJs(`
+      ${draw}
+      fn pick() -> dyn Draw { Square { s: 9 } }
+      fn main() { print(pick().draw()); }
+    `);
+    expect(runEmittedJs(js)).toEqual(["9"]);
+  });
+
+  it("propagates a `&mut self` whole-value reassignment through `&mut dyn`", (): void => {
+    const js = emittedJs(`
+      trait Bump { fn bump(&mut self); fn value(&self) -> i32; }
+      struct N { n: i32 }
+      impl Bump for N {
+        fn bump(&mut self) { *self = N { n: self.n + 1 }; }
+        fn value(&self) -> i32 { self.n }
+      }
+      fn go(d: &mut dyn Bump) { d.bump(); }
+      fn main() {
+        let mut x = N { n: 10 };
+        go(&mut x);
+        print(x.value());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["11"]);
+  });
+
+  it("emits a `.d.ts` with an `unknown` param for a pub fn taking `dyn Trait`, without throwing", (): void => {
+    const result = compile(`
+      trait Draw { fn draw(&self) -> i32; }
+      pub fn render(d: dyn Draw) -> i32 { d.draw() }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+    assert(isSome(result.code), "expected code");
+    const { typedef } = result.code.value;
+    assert(isSome(typedef), "expected .d.ts");
+    expect(typedef.value).toContain("unknown");
   });
 });
 

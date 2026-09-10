@@ -277,6 +277,7 @@ const SAMPLE_KINDS: readonly DiagnosticKind[] = [
   { kind: "SemNotABorrowablePlace" },
   { kind: "SemCannotAssignToImmutableBinding" },
   { kind: "SemCannotAssignThroughSharedReference" },
+  { kind: "SemAssignThroughDynPlace", trait: "Draw" },
   { kind: "OwnBorrowMutThroughShared", place: "x", through: "r" },
   { kind: "OwnBorrowMutNotDeclaredMut", baseName: "x" },
   {

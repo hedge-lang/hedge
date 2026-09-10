@@ -602,7 +602,7 @@ interface ProjectionType extends AstNode {
  * representation exists yet, so a program using this type passes analysis but
  * does not lower to JavaScript (`jsim.ts` throws).
  */
-interface DynType extends AstNode {
+export interface DynType extends AstNode {
   readonly kind: "DynType";
   readonly traitId: string;
 }

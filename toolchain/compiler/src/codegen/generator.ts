@@ -10,6 +10,7 @@ import type {
   BinaryExpression,
   BinaryOperator,
   CallExpression,
+  DynBoxExpression,
   IndexExpression,
   NumericKind,
   RangeExpression,
@@ -99,6 +100,7 @@ type PrecKey =
   | "RangeExpression"
   | "StructExpression"
   | "RefCellExpression"
+  | "DynBoxExpression"
   | BinaryOperator;
 
 // Ascending precedence: earlier entries bind looser -> more likely to need parens.
@@ -489,6 +491,15 @@ function emitRefCellExpression(expression: RefCellExpression): string {
   return `({ get v() { return ${placeText}; }, set v(nv) { ${placeText} = nv; } })`;
 }
 
+function emitDynBoxExpression(expression: DynBoxExpression): string {
+  const witness = emitExpression(expression.witness);
+  if (!expression.mutableCell) {
+    return `({ value: ${emitExpression(expression.place)}, witness: ${witness} })`;
+  }
+  const place = emitExpression(expression.place);
+  return `({ get value() { return ${place}; }, set value(nv) { ${place} = nv; }, witness: ${witness} })`;
+}
+
 function emitRangeExpression(expression: RangeExpression): string {
   const parts = [
     ...(isSome(expression.start)
@@ -550,6 +561,8 @@ function emitExpression(expression: Expression): string {
       return emitStructExpression(expression);
     case "RefCellExpression":
       return emitRefCellExpression(expression);
+    case "DynBoxExpression":
+      return emitDynBoxExpression(expression);
     case "RangeExpression":
       return emitRangeExpression(expression);
     default:
@@ -683,6 +696,7 @@ function emitStatement(statement: Statement): string {
     case "RangeExpression":
     case "StructExpression":
     case "RefCellExpression":
+    case "DynBoxExpression":
       // Everything left in the union is an expression, emitted as an
       // expression statement.
       return `${emitExpression(statement)};`;
@@ -885,6 +899,7 @@ function emitItem(item: Item): string {
     case "RangeExpression":
     case "StructExpression":
     case "RefCellExpression":
+    case "DynBoxExpression":
       // Everything left in the union is an expression, emitted as an
       // expression statement.
       return `${emitExpression(item)};`;

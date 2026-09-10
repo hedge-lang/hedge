@@ -5691,6 +5691,113 @@ describe("dyn Trait object safety", (): void => {
   });
 });
 
+describe("dyn Trait unsize coercion", (): void => {
+  const draw = `
+    trait Draw { fn draw(&self) -> i32; }
+    struct Point { x: i32 }
+    impl Draw for Point { fn draw(&self) -> i32 { self.x } }
+  `;
+
+  it("accepts a concrete value where `dyn Trait` is expected (by value)", (): void => {
+    const result = diagnose(`
+      ${draw}
+      fn render(d: dyn Draw) -> i32 { d.draw() }
+      fn main() { print(render(Point { x: 1 })); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts `&T` where `&dyn Trait` is expected", (): void => {
+    const result = diagnose(`
+      ${draw}
+      fn render(d: &dyn Draw) -> i32 { d.draw() }
+      fn main() { let p = Point { x: 2 }; print(render(&p)); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts `&mut T` where `&mut dyn Trait` is expected", (): void => {
+    const result = diagnose(`
+      ${draw}
+      fn render(d: &mut dyn Draw) -> i32 { d.draw() }
+      fn main() { let mut p = Point { x: 3 }; print(render(&mut p)); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("coerces a concrete value in `dyn` return position", (): void => {
+    const result = diagnose(`
+      ${draw}
+      fn make() -> dyn Draw { Point { x: 4 } }
+      fn main() { print(make().draw()); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("coerces a concrete value in a `let: dyn Trait` binding", (): void => {
+    const result = diagnose(`
+      ${draw}
+      fn main() {
+        let d: dyn Draw = Point { x: 5 };
+        print(d.draw());
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("coerces each element of a `[dyn Trait; N]` literal independently", (): void => {
+    const result = diagnose(`
+      ${draw}
+      struct Square { s: i32 }
+      impl Draw for Square { fn draw(&self) -> i32 { self.s } }
+      fn main() {
+        let xs: [dyn Draw; 2] = [Point { x: 1 }, Square { s: 2 }];
+        print(xs[0].draw());
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    const xsType = mainLetType(result, "xs");
+    assert(xsType.kind === "ArrayType", "expected an array type");
+    expect(xsType.elementType.kind).toBe("DynType");
+  });
+
+  it("still rejects a concrete value whose type does not implement the trait", (): void => {
+    const result = diagnose(`
+      ${draw}
+      struct Other { y: i32 }
+      fn render(d: dyn Draw) -> i32 { d.draw() }
+      fn main() { print(render(Other { y: 1 })); }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("rejects assigning through a dereferenced `dyn Trait` place", (): void => {
+    const result = diagnose(`
+      ${draw}
+      fn swap_in(r: &mut dyn Draw, v: dyn Draw) { *r = v; }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toContain(
+      "cannot assign through a `dyn Draw` place",
+    );
+  });
+
+  it("still allows rebinding a `dyn Trait` variable directly", (): void => {
+    const result = diagnose(`
+      ${draw}
+      struct Square { s: i32 }
+      impl Draw for Square { fn draw(&self) -> i32 { self.s } }
+      fn main() {
+        let mut d: dyn Draw = Point { x: 1 };
+        d = Square { s: 2 };
+        print(d.draw());
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+});
+
 describe("generic parameter shadowing an outer type of the same name", (): void => {
   it("resolves a function's own type parameter over an outer struct of the same name, with a warning", (): void => {
     const result = diagnose("struct T {} fn f<T>(x: T) {}");

@@ -109,6 +109,9 @@ interface JsimContext {
   /** `AnalysisResult.extraWitnesses` - witness objects to hoist that no
    * generic call site referenced (a concrete trait-default-method call). */
   readonly extraWitnesses: readonly WitnessRef[];
+  /** `AnalysisResult.unsizeCoercions` - each expression unsize-coerced to
+   * `dyn Trait`, keyed by its tokenId, mapped to the impl witness. */
+  readonly unsizeCoercions: ReadonlyMap<number, WitnessRef>;
   /** Each emitted method free function's `methodKey` mapped to the name
    * actually emitted - identical to the readable `methodFreeFnName` unless it
    * collided with a user top-level binding. Both the emission and call sites
@@ -152,6 +155,7 @@ function createJsimContext(
     witnessParams: info.witnessParams ?? new Map(),
     witnesses: info.witnesses ?? new Map(),
     extraWitnesses: info.extraWitnesses ?? [],
+    unsizeCoercions: info.unsizeCoercions ?? new Map(),
     methodFreeFnNames: new Map(),
     hoistedWitnesses: new Map(),
     primitiveEqWitnessUsed: { used: false },
@@ -814,6 +818,7 @@ export interface JsimInfo {
   readonly witnessParams?: ReadonlyMap<number, readonly WitnessParam[]>;
   readonly witnesses?: ReadonlyMap<number, readonly WitnessRef[]>;
   readonly extraWitnesses?: readonly WitnessRef[];
+  readonly unsizeCoercions?: ReadonlyMap<number, WitnessRef>;
 }
 
 export function toJsim(
@@ -895,10 +900,10 @@ function semanticTypeToJsPrimitive(
       // No JS primitive to erase to; the caller renders these itself.
       return none();
     case "DynType":
-      // The `{ value, witness }` layout and dispatch don't exist yet, so a
-      // program that reaches lowering with a `dyn` type has passed analysis
-      // but cannot produce runnable output.
-      throw new Error("dyn Trait code generation is not implemented yet");
+      // A `dyn Trait` value is a `{ value, witness }` object with no JS
+      // primitive of its own; a `.d.ts` position renders it `unknown`, same
+      // as a struct (struct `.d.ts` generation is a later ticket).
+      return none();
     default:
       return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
@@ -1717,8 +1722,43 @@ function jsimIfExpressionAsStatement(
   return jsimIfStatement(ctx, ifExpr);
 }
 
-// eslint-disable-next-line complexity -- This is a routing function
 function parseExpression(
+  ctx: JsimContext,
+  expression: Semantics.Expression,
+): JSIM.Expression {
+  const unsizeRef = ctx.unsizeCoercions.get(expression.tokenId);
+  if (unsizeRef !== undefined) {
+    return jsimUnsizeBox(ctx, expression, unsizeRef);
+  }
+  return parseExpressionDispatch(ctx, expression);
+}
+
+/** Wraps a concrete value being unsize-coerced to `dyn Trait` as
+ * `{ value, witness }` (see `AnalysisResult.unsizeCoercions`). A
+ * `&mut T -> &mut dyn` coercion (`ReferenceExpression`, `mutable`) makes
+ * `value` a getter/setter cell over the borrowed place so a whole-value write
+ * through the trait object propagates. */
+function jsimUnsizeBox(
+  ctx: JsimContext,
+  expression: Semantics.Expression,
+  ref: WitnessRef,
+): JSIM.Expression {
+  const witness: JSIM.Expression = {
+    kind: "Identifier",
+    value: witnessRefName(ctx, ref),
+    type: none(),
+  };
+  const mutableCell =
+    expression.kind === "ReferenceExpression" && expression.mutable;
+  const place =
+    expression.kind === "ReferenceExpression"
+      ? parseExpression(ctx, expression.operand)
+      : parseExpressionDispatch(ctx, expression);
+  return { kind: "DynBoxExpression", place, witness, mutableCell };
+}
+
+// eslint-disable-next-line complexity -- This is a routing function
+function parseExpressionDispatch(
   ctx: JsimContext,
   expression: Semantics.Expression,
 ): JSIM.Expression {
@@ -1888,14 +1928,99 @@ function jsimMethodCallExpression(
       arguments: [selfArgument(ctx, methodCallExpression), ...loweredArgs],
     };
   }
-  // No resolved target: a `dyn` receiver, whose witnessed dispatch is a
-  // later slice. Left as a JS method call, as before.
+  if (target?.kind === "dyn") {
+    return jsimDynDispatch(ctx, methodCallExpression, target, loweredArgs);
+  }
+  // No resolved target - keep the plain JS method call.
   return {
     kind: "MethodCallExpression",
     receiver: parseExpression(ctx, methodCallExpression.receiver),
     method: methodCallExpression.method.text,
     arguments: loweredArgs,
   };
+}
+
+function jsimField(object: JSIM.Expression, field: string): JSIM.Expression {
+  return { kind: "FieldAccessExpression", object, field };
+}
+
+/** `d.witness.m(d.value, ...args)` for a `dyn Trait` method call, wrapped as a
+ * fresh `dyn` box (reusing `d.witness`) when the method returns `Self`. A
+ * side-effect-free place receiver is emitted twice; anything computed is
+ * bound once in an IIFE so it runs once. */
+function jsimDynDispatch(
+  ctx: JsimContext,
+  call: Semantics.MethodCallExpression,
+  target: Extract<MethodTarget, { kind: "dyn" }>,
+  loweredArgs: readonly JSIM.Expression[],
+): JSIM.Expression {
+  // `d.value` is the raw concrete value; a `&mut self` method body reads it
+  // through a `.v` cell (see L1), so wrap it in one whose setter writes back
+  // through the box.
+  const wantsMutCell =
+    isSome(call.receiverKind) &&
+    call.receiverKind.value.byRef &&
+    call.receiverKind.value.mutable;
+  const dispatch = (box: JSIM.Expression): JSIM.Expression => {
+    const selfArg: JSIM.Expression = wantsMutCell
+      ? { kind: "RefCellExpression", place: jsimField(box, "value") }
+      : jsimField(box, "value");
+    const inner: JSIM.Expression = {
+      kind: "MethodCallExpression",
+      receiver: jsimField(box, "witness"),
+      method: target.methodName,
+      arguments: [selfArg, ...loweredArgs],
+    };
+    return target.returnsSelf
+      ? {
+          kind: "DynBoxExpression",
+          place: inner,
+          witness: jsimField(box, "witness"),
+          mutableCell: false,
+        }
+      : inner;
+  };
+  if (isRepeatablePlace(call.receiver)) {
+    return dispatch(parseExpression(ctx, call.receiver));
+  }
+  const recvName = reserveLocalName(ctx, "dynRecv");
+  return {
+    kind: "CallExpression",
+    callee: {
+      kind: "ArrowFunctionExpression",
+      params: [recvName],
+      body: [
+        {
+          kind: "ReturnStatement",
+          value: some(
+            dispatch({ kind: "Identifier", value: recvName, type: none() }),
+          ),
+        },
+      ],
+    },
+    arguments: [parseExpression(ctx, call.receiver)],
+  };
+}
+
+/** Whether lowering `expr` twice is safe - a bare place with no computed
+ * index (see the `dyn` dispatch double-emit note in the compiler CLAUDE.md). */
+function isRepeatablePlace(expr: Semantics.Expression): boolean {
+  switch (expr.kind) {
+    case "PathExpression":
+      return true;
+    case "FieldAccessExpression":
+      return isRepeatablePlace(expr.object);
+    case "DereferenceExpression":
+      return isRepeatablePlace(expr.operand);
+    case "IndexExpression":
+      return (
+        isRepeatablePlace(expr.object) &&
+        (expr.index.kind === "IntLiteral" ||
+          expr.index.kind === "PathExpression")
+      );
+    default:
+      return false;
+  }
 }
 
 function jsimBlockExpression(

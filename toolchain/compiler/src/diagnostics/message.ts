@@ -439,6 +439,8 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return "cannot assign to immutable binding";
     case "SemCannotAssignThroughSharedReference":
       return "cannot assign through a shared reference";
+    case "SemAssignThroughDynPlace":
+      return `cannot assign through a \`dyn ${kind.trait}\` place; its concrete type is erased - mutate through the trait's methods, or rebind the \`dyn\` value directly`;
     case "OwnBorrowMutThroughShared":
       return `cannot borrow \`${kind.place}\` as mutable because \`${kind.through}\` is a shared reference.`;
     case "OwnBorrowMutNotDeclaredMut":

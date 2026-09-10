@@ -59,6 +59,11 @@ export interface AnalysisResult {
    * site referenced them - a concrete receiver calling a trait default
    * method needs the `(type, trait)` witness passed to `Trait$m$default`. */
   readonly extraWitnesses: readonly WitnessRef[];
+  /** Each expression that is unsize-coerced to `dyn Trait` in the position it
+   * fills, keyed by the expression's own `tokenId`, mapped to the witness for
+   * the concrete type's trait impl. Codegen wraps the expression as
+   * `{ value, witness }`. */
+  readonly unsizeCoercions: ReadonlyMap<number, WitnessRef>;
 }
 
 /** One hidden witness parameter of a generic function: `_witness_T_Draw` for
@@ -106,7 +111,17 @@ interface WitnessMethodTarget {
   readonly methodName: string;
 }
 
-export type MethodTarget = FreeMethodTarget | WitnessMethodTarget;
+/** A call on a `dyn Trait` receiver: dispatched through the receiver's own
+ * `.witness` field against its `.value`. `returnsSelf` re-wraps the result as
+ * a fresh `dyn` box reusing that witness. */
+interface DynMethodTarget {
+  readonly kind: "dyn";
+  readonly methodName: string;
+  readonly returnsSelf: boolean;
+}
+
+export type MethodTarget =
+  FreeMethodTarget | WitnessMethodTarget | DynMethodTarget;
 
 /** One trait method a witness carries, flattened across the trait's
  * supertrait chain. `definingTrait` is the bare name of the trait that
@@ -235,6 +250,8 @@ interface AnalysisContext {
   /** Mutable build-up of `AnalysisResult.witnessParams`. */
   readonly witnessParamTable: Map<number, readonly WitnessParam[]>;
   readonly extraWitnessRefs: WitnessRef[];
+  /** Mutable build-up of `AnalysisResult.unsizeCoercions`. */
+  readonly unsizeCoercionTable: Map<number, WitnessRef>;
   /**
    * What `Self` means at the innermost currently-open trait or impl body -
    * only the top is ever consulted, same lifecycle as `genericParamStack`. A
@@ -6594,6 +6611,47 @@ function checkExpression(
 }
 
 /**
+ * If `expr` fills a position that expects `dyn Trait` (or `&dyn`/`&mut dyn`)
+ * with a value whose concrete type - or bounded type parameter - implements
+ * that trait, records the unsize coercion (`AnalysisResult.unsizeCoercions`)
+ * and returns `expr` retyped as the `dyn` target. Ref-ness must agree on both
+ * sides. `undefined` when no such coercion applies.
+ */
+function tryUnsizeCoercion(
+  ctx: AnalysisContext,
+  expr: Semantics.Expression,
+  expectedType: Semantics.Type,
+): Semantics.Expression | undefined {
+  const targetDyn = dynTypeOf(expectedType);
+  if (targetDyn === undefined) return undefined;
+  const exprType = expr.type;
+  if (
+    (expectedType.kind === "ReferenceType") !==
+    (exprType.kind === "ReferenceType")
+  ) {
+    return undefined;
+  }
+  const sourceType =
+    exprType.kind === "ReferenceType" ? exprType.referent : exprType;
+  if (sourceType.kind === "DynType") return undefined;
+  const witness = resolveTraitBound(ctx, sourceType, targetDyn.traitId);
+  if (!isSome(witness)) return undefined;
+  ctx.unsizeCoercionTable.set(expr.tokenId, witness.value);
+  if (witness.value.kind === "Impl") ctx.extraWitnessRefs.push(witness.value);
+  return { ...expr, type: expectedType };
+}
+
+/** The `DynType` a type is, or is a single reference to (`dyn T` / `&dyn T` /
+ * `&mut dyn T`); `undefined` otherwise. */
+function dynTypeOf(type: Semantics.Type): Semantics.DynType | undefined {
+  if (type.kind === "DynType") return type;
+  if (type.kind === "ReferenceType" && type.referent.kind === "DynType") {
+    return type.referent;
+  }
+  return undefined;
+}
+
+/**
  * One child of a checked array / match: analysed against `expected`
  * (kind-directed) then reconciled and range-checked. Does not emit - a
  * checked construct reports at most one child mismatch, so its callers emit
@@ -6679,6 +6737,14 @@ function reconcileExpressionType(
     const rangeError = checkNegLiteralRange(result.operand, expectedType);
     if (isSome(rangeError)) {
       emitError(ctx, rangeError.value, tokenId);
+      suppressed = true;
+    }
+  }
+
+  if (!suppressed) {
+    const unsized = tryUnsizeCoercion(ctx, result, expectedType);
+    if (unsized !== undefined) {
+      result = unsized;
       suppressed = true;
     }
   }
@@ -7591,8 +7657,20 @@ function recordMethodTarget(
   });
 }
 
+/** Whether a resolved type is an abstract `Self` (through any `&`/`&mut`) -
+ * a trait method's `-> Self` before the concrete receiver is substituted. */
+function isAbstractSelfType(type: Semantics.Type): boolean {
+  if (type.kind === "ReferenceType") return isAbstractSelfType(type.referent);
+  return (
+    type.kind === "NamedType" &&
+    type.path.segments.length === 1 &&
+    type.path.segments[0] === "Self"
+  );
+}
+
 /** Records how a resolved method call lowers: a `free` target for a concrete
- * receiver, a `witness` target for a call inside a generic body. */
+ * receiver, a `witness` target for a call inside a generic body, a `dyn`
+ * target for a `dyn Trait` receiver. */
 function recordMethodDispatch(
   ctx: AnalysisContext,
   methodTokenId: number,
@@ -7602,6 +7680,14 @@ function recordMethodDispatch(
 ): void {
   if (isNominalType(receiverType)) {
     recordMethodTarget(ctx, methodTokenId, receiverType, method, methodName);
+    return;
+  }
+  if (receiverType.kind === "DynType") {
+    ctx.methodTargetTable.set(methodTokenId, {
+      kind: "dyn",
+      methodName,
+      returnsSelf: isAbstractSelfType(method.returnType),
+    });
     return;
   }
   if (method.origin.kind !== "trait") return;
@@ -7680,6 +7766,12 @@ function analyzeMethodCallExpression(
     method,
     expression.method.text,
   );
+  // `-> Self` on a `dyn` receiver yields another value of that same trait
+  // object - re-wrapped with the receiver's witness in codegen.
+  const resultType =
+    lookupType.kind === "DynType" && isAbstractSelfType(method.returnType)
+      ? lookupType
+      : method.returnType;
   return {
     ...base,
     arguments: [
@@ -7692,7 +7784,7 @@ function analyzeMethodCallExpression(
         args,
       ),
     ],
-    type: method.returnType,
+    type: resultType,
     receiverKind: method.receiver,
   };
 }
@@ -8467,6 +8559,17 @@ function analyzeAssignmentExpression(
 ): Semantics.AssignExpression {
   const lhs = analyzeExpression(ctx, assignExpression.lhs);
   checkLhsMutability(ctx, lhs, assignExpression.tokenId);
+  const lhsType = getType(lhs);
+  if (lhs.kind === "DereferenceExpression" && lhsType.kind === "DynType") {
+    emitError(
+      ctx,
+      {
+        kind: "SemAssignThroughDynPlace",
+        trait: bareTypeName(lhsType.traitId),
+      },
+      assignExpression.tokenId,
+    );
+  }
   return {
     ...assignExpression,
     lhs,
@@ -9964,6 +10067,7 @@ export function analyze(
     implMethodTargetTable: new Map(),
     witnessParamTable: new Map(),
     extraWitnessRefs: [],
+    unsizeCoercionTable: new Map(),
     selfContextStack: [],
   };
   // Before functions, so a signature can name any declared type.
@@ -10026,5 +10130,6 @@ export function analyze(
     implMethodTargets: ctx.implMethodTargetTable,
     witnessParams: ctx.witnessParamTable,
     extraWitnesses: ctx.extraWitnessRefs,
+    unsizeCoercions: ctx.unsizeCoercionTable,
   };
 }

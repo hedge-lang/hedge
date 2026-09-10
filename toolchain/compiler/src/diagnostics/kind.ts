@@ -550,6 +550,7 @@ export type DiagnosticKind =
   | { readonly kind: "SemNotABorrowablePlace" }
   | { readonly kind: "SemCannotAssignToImmutableBinding" }
   | { readonly kind: "SemCannotAssignThroughSharedReference" }
+  | { readonly kind: "SemAssignThroughDynPlace"; readonly trait: string }
   // Ownership analysis.
   | {
       readonly kind: "OwnBorrowMutThroughShared";
@@ -805,6 +806,7 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemNotABorrowablePlace", "HEDGE-BORROW-CHECK-005"],
   ["SemCannotAssignToImmutableBinding", "HEDGE-BORROW-CHECK-006"],
   ["SemCannotAssignThroughSharedReference", "HEDGE-BORROW-CHECK-006"],
+  ["SemAssignThroughDynPlace", "HEDGE-TYPE-007"],
   ["OwnConflictingBorrows", "HEDGE-BORROW-CHECK-001"],
   ["OwnBorrowMutThroughShared", "HEDGE-BORROW-CHECK-002"],
   ["OwnBorrowMutNotDeclaredMut", "HEDGE-BORROW-CHECK-002"],

@@ -250,7 +250,8 @@ export type Expression =
   | ArraySliceViewExpression
   | RangeExpression
   | StructExpression
-  | RefCellExpression;
+  | RefCellExpression
+  | DynBoxExpression;
 
 interface BooleanLiteral {
   readonly kind: "BooleanLiteral";
@@ -492,6 +493,19 @@ export interface StructExpression {
 export interface RefCellExpression {
   readonly kind: "RefCellExpression";
   readonly place: Expression;
+}
+
+/**
+ * A concrete value unsize-coerced to `dyn Trait`: `{ value, witness }`. When
+ * `mutableCell` is set (a `&mut T -> &mut dyn Trait` coercion), `value` is a
+ * getter/setter over `place` so a whole-value write through the trait object
+ * reaches the caller's binding; otherwise `value` is `place` read once.
+ */
+export interface DynBoxExpression {
+  readonly kind: "DynBoxExpression";
+  readonly place: Expression;
+  readonly witness: Expression;
+  readonly mutableCell: boolean;
 }
 
 type StructExpressionField = StructField | SpreadExpression;
