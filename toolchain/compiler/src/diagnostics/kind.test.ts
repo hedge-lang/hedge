@@ -153,6 +153,7 @@ const SAMPLE_KINDS: readonly DiagnosticKind[] = [
   { kind: "SemAssocTypeAmbiguous", assocName: "A", traitList: "`T1`, `T2`" },
   { kind: "SemTraitNotObjectSafe", trait: "T", offender: "method `m`" },
   { kind: "SemQualifiedTypePathsUnsupported" },
+  { kind: "SemDropImplForEnumUnsupported" },
   { kind: "SemGenericTypeParamNoArguments", name: "T" },
   { kind: "SemPatternKindNotYetSupported" },
   { kind: "SemWhileNotYetSupported" },

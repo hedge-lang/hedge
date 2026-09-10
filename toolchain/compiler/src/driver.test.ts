@@ -1448,6 +1448,17 @@ describe("Drop::drop dispose body", (): void => {
     expect(runEmittedJs(js)).toEqual(["0", "99", "7"]);
   });
 
+  it("rejects `impl Drop` for an enum rather than silently ignoring it", (): void => {
+    const result = compile(`
+      enum State { On, Off }
+      impl Drop for State { fn drop(&mut self) { print(1); } }
+      fn main() {}
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toContain(
+      "`Drop` for an enum is not yet supported",
+    );
+  });
+
   it("keeps the no-op disposer for a struct with no `Drop` impl", (): void => {
     const js = emittedJs(`
       struct Plain { x: i32 }

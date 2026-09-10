@@ -280,6 +280,8 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return `trait \`${kind.trait}\` cannot be made into a \`dyn\` object: ${kind.offender} takes \`Self\` as a non-receiver argument`;
     case "SemQualifiedTypePathsUnsupported":
       return "qualified type paths are not supported yet";
+    case "SemDropImplForEnumUnsupported":
+      return "`Drop` for an enum is not yet supported";
     case "SemGenericTypeParamNoArguments":
       return `generic type parameter \`${kind.name}\` does not accept type arguments`;
     case "SemPatternKindNotYetSupported":

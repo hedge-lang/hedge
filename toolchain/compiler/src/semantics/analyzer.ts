@@ -7633,8 +7633,10 @@ function recordImplMethodTarget(
   });
 }
 
-/** Indexes a `impl Drop for T`'s `drop` method so codegen can call its free
- * function from `T`'s `[Symbol.dispose]`. Only the prelude `Drop` counts. */
+/** Indexes an `impl Drop for T`'s `drop` method so codegen can call its free
+ * function from `T`'s `[Symbol.dispose]`. Only the prelude `Drop` counts. An
+ * enum target is rejected rather than silently ignored - enum disposers don't
+ * thread a drop call yet. */
 function recordDropImpl(
   ctx: AnalysisContext,
   decl: Parser.FunctionDef,
@@ -7650,11 +7652,19 @@ function recordDropImpl(
   ) {
     return;
   }
+  if (targetType.kind !== "StructType") {
+    emitError(
+      ctx,
+      { kind: "SemDropImplForEnumUnsupported" },
+      decl.signature.name.tokenId,
+    );
+    return;
+  }
   ctx.dropImplTable.set(targetType.name, {
     kind: "free",
     typeId: targetType.name,
     typeName: bareTypeName(targetType.name),
-    traitName: some("Drop"),
+    traitName: some(bareTypeName(traitName.value)),
     methodName: "drop",
     isDefaultBody: false,
   });

@@ -321,6 +321,7 @@ export type DiagnosticKind =
       readonly offender: string;
     }
   | { readonly kind: "SemQualifiedTypePathsUnsupported" }
+  | { readonly kind: "SemDropImplForEnumUnsupported" }
   | { readonly kind: "SemGenericTypeParamNoArguments"; readonly name: string }
   | { readonly kind: "SemPatternKindNotYetSupported" }
   | { readonly kind: "SemWhileNotYetSupported" }
@@ -727,6 +728,7 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemImplDefinesUndeclaredAssocType", "HEDGE-TRAIT-007"],
   ["SemTraitNotObjectSafe", "HEDGE-TRAIT-008"],
   ["SemQualifiedTypePathsUnsupported", "HEDGE-UNSUPPORTED-001"],
+  ["SemDropImplForEnumUnsupported", "HEDGE-UNSUPPORTED-001"],
   ["SemGenericTypeParamNoArguments", "HEDGE-UNSUPPORTED-001"],
   ["SemPatternKindNotYetSupported", "HEDGE-UNSUPPORTED-001"],
   ["SemWhileNotYetSupported", "HEDGE-UNSUPPORTED-001"],

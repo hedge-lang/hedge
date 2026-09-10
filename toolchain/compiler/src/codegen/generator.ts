@@ -244,7 +244,11 @@ function ownFieldAccess(name: string): string {
  *
  * A `Drop` impl's `drop(&mut self)` body runs first (matching the spec's
  * "the value's own drop glue, then its fields" order), passed `this` in a
- * `&mut self` accessor cell.
+ * `&mut self` accessor cell. `_s` shares the `_dN` bindings' method scope and
+ * codegen-reserved underscore prefix, so it can't collide with a field. A
+ * `drop` body that does `*self = other` rebinds only `_s`; the field release
+ * below still reads `this`, so the reassignment doesn't reach it - a
+ * pathological case not worth reifying yet.
  */
 function structDisposer(
   disposableFields: readonly string[],

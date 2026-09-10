@@ -5822,6 +5822,38 @@ describe("dyn Trait unsize coercion", (): void => {
   });
 });
 
+describe("Drop impl indexing", (): void => {
+  it("keys `dropImpls` by the struct's scope-qualified type id", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Handle { fd: i32 }
+      impl Drop for Handle { fn drop(&mut self) {} }
+      struct Plain { x: i32 }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+    const handle = result.program.items.find(
+      (i) => i.kind === "Struct" && i.name.text === "Handle",
+    );
+    assert(handle?.kind === "Struct", "expected the Handle struct");
+    assert(handle.type.kind === "StructType", "expected a StructType");
+    expect([...result.dropImpls.keys()]).toEqual([handle.type.name]);
+  });
+
+  it("rejects an `impl Drop` for an enum, recording nothing", (): void => {
+    const result = diagnoseWithPrelude(`
+      enum State { On, Off }
+      impl Drop for State { fn drop(&mut self) {} }
+      fn main() {}
+    `);
+    expect(
+      result.diagnostics
+        .filter((d) => d.severity === "error")
+        .map((d) => messageOf(d)),
+    ).toEqual(["`Drop` for an enum is not yet supported"]);
+    expect(result.dropImpls.size).toBe(0);
+  });
+});
+
 describe("generic parameter shadowing an outer type of the same name", (): void => {
   it("resolves a function's own type parameter over an outer struct of the same name, with a warning", (): void => {
     const result = diagnose("struct T {} fn f<T>(x: T) {}");
