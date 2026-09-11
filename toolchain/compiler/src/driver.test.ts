@@ -1079,6 +1079,23 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["p", "t"]);
   });
 
+  it("suffixes the primitive-eq witness const when it collides with a user top-level binding", (): void => {
+    const js = emittedJs(`
+      fn same<T: PartialEq>(a: T, b: T) -> bool { a == b }
+      fn __witnessPrimitiveEq() -> i32 { 0 }
+      fn main() {
+        if same(2, 2) { print("eq"); }
+        print(__witnessPrimitiveEq());
+      }
+    `);
+    expect(js).toMatch(/function __witnessPrimitiveEq\(\) \{\s*\n\s*return 0;/);
+    expect(js).toContain(
+      "const __witnessPrimitiveEq_2 = {eq: (a, b) => a === b};",
+    );
+    expect(js).toContain("same(2, 2, __witnessPrimitiveEq_2)");
+    expect(runEmittedJs(js)).toEqual(["eq", "0"]);
+  });
+
   it("compiles and runs a generic `PartialEq` equality check on a boolean argument", (): void => {
     const js = emittedJs(`
       fn eq_check<T: PartialEq>(a: T, b: T) -> bool { a == b }

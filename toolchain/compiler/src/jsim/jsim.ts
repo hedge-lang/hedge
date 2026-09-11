@@ -124,9 +124,10 @@ interface JsimContext {
   /** Every `(typeId, trait)` witness object referenced while lowering,
    * allocated on first use and emitted as a hoisted `const` afterwards. */
   readonly hoistedWitnesses: Map<string, HoistedWitness>;
-  /** Set once a `Primitive` witness is referenced, so the shared
-   * `__witnessPrimitiveEq` const is emitted. */
-  readonly primitiveEqWitnessUsed: { used: boolean };
+  /** The collision-safe name reserved for the shared primitive-eq witness
+   * const, allocated on first `Primitive` witness reference (`undefined`
+   * until then, matching `hoistedWitnesses`' own lazy-allocation shape). */
+  readonly primitiveEqWitness: { name: string | undefined };
 }
 
 interface HoistedWitness {
@@ -163,7 +164,7 @@ function createJsimContext(
     dropImpls: info.dropImpls ?? new Map(),
     methodFreeFnNames: new Map(),
     hoistedWitnesses: new Map(),
-    primitiveEqWitnessUsed: { used: false },
+    primitiveEqWitness: { name: undefined },
   };
 }
 
@@ -1015,7 +1016,18 @@ function resolvedMethodFreeFnName(
   );
 }
 
-const PRIMITIVE_EQ_WITNESS = "__witnessPrimitiveEq";
+/** The collision-safe name for the shared primitive-eq witness const,
+ * reserved (once) on first reference - mirrors `witnessConstName`'s own
+ * allocate-once-and-cache shape. */
+function primitiveEqWitnessName(ctx: JsimContext): string {
+  if (ctx.primitiveEqWitness.name === undefined) {
+    ctx.primitiveEqWitness.name = reserveTopLevelName(
+      ctx,
+      "__witnessPrimitiveEq",
+    );
+  }
+  return ctx.primitiveEqWitness.name;
+}
 
 /** The `FreeMethodTarget` for one method a `(typeId, trait)` witness carries,
  * used to resolve the free-function name the slot points at. Keyed on the
@@ -1079,8 +1091,7 @@ function witnessRefName(ctx: JsimContext, ref: WitnessRef): string {
     case "Forwarded":
       return witnessParamName(ref.paramName, ref.traitName);
     case "Primitive":
-      ctx.primitiveEqWitnessUsed.used = true;
-      return PRIMITIVE_EQ_WITNESS;
+      return primitiveEqWitnessName(ctx);
     default:
       return assertNever(ref, `witness ref: ${JSON.stringify(ref)}`);
   }
@@ -1135,10 +1146,10 @@ function reserveExtraWitnessConsts(ctx: JsimContext): void {
  * from what was referenced during lowering - prepended to the program. */
 function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
   const decls: JSIM.Item[] = [];
-  if (ctx.primitiveEqWitnessUsed.used) {
+  if (ctx.primitiveEqWitness.name !== undefined) {
     decls.push({
       kind: "WitnessObjectDecl",
-      name: PRIMITIVE_EQ_WITNESS,
+      name: ctx.primitiveEqWitness.name,
       directSlots: [{ method: "eq", value: "(a, b) => a === b" }],
       closureSlots: [],
     });
