@@ -1074,12 +1074,10 @@ function resolvedMethodFreeFnName(
  * reserved (once) on first reference - mirrors `witnessConstName`'s own
  * allocate-once-and-cache shape. */
 function primitiveEqWitnessName(ctx: JsimContext): string {
-  if (ctx.primitiveEqWitness.name === undefined) {
-    ctx.primitiveEqWitness.name = reserveTopLevelName(
-      ctx,
-      "__witnessPrimitiveEq",
-    );
-  }
+  ctx.primitiveEqWitness.name ??= reserveTopLevelName(
+    ctx,
+    "__witnessPrimitiveEq",
+  );
   return ctx.primitiveEqWitness.name;
 }
 
