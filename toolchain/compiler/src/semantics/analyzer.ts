@@ -8776,13 +8776,14 @@ function analyzeAssignmentExpression(
   const lhs = analyzeExpression(ctx, assignExpression.lhs);
   checkLhsMutability(ctx, lhs, assignExpression.tokenId);
   const lhsType = getType(lhs);
-  if (lhs.kind === "DereferenceExpression" && lhsType.kind === "DynType") {
+  const dynPlaceTrait =
+    lhs.kind === "DereferenceExpression" && lhsType.kind === "DynType"
+      ? lhsType.traitId
+      : undefined;
+  if (dynPlaceTrait !== undefined) {
     emitError(
       ctx,
-      {
-        kind: "SemAssignThroughDynPlace",
-        trait: bareTypeName(lhsType.traitId),
-      },
+      { kind: "SemAssignThroughDynPlace", trait: bareTypeName(dynPlaceTrait) },
       assignExpression.tokenId,
     );
   }
@@ -8794,7 +8795,7 @@ function analyzeAssignmentExpression(
   // `{ value, witness }` box belonged and the next dispatch read missing
   // fields.
   //
-  // Two cases stay unchecked:
+  // Three cases stay unchecked:
   // - The LHS itself didn't resolve (`isAmbiguousUnitExpr`) - `lhsType` is
   //   then the error-recovery placeholder, already-diagnosed, and checking
   //   the RHS against it would cascade a bogus second mismatch.
@@ -8804,10 +8805,15 @@ function analyzeAssignmentExpression(
   //   it a different-length array is the intended way to resize what it
   //   views (matching a `&mut self` method's own `*self = ...` whole-value
   //   pattern), not a genuine length mismatch to reject.
+  // - An assignment through a `dyn` place, already rejected above - the
+  //   place has no assignable storage regardless of the RHS's type, so a
+  //   type-mismatch diagnostic on top would just be noise on an assignment
+  //   that's already fully rejected.
   let rhs: Semantics.Expression;
   if (
     (lhsType.kind === "UnitType" && isAmbiguousUnitExpr(lhs)) ||
-    (lhs.kind === "DereferenceExpression" && lhsType.kind === "ArrayType")
+    (lhs.kind === "DereferenceExpression" && lhsType.kind === "ArrayType") ||
+    dynPlaceTrait !== undefined
   ) {
     rhs = analyzeExpression(ctx, assignExpression.rhs);
   } else {

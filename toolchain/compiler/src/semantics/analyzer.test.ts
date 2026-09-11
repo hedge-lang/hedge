@@ -5829,6 +5829,18 @@ describe("dyn Trait unsize coercion", (): void => {
     );
   });
 
+  it("reports only the dyn-place diagnostic when the RHS also has the wrong type, without cascading a type mismatch", (): void => {
+    const result = diagnose(`
+      ${draw}
+      fn swap_in(r: &mut dyn Draw, v: i32) { *r = v; }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toContain(
+      "cannot assign through a `dyn Draw` place",
+    );
+  });
+
   it("rejects assigning a value of the wrong type to an existing binding", (): void => {
     const result = diagnose(`
       fn main() {
