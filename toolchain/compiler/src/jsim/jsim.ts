@@ -87,6 +87,16 @@ interface JsimContext {
    */
   readonly emittedNameByBindingId: Map<BindingId, string>[];
   /**
+   * Per-function map from a hidden witness parameter's raw synthesized name
+   * (`_witness_T_Draw`) to its actual collision-safe emitted name. Reserved
+   * via `reserveLocalName`, not `bindLocalName` - the raw name has no real
+   * Hedge-level identity a source `let`/param could shadow (same reasoning
+   * as `emittedNameByBindingId`: resolving through `lookupLocalName` would
+   * find a same-spelled body-local instead of the witness param it's not
+   * related to). See `resolvedWitnessParamName`.
+   */
+  readonly witnessParamNames: Map<string, string>[];
+  /**
    * Every top-level JS binding name already claimed (function names, and
    * each static's own accessor name) - not `$k`-suffixed alpha-rename
    * (that machinery is per-function local scope only), but the same
@@ -154,6 +164,7 @@ function createJsimContext(
     branchDrops: [],
     allConditionalDrops: [],
     emittedNameByBindingId: [],
+    witnessParamNames: [],
     topLevelNames,
     methodTargets: info.methodTargets ?? new Map(),
     implMethodTargets: info.implMethodTargets ?? new Map(),
@@ -593,6 +604,7 @@ function withFunctionCtx<T>(
   ctx.dropFlagNames.push(new Map());
   ctx.branchDrops.push(ctx.ownership.get(functionName)?.branchDrops ?? []);
   ctx.emittedNameByBindingId.push(new Map());
+  ctx.witnessParamNames.push(new Map());
   try {
     return fn();
   } finally {
@@ -603,6 +615,7 @@ function withFunctionCtx<T>(
     ctx.dropFlagNames.pop();
     ctx.branchDrops.pop();
     ctx.emittedNameByBindingId.pop();
+    ctx.witnessParamNames.pop();
   }
 }
 
@@ -814,6 +827,26 @@ function emittedNameForBinding(
     `ICE: no emitted name recorded for binding \`${declaration.name}\``,
   );
   return name;
+}
+
+/** Reserves a collision-safe emitted name for a hidden witness parameter
+ * (`_witness_T_Draw`) and records the mapping for `resolvedWitnessParamName`
+ * to resolve. Called once, at the parameter's own declaration site, before
+ * the body lowers - same ordering `emitFunctionParams` uses for a real
+ * parameter, so a colliding body-local gets alpha-renamed instead. */
+function reserveWitnessParamName(ctx: JsimContext, rawName: string): string {
+  const emitted = reserveLocalName(ctx, rawName);
+  ctx.witnessParamNames.at(-1)?.set(rawName, emitted);
+  return emitted;
+}
+
+/** The emitted name a hidden witness parameter's raw synthesized name
+ * (`_witness_T_Draw`) resolves to in the current function - see
+ * `witnessParamNames`'s own doc comment for why this isn't `lookupLocalName`.
+ * Falls back to `rawName` itself if nothing reserved it (a test lowering a
+ * body in isolation, with no enclosing `reserveWitnessParamName` call). */
+function resolvedWitnessParamName(ctx: JsimContext, rawName: string): string {
+  return ctx.witnessParamNames.at(-1)?.get(rawName) ?? rawName;
 }
 
 /** The analyzer-produced tables codegen consults, all optional so a test can
@@ -1089,7 +1122,10 @@ function witnessRefName(ctx: JsimContext, ref: WitnessRef): string {
         ref.methods,
       );
     case "Forwarded":
-      return witnessParamName(ref.paramName, ref.traitName);
+      return resolvedWitnessParamName(
+        ctx,
+        witnessParamName(ref.paramName, ref.traitName),
+      );
     case "Primitive":
       return primitiveEqWitnessName(ctx);
     default:
@@ -1538,11 +1574,15 @@ function parseFunctionBody(
     fn.signature,
     emittedParams,
   );
+  // Reserved before the body lowers, so a colliding body-local (e.g.
+  // `let _witness_T_Draw = 5;`) is the one that gets alpha-renamed. Every
+  // dispatch/forwarding reference resolves through `resolvedWitnessParamName`,
+  // never the raw `wp.name` string.
   const witnessParams: readonly JSIM.FunctionParam[] = (
     ctx.witnessParams.get(fn.tokenId) ?? []
   ).map((wp) => ({
     kind: "FunctionParam",
-    name: wp.name,
+    name: reserveWitnessParamName(ctx, wp.name),
     type: none(),
     synthetic: true,
   }));
@@ -1958,7 +1998,11 @@ function jsimMethodCallExpression(
   if (target?.kind === "witness") {
     return {
       kind: "MethodCallExpression",
-      receiver: { kind: "Identifier", value: target.witnessName, type: none() },
+      receiver: {
+        kind: "Identifier",
+        value: resolvedWitnessParamName(ctx, target.witnessName),
+        type: none(),
+      },
       method: target.methodName,
       arguments: [selfArgument(ctx, methodCallExpression), ...loweredArgs],
     };
@@ -3558,7 +3602,11 @@ function traitEqualityCall(
   if (target?.kind === "witness") {
     return {
       kind: "MethodCallExpression",
-      receiver: { kind: "Identifier", value: target.witnessName, type: none() },
+      receiver: {
+        kind: "Identifier",
+        value: resolvedWitnessParamName(ctx, target.witnessName),
+        type: none(),
+      },
       method: "eq",
       arguments: [left, right],
     };

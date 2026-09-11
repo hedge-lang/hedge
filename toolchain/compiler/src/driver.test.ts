@@ -876,6 +876,25 @@ describe("generic witness codegen", (): void => {
     expect(js).toContain("function draw_all(t, _witness_T_Draw)");
   });
 
+  it("alpha-renames a body-local that collides with the hidden witness parameter's name, and runs", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { n: i32 }
+      impl Draw for P { fn draw(&self) -> i32 { self.n } }
+      fn f<T: Draw>(t: &T) -> i32 {
+        let _witness_T_Draw = 5;
+        _witness_T_Draw + t.draw()
+      }
+      fn main() {
+        let p = P { n: 9 };
+        print(f(&p));
+      }
+    `);
+    expect(js).toContain("_witness_T_Draw.draw(t)");
+    expect(js).not.toContain("_witness_T_Draw$1.draw(t)");
+    expect(runEmittedJs(js)).toEqual(["14"]);
+  });
+
   it("dispatches a trait method on a bound type parameter through its witness", (): void => {
     const js = emittedJs(`
       trait Draw { fn draw(&self) -> i32; }
