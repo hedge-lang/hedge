@@ -6639,6 +6639,32 @@ function checkExpression(
  * coercion still suppresses the type-mismatch diagnostic, but recording it
  * would emit a `__witness_<Trait>_<Type>` const that nothing boxes against.
  */
+/**
+ * Whether `exprType`'s ref-ness can fill a position expecting `expectedType`
+ * for a unsize coercion: both bare, both shared refs, both mutable refs, or
+ * a mutable ref satisfying a shared one (a downgrade). A shared ref can't
+ * satisfy a mutable one - the box would carry a plain-literal `value`, so an
+ * `&mut self` dispatch through it would silently fail to write back to the
+ * borrowed place.
+ */
+function refnessSatisfiesDynTarget(
+  expectedType: Semantics.Type,
+  exprType: Semantics.Type,
+): boolean {
+  if (
+    (expectedType.kind === "ReferenceType") !==
+    (exprType.kind === "ReferenceType")
+  ) {
+    return false;
+  }
+  return (
+    expectedType.kind !== "ReferenceType" ||
+    exprType.kind !== "ReferenceType" ||
+    !expectedType.mutable ||
+    exprType.mutable
+  );
+}
+
 function tryUnsizeCoercion(
   ctx: AnalysisContext,
   expr: Semantics.Expression,
@@ -6648,12 +6674,7 @@ function tryUnsizeCoercion(
   const targetDyn = dynTypeOf(expectedType);
   if (targetDyn === undefined) return undefined;
   const exprType = expr.type;
-  if (
-    (expectedType.kind === "ReferenceType") !==
-    (exprType.kind === "ReferenceType")
-  ) {
-    return undefined;
-  }
+  if (!refnessSatisfiesDynTarget(expectedType, exprType)) return undefined;
   const sourceType =
     exprType.kind === "ReferenceType" ? exprType.referent : exprType;
   if (sourceType.kind === "DynType") return undefined;

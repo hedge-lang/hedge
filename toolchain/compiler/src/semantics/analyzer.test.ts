@@ -5738,6 +5738,15 @@ describe("dyn Trait unsize coercion", (): void => {
     expect(result.diagnostics).toEqual([]);
   });
 
+  it("rejects a shared borrow where `&mut dyn Trait` is expected", (): void => {
+    const result = diagnose(`
+      ${draw}
+      fn render(d: &mut dyn Draw) -> i32 { d.draw() }
+      fn main() { let p = Point { x: 3 }; print(render(&p)); }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
   it("coerces a concrete value in `dyn` return position", (): void => {
     const result = diagnose(`
       ${draw}
