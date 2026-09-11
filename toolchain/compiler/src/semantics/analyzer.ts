@@ -69,6 +69,13 @@ export interface AnalysisResult {
    * the `drop` method's free-function target. Codegen calls it from the
    * type's `[Symbol.dispose]` before releasing the fields. */
   readonly dropImpls: ReadonlyMap<string, FreeMethodTarget>;
+  /** Witnesses resolved for a concrete-receiver method call's own bounded
+   * generic parameters (the method's own `<U: Trait>`), keyed by the
+   * method-name token (same convention as `methodTargets`), one entry per
+   * satisfied bound in declared-parameter order. Codegen passes these as
+   * trailing arguments alongside the call, mirroring an ordinary generic
+   * function call's `witnesses`. */
+  readonly methodCallWitnesses: ReadonlyMap<number, readonly WitnessRef[]>;
 }
 
 /** One hidden witness parameter of a generic function: `_witness_T_Draw` for
@@ -267,6 +274,8 @@ interface AnalysisContext {
   readonly unsizeCoercionTable: Map<number, UnsizeCoercion>;
   /** Mutable build-up of `AnalysisResult.dropImpls`. */
   readonly dropImplTable: Map<string, FreeMethodTarget>;
+  /** Mutable build-up of `AnalysisResult.methodCallWitnesses`. */
+  readonly methodCallWitnessTable: Map<number, readonly WitnessRef[]>;
   /**
    * What `Self` means at the innermost currently-open trait or impl body -
    * only the top is ever consulted, same lifecycle as `genericParamStack`. A
@@ -2381,6 +2390,16 @@ function analyzeMethodItem(
     : undefined;
   let ownershipView: Option<Semantics.FunctionDef> = none();
   if (method.kind === "Function") {
+    // The merged (impl/trait-plus-method) generic scope, same as an
+    // ordinary generic `fn` - a bound used inside the body (an impl-level
+    // `T: Draw` or the method's own `U: Draw`) needs this to get its hidden
+    // witness parameter at all, not just to resolve cleanly.
+    recordWitnessParams(
+      ctx,
+      method.tokenId,
+      merged.generics,
+      merged.whereClause,
+    );
     if (selfParam !== undefined) {
       bind(ctx, "self", {
         type: selfParam.type,
@@ -7293,6 +7312,13 @@ interface IndexedMethod {
    * against one of them is arity-checked but not type-checked - unification
    * for method calls isn't implemented. */
   readonly genericParams: readonly string[];
+  /** Each `genericParams` name's own declared bound trait names (resolved
+   * `traitRegistry` keys), for an inherent method - empty for a trait-origin
+   * method, since a trait's own methods don't persist their generic bounds
+   * anywhere yet (a narrower version of the same `genericParams` gap above).
+   * `recordMethodCallWitnesses` uses this to resolve a witness per bound
+   * from the call site's own argument types. */
+  readonly genericParamBounds: ReadonlyMap<string, readonly string[]>;
   readonly origin:
     | { readonly kind: "inherent" }
     | { readonly kind: "trait"; readonly traitId: string };
@@ -7348,6 +7374,7 @@ function traitMethodSet(
     params: m.params,
     returnType: m.returnType,
     genericParams: [...trait.genericParams, ...m.genericParams],
+    genericParamBounds: new Map(),
     origin: { kind: "trait", traitId },
   }));
   const inherited = trait.supertraits.flatMap((s) =>
@@ -7449,6 +7476,12 @@ function indexInherentMethods(
       decl.signature,
       resolveSlice1Type,
     );
+    const merged = mergedGenericScope(
+      item.generics,
+      item.whereClause,
+      decl.signature.generics,
+      decl.signature.whereClause,
+    );
     return [
       {
         name: decl.signature.name.text,
@@ -7459,6 +7492,10 @@ function indexInherentMethods(
           ...implGenerics,
           ...genericParamNames(decl.signature.generics),
         ],
+        genericParamBounds: resolveBoundNames(
+          ctx,
+          genericParamBoundNames(merged.generics, merged.whereClause),
+        ),
         origin: { kind: "inherent" },
       },
     ];
@@ -7809,6 +7846,56 @@ function recordMethodDispatch(
   });
 }
 
+/** Whether `type` (or its referent, through one `&`/`&mut`) is the bare
+ * generic parameter `paramName` - the shape a method's own `u: U` param has
+ * before any substitution. */
+function namesGenericParam(type: Semantics.Type, paramName: string): boolean {
+  const referent = type.kind === "ReferenceType" ? type.referent : type;
+  return (
+    referent.kind === "NamedType" &&
+    referent.path.segments.length === 1 &&
+    referent.path.segments[0] === paramName
+  );
+}
+
+/**
+ * Resolves a witness for each of a concrete-receiver method call's own
+ * bounded generic parameters (the method's own `<U: Trait>`, or its
+ * enclosing impl's), from the positionally-matching argument's own already-
+ * analyzed type - there is no unification for method calls
+ * (`IndexedMethod.genericParams`'s own doc comment), so this is a direct
+ * read, not real inference. An unsatisfied bound resolves nothing for that
+ * slot rather than emitting a diagnostic, matching the surrounding
+ * arity-checked-not-type-checked state; the resulting argument-count
+ * mismatch surfaces as a runtime error in the callee, not a compile
+ * diagnostic, same as any other not-yet-type-checked method generic.
+ */
+function recordMethodCallWitnesses(
+  ctx: AnalysisContext,
+  methodTokenId: number,
+  method: IndexedMethod,
+  args: readonly Semantics.Expression[],
+): void {
+  if (method.genericParamBounds.size === 0) return;
+  const witnesses: WitnessRef[] = [];
+  for (const [paramName, traitNames] of method.genericParamBounds) {
+    const argIndex = method.params.findIndex((p) =>
+      namesGenericParam(p, paramName),
+    );
+    const arg = argIndex === -1 ? undefined : args[argIndex];
+    if (arg === undefined) continue;
+    const argType =
+      arg.type.kind === "ReferenceType" ? arg.type.referent : arg.type;
+    for (const traitName of traitNames) {
+      const witness = resolveTraitBound(ctx, argType, traitName);
+      if (isSome(witness)) witnesses.push(witness.value);
+    }
+  }
+  if (witnesses.length > 0) {
+    ctx.methodCallWitnessTable.set(methodTokenId, witnesses);
+  }
+}
+
 function analyzeMethodCallExpression(
   ctx: AnalysisContext,
   expression: Parser.MethodCallExpression,
@@ -7871,6 +7958,10 @@ function analyzeMethodCallExpression(
     method,
     expression.method.text,
   );
+  // A no-op for anything but a nominal receiver's own bounded generic
+  // params - `method.genericParamBounds` is only ever populated for those
+  // (see `IndexedMethod`'s own doc comment).
+  recordMethodCallWitnesses(ctx, expression.method.tokenId, method, args);
   // `-> Self` on a `dyn` receiver yields another value of that same trait
   // object - re-wrapped with the receiver's witness in codegen.
   const resultType =
@@ -10174,6 +10265,7 @@ export function analyze(
     extraWitnessRefs: [],
     unsizeCoercionTable: new Map(),
     dropImplTable: new Map(),
+    methodCallWitnessTable: new Map(),
     selfContextStack: [],
   };
   // Before functions, so a signature can name any declared type.
@@ -10238,5 +10330,6 @@ export function analyze(
     extraWitnesses: ctx.extraWitnessRefs,
     unsizeCoercions: ctx.unsizeCoercionTable,
     dropImpls: ctx.dropImplTable,
+    methodCallWitnesses: ctx.methodCallWitnessTable,
   };
 }

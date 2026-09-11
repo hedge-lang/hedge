@@ -464,6 +464,27 @@ describe("method-call codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["7"]);
   });
 
+  it("threads a witness for a method's own bounded generic parameter, and runs", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { n: i32 }
+      impl Draw for P { fn draw(&self) -> i32 { self.n } }
+      struct Holder {}
+      impl Holder {
+        fn show<U: Draw>(&self, u: U) -> i32 { u.draw() }
+      }
+      fn main() {
+        let h = Holder {};
+        print(h.show(P { n: 3 }));
+      }
+    `);
+    expect(js).toContain("function Holder$show(self, u, _witness_U_Draw)");
+    expect(js).toContain("return _witness_U_Draw.draw(u);");
+    expect(js).toContain("Holder$show(h, ({n: 3");
+    expect(js).toContain("__witness_Draw_P)");
+    expect(runEmittedJs(js)).toEqual(["3"]);
+  });
+
   it("passes a method's own arguments after the receiver", (): void => {
     const js = emittedJs(`
       struct Point { x: i32 }

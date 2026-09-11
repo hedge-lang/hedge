@@ -126,6 +126,10 @@ interface JsimContext {
   /** `AnalysisResult.dropImpls` - struct/enum type ids with a `Drop` impl,
    * mapped to the `drop` free-function target. */
   readonly dropImpls: ReadonlyMap<string, FreeMethodTarget>;
+  /** `AnalysisResult.methodCallWitnesses` - witnesses resolved for a
+   * concrete-receiver method call's own bounded generic parameters, keyed
+   * by the method-name token (same convention as `methodTargets`). */
+  readonly methodCallWitnesses: ReadonlyMap<number, readonly WitnessRef[]>;
   /** Each emitted method free function's `methodKey` mapped to the name
    * actually emitted - identical to the readable `methodFreeFnName` unless it
    * collided with a user top-level binding. Both the emission and call sites
@@ -173,6 +177,7 @@ function createJsimContext(
     extraWitnesses: info.extraWitnesses ?? [],
     unsizeCoercions: info.unsizeCoercions ?? new Map(),
     dropImpls: info.dropImpls ?? new Map(),
+    methodCallWitnesses: info.methodCallWitnesses ?? new Map(),
     methodFreeFnNames: new Map(),
     hoistedWitnesses: new Map(),
     primitiveEqWitness: { name: undefined },
@@ -874,6 +879,7 @@ export interface JsimInfo {
   readonly extraWitnesses?: readonly WitnessRef[];
   readonly unsizeCoercions?: ReadonlyMap<number, UnsizeCoercion>;
   readonly dropImpls?: ReadonlyMap<string, FreeMethodTarget>;
+  readonly methodCallWitnesses?: ReadonlyMap<number, readonly WitnessRef[]>;
 }
 
 export function toJsim(
@@ -1176,6 +1182,20 @@ function defaultBodyWitnessArg(
   return [{ kind: "Identifier", value: witness.name, type: none() }];
 }
 
+/** The trailing witness arguments a concrete-receiver call to a method with
+ * its own bounded generic parameters passes - one per
+ * `AnalysisResult.methodCallWitnesses` entry, in resolved-bound order
+ * (matching the order `recordWitnessParams` appended the callee's own hidden
+ * witness parameters in). */
+function methodCallWitnessArgs(
+  ctx: JsimContext,
+  methodTokenId: number,
+): readonly JSIM.Expression[] {
+  return (ctx.methodCallWitnesses.get(methodTokenId) ?? []).map((ref) =>
+    witnessArgExpression(ctx, ref),
+  );
+}
+
 /** Reserves the hoisted `const` name a single resolved bound needs, if any -
  * `Impl` its own `(type, trait)` const, `Primitive` the shared
  * `__witnessPrimitiveEq`, `Forwarded` nothing (it resolves through the
@@ -1219,6 +1239,9 @@ function reserveHoistedWitnessConsts(ctx: JsimContext): void {
   }
   for (const coercion of ctx.unsizeCoercions.values()) {
     reserveWitnessRef(ctx, coercion.witness);
+  }
+  for (const refs of ctx.methodCallWitnesses.values()) {
+    for (const ref of refs) reserveWitnessRef(ctx, ref);
   }
 }
 
@@ -2060,6 +2083,7 @@ function jsimMethodCallExpression(
         selfArgument(ctx, methodCallExpression),
         ...loweredArgs,
         ...defaultBodyWitnessArg(ctx, target),
+        ...methodCallWitnessArgs(ctx, methodCallExpression.method.tokenId),
       ],
     };
   }
