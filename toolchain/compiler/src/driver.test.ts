@@ -518,6 +518,22 @@ describe("method-call codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["7", "0"]);
   });
 
+  it("alpha-renames a local that collides with a generated method free-function's name, and still dispatches to the method", (): void => {
+    const js = emittedJs(`
+      struct Point { x: i32 }
+      impl Point { fn get(&self) -> i32 { self.x } }
+      fn main() {
+        let Point$get = 0;
+        let p = Point { x: 7 };
+        print(Point$get);
+        print(p.get());
+      }
+    `);
+    expect(js).toContain("function Point$get(self)");
+    expect(js).not.toContain("const Point$get = 0;");
+    expect(runEmittedJs(js)).toEqual(["0", "7"]);
+  });
+
   it("keeps an inherent method and a trait method on the same type as distinct free functions", (): void => {
     const js = emittedJs(`
       trait Draw { fn describe(&self) -> i32; }
@@ -893,6 +909,24 @@ describe("generic witness codegen", (): void => {
     expect(js).toContain("_witness_T_Draw.draw(t)");
     expect(js).not.toContain("_witness_T_Draw$1.draw(t)");
     expect(runEmittedJs(js)).toEqual(["14"]);
+  });
+
+  it("alpha-renames a local declared before a generic call that collides with the hoisted witness const's name", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { n: i32 }
+      impl Draw for P { fn draw(&self) -> i32 { self.n } }
+      fn render<T: Draw>(t: T) -> i32 { t.draw() }
+      fn main() {
+        let __witness_Draw_P = 99;
+        print(__witness_Draw_P);
+        print(render(P { n: 3 }));
+      }
+    `);
+    expect(js).toContain("const __witness_Draw_P = {draw: P$Draw$draw};");
+    expect(js).toContain("const __witness_Draw_P$1 = 99;");
+    expect(js).toContain("render(({n: 3");
+    expect(runEmittedJs(js)).toEqual(["99", "3"]);
   });
 
   it("dispatches a trait method on a bound type parameter through its witness", (): void => {

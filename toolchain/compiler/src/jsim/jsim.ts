@@ -725,11 +725,25 @@ const JS_UNUSABLE_NAMES: ReadonlySet<string> = new Set([
   "Uint32Array",
 ]);
 
-function probeFreeName(renameCtx: RenameCtx, base: string): string {
+/**
+ * `topLevelNames` is in the collision probe (not just `renameCtx`'s own
+ * frames/`emittedNames`) so a local can't silently shadow a generated
+ * top-level reference - a method's free-function name (`Point$get`), a
+ * hoisted witness const, a static's backing variable. Those are looked up
+ * by their exact spelling at the call site with no rename indirection of
+ * their own, unlike a real Hedge-level name, which always goes through
+ * `lookupLocalName`/`reserveWitnessParamName`'s own resolution.
+ */
+function probeFreeName(
+  renameCtx: RenameCtx,
+  topLevelNames: ReadonlySet<string>,
+  base: string,
+): string {
   const visible = renameCtx.frames.some((f) => f.has(base));
   if (
     !visible &&
     !renameCtx.emittedNames.has(base) &&
+    !topLevelNames.has(base) &&
     !JS_UNUSABLE_NAMES.has(base)
   ) {
     return base;
@@ -738,7 +752,8 @@ function probeFreeName(renameCtx: RenameCtx, base: string): string {
   let candidate = `${base}$${k}`;
   while (
     renameCtx.frames.some((f) => f.has(candidate)) ||
-    renameCtx.emittedNames.has(candidate)
+    renameCtx.emittedNames.has(candidate) ||
+    topLevelNames.has(candidate)
   ) {
     k += 1;
     candidate = `${base}$${k}`;
@@ -754,7 +769,7 @@ function bindLocalName(ctx: JsimContext, sourceName: string): string {
   }
   const frame = renameCtx.value.frames.at(-1);
   assert(frame !== undefined, "Expected a rename frame to be present");
-  const emitted = probeFreeName(renameCtx.value, sourceName);
+  const emitted = probeFreeName(renameCtx.value, ctx.topLevelNames, sourceName);
   frame.set(sourceName, emitted);
   renameCtx.value.emittedNames.add(emitted);
   return emitted;
@@ -771,7 +786,7 @@ function reserveLocalName(ctx: JsimContext, base: string): string {
   if (!isSome(renameCtx)) {
     return base;
   }
-  const emitted = probeFreeName(renameCtx.value, base);
+  const emitted = probeFreeName(renameCtx.value, ctx.topLevelNames, base);
   renameCtx.value.emittedNames.add(emitted);
   return emitted;
 }
@@ -881,7 +896,7 @@ export function toJsim(
   const ctx = createJsimContext(tokens, ownership, topLevelNames, info);
   const methodOwners = collectMethodOwners(program);
   reserveMethodFreeFnNames(ctx, methodOwners);
-  reserveExtraWitnessConsts(ctx);
+  reserveHoistedWitnessConsts(ctx);
   const bodyItems = [
     ...methodOwners.flatMap((owner) => parseMethodBodies(ctx, owner)),
     ...program.items.flatMap((i) => parseItem(ctx, i)),
@@ -1161,12 +1176,13 @@ function defaultBodyWitnessArg(
   return [{ kind: "Identifier", value: witness.name, type: none() }];
 }
 
-/** Pre-reserves the hoisted `const` name for every `extraWitnesses` object -
- * a concrete trait-default-method call needs the name during body lowering,
- * before `hoistedWitnessDecls` runs. */
-function reserveExtraWitnessConsts(ctx: JsimContext): void {
-  for (const ref of ctx.extraWitnesses) {
-    if (ref.kind === "Impl") {
+/** Reserves the hoisted `const` name a single resolved bound needs, if any -
+ * `Impl` its own `(type, trait)` const, `Primitive` the shared
+ * `__witnessPrimitiveEq`, `Forwarded` nothing (it resolves through the
+ * caller's own witness parameter, not a top-level const). */
+function reserveWitnessRef(ctx: JsimContext, ref: WitnessRef): void {
+  switch (ref.kind) {
+    case "Impl":
       witnessConstName(
         ctx,
         ref.typeId,
@@ -1174,7 +1190,35 @@ function reserveExtraWitnessConsts(ctx: JsimContext): void {
         ref.traitName,
         ref.methods,
       );
-    }
+      return;
+    case "Primitive":
+      primitiveEqWitnessName(ctx);
+      return;
+    case "Forwarded":
+      return;
+    default:
+      assertNever(ref, `witness ref: ${JSON.stringify(ref)}`);
+  }
+}
+
+/**
+ * Pre-reserves every hoisted witness const's name before any function body
+ * lowers - a witness reference (`witnessRefName`) bakes the raw name
+ * directly into an `Identifier`, with no shadow protection of its own at the
+ * use site, so the name has to already be in `ctx.topLevelNames` by the time
+ * the *first* function's own locals are bound, not just by the time the
+ * witness is actually referenced - otherwise an earlier-lowered function's
+ * local can claim the bare name first (`probeFreeName` only checks names
+ * already known), and the const that gets hoisted later collides with it
+ * wherever that local is still in scope.
+ */
+function reserveHoistedWitnessConsts(ctx: JsimContext): void {
+  for (const ref of ctx.extraWitnesses) reserveWitnessRef(ctx, ref);
+  for (const refs of ctx.witnesses.values()) {
+    for (const ref of refs) reserveWitnessRef(ctx, ref);
+  }
+  for (const coercion of ctx.unsizeCoercions.values()) {
+    reserveWitnessRef(ctx, coercion.witness);
   }
 }
 
