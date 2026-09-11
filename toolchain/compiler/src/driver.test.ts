@@ -673,6 +673,42 @@ describe("method-call codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["3"]);
   });
 
+  it("emits a method body for an impl declared inside an `if` block", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      fn main() {
+        if true {
+          struct Local { n: i32 }
+          impl Draw for Local { fn draw(&self) -> i32 { self.n } }
+          let x = Local { n: 42 };
+          print(x.draw());
+        }
+      }
+    `);
+    expect(js).toContain("function Local$Draw$draw(self)");
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
+  it("emits a method body for an impl declared inside a `match` arm", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      fn pick(n: i32) -> i32 {
+        match n {
+          0 => {
+            struct L { v: i32 }
+            impl Draw for L { fn draw(&self) -> i32 { self.v } }
+            let l = L { v: 7 };
+            l.draw()
+          }
+          _ => 1,
+        }
+      }
+      fn main() { print(pick(0)); }
+    `);
+    expect(js).toContain("function L$Draw$draw(self)");
+    expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
   it("keeps a block-local struct's method distinct from a shadowed top-level struct's", (): void => {
     const result = compile(`
       struct Point { x: i32 }

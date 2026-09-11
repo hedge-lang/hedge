@@ -1252,7 +1252,7 @@ function parseItem(
   }
   if (item.kind === "Static") return parseStaticDecl(ctx, item);
   // Impl methods emit as top-level free functions from `toJsim` (via
-  // `collectAllImpls`), so a block-local impl's methods are reachable too;
+  // `collectMethodOwners`), so a block-local impl's methods are reachable too;
   // the item itself erases at its own position.
   if (
     item.kind === "Trait" ||
