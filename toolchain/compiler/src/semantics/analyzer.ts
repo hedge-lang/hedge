@@ -6628,18 +6628,6 @@ function checkExpression(
 }
 
 /**
- * If `expr` fills a position that expects `dyn Trait` (or `&dyn`/`&mut dyn`)
- * with a value whose concrete type - or bounded type parameter - implements
- * that trait, records the unsize coercion (`AnalysisResult.unsizeCoercions`)
- * and returns `expr` retyped as the `dyn` target. Ref-ness must agree on both
- * sides. `undefined` when no such coercion applies.
- *
- * `record` is `false` for a caller that discards the returned `.expr` and
- * whose position never reaches codegen (an `impl` associated const): the
- * coercion still suppresses the type-mismatch diagnostic, but recording it
- * would emit a `__witness_<Trait>_<Type>` const that nothing boxes against.
- */
-/**
  * Whether `exprType`'s ref-ness can fill a position expecting `expectedType`
  * for a unsize coercion: both bare, both shared refs, both mutable refs, or
  * a mutable ref satisfying a shared one (a downgrade). A shared ref can't
@@ -6665,6 +6653,18 @@ function refnessSatisfiesDynTarget(
   );
 }
 
+/**
+ * If `expr` fills a position that expects `dyn Trait` (or `&dyn`/`&mut dyn`)
+ * with a value whose concrete type - or bounded type parameter - implements
+ * that trait, records the unsize coercion (`AnalysisResult.unsizeCoercions`)
+ * and returns `expr` retyped as the `dyn` target. Ref-ness must agree on both
+ * sides. `undefined` when no such coercion applies.
+ *
+ * `record` is `false` for a caller that discards the returned `.expr` and
+ * whose position never reaches codegen (an `impl` associated const): the
+ * coercion still suppresses the type-mismatch diagnostic, but recording it
+ * would emit a `__witness_<Trait>_<Type>` const that nothing boxes against.
+ */
 function tryUnsizeCoercion(
   ctx: AnalysisContext,
   expr: Semantics.Expression,

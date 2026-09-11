@@ -1429,6 +1429,23 @@ describe("dyn Trait runtime", (): void => {
     expect(runEmittedJs(js)).toEqual(["6"]);
   });
 
+  it("disposes a `-> Self` method result bound to its own `let`, without throwing", (): void => {
+    const js = emittedJs(`
+      trait Grow { fn grown(&self) -> Self; fn size(&self) -> i32; }
+      struct Box2 { w: i32 }
+      impl Grow for Box2 {
+        fn grown(&self) -> Self { Box2 { w: self.w + 1 } }
+        fn size(&self) -> i32 { self.w }
+      }
+      fn main() {
+        let d: dyn Grow = Box2 { w: 5 };
+        let e = d.grown();
+        print(e.size());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["6"]);
+  });
+
   it("coerces a `dyn` return value and dispatches on the result", (): void => {
     const js = emittedJs(`
       ${draw}

@@ -2001,10 +2001,12 @@ function jsimDynDispatch(
           place: inner,
           witness: jsimField(box, "witness"),
           mutableCell: false,
-          // `-> Self` may be `-> &Self` (the `&` erases), so the re-wrapped
-          // value isn't necessarily owned; leave disposal to the concrete
-          // value's own binding rather than risk a double drop.
-          owned: false,
+          // The call's own result type is already the receiver's byval
+          // `DynType` regardless of whether the method returns `Self`,
+          // `&Self`, or `&mut Self` (`analyzeMethodCallExpression` doesn't
+          // distinguish them either) - `owned` has to agree with that type,
+          // or a bound result crashes with no `[Symbol.dispose]` to call.
+          owned: true,
         }
       : inner;
   };
