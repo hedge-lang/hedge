@@ -492,17 +492,35 @@ function emitStructExpression(expression: StructExpression): string {
 /**
  * A dynamic array-index place's emitted text is a bounds-check call
  * expression, not an assignable target, so reusing it as `${place} = nv`
- * crashes. Capturing `arr`/`i` once in a wrapping IIFE fixes that and pins
- * the reference to the index's value at borrow time, instead of
- * re-evaluating `i` on every access.
+ * crashes - and, unlike a bare identifier or field access, re-emitting it
+ * verbatim would re-evaluate the index expression on every access instead of
+ * pinning the reference to the index's value at borrow time. `bodyFor`
+ * builds the accessor-cell object literal (as a bare `{ ... }`, since it
+ * sits in `return` position) from the names the wrapping IIFE captures
+ * `object`/`index` under; `undefined` when `place` isn't an array index, so
+ * the caller falls back to its own non-indexed accessor-cell text.
  */
+function capturedArrayIndexPlace(
+  place: Expression,
+  bodyFor: (arrName: string, indexName: string) => string,
+): string | undefined {
+  if (place.kind !== "IndexExpression" || !place.isArrayIndex) {
+    return undefined;
+  }
+  const object = emitExpression(place.object);
+  const index = emitExpression(place.index);
+  const body = bodyFor("_arr", "_i");
+  return `((_arr, _i) => { if (${ARRAY_INDEX_OUT_OF_RANGE_CONDITION}) { ${ARRAY_INDEX_OUT_OF_RANGE_THROW}; } return ${body}; })(${object}, ${index})`;
+}
+
 function emitRefCellExpression(expression: RefCellExpression): string {
   const place = expression.place;
-  if (place.kind === "IndexExpression" && place.isArrayIndex) {
-    const object = emitExpression(place.object);
-    const index = emitExpression(place.index);
-    return `((_arr, _i) => { if (${ARRAY_INDEX_OUT_OF_RANGE_CONDITION}) { ${ARRAY_INDEX_OUT_OF_RANGE_THROW}; } return { get v() { return _arr[_i]; }, set v(nv) { _arr[_i] = nv; } }; })(${object}, ${index})`;
-  }
+  const captured = capturedArrayIndexPlace(
+    place,
+    (arr, idx) =>
+      `{ get v() { return ${arr}[${idx}]; }, set v(nv) { ${arr}[${idx}] = nv; } }`,
+  );
+  if (captured !== undefined) return captured;
   const placeText = emitExpression(place);
   return `({ get v() { return ${placeText}; }, set v(nv) { ${placeText} = nv; } })`;
 }
@@ -518,6 +536,12 @@ function emitDynBoxExpression(expression: DynBoxExpression): string {
   if (!expression.mutableCell) {
     return `({ value: ${emitExpression(expression.place)}, witness: ${witness}${disposer} })`;
   }
+  const captured = capturedArrayIndexPlace(
+    expression.place,
+    (arr, idx) =>
+      `{ get value() { return ${arr}[${idx}]; }, set value(nv) { ${arr}[${idx}] = nv; }, witness: ${witness}${disposer} }`,
+  );
+  if (captured !== undefined) return captured;
   const place = emitExpression(expression.place);
   return `({ get value() { return ${place}; }, set value(nv) { ${place} = nv; }, witness: ${witness}${disposer} })`;
 }

@@ -1599,6 +1599,29 @@ describe("dyn Trait runtime", (): void => {
     expect(runEmittedJs(js)).toEqual(["6"]);
   });
 
+  it("propagates a whole-value `&mut self` reassignment through `&mut dyn` when the borrowed place is an array element", (): void => {
+    // A field write alone (`self.n = ...`) never exercises the box's own
+    // `value` setter - only a whole-value `*self = ...` reassignment calls
+    // it, which is the shape that actually reaches the array-index place's
+    // emitted (invalid, pre-fix) assignment target.
+    const js = emittedJs(`
+      trait Draw { fn bump(&mut self); fn value(&self) -> i32; }
+      struct P { n: i32 }
+      impl Draw for P {
+        fn bump(&mut self) { *self = P { n: self.n + 1 }; }
+        fn value(&self) -> i32 { self.n }
+      }
+      fn bump_dyn(d: &mut dyn Draw) { d.bump(); }
+      fn main() {
+        let mut xs = [P { n: 1 }, P { n: 2 }];
+        bump_dyn(&mut xs[0]);
+        print(xs[0].value());
+        print(xs[1].value());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["2", "2"]);
+  });
+
   it("emits a `.d.ts` with an `unknown` param for a pub fn taking `dyn Trait`, without throwing", (): void => {
     const result = compile(`
       trait Draw { fn draw(&self) -> i32; }
