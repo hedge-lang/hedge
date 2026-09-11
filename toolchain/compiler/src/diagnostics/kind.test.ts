@@ -167,6 +167,7 @@ const SAMPLE_KINDS: readonly DiagnosticKind[] = [
   { kind: "SemMissingReturnValue", expected: "i32" },
   { kind: "SemReturnTypeMismatch", expected: "i32", found: "str" },
   { kind: "SemLetAnnotationMismatch" },
+  { kind: "SemAssignmentTypeMismatch", expected: "i32", found: "str" },
   { kind: "SemArrayIndexMustBeUsize", found: "i32" },
   {
     kind: "SemStructFieldTypeMismatch",

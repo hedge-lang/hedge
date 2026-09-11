@@ -5829,6 +5829,29 @@ describe("dyn Trait unsize coercion", (): void => {
     );
   });
 
+  it("rejects assigning a value of the wrong type to an existing binding", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let mut x: i32 = 1;
+        x = "wrong";
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "type mismatch: expected `i32`, found `str`",
+    );
+  });
+
+  it("reports only the unresolved-name diagnostic for an assignment to an undeclared binding, without cascading a type mismatch", (): void => {
+    const result = diagnose(`
+      fn main() {
+        nonexistent = 5;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
   it("still allows rebinding a `dyn Trait` variable directly", (): void => {
     const result = diagnose(`
       ${draw}

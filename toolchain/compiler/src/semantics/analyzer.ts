@@ -8786,10 +8786,59 @@ function analyzeAssignmentExpression(
       assignExpression.tokenId,
     );
   }
+  // Checked against `lhsType`, mirroring `analyzeLetStatement`'s own
+  // initializer-against-annotation shape - a plain type mismatch (`x = "s"`
+  // for `x: i32`) was previously accepted with zero diagnostics, and,
+  // narrower but worse, a direct `dyn`-typed rebind (`d = Square { .. };`)
+  // recorded no unsize coercion, so codegen assigned the raw struct where a
+  // `{ value, witness }` box belonged and the next dispatch read missing
+  // fields.
+  //
+  // Two cases stay unchecked:
+  // - The LHS itself didn't resolve (`isAmbiguousUnitExpr`) - `lhsType` is
+  //   then the error-recovery placeholder, already-diagnosed, and checking
+  //   the RHS against it would cascade a bogus second mismatch.
+  // - A whole-value reassignment through a dereferenced array reference
+  //   (`*tail = other;`) - a rest-binding's `&mut [T; N]` is a slice view
+  //   over the original array (`ArraySliceViewExpression`), and reassigning
+  //   it a different-length array is the intended way to resize what it
+  //   views (matching a `&mut self` method's own `*self = ...` whole-value
+  //   pattern), not a genuine length mismatch to reject.
+  let rhs: Semantics.Expression;
+  if (
+    (lhsType.kind === "UnitType" && isAmbiguousUnitExpr(lhs)) ||
+    (lhs.kind === "DereferenceExpression" && lhsType.kind === "ArrayType")
+  ) {
+    rhs = analyzeExpression(ctx, assignExpression.rhs);
+  } else {
+    const analyzedRhs = checkExpression(ctx, assignExpression.rhs, {
+      kind: "HasType",
+      type: lhsType,
+    });
+    const reconciled = reconcileExpressionType(
+      ctx,
+      analyzedRhs,
+      lhsType,
+      assignExpression.tokenId,
+    );
+    rhs = reconciled.expr;
+    if (reconciled.mismatch) {
+      emitError(
+        ctx,
+        {
+          kind: "SemAssignmentTypeMismatch",
+          expected: describeType(lhsType),
+          found: describeType(getType(rhs)),
+        },
+        assignExpression.tokenId,
+      );
+    }
+    if (rhs.kind === "IntLiteral") checkPosLiteralRange(ctx, rhs, lhsType);
+  }
   return {
     ...assignExpression,
     lhs,
-    rhs: analyzeExpression(ctx, assignExpression.rhs),
+    rhs,
     type: { kind: "UnitType", tokenId: assignExpression.tokenId },
   };
 }

@@ -347,6 +347,11 @@ export type DiagnosticKind =
       readonly found: string;
     }
   | { readonly kind: "SemLetAnnotationMismatch" }
+  | {
+      readonly kind: "SemAssignmentTypeMismatch";
+      readonly expected: string;
+      readonly found: string;
+    }
   | { readonly kind: "SemArrayIndexMustBeUsize"; readonly found: string }
   | {
       readonly kind: "SemStructFieldTypeMismatch";
@@ -747,6 +752,7 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemMissingReturnValue", "HEDGE-TYPE-001"],
   ["SemReturnTypeMismatch", "HEDGE-TYPE-001"],
   ["SemLetAnnotationMismatch", "HEDGE-TYPE-001"],
+  ["SemAssignmentTypeMismatch", "HEDGE-TYPE-001"],
   ["SemArrayIndexMustBeUsize", "HEDGE-TYPE-001"],
   ["SemStructFieldTypeMismatch", "HEDGE-TYPE-001"],
   ["SemArgumentTypeMismatch", "HEDGE-TYPE-001"],

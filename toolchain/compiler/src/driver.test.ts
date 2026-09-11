@@ -1653,6 +1653,22 @@ describe("dyn Trait runtime", (): void => {
     // when the borrowed box in show goes out of scope.
     expect(runEmittedJs(js)).toEqual(["3", "0", "99"]);
   });
+
+  it("coerces a direct rebind of a `dyn` variable to a new concrete type, and dispatches on it", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { n: i32 }
+      impl Draw for P { fn draw(&self) -> i32 { self.n } }
+      struct Square { s: i32 }
+      impl Draw for Square { fn draw(&self) -> i32 { self.s } }
+      fn main() {
+        let mut d: dyn Draw = P { n: 1 };
+        d = Square { s: 2 };
+        print(d.draw());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["2"]);
+  });
 });
 
 describe("Drop::drop dispose body", (): void => {

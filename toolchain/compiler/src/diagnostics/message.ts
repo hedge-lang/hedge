@@ -308,6 +308,8 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return `return type mismatch: expected \`${kind.expected}\`, found \`${kind.found}\``;
     case "SemLetAnnotationMismatch":
       return "type mismatch: explicit annotation does not match initializer type";
+    case "SemAssignmentTypeMismatch":
+      return `type mismatch: expected \`${kind.expected}\`, found \`${kind.found}\``;
     case "SemArrayIndexMustBeUsize":
       return `array index must be \`usize\`, found \`${kind.found}\``;
     case "SemStructFieldTypeMismatch":
