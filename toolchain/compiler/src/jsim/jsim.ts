@@ -1795,12 +1795,14 @@ function parseExpression(
 }
 
 /** Wraps a concrete value being unsize-coerced to `dyn Trait` as
- * `{ value, witness }` (see `AnalysisResult.unsizeCoercions`). A
- * `&mut T -> &mut dyn` coercion (`ReferenceExpression`, `mutable`) makes
- * `value` a getter/setter cell over the borrowed place so a whole-value write
- * through the trait object propagates. `expression.type` is the `dyn` target
- * by now, so `sourceType` is restored on the wrapped node for struct/enum
- * lowering (drop glue, the tagged-object shape). */
+ * `{ value, witness }` (see `AnalysisResult.unsizeCoercions`). Borrowedness
+ * comes from `expression.type` (already rewritten to the `dyn` target - a
+ * `ReferenceType` iff the source was too, per `refnessSatisfiesDynTarget`),
+ * not `expression.kind`: a `&mut T` param/local passed straight through is a
+ * borrow too, even though it's a bare `PathExpression`, not a fresh
+ * `&mut x`. See `dynBoxPlace` for how each case's place is built.
+ * `sourceType` is restored on an owned (by-value) wrapped node for
+ * struct/enum lowering (drop glue, the tagged-object shape). */
 function jsimUnsizeBox(
   ctx: JsimContext,
   expression: Semantics.Expression,
@@ -1811,14 +1813,9 @@ function jsimUnsizeBox(
     value: witnessRefName(ctx, coercion.witness),
     type: none(),
   };
-  const isBorrow = expression.kind === "ReferenceExpression";
-  const mutableCell = isBorrow && expression.mutable;
-  const place = isBorrow
-    ? parseExpression(ctx, expression.operand)
-    : parseExpressionDispatch(ctx, {
-        ...expression,
-        type: coercion.sourceType,
-      });
+  const isBorrow = expression.type.kind === "ReferenceType";
+  const mutableCell = isBorrow && expression.type.mutable;
+  const place = dynBoxPlace(ctx, expression, isBorrow, coercion.sourceType);
   return {
     kind: "DynBoxExpression",
     place,
@@ -1826,6 +1823,33 @@ function jsimUnsizeBox(
     mutableCell,
     owned: !isBorrow,
   };
+}
+
+/** The `dyn` box's own place: a syntactic `&x`/`&mut x` unwraps to its
+ * operand directly; an already reference-typed expression lowers normally
+ * and hops through its own `.v` cell if mutable (a shared reference stays
+ * transparent, matching how any other read through one already does); a
+ * by-value source lowers with `sourceType` restored. */
+function dynBoxPlace(
+  ctx: JsimContext,
+  expression: Semantics.Expression,
+  isBorrow: boolean,
+  sourceType: Semantics.Type,
+): JSIM.Expression {
+  if (!isBorrow) {
+    return parseExpressionDispatch(ctx, { ...expression, type: sourceType });
+  }
+  if (expression.kind === "ReferenceExpression") {
+    return parseExpression(ctx, expression.operand);
+  }
+  // `parseExpressionDispatch`, not `parseExpression` - `expression` is still
+  // registered in `ctx.unsizeCoercions` under its own tokenId, so routing it
+  // back through `parseExpression`'s coercion intercept would re-enter
+  // `jsimUnsizeBox` on the same node and recurse forever.
+  return throughMutableReferenceCell(
+    parseExpressionDispatch(ctx, expression),
+    expression,
+  );
 }
 
 // eslint-disable-next-line complexity -- This is a routing function

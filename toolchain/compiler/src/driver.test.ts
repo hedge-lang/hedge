@@ -1509,6 +1509,25 @@ describe("dyn Trait runtime", (): void => {
     expect(runEmittedJs(js)).toEqual(["11"]);
   });
 
+  it("propagates an `&mut self` write through `&mut dyn` when an existing `&mut T` binding is passed directly, not a fresh `&mut x`", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn bump(&mut self); fn value(&self) -> i32; }
+      struct P { n: i32 }
+      impl Draw for P {
+        fn bump(&mut self) { self.n = self.n + 1; }
+        fn value(&self) -> i32 { self.n }
+      }
+      fn bump_dyn(d: &mut dyn Draw) { d.bump(); }
+      fn helper(r: &mut P) { bump_dyn(r); }
+      fn main() {
+        let mut p = P { n: 5 };
+        helper(&mut p);
+        print(p.value());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["6"]);
+  });
+
   it("emits a `.d.ts` with an `unknown` param for a pub fn taking `dyn Trait`, without throwing", (): void => {
     const result = compile(`
       trait Draw { fn draw(&self) -> i32; }
