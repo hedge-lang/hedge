@@ -104,3 +104,18 @@ export function hasCapability(
 ): boolean {
   return TYPE_CAPABILITIES.get(type.kind)?.has(cap) ?? false;
 }
+
+/**
+ * Whether a primitive type satisfies the prelude `Eq` (total equality): every
+ * type comparable with `==` except the raw floats, whose NaN breaks
+ * reflexivity - `specification/0010-primitive-types.md` "Floating point"
+ * makes `f32`/`f64` `PartialEq`/`PartialOrd` only. `PartialEq` itself is just
+ * `hasCapability(type, "equality")`.
+ */
+export function primitiveImplementsEq(type: Semantics.Type): boolean {
+  return (
+    hasCapability(type, "equality") &&
+    type.kind !== "PrimitiveF32Type" &&
+    type.kind !== "PrimitiveF64Type"
+  );
+}

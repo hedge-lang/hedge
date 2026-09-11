@@ -280,6 +280,8 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return `trait \`${kind.trait}\` cannot be made into a \`dyn\` object: ${kind.offender} takes \`Self\` as a non-receiver argument`;
     case "SemQualifiedTypePathsUnsupported":
       return "qualified type paths are not supported yet";
+    case "SemDropImplForEnumUnsupported":
+      return "`Drop` for an enum is not yet supported";
     case "SemGenericTypeParamNoArguments":
       return `generic type parameter \`${kind.name}\` does not accept type arguments`;
     case "SemPatternKindNotYetSupported":
@@ -306,6 +308,8 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return `return type mismatch: expected \`${kind.expected}\`, found \`${kind.found}\``;
     case "SemLetAnnotationMismatch":
       return "type mismatch: explicit annotation does not match initializer type";
+    case "SemAssignmentTypeMismatch":
+      return `type mismatch: expected \`${kind.expected}\`, found \`${kind.found}\``;
     case "SemArrayIndexMustBeUsize":
       return `array index must be \`usize\`, found \`${kind.found}\``;
     case "SemStructFieldTypeMismatch":
@@ -353,6 +357,10 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return "match arms have incompatible types";
     case "SemIfBranchesIncompatible":
       return "if expression branches have incompatible types";
+    case "SemCheckedBranchTypeMismatch":
+      return `expected \`${kind.expected}\`, found \`${kind.found}\``;
+    case "SemCheckedArrayElementTypeMismatch":
+      return `array element type mismatch: expected \`${kind.expected}\`, found \`${kind.found}\``;
     case "SemLiteralOutOfRange":
       return `out of range for ${kind.typeName}`;
     case "SemUnexpectedIntLiteralRangeCheck":
@@ -437,6 +445,8 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return "cannot assign to immutable binding";
     case "SemCannotAssignThroughSharedReference":
       return "cannot assign through a shared reference";
+    case "SemAssignThroughDynPlace":
+      return `cannot assign through a \`dyn ${kind.trait}\` place; its concrete type is erased - mutate through the trait's methods, or rebind the \`dyn\` value directly`;
     case "OwnBorrowMutThroughShared":
       return `cannot borrow \`${kind.place}\` as mutable because \`${kind.through}\` is a shared reference.`;
     case "OwnBorrowMutNotDeclaredMut":

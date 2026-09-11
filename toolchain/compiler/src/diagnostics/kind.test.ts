@@ -153,6 +153,7 @@ const SAMPLE_KINDS: readonly DiagnosticKind[] = [
   { kind: "SemAssocTypeAmbiguous", assocName: "A", traitList: "`T1`, `T2`" },
   { kind: "SemTraitNotObjectSafe", trait: "T", offender: "method `m`" },
   { kind: "SemQualifiedTypePathsUnsupported" },
+  { kind: "SemDropImplForEnumUnsupported" },
   { kind: "SemGenericTypeParamNoArguments", name: "T" },
   { kind: "SemPatternKindNotYetSupported" },
   { kind: "SemWhileNotYetSupported" },
@@ -166,6 +167,7 @@ const SAMPLE_KINDS: readonly DiagnosticKind[] = [
   { kind: "SemMissingReturnValue", expected: "i32" },
   { kind: "SemReturnTypeMismatch", expected: "i32", found: "str" },
   { kind: "SemLetAnnotationMismatch" },
+  { kind: "SemAssignmentTypeMismatch", expected: "i32", found: "str" },
   { kind: "SemArrayIndexMustBeUsize", found: "i32" },
   {
     kind: "SemStructFieldTypeMismatch",
@@ -218,6 +220,12 @@ const SAMPLE_KINDS: readonly DiagnosticKind[] = [
   { kind: "SemArrayElementsSameType", expected: "i32", found: "str" },
   { kind: "SemMatchArmsIncompatible" },
   { kind: "SemIfBranchesIncompatible" },
+  { kind: "SemCheckedBranchTypeMismatch", expected: "i64", found: "bool" },
+  {
+    kind: "SemCheckedArrayElementTypeMismatch",
+    expected: "i64",
+    found: "bool",
+  },
   { kind: "SemLiteralOutOfRange", typeName: "u8" },
   { kind: "SemUnexpectedIntLiteralRangeCheck", typeName: "u8" },
   { kind: "SemUnexpectedFloatLiteralRangeCheck", typeName: "f64" },
@@ -276,6 +284,7 @@ const SAMPLE_KINDS: readonly DiagnosticKind[] = [
   { kind: "SemNotABorrowablePlace" },
   { kind: "SemCannotAssignToImmutableBinding" },
   { kind: "SemCannotAssignThroughSharedReference" },
+  { kind: "SemAssignThroughDynPlace", trait: "Draw" },
   { kind: "OwnBorrowMutThroughShared", place: "x", through: "r" },
   { kind: "OwnBorrowMutNotDeclaredMut", baseName: "x" },
   {

@@ -398,14 +398,26 @@ describe("semantic analysis", (): void => {
       const result = diagnose(
         "fn main() { let c: bool = true; let x: i32 = if c { 1 } else { }; }",
       );
+      // The `i32` annotation is checked into each branch, so the empty `else`
+      // is reported against the expectation, not against the `then` branch.
       expect(messageOf(result.diagnostics[0])).toContain(
-        "if expression branches have incompatible types",
+        "expected `i32`, found `()`",
       );
     });
 
     it("rejects branches of differing value types", () => {
       const result = diagnose(
         'fn main() { let c: bool = true; let x: i32 = if c { 1 } else { "a" }; }',
+      );
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toContain(
+        "expected `i32`, found `str`",
+      );
+    });
+
+    it("still rejects branches that disagree with each other when there is no annotation", () => {
+      const result = diagnose(
+        'fn main() { let c: bool = true; let x = if c { 1 } else { "a" }; print(x); }',
       );
       expect(result.diagnostics).toHaveLength(1);
       expect(messageOf(result.diagnostics[0])).toContain(
@@ -2481,7 +2493,11 @@ describe("semantic analysis", (): void => {
       );
       expect(diagnostics).toHaveLength(1);
       assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(messageOf(diagnostics[0])).toContain("return type mismatch");
+      // The `bool` return type is checked into the branches, so the report
+      // points at the first branch that can't produce it.
+      expect(messageOf(diagnostics[0])).toContain(
+        "expected `bool`, found `i32`",
+      );
     });
 
     it("checks the return type of a block-local function", (): void => {
@@ -3685,6 +3701,170 @@ describe("array types", (): void => {
     expect(result.diagnostics).toHaveLength(1);
     assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
     expect(messageOf(result.diagnostics[0])).toContain("immutable");
+  });
+});
+
+describe("expected-type threading into a let initializer / trailing expression", (): void => {
+  it("coerces each element of an array literal to a declared non-default element type", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let xs: [i64; 3] = [1, 2, 3];
+        print(xs);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(mainLetType(result, "xs")).toEqual({
+      kind: "ArrayType",
+      elementType: { kind: "PrimitiveI64Type" },
+      length: 3,
+    });
+  });
+
+  it("coerces each branch of an `if` expression to the declared binding type", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let cond = true;
+        let x: i64 = if cond { 1 } else { 2 };
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(mainLetType(result, "x")).toEqual({ kind: "PrimitiveI64Type" });
+  });
+
+  it("coerces each arm of a `match` expression to the declared binding type", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let n = 0;
+        let x: i64 = match n { 0 => 1, _ => 2 };
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(mainLetType(result, "x")).toEqual({ kind: "PrimitiveI64Type" });
+  });
+
+  it("threads the expectation through a nested array literal", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let xs: [[i64; 2]; 2] = [[1, 2], [3, 4]];
+        print(xs);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(mainLetType(result, "xs")).toEqual({
+      kind: "ArrayType",
+      elementType: {
+        kind: "ArrayType",
+        elementType: { kind: "PrimitiveI64Type" },
+        length: 2,
+      },
+      length: 2,
+    });
+  });
+
+  it("threads the expectation through an `else if` chain", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let a = true;
+        let b = false;
+        let x: i64 = if a { 1 } else if b { 2 } else { 3 };
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(mainLetType(result, "x")).toEqual({ kind: "PrimitiveI64Type" });
+  });
+
+  it("threads the declared return type through a trailing `if` expression", (): void => {
+    const result = diagnose(`
+      fn pick(c: bool) -> i64 { if c { 1 } else { 2 } }
+      fn main() { print(pick(true)); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("threads the expectation through a bare block whose trailing is an `if`", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let c = true;
+        let x: i64 = { if c { 1 } else { 2 } };
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(mainLetType(result, "x")).toEqual({ kind: "PrimitiveI64Type" });
+  });
+
+  it("reports one mismatch on the offending `if` branch, without cascading", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let c = true;
+        let x: i64 = if c { 1 } else { true };
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("reports one mismatch on the offending array element, without cascading", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let xs: [i64; 2] = [1, true];
+        print(xs);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("names the declared element type and the offending element when an annotated array element does not fit", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let xs: [i64; 2] = [1, true];
+        print(xs);
+      }
+    `);
+    assert(result.diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "array element type mismatch: expected `i64`, found `bool`",
+    );
+  });
+
+  it("reports one mismatch on the offending `match` arm, without cascading", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let n = 0;
+        let x: i64 = match n { 0 => 1, _ => "s" };
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("still requires the branches of an unannotated `if` to agree with each other", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let c = true;
+        let x = if c { 1i32 } else { 2i64 };
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("rejects an `if` with no `else` against a non-unit binding type", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let a = true;
+        let b = false;
+        let x: i64 = if a { 1 } else if b { 2 };
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toContain(
+      "expected `i64`, found `()`",
+    );
   });
 });
 
@@ -5524,6 +5704,213 @@ describe("dyn Trait object safety", (): void => {
   });
 });
 
+describe("dyn Trait unsize coercion", (): void => {
+  const draw = `
+    trait Draw { fn draw(&self) -> i32; }
+    struct Point { x: i32 }
+    impl Draw for Point { fn draw(&self) -> i32 { self.x } }
+  `;
+
+  it("accepts a concrete value where `dyn Trait` is expected (by value)", (): void => {
+    const result = diagnose(`
+      ${draw}
+      fn render(d: dyn Draw) -> i32 { d.draw() }
+      fn main() { print(render(Point { x: 1 })); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts `&T` where `&dyn Trait` is expected", (): void => {
+    const result = diagnose(`
+      ${draw}
+      fn render(d: &dyn Draw) -> i32 { d.draw() }
+      fn main() { let p = Point { x: 2 }; print(render(&p)); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts `&mut T` where `&mut dyn Trait` is expected", (): void => {
+    const result = diagnose(`
+      ${draw}
+      fn render(d: &mut dyn Draw) -> i32 { d.draw() }
+      fn main() { let mut p = Point { x: 3 }; print(render(&mut p)); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a shared borrow where `&mut dyn Trait` is expected", (): void => {
+    const result = diagnose(`
+      ${draw}
+      fn render(d: &mut dyn Draw) -> i32 { d.draw() }
+      fn main() { let p = Point { x: 3 }; print(render(&p)); }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("coerces a concrete value in `dyn` return position", (): void => {
+    const result = diagnose(`
+      ${draw}
+      fn make() -> dyn Draw { Point { x: 4 } }
+      fn main() { print(make().draw()); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("coerces a concrete value in a `let: dyn Trait` binding", (): void => {
+    const result = diagnose(`
+      ${draw}
+      fn main() {
+        let d: dyn Draw = Point { x: 5 };
+        print(d.draw());
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("coerces each element of a `[dyn Trait; N]` literal independently", (): void => {
+    const result = diagnose(`
+      ${draw}
+      struct Square { s: i32 }
+      impl Draw for Square { fn draw(&self) -> i32 { self.s } }
+      fn main() {
+        let xs: [dyn Draw; 2] = [Point { x: 1 }, Square { s: 2 }];
+        print(xs[0].draw());
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    const xsType = mainLetType(result, "xs");
+    assert(xsType.kind === "ArrayType", "expected an array type");
+    expect(xsType.elementType.kind).toBe("DynType");
+  });
+
+  it("still rejects a concrete value whose type does not implement the trait", (): void => {
+    const result = diagnose(`
+      ${draw}
+      struct Other { y: i32 }
+      fn render(d: dyn Draw) -> i32 { d.draw() }
+      fn main() { print(render(Other { y: 1 })); }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("rejects a `dyn` coercion satisfied only by a blanket impl, whose method bodies are not emitted", (): void => {
+    const result = diagnose(`
+      trait Draw { fn draw(&self) -> i32; }
+      trait Marker {}
+      impl<T: Marker> Draw for T { fn draw(&self) -> i32 { 0 } }
+      struct Point { x: i32 }
+      impl Marker for Point {}
+      fn render(d: dyn Draw) -> i32 { d.draw() }
+      fn main() { print(render(Point { x: 1 })); }
+    `);
+    expect(
+      result.diagnostics.filter((d) => d.severity === "error"),
+    ).toHaveLength(1);
+  });
+
+  it("coerces a bounded generic parameter to `dyn Trait`, forwarding the caller's witness", (): void => {
+    const result = diagnose(`
+      ${draw}
+      fn erase<T: Draw>(x: T) -> dyn Draw { x }
+      fn main() { print(erase(Point { x: 1 }).draw()); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects assigning through a dereferenced `dyn Trait` place", (): void => {
+    const result = diagnose(`
+      ${draw}
+      fn swap_in(r: &mut dyn Draw, v: dyn Draw) { *r = v; }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toContain(
+      "cannot assign through a `dyn Draw` place",
+    );
+  });
+
+  it("reports only the dyn-place diagnostic when the RHS also has the wrong type, without cascading a type mismatch", (): void => {
+    const result = diagnose(`
+      ${draw}
+      fn swap_in(r: &mut dyn Draw, v: i32) { *r = v; }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toContain(
+      "cannot assign through a `dyn Draw` place",
+    );
+  });
+
+  it("rejects assigning a value of the wrong type to an existing binding", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let mut x: i32 = 1;
+        x = "wrong";
+        print(x);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "type mismatch: expected `i32`, found `str`",
+    );
+  });
+
+  it("reports only the unresolved-name diagnostic for an assignment to an undeclared binding, without cascading a type mismatch", (): void => {
+    const result = diagnose(`
+      fn main() {
+        nonexistent = 5;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("still allows rebinding a `dyn Trait` variable directly", (): void => {
+    const result = diagnose(`
+      ${draw}
+      struct Square { s: i32 }
+      impl Draw for Square { fn draw(&self) -> i32 { self.s } }
+      fn main() {
+        let mut d: dyn Draw = Point { x: 1 };
+        d = Square { s: 2 };
+        print(d.draw());
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+});
+
+describe("Drop impl indexing", (): void => {
+  it("keys `dropImpls` by the struct's scope-qualified type id", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Handle { fd: i32 }
+      impl Drop for Handle { fn drop(&mut self) {} }
+      struct Plain { x: i32 }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+    const handle = result.program.items.find(
+      (i) => i.kind === "Struct" && i.name.text === "Handle",
+    );
+    assert(handle?.kind === "Struct", "expected the Handle struct");
+    assert(handle.type.kind === "StructType", "expected a StructType");
+    expect([...result.dropImpls.keys()]).toEqual([handle.type.name]);
+  });
+
+  it("rejects an `impl Drop` for an enum, recording nothing", (): void => {
+    const result = diagnoseWithPrelude(`
+      enum State { On, Off }
+      impl Drop for State { fn drop(&mut self) {} }
+      fn main() {}
+    `);
+    expect(
+      result.diagnostics
+        .filter((d) => d.severity === "error")
+        .map((d) => messageOf(d)),
+    ).toEqual(["`Drop` for an enum is not yet supported"]);
+    expect(result.dropImpls.size).toBe(0);
+  });
+});
+
 describe("generic parameter shadowing an outer type of the same name", (): void => {
   it("resolves a function's own type parameter over an outer struct of the same name, with a warning", (): void => {
     const result = diagnose("struct T {} fn f<T>(x: T) {}");
@@ -6009,7 +6396,12 @@ describe("trait and impl declarations", (): void => {
   });
 
   describe("blanket impls and supertraits", (): void => {
-    it("resolves a blanket impl for a concrete type that implements the blanket's own bound", (): void => {
+    it("rejects a generic bound satisfied only by a blanket impl, since its witness can't be built", (): void => {
+      // The bound `Point: B` genuinely holds (via the blanket `impl<T: A> B
+      // for T`), but a generic call site still needs a real witness object
+      // to pass, and a blanket impl's methods don't emit as free functions
+      // for one to reference - rejected here rather than producing a
+      // witness whose slots point at nothing.
       const result = diagnose(`
         trait A {}
         trait B { fn f(&self) -> str; }
@@ -6019,7 +6411,10 @@ describe("trait and impl declarations", (): void => {
         fn needs_b<U: B>(x: U) {}
         fn main() { needs_b(Point { x: 0, y: 0 }); }
       `);
-      expect(result.diagnostics).toEqual([]);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `Point: B` is not satisfied",
+      );
     });
 
     it("rejects calling a function requiring a blanket-implemented trait for a concrete type that does not implement the blanket's own bound", (): void => {
@@ -6184,32 +6579,6 @@ describe("trait and impl declarations", (): void => {
       ).toEqual(["Draw", "Describe"]);
     });
 
-    it("records a witness pointing at the blanket impl, not a synthesized concrete one", (): void => {
-      const { result, tokens } = analyzeWithTokens(`
-        trait A {}
-        trait B { fn f(&self) -> str; }
-        struct Point { x: i32, y: i32 }
-        impl A for Point {}
-        impl<T: A> B for T { fn f(&self) -> str { "a" } }
-        fn needs_b<U: B>(x: U) {}
-        fn main() { needs_b(Point { x: 0, y: 0 }); }
-      `);
-      expect(result.diagnostics).toEqual([]);
-      const [witnesses] = [...result.witnesses.values()];
-      const witness = witnesses?.[0];
-      assert(witness?.kind === "Impl", "expected an Impl witness");
-      expect(keywordTextAt(tokens, witness.implTokenId)).toBe("impl");
-      const implTokenSpan = tokens[witness.implTokenId]?.span;
-      // The blanket impl is the second `impl` in the source; the first
-      // registers `A for Point`, so a witness pointing at the blanket impl
-      // (not the first, unrelated one) starts at a later source position.
-      const firstImplTokenId = tokens.findIndex(
-        (t) => t.kind === "keyword" && t.text === "impl",
-      );
-      const firstImplSpan = tokens[firstImplTokenId]?.span;
-      expect(implTokenSpan?.start).toBeGreaterThan(firstImplSpan?.start ?? -1);
-    });
-
     it("marks a default method not overridden by the impl as default-sourced, and an overridden one as impl-sourced", (): void => {
       const { result } = analyzeWithTokens(`
         trait Shape {
@@ -6226,8 +6595,51 @@ describe("trait and impl declarations", (): void => {
       const witness = witnesses?.[0];
       assert(witness?.kind === "Impl", "expected an Impl witness");
       expect(witness.methods).toEqual([
-        { name: "draw", source: "impl" },
-        { name: "describe", source: "default" },
+        { name: "draw", source: "impl", definingTrait: "Shape" },
+        { name: "describe", source: "default", definingTrait: "Shape" },
+      ]);
+    });
+
+    it("flattens supertrait methods into one witness, each tagged with its defining trait", (): void => {
+      const { result } = analyzeWithTokens(`
+        trait Base { fn base(&self) -> i32; }
+        trait Ext: Base { fn ext(&self) -> i32; }
+        struct S { n: i32 }
+        impl Base for S { fn base(&self) -> i32 { self.n } }
+        impl Ext for S { fn ext(&self) -> i32 { self.n } }
+        fn run<T: Ext>(x: T) {}
+        fn main() { run(S { n: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      const witness = witnesses?.[0];
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(witness.methods).toEqual([
+        { name: "ext", source: "impl", definingTrait: "Ext" },
+        { name: "base", source: "impl", definingTrait: "Base" },
+      ]);
+    });
+
+    it("records a diamond supertrait's shared ancestor method once in the witness", (): void => {
+      const { result } = analyzeWithTokens(`
+        trait A { fn a(&self) -> i32; }
+        trait B: A { fn b(&self) -> i32; }
+        trait C: A { fn c(&self) -> i32; }
+        trait D: B + C {}
+        struct S { n: i32 }
+        impl A for S { fn a(&self) -> i32 { self.n } }
+        impl B for S { fn b(&self) -> i32 { self.n } }
+        impl C for S { fn c(&self) -> i32 { self.n } }
+        impl D for S {}
+        fn run<T: D>(x: T) {}
+        fn main() { run(S { n: 0 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      const witness = witnesses?.[0];
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(witness.methods.filter((m) => m.name === "a")).toEqual([
+        { name: "a", source: "impl", definingTrait: "A" },
       ]);
     });
 
@@ -6247,8 +6659,8 @@ describe("trait and impl declarations", (): void => {
       const witness = witnesses?.[0];
       assert(witness?.kind === "Impl", "expected an Impl witness");
       expect(witness.methods).toEqual([
-        { name: "describe", source: "default" },
-        { name: "draw", source: "impl" },
+        { name: "describe", source: "default", definingTrait: "Shape" },
+        { name: "draw", source: "impl", definingTrait: "Shape" },
       ]);
     });
 
@@ -6279,6 +6691,234 @@ describe("trait and impl declarations", (): void => {
       expect(witnesses).toEqual([
         { kind: "Forwarded", traitName: "Draw", paramName: "T" },
       ]);
+    });
+  });
+
+  describe("witness parameters", (): void => {
+    it("records one witness parameter per trait bound, in declaration order", (): void => {
+      const result = diagnose(`
+        trait A { fn a(&self) -> i32; }
+        trait B { fn b(&self) -> i32; }
+        fn f<T: A + B, U: A>(t: &T, u: &U) -> i32 { t.a() }
+        fn main() { print(0); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [params] = [...result.witnessParams.values()];
+      expect(params).toEqual([
+        { name: "_witness_T_A", paramName: "T", traitName: "A" },
+        { name: "_witness_T_B", paramName: "T", traitName: "B" },
+        { name: "_witness_U_A", paramName: "U", traitName: "A" },
+      ]);
+    });
+
+    it("records no witness parameters for a function with no bounded type parameter", (): void => {
+      const result = diagnose(`
+        fn id<T>(x: T) -> T { x }
+        fn main() { print(0); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(result.witnessParams.size).toBe(0);
+    });
+  });
+
+  describe("primitive trait bounds", (): void => {
+    it("resolves a `T: PartialEq` bound satisfied by a primitive argument", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn eq_check<T: PartialEq>(a: T, b: T) -> bool { a == b }
+        fn main() { if eq_check(1, 2) { print(1); } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("records a synthesized `Primitive` witness for the satisfied `PartialEq` bound", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn eq_check<T: PartialEq>(a: T, b: T) -> bool { a == b }
+        fn main() { let ok = eq_check(1, 2); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      expect(witnesses).toEqual([
+        { kind: "Primitive", traitName: "PartialEq" },
+      ]);
+    });
+
+    it.each([
+      ["fn use_bool<T: PartialEq>(x: T) {} fn main() { use_bool(true); }"],
+      ["fn use_char<T: PartialEq>(x: T) {} fn main() { use_char('c'); }"],
+      ['fn use_str<T: PartialEq>(x: T) {} fn main() { use_str("s"); }'],
+      ["fn use_f64<T: PartialEq>(x: T) {} fn main() { use_f64(1.5); }"],
+    ])(
+      "resolves a `PartialEq` bound for every equality-capable primitive (%s)",
+      (source): void => {
+        const result = diagnoseWithPrelude(source);
+        expect(result.diagnostics).toEqual([]);
+        const [witnesses] = [...result.witnesses.values()];
+        expect(witnesses).toEqual([
+          { kind: "Primitive", traitName: "PartialEq" },
+        ]);
+      },
+    );
+
+    it("resolves a `T: Eq` bound for a non-float primitive and records an `Eq` witness", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn total<T: Eq>(x: T) {}
+        fn main() { total(1); total(true); total('c'); total("s"); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const all = [...result.witnesses.values()].flat();
+      expect(all).toEqual([
+        { kind: "Primitive", traitName: "Eq" },
+        { kind: "Primitive", traitName: "Eq" },
+        { kind: "Primitive", traitName: "Eq" },
+        { kind: "Primitive", traitName: "Eq" },
+      ]);
+    });
+
+    it("rejects a `T: Eq` bound for a float argument, since a raw float is only `PartialEq`", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn total<T: Eq>(x: T) {}
+        fn main() { total(1.5); }
+      `);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+    });
+
+    it("still resolves a `T: PartialEq` bound for a float argument", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn cmp<T: PartialEq>(x: T) {}
+        fn main() { cmp(1.5); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("records one `Primitive` witness per bound for a `T: PartialEq + Eq` parameter", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn both<T: PartialEq + Eq>(x: T) {}
+        fn main() { both(1); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      expect(witnesses).toEqual([
+        { kind: "Primitive", traitName: "PartialEq" },
+        { kind: "Primitive", traitName: "Eq" },
+      ]);
+    });
+
+    it("still rejects a `T: PartialEq` bound for a struct with no `PartialEq` impl", (): void => {
+      const result = diagnoseWithPrelude(`
+        struct P { x: i32 }
+        fn eq_check<T: PartialEq>(x: T) {}
+        fn main() { eq_check(P { x: 1 }); }
+      `);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+    });
+
+    it("still rejects a `T: PartialEq` bound for a reference to a primitive", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn eq_check<T: PartialEq>(x: T) {}
+        fn main() { let n = 1; eq_check(&n); }
+      `);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+    });
+
+    it("does not add a spurious trait-bound error when the argument name is undefined", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn eq_check<T: PartialEq>(x: T) {}
+        fn main() { eq_check(missing); }
+      `);
+      const codes = result.diagnostics
+        .filter((d) => d.severity === "error")
+        .map((d) => d.code);
+      expect(codes).not.toContain("HEDGE-TRAIT-002");
+      expect(codes).toContain("HEDGE-NAME-001");
+    });
+  });
+
+  describe("method-call targets", (): void => {
+    it("records an inherent method call's resolved type and method, and no trait", (): void => {
+      const result = diagnose(`
+        struct Point { x: i32 }
+        impl Point { fn get(&self) -> i32 { self.x } }
+        fn main() { let p = Point { x: 1 }; print(p.get()); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [target] = [...result.methodTargets.values()];
+      assert(target?.kind === "free", "expected a free method target");
+      expect(target).toMatchObject({
+        typeName: "Point",
+        traitName: none(),
+        methodName: "get",
+      });
+      expect(target.typeId).toContain("Point");
+    });
+
+    it("records the trait for a trait-impl method call", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> i32; }
+        struct Point { x: i32 }
+        impl Draw for Point { fn draw(&self) -> i32 { self.x } }
+        fn main() { let p = Point { x: 1 }; print(p.draw()); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [target] = [...result.methodTargets.values()];
+      expect(target).toMatchObject({
+        typeName: "Point",
+        traitName: some("Draw"),
+        methodName: "draw",
+      });
+    });
+
+    it("records a `PartialEq`-dispatched `==` against the operator token", (): void => {
+      const { program, tokens } = assembleProgram(`
+        struct P { x: i32 }
+        impl PartialEq for P { fn eq(&self, other: &Self) -> bool { true } }
+        fn main() {
+          let a = P { x: 1 };
+          let b = P { x: 2 };
+          if a == b { print(1); }
+        }
+      `);
+      assert(isSome(program), "Parse failed");
+      const result = analyze(program.value, tokens);
+      expect(result.diagnostics).toEqual([]);
+      const entry = [...result.methodTargets.entries()][0];
+      assert(entry !== undefined, "expected one method target");
+      const [tokenId, target] = entry;
+      expect(tokens[tokenId]?.kind).toBe("eq_eq");
+      expect(target).toMatchObject({
+        typeName: "P",
+        traitName: some("PartialEq"),
+        methodName: "eq",
+      });
+    });
+
+    it("records a witness target for a method call on a bound generic parameter", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> i32; }
+        fn run<T: Draw>(t: &T) -> i32 { t.draw() }
+        fn main() { print(0); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [target] = [...result.methodTargets.values()];
+      expect(target).toEqual({
+        kind: "witness",
+        witnessName: "_witness_T_Draw",
+        methodName: "draw",
+      });
+    });
+
+    it("records no target for a method call on an unbounded generic parameter", (): void => {
+      const result = diagnose(`
+        fn run<T>(t: &T) { }
+        fn main() { print(0); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(result.methodTargets.size).toBe(0);
     });
   });
 
@@ -6840,6 +7480,29 @@ describe("== / != resolving through a PartialEq/Eq impl", (): void => {
       fn main() {}
     `);
     expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts `*self == *other` in a trait default body when the trait's supertrait chain implies `PartialEq`", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Same: PartialEq {
+        fn same_as(&self, other: &Self) -> bool { *self == *other }
+      }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("still rejects `*self == *other` in a trait default body when the trait does not imply `PartialEq`", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Plain {
+        fn same_as(&self, other: &Self) -> bool { *self == *other }
+      }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "type does not support equality comparison",
+    );
   });
 
   it("still rejects `==` on a struct with no `PartialEq` impl", (): void => {

@@ -1,4 +1,5 @@
 import { assert, assertNever } from "../assert.js";
+import type { Option } from "../option.js";
 import { isSome, mapSome, none, some, unwrapSomeOr } from "../option.js";
 import type {
   AssignExpression,
@@ -10,11 +11,13 @@ import type {
   BinaryExpression,
   BinaryOperator,
   CallExpression,
+  DynBoxExpression,
   IndexExpression,
   NumericKind,
   RangeExpression,
   RefCellExpression,
   StructExpression,
+  WitnessObjectDecl,
   UnaryExpression,
   UnaryOperator,
   BlockStatement,
@@ -98,6 +101,7 @@ type PrecKey =
   | "RangeExpression"
   | "StructExpression"
   | "RefCellExpression"
+  | "DynBoxExpression"
   | BinaryOperator;
 
 // Ascending precedence: earlier entries bind looser -> more likely to need parens.
@@ -237,11 +241,26 @@ function ownFieldAccess(name: string): string {
  * The bindings are numbered rather than named after their fields, since a
  * field name need not be a legal JS binding (`default`, or a tuple struct's
  * `0`).
+ *
+ * A `Drop` impl's `drop(&mut self)` body runs first (matching the spec's
+ * "the value's own drop glue, then its fields" order), passed `this` in a
+ * `&mut self` accessor cell. `_s` shares the `_dN` bindings' method scope and
+ * codegen-reserved underscore prefix, so it can't collide with a field. A
+ * `drop` body that does `*self = other` rebinds only `_s`; the field release
+ * below still reads `this`, so the reassignment doesn't reach it - a
+ * pathological case not worth reifying yet.
  */
-function structDisposer(disposableFields: readonly string[]): string {
-  const body = disposableFields
+function structDisposer(
+  disposableFields: readonly string[],
+  dropFn: Option<string>,
+): string {
+  const dropCall = isSome(dropFn)
+    ? `let _s = this; ${dropFn.value}({ get v() { return _s; }, set v(nv) { _s = nv; } }); `
+    : "";
+  const fieldReleases = disposableFields
     .map((name, i) => `using _d${String(i)} = ${ownFieldAccess(name)};`)
     .join(" ");
+  const body = `${dropCall}${fieldReleases}`;
   const disposeBody = body === "" ? "" : ` ${body} `;
   return `[Symbol.dispose]() {${disposeBody}}`;
 }
@@ -467,25 +486,64 @@ function emitStructExpression(expression: StructExpression): string {
           f.name,
         ),
   );
-  return `({${[...fields, structDisposer(expression.disposableFields)].join(", ")}})`;
+  return `({${[...fields, structDisposer(expression.disposableFields, expression.dropFn)].join(", ")}})`;
 }
 
 /**
  * A dynamic array-index place's emitted text is a bounds-check call
  * expression, not an assignable target, so reusing it as `${place} = nv`
- * crashes. Capturing `arr`/`i` once in a wrapping IIFE fixes that and pins
- * the reference to the index's value at borrow time, instead of
- * re-evaluating `i` on every access.
+ * crashes - and, unlike a bare identifier or field access, re-emitting it
+ * verbatim would re-evaluate the index expression on every access instead of
+ * pinning the reference to the index's value at borrow time. `bodyFor`
+ * builds the accessor-cell object literal (as a bare `{ ... }`, since it
+ * sits in `return` position) from the names the wrapping IIFE captures
+ * `object`/`index` under; `undefined` when `place` isn't an array index, so
+ * the caller falls back to its own non-indexed accessor-cell text.
  */
+function capturedArrayIndexPlace(
+  place: Expression,
+  bodyFor: (arrName: string, indexName: string) => string,
+): string | undefined {
+  if (place.kind !== "IndexExpression" || !place.isArrayIndex) {
+    return undefined;
+  }
+  const object = emitExpression(place.object);
+  const index = emitExpression(place.index);
+  const body = bodyFor("_arr", "_i");
+  return `((_arr, _i) => { if (${ARRAY_INDEX_OUT_OF_RANGE_CONDITION}) { ${ARRAY_INDEX_OUT_OF_RANGE_THROW}; } return ${body}; })(${object}, ${index})`;
+}
+
 function emitRefCellExpression(expression: RefCellExpression): string {
   const place = expression.place;
-  if (place.kind === "IndexExpression" && place.isArrayIndex) {
-    const object = emitExpression(place.object);
-    const index = emitExpression(place.index);
-    return `((_arr, _i) => { if (${ARRAY_INDEX_OUT_OF_RANGE_CONDITION}) { ${ARRAY_INDEX_OUT_OF_RANGE_THROW}; } return { get v() { return _arr[_i]; }, set v(nv) { _arr[_i] = nv; } }; })(${object}, ${index})`;
-  }
+  const captured = capturedArrayIndexPlace(
+    place,
+    (arr, idx) =>
+      `{ get v() { return ${arr}[${idx}]; }, set v(nv) { ${arr}[${idx}] = nv; } }`,
+  );
+  if (captured !== undefined) return captured;
   const placeText = emitExpression(place);
   return `({ get v() { return ${placeText}; }, set v(nv) { ${placeText} = nv; } })`;
+}
+
+function emitDynBoxExpression(expression: DynBoxExpression): string {
+  const witness = emitExpression(expression.witness);
+  // An owned box disposes the concrete value it carries when the box's own
+  // binding goes out of scope (`using`); a primitive value has no disposer,
+  // hence the optional chain.
+  const disposer = expression.owned
+    ? ", [Symbol.dispose]() { this.value?.[Symbol.dispose]?.(); }"
+    : "";
+  if (!expression.mutableCell) {
+    return `({ value: ${emitExpression(expression.place)}, witness: ${witness}${disposer} })`;
+  }
+  const captured = capturedArrayIndexPlace(
+    expression.place,
+    (arr, idx) =>
+      `{ get value() { return ${arr}[${idx}]; }, set value(nv) { ${arr}[${idx}] = nv; }, witness: ${witness}${disposer} }`,
+  );
+  if (captured !== undefined) return captured;
+  const place = emitExpression(expression.place);
+  return `({ get value() { return ${place}; }, set value(nv) { ${place} = nv; }, witness: ${witness}${disposer} })`;
 }
 
 function emitRangeExpression(expression: RangeExpression): string {
@@ -549,6 +607,8 @@ function emitExpression(expression: Expression): string {
       return emitStructExpression(expression);
     case "RefCellExpression":
       return emitRefCellExpression(expression);
+    case "DynBoxExpression":
+      return emitDynBoxExpression(expression);
     case "RangeExpression":
       return emitRangeExpression(expression);
     default:
@@ -682,6 +742,7 @@ function emitStatement(statement: Statement): string {
     case "RangeExpression":
     case "StructExpression":
     case "RefCellExpression":
+    case "DynBoxExpression":
       // Everything left in the union is an expression, emitted as an
       // expression statement.
       return `${emitExpression(statement)};`;
@@ -806,6 +867,17 @@ function emitStaticPart(decl: StaticDecl): EmittedPart {
  * comment for why this exists (a plain-JS consumer needs a real binding,
  * unlike an in-Hedge reference site, which is already inlined).
  */
+function emitWitnessObjectDecl(decl: WitnessObjectDecl): string {
+  const direct = decl.directSlots.map((s) => `${s.method}: ${s.value}`);
+  if (decl.closureSlots.length === 0) {
+    return `const ${decl.name} = {${direct.join(", ")}};`;
+  }
+  const closures = decl.closureSlots.map(
+    (s) => `w.${s.method} = (self, ...args) => ${s.value}(self, ...args, w);`,
+  );
+  return `const ${decl.name} = (() => { const w = {${direct.join(", ")}}; ${closures.join(" ")} return w; })();`;
+}
+
 function emitConstPart(decl: ConstDecl): EmittedPart {
   const text = `export const ${decl.name} = ${emitExpression(decl.value)};`;
   return {
@@ -832,6 +904,8 @@ function emitItem(item: Item): string {
       return emitStaticPart(item).text;
     case "ConstDecl":
       return emitConstPart(item).text;
+    case "WitnessObjectDecl":
+      return emitWitnessObjectDecl(item);
     case "LetStatement":
       return emitLet(item);
     case "BlockStatement":
@@ -871,6 +945,7 @@ function emitItem(item: Item): string {
     case "RangeExpression":
     case "StructExpression":
     case "RefCellExpression":
+    case "DynBoxExpression":
       // Everything left in the union is an expression, emitted as an
       // expression statement.
       return `${emitExpression(item)};`;
@@ -884,6 +959,7 @@ function emitDtsFunction(
   scope: "public" | "package",
 ): string {
   const params = decl.params
+    .filter((p) => p.synthetic !== true)
     .map((p) => `${p.name}: ${isSome(p.type) ? p.type.value.value : "unknown"}`)
     .join(", ");
   const returnType = isSome(decl.returnType)

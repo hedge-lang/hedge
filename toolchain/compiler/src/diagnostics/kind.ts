@@ -321,6 +321,7 @@ export type DiagnosticKind =
       readonly offender: string;
     }
   | { readonly kind: "SemQualifiedTypePathsUnsupported" }
+  | { readonly kind: "SemDropImplForEnumUnsupported" }
   | { readonly kind: "SemGenericTypeParamNoArguments"; readonly name: string }
   | { readonly kind: "SemPatternKindNotYetSupported" }
   | { readonly kind: "SemWhileNotYetSupported" }
@@ -346,6 +347,11 @@ export type DiagnosticKind =
       readonly found: string;
     }
   | { readonly kind: "SemLetAnnotationMismatch" }
+  | {
+      readonly kind: "SemAssignmentTypeMismatch";
+      readonly expected: string;
+      readonly found: string;
+    }
   | { readonly kind: "SemArrayIndexMustBeUsize"; readonly found: string }
   | {
       readonly kind: "SemStructFieldTypeMismatch";
@@ -419,6 +425,16 @@ export type DiagnosticKind =
     }
   | { readonly kind: "SemMatchArmsIncompatible" }
   | { readonly kind: "SemIfBranchesIncompatible" }
+  | {
+      readonly kind: "SemCheckedBranchTypeMismatch";
+      readonly expected: string;
+      readonly found: string;
+    }
+  | {
+      readonly kind: "SemCheckedArrayElementTypeMismatch";
+      readonly expected: string;
+      readonly found: string;
+    }
   | { readonly kind: "SemLiteralOutOfRange"; readonly typeName: string }
   | {
       readonly kind: "SemUnexpectedIntLiteralRangeCheck";
@@ -545,6 +561,7 @@ export type DiagnosticKind =
   | { readonly kind: "SemNotABorrowablePlace" }
   | { readonly kind: "SemCannotAssignToImmutableBinding" }
   | { readonly kind: "SemCannotAssignThroughSharedReference" }
+  | { readonly kind: "SemAssignThroughDynPlace"; readonly trait: string }
   // Ownership analysis.
   | {
       readonly kind: "OwnBorrowMutThroughShared";
@@ -721,6 +738,7 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemImplDefinesUndeclaredAssocType", "HEDGE-TRAIT-007"],
   ["SemTraitNotObjectSafe", "HEDGE-TRAIT-008"],
   ["SemQualifiedTypePathsUnsupported", "HEDGE-UNSUPPORTED-001"],
+  ["SemDropImplForEnumUnsupported", "HEDGE-UNSUPPORTED-001"],
   ["SemGenericTypeParamNoArguments", "HEDGE-UNSUPPORTED-001"],
   ["SemPatternKindNotYetSupported", "HEDGE-UNSUPPORTED-001"],
   ["SemWhileNotYetSupported", "HEDGE-UNSUPPORTED-001"],
@@ -734,6 +752,7 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemMissingReturnValue", "HEDGE-TYPE-001"],
   ["SemReturnTypeMismatch", "HEDGE-TYPE-001"],
   ["SemLetAnnotationMismatch", "HEDGE-TYPE-001"],
+  ["SemAssignmentTypeMismatch", "HEDGE-TYPE-001"],
   ["SemArrayIndexMustBeUsize", "HEDGE-TYPE-001"],
   ["SemStructFieldTypeMismatch", "HEDGE-TYPE-001"],
   ["SemArgumentTypeMismatch", "HEDGE-TYPE-001"],
@@ -757,6 +776,8 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemArrayElementsSameType", "HEDGE-TYPE-003"],
   ["SemMatchArmsIncompatible", "HEDGE-TYPE-004"],
   ["SemIfBranchesIncompatible", "HEDGE-TYPE-004"],
+  ["SemCheckedBranchTypeMismatch", "HEDGE-TYPE-004"],
+  ["SemCheckedArrayElementTypeMismatch", "HEDGE-TYPE-003"],
   ["SemLiteralOutOfRange", "HEDGE-TYPE-005"],
   ["SemUnexpectedIntLiteralRangeCheck", "HEDGE-TYPE-005"],
   ["SemUnexpectedFloatLiteralRangeCheck", "HEDGE-TYPE-005"],
@@ -799,6 +820,7 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemNotABorrowablePlace", "HEDGE-BORROW-CHECK-005"],
   ["SemCannotAssignToImmutableBinding", "HEDGE-BORROW-CHECK-006"],
   ["SemCannotAssignThroughSharedReference", "HEDGE-BORROW-CHECK-006"],
+  ["SemAssignThroughDynPlace", "HEDGE-TYPE-007"],
   ["OwnConflictingBorrows", "HEDGE-BORROW-CHECK-001"],
   ["OwnBorrowMutThroughShared", "HEDGE-BORROW-CHECK-002"],
   ["OwnBorrowMutNotDeclaredMut", "HEDGE-BORROW-CHECK-002"],

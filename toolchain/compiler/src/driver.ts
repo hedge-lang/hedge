@@ -74,7 +74,18 @@ export function compile(
   return {
     diagnostics,
     code: some(
-      generate(toJsim(optimize(analysis.program), tokens, ownership.functions)),
+      generate(
+        toJsim(optimize(analysis.program), tokens, ownership.functions, {
+          methodTargets: analysis.methodTargets,
+          implMethodTargets: analysis.implMethodTargets,
+          witnessParams: analysis.witnessParams,
+          witnesses: analysis.witnesses,
+          extraWitnesses: analysis.extraWitnesses,
+          unsizeCoercions: analysis.unsizeCoercions,
+          dropImpls: analysis.dropImpls,
+          methodCallWitnesses: analysis.methodCallWitnesses,
+        }),
+      ),
     ),
   };
 }

@@ -1322,16 +1322,14 @@ function ambiguousDropKind(name: string, state: MoveState): DiagnosticKind {
   }
 }
 
-/** A type that is move-only for tracking purposes but has no witness-based
- * `Drop` to call, so it can't get a scope-end `using` (which would throw at
- * runtime). A bare generic parameter (`T`), an unresolved trait projection
- * (`T::Item`), and a `dyn Trait` value are all this abstract-type case. */
+/** A type that is move-only for tracking purposes but has no scope-end
+ * `using` to emit (which would throw at runtime for a value with no
+ * disposer). A bare generic parameter (`T`) and an unresolved trait
+ * projection (`T::Item`) are this abstract-type case. A `dyn Trait` binding
+ * is always an owned box carrying a `[Symbol.dispose]` (`&dyn`/`&mut dyn` are
+ * `ReferenceType`, already skipped), so it does get one. */
 function hasNoScopeEndDrop(type: Semantics.Type): boolean {
-  return (
-    type.kind === "NamedType" ||
-    type.kind === "Projection" ||
-    type.kind === "DynType"
-  );
+  return type.kind === "NamedType" || type.kind === "Projection";
 }
 
 /**
@@ -1510,18 +1508,29 @@ export function analyzeOwnership(
     walkFunction(ctx, fn);
     return { graph, drops, conditionalDrops, branchDrops };
   };
-  // Only top-level functions land in the returned `functions` map (keyed by
-  // name, for codegen); a method body's own `FunctionOwnership` has no
-  // consumer yet and two impls can share a method name. Every function still
-  // gets walked for diagnostics.
+  // A top-level function is keyed by name (codegen looks it up that way);
+  // anything else `collectOwnedFunctions` returns - a method body, a nested
+  // `fn` - is keyed by its own tokenId, since those names are not unique
+  // program-wide. Codegen consumes the method-body entries via
+  // `methodOwnershipKey`; every function is walked for diagnostics regardless.
   const topLevel = new Set(
     program.items.filter((item) => item.kind === "Function"),
   );
   for (const fn of collectOwnedFunctions(program)) {
     const ownership = ownershipOf(fn);
-    if (topLevel.has(fn)) {
-      functions.set(fn.signature.name.text, ownership);
-    }
+    functions.set(
+      topLevel.has(fn)
+        ? fn.signature.name.text
+        : methodOwnershipKey(fn.tokenId),
+      ownership,
+    );
   }
   return { diagnostics, functions };
+}
+
+/** The `analyzeOwnership` / `JsimContext.ownership` key for a non-top-level
+ * function body - its own `tokenId`, since such names are not unique
+ * program-wide. */
+export function methodOwnershipKey(methodTokenId: number): string {
+  return `method#${methodTokenId}`;
 }

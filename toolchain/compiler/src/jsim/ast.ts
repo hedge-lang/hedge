@@ -13,7 +13,30 @@ export type Item =
   | StaticDecl
   | ConstDecl
   | EnumDecl
+  | WitnessObjectDecl
   | Statement;
+
+/**
+ * A hoisted `const <name> = { ... }` holding a trait witness for a
+ * `(concrete type, trait)` pair. `directSlots` map a method name straight to
+ * an emitted free function; `closureSlots` are trait-default slots that must
+ * close over the witness so the default body can dispatch through it, forcing
+ * an imperative build. Not `export`ed and carries no `[Symbol.dispose]`,
+ * unlike a `ConstDecl` / `StructExpression`.
+ */
+export interface WitnessObjectDecl {
+  readonly kind: "WitnessObjectDecl";
+  readonly name: string;
+  readonly directSlots: readonly WitnessSlot[];
+  readonly closureSlots: readonly WitnessSlot[];
+}
+
+export interface WitnessSlot {
+  readonly method: string;
+  /** The slot's emitted value: a free-function name, or an inline expression
+   * for the synthesized primitive-equality witness. */
+  readonly value: string;
+}
 
 /**
  * Contributes nothing to emitted JS - a variant's tagged object already
@@ -227,7 +250,8 @@ export type Expression =
   | ArraySliceViewExpression
   | RangeExpression
   | StructExpression
-  | RefCellExpression;
+  | RefCellExpression
+  | DynBoxExpression;
 
 interface BooleanLiteral {
   readonly kind: "BooleanLiteral";
@@ -264,6 +288,9 @@ export interface FunctionParam {
    * type annotation yet.
    */
   readonly type: Option<Type>;
+  /** A compiler-synthesized parameter (a generic function's hidden witness
+   * argument) - emitted in JS, omitted from `.d.ts`. */
+  readonly synthetic?: boolean;
 }
 
 type Type = PrimitiveType;
@@ -448,6 +475,12 @@ export interface StructExpression {
    * same no-op disposer it always did.
    */
   readonly disposableFields: readonly string[];
+  /**
+   * The free-function name of the type's `Drop::drop` body, when it has one -
+   * the disposer calls it (with `this` in a `&mut self` cell) before
+   * releasing the fields.
+   */
+  readonly dropFn: Option<string>;
 }
 
 /**
@@ -466,6 +499,26 @@ export interface StructExpression {
 export interface RefCellExpression {
   readonly kind: "RefCellExpression";
   readonly place: Expression;
+}
+
+/**
+ * A concrete value unsize-coerced to `dyn Trait`: `{ value, witness }`. When
+ * `mutableCell` is set (a `&mut T -> &mut dyn Trait` coercion), `value` is a
+ * getter/setter over `place` so a whole-value write through the trait object
+ * reaches the caller's binding; otherwise `value` is `place` read once.
+ *
+ * `owned` is set for a by-value coercion (`T -> dyn`, or a `-> Self` method
+ * result): the box owns the concrete value, so it carries a
+ * `[Symbol.dispose]` that disposes `value` and the binding gets a scope-end
+ * `using`. A `&T`/`&mut T -> &dyn` box borrows the value and disposes
+ * nothing.
+ */
+export interface DynBoxExpression {
+  readonly kind: "DynBoxExpression";
+  readonly place: Expression;
+  readonly witness: Expression;
+  readonly mutableCell: boolean;
+  readonly owned: boolean;
 }
 
 type StructExpressionField = StructField | SpreadExpression;

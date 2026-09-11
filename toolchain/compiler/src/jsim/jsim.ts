@@ -5,12 +5,23 @@ import {
   type BindingId,
   type Declaration,
 } from "../ownership/control-flow-graph.js";
-import type {
-  BranchDrop,
-  ConditionalDrop,
-  FunctionOwnership,
+import {
+  methodOwnershipKey,
+  type BranchDrop,
+  type ConditionalDrop,
+  type FunctionOwnership,
 } from "../ownership/move-check.js";
-import { constValueToLiteralExpression } from "../semantics/analyzer.js";
+import { collectMethodOwners } from "../ownership/owned-functions.js";
+import {
+  constValueToLiteralExpression,
+  type FreeMethodTarget,
+  type MethodTarget,
+  type UnsizeCoercion,
+  witnessParamName,
+  type WitnessMethod,
+  type WitnessParam,
+  type WitnessRef,
+} from "../semantics/analyzer.js";
 import type * as Semantics from "../semantics/ast.js";
 import { hasCapability } from "../semantics/type-capabilities.js";
 import type * as JSIM from "./ast.js";
@@ -76,6 +87,16 @@ interface JsimContext {
    */
   readonly emittedNameByBindingId: Map<BindingId, string>[];
   /**
+   * Per-function map from a hidden witness parameter's raw synthesized name
+   * (`_witness_T_Draw`) to its actual collision-safe emitted name. Reserved
+   * via `reserveLocalName`, not `bindLocalName` - the raw name has no real
+   * Hedge-level identity a source `let`/param could shadow (same reasoning
+   * as `emittedNameByBindingId`: resolving through `lookupLocalName` would
+   * find a same-spelled body-local instead of the witness param it's not
+   * related to). See `resolvedWitnessParamName`.
+   */
+  readonly witnessParamNames: Map<string, string>[];
+  /**
    * Every top-level JS binding name already claimed (function names, and
    * each static's own accessor name) - not `$k`-suffixed alpha-rename
    * (that machinery is per-function local scope only), but the same
@@ -83,12 +104,59 @@ interface JsimContext {
    * static's hidden backing variable from colliding with any of these.
    */
   readonly topLevelNames: Set<string>;
+  /** `AnalysisResult.methodTargets` - the free function each resolved method
+   * call (keyed by method-name token) and trait-dispatched `==` (keyed by
+   * operator token) lowers to. */
+  readonly methodTargets: ReadonlyMap<number, MethodTarget>;
+  /** `AnalysisResult.implMethodTargets` - one entry per impl-provided method
+   * to emit, keyed by its body tokenId. */
+  readonly implMethodTargets: ReadonlyMap<number, FreeMethodTarget>;
+  /** `AnalysisResult.witnessParams` - the hidden witness parameters a generic
+   * function body carries, keyed by its own tokenId. */
+  readonly witnessParams: ReadonlyMap<number, readonly WitnessParam[]>;
+  /** `AnalysisResult.witnesses` - the resolved trait bounds a generic call
+   * site passes, keyed by the call's tokenId. */
+  readonly witnesses: ReadonlyMap<number, readonly WitnessRef[]>;
+  /** `AnalysisResult.extraWitnesses` - witness objects to hoist that no
+   * generic call site referenced (a concrete trait-default-method call). */
+  readonly extraWitnesses: readonly WitnessRef[];
+  /** `AnalysisResult.unsizeCoercions` - each expression unsize-coerced to
+   * `dyn Trait`, keyed by its tokenId, mapped to the impl witness. */
+  readonly unsizeCoercions: ReadonlyMap<number, UnsizeCoercion>;
+  /** `AnalysisResult.dropImpls` - struct/enum type ids with a `Drop` impl,
+   * mapped to the `drop` free-function target. */
+  readonly dropImpls: ReadonlyMap<string, FreeMethodTarget>;
+  /** `AnalysisResult.methodCallWitnesses` - witnesses resolved for a
+   * concrete-receiver method call's own bounded generic parameters, keyed
+   * by the method-name token (same convention as `methodTargets`). */
+  readonly methodCallWitnesses: ReadonlyMap<number, readonly WitnessRef[]>;
+  /** Each emitted method free function's `methodKey` mapped to the name
+   * actually emitted - identical to the readable `methodFreeFnName` unless it
+   * collided with a user top-level binding. Both the emission and call sites
+   * resolve through this so they agree. */
+  readonly methodFreeFnNames: Map<string, string>;
+  /** Every `(typeId, trait)` witness object referenced while lowering,
+   * allocated on first use and emitted as a hoisted `const` afterwards. */
+  readonly hoistedWitnesses: Map<string, HoistedWitness>;
+  /** The collision-safe name reserved for the shared primitive-eq witness
+   * const, allocated on first `Primitive` witness reference (`undefined`
+   * until then, matching `hoistedWitnesses`' own lazy-allocation shape). */
+  readonly primitiveEqWitness: { name: string | undefined };
+}
+
+interface HoistedWitness {
+  readonly name: string;
+  readonly typeId: string;
+  readonly typeName: string;
+  readonly traitName: string;
+  readonly methods: readonly WitnessMethod[];
 }
 
 function createJsimContext(
   tokens: readonly Token[],
   ownership: ReadonlyMap<string, FunctionOwnership>,
   topLevelNames: Set<string>,
+  info: JsimInfo,
 ): JsimContext {
   return {
     tokens,
@@ -100,7 +168,19 @@ function createJsimContext(
     branchDrops: [],
     allConditionalDrops: [],
     emittedNameByBindingId: [],
+    witnessParamNames: [],
     topLevelNames,
+    methodTargets: info.methodTargets ?? new Map(),
+    implMethodTargets: info.implMethodTargets ?? new Map(),
+    witnessParams: info.witnessParams ?? new Map(),
+    witnesses: info.witnesses ?? new Map(),
+    extraWitnesses: info.extraWitnesses ?? [],
+    unsizeCoercions: info.unsizeCoercions ?? new Map(),
+    dropImpls: info.dropImpls ?? new Map(),
+    methodCallWitnesses: info.methodCallWitnesses ?? new Map(),
+    methodFreeFnNames: new Map(),
+    hoistedWitnesses: new Map(),
+    primitiveEqWitness: { name: undefined },
   };
 }
 
@@ -529,6 +609,7 @@ function withFunctionCtx<T>(
   ctx.dropFlagNames.push(new Map());
   ctx.branchDrops.push(ctx.ownership.get(functionName)?.branchDrops ?? []);
   ctx.emittedNameByBindingId.push(new Map());
+  ctx.witnessParamNames.push(new Map());
   try {
     return fn();
   } finally {
@@ -539,6 +620,7 @@ function withFunctionCtx<T>(
     ctx.dropFlagNames.pop();
     ctx.branchDrops.pop();
     ctx.emittedNameByBindingId.pop();
+    ctx.witnessParamNames.pop();
   }
 }
 
@@ -648,11 +730,25 @@ const JS_UNUSABLE_NAMES: ReadonlySet<string> = new Set([
   "Uint32Array",
 ]);
 
-function probeFreeName(renameCtx: RenameCtx, base: string): string {
+/**
+ * `topLevelNames` is in the collision probe (not just `renameCtx`'s own
+ * frames/`emittedNames`) so a local can't silently shadow a generated
+ * top-level reference - a method's free-function name (`Point$get`), a
+ * hoisted witness const, a static's backing variable. Those are looked up
+ * by their exact spelling at the call site with no rename indirection of
+ * their own, unlike a real Hedge-level name, which always goes through
+ * `lookupLocalName`/`reserveWitnessParamName`'s own resolution.
+ */
+function probeFreeName(
+  renameCtx: RenameCtx,
+  topLevelNames: ReadonlySet<string>,
+  base: string,
+): string {
   const visible = renameCtx.frames.some((f) => f.has(base));
   if (
     !visible &&
     !renameCtx.emittedNames.has(base) &&
+    !topLevelNames.has(base) &&
     !JS_UNUSABLE_NAMES.has(base)
   ) {
     return base;
@@ -661,7 +757,8 @@ function probeFreeName(renameCtx: RenameCtx, base: string): string {
   let candidate = `${base}$${k}`;
   while (
     renameCtx.frames.some((f) => f.has(candidate)) ||
-    renameCtx.emittedNames.has(candidate)
+    renameCtx.emittedNames.has(candidate) ||
+    topLevelNames.has(candidate)
   ) {
     k += 1;
     candidate = `${base}$${k}`;
@@ -677,7 +774,7 @@ function bindLocalName(ctx: JsimContext, sourceName: string): string {
   }
   const frame = renameCtx.value.frames.at(-1);
   assert(frame !== undefined, "Expected a rename frame to be present");
-  const emitted = probeFreeName(renameCtx.value, sourceName);
+  const emitted = probeFreeName(renameCtx.value, ctx.topLevelNames, sourceName);
   frame.set(sourceName, emitted);
   renameCtx.value.emittedNames.add(emitted);
   return emitted;
@@ -694,7 +791,7 @@ function reserveLocalName(ctx: JsimContext, base: string): string {
   if (!isSome(renameCtx)) {
     return base;
   }
-  const emitted = probeFreeName(renameCtx.value, base);
+  const emitted = probeFreeName(renameCtx.value, ctx.topLevelNames, base);
   renameCtx.value.emittedNames.add(emitted);
   return emitted;
 }
@@ -752,10 +849,44 @@ function emittedNameForBinding(
   return name;
 }
 
+/** Reserves a collision-safe emitted name for a hidden witness parameter
+ * (`_witness_T_Draw`) and records the mapping for `resolvedWitnessParamName`
+ * to resolve. Called once, at the parameter's own declaration site, before
+ * the body lowers - same ordering `emitFunctionParams` uses for a real
+ * parameter, so a colliding body-local gets alpha-renamed instead. */
+function reserveWitnessParamName(ctx: JsimContext, rawName: string): string {
+  const emitted = reserveLocalName(ctx, rawName);
+  ctx.witnessParamNames.at(-1)?.set(rawName, emitted);
+  return emitted;
+}
+
+/** The emitted name a hidden witness parameter's raw synthesized name
+ * (`_witness_T_Draw`) resolves to in the current function - see
+ * `witnessParamNames`'s own doc comment for why this isn't `lookupLocalName`.
+ * Falls back to `rawName` itself if nothing reserved it (a test lowering a
+ * body in isolation, with no enclosing `reserveWitnessParamName` call). */
+function resolvedWitnessParamName(ctx: JsimContext, rawName: string): string {
+  return ctx.witnessParamNames.at(-1)?.get(rawName) ?? rawName;
+}
+
+/** The analyzer-produced tables codegen consults, all optional so a test can
+ * lower a program with none of them. */
+export interface JsimInfo {
+  readonly methodTargets?: ReadonlyMap<number, MethodTarget>;
+  readonly implMethodTargets?: ReadonlyMap<number, FreeMethodTarget>;
+  readonly witnessParams?: ReadonlyMap<number, readonly WitnessParam[]>;
+  readonly witnesses?: ReadonlyMap<number, readonly WitnessRef[]>;
+  readonly extraWitnesses?: readonly WitnessRef[];
+  readonly unsizeCoercions?: ReadonlyMap<number, UnsizeCoercion>;
+  readonly dropImpls?: ReadonlyMap<string, FreeMethodTarget>;
+  readonly methodCallWitnesses?: ReadonlyMap<number, readonly WitnessRef[]>;
+}
+
 export function toJsim(
   program: Semantics.Program,
   tokens: readonly Token[],
   ownership: ReadonlyMap<string, FunctionOwnership> = new Map(),
+  info: JsimInfo = {},
 ): JSIM.Program {
   const topLevelNames = new Set<string>();
   for (const item of program.items) {
@@ -768,11 +899,18 @@ export function toJsim(
       topLevelNames.add(item.name.text);
     }
   }
-  const ctx = createJsimContext(tokens, ownership, topLevelNames);
+  const ctx = createJsimContext(tokens, ownership, topLevelNames, info);
+  const methodOwners = collectMethodOwners(program);
+  reserveMethodFreeFnNames(ctx, methodOwners);
+  reserveHoistedWitnessConsts(ctx);
+  const bodyItems = [
+    ...methodOwners.flatMap((owner) => parseMethodBodies(ctx, owner)),
+    ...program.items.flatMap((i) => parseItem(ctx, i)),
+  ];
   return {
     kind: "Program",
     docComment: toDocComment(program.attributes),
-    items: program.items.flatMap((i) => parseItem(ctx, i)),
+    items: [...hoistedWitnessDecls(ctx), ...bodyItems],
   };
 }
 
@@ -823,10 +961,10 @@ function semanticTypeToJsPrimitive(
       // No JS primitive to erase to; the caller renders these itself.
       return none();
     case "DynType":
-      // The `{ value, witness }` layout and dispatch don't exist yet, so a
-      // program that reaches lowering with a `dyn` type has passed analysis
-      // but cannot produce runnable output.
-      throw new Error("dyn Trait code generation is not implemented yet");
+      // A `dyn Trait` value is a `{ value, witness }` object with no JS
+      // primitive of its own; a `.d.ts` position renders it `unknown`, same
+      // as a struct (struct `.d.ts` generation is a later ticket).
+      return none();
     default:
       return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
@@ -894,6 +1032,299 @@ function hedgeTypeToNumericKind(
   }
 }
 
+/** The readable `<Type>$<method>` (inherent) / `<Type>$<Trait>$<method>`
+ * (trait impl) name a method's free function emits under, before collision
+ * resolution. Uses the bare `typeName`; two shadowed types share it, which
+ * is what `methodKey` disambiguates. */
+function methodFreeFnName(target: FreeMethodTarget): string {
+  if (target.isDefaultBody && isSome(target.traitName)) {
+    return `${target.traitName.value}$${target.methodName}$default`;
+  }
+  const traitSegment = isSome(target.traitName)
+    ? `${target.traitName.value}$`
+    : "";
+  return `${target.typeName}$${traitSegment}${target.methodName}`;
+}
+
+/** The per-declaration identity of a method free function, used to look up
+ * its collision-resolved name. Scope-qualified by `typeId` for an inherent
+ * or override method (a block-local type shadowing a top-level one keeps a
+ * distinct entry), but a default body has no owning type - there is one per
+ * trait - so it keys on the bare trait name alone, which every site (the
+ * emission, a concrete call, a witness slot) agrees on. */
+function methodKey(target: FreeMethodTarget): string {
+  const trait = isSome(target.traitName) ? target.traitName.value : "";
+  if (target.isDefaultBody) return `default#${trait}#${target.methodName}`;
+  return `${target.typeId}#${trait}#${target.methodName}#false`;
+}
+
+/** The name a method's free function actually emits and every call site
+ * calls - the readable name unless it collided with a user top-level binding
+ * and was suffixed (`reserveMethodFreeFnNames`). */
+function resolvedMethodFreeFnName(
+  ctx: JsimContext,
+  target: FreeMethodTarget,
+): string {
+  return (
+    ctx.methodFreeFnNames.get(methodKey(target)) ?? methodFreeFnName(target)
+  );
+}
+
+/** The collision-safe name for the shared primitive-eq witness const,
+ * reserved (once) on first reference - mirrors `witnessConstName`'s own
+ * allocate-once-and-cache shape. */
+function primitiveEqWitnessName(ctx: JsimContext): string {
+  ctx.primitiveEqWitness.name ??= reserveTopLevelName(
+    ctx,
+    "__witnessPrimitiveEq",
+  );
+  return ctx.primitiveEqWitness.name;
+}
+
+/** The `FreeMethodTarget` for one method a `(typeId, trait)` witness carries,
+ * used to resolve the free-function name the slot points at. Keyed on the
+ * method's *defining* trait, not the witness's - a flattened supertrait
+ * method's free function is named for the trait that declared it. */
+function witnessSlotTarget(
+  witness: HoistedWitness,
+  method: WitnessMethod,
+): FreeMethodTarget {
+  return {
+    kind: "free",
+    typeId: witness.typeId,
+    typeName: witness.typeName,
+    traitName: some(method.definingTrait),
+    methodName: method.name,
+    isDefaultBody: method.source === "default",
+  };
+}
+
+/** The hoisted `const` name for the `(typeId, trait)` witness object,
+ * allocated (collision-safe) and remembered on first reference. */
+function witnessConstName(
+  ctx: JsimContext,
+  typeId: string,
+  typeName: string,
+  traitName: string,
+  methods: readonly WitnessMethod[],
+): string {
+  const key = `${typeId}#${traitName}`;
+  const existing = ctx.hoistedWitnesses.get(key);
+  if (existing !== undefined) return existing.name;
+  const name = reserveTopLevelName(ctx, `__witness_${traitName}_${typeName}`);
+  ctx.hoistedWitnesses.set(key, {
+    name,
+    typeId,
+    typeName,
+    traitName,
+    methods,
+  });
+  return name;
+}
+
+/** The witness argument for one resolved bound at a generic call site. */
+function witnessArgExpression(
+  ctx: JsimContext,
+  ref: WitnessRef,
+): JSIM.Expression {
+  return { kind: "Identifier", value: witnessRefName(ctx, ref), type: none() };
+}
+
+function witnessRefName(ctx: JsimContext, ref: WitnessRef): string {
+  switch (ref.kind) {
+    case "Impl":
+      return witnessConstName(
+        ctx,
+        ref.typeId,
+        ref.typeName,
+        ref.traitName,
+        ref.methods,
+      );
+    case "Forwarded":
+      return resolvedWitnessParamName(
+        ctx,
+        witnessParamName(ref.paramName, ref.traitName),
+      );
+    case "Primitive":
+      return primitiveEqWitnessName(ctx);
+    default:
+      return assertNever(ref, `witness ref: ${JSON.stringify(ref)}`);
+  }
+}
+
+/** The hidden witness arguments a generic call at `callTokenId` passes,
+ * appended after the real arguments. */
+function witnessArguments(
+  ctx: JsimContext,
+  callTokenId: number,
+): readonly JSIM.Expression[] {
+  return (ctx.witnesses.get(callTokenId) ?? []).map((ref) =>
+    witnessArgExpression(ctx, ref),
+  );
+}
+
+/** The trailing witness argument a concrete-receiver call to `Trait$m$default`
+ * passes - the `(type, trait)` witness object (pre-reserved from
+ * `AnalysisResult.extraWitnesses`). */
+function defaultBodyWitnessArg(
+  ctx: JsimContext,
+  target: FreeMethodTarget,
+): readonly JSIM.Expression[] {
+  if (!target.isDefaultBody || !isSome(target.traitName)) return [];
+  const key = `${target.typeId}#${target.traitName.value}`;
+  const witness = ctx.hoistedWitnesses.get(key);
+  assert(
+    witness !== undefined,
+    `ICE: no witness const for default-method call \`${key}\``,
+  );
+  return [{ kind: "Identifier", value: witness.name, type: none() }];
+}
+
+/** The trailing witness arguments a concrete-receiver call to a method with
+ * its own bounded generic parameters passes - one per
+ * `AnalysisResult.methodCallWitnesses` entry, in resolved-bound order
+ * (matching the order `recordWitnessParams` appended the callee's own hidden
+ * witness parameters in). */
+function methodCallWitnessArgs(
+  ctx: JsimContext,
+  methodTokenId: number,
+): readonly JSIM.Expression[] {
+  return (ctx.methodCallWitnesses.get(methodTokenId) ?? []).map((ref) =>
+    witnessArgExpression(ctx, ref),
+  );
+}
+
+/** Reserves the hoisted `const` name a single resolved bound needs, if any -
+ * `Impl` its own `(type, trait)` const, `Primitive` the shared
+ * `__witnessPrimitiveEq`, `Forwarded` nothing (it resolves through the
+ * caller's own witness parameter, not a top-level const). */
+function reserveWitnessRef(ctx: JsimContext, ref: WitnessRef): void {
+  switch (ref.kind) {
+    case "Impl":
+      witnessConstName(
+        ctx,
+        ref.typeId,
+        ref.typeName,
+        ref.traitName,
+        ref.methods,
+      );
+      return;
+    case "Primitive":
+      primitiveEqWitnessName(ctx);
+      return;
+    case "Forwarded":
+      return;
+    default:
+      assertNever(ref, `witness ref: ${JSON.stringify(ref)}`);
+  }
+}
+
+/**
+ * Pre-reserves every hoisted witness const's name before any function body
+ * lowers - a witness reference (`witnessRefName`) bakes the raw name
+ * directly into an `Identifier`, with no shadow protection of its own at the
+ * use site, so the name has to already be in `ctx.topLevelNames` by the time
+ * the *first* function's own locals are bound, not just by the time the
+ * witness is actually referenced - otherwise an earlier-lowered function's
+ * local can claim the bare name first (`probeFreeName` only checks names
+ * already known), and the const that gets hoisted later collides with it
+ * wherever that local is still in scope.
+ */
+function reserveHoistedWitnessConsts(ctx: JsimContext): void {
+  for (const ref of ctx.extraWitnesses) reserveWitnessRef(ctx, ref);
+  for (const refs of ctx.witnesses.values()) {
+    for (const ref of refs) reserveWitnessRef(ctx, ref);
+  }
+  for (const coercion of ctx.unsizeCoercions.values()) {
+    reserveWitnessRef(ctx, coercion.witness);
+  }
+  for (const refs of ctx.methodCallWitnesses.values()) {
+    for (const ref of refs) reserveWitnessRef(ctx, ref);
+  }
+}
+
+/** The hoisted witness-object and primitive-eq-witness declarations, built
+ * from what was referenced during lowering - prepended to the program. */
+function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
+  const decls: JSIM.Item[] = [];
+  if (ctx.primitiveEqWitness.name !== undefined) {
+    decls.push({
+      kind: "WitnessObjectDecl",
+      name: ctx.primitiveEqWitness.name,
+      directSlots: [{ method: "eq", value: "(a, b) => a === b" }],
+      closureSlots: [],
+    });
+  }
+  for (const witness of ctx.hoistedWitnesses.values()) {
+    const direct: JSIM.WitnessSlot[] = [];
+    const closure: JSIM.WitnessSlot[] = [];
+    for (const method of witness.methods) {
+      const slot: JSIM.WitnessSlot = {
+        method: method.name,
+        value: resolvedMethodFreeFnName(
+          ctx,
+          witnessSlotTarget(witness, method),
+        ),
+      };
+      (method.source === "default" ? closure : direct).push(slot);
+    }
+    decls.push({
+      kind: "WitnessObjectDecl",
+      name: witness.name,
+      directSlots: direct,
+      closureSlots: closure,
+    });
+  }
+  return decls;
+}
+
+interface EmittableMethod {
+  readonly method: Semantics.FunctionDef;
+  readonly target: FreeMethodTarget;
+}
+
+/** Each of an `impl`/`trait` method body the analyzer marked for emission
+ * (`AnalysisResult.implMethodTargets`), paired with its `MethodTarget`. */
+function emittableMethods(
+  ctx: JsimContext,
+  owner: Semantics.ImplDecl | Semantics.TraitDecl,
+): readonly EmittableMethod[] {
+  return owner.methodBodies.flatMap((method): readonly EmittableMethod[] => {
+    const target = ctx.implMethodTargets.get(method.tokenId);
+    return target === undefined ? [] : [{ method, target }];
+  });
+}
+
+/** Claims a top-level JS name for every method free function before any item
+ * is lowered, so a readable name that collides with a user function gets a
+ * suffix and every call site resolves to the same suffixed name. */
+function reserveMethodFreeFnNames(
+  ctx: JsimContext,
+  owners: readonly (Semantics.ImplDecl | Semantics.TraitDecl)[],
+): void {
+  for (const owner of owners) {
+    for (const { target } of emittableMethods(ctx, owner)) {
+      ctx.methodFreeFnNames.set(
+        methodKey(target),
+        reserveTopLevelName(ctx, methodFreeFnName(target)),
+      );
+    }
+  }
+}
+
+/** Lowers each marked method body to a top-level free function with `self` as
+ * the first parameter (a trait default method also gets a trailing
+ * `_witness_Self_<Trait>` parameter from `witnessParams`). */
+function parseMethodBodies(
+  ctx: JsimContext,
+  owner: Semantics.ImplDecl | Semantics.TraitDecl,
+): JSIM.Item[] {
+  return emittableMethods(ctx, owner).map(({ method, target }): JSIM.Item => ({
+    ...parseFunction(ctx, method, methodOwnershipKey(method.tokenId)),
+    name: resolvedMethodFreeFnName(ctx, target),
+  }));
+}
+
 // eslint-disable-next-line complexity -- Routing function over the full Item union
 function parseItem(
   ctx: JsimContext,
@@ -932,6 +1363,9 @@ function parseItem(
     ];
   }
   if (item.kind === "Static") return parseStaticDecl(ctx, item);
+  // Impl methods emit as top-level free functions from `toJsim` (via
+  // `collectMethodOwners`), so a block-local impl's methods are reachable too;
+  // the item itself erases at its own position.
   if (
     item.kind === "Trait" ||
     item.kind === "Impl" ||
@@ -1033,8 +1467,9 @@ function emitFunctionParams(
 function parseFunction(
   ctx: JsimContext,
   fn: Semantics.FunctionDef,
+  ownershipKey: string = fn.signature.name.text,
 ): JSIM.FunctionDef {
-  return withFunctionCtx(ctx, fn.signature.name.text, () => {
+  return withFunctionCtx(ctx, ownershipKey, () => {
     const emittedParams = emitFunctionParams(ctx, fn.signature.params);
     return parseFunctionBody(ctx, fn, emittedParams);
   });
@@ -1204,6 +1639,18 @@ function parseFunctionBody(
     fn.signature,
     emittedParams,
   );
+  // Reserved before the body lowers, so a colliding body-local (e.g.
+  // `let _witness_T_Draw = 5;`) is the one that gets alpha-renamed. Every
+  // dispatch/forwarding reference resolves through `resolvedWitnessParamName`,
+  // never the raw `wp.name` string.
+  const witnessParams: readonly JSIM.FunctionParam[] = (
+    ctx.witnessParams.get(fn.tokenId) ?? []
+  ).map((wp) => ({
+    kind: "FunctionParam",
+    name: reserveWitnessParamName(ctx, wp.name),
+    type: none(),
+    synthetic: true,
+  }));
   const block = fn.body;
   const innerDoc = toDocComment(block.innerAttributes);
   const outerDoc = toDocComment(fn.signature.attributes);
@@ -1247,7 +1694,7 @@ function parseFunctionBody(
     kind: "Function",
     scope,
     name: fn.signature.name.text,
-    params,
+    params: [...params, ...witnessParams],
     returnType,
     span: resolveSpan(
       ctx.tokens,
@@ -1401,8 +1848,77 @@ function jsimIfExpressionAsStatement(
   return jsimIfStatement(ctx, ifExpr);
 }
 
-// eslint-disable-next-line complexity -- This is a routing function
 function parseExpression(
+  ctx: JsimContext,
+  expression: Semantics.Expression,
+): JSIM.Expression {
+  const coercion = ctx.unsizeCoercions.get(expression.tokenId);
+  if (coercion !== undefined) {
+    return jsimUnsizeBox(ctx, expression, coercion);
+  }
+  return parseExpressionDispatch(ctx, expression);
+}
+
+/** Wraps a concrete value being unsize-coerced to `dyn Trait` as
+ * `{ value, witness }` (see `AnalysisResult.unsizeCoercions`). Borrowedness
+ * comes from `expression.type` (already rewritten to the `dyn` target - a
+ * `ReferenceType` iff the source was too, per `refnessSatisfiesDynTarget`),
+ * not `expression.kind`: a `&mut T` param/local passed straight through is a
+ * borrow too, even though it's a bare `PathExpression`, not a fresh
+ * `&mut x`. See `dynBoxPlace` for how each case's place is built.
+ * `sourceType` is restored on an owned (by-value) wrapped node for
+ * struct/enum lowering (drop glue, the tagged-object shape). */
+function jsimUnsizeBox(
+  ctx: JsimContext,
+  expression: Semantics.Expression,
+  coercion: UnsizeCoercion,
+): JSIM.Expression {
+  const witness: JSIM.Expression = {
+    kind: "Identifier",
+    value: witnessRefName(ctx, coercion.witness),
+    type: none(),
+  };
+  const isBorrow = expression.type.kind === "ReferenceType";
+  const mutableCell = isBorrow && expression.type.mutable;
+  const place = dynBoxPlace(ctx, expression, isBorrow, coercion.sourceType);
+  return {
+    kind: "DynBoxExpression",
+    place,
+    witness,
+    mutableCell,
+    owned: !isBorrow,
+  };
+}
+
+/** The `dyn` box's own place: a syntactic `&x`/`&mut x` unwraps to its
+ * operand directly; an already reference-typed expression lowers normally
+ * and hops through its own `.v` cell if mutable (a shared reference stays
+ * transparent, matching how any other read through one already does); a
+ * by-value source lowers with `sourceType` restored. */
+function dynBoxPlace(
+  ctx: JsimContext,
+  expression: Semantics.Expression,
+  isBorrow: boolean,
+  sourceType: Semantics.Type,
+): JSIM.Expression {
+  if (!isBorrow) {
+    return parseExpressionDispatch(ctx, { ...expression, type: sourceType });
+  }
+  if (expression.kind === "ReferenceExpression") {
+    return parseExpression(ctx, expression.operand);
+  }
+  // `parseExpressionDispatch`, not `parseExpression` - `expression` is still
+  // registered in `ctx.unsizeCoercions` under its own tokenId, so routing it
+  // back through `parseExpression`'s coercion intercept would re-enter
+  // `jsimUnsizeBox` on the same node and recurse forever.
+  return throughMutableReferenceCell(
+    parseExpressionDispatch(ctx, expression),
+    expression,
+  );
+}
+
+// eslint-disable-next-line complexity -- This is a routing function
+function parseExpressionDispatch(
   ctx: JsimContext,
   expression: Semantics.Expression,
 ): JSIM.Expression {
@@ -1453,12 +1969,19 @@ function parseExpression(
         expression.callee.kind === "PathExpression" &&
         expression.callee.type.kind === "StructType"
       ) {
-        return jsimTupleStructConstruction(ctx, expression.arguments);
+        return jsimTupleStructConstruction(
+          ctx,
+          expression.arguments,
+          expression.callee.type,
+        );
       }
       return {
         kind: "CallExpression",
         callee: parseExpression(ctx, expression.callee),
-        arguments: expression.arguments.map((arg) => parseExpression(ctx, arg)),
+        arguments: [
+          ...expression.arguments.map((arg) => parseExpression(ctx, arg)),
+          ...witnessArguments(ctx, expression.tokenId),
+        ],
       };
     case "ReferenceExpression":
       // A shared borrow is transparent in JS - emit the operand directly. A
@@ -1518,18 +2041,163 @@ function parseExpression(
   }
 }
 
+/** The receiver, lowered as the free function's first argument. A `&mut self`
+ * method needs an accessor cell so writes to `self` reach the caller's
+ * binding - unless the receiver is already a `&mut` reference, in which case
+ * it is that cell already. `&self` erases and by-value `self` is passed
+ * (and moved) directly. */
+function selfArgument(
+  ctx: JsimContext,
+  call: Semantics.MethodCallExpression,
+): JSIM.Expression {
+  const receiver = parseExpression(ctx, call.receiver);
+  const wantsMutCell =
+    isSome(call.receiverKind) &&
+    call.receiverKind.value.byRef &&
+    call.receiverKind.value.mutable &&
+    call.receiver.type.kind !== "ReferenceType";
+  return wantsMutCell
+    ? { kind: "RefCellExpression", place: receiver }
+    : receiver;
+}
+
 function jsimMethodCallExpression(
   ctx: JsimContext,
   methodCallExpression: Semantics.MethodCallExpression,
 ): JSIM.Expression {
+  const loweredArgs = methodCallExpression.arguments.map((arg) =>
+    parseExpression(ctx, arg),
+  );
+  const target = ctx.methodTargets.get(methodCallExpression.method.tokenId);
+  if (target?.kind === "free") {
+    return {
+      kind: "CallExpression",
+      callee: {
+        kind: "Identifier",
+        value: resolvedMethodFreeFnName(ctx, target),
+        type: none(),
+      },
+      arguments: [
+        selfArgument(ctx, methodCallExpression),
+        ...loweredArgs,
+        ...defaultBodyWitnessArg(ctx, target),
+        ...methodCallWitnessArgs(ctx, methodCallExpression.method.tokenId),
+      ],
+    };
+  }
+  if (target?.kind === "witness") {
+    return {
+      kind: "MethodCallExpression",
+      receiver: {
+        kind: "Identifier",
+        value: resolvedWitnessParamName(ctx, target.witnessName),
+        type: none(),
+      },
+      method: target.methodName,
+      arguments: [selfArgument(ctx, methodCallExpression), ...loweredArgs],
+    };
+  }
+  if (target?.kind === "dyn") {
+    return jsimDynDispatch(ctx, methodCallExpression, target, loweredArgs);
+  }
+  // No resolved target - keep the plain JS method call.
   return {
     kind: "MethodCallExpression",
     receiver: parseExpression(ctx, methodCallExpression.receiver),
     method: methodCallExpression.method.text,
-    arguments: methodCallExpression.arguments.map((arg) =>
-      parseExpression(ctx, arg),
-    ),
+    arguments: loweredArgs,
   };
+}
+
+function jsimField(object: JSIM.Expression, field: string): JSIM.Expression {
+  return { kind: "FieldAccessExpression", object, field };
+}
+
+/** `d.witness.m(d.value, ...args)` for a `dyn Trait` method call, wrapped as a
+ * fresh `dyn` box (reusing `d.witness`) when the method returns `Self`. A
+ * side-effect-free place receiver is emitted twice; anything computed is
+ * bound once in an IIFE so it runs once. */
+function jsimDynDispatch(
+  ctx: JsimContext,
+  call: Semantics.MethodCallExpression,
+  target: Extract<MethodTarget, { kind: "dyn" }>,
+  loweredArgs: readonly JSIM.Expression[],
+): JSIM.Expression {
+  // `d.value` is the raw concrete value; a `&mut self` method body reads it
+  // through a `.v` cell (see L1), so wrap it in one whose setter writes back
+  // through the box.
+  const wantsMutCell =
+    isSome(call.receiverKind) &&
+    call.receiverKind.value.byRef &&
+    call.receiverKind.value.mutable;
+  const dispatch = (box: JSIM.Expression): JSIM.Expression => {
+    const selfArg: JSIM.Expression = wantsMutCell
+      ? { kind: "RefCellExpression", place: jsimField(box, "value") }
+      : jsimField(box, "value");
+    const inner: JSIM.Expression = {
+      kind: "MethodCallExpression",
+      receiver: jsimField(box, "witness"),
+      method: target.methodName,
+      arguments: [selfArg, ...loweredArgs],
+    };
+    return target.returnsSelf
+      ? {
+          kind: "DynBoxExpression",
+          place: inner,
+          witness: jsimField(box, "witness"),
+          mutableCell: false,
+          // The call's own result type is already the receiver's byval
+          // `DynType` regardless of whether the method returns `Self`,
+          // `&Self`, or `&mut Self` (`analyzeMethodCallExpression` doesn't
+          // distinguish them either) - `owned` has to agree with that type,
+          // or a bound result crashes with no `[Symbol.dispose]` to call.
+          owned: true,
+        }
+      : inner;
+  };
+  if (isRepeatablePlace(call.receiver)) {
+    return dispatch(parseExpression(ctx, call.receiver));
+  }
+  const recvName = reserveLocalName(ctx, "dynRecv");
+  return {
+    kind: "CallExpression",
+    callee: {
+      kind: "ArrowFunctionExpression",
+      params: [recvName],
+      body: [
+        {
+          kind: "ReturnStatement",
+          value: some(
+            dispatch({ kind: "Identifier", value: recvName, type: none() }),
+          ),
+        },
+      ],
+    },
+    arguments: [parseExpression(ctx, call.receiver)],
+  };
+}
+
+/** Whether lowering `expr` twice is safe - side-effect-free, so `d.witness`
+ * and `d.value` can each re-emit it (see the `dyn` dispatch double-emit note
+ * in the compiler CLAUDE.md). */
+function isRepeatablePlace(expr: Semantics.Expression): boolean {
+  switch (expr.kind) {
+    case "PathExpression":
+      // A local, a const path, or an enum-variant path - never side-effecting.
+      return true;
+    case "FieldAccessExpression":
+      return isRepeatablePlace(expr.object);
+    case "DereferenceExpression":
+      return isRepeatablePlace(expr.operand);
+    case "IndexExpression":
+      return (
+        isRepeatablePlace(expr.object) &&
+        (expr.index.kind === "IntLiteral" ||
+          expr.index.kind === "PathExpression")
+      );
+    default:
+      return false;
+  }
 }
 
 function jsimBlockExpression(
@@ -1879,6 +2547,16 @@ function jsimRangeExpression(
   };
 }
 
+/** The free-function name of a struct type's `Drop::drop` body.
+ * Enum `Drop` is not wired yet (a later ticket). */
+function structDropFn(ctx: JsimContext, type: Semantics.Type): Option<string> {
+  if (type.kind !== "StructType") return none();
+  const target = ctx.dropImpls.get(type.name);
+  return target === undefined
+    ? none()
+    : some(resolvedMethodFreeFnName(ctx, target));
+}
+
 function jsimStructExpression(
   ctx: JsimContext,
   { base, fields, path, type }: Semantics.StructExpression,
@@ -1900,12 +2578,19 @@ function jsimStructExpression(
           kind: "StructExpression",
           fields: ownFields,
           disposableFields,
+          dropFn: none(),
         }),
       ],
       disposableFields: ENUM_PAYLOAD_DISPOSABLE_FIELDS,
+      dropFn: none(),
     };
   }
-  return { kind: "StructExpression", fields: ownFields, disposableFields };
+  return {
+    kind: "StructExpression",
+    fields: ownFields,
+    disposableFields,
+    dropFn: structDropFn(ctx, type),
+  };
 }
 
 /** A tagged object with no `data` payload - a unit variant has no fields. */
@@ -1918,6 +2603,7 @@ function jsimEnumUnitVariantConstruction(
     kind: "StructExpression",
     fields: [jsimEnumTagField(variantName)],
     disposableFields: [],
+    dropFn: none(),
   };
 }
 
@@ -1943,6 +2629,7 @@ function jsimEnumTupleVariantConstruction(
       }),
     ],
     disposableFields: ENUM_PAYLOAD_DISPOSABLE_FIELDS,
+    dropFn: none(),
   };
 }
 
@@ -1952,6 +2639,7 @@ function jsimEnumTupleVariantConstruction(
 function jsimTupleStructConstruction(
   ctx: JsimContext,
   args: readonly Semantics.Expression[],
+  type: Semantics.Type,
 ): JSIM.Expression {
   return {
     kind: "StructExpression",
@@ -1964,6 +2652,7 @@ function jsimTupleStructConstruction(
       .map((arg, i) => ({ arg, name: String(i) }))
       .filter(({ arg }) => !hasCapability(arg.type, "copy"))
       .map(({ name }) => name),
+    dropFn: structDropFn(ctx, type),
   };
 }
 
@@ -2979,16 +3668,55 @@ function isTraitEqualityOperand(type: Semantics.Type): boolean {
   );
 }
 
+/** The `x.eq(y)`-shaped call a trait-dispatched `==` lowers to: a concrete
+ * free function, a generic body's witness slot, or (no resolved target - a
+ * type whose `PartialEq` is not yet reachable) the interim `left.eq(right)`
+ * method call. */
+function traitEqualityCall(
+  ctx: JsimContext,
+  target: MethodTarget | undefined,
+  left: JSIM.Expression,
+  right: JSIM.Expression,
+): JSIM.Expression {
+  if (target?.kind === "free") {
+    return {
+      kind: "CallExpression",
+      callee: {
+        kind: "Identifier",
+        value: resolvedMethodFreeFnName(ctx, target),
+        type: none(),
+      },
+      arguments: [left, right],
+    };
+  }
+  if (target?.kind === "witness") {
+    return {
+      kind: "MethodCallExpression",
+      receiver: {
+        kind: "Identifier",
+        value: resolvedWitnessParamName(ctx, target.witnessName),
+        type: none(),
+      },
+      method: "eq",
+      arguments: [left, right],
+    };
+  }
+  return {
+    kind: "MethodCallExpression",
+    receiver: left,
+    method: "eq",
+    arguments: [right],
+  };
+}
+
 function parseTraitEqualityComparison(
   ctx: JsimContext,
   binExp: Semantics.BinaryExpression,
 ): JSIM.Expression {
-  const call: JSIM.Expression = {
-    kind: "MethodCallExpression",
-    receiver: parseExpression(ctx, binExp.left),
-    method: "eq",
-    arguments: [parseExpression(ctx, binExp.right)],
-  };
+  const target = ctx.methodTargets.get(binExp.tokenId);
+  const left = parseExpression(ctx, binExp.left);
+  const right = parseExpression(ctx, binExp.right);
+  const call = traitEqualityCall(ctx, target, left, right);
   if (binExp.operator === "Ne") {
     return {
       kind: "UnaryExpression",

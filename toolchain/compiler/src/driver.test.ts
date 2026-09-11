@@ -391,7 +391,7 @@ describe("bodiless function signatures", (): void => {
 });
 
 describe("trait/impl declarations", (): void => {
-  it("compiles a trait and impl declaration cleanly, erasing both from the emitted JavaScript", (): void => {
+  it("erases the trait declaration but emits the impl's method body as a free function", (): void => {
     const result = compile(`
       trait Draw {
         fn draw(&self) -> str;
@@ -409,87 +409,1024 @@ describe("trait/impl declarations", (): void => {
     const { javascript } = result.code.value;
     assert(isSome(javascript), "Expected emitted JavaScript");
     expect(javascript.value).toContain("function main()");
-    expect(javascript.value).not.toContain("Draw");
-    expect(javascript.value).not.toContain("draw");
+    expect(javascript.value).toContain("function Point$Draw$draw(self)");
+    expect(javascript.value).toContain('return "point";');
+    expect(javascript.value).not.toContain("trait Draw");
+  });
+});
+
+/**
+ * Runs emitted Slice-1/4 JavaScript in a `new Function` sandbox with a mock
+ * `print`, mirroring the conformance suite's `executeHedgeCode`, and returns
+ * the captured `print` lines. For the runtime-worded acceptance criteria that
+ * a `toContain` shape check alone cannot pin.
+ */
+function runEmittedJs(javascript: string): string[] {
+  const stdout: string[] = [];
+  const env = {
+    print: (...args: unknown[]): void => {
+      stdout.push(args.join(""));
+    },
+  };
+  const body = javascript.startsWith("#!") ? `// ${javascript}` : javascript;
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  const fn = new Function(...Object.keys(env), body);
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+  fn(...Object.values(env));
+  return stdout;
+}
+
+function emittedJs(source: string): string {
+  const result = compile(source);
+  expect(result.diagnostics).toEqual([]);
+  assert(isSome(result.code), "Expected the program to compile");
+  const { javascript } = result.code.value;
+  assert(isSome(javascript), "Expected emitted JavaScript");
+  return javascript.value;
+}
+
+describe("method-call codegen", (): void => {
+  it("emits an inherent `&self` method as a free function and lowers the call to it", (): void => {
+    const js = emittedJs(`
+      struct Point { x: i32 }
+      impl Point {
+        fn get(&self) -> i32 { self.x }
+      }
+      fn main() {
+        let p = Point { x: 7 };
+        print(p.get());
+      }
+    `);
+    expect(js).toContain("function Point$get(self)");
+    expect(js).toContain("return self.x;");
+    expect(js).toContain("Point$get(p)");
+    expect(js).not.toContain("p.get()");
+    expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
+  it("threads a witness for a method's own bounded generic parameter, and runs", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { n: i32 }
+      impl Draw for P { fn draw(&self) -> i32 { self.n } }
+      struct Holder {}
+      impl Holder {
+        fn show<U: Draw>(&self, u: U) -> i32 { u.draw() }
+      }
+      fn main() {
+        let h = Holder {};
+        print(h.show(P { n: 3 }));
+      }
+    `);
+    expect(js).toContain("function Holder$show(self, u, _witness_U_Draw)");
+    expect(js).toContain("return _witness_U_Draw.draw(u);");
+    expect(js).toContain("Holder$show(h, ({n: 3");
+    expect(js).toContain("__witness_Draw_P)");
+    expect(runEmittedJs(js)).toEqual(["3"]);
+  });
+
+  it("passes a method's own arguments after the receiver", (): void => {
+    const js = emittedJs(`
+      struct Point { x: i32 }
+      impl Point {
+        fn add(&self, n: i32) -> i32 { self.x + n }
+      }
+      fn main() {
+        let p = Point { x: 7 };
+        print(p.add(5));
+      }
+    `);
+    expect(js).toContain("function Point$add(self, n)");
+    expect(js).toContain("Point$add(p, 5)");
+    expect(runEmittedJs(js)).toEqual(["12"]);
+  });
+
+  it("dispatches a trait method on a concrete receiver to the impl's free function", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct Point { x: i32 }
+      impl Draw for Point {
+        fn draw(&self) -> i32 { self.x }
+      }
+      fn main() {
+        let p = Point { x: 9 };
+        print(p.draw());
+      }
+    `);
+    expect(js).toContain("function Point$Draw$draw(self)");
+    expect(js).toContain("Point$Draw$draw(p)");
+    expect(js).not.toContain("p.draw()");
+    expect(runEmittedJs(js)).toEqual(["9"]);
+  });
+
+  it("suffixes a generated method free-function name that collides with a user function", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct Point { x: i32 }
+      impl Draw for Point { fn draw(&self) -> i32 { self.x } }
+      fn Point$Draw$draw() -> i32 { 0 }
+      fn main() {
+        let p = Point { x: 7 };
+        print(p.draw());
+        print(Point$Draw$draw());
+      }
+    `);
+    // The user function keeps its name; the generated one is suffixed and the
+    // call site follows it.
+    expect(js).toMatch(/function Point\$Draw\$draw\(\) \{\s*\n\s*return 0;/);
+    expect(js).toContain("function Point$Draw$draw_2(self)");
+    expect(js).toContain("Point$Draw$draw_2(p)");
+    expect(runEmittedJs(js)).toEqual(["7", "0"]);
+  });
+
+  it("alpha-renames a local that collides with a generated method free-function's name, and still dispatches to the method", (): void => {
+    const js = emittedJs(`
+      struct Point { x: i32 }
+      impl Point { fn get(&self) -> i32 { self.x } }
+      fn main() {
+        let Point$get = 0;
+        let p = Point { x: 7 };
+        print(Point$get);
+        print(p.get());
+      }
+    `);
+    expect(js).toContain("function Point$get(self)");
+    expect(js).not.toContain("const Point$get = 0;");
+    expect(runEmittedJs(js)).toEqual(["0", "7"]);
+  });
+
+  it("keeps an inherent method and a trait method on the same type as distinct free functions", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn describe(&self) -> i32; }
+      struct Point { x: i32 }
+      impl Point { fn raw(&self) -> i32 { self.x } }
+      impl Draw for Point { fn describe(&self) -> i32 { self.x + 1 } }
+      fn main() {
+        let p = Point { x: 10 };
+        print(p.raw());
+        print(p.describe());
+      }
+    `);
+    expect(js).toContain("function Point$raw(self)");
+    expect(js).toContain("function Point$Draw$describe(self)");
+    expect(js).toContain("Point$raw(p)");
+    expect(js).toContain("Point$Draw$describe(p)");
+    expect(runEmittedJs(js)).toEqual(["10", "11"]);
+  });
+
+  it("passes a by-value `self` receiver directly and moves the caller's binding", (): void => {
+    const src = `
+      struct Point { x: i32 }
+      impl Point {
+        fn consume(self) -> i32 { self.x }
+      }
+      fn main() {
+        let p = Point { x: 5 };
+        print(p.consume());
+      }
+    `;
+    const js = emittedJs(src);
+    expect(js).toContain("function Point$consume(self)");
+    expect(js).toContain("Point$consume(p)");
+    expect(runEmittedJs(js)).toEqual(["5"]);
+
+    const moved = compile(`
+      struct Point { x: i32 }
+      impl Point { fn consume(self) -> i32 { self.x } }
+      fn main() {
+        let p = Point { x: 5 };
+        let a = p.consume();
+        let b = p.consume();
+        print(a);
+      }
+    `);
+    expect(
+      moved.diagnostics.filter((d) => d.severity === "error"),
+    ).toHaveLength(1);
+  });
+
+  it("passes an accessor cell for a `&mut self` receiver and mutates the caller's binding", (): void => {
+    const js = emittedJs(`
+      struct Point { x: i32 }
+      impl Point {
+        fn bump(&mut self, n: i32) { self.x = self.x + n; }
+      }
+      fn main() {
+        let mut p = Point { x: 1 };
+        p.bump(3);
+        print(p.x);
+      }
+    `);
+    expect(js).toContain("function Point$bump(self, n)");
+    expect(js).toContain("self.v.x = ((self.v.x + n)|0);");
+    expect(js).toMatch(/Point\$bump\(\(\{ get v\(\) \{ return p; \}/);
+    expect(runEmittedJs(js)).toEqual(["4"]);
+  });
+
+  it("chains a method call on a struct another method returned", (): void => {
+    const js = emittedJs(`
+      struct Point { x: i32 }
+      impl Point {
+        fn twin(&self) -> Point { Point { x: self.x } }
+        fn val(&self) -> i32 { self.x }
+      }
+      fn main() {
+        let p = Point { x: 6 };
+        print(p.twin().val());
+      }
+    `);
+    expect(js).toContain("Point$val(Point$twin(p))");
+    expect(runEmittedJs(js)).toEqual(["6"]);
+  });
+
+  it("emits one free function however many sites call the method", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct Point { x: i32 }
+      impl Draw for Point { fn draw(&self) -> i32 { self.x } }
+      fn main() {
+        let p = Point { x: 1 };
+        let q = Point { x: 2 };
+        print(p.draw());
+        print(q.draw());
+      }
+    `);
+    expect(js.match(/function Point\$Draw\$draw\b/g)).toHaveLength(1);
+  });
+
+  it("does not emit a broken call for an unresolved method, reporting one error", (): void => {
+    const result = compile(`
+      struct Point { x: i32 }
+      fn main() {
+        let p = Point { x: 1 };
+        print(p.nope());
+      }
+    `);
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.code).toBe("HEDGE-TYPE-012");
+    expect(isNone(result.code)).toBe(true);
+  });
+
+  it("lowers a method call nested in an `if` branch and a struct field initializer", (): void => {
+    const js = emittedJs(`
+      struct Point { x: i32 }
+      struct Wrap { p: Point }
+      impl Point { fn get(&self) -> i32 { self.x } }
+      fn main() {
+        let p = Point { x: 4 };
+        let w = Wrap { p: Point { x: p.get() } };
+        if p.get() == 4 { print(w.p.x); }
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["4"]);
+  });
+
+  it("lowers a method that reads a `$`-containing field name", (): void => {
+    const js = emittedJs(`
+      struct P { x$1: i32 }
+      impl P { fn get(&self) -> i32 { self.x$1 } }
+      fn main() {
+        let p = P { x$1: 8 };
+        print(p.get());
+      }
+    `);
+    expect(js).toContain("return self.x$1;");
+    expect(runEmittedJs(js)).toEqual(["8"]);
+  });
+
+  it("emits a block-local impl's method as a top-level free function", (): void => {
+    const js = emittedJs(`
+      struct Widget { n: i32 }
+      fn build() -> i32 {
+        impl Widget { fn size(&self) -> i32 { self.n } }
+        let w = Widget { n: 3 };
+        w.size()
+      }
+      fn main() { print(build()); }
+    `);
+    expect(js).toContain("function Widget$size(self)");
+    expect(js).toContain("Widget$size(w)");
+    expect(runEmittedJs(js)).toEqual(["3"]);
+  });
+
+  it("emits a method body for an impl declared inside an `if` block", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      fn main() {
+        if true {
+          struct Local { n: i32 }
+          impl Draw for Local { fn draw(&self) -> i32 { self.n } }
+          let x = Local { n: 42 };
+          print(x.draw());
+        }
+      }
+    `);
+    expect(js).toContain("function Local$Draw$draw(self)");
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
+  it("emits a method body for an impl declared inside a `match` arm", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      fn pick(n: i32) -> i32 {
+        match n {
+          0 => {
+            struct L { v: i32 }
+            impl Draw for L { fn draw(&self) -> i32 { self.v } }
+            let l = L { v: 7 };
+            l.draw()
+          }
+          _ => 1,
+        }
+      }
+      fn main() { print(pick(0)); }
+    `);
+    expect(js).toContain("function L$Draw$draw(self)");
+    expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
+  it("keeps a block-local struct's method distinct from a shadowed top-level struct's", (): void => {
+    const result = compile(`
+      struct Point { x: i32 }
+      impl Point { fn get(&self) -> i32 { self.x } }
+      fn inner() -> i32 {
+        struct Point { y: i32 }
+        impl Point { fn get(&self) -> i32 { self.y } }
+        let p = Point { y: 9 };
+        p.get()
+      }
+      fn main() {
+        let p = Point { x: 4 };
+        print(p.get());
+        print(inner());
+      }
+    `);
+    assert(isSome(result.code), "Expected the program to compile");
+    const { javascript } = result.code.value;
+    assert(isSome(javascript), "Expected emitted JavaScript");
+    const js = javascript.value;
+    expect(js).toContain("function Point$get(self)");
+    expect(js).toContain("function Point$get_2(self)");
+    expect(runEmittedJs(js)).toEqual(["4", "9"]);
+  });
+
+  it("disposes an owned local declared inside a method body at method-scope end", (): void => {
+    const js = emittedJs(`
+      struct Res { fd: i32 }
+      struct Holder { x: i32 }
+      impl Holder {
+        fn work(&self) -> i32 { let r = Res { fd: 1 }; self.x }
+      }
+      fn main() { let h = Holder { x: 5 }; print(h.work()); }
+    `);
+    expect(js).toMatch(/function Holder\$work\(self\) \{\s*\n\s*using r = /);
+    expect(runEmittedJs(js)).toEqual(["5"]);
+  });
+
+  it("calls `Trait$m$default` for a trait default method the impl does not override, and runs", (): void => {
+    const js = emittedJs(`
+      trait Greet { fn hello(&self) -> i32 { 42 } }
+      struct P { x: i32 }
+      impl Greet for P {}
+      fn main() { let p = P { x: 1 }; print(p.hello()); }
+    `);
+    expect(js).toContain("Greet$hello$default(p, __witness_Greet_P)");
+    expect(js).not.toContain("p.hello()");
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
+  it("keeps method free functions out of the emitted `.d.ts`", (): void => {
+    const result = compile(`
+      struct Counter { n: i32 }
+      impl Counter { fn value(&self) -> i32 { self.n } }
+      pub fn read(c: Counter) -> i32 { c.value() }
+      fn main() { print(read(Counter { n: 1 })); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    assert(isSome(result.code), "Expected the program to compile");
+    const { typedef } = result.code.value;
+    assert(isSome(typedef), "Expected an emitted .d.ts");
+    expect(typedef.value).toContain("read");
+    expect(typedef.value).not.toContain("Counter$value");
+    expect(typedef.value).not.toContain("$");
   });
 });
 
 describe("== / != on a type with a PartialEq impl", (): void => {
-  const program = (op: "==" | "!="): string => `
-    struct Point { x: i32 }
-    impl PartialEq for Point {
-      fn eq(&self, other: &Self) -> bool { true }
-    }
-    fn main() {
-      let a = Point { x: 1 };
-      let b = Point { x: 2 };
-      let c = a ${op} b;
-      print("done");
-    }
-  `;
-
-  it("lowers `==` on a struct to a call of the impl's `eq` method", (): void => {
-    const result = compile(program("=="));
-    expect(result.diagnostics).toEqual([]);
-    assert(isSome(result.code), "Expected the program to compile");
-    const { javascript } = result.code.value;
-    assert(isSome(javascript), "Expected emitted JavaScript");
-    expect(javascript.value).toContain("a.eq(b)");
-    expect(javascript.value).not.toContain("a === b");
+  it("lowers `==` on a struct to a call of the impl's `eq` free function and runs it", (): void => {
+    const js = emittedJs(`
+      struct Point { x: i32 }
+      impl PartialEq for Point {
+        fn eq(&self, other: &Self) -> bool { self.x == other.x }
+      }
+      fn main() {
+        let a = Point { x: 3 };
+        let b = Point { x: 3 };
+        if a == b { print("equal"); }
+      }
+    `);
+    expect(js).toContain("Point$PartialEq$eq(a, b)");
+    expect(js).not.toContain("a.eq(b)");
+    expect(js).not.toContain("a === b");
+    expect(runEmittedJs(js)).toEqual(["equal"]);
   });
 
-  it("lowers `!=` on a struct to a negated call of the impl's `eq` method", (): void => {
-    const result = compile(program("!="));
-    expect(result.diagnostics).toEqual([]);
-    assert(isSome(result.code), "Expected the program to compile");
-    const { javascript } = result.code.value;
-    assert(isSome(javascript), "Expected emitted JavaScript");
-    expect(javascript.value).toContain("!a.eq(b)");
-    expect(javascript.value).not.toContain("a !== b");
+  it("lowers `!=` on a struct to a negated call of the impl's `eq` free function and runs it", (): void => {
+    const js = emittedJs(`
+      struct Point { x: i32 }
+      impl PartialEq for Point {
+        fn eq(&self, other: &Self) -> bool { self.x == other.x }
+      }
+      fn main() {
+        let a = Point { x: 3 };
+        let b = Point { x: 4 };
+        if a != b { print("different"); }
+      }
+    `);
+    expect(js).toContain("!Point$PartialEq$eq(a, b)");
+    expect(js).not.toContain("a.eq(b)");
+    expect(runEmittedJs(js)).toEqual(["different"]);
   });
 
-  it("lowers `==` on an enum to a call of the impl's `eq` method", (): void => {
-    const result = compile(`
+  it("lowers `==` on an enum to a call of the impl's `eq` free function and runs it", (): void => {
+    const js = emittedJs(`
       enum Dir { N, S }
-      impl PartialEq for Dir { fn eq(&self, other: &Self) -> bool { true } }
+      impl PartialEq for Dir {
+        fn eq(&self, other: &Self) -> bool { true }
+      }
       fn main() {
         let a = Dir::N;
         let b = Dir::S;
-        let c = a == b;
-        print("done");
+        if a == b { print("same tag"); }
       }
     `);
-    expect(result.diagnostics).toEqual([]);
-    assert(isSome(result.code), "Expected the program to compile");
-    const { javascript } = result.code.value;
-    assert(isSome(javascript), "Expected emitted JavaScript");
-    expect(javascript.value).toContain("a.eq(b)");
+    expect(js).toContain("Dir$PartialEq$eq(a, b)");
+    expect(js).not.toContain("a.eq(b)");
+    expect(runEmittedJs(js)).toEqual(["same tag"]);
   });
 
-  it("lowers `==` on `&Point` operands to a call of `eq`", (): void => {
-    const result = compile(`
+  it("lowers `==` on `&Point` operands to a call of the `eq` free function", (): void => {
+    const js = emittedJs(`
       struct Point { x: i32 }
       impl PartialEq for Point { fn eq(&self, other: &Self) -> bool { true } }
       fn eq_refs(a: &Point, b: &Point) -> bool { a == b }
       fn main() { print("done"); }
     `);
-    expect(result.diagnostics).toEqual([]);
-    assert(isSome(result.code), "Expected the program to compile");
-    const { javascript } = result.code.value;
-    assert(isSome(javascript), "Expected emitted JavaScript");
-    expect(javascript.value).toContain("a.eq(b)");
+    expect(js).toContain("Point$PartialEq$eq(a, b)");
+    expect(js).not.toContain("a.eq(b)");
   });
 
-  it("lowers `==` on a `PartialEq`-bound generic parameter to a call of `eq`", (): void => {
-    const result = compile(`
+  it("dispatches `==` on a `PartialEq`-bound generic parameter through the witness", (): void => {
+    const js = emittedJs(`
       fn same<T: PartialEq>(a: T, b: T) -> bool { a == b }
       fn main() { print("done"); }
     `);
-    expect(result.diagnostics).toEqual([]);
+    expect(js).toContain("_witness_T_PartialEq.eq(a, b)");
+    expect(js).not.toContain("a.eq(b)");
+  });
+
+  it("leaves `==` on a type whose `PartialEq` comes only from a blanket impl as a method call", (): void => {
+    const js = emittedJs(`
+      trait Marker {}
+      struct W { n: i32 }
+      impl Marker for W {}
+      impl<T: Marker> PartialEq for T { fn eq(&self, other: &Self) -> bool { true } }
+      fn main() {
+        let a = W { n: 1 };
+        let b = W { n: 2 };
+        if a == b { print("done"); }
+      }
+    `);
+    expect(js).toContain("a.eq(b)");
+    expect(js).not.toContain("W$PartialEq$eq");
+  });
+});
+
+describe("generic witness codegen", (): void => {
+  it("appends a hidden witness parameter for each of a generic function's trait bounds", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      fn draw_all<T: Draw>(t: &T) -> i32 { t.draw() }
+      fn main() { print(0); }
+    `);
+    expect(js).toContain("function draw_all(t, _witness_T_Draw)");
+  });
+
+  it("alpha-renames a body-local that collides with the hidden witness parameter's name, and runs", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { n: i32 }
+      impl Draw for P { fn draw(&self) -> i32 { self.n } }
+      fn f<T: Draw>(t: &T) -> i32 {
+        let _witness_T_Draw = 5;
+        _witness_T_Draw + t.draw()
+      }
+      fn main() {
+        let p = P { n: 9 };
+        print(f(&p));
+      }
+    `);
+    expect(js).toContain("_witness_T_Draw.draw(t)");
+    expect(js).not.toContain("_witness_T_Draw$1.draw(t)");
+    expect(runEmittedJs(js)).toEqual(["14"]);
+  });
+
+  it("alpha-renames a local declared before a generic call that collides with the hoisted witness const's name", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { n: i32 }
+      impl Draw for P { fn draw(&self) -> i32 { self.n } }
+      fn render<T: Draw>(t: T) -> i32 { t.draw() }
+      fn main() {
+        let __witness_Draw_P = 99;
+        print(__witness_Draw_P);
+        print(render(P { n: 3 }));
+      }
+    `);
+    expect(js).toContain("const __witness_Draw_P = {draw: P$Draw$draw};");
+    expect(js).toContain("const __witness_Draw_P$1 = 99;");
+    expect(js).toContain("render(({n: 3");
+    expect(runEmittedJs(js)).toEqual(["99", "3"]);
+  });
+
+  it("dispatches a trait method on a bound type parameter through its witness", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      fn draw_all<T: Draw>(t: &T) -> i32 { t.draw() }
+      fn main() { print(0); }
+    `);
+    expect(js).toContain("return _witness_T_Draw.draw(t);");
+    expect(js).not.toContain("t.draw()");
+  });
+
+  it("passes a hoisted witness object at a generic call site and runs end-to-end", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { x: i32 }
+      impl Draw for P { fn draw(&self) -> i32 { self.x } }
+      fn draw_all<T: Draw>(t: &T) -> i32 { t.draw() }
+      fn main() {
+        let p = P { x: 7 };
+        print(draw_all(&p));
+      }
+    `);
+    expect(js).toContain("const __witness_Draw_P = {draw: P$Draw$draw};");
+    expect(js).toContain("draw_all(p, __witness_Draw_P)");
+    expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
+  it("appends one witness parameter per bound, in bound order", (): void => {
+    const js = emittedJs(`
+      trait A { fn a(&self) -> i32; }
+      trait B { fn b(&self) -> i32; }
+      fn use_both<T: A + B>(t: &T) -> i32 { t.a() + t.b() }
+      fn main() { print(0); }
+    `);
+    expect(js).toContain("function use_both(t, _witness_T_A, _witness_T_B)");
+    expect(js).toContain("_witness_T_A.a(t)");
+    expect(js).toContain("_witness_T_B.b(t)");
+  });
+
+  it("orders witness parameters by type parameter, then bound", (): void => {
+    const js = emittedJs(`
+      trait A { fn a(&self) -> i32; }
+      trait B { fn b(&self) -> i32; }
+      fn pair<T: A, U: B>(t: &T, u: &U) -> i32 { t.a() + u.b() }
+      fn main() { print(0); }
+    `);
+    expect(js).toContain("function pair(t, u, _witness_T_A, _witness_U_B)");
+  });
+
+  it("forwards a caller's own witness to a nested generic call", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { x: i32 }
+      impl Draw for P { fn draw(&self) -> i32 { self.x } }
+      fn inner<U: Draw>(u: &U) -> i32 { u.draw() }
+      fn outer<T: Draw>(t: &T) -> i32 { inner(t) }
+      fn main() { let p = P { x: 5 }; print(outer(&p)); }
+    `);
+    expect(js).toContain("function outer(t, _witness_T_Draw)");
+    expect(js).toContain("inner(t, _witness_T_Draw)");
+    expect(runEmittedJs(js)).toEqual(["5"]);
+  });
+
+  it("forwards a witness two hops through nested generic calls", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { x: i32 }
+      impl Draw for P { fn draw(&self) -> i32 { self.x } }
+      fn deepest<A: Draw>(a: &A) -> i32 { a.draw() }
+      fn middle<B: Draw>(b: &B) -> i32 { deepest(b) }
+      fn top<C: Draw>(c: &C) -> i32 { middle(c) }
+      fn main() { let p = P { x: 3 }; print(top(&p)); }
+    `);
+    expect(js).toContain("middle(b, _witness_B_Draw)");
+    expect(js).toContain("deepest(b, _witness_B_Draw)");
+    expect(runEmittedJs(js)).toEqual(["3"]);
+  });
+
+  it("emits one JS function for a bounded generic instantiated at two concrete types", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct A { n: i32 }
+      struct B { n: i32 }
+      impl Draw for A { fn draw(&self) -> i32 { self.n } }
+      impl Draw for B { fn draw(&self) -> i32 { self.n + 1 } }
+      fn run<T: Draw>(t: &T) -> i32 { t.draw() }
+      fn main() {
+        let a = A { n: 10 };
+        let b = B { n: 20 };
+        print(run(&a));
+        print(run(&b));
+      }
+    `);
+    expect(js.match(/function run\b/g)).toHaveLength(1);
+    expect(runEmittedJs(js)).toEqual(["10", "21"]);
+  });
+
+  it("emits one JS function with no witness parameter for an unbounded generic at two types", (): void => {
+    const js = emittedJs(`
+      fn id<T>(x: T) -> T { x }
+      fn main() { print(id(1)); print(id(2)); }
+    `);
+    expect(js).toContain("function id(x)");
+    expect(js).not.toContain("_witness");
+    expect(js.match(/function id\b/g)).toHaveLength(1);
+    expect(runEmittedJs(js)).toEqual(["1", "2"]);
+  });
+
+  it("keeps witness parameters out of a `pub` generic function's `.d.ts`", (): void => {
+    const result = compile(`
+      trait Draw { fn draw(&self) -> i32; }
+      pub fn draw_all<T: Draw>(t: &T) -> i32 { t.draw() }
+      fn main() { print(0); }
+    `);
     assert(isSome(result.code), "Expected the program to compile");
-    const { javascript } = result.code.value;
-    assert(isSome(javascript), "Expected emitted JavaScript");
-    expect(javascript.value).toContain("a.eq(b)");
+    const { typedef } = result.code.value;
+    assert(isSome(typedef), "Expected a .d.ts");
+    expect(typedef.value).not.toContain("_witness");
+  });
+
+  it("does not emit witness codegen for an unsatisfied bound", (): void => {
+    const result = compile(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { x: i32 }
+      fn draw_all<T: Draw>(t: &T) -> i32 { t.draw() }
+      fn main() { let p = P { x: 1 }; print(draw_all(&p)); }
+    `);
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+    expect(isNone(result.code)).toBe(true);
+  });
+
+  it("rejects a generic bound satisfied only by a blanket impl, instead of hoisting a witness pointing at an unemitted function", (): void => {
+    const result = compile(`
+      trait A {}
+      trait B { fn f(&self) -> i32; }
+      impl<T: A> B for T { fn f(&self) -> i32 { 42 } }
+      struct Point { x: i32 }
+      impl A for Point {}
+      fn g<T: B>(x: T) -> i32 { x.f() }
+      fn main() { print(g(Point { x: 1 })); }
+    `);
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+    expect(isNone(result.code)).toBe(true);
+  });
+
+  it("rejects a method call on an unbounded type parameter without emitting a witness", (): void => {
+    const result = compile(`
+      trait Draw { fn draw(&self) -> i32; }
+      fn draw_all<T>(t: &T) -> i32 { t.draw() }
+      fn main() { print(0); }
+    `);
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.code).toBe("HEDGE-TYPE-012");
+  });
+
+  it("dispatches a `&mut self` trait method through a witness and mutates the caller's value", (): void => {
+    const js = emittedJs(`
+      trait Bump { fn bump(&mut self); }
+      struct C { n: i32 }
+      impl Bump for C { fn bump(&mut self) { self.n = self.n + 1; } }
+      fn bump_it<T: Bump>(t: &mut T) { t.bump() }
+      fn main() {
+        let mut c = C { n: 4 };
+        bump_it(&mut c);
+        print(c.n);
+      }
+    `);
+    // `t` is already a `&mut T` cell here, so it passes through unwrapped;
+    // the wrap happens at `bump_it(&mut c)` in `main`.
+    expect(js).toContain("_witness_T_Bump.bump(t)");
+    expect(js).toMatch(/bump_it\(\(\{ get v\(\) \{ return c; \}/);
+    expect(runEmittedJs(js)).toEqual(["5"]);
+  });
+
+  it("dispatches `==` on a `PartialEq`-bound parameter through the witness", (): void => {
+    const js = emittedJs(`
+      fn same<T: PartialEq>(a: T, b: T) -> bool { a == b }
+      fn main() { print(0); }
+    `);
+    expect(js).toContain("function same(a, b, _witness_T_PartialEq)");
+    expect(js).toContain("return _witness_T_PartialEq.eq(a, b);");
+    expect(js).not.toContain("a.eq(b)");
+  });
+
+  it("passes the shared primitive-eq witness at a `T: PartialEq` call with an integer, and runs", (): void => {
+    const js = emittedJs(`
+      fn same<T: PartialEq>(a: T, b: T) -> bool { a == b }
+      fn main() {
+        if same(2, 2) { print("eq"); }
+        if same(2, 3) { print("ne"); }
+      }
+    `);
+    expect(js).toContain(
+      "const __witnessPrimitiveEq = {eq: (a, b) => a === b};",
+    );
+    expect(js).toContain("same(2, 2, __witnessPrimitiveEq)");
+    expect(js.match(/const __witnessPrimitiveEq\b/g)).toHaveLength(1);
+    expect(runEmittedJs(js)).toEqual(["eq"]);
+  });
+
+  it("shares one primitive-eq witness between `T: PartialEq` and `T: Eq` calls", (): void => {
+    const js = emittedJs(`
+      fn peq<T: PartialEq>(a: T, b: T) -> bool { a == b }
+      fn teq<T: Eq>(a: T, b: T) -> bool { a == b }
+      fn main() {
+        if peq(1, 1) { print("p"); }
+        if teq('x', 'x') { print("t"); }
+      }
+    `);
+    expect(js).toContain("_witness_T_Eq.eq(a, b)");
+    expect(js.match(/const __witnessPrimitiveEq\b/g)).toHaveLength(1);
+    expect(js).toContain('teq("x", "x", __witnessPrimitiveEq)');
+    expect(runEmittedJs(js)).toEqual(["p", "t"]);
+  });
+
+  it("suffixes the primitive-eq witness const when it collides with a user top-level binding", (): void => {
+    const js = emittedJs(`
+      fn same<T: PartialEq>(a: T, b: T) -> bool { a == b }
+      fn __witnessPrimitiveEq() -> i32 { 0 }
+      fn main() {
+        if same(2, 2) { print("eq"); }
+        print(__witnessPrimitiveEq());
+      }
+    `);
+    expect(js).toMatch(/function __witnessPrimitiveEq\(\) \{\s*\n\s*return 0;/);
+    expect(js).toContain(
+      "const __witnessPrimitiveEq_2 = {eq: (a, b) => a === b};",
+    );
+    expect(js).toContain("same(2, 2, __witnessPrimitiveEq_2)");
+    expect(runEmittedJs(js)).toEqual(["eq", "0"]);
+  });
+
+  it("compiles and runs a generic `PartialEq` equality check on a boolean argument", (): void => {
+    const js = emittedJs(`
+      fn eq_check<T: PartialEq>(a: T, b: T) -> bool { a == b }
+      fn main() {
+        let ok = eq_check(true, true);
+        if ok { print("yes"); }
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["yes"]);
+  });
+
+  it("threads a witness for a bound declared in a `where` clause", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { x: i32 }
+      impl Draw for P { fn draw(&self) -> i32 { self.x } }
+      fn run<T>(t: &T) -> i32 where T: Draw { t.draw() }
+      fn main() { let p = P { x: 8 }; print(run(&p)); }
+    `);
+    expect(js).toContain("function run(t, _witness_T_Draw)");
+    expect(js).toContain("_witness_T_Draw.draw(t)");
+    expect(runEmittedJs(js)).toEqual(["8"]);
+  });
+});
+
+describe("trait default method codegen", (): void => {
+  const greetTrait = `
+    trait Greet {
+      fn name(&self) -> i32;
+      fn hello(&self) -> i32 { self.name() }
+    }
+    struct En { who: i32 }
+    impl Greet for En { fn name(&self) -> i32 { self.who } }
+  `;
+
+  it("emits a default method as `Trait$m$default` with a trailing witness parameter", (): void => {
+    const js = emittedJs(`
+      ${greetTrait}
+      fn main() { print(0); }
+    `);
+    expect(js).toContain(
+      "function Greet$hello$default(self, _witness_Self_Greet)",
+    );
+    expect(js).toContain("return _witness_Self_Greet.name(self);");
+  });
+
+  it("calls `Trait$m$default` with the hoisted witness for a concrete receiver, and runs", (): void => {
+    const js = emittedJs(`
+      ${greetTrait}
+      fn main() { let e = En { who: 42 }; print(e.hello()); }
+    `);
+    expect(js).toContain("Greet$hello$default(e, __witness_Greet_En)");
+    expect(js).toMatch(
+      /const __witness_Greet_En = \(\(\) => \{ const w = \{name: En\$Greet\$name\}; w\.hello = \(self, \.\.\.args\) => Greet\$hello\$default\(self, \.\.\.args, w\); return w; \}\)\(\);/,
+    );
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
+  it("dispatches a default method through a witness in a generic body, and runs", (): void => {
+    const js = emittedJs(`
+      ${greetTrait}
+      fn greet<T: Greet>(t: &T) -> i32 { t.hello() }
+      fn main() { let e = En { who: 7 }; print(greet(&e)); }
+    `);
+    expect(js).toContain("_witness_T_Greet.hello(t)");
+    expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
+  it("follows the suffixed default-body name at the call site when it collides with a user function", (): void => {
+    const js = emittedJs(`
+      ${greetTrait}
+      fn Greet$hello$default() -> i32 { 0 }
+      fn main() {
+        let e = En { who: 8 };
+        print(e.hello());
+        print(Greet$hello$default());
+      }
+    `);
+    expect(js).toContain(
+      "function Greet$hello$default_2(self, _witness_Self_Greet)",
+    );
+    expect(js).toContain("Greet$hello$default_2(e, __witness_Greet_En)");
+    expect(runEmittedJs(js)).toEqual(["8", "0"]);
+  });
+
+  it("passes a default method's own arguments before the witness", (): void => {
+    const js = emittedJs(`
+      trait Scale {
+        fn base(&self) -> i32;
+        fn scaled(&self, k: i32) -> i32 { self.base() * k }
+      }
+      struct N { v: i32 }
+      impl Scale for N { fn base(&self) -> i32 { self.v } }
+      fn main() { let n = N { v: 3 }; print(n.scaled(4)); }
+    `);
+    expect(js).toContain(
+      "function Scale$scaled$default(self, k, _witness_Self_Scale)",
+    );
+    expect(js).toContain("Scale$scaled$default(n, 4, __witness_Scale_N)");
+    expect(runEmittedJs(js)).toEqual(["12"]);
+  });
+
+  it("uses an impl's override, not `Trait$m$default`, when the impl provides the method", (): void => {
+    const js = emittedJs(`
+      trait Greet {
+        fn name(&self) -> i32;
+        fn hello(&self) -> i32 { self.name() }
+      }
+      struct En { who: i32 }
+      impl Greet for En {
+        fn name(&self) -> i32 { self.who }
+        fn hello(&self) -> i32 { self.who + 100 }
+      }
+      fn greet<T: Greet>(t: &T) -> i32 { t.hello() }
+      fn main() {
+        let e = En { who: 5 };
+        print(e.hello());
+        print(greet(&e));
+      }
+    `);
+    expect(js).toContain("hello: En$Greet$hello");
+    expect(js).not.toMatch(/w\.hello = /);
+    expect(js).toContain("En$Greet$hello(e)");
+    expect(runEmittedJs(js)).toEqual(["105", "105"]);
+  });
+
+  it("dispatches a default body's supertrait call through the enclosing trait's witness, and runs", (): void => {
+    const js = emittedJs(`
+      trait Base { fn base(&self) -> i32; }
+      trait Ext: Base {
+        fn ext(&self) -> i32 { self.base() + 1 }
+      }
+      struct S { n: i32 }
+      impl Base for S { fn base(&self) -> i32 { self.n } }
+      impl Ext for S {}
+      fn run<T: Ext>(t: &T) -> i32 { t.ext() }
+      fn main() {
+        let s = S { n: 10 };
+        print(s.ext());
+        print(run(&s));
+      }
+    `);
+    // `self.base()` in `Ext`'s default resolves to `Base` (a supertrait), so it
+    // dispatches through `_witness_Self_Ext`, whose flattened slots carry `base`.
+    expect(js).toContain("function Ext$ext$default(self, _witness_Self_Ext)");
+    expect(js).toContain("_witness_Self_Ext.base(self)");
+    expect(js).toMatch(
+      /const __witness_Ext_S = \(\(\) => \{ const w = \{base: S\$Base\$base\};/,
+    );
+    expect(runEmittedJs(js)).toEqual(["11", "11"]);
+  });
+
+  it("dispatches `==` on an `Eq`-bounded struct type parameter through the flattened witness, and runs", (): void => {
+    const js = emittedJs(`
+      struct P { x: i32 }
+      impl PartialEq for P { fn eq(&self, other: &Self) -> bool { self.x == other.x } }
+      impl Eq for P {}
+      fn same<T: Eq>(a: T, b: T) -> bool { a == b }
+      fn main() {
+        let a = P { x: 3 };
+        let b = P { x: 3 };
+        if same(a, b) { print("equal"); }
+      }
+    `);
+    expect(js).toContain("_witness_T_Eq.eq(a, b)");
+    expect(js).toContain("const __witness_Eq_P = {eq: P$PartialEq$eq};");
+    expect(runEmittedJs(js)).toEqual(["equal"]);
+  });
+
+  it("dispatches `==` in a supertrait default body through the enclosing trait's witness, and runs", (): void => {
+    const js = emittedJs(`
+      trait Same: PartialEq {
+        fn same_as(&self, other: &Self) -> bool { *self == *other }
+      }
+      struct P { x: i32 }
+      impl PartialEq for P { fn eq(&self, other: &Self) -> bool { self.x == other.x } }
+      impl Same for P {}
+      fn main() {
+        let a = P { x: 5 };
+        let b = P { x: 5 };
+        if a.same_as(&b) { print("yes"); }
+      }
+    `);
+    expect(js).toContain("_witness_Self_Same.eq(");
+    expect(runEmittedJs(js)).toEqual(["yes"]);
+  });
+
+  it("flattens a multi-level supertrait chain into one witness, deduplicating a diamond", (): void => {
+    const js = emittedJs(`
+      trait A { fn a(&self) -> i32; }
+      trait B: A { fn b(&self) -> i32; }
+      trait C: A { fn c(&self) -> i32; }
+      trait D: B + C {}
+      struct S { n: i32 }
+      impl A for S { fn a(&self) -> i32 { self.n } }
+      impl B for S { fn b(&self) -> i32 { self.n + 1 } }
+      impl C for S { fn c(&self) -> i32 { self.n + 2 } }
+      impl D for S {}
+      fn run<T: D>(t: &T) -> i32 { t.a() + t.b() + t.c() }
+      fn main() { let s = S { n: 10 }; print(run(&s)); }
+    `);
+    // `a` appears once in the D witness despite the B/C diamond.
+    expect(js.match(/a: S\$A\$a/g)).toHaveLength(1);
+    expect(runEmittedJs(js)).toEqual(["33"]);
+  });
+});
+
+describe("expected-type threading codegen", (): void => {
+  it("coerces array-literal elements to the declared element type and runs", (): void => {
+    const js = emittedJs(`
+      fn main() {
+        let xs: [i64; 3] = [1, 2, 3];
+        print(xs[0] + xs[2]);
+      }
+    `);
+    // i64 elements emit as bigint literals - a dropped coercion would emit
+    // `1`/`2`/`3` and the sum would still be "4", so pin the shape too.
+    expect(js).toContain("3n");
+    expect(runEmittedJs(js)).toEqual(["4"]);
+  });
+
+  it("coerces `if` branches to the declared binding type and runs", (): void => {
+    const js = emittedJs(`
+      fn main() {
+        let c = true;
+        let x: i64 = if c { 10 } else { 20 };
+        print(x + 5);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["15"]);
+  });
+
+  it("coerces `match` arms to the declared binding type and runs", (): void => {
+    const js = emittedJs(`
+      fn main() {
+        let n = 1;
+        let x: i64 = match n { 0 => 100, _ => 200 };
+        print(x + 1);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["201"]);
   });
 });
 
@@ -525,29 +1462,297 @@ describe("a rejected construct is named without an internal roadmap slice", (): 
   });
 });
 
-describe("dyn Trait as a type", (): void => {
-  it("throws at JSIM lowering for a semantically clean program that uses a dyn type, since dispatch codegen is not implemented yet", (): void => {
-    expect(() =>
-      compile(`
-        trait Draw {
-          fn draw(&self) -> str;
-        }
-        fn f(x: dyn Draw) {}
-        fn main() {
-          print("done");
-        }
-      `),
-    ).toThrow("dyn Trait code generation is not implemented yet");
+describe("dyn Trait runtime", (): void => {
+  const draw = `
+    trait Draw { fn draw(&self) -> i32; }
+    struct Circle { r: i32 }
+    struct Square { s: i32 }
+    impl Draw for Circle { fn draw(&self) -> i32 { self.r } }
+    impl Draw for Square { fn draw(&self) -> i32 { self.s } }
+  `;
+
+  it("unsize-coerces a concrete value at a `dyn` argument and dispatches through its witness", (): void => {
+    const js = emittedJs(`
+      ${draw}
+      fn render(d: dyn Draw) -> i32 { d.draw() }
+      fn main() { print(render(Circle { r: 7 })); }
+    `);
+    expect(js).toContain("witness: __witness_Draw_Circle");
+    expect(js).toContain(".witness.draw(");
+    expect(runEmittedJs(js)).toEqual(["7"]);
   });
 
-  it("throws at JSIM lowering for a dyn type nested inside an array parameter", (): void => {
-    expect(() =>
-      compile(`
-        trait Draw { fn draw(&self) -> str; }
-        fn f(xs: [dyn Draw; 2]) {}
-        fn main() { print("done"); }
-      `),
-    ).toThrow("dyn Trait code generation is not implemented yet");
+  it("dispatches heterogeneously through each element's own witness", (): void => {
+    const js = emittedJs(`
+      ${draw}
+      fn render(d: &dyn Draw) -> i32 { d.draw() }
+      fn main() {
+        let a = Circle { r: 3 };
+        let b = Square { s: 5 };
+        print(render(&a) + render(&b));
+      }
+    `);
+    expect(js).toContain("__witness_Draw_Circle");
+    expect(js).toContain("__witness_Draw_Square");
+    expect(runEmittedJs(js)).toEqual(["8"]);
+  });
+
+  it("holds heterogeneous concrete values in a `[dyn Trait; N]` and dispatches per element", (): void => {
+    const js = emittedJs(`
+      ${draw}
+      fn main() {
+        let xs: [dyn Draw; 3] = [Circle { r: 1 }, Square { s: 2 }, Circle { r: 4 }];
+        print(xs[0].draw() + xs[1].draw() + xs[2].draw());
+      }
+    `);
+    expect(js).toContain("__witness_Draw_Circle");
+    expect(js).toContain("__witness_Draw_Square");
+    expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
+  it("coerces a bounded generic parameter to `dyn Trait` and dispatches on it", (): void => {
+    const js = emittedJs(`
+      ${draw}
+      fn erase<T: Draw>(x: T) -> dyn Draw { x }
+      fn main() { print(erase(Circle { r: 6 }).draw()); }
+    `);
+    expect(js).toContain("_witness_T_Draw");
+    expect(runEmittedJs(js)).toEqual(["6"]);
+  });
+
+  it("re-wraps a `-> Self` method result as a fresh `dyn` value", (): void => {
+    const js = emittedJs(`
+      trait Grow { fn grown(&self) -> Self; fn size(&self) -> i32; }
+      struct Box2 { w: i32 }
+      impl Grow for Box2 {
+        fn grown(&self) -> Self { Box2 { w: self.w + 1 } }
+        fn size(&self) -> i32 { self.w }
+      }
+      fn main() {
+        let d: dyn Grow = Box2 { w: 5 };
+        print(d.grown().size());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["6"]);
+  });
+
+  it("disposes a `-> Self` method result bound to its own `let`, without throwing", (): void => {
+    const js = emittedJs(`
+      trait Grow { fn grown(&self) -> Self; fn size(&self) -> i32; }
+      struct Box2 { w: i32 }
+      impl Grow for Box2 {
+        fn grown(&self) -> Self { Box2 { w: self.w + 1 } }
+        fn size(&self) -> i32 { self.w }
+      }
+      fn main() {
+        let d: dyn Grow = Box2 { w: 5 };
+        let e = d.grown();
+        print(e.size());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["6"]);
+  });
+
+  it("coerces a `dyn` return value and dispatches on the result", (): void => {
+    const js = emittedJs(`
+      ${draw}
+      fn pick() -> dyn Draw { Square { s: 9 } }
+      fn main() { print(pick().draw()); }
+    `);
+    expect(runEmittedJs(js)).toEqual(["9"]);
+  });
+
+  it("propagates a `&mut self` whole-value reassignment through `&mut dyn`", (): void => {
+    const js = emittedJs(`
+      trait Bump { fn bump(&mut self); fn value(&self) -> i32; }
+      struct N { n: i32 }
+      impl Bump for N {
+        fn bump(&mut self) { *self = N { n: self.n + 1 }; }
+        fn value(&self) -> i32 { self.n }
+      }
+      fn go(d: &mut dyn Bump) { d.bump(); }
+      fn main() {
+        let mut x = N { n: 10 };
+        go(&mut x);
+        print(x.value());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["11"]);
+  });
+
+  it("propagates an `&mut self` write through `&mut dyn` when an existing `&mut T` binding is passed directly, not a fresh `&mut x`", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn bump(&mut self); fn value(&self) -> i32; }
+      struct P { n: i32 }
+      impl Draw for P {
+        fn bump(&mut self) { self.n = self.n + 1; }
+        fn value(&self) -> i32 { self.n }
+      }
+      fn bump_dyn(d: &mut dyn Draw) { d.bump(); }
+      fn helper(r: &mut P) { bump_dyn(r); }
+      fn main() {
+        let mut p = P { n: 5 };
+        helper(&mut p);
+        print(p.value());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["6"]);
+  });
+
+  it("propagates a whole-value `&mut self` reassignment through `&mut dyn` when the borrowed place is an array element", (): void => {
+    // A field write alone (`self.n = ...`) never exercises the box's own
+    // `value` setter - only a whole-value `*self = ...` reassignment calls
+    // it, which is the shape that actually reaches the array-index place's
+    // emitted (invalid, pre-fix) assignment target.
+    const js = emittedJs(`
+      trait Draw { fn bump(&mut self); fn value(&self) -> i32; }
+      struct P { n: i32 }
+      impl Draw for P {
+        fn bump(&mut self) { *self = P { n: self.n + 1 }; }
+        fn value(&self) -> i32 { self.n }
+      }
+      fn bump_dyn(d: &mut dyn Draw) { d.bump(); }
+      fn main() {
+        let mut xs = [P { n: 1 }, P { n: 2 }];
+        bump_dyn(&mut xs[0]);
+        print(xs[0].value());
+        print(xs[1].value());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["2", "2"]);
+  });
+
+  it("emits a `.d.ts` with an `unknown` param for a pub fn taking `dyn Trait`, without throwing", (): void => {
+    const result = compile(`
+      trait Draw { fn draw(&self) -> i32; }
+      pub fn render(d: dyn Draw) -> i32 { d.draw() }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+    assert(isSome(result.code), "expected code");
+    const { typedef } = result.code.value;
+    assert(isSome(typedef), "expected .d.ts");
+    expect(typedef.value).toContain("unknown");
+  });
+
+  it("does not hoist a witness const for a `dyn`-typed associated const, which nothing boxes", (): void => {
+    const js = emittedJs(`
+      ${draw}
+      struct Holder {}
+      impl Holder { const N: dyn Draw = Circle { r: 1 }; }
+      fn main() { print(1); }
+    `);
+    expect(js).not.toContain("__witness");
+  });
+
+  it("runs the wrapped value's `drop` at scope end for a by-value `dyn` binding", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct Loud { id: i32 }
+      impl Draw for Loud { fn draw(&self) -> i32 { self.id } }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      fn main() {
+        let d: dyn Draw = Loud { id: 5 };
+        print(d.draw());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["5", "5"]);
+  });
+
+  it("does not dispose a borrowed `&dyn` box, since the caller still owns the value", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct Loud { id: i32 }
+      impl Draw for Loud { fn draw(&self) -> i32 { self.id } }
+      impl Drop for Loud { fn drop(&mut self) { print(99); } }
+      fn show(d: &dyn Draw) -> i32 { d.draw() }
+      fn main() {
+        let v = Loud { id: 3 };
+        print(show(&v));
+        print(0);
+      }
+    `);
+    // Loud's drop (99) runs once, at main's scope end after 0 - not again
+    // when the borrowed box in show goes out of scope.
+    expect(runEmittedJs(js)).toEqual(["3", "0", "99"]);
+  });
+
+  it("coerces a direct rebind of a `dyn` variable to a new concrete type, and dispatches on it", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { n: i32 }
+      impl Draw for P { fn draw(&self) -> i32 { self.n } }
+      struct Square { s: i32 }
+      impl Draw for Square { fn draw(&self) -> i32 { self.s } }
+      fn main() {
+        let mut d: dyn Draw = P { n: 1 };
+        d = Square { s: 2 };
+        print(d.draw());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["2"]);
+  });
+});
+
+describe("Drop::drop dispose body", (): void => {
+  it("runs the resolved `drop` body at scope end", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud {
+        fn drop(&mut self) { print(self.id); }
+      }
+      fn main() {
+        let a = Loud { id: 1 };
+        print(0);
+      }
+    `);
+    expect(js).toContain("Loud$Drop$drop(");
+    expect(runEmittedJs(js)).toEqual(["0", "1"]);
+  });
+
+  it("runs `drop` before releasing the struct's own fields", (): void => {
+    const js = emittedJs(`
+      struct Inner { tag: i32 }
+      impl Drop for Inner { fn drop(&mut self) { print(self.tag); } }
+      struct Outer { inner: Inner }
+      impl Drop for Outer { fn drop(&mut self) { print(99); } }
+      fn main() {
+        let o = Outer { inner: Inner { tag: 7 } };
+        print(0);
+      }
+    `);
+    // Outer's drop (99) runs, then its `inner` field is released (7).
+    expect(runEmittedJs(js)).toEqual(["0", "99", "7"]);
+  });
+
+  it("rejects `impl Drop` for an enum rather than silently ignoring it", (): void => {
+    const result = compile(`
+      enum State { On, Off }
+      impl Drop for State { fn drop(&mut self) { print(1); } }
+      fn main() {}
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toContain(
+      "`Drop` for an enum is not yet supported",
+    );
+  });
+
+  it("keeps the no-op disposer for a struct with no `Drop` impl", (): void => {
+    const js = emittedJs(`
+      struct Plain { x: i32 }
+      fn main() { let p = Plain { x: 1 }; print(p.x); }
+    `);
+    expect(js).not.toContain("$Drop$drop");
+    expect(js).toContain("[Symbol.dispose]() {}");
+  });
+
+  it("runs `drop` for a tuple struct too", (): void => {
+    const js = emittedJs(`
+      struct Res(i32);
+      impl Drop for Res { fn drop(&mut self) { print(42); } }
+      fn main() { let r = Res(5); print(0); }
+    `);
+    expect(js).toContain("Res$Drop$drop(");
+    expect(runEmittedJs(js)).toEqual(["0", "42"]);
   });
 });
 

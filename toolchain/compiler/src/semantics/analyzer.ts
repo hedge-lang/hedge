@@ -25,7 +25,11 @@ import {
   type ConstFoldOutcome,
   type FoldWidth,
 } from "./const-eval.js";
-import { hasCapability, type TypeCapability } from "./type-capabilities.js";
+import {
+  hasCapability,
+  primitiveImplementsEq,
+  type TypeCapability,
+} from "./type-capabilities.js";
 
 export interface AnalysisResult {
   readonly diagnostics: readonly Diagnostic[];
@@ -36,14 +40,111 @@ export interface AnalysisResult {
    * to turn into a hidden witness argument later. A call with unresolved
    * bounds carries no entry (analysis already reported the diagnostic). */
   readonly witnesses: ReadonlyMap<number, readonly WitnessRef[]>;
+  /** Where codegen finds the free function backing a resolved method call
+   * (keyed by the method-name token) and a trait-dispatched `==`/`!=` (keyed
+   * by the operator token). Absent when the call/operator did not resolve
+   * through a concrete impl. */
+  readonly methodTargets: ReadonlyMap<number, MethodTarget>;
+  /** The same `MethodTarget` for each impl-provided method that should emit
+   * as a free function, keyed by its own body `tokenId`. Produced here (not
+   * re-derived in codegen) so an emission and its call sites always agree,
+   * shadowed local types included. */
+  readonly implMethodTargets: ReadonlyMap<number, FreeMethodTarget>;
+  /** The hidden witness parameters a generic function body carries, keyed by
+   * the function body's `tokenId`, one per resolved trait bound in
+   * `(param-declaration, bound)` order - the shape codegen appends after the
+   * real parameters. Absent for a function with no bounded type parameter. */
+  readonly witnessParams: ReadonlyMap<number, readonly WitnessParam[]>;
+  /** Witness objects codegen must still hoist even though no generic *call*
+   * site referenced them - a concrete receiver calling a trait default
+   * method needs the `(type, trait)` witness passed to `Trait$m$default`. */
+  readonly extraWitnesses: readonly WitnessRef[];
+  /** Each expression that is unsize-coerced to `dyn Trait` in the position it
+   * fills, keyed by the expression's own `tokenId`. Codegen wraps the
+   * expression as `{ value, witness }` using `witness`, and restores
+   * `sourceType` on the wrapped node (its own `.type` was rewritten to the
+   * `dyn` target here) so struct/enum lowering still sees the concrete type. */
+  readonly unsizeCoercions: ReadonlyMap<number, UnsizeCoercion>;
+  /** Struct/enum scope-qualified type ids that have a `Drop` impl, mapped to
+   * the `drop` method's free-function target. Codegen calls it from the
+   * type's `[Symbol.dispose]` before releasing the fields. */
+  readonly dropImpls: ReadonlyMap<string, FreeMethodTarget>;
+  /** Witnesses resolved for a concrete-receiver method call's own bounded
+   * generic parameters (the method's own `<U: Trait>`), keyed by the
+   * method-name token (same convention as `methodTargets`), one entry per
+   * satisfied bound in declared-parameter order. Codegen passes these as
+   * trailing arguments alongside the call, mirroring an ordinary generic
+   * function call's `witnesses`. */
+  readonly methodCallWitnesses: ReadonlyMap<number, readonly WitnessRef[]>;
 }
 
-/** One trait method a witness carries, and where its implementation comes
- * from: the impl's own override, or the trait's own default body when the
- * impl doesn't override it. */
-interface WitnessMethod {
+/** One hidden witness parameter of a generic function: `_witness_T_Draw` for
+ * a `T: Draw` bound. */
+export interface WitnessParam {
+  readonly name: string;
+  readonly paramName: string;
+  readonly traitName: string;
+}
+
+/** The one place the `_witness_<param>_<trait>` naming scheme is defined -
+ * `param` is a type-parameter name or `Self` (a trait default body), `trait`
+ * is a bare trait name. */
+export function witnessParamName(param: string, trait: string): string {
+  return `_witness_${param}_${trait}`;
+}
+
+/**
+ * How a resolved method call (or trait-dispatched `==`) lowers.
+ *
+ * `free` - a call on a concrete type, to an emitted free function:
+ * `<typeName>$<methodName>` for an inherent method,
+ * `<typeName>$<traitName>$<methodName>` for a trait impl,
+ * `<traitName>$<methodName>$default` when `isDefaultBody`. `typeId` is the
+ * scope-qualified `StructType`/`EnumType` identity - distinct per declaration
+ * even when two types share `typeName`, so codegen keys its name-reservation
+ * map on it rather than the collision-prone readable name.
+ *
+ * `witness` - a call inside a generic body, dispatched through the witness
+ * parameter `witnessName` (`_witness_T_Draw`, or `_witness_Self_Foo` in a
+ * trait default body).
+ */
+export interface FreeMethodTarget {
+  readonly kind: "free";
+  readonly typeId: string;
+  readonly typeName: string;
+  readonly traitName: Option<string>;
+  readonly methodName: string;
+  readonly isDefaultBody: boolean;
+}
+
+interface WitnessMethodTarget {
+  readonly kind: "witness";
+  readonly witnessName: string;
+  readonly methodName: string;
+}
+
+/** A call on a `dyn Trait` receiver: dispatched through the receiver's own
+ * `.witness` field against its `.value`. `returnsSelf` re-wraps the result as
+ * a fresh `dyn` box reusing that witness. */
+interface DynMethodTarget {
+  readonly kind: "dyn";
+  readonly methodName: string;
+  readonly returnsSelf: boolean;
+}
+
+export type MethodTarget =
+  FreeMethodTarget | WitnessMethodTarget | DynMethodTarget;
+
+/** One trait method a witness carries, flattened across the trait's
+ * supertrait chain. `definingTrait` is the bare name of the trait that
+ * actually declares the method (so codegen names its free function
+ * `<Type>$<definingTrait>$<name>` / `<definingTrait>$<name>$default`);
+ * `source` is whether the relevant impl provides it or it falls back to a
+ * default body. */
+export interface WitnessMethod {
   readonly name: string;
   readonly source: "impl" | "default";
+  readonly definingTrait: string;
 }
 
 /**
@@ -54,12 +155,19 @@ interface WitnessMethod {
  * since the concrete type isn't known until whatever calls the enclosing
  * function supplies it; codegen forwards the enclosing function's own
  * received witness for `paramName` instead of resolving a new one.
+ * `Primitive` covers a primitive argument satisfying `PartialEq`/`Eq`, which
+ * has no impl - codegen synthesizes the witness.
  */
-type WitnessRef =
+export type WitnessRef =
   | {
       readonly kind: "Impl";
       readonly traitName: string;
+      /** Bare readable type name (`Point`). */
       readonly typeName: string;
+      /** Scope-qualified type identity, matching `FreeMethodTarget.typeId` -
+       * so codegen resolves the same collision-safe free-function names the
+       * impl's own methods emitted under. */
+      readonly typeId: string;
       readonly implTokenId: number;
       readonly methods: readonly WitnessMethod[];
     }
@@ -67,7 +175,19 @@ type WitnessRef =
       readonly kind: "Forwarded";
       readonly traitName: string;
       readonly paramName: string;
+    }
+  | {
+      readonly kind: "Primitive";
+      readonly traitName: string;
     };
+
+/** A recorded unsize coercion of a concrete value to `dyn Trait`: the
+ * resolved impl witness, plus the pre-coercion concrete type (the coerced
+ * node's own `.type` is rewritten to the `dyn` target). */
+export interface UnsizeCoercion {
+  readonly witness: WitnessRef;
+  readonly sourceType: Semantics.Type;
+}
 
 /**
  * Everything one lexical scope owns, in a single object so a scope is pushed
@@ -143,6 +263,19 @@ interface AnalysisContext {
   /** Mutable build-up of `AnalysisResult.witnesses`, keyed by call-site
    * `tokenId`. */
   readonly witnessTable: Map<number, WitnessRef[]>;
+  /** Mutable build-up of `AnalysisResult.methodTargets`. */
+  readonly methodTargetTable: Map<number, MethodTarget>;
+  /** Mutable build-up of `AnalysisResult.implMethodTargets`. */
+  readonly implMethodTargetTable: Map<number, FreeMethodTarget>;
+  /** Mutable build-up of `AnalysisResult.witnessParams`. */
+  readonly witnessParamTable: Map<number, readonly WitnessParam[]>;
+  readonly extraWitnessRefs: WitnessRef[];
+  /** Mutable build-up of `AnalysisResult.unsizeCoercions`. */
+  readonly unsizeCoercionTable: Map<number, UnsizeCoercion>;
+  /** Mutable build-up of `AnalysisResult.dropImpls`. */
+  readonly dropImplTable: Map<string, FreeMethodTarget>;
+  /** Mutable build-up of `AnalysisResult.methodCallWitnesses`. */
+  readonly methodCallWitnessTable: Map<number, readonly WitnessRef[]>;
   /**
    * What `Self` means at the innermost currently-open trait or impl body -
    * only the top is ever consulted, same lifecycle as `genericParamStack`. A
@@ -2257,6 +2390,16 @@ function analyzeMethodItem(
     : undefined;
   let ownershipView: Option<Semantics.FunctionDef> = none();
   if (method.kind === "Function") {
+    // The merged (impl/trait-plus-method) generic scope, same as an
+    // ordinary generic `fn` - a bound used inside the body (an impl-level
+    // `T: Draw` or the method's own `U: Draw`) needs this to get its hidden
+    // witness parameter at all, not just to resolve cleanly.
+    recordWitnessParams(
+      ctx,
+      method.tokenId,
+      merged.generics,
+      merged.whereClause,
+    );
     if (selfParam !== undefined) {
       bind(ctx, "self", {
         type: selfParam.type,
@@ -2306,6 +2449,33 @@ function abstractSelfType(tokenId: number): Semantics.Type {
   };
 }
 
+/** A bodied trait method emits as `Trait$m$default(self, ...args,
+ * _witness_Self_<Trait>)` - a `free` `MethodTarget` codegen keys on
+ * (`isDefaultBody`), plus a trailing witness parameter its own `self.other()`
+ * sibling calls dispatch through. */
+function recordDefaultMethodTarget(
+  ctx: AnalysisContext,
+  decl: Parser.FunctionDef,
+  traitId: string,
+): void {
+  const trait = bareTypeName(traitId);
+  ctx.implMethodTargetTable.set(decl.tokenId, {
+    kind: "free",
+    typeId: traitId,
+    typeName: trait,
+    traitName: some(trait),
+    methodName: decl.signature.name.text,
+    isDefaultBody: true,
+  });
+  ctx.witnessParamTable.set(decl.tokenId, [
+    {
+      name: witnessParamName("Self", trait),
+      paramName: "Self",
+      traitName: trait,
+    },
+  ]);
+}
+
 /** The real, diagnostic-emitting counterpart to `buildTraitDecl` - resolves
  * every method's own `params`/`returnType` for real (and analyzes each
  * default method's body), with `Self`/`Self::Assoc` resolving against this
@@ -2335,8 +2505,9 @@ function analyzeTraitDecl(
         item.whereClause,
         abstractSelf,
       );
-      if (isSome(analyzed.ownershipView)) {
+      if (decl.kind === "Function" && isSome(analyzed.ownershipView)) {
         methodBodies.push(analyzed.ownershipView.value);
+        recordDefaultMethodTarget(ctx, decl, shallow.traitId);
       }
       return [
         {
@@ -2449,6 +2620,8 @@ function analyzeImplDecl(
       );
       if (isSome(analyzed.ownershipView)) {
         methodBodies.push(analyzed.ownershipView.value);
+        recordImplMethodTarget(ctx, decl, targetType, traitName);
+        recordDropImpl(ctx, decl, targetType, traitName);
       }
       return [
         {
@@ -2482,6 +2655,7 @@ function checkAssociatedConst(
     analyzeExpression(ctx, decl.value),
     declaredType,
     decl.value.tokenId,
+    false,
   );
   if (mismatch) {
     emitError(
@@ -2560,7 +2734,29 @@ function resolveTraitBound(
         : none();
     }
   }
+  const primitiveWitness = resolvePrimitiveTraitBound(ctx, type, traitName);
+  if (isSome(primitiveWitness)) return primitiveWitness;
   return resolveTraitBoundForTypeName(ctx, typeIdentity(type), traitName);
+}
+
+/** A primitive argument satisfies the prelude `PartialEq` (any type
+ * comparable with `==`) and `Eq` (all but the floats - see
+ * `primitiveImplementsEq`) with no impl, via a codegen-synthesized witness.
+ * Only the prelude's own `PartialEq`/`Eq` count - a block-local trait of the
+ * same name resolves through the normal impl path. */
+function resolvePrimitiveTraitBound(
+  ctx: AnalysisContext,
+  type: Semantics.Type,
+  traitName: string,
+): Option<WitnessRef> {
+  const satisfies =
+    (traitName === lookupPreludeTrait(ctx, "PartialEq") &&
+      hasCapability(type, "equality")) ||
+    (traitName === lookupPreludeTrait(ctx, "Eq") &&
+      primitiveImplementsEq(type));
+  return satisfies
+    ? some({ kind: "Primitive", traitName: bareTypeName(traitName) })
+    : none();
 }
 
 /**
@@ -2648,9 +2844,38 @@ function resolveTraitBoundForTypeName(
     kind: "Impl",
     traitName: bareTypeName(traitName),
     typeName: bareTypeName(typeName),
+    typeId: typeName,
     implTokenId: impl.tokenId,
-    methods: witnessMethods(ctx, impl),
+    methods: witnessMethods(ctx, traitName, typeName),
   });
+}
+
+/**
+ * Whether `witness` is an `Impl` ref backed by a blanket impl - deliberately
+ * *not* folded into `resolveTraitBound`/`resolveTraitBoundForTypeName`
+ * themselves, since a blanket-satisfied bound is genuinely satisfied
+ * (`needs_b<U: B>(point)` with `B` only blanket-implemented is valid Hedge
+ * with zero diagnostics, and `==`'s own operand-resolves gate needs that
+ * fact too) - only whether codegen can actually reference the witness. A
+ * blanket impl's method bodies aren't emitted as free functions
+ * (`buildMethodIndex` skips them), so a witness object built from one would
+ * carry slots referencing functions that don't exist; each site that would
+ * hoist or pass such a witness checks this first and treats the bound as
+ * unresolved for codegen purposes, leaving the semantic "is it satisfied"
+ * answer (and any diagnostic that follows from *that* being false) alone.
+ */
+function witnessIsUnemittableBlanket(
+  ctx: AnalysisContext,
+  witness: WitnessRef,
+): boolean {
+  if (witness.kind !== "Impl") return false;
+  // By `implTokenId`, not `findRegisteredImpl(typeId, traitName)` - the ref
+  // only carries `traitName` as a bare display name (`bareTypeName`), not
+  // the scoped `traitRegistry` key that lookup needs.
+  return (
+    ctx.implRegistry.find((impl) => impl.tokenId === witness.implTokenId)
+      ?.isBlanket ?? false
+  );
 }
 
 /** `Self::assocName` inside an impl, when the impl's own definitions don't
@@ -2679,24 +2904,51 @@ function resolveAssociatedTypeViaSupertrait(
   return impl?.associatedTypeDefs.get(assocName);
 }
 
-/** An impl's own witness method list: every one of its trait's methods, in
- * the trait's own interleaved declaration order (source order, not grouped
- * by required-vs-default), each marked `"impl"` when this impl provides or
- * overrides it and `"default"` when it falls back to the trait's own
- * default body. */
+/** Every method a `typeName: traitId` witness carries, flattened across
+ * `traitId`'s supertrait chain (cycle-guarded, deduplicated by method name -
+ * the nearest trait in the chain wins). A supertrait method's `source`
+ * consults *that* supertrait's own impl for `typeName`. */
 function witnessMethods(
   ctx: AnalysisContext,
-  impl: RegisteredImpl,
+  traitId: string,
+  typeName: string,
 ): readonly WitnessMethod[] {
-  const trait = ctx.traitRegistry.get(impl.traitName);
-  if (trait === undefined) return [];
-  return trait.methods.map((method): WitnessMethod => ({
-    name: method.name,
-    source:
-      !method.isDefault || impl.providedMethods.includes(method.name)
-        ? "impl"
-        : "default",
-  }));
+  const byName = new Map<string, WitnessMethod>();
+  collectWitnessMethods(ctx, traitId, typeName, new Set(), byName);
+  return [...byName.values()];
+}
+
+/** Walks one supertrait DAG, filling `byName`. `seen` and `byName` are shared
+ * across the whole walk - not copied per branch - so a diamond's shared
+ * ancestor is visited (and its methods recorded) exactly once. */
+function collectWitnessMethods(
+  ctx: AnalysisContext,
+  traitId: string,
+  typeName: string,
+  seen: Set<string>,
+  byName: Map<string, WitnessMethod>,
+): void {
+  if (seen.has(traitId)) return;
+  seen.add(traitId);
+  const trait = ctx.traitRegistry.get(traitId);
+  if (trait === undefined) return;
+  const impl = findRegisteredImpl(ctx, typeName, traitId);
+  const bareTrait = bareTypeName(traitId);
+  for (const method of trait.methods) {
+    if (byName.has(method.name)) continue;
+    byName.set(method.name, {
+      name: method.name,
+      source:
+        !method.isDefault ||
+        (impl?.providedMethods.includes(method.name) ?? false)
+          ? "impl"
+          : "default",
+      definingTrait: bareTrait,
+    });
+  }
+  for (const supertrait of trait.supertraits) {
+    collectWitnessMethods(ctx, supertrait, typeName, seen, byName);
+  }
 }
 
 /**
@@ -5033,6 +5285,7 @@ function analyzeMatchArm(
   effectiveScrutineeType: Semantics.Type,
   defaultMode: PatternBindingMode,
   rootMutable: boolean,
+  expected?: Semantics.Type,
 ): Semantics.MatchArm {
   pushFrame(ctx);
   try {
@@ -5044,7 +5297,10 @@ function analyzeMatchArm(
       rootMutable,
     );
     const guard = mapSome(arm.guard, (g) => analyzeExpression(ctx, g));
-    const body = analyzeExpression(ctx, arm.body);
+    const body =
+      expected === undefined
+        ? analyzeExpression(ctx, arm.body)
+        : checkExpressionAgainst(ctx, arm.body, expected);
     return { ...arm, pattern, guard, body };
   } finally {
     popFrame(ctx);
@@ -5054,6 +5310,7 @@ function analyzeMatchArm(
 function analyzeMatchExpression(
   ctx: AnalysisContext,
   matchExpr: Parser.MatchExpression,
+  expected?: Semantics.Type,
 ): Semantics.MatchExpression {
   const scrutinee = analyzeExpression(ctx, matchExpr.scrutinee);
   const scrutineeType = getType(scrutinee);
@@ -5066,7 +5323,14 @@ function analyzeMatchExpression(
   // (`defaultMode` itself already captures that).
   const rootMutable = !isSome(placeMutabilityViolation(ctx, scrutinee, true));
   const arms = matchExpr.arms.map((arm) =>
-    analyzeMatchArm(ctx, arm, effectiveType, defaultMode, rootMutable),
+    analyzeMatchArm(
+      ctx,
+      arm,
+      effectiveType,
+      defaultMode,
+      rootMutable,
+      expected,
+    ),
   );
 
   // A `UnitType` scrutinee is ambiguous (see `isAmbiguousUnitExpr`'s doc
@@ -5082,6 +5346,25 @@ function analyzeMatchExpression(
   if (!(scrutineeType.kind === "UnitType" && isAmbiguousUnitExpr(scrutinee))) {
     checkUnreachableArms(ctx, arms, effectiveType);
     checkMatchExhaustiveness(ctx, matchExpr, arms, effectiveType);
+  }
+
+  if (expected !== undefined) {
+    // Each arm body was already checked against `expected` in
+    // `analyzeMatchArm`, replacing the arm-to-arm agreement check below. One
+    // diagnostic for the first arm that doesn't fit.
+    const bad = arms.find((arm) => checkedValueViolates(arm.body, expected));
+    if (bad !== undefined) {
+      emitError(
+        ctx,
+        {
+          kind: "SemCheckedBranchTypeMismatch",
+          expected: describeType(expected),
+          found: describeType(getType(bad.body)),
+        },
+        bad.body.tokenId,
+      );
+    }
+    return { ...matchExpr, scrutinee, arms, type: expected };
   }
 
   let resultType: Semantics.Type = {
@@ -5757,12 +6040,43 @@ function analyzeFunctionSignature(
   return signature;
 }
 
+/** Records a generic function's hidden witness parameters
+ * (`AnalysisResult.witnessParams`) - one per declared trait bound, in
+ * `(param-declaration, bound)` order, named `_witness_<Param>_<Trait>`. */
+function recordWitnessParams(
+  ctx: AnalysisContext,
+  fnTokenId: number,
+  generics: readonly Parser.GenericParam[],
+  whereClause: Option<Parser.WhereClause>,
+): void {
+  const params: WitnessParam[] = [];
+  for (const [paramName, traitNames] of genericParamBoundNames(
+    generics,
+    whereClause,
+  )) {
+    for (const traitName of traitNames) {
+      params.push({
+        name: witnessParamName(paramName, traitName),
+        paramName,
+        traitName,
+      });
+    }
+  }
+  if (params.length > 0) ctx.witnessParamTable.set(fnTokenId, params);
+}
+
 function analyzeFunction(
   ctx: AnalysisContext,
   decl: Parser.FunctionDef,
 ): Semantics.FunctionDef {
   pushFrame(ctx);
-  pushGenericParams(ctx, decl.signature.generics);
+  pushGenericParams(ctx, decl.signature.generics, decl.signature.whereClause);
+  recordWitnessParams(
+    ctx,
+    decl.tokenId,
+    decl.signature.generics,
+    decl.signature.whereClause,
+  );
   const { signature, expectedReturnType, suppressReturnTypeMismatch } =
     buildFunctionSignature(ctx, decl.signature);
   const body = checkFunctionReturnType(
@@ -5805,9 +6119,13 @@ function analyzeBlock(
     analyzeStatement(ctx, statement),
   );
   const analyzedTrailing = mapSome(block.trailingExpression, (expr) =>
-    expr.kind === "CallExpression" && expectedType !== undefined
-      ? analyzeCall(ctx, expr, expectedType)
-      : analyzeExpression(ctx, expr),
+    checkExpression(
+      ctx,
+      expr,
+      expectedType === undefined
+        ? { kind: "None" }
+        : { kind: "HasType", type: expectedType },
+    ),
   );
   const type: Semantics.Type = isSome(analyzedTrailing)
     ? getType(analyzedTrailing.value)
@@ -5907,11 +6225,13 @@ function analyzeLetStatement(
   const analyzedInitializer: Option<Semantics.Expression> = mapSome(
     statement.initializer,
     (initializer) =>
-      initializer.kind === "CallExpression" &&
-      isSome(annotation) &&
-      !annotation.value.isSelf
-        ? analyzeCall(ctx, initializer, annotation.value.type)
-        : analyzeExpression(ctx, initializer),
+      checkExpression(
+        ctx,
+        initializer,
+        isSome(annotation) && !annotation.value.isSelf
+          ? { kind: "HasType", type: annotation.value.type }
+          : { kind: "None" },
+      ),
   );
 
   let coercedInitializer: Option<Semantics.Expression> = analyzedInitializer;
@@ -6312,6 +6632,150 @@ function isAmbiguousUnitExpr(expr: Semantics.Expression): boolean {
 }
 
 /**
+ * What a position expects of the expression that fills it. The `HasType` type
+ * is carried into analysis so a nested construct can be checked against it
+ * rather than synthesised in isolation. Left open for a third variant if a
+ * coercion-vs-exact distinction is ever needed.
+ */
+type Expectation =
+  | { readonly kind: "None" }
+  | { readonly kind: "HasType"; readonly type: Semantics.Type };
+
+/**
+ * Check-mode expression analysis. Given a `HasType` expectation, a construct
+ * whose type is otherwise synthesised from its parts is checked against the
+ * expected type instead: a call seeds generic inference from it; an array's
+ * elements and an if/match's branches are each checked against it
+ * independently, replacing the "siblings must agree with each other" rule
+ * (they need only agree with the expectation). Every other expression is
+ * synthesised. Callers still run {@link reconcileExpressionType} on the
+ * result for scalar coercion and the mismatch flag.
+ */
+function checkExpression(
+  ctx: AnalysisContext,
+  expr: Parser.Expression,
+  expectation: Expectation,
+): Semantics.Expression {
+  if (expectation.kind === "None") return analyzeExpression(ctx, expr);
+  const type = expectation.type;
+  switch (expr.kind) {
+    case "CallExpression":
+      return analyzeCall(ctx, expr, type);
+    case "ArrayExpression":
+      return analyzeArrayExpression(ctx, expr, type);
+    case "IfExpression":
+      return analyzeIfExpression(ctx, expr, type);
+    case "MatchExpression":
+      return analyzeMatchExpression(ctx, expr, type);
+    case "Block":
+      return analyzeBlock(ctx, expr, type);
+    default:
+      return analyzeExpression(ctx, expr);
+  }
+}
+
+/**
+ * Whether `exprType`'s ref-ness can fill a position expecting `expectedType`
+ * for a unsize coercion: both bare, both shared refs, both mutable refs, or
+ * a mutable ref satisfying a shared one (a downgrade). A shared ref can't
+ * satisfy a mutable one - the box would carry a plain-literal `value`, so an
+ * `&mut self` dispatch through it would silently fail to write back to the
+ * borrowed place.
+ */
+function refnessSatisfiesDynTarget(
+  expectedType: Semantics.Type,
+  exprType: Semantics.Type,
+): boolean {
+  if (
+    (expectedType.kind === "ReferenceType") !==
+    (exprType.kind === "ReferenceType")
+  ) {
+    return false;
+  }
+  return (
+    expectedType.kind !== "ReferenceType" ||
+    exprType.kind !== "ReferenceType" ||
+    !expectedType.mutable ||
+    exprType.mutable
+  );
+}
+
+/**
+ * If `expr` fills a position that expects `dyn Trait` (or `&dyn`/`&mut dyn`)
+ * with a value whose concrete type - or bounded type parameter - implements
+ * that trait, records the unsize coercion (`AnalysisResult.unsizeCoercions`)
+ * and returns `expr` retyped as the `dyn` target. Ref-ness must agree on both
+ * sides. `undefined` when no such coercion applies.
+ *
+ * `record` is `false` for a caller that discards the returned `.expr` and
+ * whose position never reaches codegen (an `impl` associated const): the
+ * coercion still suppresses the type-mismatch diagnostic, but recording it
+ * would emit a `__witness_<Trait>_<Type>` const that nothing boxes against.
+ */
+function tryUnsizeCoercion(
+  ctx: AnalysisContext,
+  expr: Semantics.Expression,
+  expectedType: Semantics.Type,
+  record: boolean,
+): Semantics.Expression | undefined {
+  const targetDyn = dynTypeOf(expectedType);
+  if (targetDyn === undefined) return undefined;
+  const exprType = expr.type;
+  if (!refnessSatisfiesDynTarget(expectedType, exprType)) return undefined;
+  const sourceType =
+    exprType.kind === "ReferenceType" ? exprType.referent : exprType;
+  if (sourceType.kind === "DynType") return undefined;
+  const witness = resolveTraitBound(ctx, sourceType, targetDyn.traitId);
+  if (!isSome(witness)) return undefined;
+  if (witnessIsUnemittableBlanket(ctx, witness.value)) return undefined;
+  if (record) {
+    ctx.unsizeCoercionTable.set(expr.tokenId, {
+      witness: witness.value,
+      sourceType,
+    });
+    if (witness.value.kind === "Impl") {
+      ctx.extraWitnessRefs.push(witness.value);
+    }
+  }
+  return { ...expr, type: expectedType };
+}
+
+/** The `DynType` a type is, or is a single reference to (`dyn T` / `&dyn T` /
+ * `&mut dyn T`); `undefined` otherwise. */
+function dynTypeOf(type: Semantics.Type): Semantics.DynType | undefined {
+  if (type.kind === "DynType") return type;
+  if (type.kind === "ReferenceType" && type.referent.kind === "DynType") {
+    return type.referent;
+  }
+  return undefined;
+}
+
+/**
+ * One child of a checked array / match: analysed against `expected`
+ * (kind-directed) then reconciled and range-checked. Does not emit - a
+ * checked construct reports at most one child mismatch, so its callers emit
+ * once against the first violating child rather than per child.
+ */
+function checkExpressionAgainst(
+  ctx: AnalysisContext,
+  child: Parser.Expression,
+  expected: Semantics.Type,
+): Semantics.Expression {
+  const analyzed = checkExpression(ctx, child, {
+    kind: "HasType",
+    type: expected,
+  });
+  const { expr } = reconcileExpressionType(
+    ctx,
+    analyzed,
+    expected,
+    child.tokenId,
+  );
+  if (expr.kind === "IntLiteral") checkPosLiteralRange(ctx, expr, expected);
+  return expr;
+}
+
+/**
  * Reconciles an analyzed expression against an `expectedType` context - a
  * `let` binding's explicit annotation, a function's declared return type, or
  * a struct field's declared type - applying Slice 1's unsuffixed-integer-
@@ -6336,6 +6800,7 @@ function reconcileExpressionType(
   expr: Semantics.Expression,
   expectedType: Semantics.Type,
   tokenId: number,
+  recordUnsizeCoercion: boolean = true,
 ): { expr: Semantics.Expression; mismatch: boolean } {
   let result = expr;
   let suppressed = false;
@@ -6372,6 +6837,19 @@ function reconcileExpressionType(
     const rangeError = checkNegLiteralRange(result.operand, expectedType);
     if (isSome(rangeError)) {
       emitError(ctx, rangeError.value, tokenId);
+      suppressed = true;
+    }
+  }
+
+  if (!suppressed) {
+    const unsized = tryUnsizeCoercion(
+      ctx,
+      result,
+      expectedType,
+      recordUnsizeCoercion,
+    );
+    if (unsized !== undefined) {
+      result = unsized;
       suppressed = true;
     }
   }
@@ -6418,6 +6896,19 @@ function comparisonOperandResolves(
     operand.type.kind === "ReferenceType"
       ? operand.type.referent
       : operand.type;
+  if (
+    referent.kind === "NamedType" &&
+    referent.path.segments.length === 1 &&
+    referent.path.segments[0] === "Self"
+  ) {
+    const selfContext = currentSelfContext(ctx);
+    if (
+      selfContext?.kind === "Trait" &&
+      boundsImplyTrait(ctx, [selfContext.traitName], partialEq)
+    ) {
+      return true;
+    }
+  }
   return isSome(resolveTraitBound(ctx, referent, partialEq));
 }
 
@@ -6447,8 +6938,88 @@ function inferComparisonType(
     !typesEqual(left.type, right.type)
   ) {
     emitError(ctx, { kind: "SemComparisonOperandsSameType" }, tokenId);
+  } else {
+    recordEqualityTarget(ctx, spec, left, tokenId);
   }
   return { kind: "PrimitiveBooleanType" };
+}
+
+/** For an `==`/`!=` that resolves through a concrete `impl PartialEq for
+ * <operand type>` (not the native `equality` capability, not a generic
+ * parameter, not a blanket impl), records the impl's `eq` free function so
+ * `jsim.ts`'s `parseTraitEqualityComparison` calls it directly. Anything
+ * else dispatches through a witness (a later slice) and keeps the interim
+ * `a.eq(b)` shape. */
+function recordEqualityTarget(
+  ctx: AnalysisContext,
+  spec: ComparisonSpec,
+  left: ComparisonOperand,
+  tokenId: number,
+): void {
+  if (!spec.equalityTraitFallback || !left.isValid) return;
+  const operandType =
+    left.type.kind === "ReferenceType" ? left.type.referent : left.type;
+  if (hasCapability(operandType, "equality")) return;
+  const partialEq = lookupPreludeTrait(ctx, "PartialEq");
+  if (partialEq === undefined) return;
+  if (isNominalType(operandType)) {
+    const impl = findRegisteredImpl(ctx, operandType.name, partialEq);
+    if (impl === undefined || impl.isBlanket) return;
+    ctx.methodTargetTable.set(tokenId, {
+      kind: "free",
+      typeId: operandType.name,
+      typeName: bareTypeName(operandType.name),
+      traitName: some(bareTypeName(partialEq)),
+      methodName: "eq",
+      isDefaultBody: false,
+    });
+    return;
+  }
+  const witnessName = abstractWitnessParamName(ctx, operandType, partialEq);
+  if (witnessName !== undefined) {
+    ctx.methodTargetTable.set(tokenId, {
+      kind: "witness",
+      witnessName,
+      methodName: "eq",
+    });
+  }
+}
+
+/** The witness parameter an abstract receiver (a `==` operand or a method
+ * call's receiver) dispatches a `requiredTrait` method through inside a
+ * generic body: the bounded type parameter's own declared bound - or, for
+ * `Self` in a trait default body, the enclosing trait - that is or
+ * transitively implies `requiredTrait`. That bound's flattened witness carries
+ * the method (see `witnessMethods`). `undefined` unless `type` is a
+ * single-segment abstract name with such a bound in scope. */
+function abstractWitnessParamName(
+  ctx: AnalysisContext,
+  type: Semantics.Type,
+  requiredTrait: string,
+): string | undefined {
+  if (type.kind !== "NamedType" || type.path.segments.length !== 1) {
+    return undefined;
+  }
+  const name = type.path.segments[0];
+  if (name === undefined) return undefined;
+  const selfContext = currentSelfContext(ctx);
+  if (
+    name === "Self" &&
+    selfContext?.kind === "Trait" &&
+    boundsImplyTrait(ctx, [selfContext.traitName], requiredTrait)
+  ) {
+    return witnessParamName("Self", bareTypeName(selfContext.traitName));
+  }
+  if (!isDeclaredGenericParam(ctx, name)) return undefined;
+  for (const bound of declaredGenericParamBounds(ctx, name)) {
+    if (
+      bound === requiredTrait ||
+      boundsImplyTrait(ctx, [bound], requiredTrait)
+    ) {
+      return witnessParamName(name, bareTypeName(bound));
+    }
+  }
+  return undefined;
 }
 
 function inferLogicalType(
@@ -6759,6 +7330,13 @@ interface IndexedMethod {
    * against one of them is arity-checked but not type-checked - unification
    * for method calls isn't implemented. */
   readonly genericParams: readonly string[];
+  /** Each `genericParams` name's own declared bound trait names (resolved
+   * `traitRegistry` keys), for an inherent method - empty for a trait-origin
+   * method, since a trait's own methods don't persist their generic bounds
+   * anywhere yet (a narrower version of the same `genericParams` gap above).
+   * `recordMethodCallWitnesses` uses this to resolve a witness per bound
+   * from the call site's own argument types. */
+  readonly genericParamBounds: ReadonlyMap<string, readonly string[]>;
   readonly origin:
     | { readonly kind: "inherent" }
     | { readonly kind: "trait"; readonly traitId: string };
@@ -6814,6 +7392,7 @@ function traitMethodSet(
     params: m.params,
     returnType: m.returnType,
     genericParams: [...trait.genericParams, ...m.genericParams],
+    genericParamBounds: new Map(),
     origin: { kind: "trait", traitId },
   }));
   const inherited = trait.supertraits.flatMap((s) =>
@@ -6915,6 +7494,12 @@ function indexInherentMethods(
       decl.signature,
       resolveSlice1Type,
     );
+    const merged = mergedGenericScope(
+      item.generics,
+      item.whereClause,
+      decl.signature.generics,
+      decl.signature.whereClause,
+    );
     return [
       {
         name: decl.signature.name.text,
@@ -6925,6 +7510,10 @@ function indexInherentMethods(
           ...implGenerics,
           ...genericParamNames(decl.signature.generics),
         ],
+        genericParamBounds: resolveBoundNames(
+          ctx,
+          genericParamBoundNames(merged.generics, merged.whereClause),
+        ),
         origin: { kind: "inherent" },
       },
     ];
@@ -7123,6 +7712,210 @@ function checkAssociatedCallArgs(
       );
 }
 
+/** Records the free-function `MethodTarget` for an impl-provided method
+ * codegen should emit (`AnalysisResult.implMethodTargets`), keyed by the
+ * method body's own tokenId. A receiver-less associated function and a
+ * non-nominal impl target both emit nothing. */
+function recordImplMethodTarget(
+  ctx: AnalysisContext,
+  decl: Parser.FunctionDef,
+  targetType: Semantics.Type,
+  traitName: Option<string>,
+): void {
+  if (!isSome(decl.signature.receiver) || !isNominalType(targetType)) return;
+  ctx.implMethodTargetTable.set(decl.tokenId, {
+    kind: "free",
+    typeId: targetType.name,
+    typeName: bareTypeName(targetType.name),
+    traitName: mapSome(traitName, bareTypeName),
+    methodName: decl.signature.name.text,
+    isDefaultBody: false,
+  });
+}
+
+/** Indexes an `impl Drop for T`'s `drop` method so codegen can call its free
+ * function from `T`'s `[Symbol.dispose]`. Only the prelude `Drop` counts. An
+ * enum target is rejected rather than silently ignored - enum disposers don't
+ * thread a drop call yet. */
+function recordDropImpl(
+  ctx: AnalysisContext,
+  decl: Parser.FunctionDef,
+  targetType: Semantics.Type,
+  traitName: Option<string>,
+): void {
+  if (
+    decl.signature.name.text !== "drop" ||
+    !isSome(decl.signature.receiver) ||
+    !isNominalType(targetType) ||
+    !isSome(traitName) ||
+    traitName.value !== lookupPreludeTrait(ctx, "Drop")
+  ) {
+    return;
+  }
+  if (targetType.kind !== "StructType") {
+    emitError(
+      ctx,
+      { kind: "SemDropImplForEnumUnsupported" },
+      decl.signature.name.tokenId,
+    );
+    return;
+  }
+  ctx.dropImplTable.set(targetType.name, {
+    kind: "free",
+    typeId: targetType.name,
+    typeName: bareTypeName(targetType.name),
+    traitName: some(bareTypeName(traitName.value)),
+    methodName: "drop",
+    isDefaultBody: false,
+  });
+}
+
+/** Records how a resolved call on a concrete receiver dispatches, for
+ * codegen's free-function naming (`AnalysisResult.methodTargets`). Keyed by
+ * the *method name* token, not the call's own tokenId - a chained call
+ * (`x.a().b()`) shares the receiver token both call nodes carry as their
+ * tokenId. A trait method the impl does not override dispatches to the
+ * trait's `Trait$m$default` free function, which needs the `(type, trait)`
+ * witness (recorded in `extraWitnesses` for codegen to hoist). */
+function recordMethodTarget(
+  ctx: AnalysisContext,
+  methodTokenId: number,
+  receiverType: Semantics.StructType | Semantics.EnumType,
+  method: IndexedMethod,
+  methodName: string,
+): void {
+  if (method.origin.kind !== "trait") {
+    ctx.methodTargetTable.set(methodTokenId, {
+      kind: "free",
+      typeId: receiverType.name,
+      typeName: bareTypeName(receiverType.name),
+      traitName: none(),
+      methodName,
+      isDefaultBody: false,
+    });
+    return;
+  }
+  const witness = resolveTraitBoundForTypeName(
+    ctx,
+    receiverType.name,
+    method.origin.traitId,
+  );
+  if (!isSome(witness) || witness.value.kind !== "Impl") return;
+  const witnessMethod = witness.value.methods.find(
+    (m) => m.name === methodName,
+  );
+  if (witnessMethod === undefined) return;
+  const isDefaultBody = witnessMethod.source === "default";
+  if (isDefaultBody) ctx.extraWitnessRefs.push(witness.value);
+  ctx.methodTargetTable.set(methodTokenId, {
+    kind: "free",
+    typeId: receiverType.name,
+    typeName: bareTypeName(receiverType.name),
+    traitName: some(bareTypeName(method.origin.traitId)),
+    methodName,
+    isDefaultBody,
+  });
+}
+
+/** Whether a resolved type is an abstract `Self` (through any `&`/`&mut`) -
+ * a trait method's `-> Self` before the concrete receiver is substituted. */
+function isAbstractSelfType(type: Semantics.Type): boolean {
+  if (type.kind === "ReferenceType") return isAbstractSelfType(type.referent);
+  return (
+    type.kind === "NamedType" &&
+    type.path.segments.length === 1 &&
+    type.path.segments[0] === "Self"
+  );
+}
+
+/** Records how a resolved method call lowers: a `free` target for a concrete
+ * receiver, a `witness` target for a call inside a generic body, a `dyn`
+ * target for a `dyn Trait` receiver. */
+function recordMethodDispatch(
+  ctx: AnalysisContext,
+  methodTokenId: number,
+  receiverType: Semantics.Type,
+  method: IndexedMethod,
+  methodName: string,
+): void {
+  if (isNominalType(receiverType)) {
+    recordMethodTarget(ctx, methodTokenId, receiverType, method, methodName);
+    return;
+  }
+  if (receiverType.kind === "DynType") {
+    ctx.methodTargetTable.set(methodTokenId, {
+      kind: "dyn",
+      methodName,
+      returnsSelf: isAbstractSelfType(method.returnType),
+    });
+    return;
+  }
+  if (method.origin.kind !== "trait") return;
+  const witnessName = abstractWitnessParamName(
+    ctx,
+    receiverType,
+    method.origin.traitId,
+  );
+  if (witnessName === undefined) return;
+  ctx.methodTargetTable.set(methodTokenId, {
+    kind: "witness",
+    witnessName,
+    methodName,
+  });
+}
+
+/** Whether `type` (or its referent, through one `&`/`&mut`) is the bare
+ * generic parameter `paramName` - the shape a method's own `u: U` param has
+ * before any substitution. */
+function namesGenericParam(type: Semantics.Type, paramName: string): boolean {
+  const referent = type.kind === "ReferenceType" ? type.referent : type;
+  return (
+    referent.kind === "NamedType" &&
+    referent.path.segments.length === 1 &&
+    referent.path.segments[0] === paramName
+  );
+}
+
+/**
+ * Resolves a witness for each of a concrete-receiver method call's own
+ * bounded generic parameters (the method's own `<U: Trait>`, or its
+ * enclosing impl's), from the positionally-matching argument's own already-
+ * analyzed type - there is no unification for method calls
+ * (`IndexedMethod.genericParams`'s own doc comment), so this is a direct
+ * read, not real inference. An unsatisfied bound resolves nothing for that
+ * slot rather than emitting a diagnostic, matching the surrounding
+ * arity-checked-not-type-checked state; the resulting argument-count
+ * mismatch surfaces as a runtime error in the callee, not a compile
+ * diagnostic, same as any other not-yet-type-checked method generic.
+ */
+function recordMethodCallWitnesses(
+  ctx: AnalysisContext,
+  methodTokenId: number,
+  method: IndexedMethod,
+  args: readonly Semantics.Expression[],
+): void {
+  if (method.genericParamBounds.size === 0) return;
+  const witnesses: WitnessRef[] = [];
+  for (const [paramName, traitNames] of method.genericParamBounds) {
+    const argIndex = method.params.findIndex((p) =>
+      namesGenericParam(p, paramName),
+    );
+    const arg = argIndex === -1 ? undefined : args[argIndex];
+    if (arg === undefined) continue;
+    const argType =
+      arg.type.kind === "ReferenceType" ? arg.type.referent : arg.type;
+    for (const traitName of traitNames) {
+      const witness = resolveTraitBound(ctx, argType, traitName);
+      if (isSome(witness) && !witnessIsUnemittableBlanket(ctx, witness.value)) {
+        witnesses.push(witness.value);
+      }
+    }
+  }
+  if (witnesses.length > 0) {
+    ctx.methodCallWitnessTable.set(methodTokenId, witnesses);
+  }
+}
+
 function analyzeMethodCallExpression(
   ctx: AnalysisContext,
   expression: Parser.MethodCallExpression,
@@ -7178,6 +7971,23 @@ function analyzeMethodCallExpression(
       expression.tokenId,
     );
   }
+  recordMethodDispatch(
+    ctx,
+    expression.method.tokenId,
+    lookupType,
+    method,
+    expression.method.text,
+  );
+  // A no-op for anything but a nominal receiver's own bounded generic
+  // params - `method.genericParamBounds` is only ever populated for those
+  // (see `IndexedMethod`'s own doc comment).
+  recordMethodCallWitnesses(ctx, expression.method.tokenId, method, args);
+  // `-> Self` on a `dyn` receiver yields another value of that same trait
+  // object - re-wrapped with the receiver's witness in codegen.
+  const resultType =
+    lookupType.kind === "DynType" && isAbstractSelfType(method.returnType)
+      ? lookupType
+      : method.returnType;
   return {
     ...base,
     arguments: [
@@ -7190,7 +8000,7 @@ function analyzeMethodCallExpression(
         args,
       ),
     ],
-    type: method.returnType,
+    type: resultType,
     receiverKind: method.receiver,
   };
 }
@@ -7609,7 +8419,37 @@ const USIZE_TYPE: Semantics.PrimitiveType = { kind: "PrimitiveUsizeType" };
 function analyzeArrayExpression(
   ctx: AnalysisContext,
   expression: Parser.ArrayExpression,
+  expected?: Semantics.Type,
 ): Semantics.ArrayExpression {
+  if (expected?.kind === "ArrayType") {
+    // Checked against `[E; N]`: each element is reconciled against `E`
+    // independently (no "all elements agree" rule), and the literal's type is
+    // `[E; k]` even when `k != N` - the outer reconcile still reports the
+    // length mismatch. One diagnostic for the first element that doesn't fit.
+    const elementType = expected.elementType;
+    const elements = expression.elements.map((elem) =>
+      checkExpressionAgainst(ctx, elem, elementType),
+    );
+    const bad = elements.find((elem) =>
+      checkedValueViolates(elem, elementType),
+    );
+    if (bad !== undefined) {
+      emitError(
+        ctx,
+        {
+          kind: "SemCheckedArrayElementTypeMismatch",
+          expected: describeType(elementType),
+          found: describeType(bad.type),
+        },
+        bad.tokenId,
+      );
+    }
+    return {
+      ...expression,
+      elements,
+      type: { kind: "ArrayType", elementType, length: elements.length },
+    };
+  }
   const elements = expression.elements.map((elem) =>
     analyzeExpression(ctx, elem),
   );
@@ -7935,10 +8775,76 @@ function analyzeAssignmentExpression(
 ): Semantics.AssignExpression {
   const lhs = analyzeExpression(ctx, assignExpression.lhs);
   checkLhsMutability(ctx, lhs, assignExpression.tokenId);
+  const lhsType = getType(lhs);
+  const dynPlaceTrait =
+    lhs.kind === "DereferenceExpression" && lhsType.kind === "DynType"
+      ? lhsType.traitId
+      : undefined;
+  if (dynPlaceTrait !== undefined) {
+    emitError(
+      ctx,
+      { kind: "SemAssignThroughDynPlace", trait: bareTypeName(dynPlaceTrait) },
+      assignExpression.tokenId,
+    );
+  }
+  // Checked against `lhsType`, mirroring `analyzeLetStatement`'s own
+  // initializer-against-annotation shape - a plain type mismatch (`x = "s"`
+  // for `x: i32`) was previously accepted with zero diagnostics, and,
+  // narrower but worse, a direct `dyn`-typed rebind (`d = Square { .. };`)
+  // recorded no unsize coercion, so codegen assigned the raw struct where a
+  // `{ value, witness }` box belonged and the next dispatch read missing
+  // fields.
+  //
+  // Three cases stay unchecked:
+  // - The LHS itself didn't resolve (`isAmbiguousUnitExpr`) - `lhsType` is
+  //   then the error-recovery placeholder, already-diagnosed, and checking
+  //   the RHS against it would cascade a bogus second mismatch.
+  // - A whole-value reassignment through a dereferenced array reference
+  //   (`*tail = other;`) - a rest-binding's `&mut [T; N]` is a slice view
+  //   over the original array (`ArraySliceViewExpression`), and reassigning
+  //   it a different-length array is the intended way to resize what it
+  //   views (matching a `&mut self` method's own `*self = ...` whole-value
+  //   pattern), not a genuine length mismatch to reject.
+  // - An assignment through a `dyn` place, already rejected above - the
+  //   place has no assignable storage regardless of the RHS's type, so a
+  //   type-mismatch diagnostic on top would just be noise on an assignment
+  //   that's already fully rejected.
+  let rhs: Semantics.Expression;
+  if (
+    (lhsType.kind === "UnitType" && isAmbiguousUnitExpr(lhs)) ||
+    (lhs.kind === "DereferenceExpression" && lhsType.kind === "ArrayType") ||
+    dynPlaceTrait !== undefined
+  ) {
+    rhs = analyzeExpression(ctx, assignExpression.rhs);
+  } else {
+    const analyzedRhs = checkExpression(ctx, assignExpression.rhs, {
+      kind: "HasType",
+      type: lhsType,
+    });
+    const reconciled = reconcileExpressionType(
+      ctx,
+      analyzedRhs,
+      lhsType,
+      assignExpression.tokenId,
+    );
+    rhs = reconciled.expr;
+    if (reconciled.mismatch) {
+      emitError(
+        ctx,
+        {
+          kind: "SemAssignmentTypeMismatch",
+          expected: describeType(lhsType),
+          found: describeType(getType(rhs)),
+        },
+        assignExpression.tokenId,
+      );
+    }
+    if (rhs.kind === "IntLiteral") checkPosLiteralRange(ctx, rhs, lhsType);
+  }
   return {
     ...assignExpression,
     lhs,
-    rhs: analyzeExpression(ctx, assignExpression.rhs),
+    rhs,
     type: { kind: "UnitType", tokenId: assignExpression.tokenId },
   };
 }
@@ -8255,19 +9161,166 @@ function checkBranchTypesAgree(
   }
 }
 
+/**
+ * Coerces a checked `Block` branch's trailing expression toward `expected`,
+ * threading the possibly-coerced form back in. Does not emit - the caller
+ * reports at most one branch mismatch per `if` (see `checkExpressionAgainst`
+ * for why a checked construct caps its own diagnostics).
+ */
+function coerceBranchTrailing(
+  ctx: AnalysisContext,
+  branch: Semantics.Block,
+  expected: Semantics.Type,
+): Semantics.Block {
+  if (!isSome(branch.trailingExpression)) return branch;
+  const original = branch.trailingExpression.value;
+  const { expr } = reconcileExpressionType(
+    ctx,
+    original,
+    expected,
+    original.tokenId,
+  );
+  if (expr.kind === "IntLiteral") checkPosLiteralRange(ctx, expr, expected);
+  return expr === original
+    ? branch
+    : { ...branch, trailingExpression: some(expr), type: getType(expr) };
+}
+
+/** Whether a checked branch / arm produced a value that isn't `expected` -
+ * an empty block, or a trailing type that neither equals nor coerced to
+ * `expected` (an already-diagnosed error-recovery `UnitType` doesn't count). */
+function checkedValueViolates(
+  value: Semantics.Expression,
+  expected: Semantics.Type,
+): boolean {
+  if (
+    value.kind === "Block" &&
+    !isSome(value.trailingExpression) &&
+    expected.kind !== "UnitType"
+  ) {
+    return true;
+  }
+  if (typesEqual(value.type, expected)) return false;
+  return !(
+    value.type.kind === "UnitType" &&
+    (value.kind === "Block"
+      ? branchUnitIsAmbiguous(value)
+      : isAmbiguousUnitExpr(value))
+  );
+}
+
+function checkIfBranches(
+  ctx: AnalysisContext,
+  ifTokenId: number,
+  thenBranch: Semantics.Block,
+  elseBranch: Option<Semantics.IfExpression | Semantics.Block>,
+  expected: Semantics.Type,
+): {
+  readonly thenBranch: Semantics.Block;
+  readonly elseBranch: Option<Semantics.IfExpression | Semantics.Block>;
+} {
+  const checkedThen = coerceBranchTrailing(ctx, thenBranch, expected);
+  const checkedElse = mapSome(elseBranch, (b) =>
+    b.kind === "IfExpression" ? b : coerceBranchTrailing(ctx, b, expected),
+  );
+  // A value is expected, so an `if` with no `else` can't satisfy it - the
+  // missing branch yields no value. Otherwise report the first branch that
+  // doesn't fit.
+  if (!isSome(checkedElse) && expected.kind !== "UnitType") {
+    emitError(
+      ctx,
+      {
+        kind: "SemCheckedBranchTypeMismatch",
+        expected: describeType(expected),
+        found: describeType(UNIT),
+      },
+      ifTokenId,
+    );
+  } else {
+    const bad = [
+      checkedThen,
+      ...(isSome(checkedElse) ? [checkedElse.value] : []),
+    ].find((branch) => checkedValueViolates(branch, expected));
+    if (bad !== undefined) {
+      emitError(
+        ctx,
+        {
+          kind: "SemCheckedBranchTypeMismatch",
+          expected: describeType(expected),
+          found: describeType(bad.type),
+        },
+        bad.tokenId,
+      );
+    }
+  }
+  return { thenBranch: checkedThen, elseBranch: checkedElse };
+}
+
+/**
+ * Shared tail for `analyzeIfExpression` / `analyzeIfLetExpression` once the
+ * condition and both raw branches are analyzed: checked mode
+ * (`expected` given) coerces each branch toward `expected` and takes that as
+ * the result type; unchecked mode keeps the infer-from-`then`, require-agreement
+ * behavior, and yields `()` for an `else`-less `if`.
+ */
+function finishIfExpression(
+  ctx: AnalysisContext,
+  ifExpression: Parser.IfExpression,
+  condition: Semantics.Expression,
+  rawThen: Semantics.Block,
+  rawElse: Option<Semantics.IfExpression | Semantics.Block>,
+  expected: Semantics.Type | undefined,
+): Semantics.IfExpression {
+  if (expected !== undefined) {
+    const { thenBranch, elseBranch } = checkIfBranches(
+      ctx,
+      ifExpression.tokenId,
+      rawThen,
+      rawElse,
+      expected,
+    );
+    return {
+      ...ifExpression,
+      condition,
+      thenBranch,
+      elseBranch,
+      type: expected,
+    };
+  }
+  if (isSome(rawElse)) {
+    checkBranchTypesAgree(ctx, rawThen, rawElse.value, ifExpression.tokenId);
+  }
+  const type: Semantics.Type = isSome(rawElse)
+    ? rawThen.type
+    : { kind: "UnitType", tokenId: ifExpression.tokenId };
+  return {
+    ...ifExpression,
+    condition,
+    thenBranch: rawThen,
+    elseBranch: rawElse,
+    type,
+  };
+}
+
 function analyzeIfExpression(
   ctx: AnalysisContext,
   ifExpression: Parser.IfExpression,
+  expected?: Semantics.Type,
 ): Semantics.IfExpression {
   if (ifExpression.condition.kind === "LetExpression") {
-    return analyzeIfLetExpression(ctx, ifExpression, ifExpression.condition);
+    return analyzeIfLetExpression(
+      ctx,
+      ifExpression,
+      ifExpression.condition,
+      expected,
+    );
   }
   const condition = analyzeExpression(ctx, ifExpression.condition);
-  const thenBranch = analyzeBlock(ctx, ifExpression.thenBranch);
-  const elseBranch = mapSome(ifExpression.elseBranch, (elseBranch) =>
+  const rawThen = analyzeBlock(ctx, ifExpression.thenBranch, expected);
+  const rawElse = mapSome(ifExpression.elseBranch, (elseBranch) =>
     elseBranch.kind === "IfExpression"
-      ? analyzeIfExpression(ctx, elseBranch)
-      : analyzeBlock(ctx, elseBranch),
+      ? analyzeIfExpression(ctx, elseBranch, expected)
+      : analyzeBlock(ctx, elseBranch, expected),
   );
 
   const condType = getType(condition);
@@ -8278,25 +9331,14 @@ function analyzeIfExpression(
     emitError(ctx, { kind: "SemIfConditionMustBeBool" }, ifExpression.tokenId);
   }
 
-  if (isSome(elseBranch)) {
-    checkBranchTypesAgree(
-      ctx,
-      thenBranch,
-      elseBranch.value,
-      ifExpression.tokenId,
-    );
-  }
-
-  const type: Semantics.Type = isSome(elseBranch)
-    ? thenBranch.type
-    : { kind: "UnitType", tokenId: ifExpression.tokenId };
-  return {
-    ...ifExpression,
+  return finishIfExpression(
+    ctx,
+    ifExpression,
     condition,
-    thenBranch,
-    elseBranch,
-    type,
-  };
+    rawThen,
+    rawElse,
+    expected,
+  );
 }
 
 /**
@@ -8310,6 +9352,7 @@ function analyzeIfLetExpression(
   ctx: AnalysisContext,
   ifExpression: Parser.IfExpression,
   letExpression: Parser.LetExpression,
+  expected?: Semantics.Type,
 ): Semantics.IfExpression {
   const scrutinee = analyzeExpression(ctx, letExpression.scrutinee);
   const scrutineeType = getType(scrutinee);
@@ -8334,36 +9377,25 @@ function analyzeIfLetExpression(
       scrutinee,
       type: { kind: "PrimitiveBooleanType" },
     };
-    thenBranch = analyzeBlock(ctx, ifExpression.thenBranch);
+    thenBranch = analyzeBlock(ctx, ifExpression.thenBranch, expected);
   } finally {
     popFrame(ctx);
   }
 
-  const elseBranch = mapSome(ifExpression.elseBranch, (elseBranch) =>
+  const rawElse = mapSome(ifExpression.elseBranch, (elseBranch) =>
     elseBranch.kind === "IfExpression"
-      ? analyzeIfExpression(ctx, elseBranch)
-      : analyzeBlock(ctx, elseBranch),
+      ? analyzeIfExpression(ctx, elseBranch, expected)
+      : analyzeBlock(ctx, elseBranch, expected),
   );
 
-  if (isSome(elseBranch)) {
-    checkBranchTypesAgree(
-      ctx,
-      thenBranch,
-      elseBranch.value,
-      ifExpression.tokenId,
-    );
-  }
-
-  const type: Semantics.Type = isSome(elseBranch)
-    ? thenBranch.type
-    : { kind: "UnitType", tokenId: ifExpression.tokenId };
-  return {
-    ...ifExpression,
+  return finishIfExpression(
+    ctx,
+    ifExpression,
     condition,
     thenBranch,
-    elseBranch,
-    type,
-  };
+    rawElse,
+    expected,
+  );
 }
 
 function analyzeIdentifier(
@@ -8409,10 +9441,13 @@ function checkCallGenericBounds(
     for (const traitName of calleeType.genericParamBounds.get(paramName) ??
       []) {
       const witness = resolveTraitBound(ctx, binding.type, traitName);
-      if (isSome(witness)) {
+      if (isSome(witness) && !witnessIsUnemittableBlanket(ctx, witness.value)) {
         witnesses.push(witness.value);
         continue;
       }
+      // A blanket-satisfied bound is genuinely satisfied, but this call
+      // needs a real witness object to pass, and a blanket impl's methods
+      // don't emit as free functions - treated the same as unresolved here.
       allBoundsSatisfied = false;
       emitError(
         ctx,
@@ -9302,6 +10337,13 @@ export function analyze(
     methodIndex: new Map(),
     assocConstIndex: new Map(),
     witnessTable: new Map(),
+    methodTargetTable: new Map(),
+    implMethodTargetTable: new Map(),
+    witnessParamTable: new Map(),
+    extraWitnessRefs: [],
+    unsizeCoercionTable: new Map(),
+    dropImplTable: new Map(),
+    methodCallWitnessTable: new Map(),
     selfContextStack: [],
   };
   // Before functions, so a signature can name any declared type.
@@ -9360,5 +10402,12 @@ export function analyze(
     diagnostics: ctx.diagnostics,
     program: { ...program, attributes, items },
     witnesses: ctx.witnessTable,
+    methodTargets: ctx.methodTargetTable,
+    implMethodTargets: ctx.implMethodTargetTable,
+    witnessParams: ctx.witnessParamTable,
+    extraWitnesses: ctx.extraWitnessRefs,
+    unsizeCoercions: ctx.unsizeCoercionTable,
+    dropImpls: ctx.dropImplTable,
+    methodCallWitnesses: ctx.methodCallWitnessTable,
   };
 }
