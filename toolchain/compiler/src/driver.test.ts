@@ -1082,6 +1082,22 @@ describe("generic witness codegen", (): void => {
     expect(isNone(result.code)).toBe(true);
   });
 
+  it("rejects a generic bound satisfied only by a blanket impl, instead of hoisting a witness pointing at an unemitted function", (): void => {
+    const result = compile(`
+      trait A {}
+      trait B { fn f(&self) -> i32; }
+      impl<T: A> B for T { fn f(&self) -> i32 { 42 } }
+      struct Point { x: i32 }
+      impl A for Point {}
+      fn g<T: B>(x: T) -> i32 { x.f() }
+      fn main() { print(g(Point { x: 1 })); }
+    `);
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+    expect(isNone(result.code)).toBe(true);
+  });
+
   it("rejects a method call on an unbounded type parameter without emitting a witness", (): void => {
     const result = compile(`
       trait Draw { fn draw(&self) -> i32; }

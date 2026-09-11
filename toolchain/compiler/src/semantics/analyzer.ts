@@ -2850,6 +2850,34 @@ function resolveTraitBoundForTypeName(
   });
 }
 
+/**
+ * Whether `witness` is an `Impl` ref backed by a blanket impl - deliberately
+ * *not* folded into `resolveTraitBound`/`resolveTraitBoundForTypeName`
+ * themselves, since a blanket-satisfied bound is genuinely satisfied
+ * (`needs_b<U: B>(point)` with `B` only blanket-implemented is valid Hedge
+ * with zero diagnostics, and `==`'s own operand-resolves gate needs that
+ * fact too) - only whether codegen can actually reference the witness. A
+ * blanket impl's method bodies aren't emitted as free functions
+ * (`buildMethodIndex` skips them), so a witness object built from one would
+ * carry slots referencing functions that don't exist; each site that would
+ * hoist or pass such a witness checks this first and treats the bound as
+ * unresolved for codegen purposes, leaving the semantic "is it satisfied"
+ * answer (and any diagnostic that follows from *that* being false) alone.
+ */
+function witnessIsUnemittableBlanket(
+  ctx: AnalysisContext,
+  witness: WitnessRef,
+): boolean {
+  if (witness.kind !== "Impl") return false;
+  // By `implTokenId`, not `findRegisteredImpl(typeId, traitName)` - the ref
+  // only carries `traitName` as a bare display name (`bareTypeName`), not
+  // the scoped `traitRegistry` key that lookup needs.
+  return (
+    ctx.implRegistry.find((impl) => impl.tokenId === witness.implTokenId)
+      ?.isBlanket ?? false
+  );
+}
+
 /** `Self::assocName` inside an impl, when the impl's own definitions don't
  * have it directly - searches `traitName`'s own supertraits for the one
  * that actually declares `assocName`, then reads *that* trait's own
@@ -6699,17 +6727,7 @@ function tryUnsizeCoercion(
   if (sourceType.kind === "DynType") return undefined;
   const witness = resolveTraitBound(ctx, sourceType, targetDyn.traitId);
   if (!isSome(witness)) return undefined;
-  if (
-    witness.value.kind === "Impl" &&
-    (findRegisteredImpl(ctx, witness.value.typeId, targetDyn.traitId)
-      ?.isBlanket ??
-      false)
-  ) {
-    // A blanket impl's method bodies aren't emitted as free functions
-    // (`buildMethodIndex` skips them), so its witness slots would reference
-    // functions that don't exist - reject the coercion instead.
-    return undefined;
-  }
+  if (witnessIsUnemittableBlanket(ctx, witness.value)) return undefined;
   if (record) {
     ctx.unsizeCoercionTable.set(expr.tokenId, {
       witness: witness.value,
@@ -7888,7 +7906,9 @@ function recordMethodCallWitnesses(
       arg.type.kind === "ReferenceType" ? arg.type.referent : arg.type;
     for (const traitName of traitNames) {
       const witness = resolveTraitBound(ctx, argType, traitName);
-      if (isSome(witness)) witnesses.push(witness.value);
+      if (isSome(witness) && !witnessIsUnemittableBlanket(ctx, witness.value)) {
+        witnesses.push(witness.value);
+      }
     }
   }
   if (witnesses.length > 0) {
@@ -9366,10 +9386,13 @@ function checkCallGenericBounds(
     for (const traitName of calleeType.genericParamBounds.get(paramName) ??
       []) {
       const witness = resolveTraitBound(ctx, binding.type, traitName);
-      if (isSome(witness)) {
+      if (isSome(witness) && !witnessIsUnemittableBlanket(ctx, witness.value)) {
         witnesses.push(witness.value);
         continue;
       }
+      // A blanket-satisfied bound is genuinely satisfied, but this call
+      // needs a real witness object to pass, and a blanket impl's methods
+      // don't emit as free functions - treated the same as unresolved here.
       allBoundsSatisfied = false;
       emitError(
         ctx,
