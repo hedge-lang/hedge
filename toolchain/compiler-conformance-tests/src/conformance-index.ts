@@ -745,6 +745,7 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "reports a conflict when a turbofish disagrees with the actual argument on a generic tuple-struct construction",
       "falls back to a struct's declared default when construction gives no other information",
       "lets an explicit turbofish override a struct's declared default at construction",
+      "accepts a partial turbofish on a construction call that omits a trailing defaulted parameter",
     ],
   },
   {

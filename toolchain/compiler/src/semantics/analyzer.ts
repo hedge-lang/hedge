@@ -523,6 +523,22 @@ function validateGenericParamBounds(
   }
 }
 
+/** Validates each declared generic parameter's own default type name, the
+ * same way `validateGenericParamBounds` validates bound names - called
+ * wherever that is (fn signatures, impls), not for struct/enum generics,
+ * which don't validate bound names either. The resolved value itself still
+ * comes from `resolveGenericParamDefaults`'s silent resolver; this call
+ * exists purely for the diagnostic side effect. */
+function validateGenericParamDefaults(
+  ctx: AnalysisContext,
+  generics: readonly Parser.GenericParam[],
+): void {
+  for (const param of generics) {
+    if (param.kind !== "TypeParam" || !isSome(param.default)) continue;
+    validateSlice1Type(ctx, param.default.value, param.default.value.tokenId);
+  }
+}
+
 function pushGenericParams(
   ctx: AnalysisContext,
   generics: readonly Parser.GenericParam[],
@@ -3559,6 +3575,7 @@ function registerOneImpl(
 ): RegisteredImpl | undefined {
   const decl = buildImplDecl(item);
   validateGenericParamBounds(ctx, item.generics, item.whereClause);
+  validateGenericParamDefaults(ctx, item.generics);
   const traitRef = decl.traitRef;
   const bareTargetTypeName = decl.targetTypeName;
   if (!isSome(traitRef) || !isSome(bareTargetTypeName)) return undefined;
@@ -5824,6 +5841,7 @@ function fnSignatureType(
 ): Semantics.FunctionType {
   pushGenericParams(ctx, signature.generics, signature.whereClause);
   validateGenericParamBounds(ctx, signature.generics, signature.whereClause);
+  validateGenericParamDefaults(ctx, signature.generics);
   const type: Semantics.FunctionType = {
     kind: "FunctionType",
     params: signature.params.map((p) =>

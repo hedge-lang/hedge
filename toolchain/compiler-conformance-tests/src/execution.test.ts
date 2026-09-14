@@ -1568,6 +1568,20 @@ describe("execution tests", (): void => {
         ["ok"],
       );
     });
+
+    it("accepts a partial turbofish on a construction call that omits a trailing defaulted parameter", (): void => {
+      assertRunsTo(
+        `
+        struct Box<T>(T);
+        struct Marker<A, B = i32>(Box<A>, Box<B>);
+        fn main() {
+          Marker::<u8>(Box(5), Box(6));
+          print("ok");
+        }
+        `,
+        ["ok"],
+      );
+    });
   });
 
   describe("unused generic type parameters on a struct or enum", (): void => {

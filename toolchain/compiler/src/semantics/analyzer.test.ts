@@ -6479,6 +6479,35 @@ describe("trait and impl declarations", (): void => {
     });
   });
 
+  describe("generic parameter default: type-name validation", (): void => {
+    it("rejects a function generic default naming a type that does not exist", (): void => {
+      const result = diagnose(`fn f<T = Bogus>() {}`);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "cannot find type `Bogus` in this scope",
+      );
+    });
+
+    it("rejects an impl generic default naming a type that does not exist", (): void => {
+      const result = diagnose(`struct Bar; impl<T = Bogus> Bar {}`);
+      expect(
+        result.diagnostics.filter((d) => d.severity === "error"),
+      ).toHaveLength(1);
+      expect(
+        messageOf(result.diagnostics.filter((d) => d.severity === "error")[0]),
+      ).toBe("cannot find type `Bogus` in this scope");
+    });
+
+    it("does not validate a struct generic default's type name yet, matching the same pre-existing gap in bound-name validation", (): void => {
+      // `validateGenericParamBounds` (the equivalent check for `T: Bogus`
+      // bound names) is only ever called for fn signatures and impls, never
+      // for struct/enum generics - this mirrors that same asymmetry rather
+      // than introducing a new, narrower one just for defaults.
+      const result = diagnose(`struct Ring<T = Bogus>(T);`);
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
   describe("blanket impls and supertraits", (): void => {
     it("rejects a generic bound satisfied only by a blanket impl, since its witness can't be built", (): void => {
       // The bound `Point: B` genuinely holds (via the blanket `impl<T: A> B
