@@ -1415,13 +1415,34 @@ describe("execution tests", (): void => {
       );
     });
 
-    it("resolves a default referencing an earlier parameter using that parameter's bound value", (): void => {
+    it("resolves a default referencing an earlier parameter to that call's own binding, not a fixed value", (): void => {
+      const result = compileHedgeCode(`
+        trait OnlyB { fn m(&self) -> i32; }
+        struct TypeA { v: i32 }
+        struct TypeB { v: i32 }
+        impl OnlyB for TypeB { fn m(&self) -> i32 { 1 } }
+        fn f<T, U: OnlyB = T>(x: T) -> i32 { 0 }
+        fn main() { print(f(TypeA { v: 1 })); }
+      `);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+      expect(messageOf(errors[0])).toBe(
+        "the trait bound `TypeA: OnlyB` is not satisfied",
+      );
+    });
+
+    it("re-derives a default referencing an earlier parameter per call, following that call's own binding", (): void => {
       assertRunsTo(
         `
-        fn f<T, U = T>(x: T) -> U { x }
-        fn main() { print(f(5)); }
+        trait OnlyB { fn m(&self) -> i32; }
+        struct TypeA { v: i32 }
+        struct TypeB { v: i32 }
+        impl OnlyB for TypeB { fn m(&self) -> i32 { 1 } }
+        fn f<T, U: OnlyB = T>(x: T) -> i32 { 0 }
+        fn main() { print(f(TypeB { v: 1 })); }
         `,
-        ["5"],
+        ["0"],
       );
     });
 

@@ -437,6 +437,27 @@ function resolveBoundNames(
   );
 }
 
+/** Resolves each declared generic parameter's own default type, called with
+ * `generics`' own scope already pushed (mirrors `genericParamBoundNames` +
+ * `resolveBoundNames`'s split) so a default naming an earlier sibling
+ * parameter (`<T, U = T>`) resolves through the ordinary
+ * `isDeclaredGenericParam` path to that parameter's own `NamedType`
+ * reference, left for the call site to substitute against its own bindings. */
+function resolveGenericParamDefaults(
+  ctx: AnalysisContext,
+  generics: readonly Parser.GenericParam[],
+): ReadonlyMap<string, Semantics.Type> {
+  const defaults = new Map<string, Semantics.Type>();
+  for (const param of generics) {
+    if (param.kind !== "TypeParam" || !isSome(param.default)) continue;
+    defaults.set(
+      param.name.text,
+      resolveSlice1Type(ctx, param.default.value, param.default.value.tokenId),
+    );
+  }
+  return defaults;
+}
+
 /** Extracts the trait names from a list of `TraitBound`s - a
  * `LifetimeTraitBound` (`T: 'a`) contributes nothing, since it names no
  * trait. Shared by inline (`T: Draw`) and `where`-clause (`where T: Draw`)
@@ -866,6 +887,7 @@ const BUILTIN_SCOPE: [string, ScopedVariable][] = [
         paramsArePlaceholder: true,
         genericParams: [],
         genericParamBounds: new Map(),
+        genericParamDefaults: new Map(),
       },
       mutable: false,
     },
@@ -5814,6 +5836,7 @@ function fnSignatureType(
       ctx,
       genericParamBoundNames(signature.generics, signature.whereClause),
     ),
+    genericParamDefaults: resolveGenericParamDefaults(ctx, signature.generics),
   };
   popGenericParams(ctx);
   return type;
@@ -9470,7 +9493,17 @@ function checkCallGenericBounds(
   const witnesses: WitnessRef[] = [];
   let allBoundsSatisfied = true;
   for (const paramName of calleeType.genericParams) {
-    const binding = bindings.get(paramName);
+    let binding = bindings.get(paramName);
+    if (binding === undefined) {
+      const defaultType = calleeType.genericParamDefaults.get(paramName);
+      if (defaultType !== undefined) {
+        binding = {
+          type: substituteGenericType(defaultType, bindings),
+          tokenId: call.tokenId,
+        };
+        bindings.set(paramName, binding);
+      }
+    }
     if (binding === undefined) {
       emitError(
         ctx,

@@ -635,6 +635,12 @@ export interface FunctionType {
    * keyed by parameter name; a parameter with no bounds still gets an empty
    * array, not a missing key. */
   readonly genericParamBounds: ReadonlyMap<string, readonly string[]>;
+  /** Each declared generic parameter's own default type (`T = i32`), keyed
+   * by parameter name; a parameter with no default carries no entry. A
+   * default naming an earlier parameter resolves to that parameter's own
+   * `NamedType` reference (the same shape an ordinary `x: T` gets), left for
+   * the call site to substitute against its own resolved bindings. */
+  readonly genericParamDefaults: ReadonlyMap<string, Type>;
 }
 
 /**
