@@ -1519,6 +1519,34 @@ describe("execution tests", (): void => {
         "argument 2 to struct `Pair` type mismatch: expected `i32`, found `str`",
       );
     });
+
+    it("falls back to a struct's declared default when construction gives no other information", (): void => {
+      assertRunsTo(
+        `
+        struct Box<T>(T);
+        struct Marker<T = i32>(Box<T>);
+        fn main() {
+          Marker(Box(5));
+          print("ok");
+        }
+        `,
+        ["ok"],
+      );
+    });
+
+    it("lets an explicit turbofish override a struct's declared default at construction", (): void => {
+      assertRunsTo(
+        `
+        struct Box<T>(T);
+        struct Marker<T = i32>(Box<T>);
+        fn main() {
+          Marker::<u8>(Box(5));
+          print("ok");
+        }
+        `,
+        ["ok"],
+      );
+    });
   });
 
   describe("unused generic type parameters on a struct or enum", (): void => {

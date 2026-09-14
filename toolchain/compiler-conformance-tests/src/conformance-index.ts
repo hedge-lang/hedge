@@ -741,6 +741,8 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "reports an enum generic parameter unused by the constructed variant as unsolved",
       "lets an explicit turbofish override inference on a generic tuple-struct construction",
       "reports a conflict when a turbofish disagrees with the actual argument on a generic tuple-struct construction",
+      "falls back to a struct's declared default when construction gives no other information",
+      "lets an explicit turbofish override a struct's declared default at construction",
     ],
   },
   {
