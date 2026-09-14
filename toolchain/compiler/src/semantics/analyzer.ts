@@ -712,6 +712,45 @@ function checkUnusedGenericParams(
   }
 }
 
+/**
+ * A generic parameter's default may only reference a type parameter of the
+ * same declaration that appears strictly earlier in `generics` - by the
+ * point a later default would be substituted, only earlier ones are known.
+ * A self-reference is rejected by the same rule (a param is never in
+ * `declaredSoFar` while its own default is being checked). Reports at most
+ * one diagnostic per param, and only the first bad name within that param's
+ * own default, so a mutual forward reference (`<T = U, U = T>`) reports only
+ * the genuinely-first violation rather than double-counting.
+ */
+function checkGenericDefaultForwardReferences(
+  ctx: AnalysisContext,
+  generics: readonly Parser.GenericParam[],
+): void {
+  const declaredNames = genericParamNames(generics);
+  const declaredSoFar = new Set<string>();
+  for (const param of generics) {
+    if (param.kind !== "TypeParam") continue;
+    if (isSome(param.default)) {
+      const referenced = new Set<string>();
+      collectNamedTypeMentions(param.default.value, referenced);
+      for (const name of referenced) {
+        if (!declaredNames.includes(name) || declaredSoFar.has(name)) continue;
+        emitError(
+          ctx,
+          {
+            kind: "SemGenericDefaultForwardReference",
+            paramName: param.name.text,
+            referencedName: name,
+          },
+          param.tokenId,
+        );
+        break;
+      }
+    }
+    declaredSoFar.add(param.name.text);
+  }
+}
+
 /** Innermost frame index whose `select`ed map declares `name`, or -1. */
 function frameIndexOf(
   ctx: AnalysisContext,
@@ -1972,6 +2011,7 @@ function declareStructName(
     );
     return;
   }
+  checkGenericDefaultForwardReferences(ctx, item.generics);
   const type: Semantics.Type = {
     kind: "StructType",
     name: scopedTypeName(item.name.tokenId, item.name.text),
@@ -2011,6 +2051,7 @@ function declareEnumName(
     );
     return;
   }
+  checkGenericDefaultForwardReferences(ctx, item.generics);
   const type: Semantics.Type = {
     kind: "EnumType",
     name: scopedTypeName(item.name.tokenId, item.name.text),
@@ -2050,6 +2091,7 @@ function declareTraitName(
     );
     return;
   }
+  checkGenericDefaultForwardReferences(ctx, item.generics);
   frame.traits.set(item.name.text, item.name.tokenId);
 }
 
@@ -6069,6 +6111,7 @@ function analyzeFunction(
   ctx: AnalysisContext,
   decl: Parser.FunctionDef,
 ): Semantics.FunctionDef {
+  checkGenericDefaultForwardReferences(ctx, decl.signature.generics);
   pushFrame(ctx);
   pushGenericParams(ctx, decl.signature.generics, decl.signature.whereClause);
   recordWitnessParams(

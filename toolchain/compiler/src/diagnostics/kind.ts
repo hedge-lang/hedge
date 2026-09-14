@@ -451,6 +451,11 @@ export type DiagnosticKind =
     }
   | { readonly kind: "SemCannotInferEmptyArrayElementType" }
   | { readonly kind: "SemCannotInferGenericParam"; readonly paramName: string }
+  | {
+      readonly kind: "SemGenericDefaultForwardReference";
+      readonly paramName: string;
+      readonly referencedName: string;
+    }
   | { readonly kind: "SemCannotDereferenceNonReference" }
   | { readonly kind: "SemCannotIndexNonArray"; readonly found: string }
   | { readonly kind: "SemFieldAccessOnNonStruct" }
@@ -784,6 +789,7 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemArrayIndexOutOfBounds", "HEDGE-TYPE-005"],
   ["SemCannotInferEmptyArrayElementType", "HEDGE-TYPE-006"],
   ["SemCannotInferGenericParam", "HEDGE-TYPE-006"],
+  ["SemGenericDefaultForwardReference", "HEDGE-TYPE-015"],
   ["SemCannotDereferenceNonReference", "HEDGE-TYPE-007"],
   ["SemCannotIndexNonArray", "HEDGE-TYPE-007"],
   ["SemFieldAccessOnNonStruct", "HEDGE-TYPE-007"],
