@@ -9611,7 +9611,13 @@ function analyzeCall(
     };
   }
   const turbofishBindings: GenericBindings = new Map();
-  seedTurbofishBindings(ctx, call, calleeType.genericParams, turbofishBindings);
+  seedTurbofishBindings(
+    ctx,
+    call,
+    calleeType.genericParams,
+    calleeType.genericParamDefaults,
+    turbofishBindings,
+  );
   const expectedTypeConflicted =
     expectedType !== undefined &&
     seedExpectedReturnType(
@@ -9901,18 +9907,32 @@ function bindMismatchedReferentPlaceholder(
  * reported as the conflict, blaming the argument). An empty list (`::<>`)
  * means zero explicit arguments were supplied, so it's treated exactly like
  * an absent turbofish - full inference, not an arity error. A non-empty
- * list that doesn't match the callee's declared generic-parameter count is
- * rejected outright. */
+ * list shorter than the callee's declared generic-parameter count is
+ * accepted when every omitted trailing parameter has a declared default
+ * (positional turbofish args always fill from the front, so a shorter list
+ * always omits a trailing run, never a middle one) - those trailing
+ * parameters are left unbound here, for `checkCallGenericBounds` /
+ * `checkGenericPositionalConstruction`'s own default fallback to resolve.
+ * Any other length mismatch is rejected outright. */
 function seedTurbofishBindings(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
   genericParams: readonly string[],
+  genericDefaults: ReadonlyMap<string, Semantics.Type>,
   bindings: GenericBindings,
 ): void {
   if (call.callee.kind !== "PathExpression") return;
   const typeArgs = call.callee.typeArguments;
   if (typeArgs.length === 0) return;
-  if (typeArgs.length !== genericParams.length) {
+  const omittedTrailingParamsDefault =
+    typeArgs.length < genericParams.length &&
+    genericParams
+      .slice(typeArgs.length)
+      .every((name) => genericDefaults.has(name));
+  if (
+    typeArgs.length !== genericParams.length &&
+    !omittedTrailingParamsDefault
+  ) {
     emitError(
       ctx,
       {
@@ -9958,7 +9978,13 @@ function checkGenericPositionalConstruction(
   genericDefaults: ReadonlyMap<string, Semantics.Type>,
 ): Semantics.Expression[] {
   const turbofishBindings: GenericBindings = new Map();
-  seedTurbofishBindings(ctx, call, genericParams, turbofishBindings);
+  seedTurbofishBindings(
+    ctx,
+    call,
+    genericParams,
+    genericDefaults,
+    turbofishBindings,
+  );
   const { args: checkedArgs, bindings } = checkPositionalCallArgs(
     ctx,
     call,
