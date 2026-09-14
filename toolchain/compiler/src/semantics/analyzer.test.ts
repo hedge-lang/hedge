@@ -6395,6 +6395,90 @@ describe("trait and impl declarations", (): void => {
     });
   });
 
+  describe("generic parameter default: forward-reference validation", (): void => {
+    it("rejects a function generic default that references a later-declared parameter", (): void => {
+      const result = diagnose(`fn f<T = U, U>() {}`);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "generic parameter `T`'s default references `U`, which is not declared earlier in this parameter list",
+      );
+    });
+
+    it("rejects a struct generic default that references a later-declared parameter", (): void => {
+      const result = diagnose(`struct Pair<T = U, U>(T, U);`);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "generic parameter `T`'s default references `U`, which is not declared earlier in this parameter list",
+      );
+    });
+
+    it("rejects an enum generic default that references a later-declared parameter", (): void => {
+      const result = diagnose(`enum E<T = U, U> { A(T, U) }`);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "generic parameter `T`'s default references `U`, which is not declared earlier in this parameter list",
+      );
+    });
+
+    it("rejects a trait generic default that references a later-declared parameter", (): void => {
+      const result = diagnose(`trait Convert<T = U, U> {}`);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "generic parameter `T`'s default references `U`, which is not declared earlier in this parameter list",
+      );
+    });
+
+    it("rejects a generic default that references itself", (): void => {
+      const result = diagnose(`fn f<T = T>() {}`);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "generic parameter `T`'s default references `T`, which is not declared earlier in this parameter list",
+      );
+    });
+
+    it("reports only the first violation on a mutual forward reference", (): void => {
+      const result = diagnose(`fn f<T = U, U = T>() {}`);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "generic parameter `T`'s default references `U`, which is not declared earlier in this parameter list",
+      );
+    });
+
+    it("accepts a default referencing an earlier-declared parameter, no cascade", (): void => {
+      const result = diagnose(`fn f<T, U = T>() {}`);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("accepts a default referencing a name nested inside a compound default type", (): void => {
+      const result = diagnose(`
+        struct Box<T>(T);
+        fn f<T, U = Box<T>>() {}
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a forward reference nested inside a compound default type", (): void => {
+      const result = diagnose(`
+        struct Box<T>(T);
+        fn f<T = Box<U>, U>() {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "generic parameter `T`'s default references `U`, which is not declared earlier in this parameter list",
+      );
+    });
+
+    it("does not reject Self as a trait generic default (not one of the trait's own declared parameters)", (): void => {
+      const result = diagnose(`trait Add<Rhs = Self> {}`);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("compiles a struct with an inert, unconsulted default cleanly", (): void => {
+      const result = diagnose(`struct Ring<T = i32>(T);`);
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
   describe("blanket impls and supertraits", (): void => {
     it("rejects a generic bound satisfied only by a blanket impl, since its witness can't be built", (): void => {
       // The bound `Point: B` genuinely holds (via the blanket `impl<T: A> B
