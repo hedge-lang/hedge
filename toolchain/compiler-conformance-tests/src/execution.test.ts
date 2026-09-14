@@ -1455,6 +1455,27 @@ describe("execution tests", (): void => {
         ["7"],
       );
     });
+
+    it("accepts a partial turbofish that omits a trailing defaulted parameter", (): void => {
+      assertRunsTo(
+        `
+        fn f<T, U = i32>(x: T) -> T { x }
+        fn main() { print(f::<i32>(9)); }
+        `,
+        ["9"],
+      );
+    });
+
+    it("still rejects a short turbofish when the omitted trailing parameter has no default", (): void => {
+      const result = compileHedgeCode(
+        `fn f<T, U>(x: T) -> T { x } fn main() { print(f::<i32>(9)); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-011");
+      expect(messageOf(errors[0])).toBe(
+        "`f` declares 2 generic parameter(s), but the turbofish supplies 1",
+      );
+    });
   });
 
   describe("generic enum-variant construction turbofish and unsolved-variable checks", (): void => {

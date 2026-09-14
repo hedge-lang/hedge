@@ -728,6 +728,8 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "resolves a default referencing an earlier parameter to that call's own binding, not a fixed value",
       "re-derives a default referencing an earlier parameter per call, following that call's own binding",
       "does not let a defaulted parameter unused in the signature interfere with an ordinary generic call",
+      "accepts a partial turbofish that omits a trailing defaulted parameter",
+      "still rejects a short turbofish when the omitted trailing parameter has no default",
     ],
   },
   {
