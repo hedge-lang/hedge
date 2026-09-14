@@ -2050,6 +2050,7 @@ function declareStructName(
     ...item,
     name: { ...item.name, type },
     generics: genericParamNames(item.generics),
+    genericDefaults: new Map(),
     attributes: [],
     body: { kind: "Unit" },
     type,
@@ -2090,6 +2091,7 @@ function declareEnumName(
     ...item,
     name: { ...item.name, type },
     generics: genericParamNames(item.generics),
+    genericDefaults: new Map(),
     variants: [],
     attributes: [],
     type,
@@ -3922,11 +3924,13 @@ function analyzeEnum(
   const variants = item.variants.map((variant) =>
     analyzeVariant(ctx, variant, enumType),
   );
+  const genericDefaults = resolveGenericParamDefaults(ctx, item.generics);
   popGenericParams(ctx);
   return {
     ...item,
     name: { ...item.name, type: enumType },
     generics: genericParamNames(item.generics),
+    genericDefaults,
     attributes: item.attributes.map((attr) => analyzeAttribute(ctx, attr)),
     variants,
     type: enumType,
@@ -5531,11 +5535,13 @@ function analyzeStruct(
   checkUnusedGenericParams(ctx, item.generics, structFieldUsedNames(item.body));
   pushGenericParams(ctx, item.generics);
   const body = analyzeStructBody(ctx, item.body);
+  const genericDefaults = resolveGenericParamDefaults(ctx, item.generics);
   popGenericParams(ctx);
   return {
     ...item,
     name: { ...item.name, type: { kind: "StructType", name: scopedName } },
     generics: genericParamNames(item.generics),
+    genericDefaults,
     attributes: item.attributes.map((attr) => analyzeAttribute(ctx, attr)),
     body,
     type: {
@@ -9716,6 +9722,7 @@ function analyzeEnumVariantCallConstruction(
     variant.body.value.fields,
     args,
     enumDecl.generics,
+    enumDecl.genericDefaults,
   );
   return some({ type: enumDecl.type, args: checkedArgs });
 }
@@ -9948,6 +9955,7 @@ function checkGenericPositionalConstruction(
   params: readonly { readonly type: Semantics.Type }[],
   args: readonly Semantics.Expression[],
   genericParams: readonly string[],
+  genericDefaults: ReadonlyMap<string, Semantics.Type>,
 ): Semantics.Expression[] {
   const turbofishBindings: GenericBindings = new Map();
   seedTurbofishBindings(ctx, call, genericParams, turbofishBindings);
@@ -9962,6 +9970,14 @@ function checkGenericPositionalConstruction(
   );
   for (const paramName of genericParams) {
     if (bindings.has(paramName)) continue;
+    const defaultType = genericDefaults.get(paramName);
+    if (defaultType !== undefined) {
+      bindings.set(paramName, {
+        type: substituteGenericType(defaultType, bindings),
+        tokenId: call.tokenId,
+      });
+      continue;
+    }
     emitError(
       ctx,
       { kind: "SemCannotInferGenericParam", paramName },
@@ -10304,6 +10320,7 @@ function analyzeTupleStructCallConstruction(
     structDecl.body.fields,
     args,
     structDecl.generics,
+    structDecl.genericDefaults,
   );
   return some({ callee, type: structDecl.type, args: checkedArgs });
 }
