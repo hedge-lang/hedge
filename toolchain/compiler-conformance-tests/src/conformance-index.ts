@@ -687,7 +687,7 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
   {
     id: "GENERIC-CALL-INFERENCE",
     description:
-      "A generic call's type parameters are unified from its arguments, an expected return type, or an explicit turbofish, with a conflicting or unsolved variable reported as a diagnostic",
+      "A generic call's type parameters are unified from its arguments, an expected return type, or an explicit turbofish, falling back to a declared default when still unsolved, with a conflicting or genuinely-unsolved variable reported as a diagnostic",
     specRefs: ["0015-generics-and-traits.md"],
     testIds: [
       "infers a generic parameter from a single argument, with no annotation",
@@ -722,6 +722,11 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "does not cascade an unsolved-variable diagnostic per parameter on a wrong-arity multi-generic call",
       "does not cascade a second diagnostic when a turbofish conflicts with a let annotation",
       "does not cascade a second diagnostic when a turbofish conflicts with the enclosing function's return type",
+      "resolves an otherwise-unsolved generic parameter to its declared default",
+      "uses the declared default itself, not just any resolution, shown by a bound only the default fails",
+      "lets an explicit turbofish override a declared default",
+      "resolves a default referencing an earlier parameter using that parameter's bound value",
+      "does not let a defaulted parameter unused in the signature interfere with an ordinary generic call",
     ],
   },
   {

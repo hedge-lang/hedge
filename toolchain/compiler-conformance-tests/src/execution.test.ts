@@ -1373,6 +1373,67 @@ describe("execution tests", (): void => {
         "call to `identity` type mismatch: expected `i32`, found `str`",
       );
     });
+
+    it("resolves an otherwise-unsolved generic parameter to its declared default", (): void => {
+      assertRunsTo(
+        `
+        fn discard<T = i32>(x: i32) -> i32 { x }
+        fn main() { print(discard(5)); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("uses the declared default itself, not just any resolution, shown by a bound only the default fails", (): void => {
+      const result = compileHedgeCode(`
+        trait OnlyB { fn m(&self) -> i32; }
+        struct TypeA;
+        struct TypeB;
+        impl OnlyB for TypeB { fn m(&self) -> i32 { 1 } }
+        fn discard<T: OnlyB = TypeA>(x: i32) -> i32 { x }
+        fn main() { print(discard(5)); }
+      `);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+      expect(messageOf(errors[0])).toBe(
+        "the trait bound `TypeA: OnlyB` is not satisfied",
+      );
+    });
+
+    it("lets an explicit turbofish override a declared default", (): void => {
+      assertRunsTo(
+        `
+        trait OnlyB { fn m(&self) -> i32; }
+        struct TypeA;
+        struct TypeB;
+        impl OnlyB for TypeB { fn m(&self) -> i32 { 1 } }
+        fn discard<T: OnlyB = TypeA>(x: i32) -> i32 { x }
+        fn main() { print(discard::<TypeB>(5)); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("resolves a default referencing an earlier parameter using that parameter's bound value", (): void => {
+      assertRunsTo(
+        `
+        fn f<T, U = T>(x: T) -> U { x }
+        fn main() { print(f(5)); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("does not let a defaulted parameter unused in the signature interfere with an ordinary generic call", (): void => {
+      assertRunsTo(
+        `
+        fn f<T, U = i32>(x: T) -> T { x }
+        fn main() { print(f(7)); }
+        `,
+        ["7"],
+      );
+    });
   });
 
   describe("generic enum-variant construction turbofish and unsolved-variable checks", (): void => {
