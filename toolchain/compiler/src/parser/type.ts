@@ -82,7 +82,7 @@ export function parseType(
  * (`Container<&Foo<T>>`); `ArrayType`'s element recursion never needs to,
  * since its own close is the unambiguous `]`, never a shared `>`.
  */
-function parseTypeWithCloseState(
+export function parseTypeWithCloseState(
   tokens: readonly Token[],
   pos: number,
 ): PR<TypeParseResult> {

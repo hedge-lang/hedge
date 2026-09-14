@@ -5824,6 +5824,8 @@ describe("generic parameter defaults", (): void => {
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(messageOf(diagnostics[0])).toBe("expected a type, found `gt`");
     expect(program.value.items).toMatchObject([
       { kind: "Function", signature: { name: { text: "broken" } } },
       { kind: "Function", signature: { name: { text: "ok" } } },
@@ -5835,6 +5837,8 @@ describe("generic parameter defaults", (): void => {
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
     expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(messageOf(diagnostics[0])).toBe("expected a type, found `comma`");
     expect(program.value.items).toMatchObject([
       { kind: "Function", signature: { name: { text: "broken" } } },
       { kind: "Function", signature: { name: { text: "ok" } } },
@@ -5845,7 +5849,11 @@ describe("generic parameter defaults", (): void => {
     const { tokens } = tokenize("fn broken<'a = 'static>() {} fn ok() {}");
     const { program, diagnostics } = parse(tokens);
     assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
     assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(messageOf(diagnostics[0])).toBe(
+      "expected ',' or '>' in generic parameter list, found \"eq\"",
+    );
     expect(program.value.items).toMatchObject([
       { kind: "Function", signature: { name: { text: "broken" } } },
       { kind: "Function", signature: { name: { text: "ok" } } },
