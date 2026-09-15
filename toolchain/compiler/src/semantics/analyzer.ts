@@ -7414,9 +7414,9 @@ function unaryNegResultType(
 }
 
 /**
- * `!` is logical negation on `bool` and bitwise negation on an integer,
- * mirroring Rust; either way the result keeps the operand's type. Anything
- * else has no meaning to give it.
+ * `!` is logical negation on `bool` and bitwise negation on an integer;
+ * either way the result keeps the operand's type. Anything else has no
+ * native meaning to give it.
  */
 function unaryNotResultType(
   ctx: AnalysisContext,
