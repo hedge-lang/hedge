@@ -194,7 +194,7 @@ export interface StructDecl extends DecoratedAstNode {
   readonly generics: readonly string[];
   /** See `FunctionType.genericParamDefaults`'s own doc comment - same shape,
    * consulted by construction-call inference instead of an ordinary call. */
-  readonly genericDefaults: ReadonlyMap<string, Type>;
+  readonly genericParamDefaults: ReadonlyMap<string, Type>;
   readonly body: StructBody;
   readonly attributes: readonly Attribute[];
 }
@@ -204,7 +204,7 @@ export interface EnumDecl extends DecoratedAstNode {
   readonly visibility: Option<Visibility>;
   readonly name: Identifier;
   readonly generics: readonly string[];
-  readonly genericDefaults: ReadonlyMap<string, Type>;
+  readonly genericParamDefaults: ReadonlyMap<string, Type>;
   readonly variants: readonly Variant[];
   readonly attributes: readonly Attribute[];
 }

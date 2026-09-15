@@ -2066,7 +2066,7 @@ function declareStructName(
     ...item,
     name: { ...item.name, type },
     generics: genericParamNames(item.generics),
-    genericDefaults: new Map(),
+    genericParamDefaults: new Map(),
     attributes: [],
     body: { kind: "Unit" },
     type,
@@ -2107,7 +2107,7 @@ function declareEnumName(
     ...item,
     name: { ...item.name, type },
     generics: genericParamNames(item.generics),
-    genericDefaults: new Map(),
+    genericParamDefaults: new Map(),
     variants: [],
     attributes: [],
     type,
@@ -3941,13 +3941,13 @@ function analyzeEnum(
   const variants = item.variants.map((variant) =>
     analyzeVariant(ctx, variant, enumType),
   );
-  const genericDefaults = resolveGenericParamDefaults(ctx, item.generics);
+  const genericParamDefaults = resolveGenericParamDefaults(ctx, item.generics);
   popGenericParams(ctx);
   return {
     ...item,
     name: { ...item.name, type: enumType },
     generics: genericParamNames(item.generics),
-    genericDefaults,
+    genericParamDefaults,
     attributes: item.attributes.map((attr) => analyzeAttribute(ctx, attr)),
     variants,
     type: enumType,
@@ -5552,13 +5552,13 @@ function analyzeStruct(
   checkUnusedGenericParams(ctx, item.generics, structFieldUsedNames(item.body));
   pushGenericParams(ctx, item.generics);
   const body = analyzeStructBody(ctx, item.body);
-  const genericDefaults = resolveGenericParamDefaults(ctx, item.generics);
+  const genericParamDefaults = resolveGenericParamDefaults(ctx, item.generics);
   popGenericParams(ctx);
   return {
     ...item,
     name: { ...item.name, type: { kind: "StructType", name: scopedName } },
     generics: genericParamNames(item.generics),
-    genericDefaults,
+    genericParamDefaults,
     attributes: item.attributes.map((attr) => analyzeAttribute(ctx, attr)),
     body,
     type: {
@@ -9746,7 +9746,7 @@ function analyzeEnumVariantCallConstruction(
     variant.body.value.fields,
     args,
     enumDecl.generics,
-    enumDecl.genericDefaults,
+    enumDecl.genericParamDefaults,
   );
   return some({ type: enumDecl.type, args: checkedArgs });
 }
@@ -9936,20 +9936,20 @@ function seedTurbofishBindings(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
   genericParams: readonly string[],
-  genericDefaults: ReadonlyMap<string, Semantics.Type>,
+  genericParamDefaults: ReadonlyMap<string, Semantics.Type>,
   bindings: GenericBindings,
 ): void {
   if (call.callee.kind !== "PathExpression") return;
   const typeArgs = call.callee.typeArguments;
   if (typeArgs.length === 0) return;
-  const omittedTrailingParamsDefault =
+  const omittedTrailingParamsHaveDefaults =
     typeArgs.length < genericParams.length &&
     genericParams
       .slice(typeArgs.length)
-      .every((name) => genericDefaults.has(name));
+      .every((name) => genericParamDefaults.has(name));
   if (
     typeArgs.length !== genericParams.length &&
-    !omittedTrailingParamsDefault
+    !omittedTrailingParamsHaveDefaults
   ) {
     emitError(
       ctx,
@@ -9993,14 +9993,14 @@ function checkGenericPositionalConstruction(
   params: readonly { readonly type: Semantics.Type }[],
   args: readonly Semantics.Expression[],
   genericParams: readonly string[],
-  genericDefaults: ReadonlyMap<string, Semantics.Type>,
+  genericParamDefaults: ReadonlyMap<string, Semantics.Type>,
 ): Semantics.Expression[] {
   const turbofishBindings: GenericBindings = new Map();
   seedTurbofishBindings(
     ctx,
     call,
     genericParams,
-    genericDefaults,
+    genericParamDefaults,
     turbofishBindings,
   );
   const { args: checkedArgs, bindings } = checkPositionalCallArgs(
@@ -10014,7 +10014,7 @@ function checkGenericPositionalConstruction(
   );
   for (const paramName of genericParams) {
     if (bindings.has(paramName)) continue;
-    const defaultType = genericDefaults.get(paramName);
+    const defaultType = genericParamDefaults.get(paramName);
     if (defaultType !== undefined) {
       bindings.set(paramName, {
         type: substituteGenericType(defaultType, bindings),
@@ -10364,7 +10364,7 @@ function analyzeTupleStructCallConstruction(
     structDecl.body.fields,
     args,
     structDecl.generics,
-    structDecl.genericDefaults,
+    structDecl.genericParamDefaults,
   );
   return some({ callee, type: structDecl.type, args: checkedArgs });
 }
