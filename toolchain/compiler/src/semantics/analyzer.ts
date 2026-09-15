@@ -6968,6 +6968,35 @@ interface ComparisonSpec {
   readonly equalityTraitFallback: boolean;
 }
 
+/** Whether `type` (or, through one borrow, its referent) resolves
+ * `requiredTrait` - a concrete impl, a bound generic parameter, or an
+ * abstract `Self` inside `requiredTrait`'s own default-method body (via the
+ * enclosing trait's supertrait chain, since no concrete impl can exist for
+ * `Self` there). Shared by every prelude-trait operator fallback (`==`'s
+ * `PartialEq`, unary `-`/`!`'s `Neg`/`Not`) so they all resolve an operand
+ * the same way. */
+function resolvesViaTraitBound(
+  ctx: AnalysisContext,
+  type: Semantics.Type,
+  requiredTrait: string,
+): boolean {
+  const referent = type.kind === "ReferenceType" ? type.referent : type;
+  if (
+    referent.kind === "NamedType" &&
+    referent.path.segments.length === 1 &&
+    referent.path.segments[0] === "Self"
+  ) {
+    const selfContext = currentSelfContext(ctx);
+    if (
+      selfContext?.kind === "Trait" &&
+      boundsImplyTrait(ctx, [selfContext.traitName], requiredTrait)
+    ) {
+      return true;
+    }
+  }
+  return isSome(resolveTraitBound(ctx, referent, requiredTrait));
+}
+
 /** Whether one operand may take part in this comparison - via its own
  * capability-table entry, or (equality only) a resolved `PartialEq` impl on
  * the operand's type or, through one borrow, its referent (`&Point ==
@@ -6982,24 +7011,7 @@ function comparisonOperandResolves(
   if (!spec.equalityTraitFallback) return false;
   const partialEq = lookupPreludeTrait(ctx, "PartialEq");
   if (partialEq === undefined) return false;
-  const referent =
-    operand.type.kind === "ReferenceType"
-      ? operand.type.referent
-      : operand.type;
-  if (
-    referent.kind === "NamedType" &&
-    referent.path.segments.length === 1 &&
-    referent.path.segments[0] === "Self"
-  ) {
-    const selfContext = currentSelfContext(ctx);
-    if (
-      selfContext?.kind === "Trait" &&
-      boundsImplyTrait(ctx, [selfContext.traitName], partialEq)
-    ) {
-      return true;
-    }
-  }
-  return isSome(resolveTraitBound(ctx, referent, partialEq));
+  return resolvesViaTraitBound(ctx, operand.type, partialEq);
 }
 
 /**
@@ -7071,6 +7083,44 @@ function recordEqualityTarget(
       kind: "witness",
       witnessName,
       methodName: "eq",
+    });
+  }
+}
+
+/** For a `-`/`!` that resolves through a concrete `impl Neg`/`Not for
+ * <operand type>` (not a blanket impl), records the impl's method as a free
+ * function so `jsim.ts`'s unary lowering calls it directly. A bound generic
+ * parameter records a witness slot instead; a blanket-satisfied impl records
+ * nothing and keeps the interim `v.neg()`/`v.not()` method-call shape,
+ * mirroring `recordEqualityTarget`'s own blanket-impl carve-out. */
+function recordUnaryTraitTarget(
+  ctx: AnalysisContext,
+  traitName: string,
+  methodName: "neg" | "not",
+  operandType: Semantics.Type,
+  tokenId: number,
+): void {
+  const referent =
+    operandType.kind === "ReferenceType" ? operandType.referent : operandType;
+  if (isNominalType(referent)) {
+    const impl = findRegisteredImpl(ctx, referent.name, traitName);
+    if (impl === undefined || impl.isBlanket) return;
+    ctx.methodTargetTable.set(tokenId, {
+      kind: "free",
+      typeId: referent.name,
+      typeName: bareTypeName(referent.name),
+      traitName: some(bareTypeName(traitName)),
+      methodName,
+      isDefaultBody: false,
+    });
+    return;
+  }
+  const witnessName = abstractWitnessParamName(ctx, referent, traitName);
+  if (witnessName !== undefined) {
+    ctx.methodTargetTable.set(tokenId, {
+      kind: "witness",
+      witnessName,
+      methodName,
     });
   }
 }
@@ -7339,6 +7389,18 @@ function unaryNegResultType(
   if (operandType.kind === "UnitType" && isAmbiguousUnitExpr(operand)) {
     return operandType;
   }
+  const negTrait = lookupPreludeTrait(ctx, "Neg");
+  if (
+    negTrait !== undefined &&
+    resolvesViaTraitBound(ctx, operandType, negTrait)
+  ) {
+    recordUnaryTraitTarget(ctx, negTrait, "neg", operandType, tokenId);
+    // Homogeneous case (Output == Self): the result is the concrete type
+    // Neg is implemented for, not the borrow the operand happened to be.
+    return operandType.kind === "ReferenceType"
+      ? operandType.referent
+      : operandType;
+  }
   emitError(
     ctx,
     {
@@ -7362,7 +7424,6 @@ function unaryNotResultType(
   tokenId: number,
 ): Semantics.Type {
   const operandType = getType(operand);
-  // TODO(Hedge-280): no fallback to a Not-style operator trait yet.
   if (
     hasCapability(operandType, "logical") ||
     hasCapability(operandType, "bitwise")
@@ -7371,6 +7432,16 @@ function unaryNotResultType(
   }
   if (operandType.kind === "UnitType" && isAmbiguousUnitExpr(operand)) {
     return operandType;
+  }
+  const notTrait = lookupPreludeTrait(ctx, "Not");
+  if (
+    notTrait !== undefined &&
+    resolvesViaTraitBound(ctx, operandType, notTrait)
+  ) {
+    recordUnaryTraitTarget(ctx, notTrait, "not", operandType, tokenId);
+    return operandType.kind === "ReferenceType"
+      ? operandType.referent
+      : operandType;
   }
   emitError(
     ctx,

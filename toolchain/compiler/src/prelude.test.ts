@@ -17,14 +17,22 @@ describe("std prelude", (): void => {
     expect(analyze(program.value, tokens).diagnostics).toEqual([]);
   });
 
-  it("declares exactly Clone, PartialEq, Eq, Default, and Drop as traits", (): void => {
+  it("declares exactly Clone, PartialEq, Eq, Default, Drop, Neg, and Not as traits", (): void => {
     const { tokens } = tokenize(PRELUDE_SOURCE);
     const { program } = parse(tokens);
     assert(isSome(program), "prelude failed to parse");
     const traitNames = program.value.items
       .filter((item) => item.kind === "Trait")
       .map((item) => item.name.text);
-    expect(traitNames).toEqual(["Clone", "PartialEq", "Eq", "Default", "Drop"]);
+    expect(traitNames).toEqual([
+      "Clone",
+      "PartialEq",
+      "Eq",
+      "Default",
+      "Drop",
+      "Neg",
+      "Not",
+    ]);
   });
 
   it("gives PartialEq an `eq` method and Eq a PartialEq supertrait", (): void => {
