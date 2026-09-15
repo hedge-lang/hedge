@@ -9517,17 +9517,12 @@ function checkCallGenericBounds(
   const witnesses: WitnessRef[] = [];
   let allBoundsSatisfied = true;
   for (const paramName of calleeType.genericParams) {
-    let binding = bindings.get(paramName);
-    if (binding === undefined) {
-      const defaultType = calleeType.genericParamDefaults.get(paramName);
-      if (defaultType !== undefined) {
-        binding = {
-          type: substituteGenericType(defaultType, bindings),
-          tokenId: call.tokenId,
-        };
-        bindings.set(paramName, binding);
-      }
-    }
+    const binding = bindingOrDefault(
+      paramName,
+      calleeType.genericParamDefaults,
+      bindings,
+      call.tokenId,
+    );
     if (binding === undefined) {
       emitError(
         ctx,
@@ -9791,6 +9786,30 @@ function placeholderBindUnbound(
   }
 }
 
+/** `paramName`'s existing binding, or its declared default (substituted
+ * against `bindings`, so a default referencing an earlier parameter
+ * resolves to that parameter's own binding) when nothing else has bound it
+ * yet - `undefined` only when neither exists. A resolved default is written
+ * into `bindings` so a later parameter's own default can see it too, and so
+ * the caller's return-type substitution sees it after this call returns. */
+function bindingOrDefault(
+  paramName: string,
+  genericParamDefaults: ReadonlyMap<string, Semantics.Type>,
+  bindings: GenericBindings,
+  tokenId: number,
+): GenericBinding | undefined {
+  const existing = bindings.get(paramName);
+  if (existing !== undefined) return existing;
+  const defaultType = genericParamDefaults.get(paramName);
+  if (defaultType === undefined) return undefined;
+  const binding: GenericBinding = {
+    type: substituteGenericType(defaultType, bindings),
+    tokenId,
+  };
+  bindings.set(paramName, binding);
+  return binding;
+}
+
 /** Whether `declaredType` is a generic-parameter position at all - a bare
  * generic-named `NamedType`, or a single reference hop to one, the only two
  * shapes generic-parameter resolution currently supports. Anything else,
@@ -10035,13 +10054,14 @@ function checkGenericPositionalConstruction(
     turbofishBindings,
   );
   for (const paramName of genericParams) {
-    if (bindings.has(paramName)) continue;
-    const defaultType = genericParamDefaults.get(paramName);
-    if (defaultType !== undefined) {
-      bindings.set(paramName, {
-        type: substituteGenericType(defaultType, bindings),
-        tokenId: call.tokenId,
-      });
+    if (
+      bindingOrDefault(
+        paramName,
+        genericParamDefaults,
+        bindings,
+        call.tokenId,
+      ) !== undefined
+    ) {
       continue;
     }
     emitError(
