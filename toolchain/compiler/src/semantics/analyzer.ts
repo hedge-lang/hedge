@@ -9770,6 +9770,27 @@ interface GenericBinding {
  * bookkeeping for this pass only - never joins `Semantics.Type` itself. */
 type GenericBindings = Map<string, GenericBinding>;
 
+/** Placeholder-binds every name in `names` not already in `bindings`, so a
+ * downstream unsolved-variable check doesn't also fire for each one on top
+ * of an arity error already reported for the whole call. Shared by
+ * `checkPositionalCallArgs`'s argument-arity early-return and
+ * `seedTurbofishBindings`'s turbofish-arity early-return - the two places a
+ * call can fail before ever reaching the per-parameter binding loop. */
+function placeholderBindUnbound(
+  bindings: GenericBindings,
+  names: Iterable<string>,
+  tokenId: number,
+): void {
+  for (const name of names) {
+    if (bindings.has(name)) continue;
+    bindings.set(name, {
+      type: { kind: "UnitType", tokenId },
+      tokenId,
+      isErrorPlaceholder: true,
+    });
+  }
+}
+
 /** Whether `declaredType` is a generic-parameter position at all - a bare
  * generic-named `NamedType`, or a single reference hop to one, the only two
  * shapes generic-parameter resolution currently supports. Anything else,
@@ -9961,18 +9982,7 @@ function seedTurbofishBindings(
       },
       call.tokenId,
     );
-    // Mirrors `checkPositionalCallArgs`'s own arity early-return: nothing
-    // else will bind these before the caller's unsolved-variable check runs,
-    // so placeholder-bind them here rather than let that check re-fire once
-    // per parameter on top of this arity error.
-    for (const paramName of genericParams) {
-      if (bindings.has(paramName)) continue;
-      bindings.set(paramName, {
-        type: { kind: "UnitType", tokenId: call.tokenId },
-        tokenId: call.tokenId,
-        isErrorPlaceholder: true,
-      });
-    }
+    placeholderBindUnbound(bindings, genericParams, call.tokenId);
     return;
   }
   genericParams.forEach((paramName, index) => {
@@ -10161,17 +10171,8 @@ function checkPositionalCallArgs(
     );
     // Arity mismatch means the per-argument loop below never runs, so
     // nothing would otherwise bind a generic parameter that isn't already
-    // seeded (turbofish, expected return type). Placeholder-bind the rest
-    // so the caller's own unsolved-variable check doesn't also fire for
-    // each one on top of this arity error.
-    for (const paramName of genericNames) {
-      if (bindings.has(paramName)) continue;
-      bindings.set(paramName, {
-        type: { kind: "UnitType", tokenId: call.tokenId },
-        tokenId: call.tokenId,
-        isErrorPlaceholder: true,
-      });
-    }
+    // seeded (turbofish, expected return type).
+    placeholderBindUnbound(bindings, genericNames, call.tokenId);
     return { args: [...args], bindings };
   }
   const checkedArgs = args.map((arg, i) => {
