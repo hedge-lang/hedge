@@ -2635,6 +2635,35 @@ function resolveImplSelfTargetType(
   );
 }
 
+/** `unaryNegResultType`/`unaryNotResultType` always type `-v`/`!v` as the
+ * operand's own type (the homogeneous case) - an impl declaring a different
+ * `Output` would silently mistype the result rather than reflect what the
+ * impl body actually returns, since nothing resolves a heterogeneous
+ * `Output` at the call site. Reject it here instead, where a real `Self`
+ * resolves to the impl's own concrete target (unlike the eager coherence
+ * pre-pass, where `Self` is still an unresolved placeholder). */
+function checkOperatorOutputIsSelf(
+  ctx: AnalysisContext,
+  traitName: Option<string>,
+  targetType: Semantics.Type,
+  outputType: Semantics.Type,
+  tokenId: number,
+): void {
+  if (!isSome(traitName)) return;
+  const isOperatorTrait =
+    traitName.value === lookupPreludeTrait(ctx, "Neg") ||
+    traitName.value === lookupPreludeTrait(ctx, "Not");
+  if (!isOperatorTrait || typesEqual(outputType, targetType)) return;
+  emitError(
+    ctx,
+    {
+      kind: "SemOperatorOutputMustBeSelf",
+      trait: bareTypeName(traitName.value),
+    },
+    tokenId,
+  );
+}
+
 /** The real, diagnostic-emitting counterpart to `buildImplDecl` - resolves
  * each `type Name = Value;` definition first (against a concrete `Self` but
  * no associated types yet, since one definition referencing a sibling isn't
@@ -2679,6 +2708,15 @@ function analyzeImplDecl(
       continue;
     }
     associatedTypeDefs.set(decl.name.text, resolvedValue);
+    if (decl.name.text === "Output") {
+      checkOperatorOutputIsSelf(
+        ctx,
+        traitName,
+        targetType,
+        resolvedValue,
+        decl.value.value.tokenId,
+      );
+    }
   }
   popSelfContext(ctx);
   popGenericParams(ctx);

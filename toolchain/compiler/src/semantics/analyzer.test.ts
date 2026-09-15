@@ -7971,6 +7971,42 @@ describe("unary `-` / `!` resolving through a Neg/Not impl", (): void => {
     );
   });
 
+  it("rejects a `Neg` impl whose `Output` is not `Self`", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl Neg for Point {
+        type Output = bool;
+        fn neg(self) -> Self::Output { true }
+      }
+      fn main() {
+        let p = Point { x: 1 };
+        let q = -p;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "associated type `Output` on this `Neg` impl must resolve to `Self`; a different `Output` is not supported yet",
+    );
+  });
+
+  it("rejects a `Not` impl whose `Output` is not `Self`", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Flag { on: bool }
+      impl Not for Flag {
+        type Output = i32;
+        fn not(self) -> Self::Output { 0 }
+      }
+      fn main() {
+        let f = Flag { on: true };
+        let g = !f;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "associated type `Output` on this `Not` impl must resolve to `Self`; a different `Output` is not supported yet",
+    );
+  });
+
   it("rejects `-` on a struct whose only `Neg` impl is against a shadowing block-local trait", (): void => {
     const result = diagnoseWithPrelude(`
       struct Point { x: i32 }
