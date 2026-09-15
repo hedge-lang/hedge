@@ -8005,4 +8005,39 @@ describe("unary `-` / `!` resolving through a Neg/Not impl", (): void => {
     `);
     expect(result.diagnostics).toEqual([]);
   });
+
+  it("rejects `!` on a struct whose only `Not` impl is against a shadowing block-local trait", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      fn main() {
+        trait Not {}
+        impl Not for Point {}
+        let p = Point { x: 1 };
+        let q = !p;
+      }
+    `);
+    // The block-scoped `impl` also draws a HEDGE-LINT-003 warning, unrelated
+    // to which `Not` `!` binds to.
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toHaveLength(1);
+    expect(messageOf(errors[0])).toBe(
+      "`!` requires `bool` or an integer, found `Point`",
+    );
+  });
+
+  it("accepts `!` on a struct with a top-level `impl Not` even when a block-local `Not` trait shadows the prelude", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl Not for Point {
+        type Output = Self;
+        fn not(self) -> Self::Output { self }
+      }
+      fn main() {
+        trait Not {}
+        let p = Point { x: 1 };
+        let q = !p;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
 });
