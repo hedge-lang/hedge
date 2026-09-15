@@ -1373,6 +1373,119 @@ describe("execution tests", (): void => {
         "call to `identity` type mismatch: expected `i32`, found `str`",
       );
     });
+
+    it("resolves an otherwise-unsolved generic parameter to its declared default", (): void => {
+      assertRunsTo(
+        `
+        fn discard<T = i32>(x: i32) -> i32 { x }
+        fn main() { print(discard(5)); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("uses the declared default itself, not just any resolution, shown by a bound only the default fails", (): void => {
+      const result = compileHedgeCode(`
+        trait OnlyB { fn m(&self) -> i32; }
+        struct TypeA;
+        struct TypeB;
+        impl OnlyB for TypeB { fn m(&self) -> i32 { 1 } }
+        fn discard<T: OnlyB = TypeA>(x: i32) -> i32 { x }
+        fn main() { print(discard(5)); }
+      `);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+      expect(messageOf(errors[0])).toBe(
+        "the trait bound `TypeA: OnlyB` is not satisfied",
+      );
+    });
+
+    it("lets an explicit turbofish override a declared default", (): void => {
+      assertRunsTo(
+        `
+        trait OnlyB { fn m(&self) -> i32; }
+        struct TypeA;
+        struct TypeB;
+        impl OnlyB for TypeB { fn m(&self) -> i32 { 1 } }
+        fn discard<T: OnlyB = TypeA>(x: i32) -> i32 { x }
+        fn main() { print(discard::<TypeB>(5)); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("resolves a default referencing an earlier parameter to that call's own binding, not a fixed value", (): void => {
+      const result = compileHedgeCode(`
+        trait OnlyB { fn m(&self) -> i32; }
+        struct TypeA { v: i32 }
+        struct TypeB { v: i32 }
+        impl OnlyB for TypeB { fn m(&self) -> i32 { 1 } }
+        fn f<T, U: OnlyB = T>(x: T) -> i32 { 0 }
+        fn main() { print(f(TypeA { v: 1 })); }
+      `);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+      expect(messageOf(errors[0])).toBe(
+        "the trait bound `TypeA: OnlyB` is not satisfied",
+      );
+    });
+
+    it("re-derives a default referencing an earlier parameter per call, following that call's own binding", (): void => {
+      assertRunsTo(
+        `
+        trait OnlyB { fn m(&self) -> i32; }
+        struct TypeA { v: i32 }
+        struct TypeB { v: i32 }
+        impl OnlyB for TypeB { fn m(&self) -> i32 { 1 } }
+        fn f<T, U: OnlyB = T>(x: T) -> i32 { 0 }
+        fn main() { print(f(TypeB { v: 1 })); }
+        `,
+        ["0"],
+      );
+    });
+
+    it("does not let a defaulted parameter unused in the signature interfere with an ordinary generic call", (): void => {
+      assertRunsTo(
+        `
+        fn f<T, U = i32>(x: T) -> T { x }
+        fn main() { print(f(7)); }
+        `,
+        ["7"],
+      );
+    });
+
+    it("accepts a partial turbofish that omits a trailing defaulted parameter", (): void => {
+      assertRunsTo(
+        `
+        fn f<T, U = i32>(x: T) -> T { x }
+        fn main() { print(f::<i32>(9)); }
+        `,
+        ["9"],
+      );
+    });
+
+    it("still rejects a short turbofish when the omitted trailing parameter has no default", (): void => {
+      const result = compileHedgeCode(
+        `fn f<T, U>(x: T) -> T { x } fn main() { print(f::<i32>(9)); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-011");
+      expect(messageOf(errors[0])).toBe(
+        "`f` declares 2 generic parameter(s), but the turbofish supplies 1",
+      );
+    });
+
+    it("does not cascade an unsolved-variable diagnostic on top of a wrong-arity turbofish", (): void => {
+      const result = compileHedgeCode(
+        `fn f<T, U>(x: T) -> T { x } fn main() { print(f::<i32, bool, str>(9)); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-011");
+    });
   });
 
   describe("generic enum-variant construction turbofish and unsolved-variable checks", (): void => {
@@ -1435,6 +1548,48 @@ describe("execution tests", (): void => {
       expect(errors[1]?.code).toBe("HEDGE-TYPE-010");
       expect(messageOf(errors[1])).toBe(
         "argument 2 to struct `Pair` type mismatch: expected `i32`, found `str`",
+      );
+    });
+
+    it("falls back to a struct's declared default when construction gives no other information", (): void => {
+      assertRunsTo(
+        `
+        struct Box<T>(T);
+        struct Marker<T = i32>(Box<T>);
+        fn main() {
+          Marker(Box(5));
+          print("ok");
+        }
+        `,
+        ["ok"],
+      );
+    });
+
+    it("lets an explicit turbofish override a struct's declared default at construction", (): void => {
+      assertRunsTo(
+        `
+        struct Box<T>(T);
+        struct Marker<T = i32>(Box<T>);
+        fn main() {
+          Marker::<u8>(Box(5));
+          print("ok");
+        }
+        `,
+        ["ok"],
+      );
+    });
+
+    it("accepts a partial turbofish on a construction call that omits a trailing defaulted parameter", (): void => {
+      assertRunsTo(
+        `
+        struct Box<T>(T);
+        struct Marker<A, B = i32>(Box<A>, Box<B>);
+        fn main() {
+          Marker::<u8>(Box(5), Box(6));
+          print("ok");
+        }
+        `,
+        ["ok"],
       );
     });
   });

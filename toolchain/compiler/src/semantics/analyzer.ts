@@ -437,6 +437,27 @@ function resolveBoundNames(
   );
 }
 
+/** Resolves each declared generic parameter's own default type, called with
+ * `generics`' own scope already pushed (mirrors `genericParamBoundNames` +
+ * `resolveBoundNames`'s split) so a default naming an earlier sibling
+ * parameter (`<T, U = T>`) resolves through the ordinary
+ * `isDeclaredGenericParam` path to that parameter's own `NamedType`
+ * reference, left for the call site to substitute against its own bindings. */
+function resolveGenericParamDefaults(
+  ctx: AnalysisContext,
+  generics: readonly Parser.GenericParam[],
+): ReadonlyMap<string, Semantics.Type> {
+  const defaults = new Map<string, Semantics.Type>();
+  for (const param of generics) {
+    if (param.kind !== "TypeParam" || !isSome(param.default)) continue;
+    defaults.set(
+      param.name.text,
+      resolveSlice1Type(ctx, param.default.value, param.default.value.tokenId),
+    );
+  }
+  return defaults;
+}
+
 /** Extracts the trait names from a list of `TraitBound`s - a
  * `LifetimeTraitBound` (`T: 'a`) contributes nothing, since it names no
  * trait. Shared by inline (`T: Draw`) and `where`-clause (`where T: Draw`)
@@ -499,6 +520,22 @@ function validateGenericParamBounds(
     ? whereClause.value.predicates
     : []) {
     validateTraitBoundNames(ctx, predicate.bounds);
+  }
+}
+
+/** Validates each declared generic parameter's own default type name, the
+ * same way `validateGenericParamBounds` validates bound names - called
+ * wherever that is (fn signatures, impls), not for struct/enum generics,
+ * which don't validate bound names either. The resolved value itself still
+ * comes from `resolveGenericParamDefaults`'s silent resolver; this call
+ * exists purely for the diagnostic side effect. */
+function validateGenericParamDefaults(
+  ctx: AnalysisContext,
+  generics: readonly Parser.GenericParam[],
+): void {
+  for (const param of generics) {
+    if (param.kind !== "TypeParam" || !isSome(param.default)) continue;
+    validateSlice1Type(ctx, param.default.value, param.default.value.tokenId);
   }
 }
 
@@ -712,6 +749,45 @@ function checkUnusedGenericParams(
   }
 }
 
+/**
+ * A generic parameter's default may only reference a type parameter of the
+ * same declaration that appears strictly earlier in `generics` - by the
+ * point a later default would be substituted, only earlier ones are known.
+ * A self-reference is rejected by the same rule (a param is never in
+ * `declaredSoFar` while its own default is being checked). Reports at most
+ * one diagnostic per param, and only the first bad name within that param's
+ * own default, so a mutual forward reference (`<T = U, U = T>`) reports only
+ * the genuinely-first violation rather than double-counting.
+ */
+function checkGenericDefaultForwardReferences(
+  ctx: AnalysisContext,
+  generics: readonly Parser.GenericParam[],
+): void {
+  const declaredNames = genericParamNames(generics);
+  const declaredSoFar = new Set<string>();
+  for (const param of generics) {
+    if (param.kind !== "TypeParam") continue;
+    if (isSome(param.default)) {
+      const referenced = new Set<string>();
+      collectNamedTypeMentions(param.default.value, referenced);
+      for (const name of referenced) {
+        if (!declaredNames.includes(name) || declaredSoFar.has(name)) continue;
+        emitError(
+          ctx,
+          {
+            kind: "SemGenericDefaultForwardReference",
+            paramName: param.name.text,
+            referencedName: name,
+          },
+          param.tokenId,
+        );
+        break;
+      }
+    }
+    declaredSoFar.add(param.name.text);
+  }
+}
+
 /** Innermost frame index whose `select`ed map declares `name`, or -1. */
 function frameIndexOf(
   ctx: AnalysisContext,
@@ -827,6 +903,7 @@ const BUILTIN_SCOPE: [string, ScopedVariable][] = [
         paramsArePlaceholder: true,
         genericParams: [],
         genericParamBounds: new Map(),
+        genericParamDefaults: new Map(),
       },
       mutable: false,
     },
@@ -1972,6 +2049,7 @@ function declareStructName(
     );
     return;
   }
+  checkGenericDefaultForwardReferences(ctx, item.generics);
   const type: Semantics.Type = {
     kind: "StructType",
     name: scopedTypeName(item.name.tokenId, item.name.text),
@@ -1988,6 +2066,7 @@ function declareStructName(
     ...item,
     name: { ...item.name, type },
     generics: genericParamNames(item.generics),
+    genericParamDefaults: new Map(),
     attributes: [],
     body: { kind: "Unit" },
     type,
@@ -2011,6 +2090,7 @@ function declareEnumName(
     );
     return;
   }
+  checkGenericDefaultForwardReferences(ctx, item.generics);
   const type: Semantics.Type = {
     kind: "EnumType",
     name: scopedTypeName(item.name.tokenId, item.name.text),
@@ -2027,6 +2107,7 @@ function declareEnumName(
     ...item,
     name: { ...item.name, type },
     generics: genericParamNames(item.generics),
+    genericParamDefaults: new Map(),
     variants: [],
     attributes: [],
     type,
@@ -2050,6 +2131,7 @@ function declareTraitName(
     );
     return;
   }
+  checkGenericDefaultForwardReferences(ctx, item.generics);
   frame.traits.set(item.name.text, item.name.tokenId);
 }
 
@@ -3493,6 +3575,7 @@ function registerOneImpl(
 ): RegisteredImpl | undefined {
   const decl = buildImplDecl(item);
   validateGenericParamBounds(ctx, item.generics, item.whereClause);
+  validateGenericParamDefaults(ctx, item.generics);
   const traitRef = decl.traitRef;
   const bareTargetTypeName = decl.targetTypeName;
   if (!isSome(traitRef) || !isSome(bareTargetTypeName)) return undefined;
@@ -3858,11 +3941,13 @@ function analyzeEnum(
   const variants = item.variants.map((variant) =>
     analyzeVariant(ctx, variant, enumType),
   );
+  const genericParamDefaults = resolveGenericParamDefaults(ctx, item.generics);
   popGenericParams(ctx);
   return {
     ...item,
     name: { ...item.name, type: enumType },
     generics: genericParamNames(item.generics),
+    genericParamDefaults,
     attributes: item.attributes.map((attr) => analyzeAttribute(ctx, attr)),
     variants,
     type: enumType,
@@ -5467,11 +5552,13 @@ function analyzeStruct(
   checkUnusedGenericParams(ctx, item.generics, structFieldUsedNames(item.body));
   pushGenericParams(ctx, item.generics);
   const body = analyzeStructBody(ctx, item.body);
+  const genericParamDefaults = resolveGenericParamDefaults(ctx, item.generics);
   popGenericParams(ctx);
   return {
     ...item,
     name: { ...item.name, type: { kind: "StructType", name: scopedName } },
     generics: genericParamNames(item.generics),
+    genericParamDefaults,
     attributes: item.attributes.map((attr) => analyzeAttribute(ctx, attr)),
     body,
     type: {
@@ -5754,6 +5841,7 @@ function fnSignatureType(
 ): Semantics.FunctionType {
   pushGenericParams(ctx, signature.generics, signature.whereClause);
   validateGenericParamBounds(ctx, signature.generics, signature.whereClause);
+  validateGenericParamDefaults(ctx, signature.generics);
   const type: Semantics.FunctionType = {
     kind: "FunctionType",
     params: signature.params.map((p) =>
@@ -5772,6 +5860,7 @@ function fnSignatureType(
       ctx,
       genericParamBoundNames(signature.generics, signature.whereClause),
     ),
+    genericParamDefaults: resolveGenericParamDefaults(ctx, signature.generics),
   };
   popGenericParams(ctx);
   return type;
@@ -6069,6 +6158,7 @@ function analyzeFunction(
   ctx: AnalysisContext,
   decl: Parser.FunctionDef,
 ): Semantics.FunctionDef {
+  checkGenericDefaultForwardReferences(ctx, decl.signature.generics);
   pushFrame(ctx);
   pushGenericParams(ctx, decl.signature.generics, decl.signature.whereClause);
   recordWitnessParams(
@@ -9427,7 +9517,12 @@ function checkCallGenericBounds(
   const witnesses: WitnessRef[] = [];
   let allBoundsSatisfied = true;
   for (const paramName of calleeType.genericParams) {
-    const binding = bindings.get(paramName);
+    const binding = bindingOrDefault(
+      paramName,
+      calleeType.genericParamDefaults,
+      bindings,
+      call.tokenId,
+    );
     if (binding === undefined) {
       emitError(
         ctx,
@@ -9529,7 +9624,13 @@ function analyzeCall(
     };
   }
   const turbofishBindings: GenericBindings = new Map();
-  seedTurbofishBindings(ctx, call, calleeType.genericParams, turbofishBindings);
+  seedTurbofishBindings(
+    ctx,
+    call,
+    calleeType.genericParams,
+    calleeType.genericParamDefaults,
+    turbofishBindings,
+  );
   const expectedTypeConflicted =
     expectedType !== undefined &&
     seedExpectedReturnType(
@@ -9640,6 +9741,7 @@ function analyzeEnumVariantCallConstruction(
     variant.body.value.fields,
     args,
     enumDecl.generics,
+    enumDecl.genericParamDefaults,
   );
   return some({ type: enumDecl.type, args: checkedArgs });
 }
@@ -9662,6 +9764,51 @@ interface GenericBinding {
  * (docs/adr/0012-unification-based-generic-call-inference.md). Internal
  * bookkeeping for this pass only - never joins `Semantics.Type` itself. */
 type GenericBindings = Map<string, GenericBinding>;
+
+/** Placeholder-binds every name in `names` not already in `bindings`, so a
+ * downstream unsolved-variable check doesn't also fire for each one on top
+ * of an arity error already reported for the whole call. Shared by
+ * `checkPositionalCallArgs`'s argument-arity early-return and
+ * `seedTurbofishBindings`'s turbofish-arity early-return - the two places a
+ * call can fail before ever reaching the per-parameter binding loop. */
+function placeholderBindUnbound(
+  bindings: GenericBindings,
+  names: Iterable<string>,
+  tokenId: number,
+): void {
+  for (const name of names) {
+    if (bindings.has(name)) continue;
+    bindings.set(name, {
+      type: { kind: "UnitType", tokenId },
+      tokenId,
+      isErrorPlaceholder: true,
+    });
+  }
+}
+
+/** `paramName`'s existing binding, or its declared default (substituted
+ * against `bindings`, so a default referencing an earlier parameter
+ * resolves to that parameter's own binding) when nothing else has bound it
+ * yet - `undefined` only when neither exists. A resolved default is written
+ * into `bindings` so a later parameter's own default can see it too, and so
+ * the caller's return-type substitution sees it after this call returns. */
+function bindingOrDefault(
+  paramName: string,
+  genericParamDefaults: ReadonlyMap<string, Semantics.Type>,
+  bindings: GenericBindings,
+  tokenId: number,
+): GenericBinding | undefined {
+  const existing = bindings.get(paramName);
+  if (existing !== undefined) return existing;
+  const defaultType = genericParamDefaults.get(paramName);
+  if (defaultType === undefined) return undefined;
+  const binding: GenericBinding = {
+    type: substituteGenericType(defaultType, bindings),
+    tokenId,
+  };
+  bindings.set(paramName, binding);
+  return binding;
+}
 
 /** Whether `declaredType` is a generic-parameter position at all - a bare
  * generic-named `NamedType`, or a single reference hop to one, the only two
@@ -9818,18 +9965,32 @@ function bindMismatchedReferentPlaceholder(
  * reported as the conflict, blaming the argument). An empty list (`::<>`)
  * means zero explicit arguments were supplied, so it's treated exactly like
  * an absent turbofish - full inference, not an arity error. A non-empty
- * list that doesn't match the callee's declared generic-parameter count is
- * rejected outright. */
+ * list shorter than the callee's declared generic-parameter count is
+ * accepted when every omitted trailing parameter has a declared default
+ * (positional turbofish args always fill from the front, so a shorter list
+ * always omits a trailing run, never a middle one) - those trailing
+ * parameters are left unbound here, for `checkCallGenericBounds` /
+ * `checkGenericPositionalConstruction`'s own default fallback to resolve.
+ * Any other length mismatch is rejected outright. */
 function seedTurbofishBindings(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
   genericParams: readonly string[],
+  genericParamDefaults: ReadonlyMap<string, Semantics.Type>,
   bindings: GenericBindings,
 ): void {
   if (call.callee.kind !== "PathExpression") return;
   const typeArgs = call.callee.typeArguments;
   if (typeArgs.length === 0) return;
-  if (typeArgs.length !== genericParams.length) {
+  const omittedTrailingParamsHaveDefaults =
+    typeArgs.length < genericParams.length &&
+    genericParams
+      .slice(typeArgs.length)
+      .every((name) => genericParamDefaults.has(name));
+  if (
+    typeArgs.length !== genericParams.length &&
+    !omittedTrailingParamsHaveDefaults
+  ) {
     emitError(
       ctx,
       {
@@ -9840,6 +10001,7 @@ function seedTurbofishBindings(
       },
       call.tokenId,
     );
+    placeholderBindUnbound(bindings, genericParams, call.tokenId);
     return;
   }
   genericParams.forEach((paramName, index) => {
@@ -9872,9 +10034,16 @@ function checkGenericPositionalConstruction(
   params: readonly { readonly type: Semantics.Type }[],
   args: readonly Semantics.Expression[],
   genericParams: readonly string[],
+  genericParamDefaults: ReadonlyMap<string, Semantics.Type>,
 ): Semantics.Expression[] {
   const turbofishBindings: GenericBindings = new Map();
-  seedTurbofishBindings(ctx, call, genericParams, turbofishBindings);
+  seedTurbofishBindings(
+    ctx,
+    call,
+    genericParams,
+    genericParamDefaults,
+    turbofishBindings,
+  );
   const { args: checkedArgs, bindings } = checkPositionalCallArgs(
     ctx,
     call,
@@ -9885,7 +10054,16 @@ function checkGenericPositionalConstruction(
     turbofishBindings,
   );
   for (const paramName of genericParams) {
-    if (bindings.has(paramName)) continue;
+    if (
+      bindingOrDefault(
+        paramName,
+        genericParamDefaults,
+        bindings,
+        call.tokenId,
+      ) !== undefined
+    ) {
+      continue;
+    }
     emitError(
       ctx,
       { kind: "SemCannotInferGenericParam", paramName },
@@ -10013,17 +10191,8 @@ function checkPositionalCallArgs(
     );
     // Arity mismatch means the per-argument loop below never runs, so
     // nothing would otherwise bind a generic parameter that isn't already
-    // seeded (turbofish, expected return type). Placeholder-bind the rest
-    // so the caller's own unsolved-variable check doesn't also fire for
-    // each one on top of this arity error.
-    for (const paramName of genericNames) {
-      if (bindings.has(paramName)) continue;
-      bindings.set(paramName, {
-        type: { kind: "UnitType", tokenId: call.tokenId },
-        tokenId: call.tokenId,
-        isErrorPlaceholder: true,
-      });
-    }
+    // seeded (turbofish, expected return type).
+    placeholderBindUnbound(bindings, genericNames, call.tokenId);
     return { args: [...args], bindings };
   }
   const checkedArgs = args.map((arg, i) => {
@@ -10228,6 +10397,7 @@ function analyzeTupleStructCallConstruction(
     structDecl.body.fields,
     args,
     structDecl.generics,
+    structDecl.genericParamDefaults,
   );
   return some({ callee, type: structDecl.type, args: checkedArgs });
 }

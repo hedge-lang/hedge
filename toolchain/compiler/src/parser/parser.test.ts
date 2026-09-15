@@ -5587,6 +5587,280 @@ describe("generic parameters: declaration position", (): void => {
   });
 });
 
+describe("generic parameter defaults", (): void => {
+  it("parses a default type on a bare generic parameter (fn foo<T = i32>() {})", (): void => {
+    const { tokens } = tokenize("fn foo<T = i32>() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        signature: {
+          generics: [
+            {
+              kind: "TypeParam",
+              name: { text: "T" },
+              bounds: [],
+              default: some({ kind: "NamedType", path: { segments: ["i32"] } }),
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("parses a default combined with an inline bound, bound before default (fn foo<T: SomeTrait = i32>() {})", (): void => {
+    const { tokens } = tokenize("fn foo<T: SomeTrait = i32>() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        signature: {
+          generics: [
+            {
+              kind: "TypeParam",
+              name: { text: "T" },
+              bounds: [
+                { kind: "PathTraitBound", path: { segments: ["SomeTrait"] } },
+              ],
+              default: some({ kind: "NamedType", path: { segments: ["i32"] } }),
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("parses a default referencing an earlier generic parameter (fn foo<T, U = T>() {})", (): void => {
+    const { tokens } = tokenize("fn foo<T, U = T>() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        signature: {
+          generics: [
+            {
+              kind: "TypeParam",
+              name: { text: "T" },
+              bounds: [],
+              default: none(),
+            },
+            {
+              kind: "TypeParam",
+              name: { text: "U" },
+              bounds: [],
+              default: some({ kind: "NamedType", path: { segments: ["T"] } }),
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("parses `Self` as a generic parameter's default (trait Add<Rhs = Self> {})", (): void => {
+    const { tokens } = tokenize("trait Add<Rhs = Self> {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Trait",
+        name: { text: "Add" },
+        generics: [
+          {
+            kind: "TypeParam",
+            name: { text: "Rhs" },
+            bounds: [],
+            default: some({ kind: "NamedType", path: { segments: ["Self"] } }),
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("parses a default on a struct's own generic parameter (struct Ring<T = i32>(T);)", (): void => {
+    const { tokens } = tokenize("struct Ring<T = i32>(T);");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Struct",
+        name: { text: "Ring" },
+        generics: [
+          {
+            kind: "TypeParam",
+            name: { text: "T" },
+            default: some({ kind: "NamedType", path: { segments: ["i32"] } }),
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("parses a default on an enum's own generic parameter (enum Wrapper<T = i32> { Value(T) })", (): void => {
+    const { tokens } = tokenize("enum Wrapper<T = i32> { Value(T) }");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Enum",
+        name: { text: "Wrapper" },
+        generics: [
+          {
+            kind: "TypeParam",
+            name: { text: "T" },
+            default: some({ kind: "NamedType", path: { segments: ["i32"] } }),
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("parses a default on an impl's own generic parameter (impl<T = i32> Bar {})", (): void => {
+    const { tokens } = tokenize("impl<T = i32> Bar {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Impl",
+        generics: [
+          {
+            kind: "TypeParam",
+            name: { text: "T" },
+            default: some({ kind: "NamedType", path: { segments: ["i32"] } }),
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("parses multiple defaults in one list (fn foo<T = i32, U = bool>() {})", (): void => {
+    const { tokens } = tokenize("fn foo<T = i32, U = bool>() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        signature: {
+          generics: [
+            {
+              kind: "TypeParam",
+              name: { text: "T" },
+              default: some({ kind: "NamedType", path: { segments: ["i32"] } }),
+            },
+            {
+              kind: "TypeParam",
+              name: { text: "U" },
+              default: some({
+                kind: "NamedType",
+                path: { segments: ["bool"] },
+              }),
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("parses a compound default type, splitting the trailing >> between the default's own close and the outer list's close (fn foo<T = Vec<i32>>() {})", (): void => {
+    const { tokens } = tokenize("fn foo<T = Vec<i32>>() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        signature: {
+          generics: [
+            {
+              kind: "TypeParam",
+              name: { text: "T" },
+              default: some({
+                kind: "NamedType",
+                path: { segments: ["Vec"] },
+                typeArguments: [
+                  { kind: "NamedType", path: { segments: ["i32"] } },
+                ],
+              }),
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("parses a default followed by a trailing comma (fn foo<T = i32,>() {})", (): void => {
+    const { tokens } = tokenize("fn foo<T = i32,>() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(0);
+    expect(program.value.items).toMatchObject([
+      {
+        kind: "Function",
+        signature: {
+          generics: [
+            {
+              kind: "TypeParam",
+              name: { text: "T" },
+              default: some({ kind: "NamedType", path: { segments: ["i32"] } }),
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("recovers with exactly one diagnostic when a default has no type after = (fn broken<T = >() {} fn ok() {})", (): void => {
+    const { tokens } = tokenize("fn broken<T = >() {} fn ok() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(messageOf(diagnostics[0])).toBe("expected a type, found `gt`");
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", signature: { name: { text: "broken" } } },
+      { kind: "Function", signature: { name: { text: "ok" } } },
+    ]);
+  });
+
+  it("recovers with exactly one diagnostic when a default is followed immediately by a comma (fn broken<T = ,>() {} fn ok() {})", (): void => {
+    const { tokens } = tokenize("fn broken<T = ,>() {} fn ok() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(messageOf(diagnostics[0])).toBe("expected a type, found `comma`");
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", signature: { name: { text: "broken" } } },
+      { kind: "Function", signature: { name: { text: "ok" } } },
+    ]);
+  });
+
+  it("rejects a default on a lifetime parameter, recovering the sibling declaration (fn broken<'a = 'static>() {} fn ok() {})", (): void => {
+    const { tokens } = tokenize("fn broken<'a = 'static>() {} fn ok() {}");
+    const { program, diagnostics } = parse(tokens);
+    assert(isSome(program), "Expected a program to come back");
+    expect(diagnostics).toHaveLength(1);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(messageOf(diagnostics[0])).toBe(
+      "expected ',' or '>' in generic parameter list, found \"eq\"",
+    );
+    expect(program.value.items).toMatchObject([
+      { kind: "Function", signature: { name: { text: "broken" } } },
+      { kind: "Function", signature: { name: { text: "ok" } } },
+    ]);
+  });
+});
+
 describe("lifetime + reference type interactions", (): void => {
   it("parses cleanly with both a declared generic and a real param type, zero diagnostics (fn foo<'a>(x: &'a i32) {})", (): void => {
     const { tokens } = tokenize("fn foo<'a>(x: &'a i32) {}");

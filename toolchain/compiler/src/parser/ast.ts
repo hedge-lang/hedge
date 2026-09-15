@@ -584,6 +584,7 @@ export interface TypeParam extends AstNode {
   readonly kind: "TypeParam";
   readonly name: Identifier;
   readonly bounds: readonly TraitBound[];
+  readonly default: Option<Type>;
 }
 
 export type TraitBound = PathTraitBound | LifetimeTraitBound;

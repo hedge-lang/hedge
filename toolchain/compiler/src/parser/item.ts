@@ -71,6 +71,7 @@ import {
   parsePathTraitBound,
   parseType,
   parseTypeArgumentList,
+  parseTypeWithCloseState,
 } from "./type.js";
 
 /** Parses an optional `pub` or `pub(scope)` visibility prefix. */
@@ -459,12 +460,29 @@ function parseGenericParam(
     bounds = boundsResult.value.bounds;
     cursor = boundsResult.value.cursor;
   }
+  // A pending close half means this param's own close doubles as the
+  // enclosing list's close - there is no room left for a default clause to
+  // follow, and the next real token belongs to whatever comes after this
+  // whole generic parameter list, not to this param.
+  let defaultType: Option<Type> = none();
+  if (!cursor.pendingCloseHalf && tokens[cursor.next]?.kind === "eq") {
+    const defaultResult = parseTypeWithCloseState(tokens, cursor.next + 1);
+    if (isErr(defaultResult)) {
+      return defaultResult;
+    }
+    defaultType = some(defaultResult.value.node);
+    cursor = {
+      next: defaultResult.value.next,
+      pendingCloseHalf: defaultResult.value.pendingCloseHalf,
+    };
+  }
   return ok({
     param: {
       kind: "TypeParam",
       tokenId: pos,
       name: nameResult.value.node,
       bounds,
+      default: defaultType,
     },
     cursor,
   });

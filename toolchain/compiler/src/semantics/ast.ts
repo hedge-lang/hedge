@@ -192,6 +192,9 @@ export interface StructDecl extends DecoratedAstNode {
   readonly visibility: Option<Visibility>;
   readonly name: Identifier;
   readonly generics: readonly string[];
+  /** See `FunctionType.genericParamDefaults`'s own doc comment - same shape,
+   * consulted by construction-call inference instead of an ordinary call. */
+  readonly genericParamDefaults: ReadonlyMap<string, Type>;
   readonly body: StructBody;
   readonly attributes: readonly Attribute[];
 }
@@ -201,6 +204,7 @@ export interface EnumDecl extends DecoratedAstNode {
   readonly visibility: Option<Visibility>;
   readonly name: Identifier;
   readonly generics: readonly string[];
+  readonly genericParamDefaults: ReadonlyMap<string, Type>;
   readonly variants: readonly Variant[];
   readonly attributes: readonly Attribute[];
 }
@@ -635,6 +639,12 @@ export interface FunctionType {
    * keyed by parameter name; a parameter with no bounds still gets an empty
    * array, not a missing key. */
   readonly genericParamBounds: ReadonlyMap<string, readonly string[]>;
+  /** Each declared generic parameter's own default type (`T = i32`), keyed
+   * by parameter name; a parameter with no default carries no entry. A
+   * default naming an earlier parameter resolves to that parameter's own
+   * `NamedType` reference (the same shape an ordinary `x: T` gets), left for
+   * the call site to substitute against its own resolved bindings. */
+  readonly genericParamDefaults: ReadonlyMap<string, Type>;
 }
 
 /**

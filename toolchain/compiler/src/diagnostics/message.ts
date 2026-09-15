@@ -373,6 +373,8 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return "cannot infer element type of an empty array literal without an explicit type annotation";
     case "SemCannotInferGenericParam":
       return `cannot infer type of generic parameter \`${kind.paramName}\` without an explicit type annotation or turbofish`;
+    case "SemGenericDefaultForwardReference":
+      return `generic parameter \`${kind.paramName}\`'s default references \`${kind.referencedName}\`, which is not declared earlier in this parameter list`;
     case "SemCannotDereferenceNonReference":
       return "cannot dereference a non-reference type";
     case "SemCannotIndexNonArray":
