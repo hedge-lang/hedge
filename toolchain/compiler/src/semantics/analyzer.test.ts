@@ -393,6 +393,33 @@ describe("semantic analysis", (): void => {
     });
   });
 
+  describe("unary `-`", () => {
+    it("rejects negating a struct with no Neg impl", () => {
+      const result = diagnose(`
+        struct Point { x: i32 }
+        fn main() {
+          let p = Point { x: 1 };
+          let q = -p;
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `Point: Neg` is not satisfied",
+      );
+    });
+
+    it("does not cascade a second diagnostic when a negated struct with no Neg impl is checked against an annotation", () => {
+      const result = diagnose(`
+        struct Point { x: i32 }
+        fn main() {
+          let p = Point { x: 1 };
+          let q: Point = -p;
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+    });
+  });
+
   describe("if expression branch types", () => {
     it("rejects an empty else branch against a value-producing then branch", () => {
       const result = diagnose(

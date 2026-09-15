@@ -1,0 +1,10 @@
+[
+  {
+    "code": "HEDGE-TYPE-002",
+    "kind": {
+      "kind": "SemNotRequiresBoolOrInteger",
+      "found": "Point"
+    },
+    "relatedSpans": []
+  }
+]

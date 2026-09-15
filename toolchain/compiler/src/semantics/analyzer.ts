@@ -7321,6 +7321,37 @@ function inferBinaryType(
 }
 
 /**
+ * Unary `-` keeps the operand's type for a numeric operand. Anything else
+ * (a struct/enum with no `Neg` impl) is a trait-bound failure, not a silent
+ * pass-through - `reconcileExpressionType`'s own callers (a `let`
+ * annotation) need `operandType` back unchanged on failure so a downstream
+ * mismatch doesn't cascade a second diagnostic on top of this one.
+ */
+function unaryNegResultType(
+  ctx: AnalysisContext,
+  operand: Semantics.Expression,
+  tokenId: number,
+): Semantics.Type {
+  const operandType = getType(operand);
+  if (hasCapability(operandType, "arithmetic")) {
+    return operandType;
+  }
+  if (operandType.kind === "UnitType" && isAmbiguousUnitExpr(operand)) {
+    return operandType;
+  }
+  emitError(
+    ctx,
+    {
+      kind: "SemTraitBoundNotSatisfied",
+      typeName: describeType(operandType),
+      trait: "Neg",
+    },
+    tokenId,
+  );
+  return operandType;
+}
+
+/**
  * `!` is logical negation on `bool` and bitwise negation on an integer,
  * mirroring Rust; either way the result keeps the operand's type. Anything
  * else has no meaning to give it.
@@ -7396,7 +7427,7 @@ function analyzeUnaryExpression(
   const type: Semantics.Type =
     expression.operator === "Not"
       ? unaryNotResultType(ctx, operand, expression.tokenId)
-      : getType(operand);
+      : unaryNegResultType(ctx, operand, expression.tokenId);
   if (
     expression.operator === "Neg" &&
     operand.kind === "IntLiteral" &&
