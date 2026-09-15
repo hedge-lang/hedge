@@ -9961,6 +9961,18 @@ function seedTurbofishBindings(
       },
       call.tokenId,
     );
+    // Mirrors `checkPositionalCallArgs`'s own arity early-return: nothing
+    // else will bind these before the caller's unsolved-variable check runs,
+    // so placeholder-bind them here rather than let that check re-fire once
+    // per parameter on top of this arity error.
+    for (const paramName of genericParams) {
+      if (bindings.has(paramName)) continue;
+      bindings.set(paramName, {
+        type: { kind: "UnitType", tokenId: call.tokenId },
+        tokenId: call.tokenId,
+        isErrorPlaceholder: true,
+      });
+    }
     return;
   }
   genericParams.forEach((paramName, index) => {

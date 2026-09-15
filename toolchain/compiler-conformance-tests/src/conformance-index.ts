@@ -730,6 +730,7 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "does not let a defaulted parameter unused in the signature interfere with an ordinary generic call",
       "accepts a partial turbofish that omits a trailing defaulted parameter",
       "still rejects a short turbofish when the omitted trailing parameter has no default",
+      "does not cascade an unsolved-variable diagnostic on top of a wrong-arity turbofish",
     ],
   },
   {

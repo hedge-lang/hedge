@@ -1471,10 +1471,20 @@ describe("execution tests", (): void => {
         `fn f<T, U>(x: T) -> T { x } fn main() { print(f::<i32>(9)); }`,
       );
       const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-011");
       expect(messageOf(errors[0])).toBe(
         "`f` declares 2 generic parameter(s), but the turbofish supplies 1",
       );
+    });
+
+    it("does not cascade an unsolved-variable diagnostic on top of a wrong-arity turbofish", (): void => {
+      const result = compileHedgeCode(
+        `fn f<T, U>(x: T) -> T { x } fn main() { print(f::<i32, bool, str>(9)); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-011");
     });
   });
 
