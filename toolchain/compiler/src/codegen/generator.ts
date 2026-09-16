@@ -81,6 +81,32 @@ const ASSIGN_OPS: Record<AssignOperator, string> = {
   ShrAssign: ">>=",
 };
 
+/** A compound-assignment operator's binary-operator counterpart, for
+ * desugaring `x op= y` into `x = <wrapped x op y>` via `emitNumericBinaryOp`
+ * - never consulted for `Assign` itself, whose `numericKind` is always
+ * `none()`. */
+const ASSIGN_TO_BINARY_OP: ReadonlyMap<AssignOperator, BinaryOperator> =
+  new Map<AssignOperator, BinaryOperator>([
+    ["AddAssign", "Add"],
+    ["SubAssign", "Sub"],
+    ["MulAssign", "Mul"],
+    ["DivAssign", "Div"],
+    ["RemAssign", "Rem"],
+    ["BitAndAssign", "BitAnd"],
+    ["BitOrAssign", "BitOr"],
+    ["BitXorAssign", "BitXor"],
+    ["ShlAssign", "Shl"],
+    ["ShrAssign", "Shr"],
+  ]);
+
+function assignBinaryOp(op: AssignOperator): BinaryOperator {
+  const binOp = ASSIGN_TO_BINARY_OP.get(op);
+  if (binOp === undefined) {
+    throw new Error(`ICE: no binary-operator counterpart for ${op}`);
+  }
+  return binOp;
+}
+
 type PrecKey =
   | "BooleanLiteral"
   | "StringLiteral"
@@ -406,17 +432,36 @@ function emitUnaryExpression(expression: UnaryExpression): string {
 }
 
 function emitAssignExpression(expression: AssignExpression): string {
+  const rhs = emitExpression(expression.rhs);
   if (
     expression.lhs.kind === "IndexExpression" &&
     expression.lhs.isArrayIndex
   ) {
     const object = emitExpression(expression.lhs.object);
     const index = emitExpression(expression.lhs.index);
-    const rhs = emitExpression(expression.rhs);
+    if (isSome(expression.numericKind)) {
+      const wrapped = emitNumericBinaryOp(
+        expression.numericKind.value,
+        assignBinaryOp(expression.operator),
+        "_arr[_i]",
+        rhs,
+      );
+      return indexBoundsCheck(object, index, `_arr[_i] = ${wrapped}`);
+    }
     const op = ASSIGN_OPS[expression.operator];
     return indexBoundsCheck(object, index, `_arr[_i] ${op} ${rhs}`);
   }
-  return `${emitExpression(expression.lhs)} ${ASSIGN_OPS[expression.operator]} ${emitExpression(expression.rhs)}`;
+  const lhs = emitExpression(expression.lhs);
+  if (isSome(expression.numericKind)) {
+    const wrapped = emitNumericBinaryOp(
+      expression.numericKind.value,
+      assignBinaryOp(expression.operator),
+      lhs,
+      rhs,
+    );
+    return `${lhs} = ${wrapped}`;
+  }
+  return `${lhs} ${ASSIGN_OPS[expression.operator]} ${rhs}`;
 }
 
 function emitArrowFunctionExpression(

@@ -40,6 +40,46 @@ trait Not {
   type Output;
   fn not(self) -> Self::Output;
 }
+
+trait AddAssign<Rhs = Self> {
+  fn add_assign(&mut self, rhs: Rhs);
+}
+
+trait SubAssign<Rhs = Self> {
+  fn sub_assign(&mut self, rhs: Rhs);
+}
+
+trait MulAssign<Rhs = Self> {
+  fn mul_assign(&mut self, rhs: Rhs);
+}
+
+trait DivAssign<Rhs = Self> {
+  fn div_assign(&mut self, rhs: Rhs);
+}
+
+trait RemAssign<Rhs = Self> {
+  fn rem_assign(&mut self, rhs: Rhs);
+}
+
+trait BitAndAssign<Rhs = Self> {
+  fn bitand_assign(&mut self, rhs: Rhs);
+}
+
+trait BitOrAssign<Rhs = Self> {
+  fn bitor_assign(&mut self, rhs: Rhs);
+}
+
+trait BitXorAssign<Rhs = Self> {
+  fn bitxor_assign(&mut self, rhs: Rhs);
+}
+
+trait ShlAssign<Rhs = Self> {
+  fn shl_assign(&mut self, rhs: Rhs);
+}
+
+trait ShrAssign<Rhs = Self> {
+  fn shr_assign(&mut self, rhs: Rhs);
+}
 `;
 
 export interface AssembledProgram {

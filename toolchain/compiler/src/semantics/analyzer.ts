@@ -9079,16 +9079,151 @@ function analyzeAssignmentExpression(
   };
 }
 
+/** The native capability a compound-assignment operator's left operand must
+ * have to skip trait resolution entirely - mirrors `inferBinaryType`'s own
+ * three-way split (arithmetic / bitwise / shift), collapsed to the two
+ * capabilities `hasCapability` actually tracks (a shift amount's own
+ * capability is checked independently by `inferShiftType` below). */
+function compoundAssignNativeCapability(
+  op: Parser.CompoundAssignOperator,
+): TypeCapability {
+  switch (op) {
+    case "AddAssign":
+    case "SubAssign":
+    case "MulAssign":
+    case "DivAssign":
+    case "RemAssign":
+      return "arithmetic";
+    case "BitAndAssign":
+    case "BitOrAssign":
+    case "BitXorAssign":
+    case "ShlAssign":
+    case "ShrAssign":
+      return "bitwise";
+    default:
+      return assertNever(
+        op,
+        `Unexpected compound-assign operator: ${JSON.stringify(op)}`,
+      );
+  }
+}
+
+/** Diagnoses a native-path compound assignment (the left operand already has
+ * the capability `compoundAssignNativeCapability` requires) by delegating to
+ * the same `infer*Type` helper the matching binary operator uses, so the
+ * wording and same-type/shift-independence rules stay identical to `x = x op
+ * y`. The compound assignment's own result type is always `()`, so the
+ * returned type is discarded. */
+function checkCompoundAssignNativeOperands(
+  ctx: AnalysisContext,
+  op: Parser.CompoundAssignOperator,
+  lhsType: Semantics.Type,
+  rhsType: Semantics.Type,
+  isLhsValid: boolean,
+  isRhsValid: boolean,
+  tokenId: number,
+): void {
+  switch (op) {
+    case "AddAssign":
+    case "SubAssign":
+    case "MulAssign":
+    case "DivAssign":
+    case "RemAssign":
+      inferArithmeticType(
+        ctx,
+        lhsType,
+        rhsType,
+        isLhsValid,
+        isRhsValid,
+        tokenId,
+      );
+      return;
+    case "BitAndAssign":
+    case "BitOrAssign":
+    case "BitXorAssign":
+      inferBitwiseType(ctx, lhsType, rhsType, isLhsValid, isRhsValid, tokenId);
+      return;
+    case "ShlAssign":
+    case "ShrAssign":
+      inferShiftType(ctx, lhsType, rhsType, isLhsValid, isRhsValid, tokenId);
+      return;
+    default:
+      assertNever(
+        op,
+        `Unexpected compound-assign operator: ${JSON.stringify(op)}`,
+      );
+  }
+}
+
+/** `x op= y` validates like `x = x op y` for a native (numeric/bitwise)
+ * left operand; otherwise it falls through to the matching `*Assign` prelude
+ * trait (the operator name doubles as the trait name), the same frame-0
+ * `lookupPreludeTrait` rule `==`/`-`/`!` already use so a block-local trait
+ * of the same name can neither hijack nor break it. */
+function checkCompoundAssignOperands(
+  ctx: AnalysisContext,
+  op: Parser.CompoundAssignOperator,
+  lhs: Semantics.Expression,
+  rhs: Semantics.Expression,
+  tokenId: number,
+): void {
+  const lhsType = getType(lhs);
+  const rhsType = getType(rhs);
+  const isLhsValid = lhsType.kind !== "UnitType" || !isAmbiguousUnitExpr(lhs);
+  const isRhsValid = rhsType.kind !== "UnitType" || !isAmbiguousUnitExpr(rhs);
+  if (!isLhsValid) return;
+
+  if (hasCapability(lhsType, compoundAssignNativeCapability(op))) {
+    checkCompoundAssignNativeOperands(
+      ctx,
+      op,
+      lhsType,
+      rhsType,
+      isLhsValid,
+      isRhsValid,
+      tokenId,
+    );
+    return;
+  }
+
+  const traitId = lookupPreludeTrait(ctx, op);
+  if (traitId !== undefined && resolvesViaTraitBound(ctx, lhsType, traitId)) {
+    return;
+  }
+
+  emitError(
+    ctx,
+    {
+      kind: "SemTraitBoundNotSatisfied",
+      typeName: describeType(lhsType),
+      trait: op,
+    },
+    tokenId,
+  );
+}
+
 function analyzeCompoundAssignmentExpression(
   ctx: AnalysisContext,
   compoundAssignExpression: Parser.CompoundAssignExpression,
 ): Semantics.CompoundAssignExpression {
   const lhs = analyzeExpression(ctx, compoundAssignExpression.lhs);
   checkLhsMutability(ctx, lhs, compoundAssignExpression.tokenId);
+  let rhs = analyzeExpression(ctx, compoundAssignExpression.rhs);
+  if (isUnsuffixedLiteralExpr(rhs)) {
+    rhs = coerceToIntegerType(rhs, getType(lhs));
+    checkCoercedLiteralRange(ctx, rhs);
+  }
+  checkCompoundAssignOperands(
+    ctx,
+    compoundAssignExpression.operator,
+    lhs,
+    rhs,
+    compoundAssignExpression.tokenId,
+  );
   return {
     ...compoundAssignExpression,
     lhs,
-    rhs: analyzeExpression(ctx, compoundAssignExpression.rhs),
+    rhs,
     type: { kind: "UnitType", tokenId: compoundAssignExpression.tokenId },
   };
 }

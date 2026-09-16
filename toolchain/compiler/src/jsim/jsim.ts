@@ -464,6 +464,7 @@ function dropFlagClearStatement(
       type: none(),
     },
     rhs: { kind: "BooleanLiteral", value: false },
+    numericKind: none(),
     span: none(),
   };
 }
@@ -3508,6 +3509,7 @@ function bindPatternName(
     operator: "Assign",
     lhs: { kind: "Identifier", value: emittedName, type: none() },
     rhs: boundValue,
+    numericKind: none(),
     span: none(),
   };
 }
@@ -3837,11 +3839,41 @@ function parseAssignExpression(
     operator: "Assign",
     lhs: parseExpression(ctx, assignExp.lhs),
     rhs: parseExpression(ctx, assignExp.rhs),
+    numericKind: none(),
     span: none(),
   };
 }
 
-function parseCompoundAssignExpression(
+const COMPOUND_ASSIGN_METHOD_NAMES: ReadonlyMap<
+  Semantics.CompoundAssignExpression["operator"],
+  string
+> = new Map([
+  ["AddAssign", "add_assign"],
+  ["SubAssign", "sub_assign"],
+  ["MulAssign", "mul_assign"],
+  ["DivAssign", "div_assign"],
+  ["RemAssign", "rem_assign"],
+  ["BitAndAssign", "bitand_assign"],
+  ["BitOrAssign", "bitor_assign"],
+  ["BitXorAssign", "bitxor_assign"],
+  ["ShlAssign", "shl_assign"],
+  ["ShrAssign", "shr_assign"],
+]);
+
+function compoundAssignMethodName(
+  op: Semantics.CompoundAssignExpression["operator"],
+): string {
+  const name = COMPOUND_ASSIGN_METHOD_NAMES.get(op);
+  if (name === undefined) {
+    throw new Error(`ICE: no method name for compound-assign operator ${op}`);
+  }
+  return name;
+}
+
+/** The native (non-trait-dispatch) lowering: a plain JS compound-assignment
+ * operator, wrapped/truncated at codegen time via `numericKind` the same way
+ * a binary `x = x op y` is. */
+function parseNativeCompoundAssignExpression(
   ctx: JsimContext,
   compoundAssignExp: Semantics.CompoundAssignExpression,
 ): JSIM.AssignExpression {
@@ -3850,8 +3882,29 @@ function parseCompoundAssignExpression(
     operator: compoundAssignExp.operator,
     lhs: parseExpression(ctx, compoundAssignExp.lhs),
     rhs: parseExpression(ctx, compoundAssignExp.rhs),
+    numericKind: hedgeTypeToNumericKind(compoundAssignExp.lhs.type),
     span: none(),
   };
+}
+
+/** `a op= b` on a struct/enum/generic-parameter/reference operand lowers to
+ * the interim `a.<method>_assign(b)` call (mirroring `==`'s own interim
+ * `a.eq(b)` shape before it got free-fn dispatch) - free-fn/witness
+ * dispatch is left for later, since impl/trait method bodies still erase in
+ * codegen and the call has nothing real to reach yet. */
+function parseCompoundAssignExpression(
+  ctx: JsimContext,
+  compoundAssignExp: Semantics.CompoundAssignExpression,
+): JSIM.Expression {
+  if (isTraitDispatchOperandType(compoundAssignExp.lhs.type)) {
+    return {
+      kind: "MethodCallExpression",
+      receiver: parseExpression(ctx, compoundAssignExp.lhs),
+      method: compoundAssignMethodName(compoundAssignExp.operator),
+      arguments: [parseExpression(ctx, compoundAssignExp.rhs)],
+    };
+  }
+  return parseNativeCompoundAssignExpression(ctx, compoundAssignExp);
 }
 
 /**
@@ -3859,17 +3912,26 @@ function parseCompoundAssignExpression(
  * source-map span, from its lhs's leftmost token through the matching
  * depth-0 `;` - the same technique `LetStatement` already uses. A nested
  * occurrence (inside a larger expression) keeps `span: none()` from
- * `parseAssignExpression`/`parseCompoundAssignExpression` instead, since it
- * has no statement-level `;` of its own to bound a span with.
+ * `parseAssignExpression`/`parseNativeCompoundAssignExpression` instead,
+ * since it has no statement-level `;` of its own to bound a span with. A
+ * trait-dispatched compound assignment lowers to a bare `MethodCallExpression`
+ * instead (see `parseCompoundAssignExpression`), which carries no span at
+ * all - the same convention every other bare-expression statement gets.
  */
 function parseAssignStatement(
   ctx: JsimContext,
   expression: Semantics.AssignExpression | Semantics.CompoundAssignExpression,
 ): JSIM.Statement {
+  if (
+    expression.kind === "CompoundAssignExpression" &&
+    isTraitDispatchOperandType(expression.lhs.type)
+  ) {
+    return parseCompoundAssignExpression(ctx, expression);
+  }
   const lowered =
     expression.kind === "AssignExpression"
       ? parseAssignExpression(ctx, expression)
-      : parseCompoundAssignExpression(ctx, expression);
+      : parseNativeCompoundAssignExpression(ctx, expression);
   return {
     ...lowered,
     span: some(

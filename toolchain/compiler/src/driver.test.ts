@@ -1001,6 +1001,92 @@ describe("- / ! on a type with a Neg/Not impl", (): void => {
   });
 });
 
+describe("compound-assignment operators lowering through an Assign-family impl", (): void => {
+  it("lowers `a += b` on a struct to the interim `a.add_assign(b)` method call", (): void => {
+    const js = emittedJs(`
+      struct V { x: i32 }
+      impl AddAssign for V {
+        fn add_assign(&mut self, rhs: Self) {}
+      }
+      fn main() {
+        let mut a = V { x: 1 };
+        let b = V { x: 2 };
+        a += b;
+        print("done");
+      }
+    `);
+    expect(js).toContain("a.add_assign(b)");
+  });
+
+  it("lowers `a &= b` on a struct to the interim `a.bitand_assign(b)` method call", (): void => {
+    const js = emittedJs(`
+      struct V { x: i32 }
+      impl BitAndAssign for V {
+        fn bitand_assign(&mut self, rhs: Self) {}
+      }
+      fn main() {
+        let mut a = V { x: 1 };
+        let b = V { x: 2 };
+        a &= b;
+        print("done");
+      }
+    `);
+    expect(js).toContain("a.bitand_assign(b)");
+  });
+
+  it("lowers `a <<= b` on a struct to the interim `a.shl_assign(b)` method call", (): void => {
+    const js = emittedJs(`
+      struct V { x: i32 }
+      impl ShlAssign for V {
+        fn shl_assign(&mut self, rhs: Self) {}
+      }
+      fn main() {
+        let mut a = V { x: 1 };
+        let b = V { x: 2 };
+        a <<= b;
+        print("done");
+      }
+    `);
+    expect(js).toContain("a.shl_assign(b)");
+  });
+
+  it("lowers `a += b` on an enum to the interim `a.add_assign(b)` method call", (): void => {
+    const js = emittedJs(`
+      enum Counter { Zero, One }
+      impl AddAssign for Counter {
+        fn add_assign(&mut self, rhs: Self) {}
+      }
+      fn main() {
+        let mut a = Counter::Zero;
+        let b = Counter::One;
+        a += b;
+        print("done");
+      }
+    `);
+    expect(js).toContain("a.add_assign(b)");
+  });
+
+  it("lowers `a += b` on an `AddAssign`-bound generic parameter to the same interim method call, not a witness dispatch", (): void => {
+    const js = emittedJs(`
+      fn add_into<T: AddAssign>(mut a: T, b: T) { a += b; }
+      fn main() { print("done"); }
+    `);
+    expect(js).toContain("a.add_assign(b)");
+    expect(js).not.toContain("_witness_T_AddAssign.add_assign");
+  });
+
+  it("leaves native `i32` compound assignment as a plain assignment, not a method call", (): void => {
+    const js = emittedJs(`
+      fn main() {
+        let mut x: i32 = 1;
+        x += 1;
+        print(x);
+      }
+    `);
+    expect(js).not.toContain(".add_assign(");
+  });
+});
+
 describe("generic witness codegen", (): void => {
   it("appends a hidden witness parameter for each of a generic function's trait bounds", (): void => {
     const js = emittedJs(`

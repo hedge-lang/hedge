@@ -374,6 +374,12 @@ export interface AssignExpression {
   readonly lhs: Expression;
   readonly rhs: Expression;
   /**
+   * `none()` for a plain `=`; for a native (non-trait-dispatch) compound
+   * operator, the left operand's own numeric kind, so codegen can wrap the
+   * result the same way a binary `x = x op y` would.
+   */
+  readonly numericKind: Option<NumericKind>;
+  /**
    * `some(...)` only when this assignment is itself a statement (not nested
    * inside a larger expression) - that's the only position `emitFunctionPart`
    * can give it its own source-map mapping, since a nested occurrence has no
