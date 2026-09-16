@@ -3912,26 +3912,23 @@ function parseCompoundAssignExpression(
  * source-map span, from its lhs's leftmost token through the matching
  * depth-0 `;` - the same technique `LetStatement` already uses. A nested
  * occurrence (inside a larger expression) keeps `span: none()` from
- * `parseAssignExpression`/`parseNativeCompoundAssignExpression` instead,
- * since it has no statement-level `;` of its own to bound a span with. A
+ * `parseAssignExpression`/`parseCompoundAssignExpression` instead, since it
+ * has no statement-level `;` of its own to bound a span with. A
  * trait-dispatched compound assignment lowers to a bare `MethodCallExpression`
- * instead (see `parseCompoundAssignExpression`), which carries no span at
- * all - the same convention every other bare-expression statement gets.
+ * instead, which carries no span field at all - the same convention every
+ * other bare-expression statement gets - so the span is only ever added onto
+ * a genuine `AssignExpression` result, checked on the lowered node itself
+ * rather than re-derived from the input.
  */
 function parseAssignStatement(
   ctx: JsimContext,
   expression: Semantics.AssignExpression | Semantics.CompoundAssignExpression,
 ): JSIM.Statement {
-  if (
-    expression.kind === "CompoundAssignExpression" &&
-    isTraitDispatchOperandType(expression.lhs.type)
-  ) {
-    return parseCompoundAssignExpression(ctx, expression);
-  }
   const lowered =
     expression.kind === "AssignExpression"
       ? parseAssignExpression(ctx, expression)
-      : parseNativeCompoundAssignExpression(ctx, expression);
+      : parseCompoundAssignExpression(ctx, expression);
+  if (lowered.kind !== "AssignExpression") return lowered;
   return {
     ...lowered,
     span: some(

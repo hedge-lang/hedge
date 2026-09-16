@@ -107,6 +107,15 @@ function assignBinaryOp(op: AssignOperator): BinaryOperator {
   return binOp;
 }
 
+function emitWrappedCompoundAssignRhs(
+  numericKind: NumericKind,
+  operator: AssignOperator,
+  lhs: string,
+  rhs: string,
+): string {
+  return emitNumericBinaryOp(numericKind, assignBinaryOp(operator), lhs, rhs);
+}
+
 type PrecKey =
   | "BooleanLiteral"
   | "StringLiteral"
@@ -440,9 +449,9 @@ function emitAssignExpression(expression: AssignExpression): string {
     const object = emitExpression(expression.lhs.object);
     const index = emitExpression(expression.lhs.index);
     if (isSome(expression.numericKind)) {
-      const wrapped = emitNumericBinaryOp(
+      const wrapped = emitWrappedCompoundAssignRhs(
         expression.numericKind.value,
-        assignBinaryOp(expression.operator),
+        expression.operator,
         "_arr[_i]",
         rhs,
       );
@@ -453,9 +462,9 @@ function emitAssignExpression(expression: AssignExpression): string {
   }
   const lhs = emitExpression(expression.lhs);
   if (isSome(expression.numericKind)) {
-    const wrapped = emitNumericBinaryOp(
+    const wrapped = emitWrappedCompoundAssignRhs(
       expression.numericKind.value,
-      assignBinaryOp(expression.operator),
+      expression.operator,
       lhs,
       rhs,
     );
