@@ -440,37 +440,41 @@ function emitUnaryExpression(expression: UnaryExpression): string {
   return `(${inner})`;
 }
 
-function emitAssignExpression(expression: AssignExpression): string {
+/** Builds the assignment/compound-assignment text for a place already
+ * emitted as `placeText` - shared by the array-indexed and plain paths in
+ * `emitAssignExpression` so neither duplicates the wrap-vs-raw-operator
+ * choice. */
+function emitAssignmentText(
+  expression: AssignExpression,
+  placeText: string,
+): string {
   const rhs = emitExpression(expression.rhs);
-  if (
-    expression.lhs.kind === "IndexExpression" &&
-    expression.lhs.isArrayIndex
-  ) {
-    const object = emitExpression(expression.lhs.object);
-    const index = emitExpression(expression.lhs.index);
-    if (isSome(expression.numericKind)) {
-      const wrapped = emitWrappedCompoundAssignRhs(
-        expression.numericKind.value,
-        expression.operator,
-        "_arr[_i]",
-        rhs,
-      );
-      return indexBoundsCheck(object, index, `_arr[_i] = ${wrapped}`);
-    }
-    const op = ASSIGN_OPS[expression.operator];
-    return indexBoundsCheck(object, index, `_arr[_i] ${op} ${rhs}`);
-  }
-  const lhs = emitExpression(expression.lhs);
   if (isSome(expression.numericKind)) {
     const wrapped = emitWrappedCompoundAssignRhs(
       expression.numericKind.value,
       expression.operator,
-      lhs,
+      placeText,
       rhs,
     );
-    return `${lhs} = ${wrapped}`;
+    return `${placeText} = ${wrapped}`;
   }
-  return `${lhs} ${ASSIGN_OPS[expression.operator]} ${rhs}`;
+  return `${placeText} ${ASSIGN_OPS[expression.operator]} ${rhs}`;
+}
+
+function emitAssignExpression(expression: AssignExpression): string {
+  const found = findArrayIndexPlace(expression.lhs);
+  if (found !== undefined) {
+    const object = emitExpression(found.object);
+    const index = emitExpression(found.index);
+    const elementText = found.rebuild("_arr[_i]");
+    return indexBoundsCheck(
+      object,
+      index,
+      emitAssignmentText(expression, elementText),
+    );
+  }
+  const lhs = emitExpression(expression.lhs);
+  return emitAssignmentText(expression, lhs);
 }
 
 function emitArrowFunctionExpression(
@@ -543,6 +547,39 @@ function emitStructExpression(expression: StructExpression): string {
   return `({${[...fields, structDisposer(expression.disposableFields, expression.dropFn)].join(", ")}})`;
 }
 
+interface ArrayIndexPlace {
+  readonly object: Expression;
+  readonly index: Expression;
+  /**
+   * Re-embeds `elementText` (a reference to the captured, bounds-checked
+   * array element) at the exact position the found index occupied,
+   * replaying every field-access hop that sat above it.
+   */
+  readonly rebuild: (elementText: string) => string;
+}
+
+/**
+ * Finds the array-indexing operation anywhere in `place`'s field-access
+ * chain - a bare `arr[i]`, or one nested under any number of field-access
+ * hops (`arr[i].field`, including a `&mut` reference's own synthetic `.v`
+ * hop) - so its object/index can be captured exactly once regardless of
+ * depth, instead of re-evaluating a side-effecting index on every read/write
+ * the place is emitted into. `undefined` when the chain contains no array
+ * index at all.
+ */
+function findArrayIndexPlace(place: Expression): ArrayIndexPlace | undefined {
+  if (place.kind === "IndexExpression" && place.isArrayIndex) {
+    return { object: place.object, index: place.index, rebuild: (t) => t };
+  }
+  if (place.kind === "FieldAccessExpression") {
+    const inner = findArrayIndexPlace(place.object);
+    if (inner === undefined) return undefined;
+    const { field } = place;
+    return { ...inner, rebuild: (t) => `${inner.rebuild(t)}.${field}` };
+  }
+  return undefined;
+}
+
 /**
  * A dynamic array-index place's emitted text is a bounds-check call
  * expression, not an assignable target, so reusing it as `${place} = nv`
@@ -550,20 +587,21 @@ function emitStructExpression(expression: StructExpression): string {
  * verbatim would re-evaluate the index expression on every access instead of
  * pinning the reference to the index's value at borrow time. `bodyFor`
  * builds the accessor-cell object literal (as a bare `{ ... }`, since it
- * sits in `return` position) from the names the wrapping IIFE captures
- * `object`/`index` under; `undefined` when `place` isn't an array index, so
- * the caller falls back to its own non-indexed accessor-cell text.
+ * sits in `return` position) from the full place text - `_arr[_i]`, or
+ * `_arr[_i].field` when the index sits under one or more field-access hops -
+ * the wrapping IIFE's captured `object`/`index` produce; `undefined` when
+ * `place` contains no array index at all, so the caller falls back to its
+ * own non-indexed accessor-cell text.
  */
 function capturedArrayIndexPlace(
   place: Expression,
-  bodyFor: (arrName: string, indexName: string) => string,
+  bodyFor: (elementText: string) => string,
 ): string | undefined {
-  if (place.kind !== "IndexExpression" || !place.isArrayIndex) {
-    return undefined;
-  }
-  const object = emitExpression(place.object);
-  const index = emitExpression(place.index);
-  const body = bodyFor("_arr", "_i");
+  const found = findArrayIndexPlace(place);
+  if (found === undefined) return undefined;
+  const object = emitExpression(found.object);
+  const index = emitExpression(found.index);
+  const body = bodyFor(found.rebuild("_arr[_i]"));
   return `((_arr, _i) => { if (${ARRAY_INDEX_OUT_OF_RANGE_CONDITION}) { ${ARRAY_INDEX_OUT_OF_RANGE_THROW}; } return ${body}; })(${object}, ${index})`;
 }
 
@@ -571,8 +609,8 @@ function emitRefCellExpression(expression: RefCellExpression): string {
   const place = expression.place;
   const captured = capturedArrayIndexPlace(
     place,
-    (arr, idx) =>
-      `{ get v() { return ${arr}[${idx}]; }, set v(nv) { ${arr}[${idx}] = nv; } }`,
+    (elementText) =>
+      `{ get v() { return ${elementText}; }, set v(nv) { ${elementText} = nv; } }`,
   );
   if (captured !== undefined) return captured;
   const placeText = emitExpression(place);
@@ -592,8 +630,8 @@ function emitDynBoxExpression(expression: DynBoxExpression): string {
   }
   const captured = capturedArrayIndexPlace(
     expression.place,
-    (arr, idx) =>
-      `{ get value() { return ${arr}[${idx}]; }, set value(nv) { ${arr}[${idx}] = nv; }, witness: ${witness}${disposer} }`,
+    (elementText) =>
+      `{ get value() { return ${elementText}; }, set value(nv) { ${elementText} = nv; }, witness: ${witness}${disposer} }`,
   );
   if (captured !== undefined) return captured;
   const place = emitExpression(expression.place);

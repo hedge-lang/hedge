@@ -573,6 +573,18 @@ describe("compound-assignment codegen wrapping on numeric operands", () => {
     );
   });
 
+  it("evaluates a computed array index exactly once when the compound-assignment target is a field of that element", () => {
+    const code = js(
+      gen(
+        "struct V { x: i32 } fn idx() -> usize { 0 } fn _(mut arr: [V; 3]) { arr[idx()].x += 1; }",
+      ),
+    );
+    assert(code !== null, "Expected JS output");
+    const body = code.slice(code.indexOf("function _("));
+    const idxCalls = body.split("idx()").length - 1;
+    expect(idxCalls).toBe(1);
+  });
+
   it("keeps a lower-precedence RHS grouped correctly (x *= y + z computes x * (y + z))", () => {
     expect(stmts(gen("fn _(mut x: i32, y: i32, z: i32) { x *= y + z; }"))).toBe(
       "x = ((x * ((y + z)|0))|0);",
@@ -1045,6 +1057,18 @@ describe("mutable reference cell codegen", (): void => {
     expect(code).toContain(
       'const r = ((_arr, _i) => { if (_i < 0 || _i >= _arr.length) { throw new RangeError("index out of bounds"); } return { get v() { return _arr[_i]; }, set v(nv) { _arr[_i] = nv; } }; })(arr, i);',
     );
+  });
+
+  it("evaluates a computed array index exactly once for &mut arr[i()].field, not once per get/set access", (): void => {
+    const code = js(
+      gen(
+        "struct V { x: i32 } fn idx() -> usize { 0 } fn _(mut arr: [V; 3]) { let r = &mut arr[idx()].x; print(r); }",
+      ),
+    );
+    assert(code !== null, "Expected JS output");
+    const body = code.slice(code.indexOf("function _("));
+    const idxCalls = body.split("idx()").length - 1;
+    expect(idxCalls).toBe(1);
   });
 });
 
