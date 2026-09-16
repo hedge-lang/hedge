@@ -107,6 +107,23 @@ describe("move-check", (): void => {
     expect(diagnostics).toEqual([]);
   });
 
+  it("a compound-assignment target is borrowed, not moved, so it stays usable afterward", (): void => {
+    const { diagnostics } = check(`
+      trait AddAssign { fn add_assign(&mut self, rhs: Self); }
+      struct V { x: i32 }
+      impl AddAssign for V {
+        fn add_assign(&mut self, rhs: Self) {}
+      }
+      fn main() {
+        let mut a = V { x: 1 };
+        let b = V { x: 2 };
+        a += b;
+        print(a.x);
+      }
+    `);
+    expect(diagnostics).toEqual([]);
+  });
+
   it("a move inside a match arm's body invalidates a later use of the moved value, naming it", (): void => {
     const { diagnostics } = check(
       `${BOXED}
