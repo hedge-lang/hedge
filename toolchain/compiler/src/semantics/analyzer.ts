@@ -9079,6 +9079,33 @@ function analyzeAssignmentExpression(
   };
 }
 
+/** The `*Assign` trait method a compound-assignment operator dispatches to
+ * once resolved - `jsim.ts`'s `COMPOUND_ASSIGN_METHOD_NAMES` mirrors this
+ * same fixed mapping for codegen; this copy is for diagnostic text only. */
+const COMPOUND_ASSIGN_METHOD_NAMES: ReadonlyMap<
+  Parser.CompoundAssignOperator,
+  string
+> = new Map([
+  ["AddAssign", "add_assign"],
+  ["SubAssign", "sub_assign"],
+  ["MulAssign", "mul_assign"],
+  ["DivAssign", "div_assign"],
+  ["RemAssign", "rem_assign"],
+  ["BitAndAssign", "bitand_assign"],
+  ["BitOrAssign", "bitor_assign"],
+  ["BitXorAssign", "bitxor_assign"],
+  ["ShlAssign", "shl_assign"],
+  ["ShrAssign", "shr_assign"],
+]);
+
+function compoundAssignMethodName(op: Parser.CompoundAssignOperator): string {
+  const name = COMPOUND_ASSIGN_METHOD_NAMES.get(op);
+  if (name === undefined) {
+    throw new Error(`ICE: no method name for compound-assign operator ${op}`);
+  }
+  return name;
+}
+
 /** The native capability a compound-assignment operator's left operand must
  * have to skip trait resolution entirely - mirrors `inferBinaryType`'s own
  * three-way split (arithmetic / bitwise / shift), collapsed to the two
@@ -9188,6 +9215,22 @@ function checkCompoundAssignOperands(
 
   const traitId = lookupPreludeTrait(ctx, op);
   if (traitId !== undefined && resolvesViaTraitBound(ctx, lhsType, traitId)) {
+    const lhsReferent =
+      lhsType.kind === "ReferenceType" ? lhsType.referent : lhsType;
+    if (isRhsValid && !typesEqual(lhsReferent, rhsType)) {
+      emitError(
+        ctx,
+        {
+          kind: "SemArgumentTypeMismatch",
+          argIndex: 1,
+          calleeKind: "method",
+          calleeName: compoundAssignMethodName(op),
+          expected: describeType(lhsReferent),
+          found: describeType(rhsType),
+        },
+        tokenId,
+      );
+    }
     return;
   }
 

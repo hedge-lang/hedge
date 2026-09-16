@@ -8141,6 +8141,23 @@ describe("compound-assignment operators resolving through an Assign-family impl"
     expect(result.diagnostics).toEqual([]);
   });
 
+  it("rejects `v += true` where `v: V` has a valid `AddAssign` impl but `true` does not match `Self`", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct V { x: i32 }
+      impl AddAssign for V {
+        fn add_assign(&mut self, rhs: Self) {}
+      }
+      fn main() {
+        let mut v = V { x: 1 };
+        v += true;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "argument 1 to method `add_assign` type mismatch: expected `V`, found `bool`",
+    );
+  });
+
   it("rejects `a += b` on a struct with an `Add` impl but no `AddAssign` impl", (): void => {
     const result = diagnoseWithPrelude(`
       trait Add { fn add(self, rhs: Self) -> Self; }
