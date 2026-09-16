@@ -1087,6 +1087,24 @@ describe("compound-assignment operators lowering through an Assign-family impl",
   });
 });
 
+describe("native compound-assignment shift codegen", (): void => {
+  it("runs `x <<= n;` on an i64 shifted by an independently-typed i32 amount without a BigInt/Number mix error", (): void => {
+    const js = emittedJs(`
+      fn _(mut x: i64, n: i32) { x <<= n; print(x); }
+      fn main() { _(1, 2); }
+    `);
+    expect(runEmittedJs(js)).toEqual(["4"]);
+  });
+
+  it("runs `x >>= n;` on a u64 shifted by an independently-typed i32 amount without a BigInt/Number mix error", (): void => {
+    const js = emittedJs(`
+      fn _(mut x: u64, n: i32) { x >>= n; print(x); }
+      fn main() { _(8, 2); }
+    `);
+    expect(runEmittedJs(js)).toEqual(["2"]);
+  });
+});
+
 describe("generic witness codegen", (): void => {
   it("appends a hidden witness parameter for each of a generic function's trait bounds", (): void => {
     const js = emittedJs(`

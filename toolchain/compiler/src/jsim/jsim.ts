@@ -3637,16 +3637,19 @@ function jsimIntLiteral({
  * A shift's amount need not share the shifted value's type, but JS refuses to
  * mix a BigInt with a Number, so a non-bigint amount is converted when the
  * shifted value is `i64`/`u64`. Every other operand passes through unchanged.
+ * Shared by binary `<<`/`>>` and the native lowering of `<<=`/`>>=`, since
+ * both desugar to the same JS shift operator and need the same conversion.
  */
-function shiftAmount(
+function shiftAmountFor(
   ctx: JsimContext,
-  binExp: Semantics.BinaryExpression,
+  isShift: boolean,
+  shiftedType: Semantics.Type,
+  amountExpr: Semantics.Expression,
 ): JSIM.Expression {
-  const right = parseExpression(ctx, binExp.right);
-  const isShift = binExp.operator === "Shl" || binExp.operator === "Shr";
+  const right = parseExpression(ctx, amountExpr);
   if (!isShift) return right;
-  const shifted = hedgeTypeToNumericKind(binExp.left.type);
-  const amount = hedgeTypeToNumericKind(binExp.right.type);
+  const shifted = hedgeTypeToNumericKind(shiftedType);
+  const amount = hedgeTypeToNumericKind(amountExpr.type);
   const shiftedIsBigint = isSome(shifted) && shifted.value.kind === "bigint";
   const amountIsBigint = isSome(amount) && amount.value.kind === "bigint";
   if (!shiftedIsBigint || amountIsBigint) return right;
@@ -3655,6 +3658,18 @@ function shiftAmount(
     callee: { kind: "Identifier", value: "BigInt", type: none() },
     arguments: [right],
   };
+}
+
+function shiftAmount(
+  ctx: JsimContext,
+  binExp: Semantics.BinaryExpression,
+): JSIM.Expression {
+  return shiftAmountFor(
+    ctx,
+    binExp.operator === "Shl" || binExp.operator === "Shr",
+    binExp.left.type,
+    binExp.right,
+  );
 }
 
 /** A struct/enum operand, a reference to one, or a generic parameter, that
@@ -3877,11 +3892,19 @@ function parseNativeCompoundAssignExpression(
   ctx: JsimContext,
   compoundAssignExp: Semantics.CompoundAssignExpression,
 ): JSIM.AssignExpression {
+  const isShift =
+    compoundAssignExp.operator === "ShlAssign" ||
+    compoundAssignExp.operator === "ShrAssign";
   return {
     kind: "AssignExpression",
     operator: compoundAssignExp.operator,
     lhs: parseExpression(ctx, compoundAssignExp.lhs),
-    rhs: parseExpression(ctx, compoundAssignExp.rhs),
+    rhs: shiftAmountFor(
+      ctx,
+      isShift,
+      compoundAssignExp.lhs.type,
+      compoundAssignExp.rhs,
+    ),
     numericKind: hedgeTypeToNumericKind(compoundAssignExp.lhs.type),
     span: none(),
   };
