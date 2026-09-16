@@ -572,6 +572,12 @@ describe("compound-assignment codegen wrapping on numeric operands", () => {
       '((_arr, _i) => _i < 0 || _i >= _arr.length ? (() => { throw new RangeError("index out of bounds"); })() : (_arr[_i] = ((_arr[_i] + 1)|0)))(arr, 0);',
     );
   });
+
+  it("keeps a lower-precedence RHS grouped correctly (x *= y + z computes x * (y + z))", () => {
+    expect(stmts(gen("fn _(mut x: i32, y: i32, z: i32) { x *= y + z; }"))).toBe(
+      "x = ((x * ((y + z)|0))|0);",
+    );
+  });
 });
 
 describe("field access expression codegen", () => {
