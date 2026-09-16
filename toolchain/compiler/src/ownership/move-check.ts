@@ -720,8 +720,12 @@ function walkExpression(
       walkAssignExpression(ctx, expression, state, scopeStack);
       return;
     case "CompoundAssignExpression":
+      // Unlike plain `=`, a compound assignment never replaces the LHS's own
+      // identity - `x += y` desugars to a `&mut self` call, so the LHS is
+      // always a borrow, never a whole-value reassignment eligible for
+      // `walkAssignExpression`'s own `reassign` treatment.
       walkExpression(ctx, expression.rhs, state, scopeStack);
-      walkExpression(ctx, expression.lhs, state, scopeStack);
+      walkNonMovingPlace(ctx, expression.lhs, state, scopeStack);
       return;
     case "BinaryExpression":
       if (expression.operator === "Eq" || expression.operator === "Ne") {

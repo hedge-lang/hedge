@@ -445,6 +445,8 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return `struct literal field \`${kind.field}\` borrows \`${kind.name}\`, which does not live beyond this function`;
     case "SemNotABorrowablePlace":
       return "only a local binding, a parameter, or a field, index, or dereference of one can be borrowed directly";
+    case "SemInvalidAssignmentTarget":
+      return "only a local binding, a parameter, or a field, index, or dereference of one can be assigned to directly";
     case "SemCannotAssignToImmutableBinding":
       return "cannot assign to immutable binding";
     case "SemCannotAssignThroughSharedReference":

@@ -542,6 +542,56 @@ describe("assign expression codegen", () => {
   });
 });
 
+describe("compound-assignment codegen wrapping on numeric operands", () => {
+  it("wraps `x += 1;` on an `i32` the same way binary `+` wraps", () => {
+    expect(stmts(gen("fn _(mut x: i32) { x += 1; }"))).toBe("x = ((x + 1)|0);");
+  });
+
+  it("masks `x |= 1;` on a `u8` to 8 bits", () => {
+    expect(stmts(gen("fn _(mut x: u8) { x |= 1; }"))).toBe(
+      "x = ((x | 1)&255);",
+    );
+  });
+
+  it("sign-extends `x <<= 1;` on an `i8` to 8 bits", () => {
+    expect(stmts(gen("fn _(mut x: i8) { x <<= 1; }"))).toBe(
+      "x = (((x << 1) << 24) >> 24);",
+    );
+  });
+
+  it("zero-guards `x /= y;` on an `i32` the same way binary `/` does", () => {
+    expect(stmts(gen("fn _(mut x: i32, y: i32) { x /= y; }"))).toBe(
+      'x = ((((_l, _r) => _r === 0 ? (() => { throw new RangeError("attempt to divide by zero"); })() : _l / _r)(x, y))|0);',
+    );
+  });
+
+  it("wraps a compound assignment through a genuine fixed-array index", () => {
+    const code = js(gen("fn _(mut arr: [i32; 3]) { arr[0] += 1; }"));
+    assert(code !== null, "Expected JS output");
+    expect(code).toContain(
+      '((_arr, _i) => _i < 0 || _i >= _arr.length ? (() => { throw new RangeError("index out of bounds"); })() : (_arr[_i] = ((_arr[_i] + 1)|0)))(arr, 0);',
+    );
+  });
+
+  it("evaluates a computed array index exactly once when the compound-assignment target is a field of that element", () => {
+    const code = js(
+      gen(
+        "struct V { x: i32 } fn idx() -> usize { 0 } fn _(mut arr: [V; 3]) { arr[idx()].x += 1; }",
+      ),
+    );
+    assert(code !== null, "Expected JS output");
+    const body = code.slice(code.indexOf("function _("));
+    const idxCalls = body.split("idx()").length - 1;
+    expect(idxCalls).toBe(1);
+  });
+
+  it("keeps a lower-precedence RHS grouped correctly (x *= y + z computes x * (y + z))", () => {
+    expect(stmts(gen("fn _(mut x: i32, y: i32, z: i32) { x *= y + z; }"))).toBe(
+      "x = ((x * ((y + z)|0))|0);",
+    );
+  });
+});
+
 describe("field access expression codegen", () => {
   it("emits object.field", () => {
     expect(stmts(gen("fn _(foo: ()) { foo.bar; }"))).toBe("foo.bar;");
@@ -982,9 +1032,9 @@ describe("mutable reference cell codegen", (): void => {
     expect(stmts(code)).toBe("r.v.value = 2;");
   });
 
-  it("lowers *r += 1; to r.v += 1; when r is a &mut reference", (): void => {
+  it("lowers *r += 1; to a wrapped r.v = r.v + 1 assignment when r is a &mut reference", (): void => {
     const code = gen("fn _(r: &mut i32) { *r += 1; }");
-    expect(stmts(code)).toBe("r.v += 1;");
+    expect(stmts(code)).toBe("r.v = ((r.v + 1)|0);");
   });
 
   it("lowers r[0] to index through r.v when r is a &mut array reference", (): void => {
@@ -1007,6 +1057,18 @@ describe("mutable reference cell codegen", (): void => {
     expect(code).toContain(
       'const r = ((_arr, _i) => { if (_i < 0 || _i >= _arr.length) { throw new RangeError("index out of bounds"); } return { get v() { return _arr[_i]; }, set v(nv) { _arr[_i] = nv; } }; })(arr, i);',
     );
+  });
+
+  it("evaluates a computed array index exactly once for &mut arr[i()].field, not once per get/set access", (): void => {
+    const code = js(
+      gen(
+        "struct V { x: i32 } fn idx() -> usize { 0 } fn _(mut arr: [V; 3]) { let r = &mut arr[idx()].x; print(r); }",
+      ),
+    );
+    assert(code !== null, "Expected JS output");
+    const body = code.slice(code.indexOf("function _("));
+    const idxCalls = body.split("idx()").length - 1;
+    expect(idxCalls).toBe(1);
   });
 });
 

@@ -2333,6 +2333,17 @@ describe("semantic analysis", (): void => {
     ).toBe(true);
   });
 
+  it.each(["=", "+="])(
+    "rejects `%s` on a non-place left-hand side, with one diagnostic and no follow-on operand check",
+    (op): void => {
+      const result = diagnose(`fn main() { let x: i32 = 1; (x + 1) ${op} 2; }`);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "only a local binding, a parameter, or a field, index, or dereference of one can be assigned to directly",
+      );
+    },
+  );
+
   it("emits exactly one diagnostic for an unsupported param type on a block-local fn", (): void => {
     const result = diagnose("fn main() { fn f(x: unknownType) {} }");
     expect(result.diagnostics).toHaveLength(1);
@@ -7428,7 +7439,7 @@ describe("trait and impl declarations", (): void => {
 });
 
 describe("std prelude traits", (): void => {
-  it("registers Clone, PartialEq, Eq, Default, Drop, Neg, and Not ahead of user code", (): void => {
+  it("registers Clone, PartialEq, Eq, Default, Drop, Neg, Not, and the ten Assign traits ahead of user code", (): void => {
     const result = diagnoseWithPrelude("fn main() {}");
     expect(result.diagnostics).toEqual([]);
     const traitNames = result.program.items
@@ -7442,6 +7453,16 @@ describe("std prelude traits", (): void => {
       "Drop",
       "Neg",
       "Not",
+      "AddAssign",
+      "SubAssign",
+      "MulAssign",
+      "DivAssign",
+      "RemAssign",
+      "BitAndAssign",
+      "BitOrAssign",
+      "BitXorAssign",
+      "ShlAssign",
+      "ShrAssign",
     ]);
   });
 
@@ -8075,5 +8096,225 @@ describe("unary `-` / `!` resolving through a Neg/Not impl", (): void => {
       }
     `);
     expect(result.diagnostics).toEqual([]);
+  });
+});
+
+describe("compound-assignment operators resolving through an Assign-family impl", (): void => {
+  it.each([
+    ["+=", "AddAssign", "add_assign"],
+    ["-=", "SubAssign", "sub_assign"],
+    ["*=", "MulAssign", "mul_assign"],
+    ["/=", "DivAssign", "div_assign"],
+    ["%=", "RemAssign", "rem_assign"],
+    ["&=", "BitAndAssign", "bitand_assign"],
+    ["|=", "BitOrAssign", "bitor_assign"],
+    ["^=", "BitXorAssign", "bitxor_assign"],
+    ["<<=", "ShlAssign", "shl_assign"],
+    [">>=", "ShrAssign", "shr_assign"],
+  ])(
+    "accepts `a %s b` on a struct with a hand-written `impl %s`",
+    (op, trait, method): void => {
+      const result = diagnoseWithPrelude(`
+        struct V { x: i32 }
+        impl ${trait} for V {
+          fn ${method}(&mut self, rhs: Self) {}
+        }
+        fn main() {
+          let mut a = V { x: 1 };
+          let b = V { x: 2 };
+          a ${op} b;
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    },
+  );
+
+  it("accepts `a += b` on an enum with a hand-written `impl AddAssign`", (): void => {
+    const result = diagnoseWithPrelude(`
+      enum Counter { Zero, One }
+      impl AddAssign for Counter {
+        fn add_assign(&mut self, rhs: Self) {}
+      }
+      fn main() {
+        let mut a = Counter::Zero;
+        let b = Counter::One;
+        a += b;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts `a += b` on a generic parameter bound by `AddAssign`", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn add_into<T: AddAssign>(mut a: T, b: T) { a += b; }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects `v += true` where `v: V` has a valid `AddAssign` impl but `true` does not match `Self`", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct V { x: i32 }
+      impl AddAssign for V {
+        fn add_assign(&mut self, rhs: Self) {}
+      }
+      fn main() {
+        let mut v = V { x: 1 };
+        v += true;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "argument 1 to method `add_assign` type mismatch: expected `V`, found `bool`",
+    );
+  });
+
+  it("rejects `a += b` on a struct with an `Add` impl but no `AddAssign` impl", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Add { fn add(self, rhs: Self) -> Self; }
+      struct V { x: i32 }
+      impl Add for V {
+        fn add(self, rhs: Self) -> Self { self }
+      }
+      fn main() {
+        let mut a = V { x: 1 };
+        let b = V { x: 2 };
+        a += b;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "the trait bound `V: AddAssign` is not satisfied",
+    );
+  });
+
+  it("rejects `a += b` on a struct with neither an `arithmetic` capability nor an `AddAssign` impl", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct V { x: i32 }
+      fn main() {
+        let mut a = V { x: 1 };
+        let b = V { x: 2 };
+        a += b;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "the trait bound `V: AddAssign` is not satisfied",
+    );
+  });
+
+  it("rejects `a += b` where `a` is not a mutable place, with exactly one diagnostic even though `V` has a valid `AddAssign` impl", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct V { x: i32 }
+      impl AddAssign for V {
+        fn add_assign(&mut self, rhs: Self) {}
+      }
+      fn main() {
+        let a = V { x: 1 };
+        let b = V { x: 2 };
+        a += b;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "cannot assign to immutable binding",
+    );
+  });
+
+  it("rejects `a += b` on a struct whose only `AddAssign` impl is against a shadowing block-local trait", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct V { x: i32 }
+      fn main() {
+        trait AddAssign {}
+        impl AddAssign for V {}
+        let mut a = V { x: 1 };
+        let b = V { x: 2 };
+        a += b;
+      }
+    `);
+    // The block-scoped `impl` also draws a HEDGE-LINT-003 warning, unrelated
+    // to which `AddAssign` `+=` binds to.
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toHaveLength(1);
+    expect(messageOf(errors[0])).toBe(
+      "the trait bound `V: AddAssign` is not satisfied",
+    );
+  });
+
+  it("accepts `a += b` on a struct with a top-level `impl AddAssign` even when a block-local `AddAssign` trait shadows the prelude", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct V { x: i32 }
+      impl AddAssign for V {
+        fn add_assign(&mut self, rhs: Self) {}
+      }
+      fn main() {
+        trait AddAssign {}
+        let mut a = V { x: 1 };
+        let b = V { x: 2 };
+        a += b;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects `x += y` where `y` is a different (non-numeric) type from a numeric `x`, matching binary `+`'s own two-diagnostic shape", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let mut x: i32 = 1;
+        x += true;
+      }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "arithmetic operands must be numeric; right-operand is type `bool`",
+      "arithmetic operands must have the same type",
+    ]);
+  });
+
+  it("accepts `x += y` on plain `i32` operands (native path unaffected)", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let mut x: i32 = 1;
+        x += 2;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("coerces an unsuffixed integer literal RHS to the LHS's narrower type instead of rejecting it as a same-type mismatch", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let mut x: u8 = 1;
+        x |= 1;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("range-checks a coerced literal RHS against the LHS's narrower type", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let mut x: u8 = 1;
+        x |= 999;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe("out of range for u8");
+  });
+
+  it("does not cascade a second diagnostic onto an unresolved compound-assignment target", (): void => {
+    const result = diagnose("fn main() { undefined_var += 1; }");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toContain("undefined_var");
+  });
+
+  it("does not cascade a second diagnostic onto an unresolved compound-assignment RHS", (): void => {
+    const result = diagnose(`
+      fn main() {
+        let mut x: i32 = 1;
+        x += undefined_var;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toContain("undefined_var");
   });
 });

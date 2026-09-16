@@ -565,6 +565,7 @@ export type DiagnosticKind =
       readonly name: string;
     }
   | { readonly kind: "SemNotABorrowablePlace" }
+  | { readonly kind: "SemInvalidAssignmentTarget" }
   | { readonly kind: "SemCannotAssignToImmutableBinding" }
   | { readonly kind: "SemCannotAssignThroughSharedReference" }
   | { readonly kind: "SemAssignThroughDynPlace"; readonly trait: string }
@@ -826,6 +827,7 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemReturnsReferenceToLocal", "HEDGE-LIFETIME-002"],
   ["SemStructLiteralFieldBorrowsLocal", "HEDGE-LIFETIME-002"],
   ["SemNotABorrowablePlace", "HEDGE-BORROW-CHECK-005"],
+  ["SemInvalidAssignmentTarget", "HEDGE-BORROW-CHECK-008"],
   ["SemCannotAssignToImmutableBinding", "HEDGE-BORROW-CHECK-006"],
   ["SemCannotAssignThroughSharedReference", "HEDGE-BORROW-CHECK-006"],
   ["SemAssignThroughDynPlace", "HEDGE-TYPE-007"],

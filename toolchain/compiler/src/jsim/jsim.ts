@@ -464,6 +464,7 @@ function dropFlagClearStatement(
       type: none(),
     },
     rhs: { kind: "BooleanLiteral", value: false },
+    numericKind: none(),
     span: none(),
   };
 }
@@ -3508,6 +3509,7 @@ function bindPatternName(
     operator: "Assign",
     lhs: { kind: "Identifier", value: emittedName, type: none() },
     rhs: boundValue,
+    numericKind: none(),
     span: none(),
   };
 }
@@ -3635,16 +3637,19 @@ function jsimIntLiteral({
  * A shift's amount need not share the shifted value's type, but JS refuses to
  * mix a BigInt with a Number, so a non-bigint amount is converted when the
  * shifted value is `i64`/`u64`. Every other operand passes through unchanged.
+ * Shared by binary `<<`/`>>` and the native lowering of `<<=`/`>>=`, since
+ * both desugar to the same JS shift operator and need the same conversion.
  */
-function shiftAmount(
+function shiftAmountFor(
   ctx: JsimContext,
-  binExp: Semantics.BinaryExpression,
+  isShift: boolean,
+  shiftedType: Semantics.Type,
+  amountExpr: Semantics.Expression,
 ): JSIM.Expression {
-  const right = parseExpression(ctx, binExp.right);
-  const isShift = binExp.operator === "Shl" || binExp.operator === "Shr";
+  const right = parseExpression(ctx, amountExpr);
   if (!isShift) return right;
-  const shifted = hedgeTypeToNumericKind(binExp.left.type);
-  const amount = hedgeTypeToNumericKind(binExp.right.type);
+  const shifted = hedgeTypeToNumericKind(shiftedType);
+  const amount = hedgeTypeToNumericKind(amountExpr.type);
   const shiftedIsBigint = isSome(shifted) && shifted.value.kind === "bigint";
   const amountIsBigint = isSome(amount) && amount.value.kind === "bigint";
   if (!shiftedIsBigint || amountIsBigint) return right;
@@ -3653,6 +3658,18 @@ function shiftAmount(
     callee: { kind: "Identifier", value: "BigInt", type: none() },
     arguments: [right],
   };
+}
+
+function shiftAmount(
+  ctx: JsimContext,
+  binExp: Semantics.BinaryExpression,
+): JSIM.Expression {
+  return shiftAmountFor(
+    ctx,
+    binExp.operator === "Shl" || binExp.operator === "Shr",
+    binExp.left.type,
+    binExp.right,
+  );
 }
 
 /** A struct/enum operand, a reference to one, or a generic parameter, that
@@ -3837,21 +3854,80 @@ function parseAssignExpression(
     operator: "Assign",
     lhs: parseExpression(ctx, assignExp.lhs),
     rhs: parseExpression(ctx, assignExp.rhs),
+    numericKind: none(),
     span: none(),
   };
 }
 
-function parseCompoundAssignExpression(
+const COMPOUND_ASSIGN_METHOD_NAMES: ReadonlyMap<
+  Semantics.CompoundAssignExpression["operator"],
+  string
+> = new Map([
+  ["AddAssign", "add_assign"],
+  ["SubAssign", "sub_assign"],
+  ["MulAssign", "mul_assign"],
+  ["DivAssign", "div_assign"],
+  ["RemAssign", "rem_assign"],
+  ["BitAndAssign", "bitand_assign"],
+  ["BitOrAssign", "bitor_assign"],
+  ["BitXorAssign", "bitxor_assign"],
+  ["ShlAssign", "shl_assign"],
+  ["ShrAssign", "shr_assign"],
+]);
+
+function compoundAssignMethodName(
+  op: Semantics.CompoundAssignExpression["operator"],
+): string {
+  const name = COMPOUND_ASSIGN_METHOD_NAMES.get(op);
+  if (name === undefined) {
+    throw new Error(`ICE: no method name for compound-assign operator ${op}`);
+  }
+  return name;
+}
+
+/** The native (non-trait-dispatch) lowering: a plain JS compound-assignment
+ * operator, wrapped/truncated at codegen time via `numericKind` the same way
+ * a binary `x = x op y` is. */
+function parseNativeCompoundAssignExpression(
   ctx: JsimContext,
   compoundAssignExp: Semantics.CompoundAssignExpression,
 ): JSIM.AssignExpression {
+  const isShift =
+    compoundAssignExp.operator === "ShlAssign" ||
+    compoundAssignExp.operator === "ShrAssign";
   return {
     kind: "AssignExpression",
     operator: compoundAssignExp.operator,
     lhs: parseExpression(ctx, compoundAssignExp.lhs),
-    rhs: parseExpression(ctx, compoundAssignExp.rhs),
+    rhs: shiftAmountFor(
+      ctx,
+      isShift,
+      compoundAssignExp.lhs.type,
+      compoundAssignExp.rhs,
+    ),
+    numericKind: hedgeTypeToNumericKind(compoundAssignExp.lhs.type),
     span: none(),
   };
+}
+
+/** `a op= b` on a struct/enum/generic-parameter/reference operand lowers to
+ * the interim `a.<method>_assign(b)` call (mirroring `==`'s own interim
+ * `a.eq(b)` shape before it got free-fn dispatch) - free-fn/witness
+ * dispatch is left for later, since impl/trait method bodies still erase in
+ * codegen and the call has nothing real to reach yet. */
+function parseCompoundAssignExpression(
+  ctx: JsimContext,
+  compoundAssignExp: Semantics.CompoundAssignExpression,
+): JSIM.Expression {
+  if (isTraitDispatchOperandType(compoundAssignExp.lhs.type)) {
+    return {
+      kind: "MethodCallExpression",
+      receiver: parseExpression(ctx, compoundAssignExp.lhs),
+      method: compoundAssignMethodName(compoundAssignExp.operator),
+      arguments: [parseExpression(ctx, compoundAssignExp.rhs)],
+    };
+  }
+  return parseNativeCompoundAssignExpression(ctx, compoundAssignExp);
 }
 
 /**
@@ -3860,7 +3936,12 @@ function parseCompoundAssignExpression(
  * depth-0 `;` - the same technique `LetStatement` already uses. A nested
  * occurrence (inside a larger expression) keeps `span: none()` from
  * `parseAssignExpression`/`parseCompoundAssignExpression` instead, since it
- * has no statement-level `;` of its own to bound a span with.
+ * has no statement-level `;` of its own to bound a span with. A
+ * trait-dispatched compound assignment lowers to a bare `MethodCallExpression`
+ * instead, which carries no span field at all - the same convention every
+ * other bare-expression statement gets - so the span is only ever added onto
+ * a genuine `AssignExpression` result, checked on the lowered node itself
+ * rather than re-derived from the input.
  */
 function parseAssignStatement(
   ctx: JsimContext,
@@ -3870,6 +3951,7 @@ function parseAssignStatement(
     expression.kind === "AssignExpression"
       ? parseAssignExpression(ctx, expression)
       : parseCompoundAssignExpression(ctx, expression);
+  if (lowered.kind !== "AssignExpression") return lowered;
   return {
     ...lowered,
     span: some(
