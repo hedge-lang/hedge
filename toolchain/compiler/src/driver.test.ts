@@ -903,6 +903,104 @@ describe("== / != on a type with a PartialEq impl", (): void => {
   });
 });
 
+describe("- / ! on a type with a Neg/Not impl", (): void => {
+  it("lowers `-` on a struct to a call of the impl's `neg` free function and runs it", (): void => {
+    const js = emittedJs(`
+      struct Point { x: i32 }
+      impl Neg for Point {
+        type Output = Self;
+        fn neg(self) -> Self::Output { Point { x: -self.x } }
+      }
+      fn main() {
+        let p = Point { x: 3 };
+        let q = -p;
+        print(q.x);
+      }
+    `);
+    expect(js).toContain("Point$Neg$neg(p)");
+    expect(js).not.toContain("p.neg()");
+    expect(runEmittedJs(js)).toEqual(["-3"]);
+  });
+
+  it("lowers `!` on a struct to a call of the impl's `not` free function and runs it", (): void => {
+    const js = emittedJs(`
+      struct Flag { on: bool }
+      impl Not for Flag {
+        type Output = Self;
+        fn not(self) -> Self::Output { Flag { on: !self.on } }
+      }
+      fn main() {
+        let f = Flag { on: true };
+        let g = !f;
+        print(g.on);
+      }
+    `);
+    expect(js).toContain("Flag$Not$not(f)");
+    expect(js).not.toContain("f.not()");
+    expect(runEmittedJs(js)).toEqual(["false"]);
+  });
+
+  it("lowers `-` on an enum to a call of the impl's `neg` free function and runs it", (): void => {
+    const js = emittedJs(`
+      enum Dir { N, S }
+      impl Neg for Dir {
+        type Output = Self;
+        fn neg(self) -> Self::Output { self }
+      }
+      fn main() {
+        let a = Dir::N;
+        let b = -a;
+        print("done");
+      }
+    `);
+    expect(js).toContain("Dir$Neg$neg(a)");
+    expect(js).not.toContain("a.neg()");
+    expect(runEmittedJs(js)).toEqual(["done"]);
+  });
+
+  it("lowers `-` on a `&Point` operand to a call of the `neg` free function", (): void => {
+    const js = emittedJs(`
+      struct Point { x: i32 }
+      impl Neg for Point {
+        type Output = Self;
+        fn neg(self) -> Self::Output { self }
+      }
+      fn negate(a: &Point) -> Point { -a }
+      fn main() { print("done"); }
+    `);
+    expect(js).toContain("Point$Neg$neg(a)");
+    expect(js).not.toContain("a.neg()");
+  });
+
+  it("dispatches `-` on a `Neg`-bound generic parameter through the witness", (): void => {
+    const js = emittedJs(`
+      fn negate<T: Neg>(x: T) -> T { -x }
+      fn main() { print("done"); }
+    `);
+    expect(js).toContain("_witness_T_Neg.neg(x)");
+    expect(js).not.toContain("x.neg()");
+  });
+
+  it("leaves `-` on a type whose `Neg` comes only from a blanket impl as a method call", (): void => {
+    const js = emittedJs(`
+      trait Marker {}
+      struct W { n: i32 }
+      impl Marker for W {}
+      impl<T: Marker> Neg for T {
+        type Output = Self;
+        fn neg(self) -> Self::Output { self }
+      }
+      fn main() {
+        let a = W { n: 1 };
+        let b = -a;
+        print("done");
+      }
+    `);
+    expect(js).toContain("a.neg()");
+    expect(js).not.toContain("W$Neg$neg");
+  });
+});
+
 describe("generic witness codegen", (): void => {
   it("appends a hidden witness parameter for each of a generic function's trait bounds", (): void => {
     const js = emittedJs(`

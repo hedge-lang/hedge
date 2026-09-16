@@ -3656,10 +3656,10 @@ function shiftAmount(
 }
 
 /** A struct/enum operand, a reference to one, or a generic parameter, that
- * reached lowering under `==`/`!=` resolved through a `PartialEq` impl - the
- * capability table covers no such type, so a clean analysis leaves no other
- * possibility. */
-function isTraitEqualityOperand(type: Semantics.Type): boolean {
+ * reached lowering under `==`/`!=`/`-`/`!` resolved through a trait impl
+ * (`PartialEq` or `Neg`/`Not`) - the capability table covers no such type,
+ * so a clean analysis leaves no other possibility. */
+function isTraitDispatchOperandType(type: Semantics.Type): boolean {
   const operandType = type.kind === "ReferenceType" ? type.referent : type;
   return (
     operandType.kind === "StructType" ||
@@ -3734,8 +3734,8 @@ function parseBinaryExpression(
 ): JSIM.Expression {
   if (
     (binExp.operator === "Eq" || binExp.operator === "Ne") &&
-    (isTraitEqualityOperand(binExp.left.type) ||
-      isTraitEqualityOperand(binExp.right.type))
+    (isTraitDispatchOperandType(binExp.left.type) ||
+      isTraitDispatchOperandType(binExp.right.type))
   ) {
     return parseTraitEqualityComparison(ctx, binExp);
   }
@@ -3759,10 +3759,61 @@ function parseBinaryExpression(
   };
 }
 
+/** The `v.neg()`/`v.not()`-shaped call a trait-dispatched unary `-`/`!`
+ * lowers to: a concrete free function, a generic body's witness slot, or
+ * (no resolved target - a blanket-satisfied impl) the interim
+ * `operand.<method>()` method call, mirroring `traitEqualityCall`. */
+function unaryTraitDispatchCall(
+  ctx: JsimContext,
+  target: MethodTarget | undefined,
+  methodName: "neg" | "not",
+  operand: JSIM.Expression,
+): JSIM.Expression {
+  if (target?.kind === "free") {
+    return {
+      kind: "CallExpression",
+      callee: {
+        kind: "Identifier",
+        value: resolvedMethodFreeFnName(ctx, target),
+        type: none(),
+      },
+      arguments: [operand],
+    };
+  }
+  if (target?.kind === "witness") {
+    return {
+      kind: "MethodCallExpression",
+      receiver: {
+        kind: "Identifier",
+        value: resolvedWitnessParamName(ctx, target.witnessName),
+        type: none(),
+      },
+      method: methodName,
+      arguments: [operand],
+    };
+  }
+  return {
+    kind: "MethodCallExpression",
+    receiver: operand,
+    method: methodName,
+    arguments: [],
+  };
+}
+
 function parseUnaryExpression(
   ctx: JsimContext,
   unaryExp: Semantics.UnaryExpression,
 ): JSIM.Expression {
+  if (isTraitDispatchOperandType(unaryExp.operand.type)) {
+    const target = ctx.methodTargets.get(unaryExp.tokenId);
+    const methodName = unaryExp.operator === "Neg" ? "neg" : "not";
+    return unaryTraitDispatchCall(
+      ctx,
+      target,
+      methodName,
+      parseExpression(ctx, unaryExp.operand),
+    );
+  }
   const numericKind = hedgeTypeToNumericKind(unaryExp.type);
   // A numeric `!` is bitwise, and needs the same width wrapping `Neg` gets.
   const operator: JSIM.UnaryOperator =

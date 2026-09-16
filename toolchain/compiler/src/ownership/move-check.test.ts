@@ -1153,6 +1153,23 @@ describe("move-check", (): void => {
       expect(messageOf(diagnostics[0])).toBe("use of moved value `self`");
     });
 
+    it("rejects using a struct after it was consumed by a `Neg::neg(self)` call", (): void => {
+      const { diagnostics } = check(`
+        trait Neg { fn neg(self) -> Self; }
+        struct P { v: i32 }
+        impl Neg for P { fn neg(self) -> Self { self } }
+        fn take(p: P) {}
+        fn main() {
+          let p = P { v: 1 };
+          let q = -p;
+          take(p);
+        }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+      expect(messageOf(diagnostics[0])).toBe("use of moved value `p`");
+    });
+
     it("rejects moving a non-Copy field out of a `&self` receiver", (): void => {
       const { diagnostics } = check(`
         struct Inner { v: i32 }

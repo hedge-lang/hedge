@@ -30,6 +30,16 @@ trait Default {
 trait Drop {
   fn drop(&mut self);
 }
+
+trait Neg {
+  type Output;
+  fn neg(self) -> Self::Output;
+}
+
+trait Not {
+  type Output;
+  fn not(self) -> Self::Output;
+}
 `;
 
 export interface AssembledProgram {

@@ -393,6 +393,33 @@ describe("semantic analysis", (): void => {
     });
   });
 
+  describe("unary `-`", () => {
+    it("rejects negating a struct with no Neg impl", () => {
+      const result = diagnose(`
+        struct Point { x: i32 }
+        fn main() {
+          let p = Point { x: 1 };
+          let q = -p;
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `Point: Neg` is not satisfied",
+      );
+    });
+
+    it("does not cascade a second diagnostic when a negated struct with no Neg impl is checked against an annotation", () => {
+      const result = diagnose(`
+        struct Point { x: i32 }
+        fn main() {
+          let p = Point { x: 1 };
+          let q: Point = -p;
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+    });
+  });
+
   describe("if expression branch types", () => {
     it("rejects an empty else branch against a value-producing then branch", () => {
       const result = diagnose(
@@ -7401,13 +7428,21 @@ describe("trait and impl declarations", (): void => {
 });
 
 describe("std prelude traits", (): void => {
-  it("registers Clone, PartialEq, Eq, Default, and Drop ahead of user code", (): void => {
+  it("registers Clone, PartialEq, Eq, Default, Drop, Neg, and Not ahead of user code", (): void => {
     const result = diagnoseWithPrelude("fn main() {}");
     expect(result.diagnostics).toEqual([]);
     const traitNames = result.program.items
       .filter((item) => item.kind === "Trait")
       .map((item) => item.name);
-    expect(traitNames).toEqual(["Clone", "PartialEq", "Eq", "Default", "Drop"]);
+    expect(traitNames).toEqual([
+      "Clone",
+      "PartialEq",
+      "Eq",
+      "Default",
+      "Drop",
+      "Neg",
+      "Not",
+    ]);
   });
 
   it("resolves a complete `impl Clone for X` against the prelude declaration", (): void => {
@@ -7809,6 +7844,234 @@ describe("== / != resolving through a PartialEq/Eq impl", (): void => {
         let a = Point { x: 1 };
         let b = Point { x: 2 };
         let c = a == b;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+});
+
+describe("unary `-` / `!` resolving through a Neg/Not impl", (): void => {
+  it("accepts `-` on a struct with a hand-written `impl Neg`, typing the result `Self`", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl Neg for Point {
+        type Output = Self;
+        fn neg(self) -> Self::Output { self }
+      }
+      fn main() {
+        let p = Point { x: 1 };
+        let q = -p;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(mainLetType(result, "q").kind).toBe("StructType");
+  });
+
+  it("accepts `-` on an enum with a hand-written `impl Neg`", (): void => {
+    const result = diagnoseWithPrelude(`
+      enum Sign { Pos, Neg }
+      impl Neg for Sign {
+        type Output = Self;
+        fn neg(self) -> Self::Output { self }
+      }
+      fn main() {
+        let s = Sign::Pos;
+        let t = -s;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(mainLetType(result, "t").kind).toBe("EnumType");
+  });
+
+  it("accepts `!` on a struct with a hand-written `impl Not`, typing the result `Self`", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Flag { on: bool }
+      impl Not for Flag {
+        type Output = Self;
+        fn not(self) -> Self::Output { self }
+      }
+      fn main() {
+        let f = Flag { on: true };
+        let g = !f;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(mainLetType(result, "g").kind).toBe("StructType");
+  });
+
+  it("accepts `-` on a generic parameter bound by `Neg`", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn negate<T: Neg>(x: T) -> T { -x }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts `!` on a generic parameter bound by `Not`", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn invert<T: Not>(x: T) -> T { !x }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts `-` on a `&Point` operand when `Point` implements `Neg`", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl Neg for Point {
+        type Output = Self;
+        fn neg(self) -> Self::Output { self }
+      }
+      fn negate(a: &Point) -> Point { -a }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("still rejects `-` on a struct with no `Neg` impl", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      fn main() {
+        let p = Point { x: 1 };
+        let q = -p;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "the trait bound `Point: Neg` is not satisfied",
+    );
+  });
+
+  it("still rejects `!` on a struct with no `Not` impl", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      fn main() {
+        let p = Point { x: 1 };
+        let q = !p;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "`!` requires `bool` or an integer, found `Point`",
+    );
+  });
+
+  it("rejects a `Neg` impl that omits the required `Output` associated type", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl Neg for Point { fn neg(self) -> Point { self } }
+      fn main() {
+        let p = Point { x: 1 };
+        let q = -p;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "impl of trait `Neg` for `Point` is missing associated type `Output`",
+    );
+  });
+
+  it("rejects a `Neg` impl whose `Output` is not `Self`", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl Neg for Point {
+        type Output = bool;
+        fn neg(self) -> Self::Output { true }
+      }
+      fn main() {
+        let p = Point { x: 1 };
+        let q = -p;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "associated type `Output` on this `Neg` impl must resolve to `Self`; a different `Output` is not supported yet",
+    );
+  });
+
+  it("rejects a `Not` impl whose `Output` is not `Self`", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Flag { on: bool }
+      impl Not for Flag {
+        type Output = i32;
+        fn not(self) -> Self::Output { 0 }
+      }
+      fn main() {
+        let f = Flag { on: true };
+        let g = !f;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "associated type `Output` on this `Not` impl must resolve to `Self`; a different `Output` is not supported yet",
+    );
+  });
+
+  it("rejects `-` on a struct whose only `Neg` impl is against a shadowing block-local trait", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      fn main() {
+        trait Neg {}
+        impl Neg for Point {}
+        let p = Point { x: 1 };
+        let q = -p;
+      }
+    `);
+    // The block-scoped `impl` also draws a HEDGE-LINT-003 warning, unrelated
+    // to which `Neg` `-` binds to.
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toHaveLength(1);
+    expect(messageOf(errors[0])).toBe(
+      "the trait bound `Point: Neg` is not satisfied",
+    );
+  });
+
+  it("accepts `-` on a struct with a top-level `impl Neg` even when a block-local `Neg` trait shadows the prelude", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl Neg for Point {
+        type Output = Self;
+        fn neg(self) -> Self::Output { self }
+      }
+      fn main() {
+        trait Neg {}
+        let p = Point { x: 1 };
+        let q = -p;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects `!` on a struct whose only `Not` impl is against a shadowing block-local trait", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      fn main() {
+        trait Not {}
+        impl Not for Point {}
+        let p = Point { x: 1 };
+        let q = !p;
+      }
+    `);
+    // The block-scoped `impl` also draws a HEDGE-LINT-003 warning, unrelated
+    // to which `Not` `!` binds to.
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toHaveLength(1);
+    expect(messageOf(errors[0])).toBe(
+      "`!` requires `bool` or an integer, found `Point`",
+    );
+  });
+
+  it("accepts `!` on a struct with a top-level `impl Not` even when a block-local `Not` trait shadows the prelude", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl Not for Point {
+        type Output = Self;
+        fn not(self) -> Self::Output { self }
+      }
+      fn main() {
+        trait Not {}
+        let p = Point { x: 1 };
+        let q = !p;
       }
     `);
     expect(result.diagnostics).toEqual([]);

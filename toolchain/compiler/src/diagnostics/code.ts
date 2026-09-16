@@ -89,6 +89,7 @@ export type DiagnosticCode =
   | "HEDGE-TRAIT-006" // associated type name ambiguous between two bound traits
   | "HEDGE-TRAIT-007" // impl defines an associated type its trait doesn't declare
   | "HEDGE-TRAIT-008" // trait is not object-safe, so `dyn Trait` is rejected
+  | "HEDGE-TRAIT-009" // operator trait impl's Output associated type is not Self
   // Items and slice gating.
   | "HEDGE-ITEM-001" // item not permitted in this position
   | "HEDGE-UNSUPPORTED-001"; // construct not yet supported by the analyzer
