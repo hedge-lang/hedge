@@ -8999,11 +8999,38 @@ function checkLhsMutability(
   }
 }
 
+/** `=`/`op=` both require the same syntactic shape on the left - a bare
+ * local/parameter, or a field/index/dereference projection of one - as a
+ * `&mut` borrow does (`isBorrowablePlace`), since either one ultimately
+ * needs a real assignable JS reference to lower to. Checked on the raw
+ * parser node, before mutability/operand validation, so a non-place LHS
+ * (`(x + 1) = 2`) gets exactly this one diagnostic instead of a
+ * nonsensical follow-on type/trait mismatch. */
+function checkIsAssignablePlace(
+  ctx: AnalysisContext,
+  rawLhs: Parser.Expression,
+  tokenId: number,
+): boolean {
+  if (isBorrowablePlace(rawLhs)) return true;
+  emitError(ctx, { kind: "SemInvalidAssignmentTarget" }, tokenId);
+  return false;
+}
+
 function analyzeAssignmentExpression(
   ctx: AnalysisContext,
   assignExpression: Parser.AssignExpression,
 ): Semantics.AssignExpression {
   const lhs = analyzeExpression(ctx, assignExpression.lhs);
+  if (
+    !checkIsAssignablePlace(ctx, assignExpression.lhs, assignExpression.tokenId)
+  ) {
+    return {
+      ...assignExpression,
+      lhs,
+      rhs: analyzeExpression(ctx, assignExpression.rhs),
+      type: { kind: "UnitType", tokenId: assignExpression.tokenId },
+    };
+  }
   checkLhsMutability(ctx, lhs, assignExpression.tokenId);
   const lhsType = getType(lhs);
   const dynPlaceTrait =
@@ -9250,6 +9277,20 @@ function analyzeCompoundAssignmentExpression(
   compoundAssignExpression: Parser.CompoundAssignExpression,
 ): Semantics.CompoundAssignExpression {
   const lhs = analyzeExpression(ctx, compoundAssignExpression.lhs);
+  if (
+    !checkIsAssignablePlace(
+      ctx,
+      compoundAssignExpression.lhs,
+      compoundAssignExpression.tokenId,
+    )
+  ) {
+    return {
+      ...compoundAssignExpression,
+      lhs,
+      rhs: analyzeExpression(ctx, compoundAssignExpression.rhs),
+      type: { kind: "UnitType", tokenId: compoundAssignExpression.tokenId },
+    };
+  }
   checkLhsMutability(ctx, lhs, compoundAssignExpression.tokenId);
   let rhs = analyzeExpression(ctx, compoundAssignExpression.rhs);
   if (isUnsuffixedLiteralExpr(rhs)) {

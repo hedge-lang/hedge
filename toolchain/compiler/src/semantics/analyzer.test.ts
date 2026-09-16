@@ -2333,6 +2333,17 @@ describe("semantic analysis", (): void => {
     ).toBe(true);
   });
 
+  it.each(["=", "+="])(
+    "rejects `%s` on a non-place left-hand side, with one diagnostic and no follow-on operand check",
+    (op): void => {
+      const result = diagnose(`fn main() { let x: i32 = 1; (x + 1) ${op} 2; }`);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "only a local binding, a parameter, or a field, index, or dereference of one can be assigned to directly",
+      );
+    },
+  );
+
   it("emits exactly one diagnostic for an unsupported param type on a block-local fn", (): void => {
     const result = diagnose("fn main() { fn f(x: unknownType) {} }");
     expect(result.diagnostics).toHaveLength(1);
