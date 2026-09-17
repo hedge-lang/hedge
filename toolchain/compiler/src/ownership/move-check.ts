@@ -671,6 +671,10 @@ function walkNonMovingPlace(
   walkExpression(ctx, expression, state, scopeStack);
 }
 
+const COMPARISON_OPERATORS: ReadonlySet<
+  Semantics.BinaryExpression["operator"]
+> = new Set(["Eq", "Ne", "Lt", "Gt", "Le", "Ge"]);
+
 /**
  * Recurse through `expression`, walking every sub-expression through the
  * same `asMove: true` path a bare `PathExpression` gets (see `useOrMove`).
@@ -679,10 +683,12 @@ function walkNonMovingPlace(
  * can be an operand of an arithmetic, bitwise, or logical operator, so
  * walking `x` inside `x + 1` as a "move" is a no-op - `useOrMove` only
  * actually transitions a binding to `Unbound` when its type has no `copy`
- * capability. `==`/`!=` are the exception among operators: a struct or enum
- * operand reaches them (dispatching through `PartialEq::eq`), so
- * `walkExpression`'s `BinaryExpression` case routes those two operators'
- * operands through `walkNonMovingPlace` - `eq` borrows, never moves.
+ * capability. The comparison operators (`==`/`!=`/`<`/`>`/`<=`/`>=`) are the
+ * exception among operators: a struct or enum operand reaches them
+ * (dispatching through `PartialEq::eq`/`PartialOrd::partial_cmp`, both
+ * `&self`/`&Self`), so `walkExpression`'s `BinaryExpression` case routes
+ * every comparison operator's operands through `walkNonMovingPlace` - a
+ * comparison borrows, never moves.
  * `FieldAccessExpression`/`ReferenceExpression`/`AssignExpression`/
  * `IndexExpression` are deliberate exceptions, routed through
  * `walkNonMovingPlace` instead: the object/operand/lhs being accessed is a
@@ -728,8 +734,9 @@ function walkExpression(
       walkNonMovingPlace(ctx, expression.lhs, state, scopeStack);
       return;
     case "BinaryExpression":
-      if (expression.operator === "Eq" || expression.operator === "Ne") {
-        // `==`/`!=` borrow their operands (see this function's doc comment).
+      if (COMPARISON_OPERATORS.has(expression.operator)) {
+        // Every comparison operator borrows its operands (see this
+        // function's doc comment).
         walkNonMovingPlace(ctx, expression.left, state, scopeStack);
         walkNonMovingPlace(ctx, expression.right, state, scopeStack);
         return;

@@ -119,3 +119,19 @@ export function primitiveImplementsEq(type: Semantics.Type): boolean {
     type.kind !== "PrimitiveF64Type"
   );
 }
+
+/**
+ * Whether a primitive type satisfies the prelude `Ord` (total order): every
+ * type comparable with `<` except the raw floats, mirroring
+ * `primitiveImplementsEq`'s own split for the same NaN-breaks-reflexivity
+ * reason - `specification/0010-primitive-types.md` "Floating point" makes
+ * `f32`/`f64` `PartialOrd` only. `PartialOrd` itself is just
+ * `hasCapability(type, "ordering")`.
+ */
+export function primitiveImplementsOrd(type: Semantics.Type): boolean {
+  return (
+    hasCapability(type, "ordering") &&
+    type.kind !== "PrimitiveF32Type" &&
+    type.kind !== "PrimitiveF64Type"
+  );
+}

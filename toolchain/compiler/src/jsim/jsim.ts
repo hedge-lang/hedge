@@ -139,9 +139,13 @@ interface JsimContext {
    * allocated on first use and emitted as a hoisted `const` afterwards. */
   readonly hoistedWitnesses: Map<string, HoistedWitness>;
   /** The collision-safe name reserved for the shared primitive-eq witness
-   * const, allocated on first `Primitive` witness reference (`undefined`
-   * until then, matching `hoistedWitnesses`' own lazy-allocation shape). */
+   * const, allocated on first `PartialEq`/`Eq` `Primitive` witness reference
+   * (`undefined` until then, matching `hoistedWitnesses`' own
+   * lazy-allocation shape). */
   readonly primitiveEqWitness: { name: string | undefined };
+  /** Same as `primitiveEqWitness`, for the shared primitive-ord witness -
+   * allocated on first `PartialOrd`/`Ord` `Primitive` witness reference. */
+  readonly primitiveOrdWitness: { name: string | undefined };
 }
 
 interface HoistedWitness {
@@ -181,6 +185,7 @@ function createJsimContext(
     methodFreeFnNames: new Map(),
     hoistedWitnesses: new Map(),
     primitiveEqWitness: { name: undefined },
+    primitiveOrdWitness: { name: undefined },
   };
 }
 
@@ -1082,6 +1087,29 @@ function primitiveEqWitnessName(ctx: JsimContext): string {
   return ctx.primitiveEqWitness.name;
 }
 
+/** Same as `primitiveEqWitnessName`, for the shared primitive-ord witness. */
+function primitiveOrdWitnessName(ctx: JsimContext): string {
+  ctx.primitiveOrdWitness.name ??= reserveTopLevelName(
+    ctx,
+    "__witnessPrimitiveOrd",
+  );
+  return ctx.primitiveOrdWitness.name;
+}
+
+/** Which shared primitive witness const a `Primitive` witness ref's own
+ * trait resolves to - `PartialEq`/`Eq` share one object (`eq` is the only
+ * method either needs), `PartialOrd`/`Ord` share the other (`partial_cmp`
+ * is the only method operator dispatch ever calls, regardless of which of
+ * the two bound the call site). */
+function resolvedPrimitiveWitnessName(
+  ctx: JsimContext,
+  traitName: string,
+): string {
+  return traitName === "PartialOrd" || traitName === "Ord"
+    ? primitiveOrdWitnessName(ctx)
+    : primitiveEqWitnessName(ctx);
+}
+
 /** The `FreeMethodTarget` for one method a `(typeId, trait)` witness carries,
  * used to resolve the free-function name the slot points at. Keyed on the
  * method's *defining* trait, not the witness's - a flattened supertrait
@@ -1147,7 +1175,7 @@ function witnessRefName(ctx: JsimContext, ref: WitnessRef): string {
         witnessParamName(ref.paramName, ref.traitName),
       );
     case "Primitive":
-      return primitiveEqWitnessName(ctx);
+      return resolvedPrimitiveWitnessName(ctx, ref.traitName);
     default:
       return assertNever(ref, `witness ref: ${JSON.stringify(ref)}`);
   }
@@ -1197,8 +1225,9 @@ function methodCallWitnessArgs(
 
 /** Reserves the hoisted `const` name a single resolved bound needs, if any -
  * `Impl` its own `(type, trait)` const, `Primitive` the shared
- * `__witnessPrimitiveEq`, `Forwarded` nothing (it resolves through the
- * caller's own witness parameter, not a top-level const). */
+ * `__witnessPrimitiveEq`/`__witnessPrimitiveOrd`, `Forwarded` nothing (it
+ * resolves through the caller's own witness parameter, not a top-level
+ * const). */
 function reserveWitnessRef(ctx: JsimContext, ref: WitnessRef): void {
   switch (ref.kind) {
     case "Impl":
@@ -1211,7 +1240,7 @@ function reserveWitnessRef(ctx: JsimContext, ref: WitnessRef): void {
       );
       return;
     case "Primitive":
-      primitiveEqWitnessName(ctx);
+      resolvedPrimitiveWitnessName(ctx, ref.traitName);
       return;
     case "Forwarded":
       return;
@@ -1244,7 +1273,18 @@ function reserveHoistedWitnessConsts(ctx: JsimContext): void {
   }
 }
 
-/** The hoisted witness-object and primitive-eq-witness declarations, built
+/** A JS expression string constructing the `Ordering` tagged object
+ * `variantTagCondition` reads `.tag` off of, for one of the three
+ * comparison outcomes - matches the shape a real `Ordering::<Variant>`
+ * construction renders to (`jsimEnumUnitVariantConstruction`'s
+ * `StructExpression` node, through `structDisposer`'s empty-fields case),
+ * so a primitive witness's `partial_cmp` result is indistinguishable from
+ * a hand-written impl's. */
+function orderingTagLiteral(tag: string): string {
+  return `{tag: "${tag}", [Symbol.dispose]() {}}`;
+}
+
+/** The hoisted witness-object and primitive-witness declarations, built
  * from what was referenced during lowering - prepended to the program. */
 function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
   const decls: JSIM.Item[] = [];
@@ -1253,6 +1293,19 @@ function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
       kind: "WitnessObjectDecl",
       name: ctx.primitiveEqWitness.name,
       directSlots: [{ method: "eq", value: "(a, b) => a === b" }],
+      closureSlots: [],
+    });
+  }
+  if (ctx.primitiveOrdWitness.name !== undefined) {
+    decls.push({
+      kind: "WitnessObjectDecl",
+      name: ctx.primitiveOrdWitness.name,
+      directSlots: [
+        {
+          method: "partial_cmp",
+          value: `(a, b) => (a < b ? ${orderingTagLiteral("Less")} : a > b ? ${orderingTagLiteral("Greater")} : ${orderingTagLiteral("Equal")})`,
+        },
+      ],
       closureSlots: [],
     });
   }
@@ -3685,13 +3738,16 @@ function isTraitDispatchOperandType(type: Semantics.Type): boolean {
   );
 }
 
-/** The `x.eq(y)`-shaped call a trait-dispatched `==` lowers to: a concrete
- * free function, a generic body's witness slot, or (no resolved target - a
- * type whose `PartialEq` is not yet reachable) the interim `left.eq(right)`
- * method call. */
-function traitEqualityCall(
+/** The `x.<method>(y)`-shaped call a trait-dispatched binary comparison
+ * lowers to: a concrete free function, a generic body's witness slot, or
+ * (no resolved target - a type whose trait impl is not yet reachable) the
+ * interim `left.<method>(right)` method call. Shared by `==`/`!=`'s `eq`
+ * dispatch and the ordering operators' `partial_cmp` dispatch - the two
+ * differ only in which method name they call. */
+function traitDispatchCall(
   ctx: JsimContext,
   target: MethodTarget | undefined,
+  methodName: string,
   left: JSIM.Expression,
   right: JSIM.Expression,
 ): JSIM.Expression {
@@ -3714,14 +3770,14 @@ function traitEqualityCall(
         value: resolvedWitnessParamName(ctx, target.witnessName),
         type: none(),
       },
-      method: "eq",
+      method: methodName,
       arguments: [left, right],
     };
   }
   return {
     kind: "MethodCallExpression",
     receiver: left,
-    method: "eq",
+    method: methodName,
     arguments: [right],
   };
 }
@@ -3733,7 +3789,7 @@ function parseTraitEqualityComparison(
   const target = ctx.methodTargets.get(binExp.tokenId);
   const left = parseExpression(ctx, binExp.left);
   const right = parseExpression(ctx, binExp.right);
-  const call = traitEqualityCall(ctx, target, left, right);
+  const call = traitDispatchCall(ctx, target, "eq", left, right);
   if (binExp.operator === "Ne") {
     return {
       kind: "UnaryExpression",
@@ -3743,6 +3799,84 @@ function parseTraitEqualityComparison(
     };
   }
   return call;
+}
+
+/** The `Ordering` tags each ordering operator accepts - `<=`/`>=` need two,
+ * since `PartialOrd` exposes only `partial_cmp`: deriving all four operators
+ * from that single result, rather than requiring an impl to hand-write four
+ * independently-checkable methods, is what makes a `lt`/`gt` disagreement
+ * structurally impossible. */
+const ORDERING_OPERATOR_TAGS: ReadonlyMap<
+  Semantics.BinaryExpression["operator"],
+  readonly string[]
+> = new Map([
+  ["Lt", ["Less"]],
+  ["Gt", ["Greater"]],
+  ["Le", ["Less", "Equal"]],
+  ["Ge", ["Greater", "Equal"]],
+]);
+
+function orderingTagsFor(
+  operator: Semantics.BinaryExpression["operator"],
+): readonly string[] {
+  const tags = ORDERING_OPERATOR_TAGS.get(operator);
+  if (tags === undefined) {
+    throw new Error(`ICE: no Ordering tags for operator ${operator}`);
+  }
+  return tags;
+}
+
+function tagComparison(
+  ctx: JsimContext,
+  value: JSIM.Expression,
+  tags: readonly string[],
+  tokenId: number,
+): JSIM.Expression {
+  const [first, ...rest] = tags.map((tag) =>
+    variantTagCondition(ctx, value, tag, tokenId),
+  );
+  assert(first !== undefined, "ICE: tagComparison called with no tags");
+  return rest.reduce(
+    (acc, condition) =>
+      jsimBinaryExpression(ctx, "Or", acc, condition, tokenId),
+    first,
+  );
+}
+
+function parseTraitOrderingComparison(
+  ctx: JsimContext,
+  binExp: Semantics.BinaryExpression,
+): JSIM.Expression {
+  const target = ctx.methodTargets.get(binExp.tokenId);
+  const left = parseExpression(ctx, binExp.left);
+  const right = parseExpression(ctx, binExp.right);
+  const call = traitDispatchCall(ctx, target, "partial_cmp", left, right);
+  const tags = orderingTagsFor(binExp.operator);
+  if (tags.length === 1) {
+    return tagComparison(ctx, call, tags, binExp.tokenId);
+  }
+  const ordName = reserveLocalName(ctx, "ord");
+  return {
+    kind: "CallExpression",
+    callee: {
+      kind: "ArrowFunctionExpression",
+      params: [ordName],
+      body: [
+        {
+          kind: "ReturnStatement",
+          value: some(
+            tagComparison(
+              ctx,
+              { kind: "Identifier", value: ordName, type: none() },
+              tags,
+              binExp.tokenId,
+            ),
+          ),
+        },
+      ],
+    },
+    arguments: [call],
+  };
 }
 
 function parseBinaryExpression(
@@ -3755,6 +3889,16 @@ function parseBinaryExpression(
       isTraitDispatchOperandType(binExp.right.type))
   ) {
     return parseTraitEqualityComparison(ctx, binExp);
+  }
+  if (
+    (binExp.operator === "Lt" ||
+      binExp.operator === "Gt" ||
+      binExp.operator === "Le" ||
+      binExp.operator === "Ge") &&
+    (isTraitDispatchOperandType(binExp.left.type) ||
+      isTraitDispatchOperandType(binExp.right.type))
+  ) {
+    return parseTraitOrderingComparison(ctx, binExp);
   }
   const numericKind: Option<JSIM.NumericKind> = ARITHMETIC_OPS.has(
     binExp.operator,
@@ -3779,7 +3923,7 @@ function parseBinaryExpression(
 /** The `v.neg()`/`v.not()`-shaped call a trait-dispatched unary `-`/`!`
  * lowers to: a concrete free function, a generic body's witness slot, or
  * (no resolved target - a blanket-satisfied impl) the interim
- * `operand.<method>()` method call, mirroring `traitEqualityCall`. */
+ * `operand.<method>()` method call, mirroring `traitDispatchCall`. */
 function unaryTraitDispatchCall(
   ctx: JsimContext,
   target: MethodTarget | undefined,

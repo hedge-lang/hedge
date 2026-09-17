@@ -886,8 +886,8 @@ describe("== / != on a type with a PartialEq impl", (): void => {
     expect(js).not.toContain("a.eq(b)");
   });
 
-  it("leaves `==` on a type whose `PartialEq` comes only from a blanket impl as a method call", (): void => {
-    const js = emittedJs(`
+  it("rejects `==` on a type whose `PartialEq` comes only from a blanket impl, since no callable target can be built", (): void => {
+    const result = compile(`
       trait Marker {}
       struct W { n: i32 }
       impl Marker for W {}
@@ -898,8 +898,142 @@ describe("== / != on a type with a PartialEq impl", (): void => {
         if a == b { print("done"); }
       }
     `);
-    expect(js).toContain("a.eq(b)");
-    expect(js).not.toContain("W$PartialEq$eq");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "the trait bound `W: PartialEq` is not satisfied",
+    );
+  });
+});
+
+function countOccurrences(haystack: string, needle: string): number {
+  return haystack.split(needle).length - 1;
+}
+
+describe("ordering operators on a type with a PartialOrd impl", (): void => {
+  const POINT_PARTIAL_ORD = `
+    struct Point { x: i32 }
+    impl PartialEq for Point { fn eq(&self, other: &Self) -> bool { self.x == other.x } }
+    impl PartialOrd for Point {
+      fn partial_cmp(&self, other: &Self) -> Ordering {
+        if self.x < other.x { Ordering::Less }
+        else if self.x > other.x { Ordering::Greater }
+        else { Ordering::Equal }
+      }
+    }
+  `;
+
+  it("lowers `<` on a struct to a tag comparison against the impl's `partial_cmp` free function and runs it", (): void => {
+    const js = emittedJs(`
+      ${POINT_PARTIAL_ORD}
+      fn main() {
+        let a = Point { x: 1 };
+        let b = Point { x: 2 };
+        if a < b { print("less"); }
+      }
+    `);
+    expect(js).toContain('Point$PartialOrd$partial_cmp(a, b).tag === "Less"');
+    expect(runEmittedJs(js)).toEqual(["less"]);
+  });
+
+  it("lowers `>` on a struct to a tag comparison against the impl's `partial_cmp` free function and runs it", (): void => {
+    const js = emittedJs(`
+      ${POINT_PARTIAL_ORD}
+      fn main() {
+        let a = Point { x: 2 };
+        let b = Point { x: 1 };
+        if a > b { print("greater"); }
+      }
+    `);
+    expect(js).toContain(
+      'Point$PartialOrd$partial_cmp(a, b).tag === "Greater"',
+    );
+    expect(runEmittedJs(js)).toEqual(["greater"]);
+  });
+
+  it("lowers `<=` on a struct to a single `partial_cmp` call checked against Less or Equal, and runs correctly for both", (): void => {
+    const lessJs = emittedJs(`
+      ${POINT_PARTIAL_ORD}
+      fn main() {
+        let a = Point { x: 1 };
+        let b = Point { x: 2 };
+        if a <= b { print("le"); }
+      }
+    `);
+    expect(countOccurrences(lessJs, "Point$PartialOrd$partial_cmp(a, b)")).toBe(
+      1,
+    );
+    expect(runEmittedJs(lessJs)).toEqual(["le"]);
+
+    const equalJs = emittedJs(`
+      ${POINT_PARTIAL_ORD}
+      fn main() {
+        let a = Point { x: 1 };
+        let b = Point { x: 1 };
+        if a <= b { print("le"); }
+      }
+    `);
+    expect(runEmittedJs(equalJs)).toEqual(["le"]);
+  });
+
+  it("lowers `>=` on a struct to a single `partial_cmp` call checked against Greater or Equal, and runs correctly for both", (): void => {
+    const greaterJs = emittedJs(`
+      ${POINT_PARTIAL_ORD}
+      fn main() {
+        let a = Point { x: 2 };
+        let b = Point { x: 1 };
+        if a >= b { print("ge"); }
+      }
+    `);
+    expect(
+      countOccurrences(greaterJs, "Point$PartialOrd$partial_cmp(a, b)"),
+    ).toBe(1);
+    expect(runEmittedJs(greaterJs)).toEqual(["ge"]);
+
+    const equalJs = emittedJs(`
+      ${POINT_PARTIAL_ORD}
+      fn main() {
+        let a = Point { x: 1 };
+        let b = Point { x: 1 };
+        if a >= b { print("ge"); }
+      }
+    `);
+    expect(runEmittedJs(equalJs)).toEqual(["ge"]);
+  });
+
+  it("lowers `<` on an enum to a tag comparison against the impl's `partial_cmp` free function and runs it", (): void => {
+    const js = emittedJs(`
+      enum Dir { N, S }
+      impl PartialEq for Dir { fn eq(&self, other: &Self) -> bool { true } }
+      impl PartialOrd for Dir {
+        fn partial_cmp(&self, other: &Self) -> Ordering { Ordering::Less }
+      }
+      fn main() {
+        let a = Dir::N;
+        let b = Dir::S;
+        if a < b { print("less"); }
+      }
+    `);
+    expect(js).toContain('Dir$PartialOrd$partial_cmp(a, b).tag === "Less"');
+    expect(runEmittedJs(js)).toEqual(["less"]);
+  });
+
+  it("lowers `<` on `&Point` operands to a call of the `partial_cmp` free function", (): void => {
+    const js = emittedJs(`
+      ${POINT_PARTIAL_ORD}
+      fn less_refs(a: &Point, b: &Point) -> bool { a < b }
+      fn main() { print("done"); }
+    `);
+    expect(js).toContain('Point$PartialOrd$partial_cmp(a, b).tag === "Less"');
+  });
+
+  it("dispatches `<` on a `PartialOrd`-bound generic parameter through the witness", (): void => {
+    const js = emittedJs(`
+      fn less<T: PartialOrd>(a: T, b: T) -> bool { a < b }
+      fn main() { print("done"); }
+    `);
+    expect(js).toContain(
+      '_witness_T_PartialOrd.partial_cmp(a, b).tag === "Less"',
+    );
   });
 });
 
@@ -1397,6 +1531,49 @@ describe("generic witness codegen", (): void => {
       }
     `);
     expect(runEmittedJs(js)).toEqual(["yes"]);
+  });
+
+  it("passes a shared primitive-ord witness at a `T: PartialOrd` call with an integer, and runs", (): void => {
+    const js = emittedJs(`
+      fn less<T: PartialOrd>(a: T, b: T) -> bool { a < b }
+      fn main() {
+        if less(1, 2) { print("lt"); }
+        if less(2, 1) { print("nope"); }
+      }
+    `);
+    expect(js).toContain("const __witnessPrimitiveOrd = {partial_cmp:");
+    expect(js).toContain("less(1, 2, __witnessPrimitiveOrd)");
+    expect(js.match(/const __witnessPrimitiveOrd\b/g)).toHaveLength(1);
+    expect(runEmittedJs(js)).toEqual(["lt"]);
+  });
+
+  it("shares one primitive-ord witness between `T: PartialOrd` and `T: Ord` calls", (): void => {
+    const js = emittedJs(`
+      fn pless<T: PartialOrd>(a: T, b: T) -> bool { a < b }
+      fn tless<T: Ord>(a: T, b: T) -> bool { a < b }
+      fn main() {
+        if pless(1, 2) { print("p"); }
+        if tless('a', 'b') { print("t"); }
+      }
+    `);
+    expect(js.match(/const __witnessPrimitiveOrd\b/g)).toHaveLength(1);
+    expect(runEmittedJs(js)).toEqual(["p", "t"]);
+  });
+
+  it("compiles and runs a generic `PartialOrd` ordering check covering all four operators on an integer argument", (): void => {
+    const js = emittedJs(`
+      fn less<T: PartialOrd>(a: T, b: T) -> bool { a < b }
+      fn greater<T: PartialOrd>(a: T, b: T) -> bool { a > b }
+      fn less_eq<T: PartialOrd>(a: T, b: T) -> bool { a <= b }
+      fn greater_eq<T: PartialOrd>(a: T, b: T) -> bool { a >= b }
+      fn main() {
+        if less(1, 2) { print("lt"); }
+        if greater(2, 1) { print("gt"); }
+        if less_eq(2, 2) { print("le"); }
+        if greater_eq(2, 2) { print("ge"); }
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["lt", "gt", "le", "ge"]);
   });
 
   it("threads a witness for a bound declared in a `where` clause", (): void => {

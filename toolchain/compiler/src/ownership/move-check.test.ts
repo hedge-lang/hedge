@@ -1257,4 +1257,33 @@ describe("move-check", (): void => {
       expect(diagnostics).toEqual([]);
     });
   });
+
+  describe("ordering operands are borrowed, not moved", (): void => {
+    const PARTIAL_ORD =
+      "trait PartialEq { fn eq(&self, other: &Self) -> bool; }\n" +
+      "enum Ordering { Less, Equal, Greater }\n" +
+      "trait PartialOrd { fn partial_cmp(&self, other: &Self) -> Ordering; }\n";
+
+    it.each(["<", ">", "<=", ">="])(
+      "does not move a struct operand of `%s`",
+      (operator) => {
+        const { diagnostics } = check(`
+          ${PARTIAL_ORD}
+          struct P { v: i32 }
+          impl PartialEq for P { fn eq(&self, other: &Self) -> bool { true } }
+          impl PartialOrd for P {
+            fn partial_cmp(&self, other: &Self) -> Ordering { Ordering::Less }
+          }
+          fn main() {
+            let a = P { v: 1 };
+            let b = P { v: 2 };
+            let result = a ${operator} b;
+            print(a.v);
+            print(b.v);
+          }
+        `);
+        expect(diagnostics).toEqual([]);
+      },
+    );
+  });
 });
