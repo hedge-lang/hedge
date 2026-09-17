@@ -7101,8 +7101,15 @@ function inferComparisonType(
  * of `spec.traitFallback`'s trait for `<operand type>` (not the native
  * capability, not a generic parameter, not a blanket impl), records the
  * impl's method as a free function so `jsim.ts`'s trait-dispatch lowering
- * calls it directly. Anything else dispatches through a witness (a later
- * slice) and keeps the interim `a.<method>(b)` shape. */
+ * calls it directly. A bound satisfied only via a blanket impl is genuinely
+ * satisfied (`comparisonOperandResolves` already accepted it), but a
+ * blanket impl's methods don't emit as free functions - rejected here
+ * with the same `SemTraitBoundNotSatisfied` diagnostic a generic call site
+ * gets from the identical situation (`checkCallGenericBounds`'s own
+ * `witnessIsUnemittableBlanket` check), rather than falling through to an
+ * interim `a.<method>(b)` call with nothing at runtime to answer it.
+ * Anything else dispatches through a witness (a later slice) and keeps
+ * that interim shape. */
 function recordComparisonTraitTarget(
   ctx: AnalysisContext,
   spec: ComparisonSpec,
@@ -7119,7 +7126,19 @@ function recordComparisonTraitTarget(
   if (trait === undefined) return;
   if (isNominalType(operandType)) {
     const impl = findRegisteredImpl(ctx, operandType.name, trait);
-    if (impl === undefined || impl.isBlanket) return;
+    if (impl === undefined) return;
+    if (impl.isBlanket) {
+      emitError(
+        ctx,
+        {
+          kind: "SemTraitBoundNotSatisfied",
+          typeName: describeType(operandType),
+          trait: bareTypeName(trait),
+        },
+        tokenId,
+      );
+      return;
+    }
     ctx.methodTargetTable.set(tokenId, {
       kind: "free",
       typeId: operandType.name,

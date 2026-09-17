@@ -8242,7 +8242,7 @@ describe("ordering operators resolving through a PartialOrd/Ord impl", (): void 
     });
   });
 
-  it("leaves `<` on a type whose `PartialOrd` comes only from a blanket impl as a method call", (): void => {
+  it("rejects `<` on a type whose `PartialOrd` comes only from a blanket impl, since no callable target can be built", (): void => {
     const result = diagnoseWithPrelude(`
       trait Marker {}
       struct W { n: i32 }
@@ -8257,7 +8257,10 @@ describe("ordering operators resolving through a PartialOrd/Ord impl", (): void 
         if a < b { print(0); }
       }
     `);
-    expect(result.diagnostics).toEqual([]);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "the trait bound `W: PartialOrd` is not satisfied",
+    );
     expect(result.methodTargets.size).toBe(0);
   });
 });

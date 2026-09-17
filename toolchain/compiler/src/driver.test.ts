@@ -886,8 +886,8 @@ describe("== / != on a type with a PartialEq impl", (): void => {
     expect(js).not.toContain("a.eq(b)");
   });
 
-  it("leaves `==` on a type whose `PartialEq` comes only from a blanket impl as a method call", (): void => {
-    const js = emittedJs(`
+  it("rejects `==` on a type whose `PartialEq` comes only from a blanket impl, since no callable target can be built", (): void => {
+    const result = compile(`
       trait Marker {}
       struct W { n: i32 }
       impl Marker for W {}
@@ -898,8 +898,10 @@ describe("== / != on a type with a PartialEq impl", (): void => {
         if a == b { print("done"); }
       }
     `);
-    expect(js).toContain("a.eq(b)");
-    expect(js).not.toContain("W$PartialEq$eq");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "the trait bound `W: PartialEq` is not satisfied",
+    );
   });
 });
 
