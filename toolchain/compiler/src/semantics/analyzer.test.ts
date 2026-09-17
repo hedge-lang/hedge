@@ -7439,7 +7439,7 @@ describe("trait and impl declarations", (): void => {
 });
 
 describe("std prelude traits", (): void => {
-  it("registers Clone, PartialEq, Eq, Default, Drop, Neg, Not, and the ten Assign traits ahead of user code", (): void => {
+  it("registers Clone, PartialEq, Eq, PartialOrd, Ord, Default, Drop, Neg, Not, and the ten Assign traits ahead of user code", (): void => {
     const result = diagnoseWithPrelude("fn main() {}");
     expect(result.diagnostics).toEqual([]);
     const traitNames = result.program.items
@@ -7449,6 +7449,8 @@ describe("std prelude traits", (): void => {
       "Clone",
       "PartialEq",
       "Eq",
+      "PartialOrd",
+      "Ord",
       "Default",
       "Drop",
       "Neg",
@@ -7868,6 +7870,248 @@ describe("== / != resolving through a PartialEq/Eq impl", (): void => {
       }
     `);
     expect(result.diagnostics).toEqual([]);
+  });
+});
+
+describe("ordering operators resolving through a PartialOrd/Ord impl", (): void => {
+  it.each(["<", ">", "<=", ">="])(
+    "accepts `%s` on a struct with a hand-written `impl PartialOrd`, typing the result `bool`",
+    (operator) => {
+      const result = diagnoseWithPrelude(`
+        struct Point { x: i32 }
+        impl PartialEq for Point { fn eq(&self, other: &Self) -> bool { true } }
+        impl PartialOrd for Point {
+          fn partial_cmp(&self, other: &Self) -> Ordering { Ordering::Less }
+        }
+        fn main() {
+          let a = Point { x: 1 };
+          let b = Point { x: 2 };
+          let c = a ${operator} b;
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "c").kind).toBe("PrimitiveBooleanType");
+    },
+  );
+
+  it.each(["<", ">", "<=", ">="])(
+    "accepts `%s` on an enum with a hand-written `impl PartialOrd`",
+    (operator) => {
+      const result = diagnoseWithPrelude(`
+        enum Dir { N, S }
+        impl PartialEq for Dir { fn eq(&self, other: &Self) -> bool { true } }
+        impl PartialOrd for Dir {
+          fn partial_cmp(&self, other: &Self) -> Ordering { Ordering::Equal }
+        }
+        fn main() {
+          let a = Dir::N;
+          let b = Dir::S;
+          let c = a ${operator} b;
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "c").kind).toBe("PrimitiveBooleanType");
+    },
+  );
+
+  it.each(["<", ">", "<=", ">="])(
+    "still rejects `%s` on a struct with no `PartialOrd` impl",
+    (operator) => {
+      const result = diagnoseWithPrelude(`
+        struct Point { x: i32 }
+        fn main() {
+          let a = Point { x: 1 };
+          let b = Point { x: 2 };
+          let c = a ${operator} b;
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "type does not support ordering comparison",
+      );
+    },
+  );
+
+  it("still rejects `<` on a struct with only `impl PartialEq` (not `PartialOrd`)", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl PartialEq for Point { fn eq(&self, other: &Self) -> bool { true } }
+      fn main() {
+        let a = Point { x: 1 };
+        let b = Point { x: 2 };
+        let c = a < b;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "type does not support ordering comparison",
+    );
+  });
+
+  it("accepts `<` on a generic parameter bound by `PartialOrd`", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn less<T: PartialOrd>(a: T, b: T) -> bool { a < b }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts `<` on a generic parameter bound by `Ord`, via the `Ord: PartialOrd` supertrait", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn less<T: Ord>(a: T, b: T) -> bool { a < b }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("still rejects `<` on an unbounded generic parameter", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn less<T>(a: T, b: T) -> bool { a < b }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "type does not support ordering comparison",
+    );
+  });
+
+  it("accepts `<` on `&Point` operands when `Point` implements `PartialOrd`", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl PartialEq for Point { fn eq(&self, other: &Self) -> bool { true } }
+      impl PartialOrd for Point {
+        fn partial_cmp(&self, other: &Self) -> Ordering { Ordering::Less }
+      }
+      fn less_refs(a: &Point, b: &Point) -> bool { a < b }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("reports differently-typed struct operands under `<` as a same-type error, not a capability error", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct A { x: i32 }
+      struct B { y: i32 }
+      impl PartialEq for A { fn eq(&self, other: &Self) -> bool { true } }
+      impl PartialOrd for A {
+        fn partial_cmp(&self, other: &Self) -> Ordering { Ordering::Less }
+      }
+      impl PartialEq for B { fn eq(&self, other: &Self) -> bool { true } }
+      impl PartialOrd for B {
+        fn partial_cmp(&self, other: &Self) -> Ordering { Ordering::Less }
+      }
+      fn main() {
+        let a = A { x: 1 };
+        let b = B { y: 2 };
+        let c = a < b;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "comparison operands must have the same type",
+    );
+  });
+
+  it("rejects `impl Ord for X` with no `impl PartialOrd for X`, resolving Ord's supertrait from the prelude", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Counter { n: i32 }
+      impl Ord for Counter {}
+      fn main() {
+        let c = Counter { n: 0 };
+        print(c.n);
+      }
+    `);
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+  });
+
+  it("leaves primitive and reference ordering unaffected", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn main() {
+        let a = 1 < 2;
+        let b = 1.5 > 2.5;
+        let c = 'x' <= 'y';
+        let d = 1 >= 2;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("still rejects `<` on `&i32` operands with no native ordering on `ReferenceType` and no `PartialOrd` impl", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn main() {
+        let a = 1;
+        let b = 2;
+        let c = &a < &b;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "type does not support ordering comparison",
+    );
+  });
+
+  it("records a `PartialOrd`-dispatched `<` against the operator token", (): void => {
+    const { program, tokens } = assembleProgram(`
+      struct P { x: i32 }
+      impl PartialEq for P { fn eq(&self, other: &Self) -> bool { true } }
+      impl PartialOrd for P {
+        fn partial_cmp(&self, other: &Self) -> Ordering { Ordering::Less }
+      }
+      fn main() {
+        let a = P { x: 1 };
+        let b = P { x: 2 };
+        if a < b { print(1); }
+      }
+    `);
+    assert(isSome(program), "Parse failed");
+    const result = analyze(program.value, tokens);
+    expect(result.diagnostics).toEqual([]);
+    const entry = [...result.methodTargets.entries()][0];
+    assert(entry !== undefined, "expected one method target");
+    const [tokenId, target] = entry;
+    expect(tokens[tokenId]?.kind).toBe("lt");
+    expect(target).toMatchObject({
+      typeName: "P",
+      traitName: some("PartialOrd"),
+      methodName: "partial_cmp",
+    });
+  });
+
+  it("records a witness target for `<` on a generic parameter bound by `PartialOrd`", (): void => {
+    const { program, tokens } = assembleProgram(`
+      fn less<T: PartialOrd>(a: T, b: T) -> bool { a < b }
+      fn main() { print(0); }
+    `);
+    assert(isSome(program), "Parse failed");
+    const result = analyze(program.value, tokens);
+    expect(result.diagnostics).toEqual([]);
+    const [target] = [...result.methodTargets.values()];
+    expect(target).toEqual({
+      kind: "witness",
+      witnessName: "_witness_T_PartialOrd",
+      methodName: "partial_cmp",
+    });
+  });
+
+  it("leaves `<` on a type whose `PartialOrd` comes only from a blanket impl as a method call", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Marker {}
+      struct W { n: i32 }
+      impl Marker for W {}
+      impl<T: Marker> PartialEq for T { fn eq(&self, other: &Self) -> bool { true } }
+      impl<T: Marker> PartialOrd for T {
+        fn partial_cmp(&self, other: &Self) -> Ordering { Ordering::Less }
+      }
+      fn main() {
+        let a = W { n: 1 };
+        let b = W { n: 2 };
+        if a < b { print(0); }
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.methodTargets.size).toBe(0);
   });
 });
 
