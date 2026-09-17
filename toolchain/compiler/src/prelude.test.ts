@@ -69,7 +69,7 @@ describe("std prelude", (): void => {
     ).toEqual(["PartialEq"]);
   });
 
-  it("gives PartialOrd a `partial_cmp` method with a PartialEq supertrait, and Ord a PartialOrd supertrait with no methods of its own", (): void => {
+  it("gives PartialOrd a `partial_cmp` method with a PartialEq supertrait, and Ord a `cmp` method with Eq and PartialOrd supertraits", (): void => {
     const { tokens } = tokenize(PRELUDE_SOURCE);
     const { program } = parse(tokens);
     assert(isSome(program), "prelude failed to parse");
@@ -89,12 +89,15 @@ describe("std prelude", (): void => {
         bound.kind === "PathTraitBound" ? bound.path.segments.join("::") : "",
       ),
     ).toEqual(["PartialEq"]);
+    const ordMethods = ord.items
+      .filter((member) => member.kind === "FunctionSignature")
+      .map((member) => member.name.text);
+    expect(ordMethods).toEqual(["cmp"]);
     expect(
       ord.supertraits.map((bound) =>
         bound.kind === "PathTraitBound" ? bound.path.segments.join("::") : "",
       ),
-    ).toEqual(["PartialOrd"]);
-    expect(ord.items).toEqual([]);
+    ).toEqual(["Eq", "PartialOrd"]);
   });
 
   it("declares an Ordering enum with Less, Equal, and Greater unit variants", (): void => {

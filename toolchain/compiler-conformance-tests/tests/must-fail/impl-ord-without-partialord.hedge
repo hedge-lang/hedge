@@ -2,7 +2,15 @@ struct Counter {
   n: i32,
 }
 
-impl Ord for Counter {}
+impl PartialEq for Counter {
+  fn eq(&self, other: &Self) -> bool { true }
+}
+
+impl Eq for Counter {}
+
+impl Ord for Counter {
+  fn cmp(&self, other: &Self) -> Ordering { Ordering::Equal }
+}
 
 fn main() {
   let c = Counter { n: 0 };

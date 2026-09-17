@@ -8012,10 +8012,12 @@ describe("ordering operators resolving through a PartialOrd/Ord impl", (): void 
     );
   });
 
-  it("rejects `impl Ord for X` with no `impl PartialOrd for X`, resolving Ord's supertrait from the prelude", (): void => {
+  it("rejects `impl Ord for X` with no `impl PartialOrd for X`, resolving one of Ord's supertraits from the prelude", (): void => {
     const result = diagnoseWithPrelude(`
       struct Counter { n: i32 }
-      impl Ord for Counter {}
+      impl PartialEq for Counter { fn eq(&self, other: &Self) -> bool { true } }
+      impl Eq for Counter {}
+      impl Ord for Counter { fn cmp(&self, other: &Self) -> Ordering { Ordering::Equal } }
       fn main() {
         let c = Counter { n: 0 };
         print(c.n);
@@ -8024,6 +8026,49 @@ describe("ordering operators resolving through a PartialOrd/Ord impl", (): void 
     const errors = result.diagnostics.filter((d) => d.severity === "error");
     expect(errors).toHaveLength(1);
     expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+    expect(messageOf(errors[0])).toBe(
+      "the trait bound `Counter: PartialOrd` is not satisfied",
+    );
+  });
+
+  it("rejects `impl Ord for X` with no `impl Eq for X`, resolving Ord's other supertrait from the prelude", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Counter { n: i32 }
+      impl PartialEq for Counter { fn eq(&self, other: &Self) -> bool { true } }
+      impl PartialOrd for Counter {
+        fn partial_cmp(&self, other: &Self) -> Ordering { Ordering::Equal }
+      }
+      impl Ord for Counter { fn cmp(&self, other: &Self) -> Ordering { Ordering::Equal } }
+      fn main() {
+        let c = Counter { n: 0 };
+        print(c.n);
+      }
+    `);
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+    expect(messageOf(errors[0])).toBe(
+      "the trait bound `Counter: Eq` is not satisfied",
+    );
+  });
+
+  it("rejects `impl Ord for X` that omits the required `cmp` method, even with both supertraits satisfied", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Counter { n: i32 }
+      impl PartialEq for Counter { fn eq(&self, other: &Self) -> bool { true } }
+      impl Eq for Counter {}
+      impl PartialOrd for Counter {
+        fn partial_cmp(&self, other: &Self) -> Ordering { Ordering::Equal }
+      }
+      impl Ord for Counter {}
+      fn main() {
+        let c = Counter { n: 0 };
+        print(c.n);
+      }
+    `);
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.code).toBe("HEDGE-TRAIT-003");
   });
 
   it("leaves primitive and reference ordering unaffected", (): void => {

@@ -29,7 +29,9 @@ trait PartialOrd: PartialEq {
   fn partial_cmp(&self, other: &Self) -> Ordering;
 }
 
-trait Ord: PartialOrd {}
+trait Ord: Eq + PartialOrd {
+  fn cmp(&self, other: &Self) -> Ordering;
+}
 
 trait Default {
   fn default() -> Self;
