@@ -1275,10 +1275,11 @@ function reserveHoistedWitnessConsts(ctx: JsimContext): void {
 
 /** A JS expression string constructing the `Ordering` tagged object
  * `variantTagCondition` reads `.tag` off of, for one of the three
- * comparison outcomes - matches the shape real `Ordering::<Variant>`
- * construction emits (`jsimEnumVariantConstruction`), so a primitive
- * witness's `partial_cmp` result is indistinguishable from a hand-written
- * impl's. */
+ * comparison outcomes - matches the shape a real `Ordering::<Variant>`
+ * construction renders to (`jsimEnumUnitVariantConstruction`'s
+ * `StructExpression` node, through `structDisposer`'s empty-fields case),
+ * so a primitive witness's `partial_cmp` result is indistinguishable from
+ * a hand-written impl's. */
 function orderingTagLiteral(tag: string): string {
   return `{tag: "${tag}", [Symbol.dispose]() {}}`;
 }
