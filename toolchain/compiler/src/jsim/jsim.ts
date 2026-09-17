@@ -3738,13 +3738,16 @@ function isTraitDispatchOperandType(type: Semantics.Type): boolean {
   );
 }
 
-/** The `x.eq(y)`-shaped call a trait-dispatched `==` lowers to: a concrete
- * free function, a generic body's witness slot, or (no resolved target - a
- * type whose `PartialEq` is not yet reachable) the interim `left.eq(right)`
- * method call. */
-function traitEqualityCall(
+/** The `x.<method>(y)`-shaped call a trait-dispatched binary comparison
+ * lowers to: a concrete free function, a generic body's witness slot, or
+ * (no resolved target - a type whose trait impl is not yet reachable) the
+ * interim `left.<method>(right)` method call. Shared by `==`/`!=`'s `eq`
+ * dispatch and the ordering operators' `partial_cmp` dispatch - the two
+ * differ only in which method name they call. */
+function traitDispatchCall(
   ctx: JsimContext,
   target: MethodTarget | undefined,
+  methodName: string,
   left: JSIM.Expression,
   right: JSIM.Expression,
 ): JSIM.Expression {
@@ -3767,14 +3770,14 @@ function traitEqualityCall(
         value: resolvedWitnessParamName(ctx, target.witnessName),
         type: none(),
       },
-      method: "eq",
+      method: methodName,
       arguments: [left, right],
     };
   }
   return {
     kind: "MethodCallExpression",
     receiver: left,
-    method: "eq",
+    method: methodName,
     arguments: [right],
   };
 }
@@ -3786,7 +3789,7 @@ function parseTraitEqualityComparison(
   const target = ctx.methodTargets.get(binExp.tokenId);
   const left = parseExpression(ctx, binExp.left);
   const right = parseExpression(ctx, binExp.right);
-  const call = traitEqualityCall(ctx, target, left, right);
+  const call = traitDispatchCall(ctx, target, "eq", left, right);
   if (binExp.operator === "Ne") {
     return {
       kind: "UnaryExpression",
@@ -3796,48 +3799,6 @@ function parseTraitEqualityComparison(
     };
   }
   return call;
-}
-
-/** The `x.partial_cmp(y)`-shaped call a trait-dispatched ordering operator
- * lowers to, mirroring `traitEqualityCall`: a concrete free function, a
- * generic body's witness slot, or (no resolved target - a type whose
- * `PartialOrd` is not yet reachable) the interim `left.partial_cmp(right)`
- * method call. */
-function traitOrderingCall(
-  ctx: JsimContext,
-  target: MethodTarget | undefined,
-  left: JSIM.Expression,
-  right: JSIM.Expression,
-): JSIM.Expression {
-  if (target?.kind === "free") {
-    return {
-      kind: "CallExpression",
-      callee: {
-        kind: "Identifier",
-        value: resolvedMethodFreeFnName(ctx, target),
-        type: none(),
-      },
-      arguments: [left, right],
-    };
-  }
-  if (target?.kind === "witness") {
-    return {
-      kind: "MethodCallExpression",
-      receiver: {
-        kind: "Identifier",
-        value: resolvedWitnessParamName(ctx, target.witnessName),
-        type: none(),
-      },
-      method: "partial_cmp",
-      arguments: [left, right],
-    };
-  }
-  return {
-    kind: "MethodCallExpression",
-    receiver: left,
-    method: "partial_cmp",
-    arguments: [right],
-  };
 }
 
 /** The `Ordering` tags each ordering operator accepts - `<=`/`>=` need two,
@@ -3871,11 +3832,15 @@ function tagComparison(
   tags: readonly string[],
   tokenId: number,
 ): JSIM.Expression {
-  return tags
-    .map((tag) => variantTagCondition(ctx, value, tag, tokenId))
-    .reduce((acc, condition) =>
+  const [first, ...rest] = tags.map((tag) =>
+    variantTagCondition(ctx, value, tag, tokenId),
+  );
+  assert(first !== undefined, "ICE: tagComparison called with no tags");
+  return rest.reduce(
+    (acc, condition) =>
       jsimBinaryExpression(ctx, "Or", acc, condition, tokenId),
-    );
+    first,
+  );
 }
 
 function parseTraitOrderingComparison(
@@ -3885,7 +3850,7 @@ function parseTraitOrderingComparison(
   const target = ctx.methodTargets.get(binExp.tokenId);
   const left = parseExpression(ctx, binExp.left);
   const right = parseExpression(ctx, binExp.right);
-  const call = traitOrderingCall(ctx, target, left, right);
+  const call = traitDispatchCall(ctx, target, "partial_cmp", left, right);
   const tags = orderingTagsFor(binExp.operator);
   if (tags.length === 1) {
     return tagComparison(ctx, call, tags, binExp.tokenId);
@@ -3958,7 +3923,7 @@ function parseBinaryExpression(
 /** The `v.neg()`/`v.not()`-shaped call a trait-dispatched unary `-`/`!`
  * lowers to: a concrete free function, a generic body's witness slot, or
  * (no resolved target - a blanket-satisfied impl) the interim
- * `operand.<method>()` method call, mirroring `traitEqualityCall`. */
+ * `operand.<method>()` method call, mirroring `traitDispatchCall`. */
 function unaryTraitDispatchCall(
   ctx: JsimContext,
   target: MethodTarget | undefined,
