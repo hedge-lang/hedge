@@ -139,9 +139,13 @@ interface JsimContext {
    * allocated on first use and emitted as a hoisted `const` afterwards. */
   readonly hoistedWitnesses: Map<string, HoistedWitness>;
   /** The collision-safe name reserved for the shared primitive-eq witness
-   * const, allocated on first `Primitive` witness reference (`undefined`
-   * until then, matching `hoistedWitnesses`' own lazy-allocation shape). */
+   * const, allocated on first `PartialEq`/`Eq` `Primitive` witness reference
+   * (`undefined` until then, matching `hoistedWitnesses`' own
+   * lazy-allocation shape). */
   readonly primitiveEqWitness: { name: string | undefined };
+  /** Same as `primitiveEqWitness`, for the shared primitive-ord witness -
+   * allocated on first `PartialOrd`/`Ord` `Primitive` witness reference. */
+  readonly primitiveOrdWitness: { name: string | undefined };
 }
 
 interface HoistedWitness {
@@ -181,6 +185,7 @@ function createJsimContext(
     methodFreeFnNames: new Map(),
     hoistedWitnesses: new Map(),
     primitiveEqWitness: { name: undefined },
+    primitiveOrdWitness: { name: undefined },
   };
 }
 
@@ -1082,6 +1087,29 @@ function primitiveEqWitnessName(ctx: JsimContext): string {
   return ctx.primitiveEqWitness.name;
 }
 
+/** Same as `primitiveEqWitnessName`, for the shared primitive-ord witness. */
+function primitiveOrdWitnessName(ctx: JsimContext): string {
+  ctx.primitiveOrdWitness.name ??= reserveTopLevelName(
+    ctx,
+    "__witnessPrimitiveOrd",
+  );
+  return ctx.primitiveOrdWitness.name;
+}
+
+/** Which shared primitive witness const a `Primitive` witness ref's own
+ * trait resolves to - `PartialEq`/`Eq` share one object (`eq` is the only
+ * method either needs), `PartialOrd`/`Ord` share the other (`partial_cmp`
+ * is the only method operator dispatch ever calls, regardless of which of
+ * the two bound the call site). */
+function resolvedPrimitiveWitnessName(
+  ctx: JsimContext,
+  traitName: string,
+): string {
+  return traitName === "PartialOrd" || traitName === "Ord"
+    ? primitiveOrdWitnessName(ctx)
+    : primitiveEqWitnessName(ctx);
+}
+
 /** The `FreeMethodTarget` for one method a `(typeId, trait)` witness carries,
  * used to resolve the free-function name the slot points at. Keyed on the
  * method's *defining* trait, not the witness's - a flattened supertrait
@@ -1147,7 +1175,7 @@ function witnessRefName(ctx: JsimContext, ref: WitnessRef): string {
         witnessParamName(ref.paramName, ref.traitName),
       );
     case "Primitive":
-      return primitiveEqWitnessName(ctx);
+      return resolvedPrimitiveWitnessName(ctx, ref.traitName);
     default:
       return assertNever(ref, `witness ref: ${JSON.stringify(ref)}`);
   }
@@ -1197,8 +1225,9 @@ function methodCallWitnessArgs(
 
 /** Reserves the hoisted `const` name a single resolved bound needs, if any -
  * `Impl` its own `(type, trait)` const, `Primitive` the shared
- * `__witnessPrimitiveEq`, `Forwarded` nothing (it resolves through the
- * caller's own witness parameter, not a top-level const). */
+ * `__witnessPrimitiveEq`/`__witnessPrimitiveOrd`, `Forwarded` nothing (it
+ * resolves through the caller's own witness parameter, not a top-level
+ * const). */
 function reserveWitnessRef(ctx: JsimContext, ref: WitnessRef): void {
   switch (ref.kind) {
     case "Impl":
@@ -1211,7 +1240,7 @@ function reserveWitnessRef(ctx: JsimContext, ref: WitnessRef): void {
       );
       return;
     case "Primitive":
-      primitiveEqWitnessName(ctx);
+      resolvedPrimitiveWitnessName(ctx, ref.traitName);
       return;
     case "Forwarded":
       return;
@@ -1244,7 +1273,17 @@ function reserveHoistedWitnessConsts(ctx: JsimContext): void {
   }
 }
 
-/** The hoisted witness-object and primitive-eq-witness declarations, built
+/** A JS expression string constructing the `Ordering` tagged object
+ * `variantTagCondition` reads `.tag` off of, for one of the three
+ * comparison outcomes - matches the shape real `Ordering::<Variant>`
+ * construction emits (`jsimEnumVariantConstruction`), so a primitive
+ * witness's `partial_cmp` result is indistinguishable from a hand-written
+ * impl's. */
+function orderingTagLiteral(tag: string): string {
+  return `{tag: "${tag}", [Symbol.dispose]() {}}`;
+}
+
+/** The hoisted witness-object and primitive-witness declarations, built
  * from what was referenced during lowering - prepended to the program. */
 function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
   const decls: JSIM.Item[] = [];
@@ -1253,6 +1292,19 @@ function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
       kind: "WitnessObjectDecl",
       name: ctx.primitiveEqWitness.name,
       directSlots: [{ method: "eq", value: "(a, b) => a === b" }],
+      closureSlots: [],
+    });
+  }
+  if (ctx.primitiveOrdWitness.name !== undefined) {
+    decls.push({
+      kind: "WitnessObjectDecl",
+      name: ctx.primitiveOrdWitness.name,
+      directSlots: [
+        {
+          method: "partial_cmp",
+          value: `(a, b) => (a < b ? ${orderingTagLiteral("Less")} : a > b ? ${orderingTagLiteral("Greater")} : ${orderingTagLiteral("Equal")})`,
+        },
+      ],
       closureSlots: [],
     });
   }

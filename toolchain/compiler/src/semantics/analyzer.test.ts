@@ -6988,6 +6988,97 @@ describe("trait and impl declarations", (): void => {
       expect(codes).not.toContain("HEDGE-TRAIT-002");
       expect(codes).toContain("HEDGE-NAME-001");
     });
+
+    it("resolves a `T: PartialOrd` bound satisfied by a primitive argument", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn less<T: PartialOrd>(a: T, b: T) -> bool { a < b }
+        fn main() { if less(1, 2) { print(1); } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("records a synthesized `Primitive` witness for the satisfied `PartialOrd` bound", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn less<T: PartialOrd>(a: T, b: T) -> bool { a < b }
+        fn main() { let ok = less(1, 2); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      expect(witnesses).toEqual([
+        { kind: "Primitive", traitName: "PartialOrd" },
+      ]);
+    });
+
+    it.each([
+      "fn use_char<T: PartialOrd>(x: T) {} fn main() { use_char('c'); }",
+      "fn use_f64<T: PartialOrd>(x: T) {} fn main() { use_f64(1.5); }",
+      "fn use_i32<T: PartialOrd>(x: T) {} fn main() { use_i32(1); }",
+    ])(
+      "resolves a `PartialOrd` bound for every ordering-capable primitive (%s)",
+      (source): void => {
+        const result = diagnoseWithPrelude(source);
+        expect(result.diagnostics).toEqual([]);
+        const [witnesses] = [...result.witnesses.values()];
+        expect(witnesses).toEqual([
+          { kind: "Primitive", traitName: "PartialOrd" },
+        ]);
+      },
+    );
+
+    it("resolves a `T: Ord` bound for a non-float ordering-capable primitive and records an `Ord` witness", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn total<T: Ord>(x: T) {}
+        fn main() { total(1); total('c'); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const all = [...result.witnesses.values()].flat();
+      expect(all).toEqual([
+        { kind: "Primitive", traitName: "Ord" },
+        { kind: "Primitive", traitName: "Ord" },
+      ]);
+    });
+
+    it("rejects a `T: Ord` bound for a float argument, since a raw float is only `PartialOrd`", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn total<T: Ord>(x: T) {}
+        fn main() { total(1.5); }
+      `);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+    });
+
+    it("still resolves a `T: PartialOrd` bound for a float argument", (): void => {
+      const result = diagnoseWithPrelude(`
+        fn less<T: PartialOrd>(x: T) {}
+        fn main() { less(1.5); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it.each([
+      "fn less<T: PartialOrd>(x: T) {} fn main() { less(true); }",
+      'fn less<T: PartialOrd>(x: T) {} fn main() { less("s"); }',
+    ])(
+      "rejects a `T: PartialOrd` bound for `bool`/`str`, neither of which is ordering-capable (%s)",
+      (source): void => {
+        const result = diagnoseWithPrelude(source);
+        const errors = result.diagnostics.filter((d) => d.severity === "error");
+        expect(errors).toHaveLength(1);
+        expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+      },
+    );
+
+    it("still rejects a `T: PartialOrd` bound for a struct with no `PartialOrd` impl", (): void => {
+      const result = diagnoseWithPrelude(`
+        struct P { x: i32 }
+        fn less<T: PartialOrd>(x: T) {}
+        fn main() { less(P { x: 1 }); }
+      `);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
+    });
   });
 
   describe("method-call targets", (): void => {
@@ -8083,11 +8174,22 @@ describe("ordering operators resolving through a PartialOrd/Ord impl", (): void 
     expect(result.diagnostics).toEqual([]);
   });
 
-  it("still rejects `<` on `&i32` operands with no native ordering on `ReferenceType` and no `PartialOrd` impl", (): void => {
+  it("accepts `<` on `&i32` operands through the same primitive `PartialOrd` fallback `&i32 == &i32` already uses", (): void => {
     const result = diagnoseWithPrelude(`
       fn main() {
         let a = 1;
         let b = 2;
+        let c = &a < &b;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("still rejects `<` on `&bool` operands, since `bool` has no native ordering and no `PartialOrd` impl", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn main() {
+        let a = true;
+        let b = false;
         let c = &a < &b;
       }
     `);

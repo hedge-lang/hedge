@@ -1531,6 +1531,49 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["yes"]);
   });
 
+  it("passes a shared primitive-ord witness at a `T: PartialOrd` call with an integer, and runs", (): void => {
+    const js = emittedJs(`
+      fn less<T: PartialOrd>(a: T, b: T) -> bool { a < b }
+      fn main() {
+        if less(1, 2) { print("lt"); }
+        if less(2, 1) { print("nope"); }
+      }
+    `);
+    expect(js).toContain("const __witnessPrimitiveOrd = {partial_cmp:");
+    expect(js).toContain("less(1, 2, __witnessPrimitiveOrd)");
+    expect(js.match(/const __witnessPrimitiveOrd\b/g)).toHaveLength(1);
+    expect(runEmittedJs(js)).toEqual(["lt"]);
+  });
+
+  it("shares one primitive-ord witness between `T: PartialOrd` and `T: Ord` calls", (): void => {
+    const js = emittedJs(`
+      fn pless<T: PartialOrd>(a: T, b: T) -> bool { a < b }
+      fn tless<T: Ord>(a: T, b: T) -> bool { a < b }
+      fn main() {
+        if pless(1, 2) { print("p"); }
+        if tless('a', 'b') { print("t"); }
+      }
+    `);
+    expect(js.match(/const __witnessPrimitiveOrd\b/g)).toHaveLength(1);
+    expect(runEmittedJs(js)).toEqual(["p", "t"]);
+  });
+
+  it("compiles and runs a generic `PartialOrd` ordering check covering all four operators on an integer argument", (): void => {
+    const js = emittedJs(`
+      fn less<T: PartialOrd>(a: T, b: T) -> bool { a < b }
+      fn greater<T: PartialOrd>(a: T, b: T) -> bool { a > b }
+      fn less_eq<T: PartialOrd>(a: T, b: T) -> bool { a <= b }
+      fn greater_eq<T: PartialOrd>(a: T, b: T) -> bool { a >= b }
+      fn main() {
+        if less(1, 2) { print("lt"); }
+        if greater(2, 1) { print("gt"); }
+        if less_eq(2, 2) { print("le"); }
+        if greater_eq(2, 2) { print("ge"); }
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["lt", "gt", "le", "ge"]);
+  });
+
   it("threads a witness for a bound declared in a `where` clause", (): void => {
     const js = emittedJs(`
       trait Draw { fn draw(&self) -> i32; }

@@ -28,6 +28,7 @@ import {
 import {
   hasCapability,
   primitiveImplementsEq,
+  primitiveImplementsOrd,
   type TypeCapability,
 } from "./type-capabilities.js";
 
@@ -2859,11 +2860,13 @@ function resolveTraitBound(
   return resolveTraitBoundForTypeName(ctx, typeIdentity(type), traitName);
 }
 
-/** A primitive argument satisfies the prelude `PartialEq` (any type
- * comparable with `==`) and `Eq` (all but the floats - see
- * `primitiveImplementsEq`) with no impl, via a codegen-synthesized witness.
- * Only the prelude's own `PartialEq`/`Eq` count - a block-local trait of the
- * same name resolves through the normal impl path. */
+/** A primitive argument satisfies the prelude `PartialEq`/`Eq` (any type
+ * comparable with `==`, all but the floats for `Eq` - see
+ * `primitiveImplementsEq`) and `PartialOrd`/`Ord` (any type comparable with
+ * `<`, all but the floats for `Ord` - see `primitiveImplementsOrd`) with no
+ * impl, via a codegen-synthesized witness. Only the prelude's own traits
+ * count - a block-local trait of the same name resolves through the normal
+ * impl path. */
 function resolvePrimitiveTraitBound(
   ctx: AnalysisContext,
   type: Semantics.Type,
@@ -2873,7 +2876,11 @@ function resolvePrimitiveTraitBound(
     (traitName === lookupPreludeTrait(ctx, "PartialEq") &&
       hasCapability(type, "equality")) ||
     (traitName === lookupPreludeTrait(ctx, "Eq") &&
-      primitiveImplementsEq(type));
+      primitiveImplementsEq(type)) ||
+    (traitName === lookupPreludeTrait(ctx, "PartialOrd") &&
+      hasCapability(type, "ordering")) ||
+    (traitName === lookupPreludeTrait(ctx, "Ord") &&
+      primitiveImplementsOrd(type));
   return satisfies
     ? some({ kind: "Primitive", traitName: bareTypeName(traitName) })
     : none();
