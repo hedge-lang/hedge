@@ -6996,14 +6996,21 @@ interface ComparisonOperand {
   readonly isValid: boolean;
 }
 
+/** The prelude trait/method an operand with no native capability falls back
+ * to - `PartialEq`/`eq` for `Eq`/`Ne`, `PartialOrd`/`partial_cmp` for
+ * `Lt`/`Gt`/`Le`/`Ge`. */
+interface ComparisonTraitFallback {
+  readonly trait: string;
+  readonly method: string;
+}
+
 interface ComparisonSpec {
   readonly capability: TypeCapability;
   readonly errorKind: DiagnosticKind;
-  /** `Eq`/`Ne` only: an operand with no `equality` capability is still
-   * comparable when its type has a resolved `PartialEq` impl (directly, or
-   * a generic parameter bound by `PartialEq`/`Eq`). Ordering has no such
-   * fallback yet - see the `TODO(Hedge-279)` below. */
-  readonly equalityTraitFallback: boolean;
+  /** An operand with no native capability is still comparable when its type
+   * has a resolved impl of this trait (directly, or a generic parameter
+   * bound by it or a subtrait of it). */
+  readonly traitFallback: Option<ComparisonTraitFallback>;
 }
 
 /** Whether `type` (or, through one borrow, its referent) resolves
@@ -7036,9 +7043,9 @@ function resolvesViaTraitBound(
 }
 
 /** Whether one operand may take part in this comparison - via its own
- * capability-table entry, or (equality only) a resolved `PartialEq` impl on
- * the operand's type or, through one borrow, its referent (`&Point ==
- * &Point` when `Point: PartialEq`). */
+ * capability-table entry, or a resolved `spec.traitFallback` impl on the
+ * operand's type or, through one borrow, its referent (`&Point == &Point`
+ * when `Point: PartialEq`; `&Point < &Point` when `Point: PartialOrd`). */
 function comparisonOperandResolves(
   ctx: AnalysisContext,
   spec: ComparisonSpec,
@@ -7046,10 +7053,11 @@ function comparisonOperandResolves(
 ): boolean {
   if (!operand.isValid) return true;
   if (hasCapability(operand.type, spec.capability)) return true;
-  if (!spec.equalityTraitFallback) return false;
-  const partialEq = lookupPreludeTrait(ctx, "PartialEq");
-  if (partialEq === undefined) return false;
-  return resolvesViaTraitBound(ctx, operand.type, partialEq);
+  const fallback = spec.traitFallback;
+  if (!isSome(fallback)) return false;
+  const trait = lookupPreludeTrait(ctx, fallback.value.trait);
+  if (trait === undefined) return false;
+  return resolvesViaTraitBound(ctx, operand.type, trait);
 }
 
 /**
@@ -7069,8 +7077,6 @@ function inferComparisonType(
   const leftOk = comparisonOperandResolves(ctx, spec, left);
   const rightOk = comparisonOperandResolves(ctx, spec, right);
   if (!leftOk || !rightOk) {
-    // TODO(Hedge-279): ordering should fall through to a resolved
-    // PartialOrd/Ord impl here, the same way equality now does.
     emitError(ctx, spec.errorKind, tokenId);
   } else if (
     left.isValid &&
@@ -7079,48 +7085,50 @@ function inferComparisonType(
   ) {
     emitError(ctx, { kind: "SemComparisonOperandsSameType" }, tokenId);
   } else {
-    recordEqualityTarget(ctx, spec, left, tokenId);
+    recordComparisonTraitTarget(ctx, spec, left, tokenId);
   }
   return { kind: "PrimitiveBooleanType" };
 }
 
-/** For an `==`/`!=` that resolves through a concrete `impl PartialEq for
- * <operand type>` (not the native `equality` capability, not a generic
- * parameter, not a blanket impl), records the impl's `eq` free function so
- * `jsim.ts`'s `parseTraitEqualityComparison` calls it directly. Anything
- * else dispatches through a witness (a later slice) and keeps the interim
- * `a.eq(b)` shape. */
-function recordEqualityTarget(
+/** For an `==`/`!=`/`<`/`>`/`<=`/`>=` that resolves through a concrete impl
+ * of `spec.traitFallback`'s trait for `<operand type>` (not the native
+ * capability, not a generic parameter, not a blanket impl), records the
+ * impl's method as a free function so `jsim.ts`'s trait-dispatch lowering
+ * calls it directly. Anything else dispatches through a witness (a later
+ * slice) and keeps the interim `a.<method>(b)` shape. */
+function recordComparisonTraitTarget(
   ctx: AnalysisContext,
   spec: ComparisonSpec,
   left: ComparisonOperand,
   tokenId: number,
 ): void {
-  if (!spec.equalityTraitFallback || !left.isValid) return;
+  const fallback = spec.traitFallback;
+  if (!isSome(fallback) || !left.isValid) return;
+  const { trait: traitName, method: methodName } = fallback.value;
   const operandType =
     left.type.kind === "ReferenceType" ? left.type.referent : left.type;
-  if (hasCapability(operandType, "equality")) return;
-  const partialEq = lookupPreludeTrait(ctx, "PartialEq");
-  if (partialEq === undefined) return;
+  if (hasCapability(operandType, spec.capability)) return;
+  const trait = lookupPreludeTrait(ctx, traitName);
+  if (trait === undefined) return;
   if (isNominalType(operandType)) {
-    const impl = findRegisteredImpl(ctx, operandType.name, partialEq);
+    const impl = findRegisteredImpl(ctx, operandType.name, trait);
     if (impl === undefined || impl.isBlanket) return;
     ctx.methodTargetTable.set(tokenId, {
       kind: "free",
       typeId: operandType.name,
       typeName: bareTypeName(operandType.name),
-      traitName: some(bareTypeName(partialEq)),
-      methodName: "eq",
+      traitName: some(bareTypeName(trait)),
+      methodName,
       isDefaultBody: false,
     });
     return;
   }
-  const witnessName = abstractWitnessParamName(ctx, operandType, partialEq);
+  const witnessName = abstractWitnessParamName(ctx, operandType, trait);
   if (witnessName !== undefined) {
     ctx.methodTargetTable.set(tokenId, {
       kind: "witness",
       witnessName,
-      methodName: "eq",
+      methodName,
     });
   }
 }
@@ -7130,7 +7138,7 @@ function recordEqualityTarget(
  * function so `jsim.ts`'s unary lowering calls it directly. A bound generic
  * parameter records a witness slot instead; a blanket-satisfied impl records
  * nothing and keeps the interim `v.neg()`/`v.not()` method-call shape,
- * mirroring `recordEqualityTarget`'s own blanket-impl carve-out. */
+ * mirroring `recordComparisonTraitTarget`'s own blanket-impl carve-out. */
 function recordUnaryTraitTarget(
   ctx: AnalysisContext,
   traitName: string,
@@ -7332,7 +7340,7 @@ function inferBinaryType(
             kind: "SemComparisonNotSupported",
             relation: "equality",
           },
-          equalityTraitFallback: true,
+          traitFallback: some({ trait: "PartialEq", method: "eq" }),
         },
         { type: leftType, isValid: isLeftTypeValid },
         { type: rightType, isValid: isRightTypeValid },
@@ -7350,7 +7358,7 @@ function inferBinaryType(
             kind: "SemComparisonNotSupported",
             relation: "ordering",
           },
-          equalityTraitFallback: false,
+          traitFallback: some({ trait: "PartialOrd", method: "partial_cmp" }),
         },
         { type: leftType, isValid: isLeftTypeValid },
         { type: rightType, isValid: isRightTypeValid },

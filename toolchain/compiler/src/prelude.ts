@@ -23,6 +23,14 @@ trait PartialEq {
 
 trait Eq: PartialEq {}
 
+enum Ordering { Less, Equal, Greater }
+
+trait PartialOrd: PartialEq {
+  fn partial_cmp(&self, other: &Self) -> Ordering;
+}
+
+trait Ord: PartialOrd {}
+
 trait Default {
   fn default() -> Self;
 }

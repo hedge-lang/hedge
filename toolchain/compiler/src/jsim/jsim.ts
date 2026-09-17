@@ -3745,6 +3745,122 @@ function parseTraitEqualityComparison(
   return call;
 }
 
+/** The `x.partial_cmp(y)`-shaped call a trait-dispatched ordering operator
+ * lowers to, mirroring `traitEqualityCall`: a concrete free function, a
+ * generic body's witness slot, or (no resolved target - a type whose
+ * `PartialOrd` is not yet reachable) the interim `left.partial_cmp(right)`
+ * method call. */
+function traitOrderingCall(
+  ctx: JsimContext,
+  target: MethodTarget | undefined,
+  left: JSIM.Expression,
+  right: JSIM.Expression,
+): JSIM.Expression {
+  if (target?.kind === "free") {
+    return {
+      kind: "CallExpression",
+      callee: {
+        kind: "Identifier",
+        value: resolvedMethodFreeFnName(ctx, target),
+        type: none(),
+      },
+      arguments: [left, right],
+    };
+  }
+  if (target?.kind === "witness") {
+    return {
+      kind: "MethodCallExpression",
+      receiver: {
+        kind: "Identifier",
+        value: resolvedWitnessParamName(ctx, target.witnessName),
+        type: none(),
+      },
+      method: "partial_cmp",
+      arguments: [left, right],
+    };
+  }
+  return {
+    kind: "MethodCallExpression",
+    receiver: left,
+    method: "partial_cmp",
+    arguments: [right],
+  };
+}
+
+/** The `Ordering` tags each ordering operator accepts - `<=`/`>=` need two,
+ * since `PartialOrd` exposes only `partial_cmp`: deriving all four operators
+ * from that single result, rather than requiring an impl to hand-write four
+ * independently-checkable methods, is what makes a `lt`/`gt` disagreement
+ * structurally impossible. */
+const ORDERING_OPERATOR_TAGS: ReadonlyMap<
+  Semantics.BinaryExpression["operator"],
+  readonly string[]
+> = new Map([
+  ["Lt", ["Less"]],
+  ["Gt", ["Greater"]],
+  ["Le", ["Less", "Equal"]],
+  ["Ge", ["Greater", "Equal"]],
+]);
+
+function orderingTagsFor(
+  operator: Semantics.BinaryExpression["operator"],
+): readonly string[] {
+  const tags = ORDERING_OPERATOR_TAGS.get(operator);
+  if (tags === undefined) {
+    throw new Error(`ICE: no Ordering tags for operator ${operator}`);
+  }
+  return tags;
+}
+
+function tagComparison(
+  ctx: JsimContext,
+  value: JSIM.Expression,
+  tags: readonly string[],
+  tokenId: number,
+): JSIM.Expression {
+  return tags
+    .map((tag) => variantTagCondition(ctx, value, tag, tokenId))
+    .reduce((acc, condition) =>
+      jsimBinaryExpression(ctx, "Or", acc, condition, tokenId),
+    );
+}
+
+function parseTraitOrderingComparison(
+  ctx: JsimContext,
+  binExp: Semantics.BinaryExpression,
+): JSIM.Expression {
+  const target = ctx.methodTargets.get(binExp.tokenId);
+  const left = parseExpression(ctx, binExp.left);
+  const right = parseExpression(ctx, binExp.right);
+  const call = traitOrderingCall(ctx, target, left, right);
+  const tags = orderingTagsFor(binExp.operator);
+  if (tags.length === 1) {
+    return tagComparison(ctx, call, tags, binExp.tokenId);
+  }
+  const ordName = reserveLocalName(ctx, "ord");
+  return {
+    kind: "CallExpression",
+    callee: {
+      kind: "ArrowFunctionExpression",
+      params: [ordName],
+      body: [
+        {
+          kind: "ReturnStatement",
+          value: some(
+            tagComparison(
+              ctx,
+              { kind: "Identifier", value: ordName, type: none() },
+              tags,
+              binExp.tokenId,
+            ),
+          ),
+        },
+      ],
+    },
+    arguments: [call],
+  };
+}
+
 function parseBinaryExpression(
   ctx: JsimContext,
   binExp: Semantics.BinaryExpression,
@@ -3755,6 +3871,16 @@ function parseBinaryExpression(
       isTraitDispatchOperandType(binExp.right.type))
   ) {
     return parseTraitEqualityComparison(ctx, binExp);
+  }
+  if (
+    (binExp.operator === "Lt" ||
+      binExp.operator === "Gt" ||
+      binExp.operator === "Le" ||
+      binExp.operator === "Ge") &&
+    (isTraitDispatchOperandType(binExp.left.type) ||
+      isTraitDispatchOperandType(binExp.right.type))
+  ) {
+    return parseTraitOrderingComparison(ctx, binExp);
   }
   const numericKind: Option<JSIM.NumericKind> = ARITHMETIC_OPS.has(
     binExp.operator,
