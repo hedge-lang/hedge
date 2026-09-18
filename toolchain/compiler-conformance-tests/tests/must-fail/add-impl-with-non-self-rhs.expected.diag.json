@@ -1,0 +1,10 @@
+[
+  {
+    "code": "HEDGE-TRAIT-010",
+    "kind": {
+      "kind": "SemOperatorRhsMustBeSelf",
+      "trait": "Add"
+    },
+    "relatedSpans": []
+  }
+]
