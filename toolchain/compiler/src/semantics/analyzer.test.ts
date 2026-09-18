@@ -2302,12 +2302,12 @@ describe("semantic analysis", (): void => {
 
   it("rejects arithmetic on unit-typed operands", (): void => {
     const result = diagnose('fn main() { let x = print("hi") + 1; }');
-    const numericError = result.diagnostics.find((d) =>
+    const traitBoundError = result.diagnostics.find((d) =>
       messageOf(d).includes("trait bound"),
     );
-    assert(numericError !== undefined, "Expected a numeric-operand error");
-    expect(numericError.severity).toBe("error");
-    expect(messageOf(numericError)).toContain("()");
+    assert(traitBoundError !== undefined, "Expected a trait-bound error");
+    expect(traitBoundError.severity).toBe("error");
+    expect(messageOf(traitBoundError)).toContain("()");
   });
 
   it.each(["=", "+=", "-=", "*=", "/=", "%=", "<<=", ">>="])(
