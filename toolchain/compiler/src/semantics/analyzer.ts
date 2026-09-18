@@ -7207,6 +7207,50 @@ function inferComparisonType(
   return { kind: "PrimitiveBooleanType" };
 }
 
+/** The free-fn/witness recording shared by every `record*TraitTarget`
+ * variant (comparison, unary, arithmetic/bitwise/shift): a concrete
+ * non-blanket impl records a `free` `MethodTarget`; a bound generic
+ * parameter records a `witness` one; a blanket-satisfied impl is the one
+ * place callers still disagree, so `onBlanket` carries what each family
+ * actually does there (comparison/arithmetic reject with
+ * `SemTraitBoundNotSatisfied`; unary still doesn't - a known, separately
+ * tracked gap, not something to change as a side effect of deduplicating
+ * this). `operandType` is already unwrapped to its referent. */
+function recordOperatorDispatchTarget(
+  ctx: AnalysisContext,
+  trait: string,
+  methodName: string,
+  operandType: Semantics.Type,
+  tokenId: number,
+  onBlanket: () => void,
+): void {
+  if (isNominalType(operandType)) {
+    const impl = findRegisteredImpl(ctx, operandType.name, trait);
+    if (impl === undefined) return;
+    if (impl.isBlanket) {
+      onBlanket();
+      return;
+    }
+    ctx.methodTargetTable.set(tokenId, {
+      kind: "free",
+      typeId: operandType.name,
+      typeName: bareTypeName(operandType.name),
+      traitName: some(bareTypeName(trait)),
+      methodName,
+      isDefaultBody: false,
+    });
+    return;
+  }
+  const witnessName = abstractWitnessParamName(ctx, operandType, trait);
+  if (witnessName !== undefined) {
+    ctx.methodTargetTable.set(tokenId, {
+      kind: "witness",
+      witnessName,
+      methodName,
+    });
+  }
+}
+
 /** For an `==`/`!=`/`<`/`>`/`<=`/`>=` that resolves through a concrete impl
  * of `spec.traitFallback`'s trait for `<operand type>` (not the native
  * capability, not a generic parameter, not a blanket impl), records the
@@ -7234,10 +7278,13 @@ function recordComparisonTraitTarget(
   if (hasCapability(operandType, spec.capability)) return;
   const trait = lookupPreludeTrait(ctx, traitName);
   if (trait === undefined) return;
-  if (isNominalType(operandType)) {
-    const impl = findRegisteredImpl(ctx, operandType.name, trait);
-    if (impl === undefined) return;
-    if (impl.isBlanket) {
+  recordOperatorDispatchTarget(
+    ctx,
+    trait,
+    methodName,
+    operandType,
+    tokenId,
+    () => {
       emitError(
         ctx,
         {
@@ -7247,26 +7294,8 @@ function recordComparisonTraitTarget(
         },
         tokenId,
       );
-      return;
-    }
-    ctx.methodTargetTable.set(tokenId, {
-      kind: "free",
-      typeId: operandType.name,
-      typeName: bareTypeName(operandType.name),
-      traitName: some(bareTypeName(trait)),
-      methodName,
-      isDefaultBody: false,
-    });
-    return;
-  }
-  const witnessName = abstractWitnessParamName(ctx, operandType, trait);
-  if (witnessName !== undefined) {
-    ctx.methodTargetTable.set(tokenId, {
-      kind: "witness",
-      witnessName,
-      methodName,
-    });
-  }
+    },
+  );
 }
 
 /** For a `-`/`!` that resolves through a concrete `impl Neg`/`Not for
@@ -7284,27 +7313,14 @@ function recordUnaryTraitTarget(
 ): void {
   const referent =
     operandType.kind === "ReferenceType" ? operandType.referent : operandType;
-  if (isNominalType(referent)) {
-    const impl = findRegisteredImpl(ctx, referent.name, traitName);
-    if (impl === undefined || impl.isBlanket) return;
-    ctx.methodTargetTable.set(tokenId, {
-      kind: "free",
-      typeId: referent.name,
-      typeName: bareTypeName(referent.name),
-      traitName: some(bareTypeName(traitName)),
-      methodName,
-      isDefaultBody: false,
-    });
-    return;
-  }
-  const witnessName = abstractWitnessParamName(ctx, referent, traitName);
-  if (witnessName !== undefined) {
-    ctx.methodTargetTable.set(tokenId, {
-      kind: "witness",
-      witnessName,
-      methodName,
-    });
-  }
+  recordOperatorDispatchTarget(
+    ctx,
+    traitName,
+    methodName,
+    referent,
+    tokenId,
+    () => {},
+  );
 }
 
 /** The witness parameter an abstract receiver (a `==` operand or a method
@@ -7369,6 +7385,56 @@ interface OperatorTraitFallback {
   readonly method: string;
 }
 
+/** One binary operator's operand pair, bundled so the arithmetic/bitwise
+ * helpers below stay under the max-params ceiling instead of threading
+ * four related values as separate positional arguments. */
+interface BinaryOperandPair {
+  readonly leftType: Semantics.Type;
+  readonly rightType: Semantics.Type;
+  readonly isLeftTypeValid: boolean;
+  readonly isRightTypeValid: boolean;
+}
+
+/** `BinaryOperandPair` plus each side's own already-computed resolution
+ * result, for the one caller (`finishArithmeticOrBitwiseCheck`) that needs
+ * both. */
+interface BinaryOperandResolution extends BinaryOperandPair {
+  readonly leftResolves: boolean;
+  readonly rightResolves: boolean;
+}
+
+/** One `{trait, method}` pair per arithmetic/bitwise/shift operator - a
+ * `ReadonlyMap` rather than a per-case literal in `inferBinaryType`'s own
+ * switch, since a long run of near-identical `case "X": return
+ * inferArithmeticType(ctx, { trait: "X", method: "x" }, ...)` blocks reads
+ * as copy-paste duplication to static analysis even though every case
+ * differs. */
+const OPERATOR_TRAIT_FALLBACKS: ReadonlyMap<
+  Parser.BinaryOperator,
+  OperatorTraitFallback
+> = new Map([
+  ["Add", { trait: "Add", method: "add" }],
+  ["Sub", { trait: "Sub", method: "sub" }],
+  ["Mul", { trait: "Mul", method: "mul" }],
+  ["Div", { trait: "Div", method: "div" }],
+  ["Rem", { trait: "Rem", method: "rem" }],
+  ["BitAnd", { trait: "BitAnd", method: "bitand" }],
+  ["BitOr", { trait: "BitOr", method: "bitor" }],
+  ["BitXor", { trait: "BitXor", method: "bitxor" }],
+  ["Shl", { trait: "Shl", method: "shl" }],
+  ["Shr", { trait: "Shr", method: "shr" }],
+]);
+
+function operatorTraitFallback(
+  op: Parser.BinaryOperator,
+): OperatorTraitFallback {
+  const fallback = OPERATOR_TRAIT_FALLBACKS.get(op);
+  if (fallback === undefined) {
+    throw new Error(`ICE: no operator trait fallback for ${op}`);
+  }
+  return fallback;
+}
+
 /** Whether `type` resolves `fallback`'s trait, via the same one-borrow/
  * generic-bound resolution every other operator fallback (`==`'s
  * `PartialEq`, unary `-`/`!`'s `Neg`/`Not`) shares. */
@@ -7416,10 +7482,13 @@ function recordArithmeticTraitTarget(
   if (hasCapability(operandType, capability)) return;
   const trait = lookupPreludeTrait(ctx, fallback.trait);
   if (trait === undefined) return;
-  if (isNominalType(operandType)) {
-    const impl = findRegisteredImpl(ctx, operandType.name, trait);
-    if (impl === undefined) return;
-    if (impl.isBlanket) {
+  recordOperatorDispatchTarget(
+    ctx,
+    trait,
+    fallback.method,
+    operandType,
+    tokenId,
+    () => {
       emitError(
         ctx,
         {
@@ -7429,26 +7498,8 @@ function recordArithmeticTraitTarget(
         },
         tokenId,
       );
-      return;
-    }
-    ctx.methodTargetTable.set(tokenId, {
-      kind: "free",
-      typeId: operandType.name,
-      typeName: bareTypeName(operandType.name),
-      traitName: some(bareTypeName(trait)),
-      methodName: fallback.method,
-      isDefaultBody: false,
-    });
-    return;
-  }
-  const witnessName = abstractWitnessParamName(ctx, operandType, trait);
-  if (witnessName !== undefined) {
-    ctx.methodTargetTable.set(tokenId, {
-      kind: "witness",
-      witnessName,
-      methodName: fallback.method,
-    });
-  }
+    },
+  );
 }
 
 /** Whether one arithmetic/bitwise operand may take part - via its own
@@ -7469,29 +7520,32 @@ function arithmeticOperandResolves(
 
 /** The same-type-or-record tail of `checkArithmeticOrBitwiseOperands`, split
  * out purely to keep that function's own branch count under the ESLint
- * complexity cap - see its own doc comment for what each branch means. */
+ * complexity cap - see its own doc comment for what each branch means. A
+ * single leading guard clause (rather than testing `isLeftTypeValid`/
+ * `isRightTypeValid` separately in each of the two branches below) keeps
+ * each validity flag read exactly once, not used to pick between outcomes
+ * at two different points in the function. */
 function finishArithmeticOrBitwiseCheck(
   ctx: AnalysisContext,
   capability: TypeCapability,
   fallback: OperatorTraitFallback,
   sameTypeKind: DiagnosticKind,
-  leftType: Semantics.Type,
-  rightType: Semantics.Type,
-  isLeftTypeValid: boolean,
-  isRightTypeValid: boolean,
-  leftResolves: boolean,
-  rightResolves: boolean,
+  resolution: BinaryOperandResolution,
   tokenId: number,
 ): void {
-  if (isLeftTypeValid && isRightTypeValid && !typesEqual(leftType, rightType)) {
+  if (!resolution.isLeftTypeValid || !resolution.isRightTypeValid) return;
+  if (!typesEqual(resolution.leftType, resolution.rightType)) {
     emitError(ctx, sameTypeKind, tokenId);
-  } else if (
-    leftResolves &&
-    rightResolves &&
-    isLeftTypeValid &&
-    isRightTypeValid
-  ) {
-    recordArithmeticTraitTarget(ctx, fallback, capability, leftType, tokenId);
+    return;
+  }
+  if (resolution.leftResolves && resolution.rightResolves) {
+    recordArithmeticTraitTarget(
+      ctx,
+      fallback,
+      capability,
+      resolution.leftType,
+      tokenId,
+    );
   }
 }
 
@@ -7508,12 +7562,10 @@ function checkArithmeticOrBitwiseOperands(
   capability: TypeCapability,
   fallback: OperatorTraitFallback,
   sameTypeKind: DiagnosticKind,
-  leftType: Semantics.Type,
-  rightType: Semantics.Type,
-  isLeftTypeValid: boolean,
-  isRightTypeValid: boolean,
+  operands: BinaryOperandPair,
   tokenId: number,
 ): Semantics.Type {
+  const { leftType, rightType, isLeftTypeValid, isRightTypeValid } = operands;
   const leftResolves = arithmeticOperandResolves(
     ctx,
     capability,
@@ -7556,12 +7608,11 @@ function checkArithmeticOrBitwiseOperands(
     capability,
     fallback,
     sameTypeKind,
-    leftType,
-    rightType,
-    isLeftTypeValid,
-    isRightTypeValid,
-    leftResolves,
-    rightResolves,
+    {
+      ...operands,
+      leftResolves,
+      rightResolves,
+    },
     tokenId,
   );
   return arithmeticOperatorResultType(isLeftTypeValid ? leftType : rightType);
@@ -7581,10 +7632,7 @@ function inferArithmeticType(
     "arithmetic",
     fallback,
     { kind: "SemArithmeticOperandsSameType" },
-    leftType,
-    rightType,
-    isLeftTypeValid,
-    isRightTypeValid,
+    { leftType, rightType, isLeftTypeValid, isRightTypeValid },
     tokenId,
   );
 }
@@ -7652,10 +7700,7 @@ function inferBitwiseType(
     "bitwise",
     fallback,
     { kind: "SemBitwiseOperandsSameType" },
-    leftType,
-    rightType,
-    isLeftTypeValid,
-    isRightTypeValid,
+    { leftType, rightType, isLeftTypeValid, isRightTypeValid },
     tokenId,
   );
 }
@@ -7726,49 +7771,13 @@ function inferBinaryType(
         tokenId,
       );
     case "Add":
-      return inferArithmeticType(
-        ctx,
-        { trait: "Add", method: "add" },
-        leftType,
-        rightType,
-        isLeftTypeValid,
-        isRightTypeValid,
-        tokenId,
-      );
     case "Sub":
-      return inferArithmeticType(
-        ctx,
-        { trait: "Sub", method: "sub" },
-        leftType,
-        rightType,
-        isLeftTypeValid,
-        isRightTypeValid,
-        tokenId,
-      );
     case "Mul":
-      return inferArithmeticType(
-        ctx,
-        { trait: "Mul", method: "mul" },
-        leftType,
-        rightType,
-        isLeftTypeValid,
-        isRightTypeValid,
-        tokenId,
-      );
     case "Div":
-      return inferArithmeticType(
-        ctx,
-        { trait: "Div", method: "div" },
-        leftType,
-        rightType,
-        isLeftTypeValid,
-        isRightTypeValid,
-        tokenId,
-      );
     case "Rem":
       return inferArithmeticType(
         ctx,
-        { trait: "Rem", method: "rem" },
+        operatorTraitFallback(op),
         leftType,
         rightType,
         isLeftTypeValid,
@@ -7776,19 +7785,10 @@ function inferBinaryType(
         tokenId,
       );
     case "Shl":
-      return inferShiftType(
-        ctx,
-        { trait: "Shl", method: "shl" },
-        leftType,
-        rightType,
-        isLeftTypeValid,
-        isRightTypeValid,
-        tokenId,
-      );
     case "Shr":
       return inferShiftType(
         ctx,
-        { trait: "Shr", method: "shr" },
+        operatorTraitFallback(op),
         leftType,
         rightType,
         isLeftTypeValid,
@@ -7796,29 +7796,11 @@ function inferBinaryType(
         tokenId,
       );
     case "BitAnd":
-      return inferBitwiseType(
-        ctx,
-        { trait: "BitAnd", method: "bitand" },
-        leftType,
-        rightType,
-        isLeftTypeValid,
-        isRightTypeValid,
-        tokenId,
-      );
     case "BitXor":
-      return inferBitwiseType(
-        ctx,
-        { trait: "BitXor", method: "bitxor" },
-        leftType,
-        rightType,
-        isLeftTypeValid,
-        isRightTypeValid,
-        tokenId,
-      );
     case "BitOr":
       return inferBitwiseType(
         ctx,
-        { trait: "BitOr", method: "bitor" },
+        operatorTraitFallback(op),
         leftType,
         rightType,
         isLeftTypeValid,
@@ -9601,12 +9583,10 @@ function checkNativeArithmeticOrBitwiseOperands(
   capability: TypeCapability,
   traitName: string,
   sameTypeKind: DiagnosticKind,
-  leftType: Semantics.Type,
-  rightType: Semantics.Type,
-  isLeftTypeValid: boolean,
-  isRightTypeValid: boolean,
+  operands: BinaryOperandPair,
   tokenId: number,
 ): void {
+  const { leftType, rightType, isLeftTypeValid, isRightTypeValid } = operands;
   if (isLeftTypeValid && !hasCapability(leftType, capability)) {
     emitError(
       ctx,
@@ -9642,12 +9622,10 @@ function checkNativeArithmeticOrBitwiseOperands(
 function checkNativeShiftOperands(
   ctx: AnalysisContext,
   traitName: string,
-  leftType: Semantics.Type,
-  rightType: Semantics.Type,
-  isLeftTypeValid: boolean,
-  isRightTypeValid: boolean,
+  operands: BinaryOperandPair,
   tokenId: number,
 ): void {
+  const { leftType, rightType, isLeftTypeValid, isRightTypeValid } = operands;
   if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
     emitError(
       ctx,
@@ -9662,6 +9640,38 @@ function checkNativeShiftOperands(
   if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
     emitError(ctx, { kind: "SemShiftAmountMustBeInteger" }, tokenId);
   }
+}
+
+/** The base trait each compound-assign operator's native path names when a
+ * side fails (`Add` for `AddAssign`, ...) - a `ReadonlyMap` for the same
+ * reason `OPERATOR_TRAIT_FALLBACKS` is one: a switch with one near-identical
+ * literal per case reads as copy-paste duplication to static analysis. */
+const COMPOUND_ASSIGN_BASE_TRAIT_NAMES: ReadonlyMap<
+  Parser.CompoundAssignOperator,
+  string
+> = new Map([
+  ["AddAssign", "Add"],
+  ["SubAssign", "Sub"],
+  ["MulAssign", "Mul"],
+  ["DivAssign", "Div"],
+  ["RemAssign", "Rem"],
+  ["BitAndAssign", "BitAnd"],
+  ["BitOrAssign", "BitOr"],
+  ["BitXorAssign", "BitXor"],
+  ["ShlAssign", "Shl"],
+  ["ShrAssign", "Shr"],
+]);
+
+function compoundAssignBaseTraitName(
+  op: Parser.CompoundAssignOperator,
+): string {
+  const name = COMPOUND_ASSIGN_BASE_TRAIT_NAMES.get(op);
+  if (name === undefined) {
+    throw new Error(
+      `ICE: no base trait name for compound-assign operator ${op}`,
+    );
+  }
+  return name;
 }
 
 /** Diagnoses a native-path compound assignment (the left operand already has
@@ -9681,130 +9691,45 @@ function checkCompoundAssignNativeOperands(
   isRhsValid: boolean,
   tokenId: number,
 ): void {
+  const operands: BinaryOperandPair = {
+    leftType: lhsType,
+    rightType: rhsType,
+    isLeftTypeValid: isLhsValid,
+    isRightTypeValid: isRhsValid,
+  };
   switch (op) {
     case "AddAssign":
-      checkNativeArithmeticOrBitwiseOperands(
-        ctx,
-        "arithmetic",
-        "Add",
-        { kind: "SemArithmeticOperandsSameType" },
-        lhsType,
-        rhsType,
-        isLhsValid,
-        isRhsValid,
-        tokenId,
-      );
-      return;
     case "SubAssign":
-      checkNativeArithmeticOrBitwiseOperands(
-        ctx,
-        "arithmetic",
-        "Sub",
-        { kind: "SemArithmeticOperandsSameType" },
-        lhsType,
-        rhsType,
-        isLhsValid,
-        isRhsValid,
-        tokenId,
-      );
-      return;
     case "MulAssign":
-      checkNativeArithmeticOrBitwiseOperands(
-        ctx,
-        "arithmetic",
-        "Mul",
-        { kind: "SemArithmeticOperandsSameType" },
-        lhsType,
-        rhsType,
-        isLhsValid,
-        isRhsValid,
-        tokenId,
-      );
-      return;
     case "DivAssign":
-      checkNativeArithmeticOrBitwiseOperands(
-        ctx,
-        "arithmetic",
-        "Div",
-        { kind: "SemArithmeticOperandsSameType" },
-        lhsType,
-        rhsType,
-        isLhsValid,
-        isRhsValid,
-        tokenId,
-      );
-      return;
     case "RemAssign":
       checkNativeArithmeticOrBitwiseOperands(
         ctx,
         "arithmetic",
-        "Rem",
+        compoundAssignBaseTraitName(op),
         { kind: "SemArithmeticOperandsSameType" },
-        lhsType,
-        rhsType,
-        isLhsValid,
-        isRhsValid,
+        operands,
         tokenId,
       );
       return;
     case "BitAndAssign":
-      checkNativeArithmeticOrBitwiseOperands(
-        ctx,
-        "bitwise",
-        "BitAnd",
-        { kind: "SemBitwiseOperandsSameType" },
-        lhsType,
-        rhsType,
-        isLhsValid,
-        isRhsValid,
-        tokenId,
-      );
-      return;
     case "BitOrAssign":
-      checkNativeArithmeticOrBitwiseOperands(
-        ctx,
-        "bitwise",
-        "BitOr",
-        { kind: "SemBitwiseOperandsSameType" },
-        lhsType,
-        rhsType,
-        isLhsValid,
-        isRhsValid,
-        tokenId,
-      );
-      return;
     case "BitXorAssign":
       checkNativeArithmeticOrBitwiseOperands(
         ctx,
         "bitwise",
-        "BitXor",
+        compoundAssignBaseTraitName(op),
         { kind: "SemBitwiseOperandsSameType" },
-        lhsType,
-        rhsType,
-        isLhsValid,
-        isRhsValid,
+        operands,
         tokenId,
       );
       return;
     case "ShlAssign":
-      checkNativeShiftOperands(
-        ctx,
-        "Shl",
-        lhsType,
-        rhsType,
-        isLhsValid,
-        isRhsValid,
-        tokenId,
-      );
-      return;
     case "ShrAssign":
       checkNativeShiftOperands(
         ctx,
-        "Shr",
-        lhsType,
-        rhsType,
-        isLhsValid,
-        isRhsValid,
+        compoundAssignBaseTraitName(op),
+        operands,
         tokenId,
       );
       return;
