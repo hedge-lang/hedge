@@ -203,8 +203,8 @@ describe("semantic analysis", (): void => {
     it("rejects shifting a non-integer value", () => {
       const result = diagnose("fn main() { let y = 1.5 << 2; }");
       expect(result.diagnostics).toHaveLength(1);
-      expect(messageOf(result.diagnostics[0])).toContain(
-        "the shifted value must be an integer",
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `f64: Shl` is not satisfied",
       );
     });
   });
@@ -286,7 +286,7 @@ describe("semantic analysis", (): void => {
       const result = diagnose("fn main() { let x = 1.5 & 2; }");
       expect(result.diagnostics).toHaveLength(2);
       expect(messageOf(result.diagnostics[0])).toBe(
-        "bitwise operations require integer operands",
+        "the trait bound `f64: BitAnd` is not satisfied",
       );
       expect(messageOf(result.diagnostics[1])).toBe(
         "bitwise operands must have the same type",
@@ -298,7 +298,7 @@ describe("semantic analysis", (): void => {
       expect(result.diagnostics).toHaveLength(2);
       for (const diagnostic of result.diagnostics) {
         expect(messageOf(diagnostic)).toBe(
-          "bitwise operations require integer operands",
+          "the trait bound `f64: BitAnd` is not satisfied",
         );
       }
     });
@@ -2302,12 +2302,12 @@ describe("semantic analysis", (): void => {
 
   it("rejects arithmetic on unit-typed operands", (): void => {
     const result = diagnose('fn main() { let x = print("hi") + 1; }');
-    const numericError = result.diagnostics.find((d) =>
-      messageOf(d).includes("arithmetic operands must be numeric"),
+    const traitBoundError = result.diagnostics.find((d) =>
+      messageOf(d).includes("trait bound"),
     );
-    assert(numericError !== undefined, "Expected a numeric-operand error");
-    expect(numericError.severity).toBe("error");
-    expect(messageOf(numericError)).toContain("()");
+    assert(traitBoundError !== undefined, "Expected a trait-bound error");
+    expect(traitBoundError.severity).toBe("error");
+    expect(messageOf(traitBoundError)).toContain("()");
   });
 
   it.each(["=", "+=", "-=", "*=", "/=", "%=", "<<=", ">>="])(
@@ -7530,7 +7530,7 @@ describe("trait and impl declarations", (): void => {
 });
 
 describe("std prelude traits", (): void => {
-  it("registers Clone, PartialEq, Eq, PartialOrd, Ord, Default, Drop, Neg, Not, and the ten Assign traits ahead of user code", (): void => {
+  it("registers Clone, PartialEq, Eq, PartialOrd, Ord, Default, Drop, Neg, Not, the ten Assign traits, and the ten arithmetic/bitwise/shift traits ahead of user code", (): void => {
     const result = diagnoseWithPrelude("fn main() {}");
     expect(result.diagnostics).toEqual([]);
     const traitNames = result.program.items
@@ -7556,6 +7556,16 @@ describe("std prelude traits", (): void => {
       "BitXorAssign",
       "ShlAssign",
       "ShrAssign",
+      "Add",
+      "Sub",
+      "Mul",
+      "Div",
+      "Rem",
+      "BitAnd",
+      "BitOr",
+      "BitXor",
+      "Shl",
+      "Shr",
     ]);
   });
 
@@ -8565,10 +8575,10 @@ describe("compound-assignment operators resolving through an Assign-family impl"
 
   it("rejects `a += b` on a struct with an `Add` impl but no `AddAssign` impl", (): void => {
     const result = diagnoseWithPrelude(`
-      trait Add { fn add(self, rhs: Self) -> Self; }
       struct V { x: i32 }
       impl Add for V {
-        fn add(self, rhs: Self) -> Self { self }
+        type Output = Self;
+        fn add(self, rhs: Self) -> Self::Output { self }
       }
       fn main() {
         let mut a = V { x: 1 };
@@ -8579,6 +8589,24 @@ describe("compound-assignment operators resolving through an Assign-family impl"
     expect(result.diagnostics).toHaveLength(1);
     expect(messageOf(result.diagnostics[0])).toBe(
       "the trait bound `V: AddAssign` is not satisfied",
+    );
+  });
+
+  it("rejects an `AddAssign` impl declaring a non-`Self` `Rhs` type argument", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct V { x: i32 }
+      impl AddAssign<bool> for V {
+        fn add_assign(&mut self, rhs: bool) {}
+      }
+      fn main() {
+        let mut a = V { x: 1 };
+        let b = V { x: 2 };
+        a += b;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "the `Rhs` type argument on this `AddAssign` impl must be `Self`; a different `Rhs` is not supported yet",
     );
   });
 
@@ -8659,7 +8687,7 @@ describe("compound-assignment operators resolving through an Assign-family impl"
       }
     `);
     expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
-      "arithmetic operands must be numeric; right-operand is type `bool`",
+      "the trait bound `bool: Add` is not satisfied",
       "arithmetic operands must have the same type",
     ]);
   });
@@ -8710,5 +8738,356 @@ describe("compound-assignment operators resolving through an Assign-family impl"
     `);
     expect(result.diagnostics).toHaveLength(1);
     expect(messageOf(result.diagnostics[0])).toContain("undefined_var");
+  });
+});
+
+/** The two diagnostics a struct/enum operand with no native capability and
+ * no operator-trait impl still gets under `op` - same shape (one message
+ * per invalid side) as before this trait fallback existed, since neither
+ * side ever resolves; each now names `trait` directly (`SemTraitBoundNotSatisfied`)
+ * rather than the operator's family, since a struct can implement `Add`
+ * without `Sub`. Only the shift-amount message is untouched by this ticket's
+ * wording pass, since the shift amount never gets a trait fallback at all. */
+function operandNotResolvedMessages(
+  op: string,
+  trait: string,
+): readonly string[] {
+  if (op === "<<" || op === ">>") {
+    return [
+      `the trait bound \`V: ${trait}\` is not satisfied`,
+      "the shift amount must be an integer",
+    ];
+  }
+  return [
+    `the trait bound \`V: ${trait}\` is not satisfied`,
+    `the trait bound \`V: ${trait}\` is not satisfied`,
+  ];
+}
+
+describe("arithmetic/bitwise/shift operators resolving through an operator-trait impl", (): void => {
+  const OPERATORS: readonly [string, string, string][] = [
+    ["+", "Add", "add"],
+    ["-", "Sub", "sub"],
+    ["*", "Mul", "mul"],
+    ["/", "Div", "div"],
+    ["%", "Rem", "rem"],
+    ["&", "BitAnd", "bitand"],
+    ["|", "BitOr", "bitor"],
+    ["^", "BitXor", "bitxor"],
+    ["<<", "Shl", "shl"],
+    [">>", "Shr", "shr"],
+  ];
+
+  it.each(OPERATORS)(
+    "accepts `a %s b` on a struct with a hand-written `impl %s`, typing the result `Self`",
+    (op, trait, method): void => {
+      const result = diagnoseWithPrelude(`
+        struct V { x: i32 }
+        impl ${trait} for V {
+          type Output = Self;
+          fn ${method}(self, rhs: Self) -> Self::Output { self }
+        }
+        fn main() {
+          let a = V { x: 1 };
+          let b = V { x: 2 };
+          let c = a ${op} b;
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "c").kind).toBe("StructType");
+    },
+  );
+
+  it.each(OPERATORS)(
+    "still rejects `a %s b` on a struct with no `%s` impl, with no additional cascade beyond today",
+    (op, trait): void => {
+      const result = diagnoseWithPrelude(`
+        struct V { x: i32 }
+        fn main() {
+          let a = V { x: 1 };
+          let b = V { x: 2 };
+          let c = a ${op} b;
+        }
+      `);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors.map((d) => messageOf(d))).toEqual(
+        operandNotResolvedMessages(op, trait),
+      );
+    },
+  );
+
+  it("accepts `a + b` on an enum with a hand-written `impl Add`", (): void => {
+    const result = diagnoseWithPrelude(`
+      enum Counter { Zero, One }
+      impl Add for Counter {
+        type Output = Self;
+        fn add(self, rhs: Self) -> Self::Output { self }
+      }
+      fn main() {
+        let a = Counter::Zero;
+        let b = Counter::One;
+        let c = a + b;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    expect(mainLetType(result, "c").kind).toBe("EnumType");
+  });
+
+  it("accepts `a + b` on a generic parameter bound by `Add`", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn combine<T: Add>(a: T, b: T) -> T { a + b }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("accepts `a + b` on `&Point` operands when `Point` implements `Add`", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Point { x: i32 }
+      impl Add for Point {
+        type Output = Self;
+        fn add(self, rhs: Self) -> Self::Output { self }
+      }
+      fn combine_refs(a: &Point, b: &Point) -> Point { a + b }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("reports differently-typed struct operands under `+` as a same-type error, not a capability error", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct A { x: i32 }
+      struct B { y: i32 }
+      impl Add for A {
+        type Output = Self;
+        fn add(self, rhs: Self) -> Self::Output { self }
+      }
+      impl Add for B {
+        type Output = Self;
+        fn add(self, rhs: Self) -> Self::Output { self }
+      }
+      fn main() {
+        let a = A { x: 1 };
+        let b = B { y: 2 };
+        let c = a + b;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "arithmetic operands must have the same type",
+    );
+  });
+
+  it("reports differently-typed struct operands under `&` as a same-type error, not a capability error", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct A { x: i32 }
+      struct B { y: i32 }
+      impl BitAnd for A {
+        type Output = Self;
+        fn bitand(self, rhs: Self) -> Self::Output { self }
+      }
+      impl BitAnd for B {
+        type Output = Self;
+        fn bitand(self, rhs: Self) -> Self::Output { self }
+      }
+      fn main() {
+        let a = A { x: 1 };
+        let b = B { y: 2 };
+        let c = a & b;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "bitwise operands must have the same type",
+    );
+  });
+
+  it("rejects `+` on a type whose `Add` comes only from a blanket impl, since no callable target can be built", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Marker {}
+      struct W { n: i32 }
+      impl Marker for W {}
+      impl<T: Marker> Add for T {
+        type Output = Self;
+        fn add(self, rhs: Self) -> Self::Output { self }
+      }
+      fn main() {
+        let a = W { n: 1 };
+        let b = W { n: 2 };
+        let c = a + b;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "the trait bound `W: Add` is not satisfied",
+    );
+    expect(result.methodTargets.size).toBe(0);
+  });
+
+  it("rejects `a + b` on a struct whose only `Add` impl is against a shadowing block-local trait", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct V { x: i32 }
+      fn main() {
+        trait Add {}
+        impl Add for V {}
+        let a = V { x: 1 };
+        let b = V { x: 2 };
+        let c = a + b;
+      }
+    `);
+    // The block-scoped `impl` also draws a HEDGE-LINT-003 warning, unrelated
+    // to which `Add` `+` binds to.
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors.map((d) => messageOf(d))).toEqual(
+      operandNotResolvedMessages("+", "Add"),
+    );
+  });
+
+  it("accepts `a + b` on a struct with a top-level `impl Add` even when a block-local `Add` trait shadows the prelude", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct V { x: i32 }
+      impl Add for V {
+        type Output = Self;
+        fn add(self, rhs: Self) -> Self::Output { self }
+      }
+      fn main() {
+        trait Add {}
+        let a = V { x: 1 };
+        let b = V { x: 2 };
+        let c = a + b;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects an `Add` impl that omits the required `Output` associated type", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct V { x: i32 }
+      impl Add for V { fn add(self, rhs: Self) -> V { self } }
+      fn main() {
+        let a = V { x: 1 };
+        let b = V { x: 2 };
+        let c = a + b;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "impl of trait `Add` for `V` is missing associated type `Output`",
+    );
+  });
+
+  it("rejects an `Add` impl whose `Output` is not `Self`", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct V { x: i32 }
+      impl Add for V {
+        type Output = bool;
+        fn add(self, rhs: Self) -> Self::Output { true }
+      }
+      fn main() {
+        let a = V { x: 1 };
+        let b = V { x: 2 };
+        let c = a + b;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "associated type `Output` on this `Add` impl must resolve to `Self`; a different `Output` is not supported yet",
+    );
+  });
+
+  it("rejects an `Add` impl declaring a non-`Self` `Rhs` type argument", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct V { x: i32 }
+      impl Add<bool> for V {
+        type Output = Self;
+        fn add(self, rhs: bool) -> Self::Output { self }
+      }
+      fn main() {
+        let a = V { x: 1 };
+        let b = V { x: 2 };
+        let c = a + b;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "the `Rhs` type argument on this `Add` impl must be `Self`; a different `Rhs` is not supported yet",
+    );
+  });
+
+  it("records an `Add`-dispatched `+` against the operator token", (): void => {
+    const { program, tokens } = assembleProgram(`
+      struct P { x: i32 }
+      impl Add for P {
+        type Output = Self;
+        fn add(self, rhs: Self) -> Self::Output { self }
+      }
+      fn main() {
+        let a = P { x: 1 };
+        let b = P { x: 2 };
+        let c = a + b;
+        print(c.x);
+      }
+    `);
+    assert(isSome(program), "Parse failed");
+    const result = analyze(program.value, tokens);
+    expect(result.diagnostics).toEqual([]);
+    const entry = [...result.methodTargets.entries()][0];
+    assert(entry !== undefined, "expected one method target");
+    const [tokenId, target] = entry;
+    expect(tokens[tokenId]?.kind).toBe("plus");
+    expect(target).toMatchObject({
+      typeName: "P",
+      traitName: some("Add"),
+      methodName: "add",
+    });
+  });
+
+  it("records a witness target for `+` on a generic parameter bound by `Add`", (): void => {
+    const { program, tokens } = assembleProgram(`
+      fn combine<T: Add>(a: T, b: T) -> T { a + b }
+      fn main() { print(0); }
+    `);
+    assert(isSome(program), "Parse failed");
+    const result = analyze(program.value, tokens);
+    expect(result.diagnostics).toEqual([]);
+    const [target] = [...result.methodTargets.values()];
+    expect(target).toEqual({
+      kind: "witness",
+      witnessName: "_witness_T_Add",
+      methodName: "add",
+    });
+  });
+
+  it("does not validate the shift amount's type at all once the shifted value resolves through a `Shl` impl", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct V { x: i32 }
+      impl Shl for V {
+        type Output = Self;
+        fn shl(self, rhs: Self) -> Self::Output { self }
+      }
+      fn main() {
+        let a = V { x: 1 };
+        let c = a << true;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("leaves primitive arithmetic, bitwise, and shift unaffected", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn main() {
+        let a = 1 + 2;
+        let b = 3 - 1;
+        let c = 2 * 3;
+        let d = 7 / 2;
+        let e = 7 % 2;
+        let f = 1 & 2;
+        let g = 1 | 2;
+        let h = 1 ^ 2;
+        let i = 1 << 2;
+        let j = 8 >> 2;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
   });
 });

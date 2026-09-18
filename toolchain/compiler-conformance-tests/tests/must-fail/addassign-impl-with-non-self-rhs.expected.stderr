@@ -1,0 +1,1 @@
+error[HEDGE-TRAIT-010]: the `Rhs` type argument on this `AddAssign` impl must be `Self`; a different `Rhs` is not supported yet

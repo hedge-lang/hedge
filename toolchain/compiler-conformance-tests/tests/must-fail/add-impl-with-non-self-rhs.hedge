@@ -1,0 +1,15 @@
+struct V {
+  x: i32,
+}
+
+impl Add<bool> for V {
+  type Output = Self;
+  fn add(self, rhs: bool) -> Self::Output { self }
+}
+
+fn main() {
+  let a = V { x: 1 };
+  let b = V { x: 2 };
+  let c = a + b;
+  print(c.x);
+}

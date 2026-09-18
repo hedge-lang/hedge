@@ -16,11 +16,10 @@ describe("renderDiagnosticMessage", (): void => {
   it("branches on a payload discriminant", (): void => {
     expect(
       renderDiagnosticMessage({
-        kind: "SemArithmeticOperandNotNumeric",
-        side: "right",
-        found: "str",
+        kind: "SemComparisonNotSupported",
+        relation: "ordering",
       }),
-    ).toBe("arithmetic operands must be numeric; right-operand is type `str`");
+    ).toBe("type does not support ordering comparison");
   });
 });
 

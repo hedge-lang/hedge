@@ -1,0 +1,2 @@
+error[HEDGE-TRAIT-002]: the trait bound `Point: Add` is not satisfied
+error[HEDGE-TRAIT-002]: the trait bound `Point: Add` is not satisfied

@@ -290,6 +290,7 @@ export type DiagnosticKind =
       readonly assocName: string;
     }
   | { readonly kind: "SemOperatorOutputMustBeSelf"; readonly trait: string }
+  | { readonly kind: "SemOperatorRhsMustBeSelf"; readonly trait: string }
   | {
       readonly kind: "SemImplDefinesUndeclaredAssocType";
       readonly trait: string;
@@ -401,13 +402,6 @@ export type DiagnosticKind =
       readonly typeName: string;
     }
   | { readonly kind: "SemLogicalOperandsMustBeBool" }
-  | { readonly kind: "SemBitwiseRequiresInteger" }
-  | {
-      readonly kind: "SemArithmeticOperandNotNumeric";
-      readonly side: "left" | "right";
-      readonly found: string;
-    }
-  | { readonly kind: "SemShiftedValueMustBeInteger" }
   | { readonly kind: "SemShiftAmountMustBeInteger" }
   | { readonly kind: "SemNotRequiresBoolOrInteger"; readonly found: string }
   | { readonly kind: "SemRepeatArrayElementMustBeCopy"; readonly found: string }
@@ -745,6 +739,7 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemImplDefinesUndeclaredAssocType", "HEDGE-TRAIT-007"],
   ["SemTraitNotObjectSafe", "HEDGE-TRAIT-008"],
   ["SemOperatorOutputMustBeSelf", "HEDGE-TRAIT-009"],
+  ["SemOperatorRhsMustBeSelf", "HEDGE-TRAIT-010"],
   ["SemQualifiedTypePathsUnsupported", "HEDGE-UNSUPPORTED-001"],
   ["SemDropImplForEnumUnsupported", "HEDGE-UNSUPPORTED-001"],
   ["SemGenericTypeParamNoArguments", "HEDGE-UNSUPPORTED-001"],
@@ -770,9 +765,6 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemAmbiguousMethod", "HEDGE-TYPE-013"],
   ["SemNoAssociatedItem", "HEDGE-TYPE-014"],
   ["SemLogicalOperandsMustBeBool", "HEDGE-TYPE-002"],
-  ["SemBitwiseRequiresInteger", "HEDGE-TYPE-002"],
-  ["SemArithmeticOperandNotNumeric", "HEDGE-TYPE-002"],
-  ["SemShiftedValueMustBeInteger", "HEDGE-TYPE-002"],
   ["SemShiftAmountMustBeInteger", "HEDGE-TYPE-002"],
   ["SemNotRequiresBoolOrInteger", "HEDGE-TYPE-002"],
   ["SemRepeatArrayElementMustBeCopy", "HEDGE-TYPE-002"],

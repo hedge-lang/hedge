@@ -90,6 +90,56 @@ trait ShlAssign<Rhs = Self> {
 trait ShrAssign<Rhs = Self> {
   fn shr_assign(&mut self, rhs: Rhs);
 }
+
+trait Add<Rhs = Self> {
+  type Output;
+  fn add(self, rhs: Rhs) -> Self::Output;
+}
+
+trait Sub<Rhs = Self> {
+  type Output;
+  fn sub(self, rhs: Rhs) -> Self::Output;
+}
+
+trait Mul<Rhs = Self> {
+  type Output;
+  fn mul(self, rhs: Rhs) -> Self::Output;
+}
+
+trait Div<Rhs = Self> {
+  type Output;
+  fn div(self, rhs: Rhs) -> Self::Output;
+}
+
+trait Rem<Rhs = Self> {
+  type Output;
+  fn rem(self, rhs: Rhs) -> Self::Output;
+}
+
+trait BitAnd<Rhs = Self> {
+  type Output;
+  fn bitand(self, rhs: Rhs) -> Self::Output;
+}
+
+trait BitOr<Rhs = Self> {
+  type Output;
+  fn bitor(self, rhs: Rhs) -> Self::Output;
+}
+
+trait BitXor<Rhs = Self> {
+  type Output;
+  fn bitxor(self, rhs: Rhs) -> Self::Output;
+}
+
+trait Shl<Rhs = Self> {
+  type Output;
+  fn shl(self, rhs: Rhs) -> Self::Output;
+}
+
+trait Shr<Rhs = Self> {
+  type Output;
+  fn shr(self, rhs: Rhs) -> Self::Output;
+}
 `;
 
 export interface AssembledProgram {

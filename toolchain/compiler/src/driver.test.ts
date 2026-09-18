@@ -2201,3 +2201,71 @@ describe("std prelude", (): void => {
     );
   });
 });
+
+describe("+ / & / << on a type with an operator-trait impl", (): void => {
+  it("lowers `+` on a struct to a call of the impl's `add` free function and runs it", (): void => {
+    const js = emittedJs(`
+      struct Point { x: i32 }
+      impl Add for Point {
+        type Output = Self;
+        fn add(self, rhs: Self) -> Self::Output { Point { x: self.x + rhs.x } }
+      }
+      fn main() {
+        let a = Point { x: 3 };
+        let b = Point { x: 4 };
+        let c = a + b;
+        print(c.x);
+      }
+    `);
+    expect(js).toContain("Point$Add$add(a, b)");
+    expect(js).not.toContain("a.add(b)");
+    expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
+  it("lowers `&` on a struct to a call of the impl's `bitand` free function and runs it", (): void => {
+    const js = emittedJs(`
+      struct Flags { bits: i32 }
+      impl BitAnd for Flags {
+        type Output = Self;
+        fn bitand(self, rhs: Self) -> Self::Output { Flags { bits: self.bits & rhs.bits } }
+      }
+      fn main() {
+        let a = Flags { bits: 6 };
+        let b = Flags { bits: 3 };
+        let c = a & b;
+        print(c.bits);
+      }
+    `);
+    expect(js).toContain("Flags$BitAnd$bitand(a, b)");
+    expect(js).not.toContain("a.bitand(b)");
+    expect(runEmittedJs(js)).toEqual(["2"]);
+  });
+
+  it("lowers `<<` on a struct to a call of the impl's `shl` free function and runs it", (): void => {
+    const js = emittedJs(`
+      struct Shifted { bits: i32 }
+      impl Shl for Shifted {
+        type Output = Self;
+        fn shl(self, rhs: Self) -> Self::Output { Shifted { bits: self.bits << rhs.bits } }
+      }
+      fn main() {
+        let a = Shifted { bits: 1 };
+        let b = Shifted { bits: 3 };
+        let c = a << b;
+        print(c.bits);
+      }
+    `);
+    expect(js).toContain("Shifted$Shl$shl(a, b)");
+    expect(js).not.toContain("a.shl(b)");
+    expect(runEmittedJs(js)).toEqual(["8"]);
+  });
+
+  it("dispatches `+` on an `Add`-bound generic parameter through the witness", (): void => {
+    const js = emittedJs(`
+      fn combine<T: Add>(a: T, b: T) -> T { a + b }
+      fn main() { print("done"); }
+    `);
+    expect(js).toContain("_witness_T_Add.add(a, b)");
+    expect(js).not.toContain("a.add(b)");
+  });
+});

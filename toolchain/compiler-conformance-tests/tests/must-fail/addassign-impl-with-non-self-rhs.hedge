@@ -1,0 +1,14 @@
+struct V {
+  x: i32,
+}
+
+impl AddAssign<bool> for V {
+  fn add_assign(&mut self, rhs: bool) {}
+}
+
+fn main() {
+  let mut a = V { x: 1 };
+  let b = V { x: 2 };
+  a += b;
+  print(a.x);
+}

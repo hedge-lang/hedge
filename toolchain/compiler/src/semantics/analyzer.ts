@@ -2636,13 +2636,124 @@ function resolveImplSelfTargetType(
   );
 }
 
-/** `unaryNegResultType`/`unaryNotResultType` always type `-v`/`!v` as the
- * operand's own type (the homogeneous case) - an impl declaring a different
- * `Output` would silently mistype the result rather than reflect what the
- * impl body actually returns, since nothing resolves a heterogeneous
- * `Output` at the call site. Reject it here instead, where a real `Self`
- * resolves to the impl's own concrete target (unlike the eager coherence
- * pre-pass, where `Self` is still an unresolved placeholder). */
+/** The ten binary arithmetic/bitwise/shift traits, each declared
+ * `<Rhs = Self>` - the only prelude traits an impl's own trait ref can
+ * carry a (currently unsupported) type argument for. */
+const BINARY_OPERATOR_TRAIT_NAMES: ReadonlySet<string> = new Set([
+  "Add",
+  "Sub",
+  "Mul",
+  "Div",
+  "Rem",
+  "BitAnd",
+  "BitOr",
+  "BitXor",
+  "Shl",
+  "Shr",
+]);
+
+/** Every prelude trait whose result type `analyzer.ts` assumes is `Self`
+ * (the homogeneous case: unary `Neg`/`Not`, plus `BINARY_OPERATOR_TRAIT_NAMES`)
+ * - an impl declaring a different `Output` for any of these would silently
+ * mistype the result rather than reflect what the impl body actually
+ * returns, since nothing resolves a heterogeneous `Output` at the call
+ * site. `*Assign` traits are excluded - they declare no `Output` at all. */
+const HOMOGENEOUS_OPERATOR_TRAIT_NAMES: ReadonlySet<string> = new Set([
+  "Neg",
+  "Not",
+  ...BINARY_OPERATOR_TRAIT_NAMES,
+]);
+
+/** The ten compound-assignment traits, each declared `<Rhs = Self>` like
+ * their binary counterparts - the same non-default-`Rhs` gap applies here,
+ * since `buildImplDecl` drops a trait ref's type arguments regardless of
+ * which trait it names. */
+const ASSIGN_OPERATOR_TRAIT_NAMES: ReadonlySet<string> = new Set([
+  "AddAssign",
+  "SubAssign",
+  "MulAssign",
+  "DivAssign",
+  "RemAssign",
+  "BitAndAssign",
+  "BitOrAssign",
+  "BitXorAssign",
+  "ShlAssign",
+  "ShrAssign",
+]);
+
+/** Every prelude trait whose impl-site `Rhs` type argument
+ * `checkOperatorImplHasNoRhsArgument` rejects - both operator families
+ * declare `<Rhs = Self>`, and neither has impl-site substitution for it
+ * yet. */
+const RHS_CHECKED_OPERATOR_TRAIT_NAMES: ReadonlySet<string> = new Set([
+  ...BINARY_OPERATOR_TRAIT_NAMES,
+  ...ASSIGN_OPERATOR_TRAIT_NAMES,
+]);
+
+/** Whether `traitId` is the prelude's own registration of a trait in
+ * `names` - a bare-name pre-filter against the `Set` first, so an impl of
+ * an unrelated trait (`Clone`, `PartialEq`, a block-local trait sharing
+ * one of these names, ...) costs no `lookupPreludeTrait` call at all, and
+ * a plausible name match still costs at most one, confirming scoped
+ * identity rather than trusting the name alone. */
+function isTraitInSet(
+  ctx: AnalysisContext,
+  traitId: string,
+  names: ReadonlySet<string>,
+): boolean {
+  const bareName = bareTypeName(traitId);
+  if (!names.has(bareName)) return false;
+  return traitId === lookupPreludeTrait(ctx, bareName);
+}
+
+function isHomogeneousOperatorTrait(
+  ctx: AnalysisContext,
+  traitId: string,
+): boolean {
+  return isTraitInSet(ctx, traitId, HOMOGENEOUS_OPERATOR_TRAIT_NAMES);
+}
+
+/** An impl's own trait ref carrying an explicit type argument
+ * (`impl Add<bool> for V`, `impl AddAssign<bool> for V`) is silently
+ * dropped by `buildImplDecl` today, so it resolves identically to the
+ * homogeneous `impl Add for V` - letting `V + V` (or `a += b`) dispatch
+ * through a method whose `rhs` doesn't match. There's no mechanism yet to
+ * substitute a trait's own generic default at an impl site, so any
+ * explicit type argument here is rejected outright, not just a non-`Self`
+ * one - there's nothing to validate it against. */
+function checkOperatorImplHasNoRhsArgument(
+  ctx: AnalysisContext,
+  item: Parser.ImplDecl,
+  traitName: Option<string>,
+): void {
+  if (
+    !isSome(item.traitRef) ||
+    item.traitRef.value.typeArguments.length === 0
+  ) {
+    return;
+  }
+  if (
+    !isSome(traitName) ||
+    !isTraitInSet(ctx, traitName.value, RHS_CHECKED_OPERATOR_TRAIT_NAMES)
+  ) {
+    return;
+  }
+  emitError(
+    ctx,
+    {
+      kind: "SemOperatorRhsMustBeSelf",
+      trait: bareTypeName(traitName.value),
+    },
+    item.traitRef.value.tokenId,
+  );
+}
+
+/** `unaryNegResultType`/`unaryNotResultType`/`inferArithmeticType`/
+ * `inferBitwiseType`/`inferShiftType` always type the trait-dispatched
+ * result as the operand's own type (the homogeneous case). Reject a
+ * declared `Output` that disagrees here, where a real `Self` resolves to
+ * the impl's own concrete target (unlike the eager coherence pre-pass,
+ * where `Self` is still an unresolved placeholder). */
 function checkOperatorOutputIsSelf(
   ctx: AnalysisContext,
   traitName: Option<string>,
@@ -2651,9 +2762,7 @@ function checkOperatorOutputIsSelf(
   tokenId: number,
 ): void {
   if (!isSome(traitName)) return;
-  const isOperatorTrait =
-    traitName.value === lookupPreludeTrait(ctx, "Neg") ||
-    traitName.value === lookupPreludeTrait(ctx, "Not");
+  const isOperatorTrait = isHomogeneousOperatorTrait(ctx, traitName.value);
   if (!isOperatorTrait || typesEqual(outputType, targetType)) return;
   emitError(
     ctx,
@@ -2683,6 +2792,7 @@ function analyzeImplDecl(
     shallow.traitRef,
     (t) => lookupTrait(ctx, t.name) ?? t.name,
   );
+  checkOperatorImplHasNoRhsArgument(ctx, item, traitName);
 
   pushGenericParams(ctx, item.generics, item.whereClause);
   pushSelfContext(ctx, {
@@ -7097,6 +7207,50 @@ function inferComparisonType(
   return { kind: "PrimitiveBooleanType" };
 }
 
+/** The free-fn/witness recording shared by every `record*TraitTarget`
+ * variant (comparison, unary, arithmetic/bitwise/shift): a concrete
+ * non-blanket impl records a `free` `MethodTarget`; a bound generic
+ * parameter records a `witness` one; a blanket-satisfied impl is the one
+ * place callers still disagree, so `onBlanket` carries what each family
+ * actually does there (comparison/arithmetic reject with
+ * `SemTraitBoundNotSatisfied`; unary still doesn't - a known, separately
+ * tracked gap, not something to change as a side effect of deduplicating
+ * this). `operandType` is already unwrapped to its referent. */
+function recordOperatorDispatchTarget(
+  ctx: AnalysisContext,
+  trait: string,
+  methodName: string,
+  operandType: Semantics.Type,
+  tokenId: number,
+  onBlanket: () => void,
+): void {
+  if (isNominalType(operandType)) {
+    const impl = findRegisteredImpl(ctx, operandType.name, trait);
+    if (impl === undefined) return;
+    if (impl.isBlanket) {
+      onBlanket();
+      return;
+    }
+    ctx.methodTargetTable.set(tokenId, {
+      kind: "free",
+      typeId: operandType.name,
+      typeName: bareTypeName(operandType.name),
+      traitName: some(bareTypeName(trait)),
+      methodName,
+      isDefaultBody: false,
+    });
+    return;
+  }
+  const witnessName = abstractWitnessParamName(ctx, operandType, trait);
+  if (witnessName !== undefined) {
+    ctx.methodTargetTable.set(tokenId, {
+      kind: "witness",
+      witnessName,
+      methodName,
+    });
+  }
+}
+
 /** For an `==`/`!=`/`<`/`>`/`<=`/`>=` that resolves through a concrete impl
  * of `spec.traitFallback`'s trait for `<operand type>` (not the native
  * capability, not a generic parameter, not a blanket impl), records the
@@ -7124,10 +7278,13 @@ function recordComparisonTraitTarget(
   if (hasCapability(operandType, spec.capability)) return;
   const trait = lookupPreludeTrait(ctx, traitName);
   if (trait === undefined) return;
-  if (isNominalType(operandType)) {
-    const impl = findRegisteredImpl(ctx, operandType.name, trait);
-    if (impl === undefined) return;
-    if (impl.isBlanket) {
+  recordOperatorDispatchTarget(
+    ctx,
+    trait,
+    methodName,
+    operandType,
+    tokenId,
+    () => {
       emitError(
         ctx,
         {
@@ -7137,26 +7294,8 @@ function recordComparisonTraitTarget(
         },
         tokenId,
       );
-      return;
-    }
-    ctx.methodTargetTable.set(tokenId, {
-      kind: "free",
-      typeId: operandType.name,
-      typeName: bareTypeName(operandType.name),
-      traitName: some(bareTypeName(trait)),
-      methodName,
-      isDefaultBody: false,
-    });
-    return;
-  }
-  const witnessName = abstractWitnessParamName(ctx, operandType, trait);
-  if (witnessName !== undefined) {
-    ctx.methodTargetTable.set(tokenId, {
-      kind: "witness",
-      witnessName,
-      methodName,
-    });
-  }
+    },
+  );
 }
 
 /** For a `-`/`!` that resolves through a concrete `impl Neg`/`Not for
@@ -7174,27 +7313,14 @@ function recordUnaryTraitTarget(
 ): void {
   const referent =
     operandType.kind === "ReferenceType" ? operandType.referent : operandType;
-  if (isNominalType(referent)) {
-    const impl = findRegisteredImpl(ctx, referent.name, traitName);
-    if (impl === undefined || impl.isBlanket) return;
-    ctx.methodTargetTable.set(tokenId, {
-      kind: "free",
-      typeId: referent.name,
-      typeName: bareTypeName(referent.name),
-      traitName: some(bareTypeName(traitName)),
-      methodName,
-      isDefaultBody: false,
-    });
-    return;
-  }
-  const witnessName = abstractWitnessParamName(ctx, referent, traitName);
-  if (witnessName !== undefined) {
-    ctx.methodTargetTable.set(tokenId, {
-      kind: "witness",
-      witnessName,
-      methodName,
-    });
-  }
+  recordOperatorDispatchTarget(
+    ctx,
+    traitName,
+    methodName,
+    referent,
+    tokenId,
+    () => {},
+  );
 }
 
 /** The witness parameter an abstract receiver (a `==` operand or a method
@@ -7251,88 +7377,332 @@ function inferLogicalType(
   return { kind: "PrimitiveBooleanType" };
 }
 
+/** The prelude trait/method an arithmetic/bitwise/shift operand with no
+ * native capability falls back to in the homogeneous case (`Rhs = Self`,
+ * `Output = Self`) - `Add`/`add` for `+`, `BitAnd`/`bitand` for `&`, etc. */
+interface OperatorTraitFallback {
+  readonly trait: string;
+  readonly method: string;
+}
+
+/** One binary operator's operand pair, bundled so the arithmetic/bitwise
+ * helpers below stay under the max-params ceiling instead of threading
+ * four related values as separate positional arguments. */
+interface BinaryOperandPair {
+  readonly leftType: Semantics.Type;
+  readonly rightType: Semantics.Type;
+  readonly isLeftTypeValid: boolean;
+  readonly isRightTypeValid: boolean;
+}
+
+/** `BinaryOperandPair` plus each side's own already-computed resolution
+ * result, for the one caller (`finishArithmeticOrBitwiseCheck`) that needs
+ * both. */
+interface BinaryOperandResolution extends BinaryOperandPair {
+  readonly leftResolves: boolean;
+  readonly rightResolves: boolean;
+}
+
+/** One `{trait, method}` pair per arithmetic/bitwise/shift operator - a
+ * `ReadonlyMap` rather than a per-case literal in `inferBinaryType`'s own
+ * switch, since a long run of near-identical `case "X": return
+ * inferArithmeticType(ctx, { trait: "X", method: "x" }, ...)` blocks reads
+ * as copy-paste duplication to static analysis even though every case
+ * differs. */
+const OPERATOR_TRAIT_FALLBACKS: ReadonlyMap<
+  Parser.BinaryOperator,
+  OperatorTraitFallback
+> = new Map([
+  ["Add", { trait: "Add", method: "add" }],
+  ["Sub", { trait: "Sub", method: "sub" }],
+  ["Mul", { trait: "Mul", method: "mul" }],
+  ["Div", { trait: "Div", method: "div" }],
+  ["Rem", { trait: "Rem", method: "rem" }],
+  ["BitAnd", { trait: "BitAnd", method: "bitand" }],
+  ["BitOr", { trait: "BitOr", method: "bitor" }],
+  ["BitXor", { trait: "BitXor", method: "bitxor" }],
+  ["Shl", { trait: "Shl", method: "shl" }],
+  ["Shr", { trait: "Shr", method: "shr" }],
+]);
+
+function operatorTraitFallback(
+  op: Parser.BinaryOperator,
+): OperatorTraitFallback {
+  const fallback = OPERATOR_TRAIT_FALLBACKS.get(op);
+  if (fallback === undefined) {
+    throw new Error(`ICE: no operator trait fallback for ${op}`);
+  }
+  return fallback;
+}
+
+/** Whether `type` resolves `fallback`'s trait, via the same one-borrow/
+ * generic-bound resolution every other operator fallback (`==`'s
+ * `PartialEq`, unary `-`/`!`'s `Neg`/`Not`) shares. */
+function resolvesViaOperatorTrait(
+  ctx: AnalysisContext,
+  fallback: OperatorTraitFallback,
+  type: Semantics.Type,
+): boolean {
+  const trait = lookupPreludeTrait(ctx, fallback.trait);
+  if (trait === undefined) return false;
+  return resolvesViaTraitBound(ctx, type, trait);
+}
+
+/** The result type of a trait-dispatched binary arithmetic/bitwise/shift
+ * operator (`Output = Self`): the concrete type the operand's own referent
+ * names, not the borrow it arrived through - mirrors `unaryNegResultType`'s
+ * own unwrap. A no-op for the native-capability case, since no primitive
+ * ever carries `arithmetic`/`bitwise` through a `ReferenceType` wrapper. */
+function arithmeticOperatorResultType(
+  primaryType: Semantics.Type,
+): Semantics.Type {
+  return primaryType.kind === "ReferenceType"
+    ? primaryType.referent
+    : primaryType;
+}
+
+/** For a `+`/`-`/`*`/`/`/`%`/`&`/`|`/`^`/`<<`/`>>` that resolves through a
+ * concrete impl of `fallback`'s trait for `operandRawType` (not the native
+ * `capability`, not a generic parameter, not a blanket impl), records the
+ * impl's method as a free function so `jsim.ts`'s trait-dispatch lowering
+ * calls it directly - mirrors `recordComparisonTraitTarget`/
+ * `recordUnaryTraitTarget`'s own free/witness/blanket split for this
+ * operator family. */
+function recordArithmeticTraitTarget(
+  ctx: AnalysisContext,
+  fallback: OperatorTraitFallback,
+  capability: TypeCapability,
+  operandRawType: Semantics.Type,
+  tokenId: number,
+): void {
+  const operandType =
+    operandRawType.kind === "ReferenceType"
+      ? operandRawType.referent
+      : operandRawType;
+  if (hasCapability(operandType, capability)) return;
+  const trait = lookupPreludeTrait(ctx, fallback.trait);
+  if (trait === undefined) return;
+  recordOperatorDispatchTarget(
+    ctx,
+    trait,
+    fallback.method,
+    operandType,
+    tokenId,
+    () => {
+      emitError(
+        ctx,
+        {
+          kind: "SemTraitBoundNotSatisfied",
+          typeName: describeType(operandType),
+          trait: bareTypeName(trait),
+        },
+        tokenId,
+      );
+    },
+  );
+}
+
+/** Whether one arithmetic/bitwise operand may take part - via its own
+ * `capability` entry, or a resolved `fallback` impl on the operand's own
+ * type - independent of the other operand's type, mirroring
+ * `comparisonOperandResolves`'s own per-operand shape. */
+function arithmeticOperandResolves(
+  ctx: AnalysisContext,
+  capability: TypeCapability,
+  fallback: OperatorTraitFallback,
+  type: Semantics.Type,
+  isValid: boolean,
+): boolean {
+  if (!isValid) return true;
+  if (hasCapability(type, capability)) return true;
+  return resolvesViaOperatorTrait(ctx, fallback, type);
+}
+
+/** The same-type-or-record tail of `checkArithmeticOrBitwiseOperands`, split
+ * out purely to keep that function's own branch count under the ESLint
+ * complexity cap - see its own doc comment for what each branch means. A
+ * single leading guard clause (rather than testing `isLeftTypeValid`/
+ * `isRightTypeValid` separately in each of the two branches below) keeps
+ * each validity flag read exactly once, not used to pick between outcomes
+ * at two different points in the function. */
+function finishArithmeticOrBitwiseCheck(
+  ctx: AnalysisContext,
+  capability: TypeCapability,
+  fallback: OperatorTraitFallback,
+  sameTypeKind: DiagnosticKind,
+  resolution: BinaryOperandResolution,
+  tokenId: number,
+): void {
+  if (!resolution.isLeftTypeValid || !resolution.isRightTypeValid) return;
+  if (!typesEqual(resolution.leftType, resolution.rightType)) {
+    emitError(ctx, sameTypeKind, tokenId);
+    return;
+  }
+  if (resolution.leftResolves && resolution.rightResolves) {
+    recordArithmeticTraitTarget(
+      ctx,
+      fallback,
+      capability,
+      resolution.leftType,
+      tokenId,
+    );
+  }
+}
+
+/** Shared per-operand-error/same-type/record flow behind `inferArithmeticType`
+ * and `inferBitwiseType`, which differ only in `capability`/`sameTypeKind`.
+ * A failing side always reports `SemTraitBoundNotSatisfied` naming
+ * `fallback.trait` directly (`Add`, `Sub`, `BitAnd`, ...) rather than a
+ * family-generic "arithmetic"/"bitwise" message - a struct can implement
+ * `Add` without `Sub`, so naming the operator family instead of the specific
+ * trait it actually needs is no more accurate than the "must be numeric"
+ * wording this replaced. */
+function checkArithmeticOrBitwiseOperands(
+  ctx: AnalysisContext,
+  capability: TypeCapability,
+  fallback: OperatorTraitFallback,
+  sameTypeKind: DiagnosticKind,
+  operands: BinaryOperandPair,
+  tokenId: number,
+): Semantics.Type {
+  const { leftType, rightType, isLeftTypeValid, isRightTypeValid } = operands;
+  const leftResolves = arithmeticOperandResolves(
+    ctx,
+    capability,
+    fallback,
+    leftType,
+    isLeftTypeValid,
+  );
+  const rightResolves = arithmeticOperandResolves(
+    ctx,
+    capability,
+    fallback,
+    rightType,
+    isRightTypeValid,
+  );
+
+  if (isLeftTypeValid && !leftResolves) {
+    emitError(
+      ctx,
+      {
+        kind: "SemTraitBoundNotSatisfied",
+        typeName: describeType(leftType),
+        trait: fallback.trait,
+      },
+      tokenId,
+    );
+  }
+  if (isRightTypeValid && !rightResolves) {
+    emitError(
+      ctx,
+      {
+        kind: "SemTraitBoundNotSatisfied",
+        typeName: describeType(rightType),
+        trait: fallback.trait,
+      },
+      tokenId,
+    );
+  }
+  finishArithmeticOrBitwiseCheck(
+    ctx,
+    capability,
+    fallback,
+    sameTypeKind,
+    {
+      ...operands,
+      leftResolves,
+      rightResolves,
+    },
+    tokenId,
+  );
+  return arithmeticOperatorResultType(isLeftTypeValid ? leftType : rightType);
+}
+
 function inferArithmeticType(
   ctx: AnalysisContext,
+  fallback: OperatorTraitFallback,
   leftType: Semantics.Type,
   rightType: Semantics.Type,
   isLeftTypeValid: boolean,
   isRightTypeValid: boolean,
   tokenId: number,
 ): Semantics.Type {
-  // TODO(Hedge-280): no fallback to an Add/Sub/Mul/Div/Rem-style operator
-  // trait yet - a struct or enum operand is always rejected here.
-  if (isLeftTypeValid && !hasCapability(leftType, "arithmetic")) {
-    emitError(
-      ctx,
-      {
-        kind: "SemArithmeticOperandNotNumeric",
-        side: "left",
-        found: describeType(leftType),
-      },
-      tokenId,
-    );
-  }
-  if (isRightTypeValid && !hasCapability(rightType, "arithmetic")) {
-    emitError(
-      ctx,
-      {
-        kind: "SemArithmeticOperandNotNumeric",
-        side: "right",
-        found: describeType(rightType),
-      },
-      tokenId,
-    );
-  }
-  if (isLeftTypeValid && isRightTypeValid && !typesEqual(leftType, rightType)) {
-    emitError(ctx, { kind: "SemArithmeticOperandsSameType" }, tokenId);
-  }
-  return isLeftTypeValid ? leftType : rightType;
+  return checkArithmeticOrBitwiseOperands(
+    ctx,
+    "arithmetic",
+    fallback,
+    { kind: "SemArithmeticOperandsSameType" },
+    { leftType, rightType, isLeftTypeValid, isRightTypeValid },
+    tokenId,
+  );
 }
 
 /**
  * A shift amount is independent of the shifted value's type (matching
  * Rust), unlike the other bitwise operators below, which combine two
- * values of one type - so unlike `inferBitwiseType`, there is no
- * same-type check here.
+ * values of one type - so unlike `inferBitwiseType`, there is no same-type
+ * check here. The shift amount's own native check is skipped entirely once
+ * the shifted value resolves only through `fallback`'s trait: `Shl`/`Shr`'s
+ * `Rhs` isn't checked against anything at a call site yet (homogeneous
+ * scope, no argument-type validation for a trait-dispatched shift amount),
+ * so validating it against the unrelated native `bitwise` rule would just
+ * be a misleading diagnostic, not a real one.
  */
 function inferShiftType(
   ctx: AnalysisContext,
+  fallback: OperatorTraitFallback,
   leftType: Semantics.Type,
   rightType: Semantics.Type,
   isLeftTypeValid: boolean,
   isRightTypeValid: boolean,
   tokenId: number,
 ): Semantics.Type {
-  // TODO(Hedge-280): no fallback to a Shl/Shr-style operator trait yet.
-  if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
-    emitError(ctx, { kind: "SemShiftedValueMustBeInteger" }, tokenId);
+  const leftNative = hasCapability(leftType, "bitwise");
+  const traitResolves =
+    isLeftTypeValid &&
+    !leftNative &&
+    resolvesViaOperatorTrait(ctx, fallback, leftType);
+  if (isLeftTypeValid && !leftNative && !traitResolves) {
+    emitError(
+      ctx,
+      {
+        kind: "SemTraitBoundNotSatisfied",
+        typeName: describeType(leftType),
+        trait: fallback.trait,
+      },
+      tokenId,
+    );
   }
-  if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
+  if (
+    !traitResolves &&
+    isRightTypeValid &&
+    !hasCapability(rightType, "bitwise")
+  ) {
     emitError(ctx, { kind: "SemShiftAmountMustBeInteger" }, tokenId);
   }
-  return isLeftTypeValid ? leftType : rightType;
+  if (traitResolves) {
+    recordArithmeticTraitTarget(ctx, fallback, "bitwise", leftType, tokenId);
+  }
+  return arithmeticOperatorResultType(isLeftTypeValid ? leftType : rightType);
 }
 
 function inferBitwiseType(
   ctx: AnalysisContext,
+  fallback: OperatorTraitFallback,
   leftType: Semantics.Type,
   rightType: Semantics.Type,
   isLeftTypeValid: boolean,
   isRightTypeValid: boolean,
   tokenId: number,
 ): Semantics.Type {
-  // TODO(Hedge-280): no fallback to a BitAnd/BitOr/BitXor-style operator
-  // trait yet.
-  if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
-    emitError(ctx, { kind: "SemBitwiseRequiresInteger" }, tokenId);
-  }
-  if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
-    emitError(ctx, { kind: "SemBitwiseRequiresInteger" }, tokenId);
-  }
-  if (isLeftTypeValid && isRightTypeValid && !typesEqual(leftType, rightType)) {
-    emitError(ctx, { kind: "SemBitwiseOperandsSameType" }, tokenId);
-  }
-  return isLeftTypeValid ? leftType : rightType;
+  return checkArithmeticOrBitwiseOperands(
+    ctx,
+    "bitwise",
+    fallback,
+    { kind: "SemBitwiseOperandsSameType" },
+    { leftType, rightType, isLeftTypeValid, isRightTypeValid },
+    tokenId,
+  );
 }
 
 // eslint-disable-next-line complexity -- Routing function; each case is one line dispatching to a named helper
@@ -7407,6 +7777,7 @@ function inferBinaryType(
     case "Rem":
       return inferArithmeticType(
         ctx,
+        operatorTraitFallback(op),
         leftType,
         rightType,
         isLeftTypeValid,
@@ -7417,6 +7788,7 @@ function inferBinaryType(
     case "Shr":
       return inferShiftType(
         ctx,
+        operatorTraitFallback(op),
         leftType,
         rightType,
         isLeftTypeValid,
@@ -7428,6 +7800,7 @@ function inferBinaryType(
     case "BitOr":
       return inferBitwiseType(
         ctx,
+        operatorTraitFallback(op),
         leftType,
         rightType,
         isLeftTypeValid,
@@ -9196,12 +9569,119 @@ function compoundAssignNativeCapability(
   }
 }
 
+/** The native-only half of `checkArithmeticOrBitwiseOperands`/
+ * `finishArithmeticOrBitwiseCheck`, without the trait-resolution machinery
+ * either side of it: `checkCompoundAssignNativeOperands`'s own left-operand
+ * gate already guarantees the left operand has `capability`, so its own
+ * check here is unreachable in practice - `traitName` (`Add`, `BitAnd`, ...,
+ * the operator's own base trait, e.g. `Add` for `AddAssign` since the native
+ * path validates `x += y` as `x = x + y`, never through `AddAssign` itself)
+ * still names the real requirement for the *right* operand, which has no
+ * such guarantee (`x: i32; x += true;` reaches this). */
+function checkNativeArithmeticOrBitwiseOperands(
+  ctx: AnalysisContext,
+  capability: TypeCapability,
+  traitName: string,
+  sameTypeKind: DiagnosticKind,
+  operands: BinaryOperandPair,
+  tokenId: number,
+): void {
+  const { leftType, rightType, isLeftTypeValid, isRightTypeValid } = operands;
+  if (isLeftTypeValid && !hasCapability(leftType, capability)) {
+    emitError(
+      ctx,
+      {
+        kind: "SemTraitBoundNotSatisfied",
+        typeName: describeType(leftType),
+        trait: traitName,
+      },
+      tokenId,
+    );
+  }
+  if (isRightTypeValid && !hasCapability(rightType, capability)) {
+    emitError(
+      ctx,
+      {
+        kind: "SemTraitBoundNotSatisfied",
+        typeName: describeType(rightType),
+        trait: traitName,
+      },
+      tokenId,
+    );
+  }
+  if (isLeftTypeValid && isRightTypeValid && !typesEqual(leftType, rightType)) {
+    emitError(ctx, sameTypeKind, tokenId);
+  }
+}
+
+/** The native-only half of `inferShiftType`'s own shifted-value/shift-amount
+ * checks, without the trait fallback - see `checkNativeArithmeticOrBitwiseOperands`'s
+ * own doc comment for why `checkCompoundAssignNativeOperands` never needs one
+ * for the shifted value. The shift amount's own check is never trait-backed
+ * at all (`inferShiftType`'s own doc comment), so it's unaffected. */
+function checkNativeShiftOperands(
+  ctx: AnalysisContext,
+  traitName: string,
+  operands: BinaryOperandPair,
+  tokenId: number,
+): void {
+  const { leftType, rightType, isLeftTypeValid, isRightTypeValid } = operands;
+  if (isLeftTypeValid && !hasCapability(leftType, "bitwise")) {
+    emitError(
+      ctx,
+      {
+        kind: "SemTraitBoundNotSatisfied",
+        typeName: describeType(leftType),
+        trait: traitName,
+      },
+      tokenId,
+    );
+  }
+  if (isRightTypeValid && !hasCapability(rightType, "bitwise")) {
+    emitError(ctx, { kind: "SemShiftAmountMustBeInteger" }, tokenId);
+  }
+}
+
+/** The base trait each compound-assign operator's native path names when a
+ * side fails (`Add` for `AddAssign`, ...) - a `ReadonlyMap` for the same
+ * reason `OPERATOR_TRAIT_FALLBACKS` is one: a switch with one near-identical
+ * literal per case reads as copy-paste duplication to static analysis. */
+const COMPOUND_ASSIGN_BASE_TRAIT_NAMES: ReadonlyMap<
+  Parser.CompoundAssignOperator,
+  string
+> = new Map([
+  ["AddAssign", "Add"],
+  ["SubAssign", "Sub"],
+  ["MulAssign", "Mul"],
+  ["DivAssign", "Div"],
+  ["RemAssign", "Rem"],
+  ["BitAndAssign", "BitAnd"],
+  ["BitOrAssign", "BitOr"],
+  ["BitXorAssign", "BitXor"],
+  ["ShlAssign", "Shl"],
+  ["ShrAssign", "Shr"],
+]);
+
+function compoundAssignBaseTraitName(
+  op: Parser.CompoundAssignOperator,
+): string {
+  const name = COMPOUND_ASSIGN_BASE_TRAIT_NAMES.get(op);
+  if (name === undefined) {
+    throw new Error(
+      `ICE: no base trait name for compound-assign operator ${op}`,
+    );
+  }
+  return name;
+}
+
 /** Diagnoses a native-path compound assignment (the left operand already has
- * the capability `compoundAssignNativeCapability` requires) by delegating to
- * the same `infer*Type` helper the matching binary operator uses, so the
- * wording and same-type/shift-independence rules stay identical to `x = x op
- * y`. The compound assignment's own result type is always `()`, so the
- * returned type is discarded. */
+ * the capability `compoundAssignNativeCapability` requires, so no operator
+ * trait is ever consulted here - unlike `x = x op y`, which always threads a
+ * trait fallback through `inferArithmeticType`/`inferBitwiseType`/
+ * `inferShiftType` since a plain binary operator has no such guarantee).
+ * Wording and same-type/shift-independence rules still match `x = x op y`'s
+ * own native path exactly. The compound assignment's own result type is
+ * always `()`, so no type is returned. */
 function checkCompoundAssignNativeOperands(
   ctx: AnalysisContext,
   op: Parser.CompoundAssignOperator,
@@ -9211,29 +9691,47 @@ function checkCompoundAssignNativeOperands(
   isRhsValid: boolean,
   tokenId: number,
 ): void {
+  const operands: BinaryOperandPair = {
+    leftType: lhsType,
+    rightType: rhsType,
+    isLeftTypeValid: isLhsValid,
+    isRightTypeValid: isRhsValid,
+  };
   switch (op) {
     case "AddAssign":
     case "SubAssign":
     case "MulAssign":
     case "DivAssign":
     case "RemAssign":
-      inferArithmeticType(
+      checkNativeArithmeticOrBitwiseOperands(
         ctx,
-        lhsType,
-        rhsType,
-        isLhsValid,
-        isRhsValid,
+        "arithmetic",
+        compoundAssignBaseTraitName(op),
+        { kind: "SemArithmeticOperandsSameType" },
+        operands,
         tokenId,
       );
       return;
     case "BitAndAssign":
     case "BitOrAssign":
     case "BitXorAssign":
-      inferBitwiseType(ctx, lhsType, rhsType, isLhsValid, isRhsValid, tokenId);
+      checkNativeArithmeticOrBitwiseOperands(
+        ctx,
+        "bitwise",
+        compoundAssignBaseTraitName(op),
+        { kind: "SemBitwiseOperandsSameType" },
+        operands,
+        tokenId,
+      );
       return;
     case "ShlAssign":
     case "ShrAssign":
-      inferShiftType(ctx, lhsType, rhsType, isLhsValid, isRhsValid, tokenId);
+      checkNativeShiftOperands(
+        ctx,
+        compoundAssignBaseTraitName(op),
+        operands,
+        tokenId,
+      );
       return;
     default:
       assertNever(

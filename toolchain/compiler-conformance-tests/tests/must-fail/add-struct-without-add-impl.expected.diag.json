@@ -1,0 +1,20 @@
+[
+  {
+    "code": "HEDGE-TRAIT-002",
+    "kind": {
+      "kind": "SemTraitBoundNotSatisfied",
+      "typeName": "Point",
+      "trait": "Add"
+    },
+    "relatedSpans": []
+  },
+  {
+    "code": "HEDGE-TRAIT-002",
+    "kind": {
+      "kind": "SemTraitBoundNotSatisfied",
+      "typeName": "Point",
+      "trait": "Add"
+    },
+    "relatedSpans": []
+  }
+]
