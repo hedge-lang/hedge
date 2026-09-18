@@ -8592,6 +8592,24 @@ describe("compound-assignment operators resolving through an Assign-family impl"
     );
   });
 
+  it("rejects an `AddAssign` impl declaring a non-`Self` `Rhs` type argument", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct V { x: i32 }
+      impl AddAssign<bool> for V {
+        fn add_assign(&mut self, rhs: bool) {}
+      }
+      fn main() {
+        let mut a = V { x: 1 };
+        let b = V { x: 2 };
+        a += b;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "the `Rhs` type argument on this `AddAssign` impl must be `Self`; a different `Rhs` is not supported yet",
+    );
+  });
+
   it("rejects `a += b` on a struct with neither an `arithmetic` capability nor an `AddAssign` impl", (): void => {
     const result = diagnoseWithPrelude(`
       struct V { x: i32 }

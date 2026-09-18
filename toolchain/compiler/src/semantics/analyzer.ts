@@ -2657,11 +2657,37 @@ const BINARY_OPERATOR_TRAIT_NAMES: ReadonlySet<string> = new Set([
  * - an impl declaring a different `Output` for any of these would silently
  * mistype the result rather than reflect what the impl body actually
  * returns, since nothing resolves a heterogeneous `Output` at the call
- * site. */
+ * site. `*Assign` traits are excluded - they declare no `Output` at all. */
 const HOMOGENEOUS_OPERATOR_TRAIT_NAMES: ReadonlySet<string> = new Set([
   "Neg",
   "Not",
   ...BINARY_OPERATOR_TRAIT_NAMES,
+]);
+
+/** The ten compound-assignment traits, each declared `<Rhs = Self>` like
+ * their binary counterparts - the same non-default-`Rhs` gap applies here,
+ * since `buildImplDecl` drops a trait ref's type arguments regardless of
+ * which trait it names. */
+const ASSIGN_OPERATOR_TRAIT_NAMES: ReadonlySet<string> = new Set([
+  "AddAssign",
+  "SubAssign",
+  "MulAssign",
+  "DivAssign",
+  "RemAssign",
+  "BitAndAssign",
+  "BitOrAssign",
+  "BitXorAssign",
+  "ShlAssign",
+  "ShrAssign",
+]);
+
+/** Every prelude trait whose impl-site `Rhs` type argument
+ * `checkOperatorImplHasNoRhsArgument` rejects - both operator families
+ * declare `<Rhs = Self>`, and neither has impl-site substitution for it
+ * yet. */
+const RHS_CHECKED_OPERATOR_TRAIT_NAMES: ReadonlySet<string> = new Set([
+  ...BINARY_OPERATOR_TRAIT_NAMES,
+  ...ASSIGN_OPERATOR_TRAIT_NAMES,
 ]);
 
 /** Whether `traitId` is the prelude's own registration of a trait in
@@ -2688,12 +2714,13 @@ function isHomogeneousOperatorTrait(
 }
 
 /** An impl's own trait ref carrying an explicit type argument
- * (`impl Add<bool> for V`) is silently dropped by `buildImplDecl` today,
- * so it resolves identically to the homogeneous `impl Add for V` - letting
- * `V + V` dispatch through a method whose `rhs` doesn't match. There's no
- * mechanism yet to substitute a trait's own generic default at an impl
- * site, so any explicit type argument here is rejected outright, not just
- * a non-`Self` one - there's nothing to validate it against. */
+ * (`impl Add<bool> for V`, `impl AddAssign<bool> for V`) is silently
+ * dropped by `buildImplDecl` today, so it resolves identically to the
+ * homogeneous `impl Add for V` - letting `V + V` (or `a += b`) dispatch
+ * through a method whose `rhs` doesn't match. There's no mechanism yet to
+ * substitute a trait's own generic default at an impl site, so any
+ * explicit type argument here is rejected outright, not just a non-`Self`
+ * one - there's nothing to validate it against. */
 function checkOperatorImplHasNoRhsArgument(
   ctx: AnalysisContext,
   item: Parser.ImplDecl,
@@ -2707,7 +2734,7 @@ function checkOperatorImplHasNoRhsArgument(
   }
   if (
     !isSome(traitName) ||
-    !isTraitInSet(ctx, traitName.value, BINARY_OPERATOR_TRAIT_NAMES)
+    !isTraitInSet(ctx, traitName.value, RHS_CHECKED_OPERATOR_TRAIT_NAMES)
   ) {
     return;
   }
