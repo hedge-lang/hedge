@@ -268,6 +268,8 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return `impl of trait \`${kind.trait}\` for \`${kind.target}\` is missing associated type \`${kind.assocName}\``;
     case "SemOperatorOutputMustBeSelf":
       return `associated type \`Output\` on this \`${kind.trait}\` impl must resolve to \`Self\`; a different \`Output\` is not supported yet`;
+    case "SemOperatorRhsMustBeSelf":
+      return `the \`Rhs\` type argument on this \`${kind.trait}\` impl must be \`Self\`; a different \`Rhs\` is not supported yet`;
     case "SemImplDefinesUndeclaredAssocType":
       return `impl of trait \`${kind.trait}\` for \`${kind.target}\` defines associated type \`${kind.assocName}\`, which trait \`${kind.trait}\` does not declare`;
     case "SemAssocTypeNotFoundOnTrait":

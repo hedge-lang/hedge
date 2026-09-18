@@ -153,6 +153,7 @@ const SAMPLE_KINDS: readonly DiagnosticKind[] = [
   { kind: "SemAssocTypeAmbiguous", assocName: "A", traitList: "`T1`, `T2`" },
   { kind: "SemTraitNotObjectSafe", trait: "T", offender: "method `m`" },
   { kind: "SemOperatorOutputMustBeSelf", trait: "Neg" },
+  { kind: "SemOperatorRhsMustBeSelf", trait: "Add" },
   { kind: "SemQualifiedTypePathsUnsupported" },
   { kind: "SemDropImplForEnumUnsupported" },
   { kind: "SemGenericTypeParamNoArguments", name: "T" },
@@ -384,6 +385,7 @@ const KNOWN_CODES = new Set<DiagnosticCode>([
   "HEDGE-TRAIT-007",
   "HEDGE-TRAIT-008",
   "HEDGE-TRAIT-009",
+  "HEDGE-TRAIT-010",
   "HEDGE-ITEM-001",
   "HEDGE-UNSUPPORTED-001",
 ]);

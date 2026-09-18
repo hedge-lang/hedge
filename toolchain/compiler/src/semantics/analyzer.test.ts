@@ -8977,6 +8977,25 @@ describe("arithmetic/bitwise/shift operators resolving through an operator-trait
     );
   });
 
+  it("rejects an `Add` impl declaring a non-`Self` `Rhs` type argument", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct V { x: i32 }
+      impl Add<bool> for V {
+        type Output = Self;
+        fn add(self, rhs: bool) -> Self::Output { self }
+      }
+      fn main() {
+        let a = V { x: 1 };
+        let b = V { x: 2 };
+        let c = a + b;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "the `Rhs` type argument on this `Add` impl must be `Self`; a different `Rhs` is not supported yet",
+    );
+  });
+
   it("records an `Add`-dispatched `+` against the operator token", (): void => {
     const { program, tokens } = assembleProgram(`
       struct P { x: i32 }

@@ -2636,15 +2636,10 @@ function resolveImplSelfTargetType(
   );
 }
 
-/** Every prelude trait whose result type `analyzer.ts` assumes is `Self`
- * (the homogeneous case: unary `Neg`/`Not`, and the binary arithmetic/
- * bitwise/shift traits) - an impl declaring a different `Output` for any of
- * these would silently mistype the result rather than reflect what the impl
- * body actually returns, since nothing resolves a heterogeneous `Output` at
- * the call site. */
-const HOMOGENEOUS_OPERATOR_TRAIT_NAMES: ReadonlySet<string> = new Set([
-  "Neg",
-  "Not",
+/** The ten binary arithmetic/bitwise/shift traits, each declared
+ * `<Rhs = Self>` - the only prelude traits an impl's own trait ref can
+ * carry a (currently unsupported) type argument for. */
+const BINARY_OPERATOR_TRAIT_NAMES: ReadonlySet<string> = new Set([
   "Add",
   "Sub",
   "Mul",
@@ -2657,20 +2652,73 @@ const HOMOGENEOUS_OPERATOR_TRAIT_NAMES: ReadonlySet<string> = new Set([
   "Shr",
 ]);
 
-/** Whether `traitId` is the prelude's own registration of one of
- * `HOMOGENEOUS_OPERATOR_TRAIT_NAMES` - a bare-name pre-filter against the
- * `Set` first, so an impl of an unrelated trait (`Clone`, `PartialEq`, a
- * block-local trait sharing one of these 12 names, ...) costs no
- * `lookupPreludeTrait` call at all, and a plausible name match still costs
- * at most one, confirming scoped identity rather than trusting the name
- * alone. */
+/** Every prelude trait whose result type `analyzer.ts` assumes is `Self`
+ * (the homogeneous case: unary `Neg`/`Not`, plus `BINARY_OPERATOR_TRAIT_NAMES`)
+ * - an impl declaring a different `Output` for any of these would silently
+ * mistype the result rather than reflect what the impl body actually
+ * returns, since nothing resolves a heterogeneous `Output` at the call
+ * site. */
+const HOMOGENEOUS_OPERATOR_TRAIT_NAMES: ReadonlySet<string> = new Set([
+  "Neg",
+  "Not",
+  ...BINARY_OPERATOR_TRAIT_NAMES,
+]);
+
+/** Whether `traitId` is the prelude's own registration of a trait in
+ * `names` - a bare-name pre-filter against the `Set` first, so an impl of
+ * an unrelated trait (`Clone`, `PartialEq`, a block-local trait sharing
+ * one of these names, ...) costs no `lookupPreludeTrait` call at all, and
+ * a plausible name match still costs at most one, confirming scoped
+ * identity rather than trusting the name alone. */
+function isTraitInSet(
+  ctx: AnalysisContext,
+  traitId: string,
+  names: ReadonlySet<string>,
+): boolean {
+  const bareName = bareTypeName(traitId);
+  if (!names.has(bareName)) return false;
+  return traitId === lookupPreludeTrait(ctx, bareName);
+}
+
 function isHomogeneousOperatorTrait(
   ctx: AnalysisContext,
   traitId: string,
 ): boolean {
-  const bareName = bareTypeName(traitId);
-  if (!HOMOGENEOUS_OPERATOR_TRAIT_NAMES.has(bareName)) return false;
-  return traitId === lookupPreludeTrait(ctx, bareName);
+  return isTraitInSet(ctx, traitId, HOMOGENEOUS_OPERATOR_TRAIT_NAMES);
+}
+
+/** An impl's own trait ref carrying an explicit type argument
+ * (`impl Add<bool> for V`) is silently dropped by `buildImplDecl` today,
+ * so it resolves identically to the homogeneous `impl Add for V` - letting
+ * `V + V` dispatch through a method whose `rhs` doesn't match. There's no
+ * mechanism yet to substitute a trait's own generic default at an impl
+ * site, so any explicit type argument here is rejected outright, not just
+ * a non-`Self` one - there's nothing to validate it against. */
+function checkOperatorImplHasNoRhsArgument(
+  ctx: AnalysisContext,
+  item: Parser.ImplDecl,
+  traitName: Option<string>,
+): void {
+  if (
+    !isSome(item.traitRef) ||
+    item.traitRef.value.typeArguments.length === 0
+  ) {
+    return;
+  }
+  if (
+    !isSome(traitName) ||
+    !isTraitInSet(ctx, traitName.value, BINARY_OPERATOR_TRAIT_NAMES)
+  ) {
+    return;
+  }
+  emitError(
+    ctx,
+    {
+      kind: "SemOperatorRhsMustBeSelf",
+      trait: bareTypeName(traitName.value),
+    },
+    item.traitRef.value.tokenId,
+  );
 }
 
 /** `unaryNegResultType`/`unaryNotResultType`/`inferArithmeticType`/
@@ -2717,6 +2765,7 @@ function analyzeImplDecl(
     shallow.traitRef,
     (t) => lookupTrait(ctx, t.name) ?? t.name,
   );
+  checkOperatorImplHasNoRhsArgument(ctx, item, traitName);
 
   pushGenericParams(ctx, item.generics, item.whereClause);
   pushSelfContext(ctx, {
