@@ -964,9 +964,10 @@ function emitWitnessObjectDecl(decl: WitnessObjectDecl): string {
   if (decl.closureSlots.length === 0) {
     return `const ${decl.name} = {${direct.join(", ")}};`;
   }
-  const closures = decl.closureSlots.map(
-    (s) => `w.${s.method} = (self, ...args) => ${s.value}(self, ...args, w);`,
-  );
+  const closures = decl.closureSlots.map((s) => {
+    const extra = s.extraArgs.map((arg) => `, ${arg}`).join("");
+    return `w.${s.method} = (self, ...args) => ${s.value}(self, ...args${extra});`;
+  });
   return `const ${decl.name} = (() => { const w = {${direct.join(", ")}}; ${closures.join(" ")} return w; })();`;
 }
 

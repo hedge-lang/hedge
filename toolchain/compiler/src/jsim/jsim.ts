@@ -154,6 +154,12 @@ interface HoistedWitness {
   readonly typeName: string;
   readonly traitName: string;
   readonly methods: readonly WitnessMethod[];
+  /** The concrete type's own witness for each of a *blanket* impl's own
+   * bounds - empty for a witness built from a concrete `Impl`. A directly-
+   * provided (non-default) method needs these threaded as trailing call
+   * arguments, since its free function is the shared, still-generic
+   * `Trait$m$blanket`, not a per-type one. */
+  readonly boundWitnesses: readonly WitnessRef[];
 }
 
 function createJsimContext(
@@ -1041,10 +1047,11 @@ function hedgeTypeToNumericKind(
 /** The readable `<Type>$<method>` (inherent) / `<Type>$<Trait>$<method>`
  * (trait impl) name a method's free function emits under, before collision
  * resolution. Uses the bare `typeName`; two shadowed types share it, which
- * is what `methodKey` disambiguates. */
+ * is what `methodKey` disambiguates. `default`/`blanket` are keyed by trait
+ * alone - neither has a per-concrete-type free function to name. */
 function methodFreeFnName(target: FreeMethodTarget): string {
-  if (target.isDefaultBody && isSome(target.traitName)) {
-    return `${target.traitName.value}$${target.methodName}$default`;
+  if (target.emitKind !== "concrete" && isSome(target.traitName)) {
+    return `${target.traitName.value}$${target.methodName}$${target.emitKind}`;
   }
   const traitSegment = isSome(target.traitName)
     ? `${target.traitName.value}$`
@@ -1053,14 +1060,18 @@ function methodFreeFnName(target: FreeMethodTarget): string {
 }
 
 /** The per-declaration identity of a method free function, used to look up
- * its collision-resolved name. Scope-qualified by `typeId` for an inherent
- * or override method (a block-local type shadowing a top-level one keeps a
- * distinct entry), but a default body has no owning type - there is one per
- * trait - so it keys on the bare trait name alone, which every site (the
- * emission, a concrete call, a witness slot) agrees on. */
+ * its collision-resolved name. Scope-qualified by `typeId` for a concrete
+ * (inherent or override) method (a block-local type shadowing a top-level
+ * one keeps a distinct entry), but `default`/`blanket` have no owning
+ * concrete type - there is one of each per trait (coherence guarantees at
+ * most one blanket impl per trait, the same way there's only one default
+ * body per trait) - so both key on the bare trait name alone, which every
+ * site (the emission, a concrete call, a witness slot) agrees on. */
 function methodKey(target: FreeMethodTarget): string {
   const trait = isSome(target.traitName) ? target.traitName.value : "";
-  if (target.isDefaultBody) return `default#${trait}#${target.methodName}`;
+  if (target.emitKind !== "concrete") {
+    return `${target.emitKind}#${trait}#${target.methodName}`;
+  }
   return `${target.typeId}#${trait}#${target.methodName}#false`;
 }
 
@@ -1113,18 +1124,31 @@ function resolvedPrimitiveWitnessName(
 /** The `FreeMethodTarget` for one method a `(typeId, trait)` witness carries,
  * used to resolve the free-function name the slot points at. Keyed on the
  * method's *defining* trait, not the witness's - a flattened supertrait
- * method's free function is named for the trait that declared it. */
+ * method's free function is named for the trait that declared it. A method
+ * a blanket impl provides directly (not a default, and the witness itself
+ * carries the blanket's own bound witnesses) has no per-concrete-type free
+ * function - it resolves to the trait-scoped `Trait$m$blanket` instead. */
 function witnessSlotTarget(
   witness: HoistedWitness,
   method: WitnessMethod,
 ): FreeMethodTarget {
+  if (method.source === "impl" && witness.boundWitnesses.length > 0) {
+    return {
+      kind: "free",
+      typeId: method.definingTrait,
+      typeName: method.definingTrait,
+      traitName: some(method.definingTrait),
+      methodName: method.name,
+      emitKind: "blanket",
+    };
+  }
   return {
     kind: "free",
     typeId: witness.typeId,
     typeName: witness.typeName,
     traitName: some(method.definingTrait),
     methodName: method.name,
-    isDefaultBody: method.source === "default",
+    emitKind: method.source === "default" ? "default" : "concrete",
   };
 }
 
@@ -1136,6 +1160,7 @@ function witnessConstName(
   typeName: string,
   traitName: string,
   methods: readonly WitnessMethod[],
+  boundWitnesses: readonly WitnessRef[] = [],
 ): string {
   const key = `${typeId}#${traitName}`;
   const existing = ctx.hoistedWitnesses.get(key);
@@ -1147,6 +1172,7 @@ function witnessConstName(
     typeName,
     traitName,
     methods,
+    boundWitnesses,
   });
   return name;
 }
@@ -1176,6 +1202,15 @@ function witnessRefName(ctx: JsimContext, ref: WitnessRef): string {
       );
     case "Primitive":
       return resolvedPrimitiveWitnessName(ctx, ref.traitName);
+    case "Composed":
+      return witnessConstName(
+        ctx,
+        ref.typeId,
+        ref.typeName,
+        ref.traitName,
+        ref.methods,
+        ref.boundWitnesses,
+      );
     default:
       return assertNever(ref, `witness ref: ${JSON.stringify(ref)}`);
   }
@@ -1194,12 +1229,15 @@ function witnessArguments(
 
 /** The trailing witness argument a concrete-receiver call to `Trait$m$default`
  * passes - the `(type, trait)` witness object (pre-reserved from
- * `AnalysisResult.extraWitnesses`). */
+ * `AnalysisResult.extraWitnesses`). A `blanket` target instead gets its
+ * trailing witness arguments from `methodCallWitnessArgs` (the receiver's
+ * own witness for each of the blanket impl's bounds, not a `(type, trait)`
+ * witness for this call's own trait). */
 function defaultBodyWitnessArg(
   ctx: JsimContext,
   target: FreeMethodTarget,
 ): readonly JSIM.Expression[] {
-  if (!target.isDefaultBody || !isSome(target.traitName)) return [];
+  if (target.emitKind !== "default" || !isSome(target.traitName)) return [];
   const key = `${target.typeId}#${target.traitName.value}`;
   const witness = ctx.hoistedWitnesses.get(key);
   assert(
@@ -1224,7 +1262,9 @@ function methodCallWitnessArgs(
 }
 
 /** Reserves the hoisted `const` name a single resolved bound needs, if any -
- * `Impl` its own `(type, trait)` const, `Primitive` the shared
+ * `Impl`/`Composed` their own `(type, trait)` const (a `Composed` witness
+ * also needs each of its own bound witnesses reserved first, so a blanket
+ * method's closure slot can reference them), `Primitive` the shared
  * `__witnessPrimitiveEq`/`__witnessPrimitiveOrd`, `Forwarded` nothing (it
  * resolves through the caller's own witness parameter, not a top-level
  * const). */
@@ -1237,6 +1277,17 @@ function reserveWitnessRef(ctx: JsimContext, ref: WitnessRef): void {
         ref.typeName,
         ref.traitName,
         ref.methods,
+      );
+      return;
+    case "Composed":
+      for (const bound of ref.boundWitnesses) reserveWitnessRef(ctx, bound);
+      witnessConstName(
+        ctx,
+        ref.typeId,
+        ref.typeName,
+        ref.traitName,
+        ref.methods,
+        ref.boundWitnesses,
       );
       return;
     case "Primitive":
@@ -1292,7 +1343,9 @@ function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
     decls.push({
       kind: "WitnessObjectDecl",
       name: ctx.primitiveEqWitness.name,
-      directSlots: [{ method: "eq", value: "(a, b) => a === b" }],
+      directSlots: [
+        { method: "eq", value: "(a, b) => a === b", extraArgs: [] },
+      ],
       closureSlots: [],
     });
   }
@@ -1304,6 +1357,7 @@ function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
         {
           method: "partial_cmp",
           value: `(a, b) => (a < b ? ${orderingTagLiteral("Less")} : a > b ? ${orderingTagLiteral("Greater")} : ${orderingTagLiteral("Equal")})`,
+          extraArgs: [],
         },
       ],
       closureSlots: [],
@@ -1312,15 +1366,21 @@ function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
   for (const witness of ctx.hoistedWitnesses.values()) {
     const direct: JSIM.WitnessSlot[] = [];
     const closure: JSIM.WitnessSlot[] = [];
+    const boundArgs = witness.boundWitnesses.map((ref) =>
+      witnessRefName(ctx, ref),
+    );
     for (const method of witness.methods) {
-      const slot: JSIM.WitnessSlot = {
-        method: method.name,
-        value: resolvedMethodFreeFnName(
-          ctx,
-          witnessSlotTarget(witness, method),
-        ),
-      };
-      (method.source === "default" ? closure : direct).push(slot);
+      const value = resolvedMethodFreeFnName(
+        ctx,
+        witnessSlotTarget(witness, method),
+      );
+      if (method.source === "default") {
+        closure.push({ method: method.name, value, extraArgs: ["w"] });
+      } else if (boundArgs.length > 0) {
+        closure.push({ method: method.name, value, extraArgs: boundArgs });
+      } else {
+        direct.push({ method: method.name, value, extraArgs: [] });
+      }
     }
     decls.push({
       kind: "WitnessObjectDecl",
@@ -3743,13 +3803,17 @@ function isTraitDispatchOperandType(type: Semantics.Type): boolean {
  * (no resolved target - a type whose trait impl is not yet reachable) the
  * interim `left.<method>(right)` method call. Shared by `==`/`!=`'s `eq`
  * dispatch and the ordering operators' `partial_cmp` dispatch - the two
- * differ only in which method name they call. */
+ * differ only in which method name they call. `tokenId` resolves a
+ * `blanket` target's own bound witnesses (`methodCallWitnessArgs`) - a
+ * no-op for every other target kind, since only `blanket` ever populates
+ * that table for an operator dispatch. */
 function traitDispatchCall(
   ctx: JsimContext,
   target: MethodTarget | undefined,
   methodName: string,
   left: JSIM.Expression,
   right: JSIM.Expression,
+  tokenId: number,
 ): JSIM.Expression {
   if (target?.kind === "free") {
     return {
@@ -3759,7 +3823,7 @@ function traitDispatchCall(
         value: resolvedMethodFreeFnName(ctx, target),
         type: none(),
       },
-      arguments: [left, right],
+      arguments: [left, right, ...methodCallWitnessArgs(ctx, tokenId)],
     };
   }
   if (target?.kind === "witness") {
@@ -3789,7 +3853,14 @@ function parseTraitEqualityComparison(
   const target = ctx.methodTargets.get(binExp.tokenId);
   const left = parseExpression(ctx, binExp.left);
   const right = parseExpression(ctx, binExp.right);
-  const call = traitDispatchCall(ctx, target, "eq", left, right);
+  const call = traitDispatchCall(
+    ctx,
+    target,
+    "eq",
+    left,
+    right,
+    binExp.tokenId,
+  );
   if (binExp.operator === "Ne") {
     return {
       kind: "UnaryExpression",
@@ -3850,7 +3921,14 @@ function parseTraitOrderingComparison(
   const target = ctx.methodTargets.get(binExp.tokenId);
   const left = parseExpression(ctx, binExp.left);
   const right = parseExpression(ctx, binExp.right);
-  const call = traitDispatchCall(ctx, target, "partial_cmp", left, right);
+  const call = traitDispatchCall(
+    ctx,
+    target,
+    "partial_cmp",
+    left,
+    right,
+    binExp.tokenId,
+  );
   const tags = orderingTagsFor(binExp.operator);
   if (tags.length === 1) {
     return tagComparison(ctx, call, tags, binExp.tokenId);
@@ -3910,7 +3988,14 @@ function parseTraitArithmeticOperator(
   const target = ctx.methodTargets.get(binExp.tokenId);
   const left = parseExpression(ctx, binExp.left);
   const right = parseExpression(ctx, binExp.right);
-  return traitDispatchCall(ctx, target, methodName, left, right);
+  return traitDispatchCall(
+    ctx,
+    target,
+    methodName,
+    left,
+    right,
+    binExp.tokenId,
+  );
 }
 
 const EQUALITY_OPERATORS: ReadonlySet<Semantics.BinaryExpression["operator"]> =
@@ -3966,13 +4051,14 @@ function parseBinaryExpression(
 
 /** The `v.neg()`/`v.not()`-shaped call a trait-dispatched unary `-`/`!`
  * lowers to: a concrete free function, a generic body's witness slot, or
- * (no resolved target - a blanket-satisfied impl) the interim
- * `operand.<method>()` method call, mirroring `traitDispatchCall`. */
+ * (no resolved target) the interim `operand.<method>()` method call,
+ * mirroring `traitDispatchCall`. */
 function unaryTraitDispatchCall(
   ctx: JsimContext,
   target: MethodTarget | undefined,
   methodName: "neg" | "not",
   operand: JSIM.Expression,
+  tokenId: number,
 ): JSIM.Expression {
   if (target?.kind === "free") {
     return {
@@ -3982,7 +4068,7 @@ function unaryTraitDispatchCall(
         value: resolvedMethodFreeFnName(ctx, target),
         type: none(),
       },
-      arguments: [operand],
+      arguments: [operand, ...methodCallWitnessArgs(ctx, tokenId)],
     };
   }
   if (target?.kind === "witness") {
@@ -4017,6 +4103,7 @@ function parseUnaryExpression(
       target,
       methodName,
       parseExpression(ctx, unaryExp.operand),
+      unaryExp.tokenId,
     );
   }
   const numericKind = hedgeTypeToNumericKind(unaryExp.type);
