@@ -3879,26 +3879,70 @@ function parseTraitOrderingComparison(
   };
 }
 
+/** The trait method an arithmetic/bitwise/shift operator dispatches to once
+ * resolved - `analyzer.ts`'s per-operator `OperatorTraitFallback` literals
+ * mirror this same fixed mapping for diagnostics/witness-recording. */
+const ARITHMETIC_OPERATOR_METHODS: ReadonlyMap<
+  Semantics.BinaryExpression["operator"],
+  string
+> = new Map([
+  ["Add", "add"],
+  ["Sub", "sub"],
+  ["Mul", "mul"],
+  ["Div", "div"],
+  ["Rem", "rem"],
+  ["BitAnd", "bitand"],
+  ["BitOr", "bitor"],
+  ["BitXor", "bitxor"],
+  ["Shl", "shl"],
+  ["Shr", "shr"],
+]);
+
+/** The `x.<method>(y)`-shaped call a trait-dispatched arithmetic/bitwise/
+ * shift operator lowers to - reuses `traitDispatchCall`, the same shared
+ * free-fn/witness/interim-call dispatch `==`'s `eq` and the ordering
+ * operators' `partial_cmp` already go through. */
+function parseTraitArithmeticOperator(
+  ctx: JsimContext,
+  binExp: Semantics.BinaryExpression,
+  methodName: string,
+): JSIM.Expression {
+  const target = ctx.methodTargets.get(binExp.tokenId);
+  const left = parseExpression(ctx, binExp.left);
+  const right = parseExpression(ctx, binExp.right);
+  return traitDispatchCall(ctx, target, methodName, left, right);
+}
+
+const EQUALITY_OPERATORS: ReadonlySet<Semantics.BinaryExpression["operator"]> =
+  new Set(["Eq", "Ne"]);
+
+const RELATIONAL_OPERATORS: ReadonlySet<
+  Semantics.BinaryExpression["operator"]
+> = new Set(["Lt", "Gt", "Le", "Ge"]);
+
+function eitherOperandTraitDispatched(
+  binExp: Semantics.BinaryExpression,
+): boolean {
+  return (
+    isTraitDispatchOperandType(binExp.left.type) ||
+    isTraitDispatchOperandType(binExp.right.type)
+  );
+}
+
 function parseBinaryExpression(
   ctx: JsimContext,
   binExp: Semantics.BinaryExpression,
 ): JSIM.Expression {
-  if (
-    (binExp.operator === "Eq" || binExp.operator === "Ne") &&
-    (isTraitDispatchOperandType(binExp.left.type) ||
-      isTraitDispatchOperandType(binExp.right.type))
-  ) {
+  const traitDispatched = eitherOperandTraitDispatched(binExp);
+  if (EQUALITY_OPERATORS.has(binExp.operator) && traitDispatched) {
     return parseTraitEqualityComparison(ctx, binExp);
   }
-  if (
-    (binExp.operator === "Lt" ||
-      binExp.operator === "Gt" ||
-      binExp.operator === "Le" ||
-      binExp.operator === "Ge") &&
-    (isTraitDispatchOperandType(binExp.left.type) ||
-      isTraitDispatchOperandType(binExp.right.type))
-  ) {
+  if (RELATIONAL_OPERATORS.has(binExp.operator) && traitDispatched) {
     return parseTraitOrderingComparison(ctx, binExp);
+  }
+  const arithmeticMethodName = ARITHMETIC_OPERATOR_METHODS.get(binExp.operator);
+  if (arithmeticMethodName !== undefined && traitDispatched) {
+    return parseTraitArithmeticOperator(ctx, binExp, arithmeticMethodName);
   }
   const numericKind: Option<JSIM.NumericKind> = ARITHMETIC_OPS.has(
     binExp.operator,

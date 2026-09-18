@@ -742,21 +742,21 @@ describe("execution tests", (): void => {
     it("rejects non-numeric arithmetic operands", (): void => {
       assertRejectsWithMessage(
         `fn main() { let _x = true + false; }`,
-        "arithmetic operands must be numeric",
+        "the trait bound `bool: Add` is not satisfied",
       );
     });
 
     it("rejects non-integer bitwise operands", (): void => {
       assertRejectsWithMessage(
         `fn main() { let _x = true & false; }`,
-        "bitwise operations require integer operands",
+        "the trait bound `bool: BitAnd` is not satisfied",
       );
     });
 
     it("rejects float bitwise operands", (): void => {
       assertRejectsWithMessage(
         `fn main() { let _x = 1.0f32 & 2.0f32; }`,
-        "bitwise operations require integer operands",
+        "the trait bound `f32: BitAnd` is not satisfied",
       );
     });
 

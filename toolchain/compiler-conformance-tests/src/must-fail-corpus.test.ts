@@ -230,14 +230,14 @@ describe("must-fail corpus - rejection tests", (): void => {
     it("rejects arithmetic on boolean operands", (): void => {
       assertRejectsWithMessage(
         `fn main() { let x = true + 1; print(x); }`,
-        "numeric",
+        "the trait bound `bool: Add` is not satisfied",
       );
     });
 
     it("rejects arithmetic on a genuinely unit-typed operand", (): void => {
       assertRejectsWithMessage(
         `fn main() { let x = print("hi") + 1; }`,
-        "numeric",
+        "the trait bound `(): Add` is not satisfied",
       );
     });
 
@@ -296,7 +296,7 @@ describe("must-fail corpus - rejection tests", (): void => {
     it("rejects string-to-string addition", (): void => {
       assertRejectsWithMessage(
         `fn main() { let x = "hello" + " world"; print(x); }`,
-        "type",
+        "the trait bound `str: Add` is not satisfied",
       );
     });
 

@@ -1,13 +1,10 @@
-trait Add {
-  fn add(self, rhs: Self) -> Self;
-}
-
 struct Point {
   x: i32,
 }
 
 impl Add for Point {
-  fn add(self, rhs: Self) -> Self { self }
+  type Output = Self;
+  fn add(self, rhs: Self) -> Self::Output { self }
 }
 
 fn main() {

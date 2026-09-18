@@ -17,7 +17,7 @@ describe("std prelude", (): void => {
     expect(analyze(program.value, tokens).diagnostics).toEqual([]);
   });
 
-  it("declares exactly Clone, PartialEq, Eq, PartialOrd, Ord, Default, Drop, Neg, Not, and the ten Assign traits", (): void => {
+  it("declares exactly Clone, PartialEq, Eq, PartialOrd, Ord, Default, Drop, Neg, Not, the ten Assign traits, and the ten arithmetic/bitwise/shift traits", (): void => {
     const { tokens } = tokenize(PRELUDE_SOURCE);
     const { program } = parse(tokens);
     assert(isSome(program), "prelude failed to parse");
@@ -44,6 +44,16 @@ describe("std prelude", (): void => {
       "BitXorAssign",
       "ShlAssign",
       "ShrAssign",
+      "Add",
+      "Sub",
+      "Mul",
+      "Div",
+      "Rem",
+      "BitAnd",
+      "BitOr",
+      "BitXor",
+      "Shl",
+      "Shr",
     ]);
   });
 

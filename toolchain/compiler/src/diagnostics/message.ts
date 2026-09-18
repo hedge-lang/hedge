@@ -331,12 +331,6 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return `no associated item \`${kind.name}\` found for \`${kind.typeName}\``;
     case "SemLogicalOperandsMustBeBool":
       return "logical operator operands must be `bool`";
-    case "SemBitwiseRequiresInteger":
-      return "bitwise operations require integer operands";
-    case "SemArithmeticOperandNotNumeric":
-      return `arithmetic operands must be numeric; ${kind.side}-operand is type \`${kind.found}\``;
-    case "SemShiftedValueMustBeInteger":
-      return "the shifted value must be an integer";
     case "SemShiftAmountMustBeInteger":
       return "the shift amount must be an integer";
     case "SemNotRequiresBoolOrInteger":

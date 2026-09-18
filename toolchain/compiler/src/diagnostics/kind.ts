@@ -401,13 +401,6 @@ export type DiagnosticKind =
       readonly typeName: string;
     }
   | { readonly kind: "SemLogicalOperandsMustBeBool" }
-  | { readonly kind: "SemBitwiseRequiresInteger" }
-  | {
-      readonly kind: "SemArithmeticOperandNotNumeric";
-      readonly side: "left" | "right";
-      readonly found: string;
-    }
-  | { readonly kind: "SemShiftedValueMustBeInteger" }
   | { readonly kind: "SemShiftAmountMustBeInteger" }
   | { readonly kind: "SemNotRequiresBoolOrInteger"; readonly found: string }
   | { readonly kind: "SemRepeatArrayElementMustBeCopy"; readonly found: string }
@@ -770,9 +763,6 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemAmbiguousMethod", "HEDGE-TYPE-013"],
   ["SemNoAssociatedItem", "HEDGE-TYPE-014"],
   ["SemLogicalOperandsMustBeBool", "HEDGE-TYPE-002"],
-  ["SemBitwiseRequiresInteger", "HEDGE-TYPE-002"],
-  ["SemArithmeticOperandNotNumeric", "HEDGE-TYPE-002"],
-  ["SemShiftedValueMustBeInteger", "HEDGE-TYPE-002"],
   ["SemShiftAmountMustBeInteger", "HEDGE-TYPE-002"],
   ["SemNotRequiresBoolOrInteger", "HEDGE-TYPE-002"],
   ["SemRepeatArrayElementMustBeCopy", "HEDGE-TYPE-002"],
