@@ -2271,6 +2271,7 @@ function buildTraitDecl(item: Parser.TraitDecl): Semantics.TraitDecl {
             params: [],
             returnType: unitType,
             genericParams: genericParamNames(decl.generics),
+            genericParamBounds: new Map(),
           },
         ];
       }
@@ -2283,6 +2284,7 @@ function buildTraitDecl(item: Parser.TraitDecl): Semantics.TraitDecl {
             params: [],
             returnType: unitType,
             genericParams: genericParamNames(decl.signature.generics),
+            genericParamBounds: new Map(),
           },
         ];
       }
@@ -2383,11 +2385,21 @@ function resolveTraitMethodSignature(
     fallbackTokenId: number,
   ) => Semantics.Type,
 ): Semantics.TraitMethod {
+  const merged = mergedGenericScope(
+    outerGenerics,
+    outerWhereClause,
+    signature.generics,
+    signature.whereClause,
+  );
   return {
     name: signature.name.text,
     isDefault,
     receiver: toMethodReceiver(signature.receiver),
     genericParams: genericParamNames(signature.generics),
+    genericParamBounds: resolveBoundNames(
+      ctx,
+      genericParamBoundNames(merged.generics, merged.whereClause),
+    ),
     ...resolveMethodSignatureTypes(
       ctx,
       outerGenerics,
@@ -2616,6 +2628,12 @@ function analyzeTraitDecl(
         methodBodies.push(analyzed.ownershipView.value);
         recordDefaultMethodTarget(ctx, decl, shallow.traitId);
       }
+      const merged = mergedGenericScope(
+        item.generics,
+        item.whereClause,
+        sig.generics,
+        sig.whereClause,
+      );
       return [
         {
           name: sig.name.text,
@@ -2624,6 +2642,10 @@ function analyzeTraitDecl(
           params: analyzed.params,
           returnType: analyzed.returnType,
           genericParams: genericParamNames(sig.generics),
+          genericParamBounds: resolveBoundNames(
+            ctx,
+            genericParamBoundNames(merged.generics, merged.whereClause),
+          ),
         },
       ];
     },
@@ -8017,11 +8039,8 @@ interface IndexedMethod {
    * for method calls isn't implemented. */
   readonly genericParams: readonly string[];
   /** Each `genericParams` name's own declared bound trait names (resolved
-   * `traitRegistry` keys), for an inherent method - empty for a trait-origin
-   * method, since a trait's own methods don't persist their generic bounds
-   * anywhere yet (a narrower version of the same `genericParams` gap above).
-   * `recordMethodCallWitnesses` uses this to resolve a witness per bound
-   * from the call site's own argument types. */
+   * `traitRegistry` keys) - `recordMethodCallWitnesses` uses this to resolve
+   * a witness per bound from the call site's own argument types. */
   readonly genericParamBounds: ReadonlyMap<string, readonly string[]>;
   readonly origin:
     | { readonly kind: "inherent" }
@@ -8078,7 +8097,7 @@ function traitMethodSet(
     params: m.params,
     returnType: m.returnType,
     genericParams: [...trait.genericParams, ...m.genericParams],
-    genericParamBounds: new Map(),
+    genericParamBounds: m.genericParamBounds,
     origin: { kind: "trait", traitId },
   }));
   const inherited = trait.supertraits.flatMap((s) =>
@@ -8654,6 +8673,12 @@ function namesGenericParam(type: Semantics.Type, paramName: string): boolean {
  * arity-checked-not-type-checked state; the resulting argument-count
  * mismatch surfaces as a runtime error in the callee, not a compile
  * diagnostic, same as any other not-yet-type-checked method generic.
+ * Appends to (never overwrites) any witnesses `recordMethodDispatch` already
+ * recorded for this same token - a blanket-dispatched call
+ * (`recordBlanketDispatchTarget`) populates the same table with the blanket
+ * impl's own bound witnesses first, and those must stay ahead of a method's
+ * own bound witnesses in the trailing-argument list, matching the callee's
+ * own parameter order (`recordWitnessParams`'s outer-then-inner merge).
  */
 function recordMethodCallWitnesses(
   ctx: AnalysisContext,
@@ -8662,7 +8687,9 @@ function recordMethodCallWitnesses(
   args: readonly Semantics.Expression[],
 ): void {
   if (method.genericParamBounds.size === 0) return;
-  const witnesses: WitnessRef[] = [];
+  const witnesses: WitnessRef[] = [
+    ...(ctx.methodCallWitnessTable.get(methodTokenId) ?? []),
+  ];
   for (const [paramName, traitNames] of method.genericParamBounds) {
     const argIndex = method.params.findIndex((p) =>
       namesGenericParam(p, paramName),

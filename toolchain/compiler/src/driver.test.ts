@@ -1488,6 +1488,39 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["1", "2"]);
   });
 
+  it("threads a witness for a trait-provided method's own bounded generic parameter, matching an inherent method's own", (): void => {
+    const js = emittedJs(`
+      trait C { fn c_val(&self) -> i32; }
+      trait B { fn f<U: C>(&self, x: U) -> i32; }
+      struct Point { x: i32 }
+      struct Helper { y: i32 }
+      impl C for Helper { fn c_val(&self) -> i32 { self.y } }
+      impl B for Point { fn f<U: C>(&self, x: U) -> i32 { self.x + x.c_val() } }
+      fn main() { print(Point { x: 40 }.f(Helper { y: 2 })); }
+    `);
+    expect(js).toContain("function Point$B$f(self, x, _witness_U_C)");
+    expect(js).toContain("__witness_C_Helper");
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
+  it("threads both a blanket impl's own bound witness and a method's own bounded generic parameter, in declaration order", (): void => {
+    const js = emittedJs(`
+      trait A { fn a(&self) -> i32; }
+      trait C { fn c_val(&self) -> i32; }
+      trait B { fn f<U: C>(&self, x: U) -> i32; }
+      struct Point { x: i32 }
+      struct Helper { y: i32 }
+      impl A for Point { fn a(&self) -> i32 { self.x } }
+      impl C for Helper { fn c_val(&self) -> i32 { self.y } }
+      impl<T: A> B for T { fn f<U: C>(&self, x: U) -> i32 { self.a() + x.c_val() } }
+      fn main() { print(Point { x: 40 }.f(Helper { y: 2 })); }
+    `);
+    expect(js).toContain(
+      "function B$f$blanket(self, x, _witness_T_A, _witness_U_C)",
+    );
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
   it("does not emit witness codegen for an unsatisfied bound", (): void => {
     const result = compile(`
       trait Draw { fn draw(&self) -> i32; }
