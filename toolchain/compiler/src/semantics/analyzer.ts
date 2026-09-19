@@ -107,11 +107,21 @@ type MethodEmitKind = "concrete" | "default" | "blanket";
  * How a resolved method call (or trait-dispatched `==`) lowers.
  *
  * `free` - a call on a concrete type, to an emitted free function - see
- * `MethodEmitKind`. `typeId` is the scope-qualified `StructType`/`EnumType`
- * identity for `emitKind: "concrete"` (distinct per declaration even when
- * two types share `typeName`, so codegen keys its name-reservation map on it
- * rather than the collision-prone readable name); for `default`/`blanket` it
- * is the trait's own identity instead, since neither is type-scoped.
+ * `MethodEmitKind`. `typeId` is a concrete `StructType`/`EnumType` identity
+ * for `emitKind: "concrete"`, or the *receiver's own* concrete identity for
+ * a call-site `"default"` target (paired with `traitName` to look up the
+ * hoisted `(type, trait)` witness object `defaultBodyWitnessArg` passes) -
+ * neither is what disambiguates the free function's own reserved name,
+ * which is `scopeId`'s job (see below). `witness`/`blanket`'s own `typeId`
+ * is otherwise unused past display.
+ *
+ * `scopeId` is the identity `methodKey` actually keys the name-reservation
+ * map on: a `StructType`/`EnumType`'s own scoped identity for `concrete`
+ * (distinct per declaration even when two types share `typeName`, matching
+ * `typeId` there), or the *declaring trait's own* scoped `traitRegistry` key
+ * for `default`/`blanket` - two block-local traits sharing a bare name (each
+ * with their own blanket impl, say) must not collide on `methodKey`, even
+ * though their readable names and `traitName` display text both do.
  *
  * `witness` - a call inside a generic body, dispatched through the witness
  * parameter `witnessName` (`_witness_T_Draw`, or `_witness_Self_Foo` in a
@@ -120,6 +130,7 @@ type MethodEmitKind = "concrete" | "default" | "blanket";
 export interface FreeMethodTarget {
   readonly kind: "free";
   readonly typeId: string;
+  readonly scopeId: string;
   readonly typeName: string;
   readonly traitName: Option<string>;
   readonly methodName: string;
@@ -154,6 +165,10 @@ export interface WitnessMethod {
   readonly name: string;
   readonly source: "impl" | "default";
   readonly definingTrait: string;
+  /** `definingTrait`'s own scoped `traitRegistry` key - what codegen's
+   * `methodKey` actually disambiguates on, since two shadowed traits can
+   * share a bare `definingTrait` name. */
+  readonly definingTraitId: string;
 }
 
 /**
@@ -2581,6 +2596,7 @@ function recordDefaultMethodTarget(
   ctx.implMethodTargetTable.set(decl.tokenId, {
     kind: "free",
     typeId: traitId,
+    scopeId: traitId,
     typeName: trait,
     traitName: some(trait),
     methodName: decl.signature.name.text,
@@ -3262,6 +3278,7 @@ function collectWitnessMethods(
           ? "impl"
           : "default",
       definingTrait: bareTrait,
+      definingTraitId: traitId,
     });
   }
   for (const supertrait of trait.supertraits) {
@@ -7306,6 +7323,7 @@ function recordBlanketDispatchTarget(
   ctx.methodTargetTable.set(tokenId, {
     kind: "free",
     typeId: trait,
+    scopeId: traitId,
     typeName: trait,
     traitName: some(trait),
     methodName,
@@ -7347,6 +7365,7 @@ function recordOperatorDispatchTarget(
     ctx.methodTargetTable.set(tokenId, {
       kind: "free",
       typeId: operandType.name,
+      scopeId: operandType.name,
       typeName: bareTypeName(operandType.name),
       traitName: some(bareTypeName(trait)),
       methodName,
@@ -8466,6 +8485,7 @@ function recordImplMethodTarget(
     ctx.implMethodTargetTable.set(decl.tokenId, {
       kind: "free",
       typeId: targetType.name,
+      scopeId: targetType.name,
       typeName: bareTypeName(targetType.name),
       traitName: mapSome(traitName, bareTypeName),
       methodName: decl.signature.name.text,
@@ -8478,6 +8498,7 @@ function recordImplMethodTarget(
   ctx.implMethodTargetTable.set(decl.tokenId, {
     kind: "free",
     typeId: traitName.value,
+    scopeId: traitName.value,
     typeName: trait,
     traitName: some(trait),
     methodName: decl.signature.name.text,
@@ -8515,6 +8536,7 @@ function recordDropImpl(
   ctx.dropImplTable.set(targetType.name, {
     kind: "free",
     typeId: targetType.name,
+    scopeId: targetType.name,
     typeName: bareTypeName(targetType.name),
     traitName: some(bareTypeName(traitName.value)),
     methodName: "drop",
@@ -8548,6 +8570,7 @@ function recordMethodTarget(
     ctx.methodTargetTable.set(methodTokenId, {
       kind: "free",
       typeId: receiverType.name,
+      scopeId: receiverType.name,
       typeName: bareTypeName(receiverType.name),
       traitName: none(),
       methodName,
@@ -8576,6 +8599,7 @@ function recordMethodTarget(
     ctx.methodTargetTable.set(methodTokenId, {
       kind: "free",
       typeId: receiverType.name,
+      scopeId: method.origin.traitId,
       typeName: bareTypeName(receiverType.name),
       traitName: some(trait),
       methodName,
@@ -8596,6 +8620,7 @@ function recordMethodTarget(
   ctx.methodTargetTable.set(methodTokenId, {
     kind: "free",
     typeId: receiverType.name,
+    scopeId: receiverType.name,
     typeName: bareTypeName(receiverType.name),
     traitName: some(trait),
     methodName,

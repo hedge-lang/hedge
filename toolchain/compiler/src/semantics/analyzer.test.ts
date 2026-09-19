@@ -6755,9 +6755,20 @@ describe("trait and impl declarations", (): void => {
       const [witnesses] = [...result.witnesses.values()];
       const witness = witnesses?.[0];
       assert(witness?.kind === "Impl", "expected an Impl witness");
+      const shapeId = traitIdOf(result, "Shape");
       expect(witness.methods).toEqual([
-        { name: "draw", source: "impl", definingTrait: "Shape" },
-        { name: "describe", source: "default", definingTrait: "Shape" },
+        {
+          name: "draw",
+          source: "impl",
+          definingTrait: "Shape",
+          definingTraitId: shapeId,
+        },
+        {
+          name: "describe",
+          source: "default",
+          definingTrait: "Shape",
+          definingTraitId: shapeId,
+        },
       ]);
     });
 
@@ -6776,8 +6787,18 @@ describe("trait and impl declarations", (): void => {
       const witness = witnesses?.[0];
       assert(witness?.kind === "Impl", "expected an Impl witness");
       expect(witness.methods).toEqual([
-        { name: "ext", source: "impl", definingTrait: "Ext" },
-        { name: "base", source: "impl", definingTrait: "Base" },
+        {
+          name: "ext",
+          source: "impl",
+          definingTrait: "Ext",
+          definingTraitId: traitIdOf(result, "Ext"),
+        },
+        {
+          name: "base",
+          source: "impl",
+          definingTrait: "Base",
+          definingTraitId: traitIdOf(result, "Base"),
+        },
       ]);
     });
 
@@ -6800,7 +6821,12 @@ describe("trait and impl declarations", (): void => {
       const witness = witnesses?.[0];
       assert(witness?.kind === "Impl", "expected an Impl witness");
       expect(witness.methods.filter((m) => m.name === "a")).toEqual([
-        { name: "a", source: "impl", definingTrait: "A" },
+        {
+          name: "a",
+          source: "impl",
+          definingTrait: "A",
+          definingTraitId: traitIdOf(result, "A"),
+        },
       ]);
     });
 
@@ -6819,9 +6845,20 @@ describe("trait and impl declarations", (): void => {
       const [witnesses] = [...result.witnesses.values()];
       const witness = witnesses?.[0];
       assert(witness?.kind === "Impl", "expected an Impl witness");
+      const shapeId = traitIdOf(result, "Shape");
       expect(witness.methods).toEqual([
-        { name: "describe", source: "default", definingTrait: "Shape" },
-        { name: "draw", source: "impl", definingTrait: "Shape" },
+        {
+          name: "describe",
+          source: "default",
+          definingTrait: "Shape",
+          definingTraitId: shapeId,
+        },
+        {
+          name: "draw",
+          source: "impl",
+          definingTrait: "Shape",
+          definingTraitId: shapeId,
+        },
       ]);
     });
 

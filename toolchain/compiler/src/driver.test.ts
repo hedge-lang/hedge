@@ -1488,6 +1488,37 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["1", "2"]);
   });
 
+  it("does not collide a blanket impl's free function with another blanket impl of a shadowed same-named trait", (): void => {
+    const result = compile(`
+      trait Marker1 {}
+      trait Marker2 {}
+      struct X { x: i32 }
+      struct Y { y: i32 }
+      impl Marker1 for X {}
+      impl Marker2 for Y {}
+
+      trait B { fn f(&self) -> i32; }
+      impl<T: Marker1> B for T { fn f(&self) -> i32 { 1 } }
+
+      fn call_inner(x: X) -> i32 {
+        trait B { fn f(&self) -> i32; }
+        impl<T: Marker2> B for T { fn f(&self) -> i32 { 2 } }
+        x.f()
+      }
+
+      fn main() {
+        print(call_inner(X { x: 0 }));
+        print(Y { y: 0 }.f());
+      }
+    `);
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toEqual([]);
+    assert(isSome(result.code), "Expected the program to compile");
+    const { javascript } = result.code.value;
+    assert(isSome(javascript), "Expected emitted JavaScript");
+    expect(runEmittedJs(javascript.value)).toEqual(["1", "2"]);
+  });
+
   it("threads a witness for a trait-provided method's own bounded generic parameter, matching an inherent method's own", (): void => {
     const js = emittedJs(`
       trait C { fn c_val(&self) -> i32; }

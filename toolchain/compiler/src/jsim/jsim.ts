@@ -1060,19 +1060,14 @@ function methodFreeFnName(target: FreeMethodTarget): string {
 }
 
 /** The per-declaration identity of a method free function, used to look up
- * its collision-resolved name. Scope-qualified by `typeId` for a concrete
- * (inherent or override) method (a block-local type shadowing a top-level
- * one keeps a distinct entry), but `default`/`blanket` have no owning
- * concrete type - there is one of each per trait (coherence guarantees at
- * most one blanket impl per trait, the same way there's only one default
- * body per trait) - so both key on the bare trait name alone, which every
- * site (the emission, a concrete call, a witness slot) agrees on. */
+ * its collision-resolved name - `target.scopeId` (a struct/enum's own scoped
+ * identity for `concrete`, a trait's own scoped `traitRegistry` key for
+ * `default`/`blanket`), not the bare `typeName`/`traitName` display text two
+ * different declarations can share (a block-local type/trait shadowing a
+ * top-level one, most concretely). */
 function methodKey(target: FreeMethodTarget): string {
   const trait = isSome(target.traitName) ? target.traitName.value : "";
-  if (target.emitKind !== "concrete") {
-    return `${target.emitKind}#${trait}#${target.methodName}`;
-  }
-  return `${target.typeId}#${trait}#${target.methodName}#false`;
+  return `${target.emitKind}#${target.scopeId}#${trait}#${target.methodName}`;
 }
 
 /** The name a method's free function actually emits and every call site
@@ -1132,10 +1127,22 @@ function witnessSlotTarget(
   witness: HoistedWitness,
   method: WitnessMethod,
 ): FreeMethodTarget {
-  if (method.source === "impl" && witness.boundWitnesses.length > 0) {
+  if (method.source === "default") {
     return {
       kind: "free",
-      typeId: method.definingTrait,
+      typeId: method.definingTraitId,
+      scopeId: method.definingTraitId,
+      typeName: method.definingTrait,
+      traitName: some(method.definingTrait),
+      methodName: method.name,
+      emitKind: "default",
+    };
+  }
+  if (witness.boundWitnesses.length > 0) {
+    return {
+      kind: "free",
+      typeId: method.definingTraitId,
+      scopeId: method.definingTraitId,
       typeName: method.definingTrait,
       traitName: some(method.definingTrait),
       methodName: method.name,
@@ -1145,10 +1152,11 @@ function witnessSlotTarget(
   return {
     kind: "free",
     typeId: witness.typeId,
+    scopeId: witness.typeId,
     typeName: witness.typeName,
     traitName: some(method.definingTrait),
     methodName: method.name,
-    emitKind: method.source === "default" ? "default" : "concrete",
+    emitKind: "concrete",
   };
 }
 
