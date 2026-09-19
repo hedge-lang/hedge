@@ -7265,6 +7265,32 @@ function inferComparisonType(
   return { kind: "PrimitiveBooleanType" };
 }
 
+/** Records a call dispatched to a blanket impl's own trait-scoped
+ * `Trait$m$blanket` free function - shared by `recordOperatorDispatchTarget`
+ * (an operator operand) and `recordMethodTarget` (a concrete-receiver method
+ * call), the two places a `Composed` witness's directly-provided method
+ * needs recording. `boundWitnesses` becomes the call site's own trailing
+ * `methodCallWitnesses` (the same table a method's own generic bounds
+ * already thread extra witnesses through). */
+function recordBlanketDispatchTarget(
+  ctx: AnalysisContext,
+  tokenId: number,
+  traitId: string,
+  methodName: string,
+  boundWitnesses: readonly WitnessRef[],
+): void {
+  const trait = bareTypeName(traitId);
+  ctx.methodCallWitnessTable.set(tokenId, boundWitnesses);
+  ctx.methodTargetTable.set(tokenId, {
+    kind: "free",
+    typeId: trait,
+    typeName: trait,
+    traitName: some(trait),
+    methodName,
+    emitKind: "blanket",
+  });
+}
+
 /** The free-fn/witness recording shared by every `record*TraitTarget`
  * variant (comparison, unary, arithmetic/bitwise/shift): a concrete
  * non-blanket impl records a `free` `MethodTarget`; a bound generic
@@ -7287,15 +7313,13 @@ function recordOperatorDispatchTarget(
     const witness = resolveTraitBoundForTypeName(ctx, operandType.name, trait);
     if (!isSome(witness)) return;
     if (witness.value.kind === "Composed") {
-      ctx.methodCallWitnessTable.set(tokenId, witness.value.boundWitnesses);
-      ctx.methodTargetTable.set(tokenId, {
-        kind: "free",
-        typeId: bareTypeName(trait),
-        typeName: bareTypeName(trait),
-        traitName: some(bareTypeName(trait)),
+      recordBlanketDispatchTarget(
+        ctx,
+        tokenId,
+        trait,
         methodName,
-        emitKind: "blanket",
-      });
+        witness.value.boundWitnesses,
+      );
       return;
     }
     ctx.methodTargetTable.set(tokenId, {
@@ -8541,15 +8565,13 @@ function recordMethodTarget(
     return;
   }
   if (witness.value.kind === "Composed") {
-    ctx.methodCallWitnessTable.set(methodTokenId, witness.value.boundWitnesses);
-    ctx.methodTargetTable.set(methodTokenId, {
-      kind: "free",
-      typeId: trait,
-      typeName: trait,
-      traitName: some(trait),
+    recordBlanketDispatchTarget(
+      ctx,
+      methodTokenId,
+      method.origin.traitId,
       methodName,
-      emitKind: "blanket",
-    });
+      witness.value.boundWitnesses,
+    );
     return;
   }
   ctx.methodTargetTable.set(methodTokenId, {
