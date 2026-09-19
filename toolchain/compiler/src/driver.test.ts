@@ -1452,6 +1452,21 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["42"]);
   });
 
+  it("threads a witness for a trait-provided method's own bounded generic parameter through a generic receiver's own witness dispatch", (): void => {
+    const js = emittedJs(`
+      trait C { fn c_val(&self) -> i32; }
+      trait B { fn f<U: C>(&self, u: U) -> i32; }
+      struct Point { x: i32 }
+      struct Helper { y: i32 }
+      impl C for Helper { fn c_val(&self) -> i32 { self.y } }
+      impl B for Point { fn f<U: C>(&self, u: U) -> i32 { self.x + u.c_val() } }
+      fn call_it<T: B>(t: T, h: Helper) -> i32 { t.f(h) }
+      fn main() { print(call_it(Point { x: 40 }, Helper { y: 2 })); }
+    `);
+    expect(js).toContain("_witness_T_B.f(t, h, __witness_C_Helper)");
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
   it("threads both a default method's own Self witness and its own bounded generic parameter's witness, in that order", (): void => {
     const js = emittedJs(`
       trait C { fn c_val(&self) -> i32; }
@@ -2039,6 +2054,20 @@ describe("dyn Trait runtime", (): void => {
     expect(js).toContain("witness: __witness_Draw_Circle");
     expect(js).toContain(".witness.draw(");
     expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
+  it("threads a witness for a trait-provided method's own bounded generic parameter through dyn dispatch", (): void => {
+    const js = emittedJs(`
+      trait C { fn c_val(&self) -> i32; }
+      trait B { fn f<U: C>(&self, u: U) -> i32; }
+      struct Point { x: i32 }
+      struct Helper { y: i32 }
+      impl C for Helper { fn c_val(&self) -> i32 { self.y } }
+      impl B for Point { fn f<U: C>(&self, u: U) -> i32 { self.x + u.c_val() } }
+      fn call_it(d: dyn B, h: Helper) -> i32 { d.f(h) }
+      fn main() { print(call_it(Point { x: 40 }, Helper { y: 2 })); }
+    `);
+    expect(runEmittedJs(js)).toEqual(["42"]);
   });
 
   it("unsize-coerces a value whose trait comes only from a blanket impl, dispatching through its composed witness", (): void => {

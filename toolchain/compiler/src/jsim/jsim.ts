@@ -2230,7 +2230,11 @@ function jsimMethodCallExpression(
         type: none(),
       },
       method: target.methodName,
-      arguments: [selfArgument(ctx, methodCallExpression), ...loweredArgs],
+      arguments: [
+        selfArgument(ctx, methodCallExpression),
+        ...loweredArgs,
+        ...methodCallWitnessArgs(ctx, methodCallExpression.method.tokenId),
+      ],
     };
   }
   if (target?.kind === "dyn") {
@@ -2274,7 +2278,11 @@ function jsimDynDispatch(
       kind: "MethodCallExpression",
       receiver: jsimField(box, "witness"),
       method: target.methodName,
-      arguments: [selfArg, ...loweredArgs],
+      arguments: [
+        selfArg,
+        ...loweredArgs,
+        ...methodCallWitnessArgs(ctx, call.method.tokenId),
+      ],
     };
     return target.returnsSelf
       ? {
