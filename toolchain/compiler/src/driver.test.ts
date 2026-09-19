@@ -1452,6 +1452,25 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["42"]);
   });
 
+  it("threads both a default method's own Self witness and its own bounded generic parameter's witness, in that order", (): void => {
+    const js = emittedJs(`
+      trait C { fn c_val(&self) -> i32; }
+      trait B {
+        fn f(&self) -> i32;
+        fn g<U: C>(&self, u: U) -> i32 { self.f() + u.c_val() }
+      }
+      struct Point { x: i32 }
+      struct Helper { y: i32 }
+      impl C for Helper { fn c_val(&self) -> i32 { self.y } }
+      impl B for Point { fn f(&self) -> i32 { self.x } }
+      fn main() { print(Point { x: 40 }.g(Helper { y: 2 })); }
+    `);
+    expect(js).toContain(
+      "function B$g$default(self, u, _witness_Self_B, _witness_U_C)",
+    );
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
   it("composes a witness through two levels of nested blanket impls", (): void => {
     const js = emittedJs(`
       trait A { fn a(&self) -> i32; }

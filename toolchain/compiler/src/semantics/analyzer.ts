@@ -2594,9 +2594,17 @@ function abstractSelfType(tokenId: number): Semantics.Type {
 }
 
 /** A bodied trait method emits as `Trait$m$default(self, ...args,
- * _witness_Self_<Trait>)` - a `free` `MethodTarget` (`emitKind: "default"`),
- * plus a trailing witness parameter its own `self.other()` sibling calls
- * dispatch through. */
+ * _witness_Self_<Trait>, ...ownBoundWitnesses)` - a `free` `MethodTarget`
+ * (`emitKind: "default"`), plus a trailing `_witness_Self_<Trait>` its own
+ * `self.other()` sibling calls dispatch through, ahead of whatever witness
+ * parameters the method's own bounded generics already need (matching the
+ * call site's own argument order - `defaultBodyWitnessArg` before
+ * `methodCallWitnessArgs`). Prepends rather than overwrites
+ * `witnessParamTable`: `analyzeMethodItem`'s own `recordWitnessParams` call,
+ * just before this one runs, already populated it for a default method with
+ * its own generic bound (`fn g<U: C>(&self, u: U) { ... }`) - overwriting
+ * that entry silently dropped `_witness_U_C` from the emitted signature
+ * while the call site still passed it. */
 function recordDefaultMethodTarget(
   ctx: AnalysisContext,
   decl: Parser.FunctionDef,
@@ -2612,12 +2620,14 @@ function recordDefaultMethodTarget(
     methodName: decl.signature.name.text,
     emitKind: "default",
   });
+  const ownBoundParams = ctx.witnessParamTable.get(decl.tokenId) ?? [];
   ctx.witnessParamTable.set(decl.tokenId, [
     {
       name: witnessParamName("Self", trait),
       paramName: "Self",
       traitName: trait,
     },
+    ...ownBoundParams,
   ]);
 }
 
