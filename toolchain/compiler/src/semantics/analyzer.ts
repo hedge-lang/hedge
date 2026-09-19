@@ -169,6 +169,16 @@ export interface WitnessMethod {
    * `methodKey` actually disambiguates on, since two shadowed traits can
    * share a bare `definingTrait` name. */
   readonly definingTraitId: string;
+  /** `some(...)` only when `source === "impl"` and the impl providing this
+   * specific method is itself blanket - the concrete type's own witness for
+   * each of that impl's own bounds, in declaration order. Determined per
+   * method (not inferred from whatever the enclosing witness happens to be),
+   * since one witness can flatten methods from more than one impl of more
+   * than one trait in its supertrait chain, and those impls need not agree
+   * on blanket-ness - a method a *concrete* impl provides has no bound
+   * witnesses to thread even when a *sibling* method in the same flattened
+   * witness comes from a genuinely blanket impl elsewhere in the chain. */
+  readonly blanketBoundWitnesses: Option<readonly WitnessRef[]>;
 }
 
 /**
@@ -3252,6 +3262,33 @@ function witnessMethods(
   return [...byName.values()];
 }
 
+/** A method's own blanket-impl bound witnesses, when the impl providing it
+ * is itself blanket - `none()` for a concretely-provided or default-sourced
+ * method. `impl`'s own bounds are already confirmed satisfiable (the
+ * caller's own `findRegisteredImpl` lookup found `impl` in the first place,
+ * which recursively checks exactly this), so `composeBlanketBoundWitnesses`
+ * failing here would mean that invariant broke, not a real "unsatisfied"
+ * case to recover from. */
+function blanketMethodBoundWitnesses(
+  ctx: AnalysisContext,
+  typeName: string,
+  isImplProvided: boolean,
+  impl: RegisteredImpl | undefined,
+): Option<readonly WitnessRef[]> {
+  if (!isImplProvided || impl === undefined || !impl.isBlanket) return none();
+  const boundWitnesses = composeBlanketBoundWitnesses(
+    ctx,
+    typeName,
+    impl.blanketBounds,
+    new Set(),
+  );
+  assert(
+    boundWitnesses !== undefined,
+    "ICE: a blanket impl's own bounds failed to compose after findRegisteredImpl already confirmed them satisfied",
+  );
+  return some(boundWitnesses);
+}
+
 /** Walks one supertrait DAG, filling `byName`. `seen` and `byName` are shared
  * across the whole walk - not copied per branch - so a diamond's shared
  * ancestor is visited (and its methods recorded) exactly once. */
@@ -3270,15 +3307,20 @@ function collectWitnessMethods(
   const bareTrait = bareTypeName(traitId);
   for (const method of trait.methods) {
     if (byName.has(method.name)) continue;
+    const isImplProvided =
+      !method.isDefault ||
+      (impl?.providedMethods.includes(method.name) ?? false);
     byName.set(method.name, {
       name: method.name,
-      source:
-        !method.isDefault ||
-        (impl?.providedMethods.includes(method.name) ?? false)
-          ? "impl"
-          : "default",
+      source: isImplProvided ? "impl" : "default",
       definingTrait: bareTrait,
       definingTraitId: traitId,
+      blanketBoundWitnesses: blanketMethodBoundWitnesses(
+        ctx,
+        typeName,
+        isImplProvided,
+        impl,
+      ),
     });
   }
   for (const supertrait of trait.supertraits) {

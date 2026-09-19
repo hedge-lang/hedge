@@ -1119,10 +1119,13 @@ function resolvedPrimitiveWitnessName(
 /** The `FreeMethodTarget` for one method a `(typeId, trait)` witness carries,
  * used to resolve the free-function name the slot points at. Keyed on the
  * method's *defining* trait, not the witness's - a flattened supertrait
- * method's free function is named for the trait that declared it. A method
- * a blanket impl provides directly (not a default, and the witness itself
- * carries the blanket's own bound witnesses) has no per-concrete-type free
- * function - it resolves to the trait-scoped `Trait$m$blanket` instead. */
+ * method's free function is named for the trait that declared it. Classified
+ * per method (`method.blanketBoundWitnesses`), not from whatever the
+ * enclosing witness happens to be - one flattened witness can carry methods
+ * from more than one impl of more than one trait, and those impls need not
+ * agree on blanket-ness. A method a blanket impl provides directly has no
+ * per-concrete-type free function - it resolves to the trait-scoped
+ * `Trait$m$blanket` instead. */
 function witnessSlotTarget(
   witness: HoistedWitness,
   method: WitnessMethod,
@@ -1138,7 +1141,7 @@ function witnessSlotTarget(
       emitKind: "default",
     };
   }
-  if (witness.boundWitnesses.length > 0) {
+  if (isSome(method.blanketBoundWitnesses)) {
     return {
       kind: "free",
       typeId: method.definingTraitId,
@@ -1161,7 +1164,12 @@ function witnessSlotTarget(
 }
 
 /** The hoisted `const` name for the `(typeId, trait)` witness object,
- * allocated (collision-safe) and remembered on first reference. */
+ * allocated (collision-safe) and remembered on first reference - on first
+ * creation, also reserves each of the witness's own methods' individual
+ * blanket bound witnesses (`WitnessMethod.blanketBoundWitnesses`), which can
+ * differ per method and aren't otherwise reachable from `boundWitnesses`
+ * (the *enclosing* witness's own bounds, a separate, narrower set only a
+ * concrete-receiver call site's trailing arguments need). */
 function witnessConstName(
   ctx: JsimContext,
   typeId: string,
@@ -1182,6 +1190,12 @@ function witnessConstName(
     methods,
     boundWitnesses,
   });
+  for (const method of methods) {
+    if (!isSome(method.blanketBoundWitnesses)) continue;
+    for (const bound of method.blanketBoundWitnesses.value) {
+      reserveWitnessRef(ctx, bound);
+    }
+  }
   return name;
 }
 
@@ -1374,9 +1388,6 @@ function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
   for (const witness of ctx.hoistedWitnesses.values()) {
     const direct: JSIM.WitnessSlot[] = [];
     const closure: JSIM.WitnessSlot[] = [];
-    const boundArgs = witness.boundWitnesses.map((ref) =>
-      witnessRefName(ctx, ref),
-    );
     for (const method of witness.methods) {
       const value = resolvedMethodFreeFnName(
         ctx,
@@ -1384,8 +1395,11 @@ function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
       );
       if (method.source === "default") {
         closure.push({ method: method.name, value, extraArgs: ["w"] });
-      } else if (boundArgs.length > 0) {
-        closure.push({ method: method.name, value, extraArgs: boundArgs });
+      } else if (isSome(method.blanketBoundWitnesses)) {
+        const extraArgs = method.blanketBoundWitnesses.value.map((ref) =>
+          witnessRefName(ctx, ref),
+        );
+        closure.push({ method: method.name, value, extraArgs });
       } else {
         direct.push({ method: method.name, value, extraArgs: [] });
       }

@@ -6762,12 +6762,14 @@ describe("trait and impl declarations", (): void => {
           source: "impl",
           definingTrait: "Shape",
           definingTraitId: shapeId,
+          blanketBoundWitnesses: none(),
         },
         {
           name: "describe",
           source: "default",
           definingTrait: "Shape",
           definingTraitId: shapeId,
+          blanketBoundWitnesses: none(),
         },
       ]);
     });
@@ -6792,12 +6794,14 @@ describe("trait and impl declarations", (): void => {
           source: "impl",
           definingTrait: "Ext",
           definingTraitId: traitIdOf(result, "Ext"),
+          blanketBoundWitnesses: none(),
         },
         {
           name: "base",
           source: "impl",
           definingTrait: "Base",
           definingTraitId: traitIdOf(result, "Base"),
+          blanketBoundWitnesses: none(),
         },
       ]);
     });
@@ -6826,6 +6830,7 @@ describe("trait and impl declarations", (): void => {
           source: "impl",
           definingTrait: "A",
           definingTraitId: traitIdOf(result, "A"),
+          blanketBoundWitnesses: none(),
         },
       ]);
     });
@@ -6852,12 +6857,14 @@ describe("trait and impl declarations", (): void => {
           source: "default",
           definingTrait: "Shape",
           definingTraitId: shapeId,
+          blanketBoundWitnesses: none(),
         },
         {
           name: "draw",
           source: "impl",
           definingTrait: "Shape",
           definingTraitId: shapeId,
+          blanketBoundWitnesses: none(),
         },
       ]);
     });

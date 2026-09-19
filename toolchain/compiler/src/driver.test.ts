@@ -1519,6 +1519,36 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(javascript.value)).toEqual(["1", "2"]);
   });
 
+  it("dispatches a witness slot for an unconstrained blanket impl's method through the trait-scoped free function, not a nonexistent per-type one", (): void => {
+    const js = emittedJs(`
+      trait B { fn f(&self) -> i32; }
+      impl<T> B for T { fn f(&self) -> i32 { 42 } }
+      struct Point { x: i32 }
+      fn call_it<X: B>(x: X) -> i32 { x.f() }
+      fn main() { print(call_it(Point { x: 1 })); }
+    `);
+    expect(js).toContain("function B$f$blanket(self)");
+    expect(js).toContain("B$f$blanket(self, ...args)");
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
+  it("dispatches a witness slot for a supertrait method from a concrete impl through its own free function, not the sibling blanket method's", (): void => {
+    const js = emittedJs(`
+      trait A { fn a(&self) -> i32; }
+      trait B: A { fn b(&self) -> i32; }
+      trait Marker {}
+      struct Point { x: i32 }
+      impl A for Point { fn a(&self) -> i32 { self.x } }
+      impl Marker for Point {}
+      impl<T: Marker> B for T { fn b(&self) -> i32 { 1 } }
+      fn call_it<X: B>(x: X) -> i32 { x.a() + x.b() }
+      fn main() { print(call_it(Point { x: 10 })); }
+    `);
+    expect(js).toContain("a: Point$A$a");
+    expect(js).toContain("w.b = (self, ...args) => B$b$blanket(self, ...args");
+    expect(runEmittedJs(js)).toEqual(["11"]);
+  });
+
   it("threads a witness for a trait-provided method's own bounded generic parameter, matching an inherent method's own", (): void => {
     const js = emittedJs(`
       trait C { fn c_val(&self) -> i32; }
