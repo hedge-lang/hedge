@@ -94,16 +94,24 @@ export function witnessParamName(param: string, trait: string): string {
   return `_witness_${param}_${trait}`;
 }
 
+/** Which free function a `FreeMethodTarget` names: `concrete` -
+ * `<typeName>$<methodName>` (inherent) / `<typeName>$<traitName>$<methodName>`
+ * (trait impl), keyed by `typeId`; `default` - `<traitName>$<methodName>$default`,
+ * one per trait, for a trait default body no concrete/blanket impl overrides;
+ * `blanket` - `<traitName>$<methodName>$blanket`, one per trait (coherence
+ * guarantees at most one blanket impl per trait), for a method a blanket
+ * impl provides directly. */
+type MethodEmitKind = "concrete" | "default" | "blanket";
+
 /**
  * How a resolved method call (or trait-dispatched `==`) lowers.
  *
- * `free` - a call on a concrete type, to an emitted free function:
- * `<typeName>$<methodName>` for an inherent method,
- * `<typeName>$<traitName>$<methodName>` for a trait impl,
- * `<traitName>$<methodName>$default` when `isDefaultBody`. `typeId` is the
- * scope-qualified `StructType`/`EnumType` identity - distinct per declaration
- * even when two types share `typeName`, so codegen keys its name-reservation
- * map on it rather than the collision-prone readable name.
+ * `free` - a call on a concrete type, to an emitted free function - see
+ * `MethodEmitKind`. `typeId` is the scope-qualified `StructType`/`EnumType`
+ * identity for `emitKind: "concrete"` (distinct per declaration even when
+ * two types share `typeName`, so codegen keys its name-reservation map on it
+ * rather than the collision-prone readable name); for `default`/`blanket` it
+ * is the trait's own identity instead, since neither is type-scoped.
  *
  * `witness` - a call inside a generic body, dispatched through the witness
  * parameter `witnessName` (`_witness_T_Draw`, or `_witness_Self_Foo` in a
@@ -115,7 +123,7 @@ export interface FreeMethodTarget {
   readonly typeName: string;
   readonly traitName: Option<string>;
   readonly methodName: string;
-  readonly isDefaultBody: boolean;
+  readonly emitKind: MethodEmitKind;
 }
 
 interface WitnessMethodTarget {
@@ -150,8 +158,9 @@ export interface WitnessMethod {
 
 /**
  * How one generic call site's declared bound resolved. `Impl` names the
- * registered impl (concrete or blanket) that satisfies it, plus its own
- * method list. `Forwarded` covers a still-abstract argument (the enclosing
+ * registered *concrete* impl that satisfies it, plus its own method list -
+ * `Composed` is the parallel case for a *blanket* impl, see its own doc
+ * comment. `Forwarded` covers a still-abstract argument (the enclosing
  * declaration's own generic parameter) - there is no impl to reference yet,
  * since the concrete type isn't known until whatever calls the enclosing
  * function supplies it; codegen forwards the enclosing function's own
@@ -171,6 +180,21 @@ export type WitnessRef =
       readonly typeId: string;
       readonly implTokenId: number;
       readonly methods: readonly WitnessMethod[];
+    }
+  | {
+      readonly kind: "Composed";
+      readonly traitName: string;
+      /** Bare readable type name (`Point`) - the *concrete* type the witness
+       * is for, not the blanket impl's own abstract parameter. */
+      readonly typeName: string;
+      readonly typeId: string;
+      readonly implTokenId: number;
+      readonly methods: readonly WitnessMethod[];
+      /** The concrete type's own witness for each of the blanket impl's own
+       * bounds (`impl<T: A + B> Trait for T` needs both, in declaration
+       * order) - recursively another `Composed` when a bound is itself only
+       * blanket-satisfied. */
+      readonly boundWitnesses: readonly WitnessRef[];
     }
   | {
       readonly kind: "Forwarded";
@@ -2247,6 +2271,7 @@ function buildTraitDecl(item: Parser.TraitDecl): Semantics.TraitDecl {
             params: [],
             returnType: unitType,
             genericParams: genericParamNames(decl.generics),
+            genericParamBounds: new Map(),
           },
         ];
       }
@@ -2259,6 +2284,7 @@ function buildTraitDecl(item: Parser.TraitDecl): Semantics.TraitDecl {
             params: [],
             returnType: unitType,
             genericParams: genericParamNames(decl.signature.generics),
+            genericParamBounds: new Map(),
           },
         ];
       }
@@ -2359,11 +2385,21 @@ function resolveTraitMethodSignature(
     fallbackTokenId: number,
   ) => Semantics.Type,
 ): Semantics.TraitMethod {
+  const merged = mergedGenericScope(
+    outerGenerics,
+    outerWhereClause,
+    signature.generics,
+    signature.whereClause,
+  );
   return {
     name: signature.name.text,
     isDefault,
     receiver: toMethodReceiver(signature.receiver),
     genericParams: genericParamNames(signature.generics),
+    genericParamBounds: resolveBoundNames(
+      ctx,
+      genericParamBoundNames(merged.generics, merged.whereClause),
+    ),
     ...resolveMethodSignatureTypes(
       ctx,
       outerGenerics,
@@ -2533,9 +2569,9 @@ function abstractSelfType(tokenId: number): Semantics.Type {
 }
 
 /** A bodied trait method emits as `Trait$m$default(self, ...args,
- * _witness_Self_<Trait>)` - a `free` `MethodTarget` codegen keys on
- * (`isDefaultBody`), plus a trailing witness parameter its own `self.other()`
- * sibling calls dispatch through. */
+ * _witness_Self_<Trait>)` - a `free` `MethodTarget` (`emitKind: "default"`),
+ * plus a trailing witness parameter its own `self.other()` sibling calls
+ * dispatch through. */
 function recordDefaultMethodTarget(
   ctx: AnalysisContext,
   decl: Parser.FunctionDef,
@@ -2548,7 +2584,7 @@ function recordDefaultMethodTarget(
     typeName: trait,
     traitName: some(trait),
     methodName: decl.signature.name.text,
-    isDefaultBody: true,
+    emitKind: "default",
   });
   ctx.witnessParamTable.set(decl.tokenId, [
     {
@@ -2592,6 +2628,12 @@ function analyzeTraitDecl(
         methodBodies.push(analyzed.ownershipView.value);
         recordDefaultMethodTarget(ctx, decl, shallow.traitId);
       }
+      const merged = mergedGenericScope(
+        item.generics,
+        item.whereClause,
+        sig.generics,
+        sig.whereClause,
+      );
       return [
         {
           name: sig.name.text,
@@ -2600,6 +2642,10 @@ function analyzeTraitDecl(
           params: analyzed.params,
           returnType: analyzed.returnType,
           genericParams: genericParamNames(sig.generics),
+          genericParamBounds: resolveBoundNames(
+            ctx,
+            genericParamBoundNames(merged.generics, merged.whereClause),
+          ),
         },
       ];
     },
@@ -2851,7 +2897,13 @@ function analyzeImplDecl(
       );
       if (isSome(analyzed.ownershipView)) {
         methodBodies.push(analyzed.ownershipView.value);
-        recordImplMethodTarget(ctx, decl, targetType, traitName);
+        recordImplMethodTarget(
+          ctx,
+          decl,
+          targetType,
+          traitName,
+          shallow.isBlanket,
+        );
         recordDropImpl(ctx, decl, targetType, traitName);
       }
       return [
@@ -3070,13 +3122,70 @@ function findRegisteredImpl(
   });
 }
 
+/** The concrete type's own witness for each of a blanket impl's own bounds
+ * (`impl<T: A + B> Trait for T` needs both A's and B's), recursively -
+ * mirrors `findRegisteredImpl`'s cycle guard, since a bound may itself be
+ * satisfied only through another blanket impl. `undefined` only on a
+ * genuine cycle; by the time this runs, `findRegisteredImpl` has already
+ * confirmed every bound is satisfied, so an ordinary (non-cyclic) blanket
+ * chain always composes successfully here. */
+function composeBlanketBoundWitnesses(
+  ctx: AnalysisContext,
+  typeName: string,
+  blanketBounds: readonly string[],
+  visiting: ReadonlySet<string>,
+): readonly WitnessRef[] | undefined {
+  const witnesses: WitnessRef[] = [];
+  for (const bound of blanketBounds) {
+    const witness = resolveTraitBoundForTypeName(
+      ctx,
+      typeName,
+      bound,
+      visiting,
+    );
+    if (!isSome(witness)) return undefined;
+    witnesses.push(witness.value);
+  }
+  return witnesses;
+}
+
+/** The real, usable witness for `typeName: traitName` - an `Impl` ref for a
+ * concrete impl, or a `Composed` ref for a blanket one, built by recursively
+ * resolving each of the blanket impl's own bounds against the same concrete
+ * `typeName` (never the blanket's own abstract parameter). `visiting` guards
+ * against a cyclic blanket-bound chain the same way `findRegisteredImpl`'s
+ * own internal recursion does - a fresh cycle-guard, not shared with that
+ * one, since this walk is composing witnesses rather than just checking
+ * satisfiability. */
 function resolveTraitBoundForTypeName(
   ctx: AnalysisContext,
   typeName: string,
   traitName: string,
+  visiting: ReadonlySet<string> = new Set(),
 ): Option<WitnessRef> {
+  const key = `${typeName}::${traitName}`;
+  if (visiting.has(key)) return none();
+  const nextVisiting = new Set(visiting).add(key);
   const impl = findRegisteredImpl(ctx, typeName, traitName);
   if (impl === undefined) return none();
+  if (impl.isBlanket) {
+    const boundWitnesses = composeBlanketBoundWitnesses(
+      ctx,
+      typeName,
+      impl.blanketBounds,
+      nextVisiting,
+    );
+    if (boundWitnesses === undefined) return none();
+    return some({
+      kind: "Composed",
+      traitName: bareTypeName(traitName),
+      typeName: bareTypeName(typeName),
+      typeId: typeName,
+      implTokenId: impl.tokenId,
+      methods: witnessMethods(ctx, traitName, typeName),
+      boundWitnesses,
+    });
+  }
   return some({
     kind: "Impl",
     traitName: bareTypeName(traitName),
@@ -3085,34 +3194,6 @@ function resolveTraitBoundForTypeName(
     implTokenId: impl.tokenId,
     methods: witnessMethods(ctx, traitName, typeName),
   });
-}
-
-/**
- * Whether `witness` is an `Impl` ref backed by a blanket impl - deliberately
- * *not* folded into `resolveTraitBound`/`resolveTraitBoundForTypeName`
- * themselves, since a blanket-satisfied bound is genuinely satisfied
- * (`needs_b<U: B>(point)` with `B` only blanket-implemented is valid Hedge
- * with zero diagnostics, and `==`'s own operand-resolves gate needs that
- * fact too) - only whether codegen can actually reference the witness. A
- * blanket impl's method bodies aren't emitted as free functions
- * (`buildMethodIndex` skips them), so a witness object built from one would
- * carry slots referencing functions that don't exist; each site that would
- * hoist or pass such a witness checks this first and treats the bound as
- * unresolved for codegen purposes, leaving the semantic "is it satisfied"
- * answer (and any diagnostic that follows from *that* being false) alone.
- */
-function witnessIsUnemittableBlanket(
-  ctx: AnalysisContext,
-  witness: WitnessRef,
-): boolean {
-  if (witness.kind !== "Impl") return false;
-  // By `implTokenId`, not `findRegisteredImpl(typeId, traitName)` - the ref
-  // only carries `traitName` as a bare display name (`bareTypeName`), not
-  // the scoped `traitRegistry` key that lookup needs.
-  return (
-    ctx.implRegistry.find((impl) => impl.tokenId === witness.implTokenId)
-      ?.isBlanket ?? false
-  );
 }
 
 /** `Self::assocName` inside an impl, when the impl's own definitions don't
@@ -6972,13 +7053,12 @@ function tryUnsizeCoercion(
   if (sourceType.kind === "DynType") return undefined;
   const witness = resolveTraitBound(ctx, sourceType, targetDyn.traitId);
   if (!isSome(witness)) return undefined;
-  if (witnessIsUnemittableBlanket(ctx, witness.value)) return undefined;
   if (record) {
     ctx.unsizeCoercionTable.set(expr.tokenId, {
       witness: witness.value,
       sourceType,
     });
-    if (witness.value.kind === "Impl") {
+    if (witness.value.kind === "Impl" || witness.value.kind === "Composed") {
       ctx.extraWitnessRefs.push(witness.value);
     }
   }
@@ -7207,28 +7287,61 @@ function inferComparisonType(
   return { kind: "PrimitiveBooleanType" };
 }
 
+/** Records a call dispatched to a blanket impl's own trait-scoped
+ * `Trait$m$blanket` free function - shared by `recordOperatorDispatchTarget`
+ * (an operator operand) and `recordMethodTarget` (a concrete-receiver method
+ * call), the two places a `Composed` witness's directly-provided method
+ * needs recording. `boundWitnesses` becomes the call site's own trailing
+ * `methodCallWitnesses` (the same table a method's own generic bounds
+ * already thread extra witnesses through). */
+function recordBlanketDispatchTarget(
+  ctx: AnalysisContext,
+  tokenId: number,
+  traitId: string,
+  methodName: string,
+  boundWitnesses: readonly WitnessRef[],
+): void {
+  const trait = bareTypeName(traitId);
+  ctx.methodCallWitnessTable.set(tokenId, boundWitnesses);
+  ctx.methodTargetTable.set(tokenId, {
+    kind: "free",
+    typeId: trait,
+    typeName: trait,
+    traitName: some(trait),
+    methodName,
+    emitKind: "blanket",
+  });
+}
+
 /** The free-fn/witness recording shared by every `record*TraitTarget`
  * variant (comparison, unary, arithmetic/bitwise/shift): a concrete
  * non-blanket impl records a `free` `MethodTarget`; a bound generic
- * parameter records a `witness` one; a blanket-satisfied impl is the one
- * place callers still disagree, so `onBlanket` carries what each family
- * actually does there (comparison/arithmetic reject with
- * `SemTraitBoundNotSatisfied`; unary still doesn't - a known, separately
- * tracked gap, not something to change as a side effect of deduplicating
- * this). `operandType` is already unwrapped to its referent. */
+ * parameter records a `witness` one; a blanket-satisfied impl records the
+ * trait-scoped `blanket` free function plus its own bound witnesses
+ * (`methodCallWitnesses`), mirroring `recordMethodTarget`'s identical split
+ * for a concrete-receiver method call. By the time this runs, the caller's
+ * own resolution check (`resolvesViaOperatorTrait`/`resolvesViaTraitBound`)
+ * has already confirmed the operand resolves, so `resolveTraitBoundForTypeName`
+ * here is only ever building the witness for a nominal operand it already
+ * knows exists. `operandType` is already unwrapped to its referent. */
 function recordOperatorDispatchTarget(
   ctx: AnalysisContext,
   trait: string,
   methodName: string,
   operandType: Semantics.Type,
   tokenId: number,
-  onBlanket: () => void,
 ): void {
   if (isNominalType(operandType)) {
-    const impl = findRegisteredImpl(ctx, operandType.name, trait);
-    if (impl === undefined) return;
-    if (impl.isBlanket) {
-      onBlanket();
+    const witness = resolveTraitBoundForTypeName(ctx, operandType.name, trait);
+    if (!isSome(witness)) return;
+    if (witness.value.kind === "Composed") {
+      recordBlanketDispatchTarget(
+        ctx,
+        tokenId,
+        trait,
+        methodName,
+        witness.value.boundWitnesses,
+      );
       return;
     }
     ctx.methodTargetTable.set(tokenId, {
@@ -7237,7 +7350,7 @@ function recordOperatorDispatchTarget(
       typeName: bareTypeName(operandType.name),
       traitName: some(bareTypeName(trait)),
       methodName,
-      isDefaultBody: false,
+      emitKind: "concrete",
     });
     return;
   }
@@ -7253,17 +7366,12 @@ function recordOperatorDispatchTarget(
 
 /** For an `==`/`!=`/`<`/`>`/`<=`/`>=` that resolves through a concrete impl
  * of `spec.traitFallback`'s trait for `<operand type>` (not the native
- * capability, not a generic parameter, not a blanket impl), records the
- * impl's method as a free function so `jsim.ts`'s trait-dispatch lowering
- * calls it directly. A bound satisfied only via a blanket impl is genuinely
- * satisfied (`comparisonOperandResolves` already accepted it), but a
- * blanket impl's methods don't emit as free functions - rejected here
- * with the same `SemTraitBoundNotSatisfied` diagnostic a generic call site
- * gets from the identical situation (`checkCallGenericBounds`'s own
- * `witnessIsUnemittableBlanket` check), rather than falling through to an
- * interim `a.<method>(b)` call with nothing at runtime to answer it.
- * Anything else dispatches through a witness (a later slice) and keeps
- * that interim shape. */
+ * capability, not a generic parameter), records the impl's method as a free
+ * function so `jsim.ts`'s trait-dispatch lowering calls it directly - a
+ * blanket-satisfied operand records the trait-scoped `blanket` free
+ * function and its own bound witnesses instead (see
+ * `recordOperatorDispatchTarget`). Anything else dispatches through a
+ * witness parameter and keeps that interim shape. */
 function recordComparisonTraitTarget(
   ctx: AnalysisContext,
   spec: ComparisonSpec,
@@ -7278,32 +7386,14 @@ function recordComparisonTraitTarget(
   if (hasCapability(operandType, spec.capability)) return;
   const trait = lookupPreludeTrait(ctx, traitName);
   if (trait === undefined) return;
-  recordOperatorDispatchTarget(
-    ctx,
-    trait,
-    methodName,
-    operandType,
-    tokenId,
-    () => {
-      emitError(
-        ctx,
-        {
-          kind: "SemTraitBoundNotSatisfied",
-          typeName: describeType(operandType),
-          trait: bareTypeName(trait),
-        },
-        tokenId,
-      );
-    },
-  );
+  recordOperatorDispatchTarget(ctx, trait, methodName, operandType, tokenId);
 }
 
 /** For a `-`/`!` that resolves through a concrete `impl Neg`/`Not for
- * <operand type>` (not a blanket impl), records the impl's method as a free
- * function so `jsim.ts`'s unary lowering calls it directly. A bound generic
- * parameter records a witness slot instead; a blanket-satisfied impl records
- * nothing and keeps the interim `v.neg()`/`v.not()` method-call shape,
- * mirroring `recordComparisonTraitTarget`'s own blanket-impl carve-out. */
+ * <operand type>`, records the impl's method as a free function so
+ * `jsim.ts`'s unary lowering calls it directly - see
+ * `recordOperatorDispatchTarget` for the generic-parameter and
+ * blanket-impl cases. */
 function recordUnaryTraitTarget(
   ctx: AnalysisContext,
   traitName: string,
@@ -7313,14 +7403,7 @@ function recordUnaryTraitTarget(
 ): void {
   const referent =
     operandType.kind === "ReferenceType" ? operandType.referent : operandType;
-  recordOperatorDispatchTarget(
-    ctx,
-    traitName,
-    methodName,
-    referent,
-    tokenId,
-    () => {},
-  );
+  recordOperatorDispatchTarget(ctx, traitName, methodName, referent, tokenId);
 }
 
 /** The witness parameter an abstract receiver (a `==` operand or a method
@@ -7463,11 +7546,10 @@ function arithmeticOperatorResultType(
 
 /** For a `+`/`-`/`*`/`/`/`%`/`&`/`|`/`^`/`<<`/`>>` that resolves through a
  * concrete impl of `fallback`'s trait for `operandRawType` (not the native
- * `capability`, not a generic parameter, not a blanket impl), records the
- * impl's method as a free function so `jsim.ts`'s trait-dispatch lowering
- * calls it directly - mirrors `recordComparisonTraitTarget`/
- * `recordUnaryTraitTarget`'s own free/witness/blanket split for this
- * operator family. */
+ * `capability`, not a generic parameter), records the impl's method as a
+ * free function so `jsim.ts`'s trait-dispatch lowering calls it directly -
+ * mirrors `recordComparisonTraitTarget`/`recordUnaryTraitTarget`'s own
+ * free/witness/blanket split for this operator family. */
 function recordArithmeticTraitTarget(
   ctx: AnalysisContext,
   fallback: OperatorTraitFallback,
@@ -7488,17 +7570,6 @@ function recordArithmeticTraitTarget(
     fallback.method,
     operandType,
     tokenId,
-    () => {
-      emitError(
-        ctx,
-        {
-          kind: "SemTraitBoundNotSatisfied",
-          typeName: describeType(operandType),
-          trait: bareTypeName(trait),
-        },
-        tokenId,
-      );
-    },
   );
 }
 
@@ -7968,11 +8039,8 @@ interface IndexedMethod {
    * for method calls isn't implemented. */
   readonly genericParams: readonly string[];
   /** Each `genericParams` name's own declared bound trait names (resolved
-   * `traitRegistry` keys), for an inherent method - empty for a trait-origin
-   * method, since a trait's own methods don't persist their generic bounds
-   * anywhere yet (a narrower version of the same `genericParams` gap above).
-   * `recordMethodCallWitnesses` uses this to resolve a witness per bound
-   * from the call site's own argument types. */
+   * `traitRegistry` keys) - `recordMethodCallWitnesses` uses this to resolve
+   * a witness per bound from the call site's own argument types. */
   readonly genericParamBounds: ReadonlyMap<string, readonly string[]>;
   readonly origin:
     | { readonly kind: "inherent" }
@@ -8029,7 +8097,7 @@ function traitMethodSet(
     params: m.params,
     returnType: m.returnType,
     genericParams: [...trait.genericParams, ...m.genericParams],
-    genericParamBounds: new Map(),
+    genericParamBounds: m.genericParamBounds,
     origin: { kind: "trait", traitId },
   }));
   const inherited = trait.supertraits.flatMap((s) =>
@@ -8184,7 +8252,37 @@ function methodCandidates(
       );
     }
   }
-  return ctx.methodIndex.get(typeIdentity(receiverType)) ?? [];
+  const indexed = ctx.methodIndex.get(typeIdentity(receiverType)) ?? [];
+  return isNominalType(receiverType)
+    ? [...indexed, ...blanketMethodCandidates(ctx, receiverType)]
+    : indexed;
+}
+
+/** Every method a blanket impl (`impl<T: Bound> Trait for T`) provides for
+ * `receiverType`, once per trait (coherence guarantees at most one blanket
+ * impl per trait) - `buildMethodIndex` never adds these to `methodIndex`
+ * itself, since whether a blanket impl applies depends on the receiver's own
+ * bound, not on anything knowable at index-build time. Bound satisfaction is
+ * `findRegisteredImpl`'s own job (already recursive/blanket-aware); this
+ * only asks it per blanket impl in the registry. */
+function blanketMethodCandidates(
+  ctx: AnalysisContext,
+  receiverType: Semantics.StructType | Semantics.EnumType,
+): readonly IndexedMethod[] {
+  const typeId = receiverType.name;
+  const seenTraits = new Set<string>();
+  const result: IndexedMethod[] = [];
+  for (const impl of ctx.implRegistry) {
+    if (!impl.isBlanket || seenTraits.has(impl.traitName)) continue;
+    seenTraits.add(impl.traitName);
+    if (findRegisteredImpl(ctx, typeId, impl.traitName) === undefined) {
+      continue;
+    }
+    result.push(
+      ...indexTraitImplMethods(ctx, impl.traitName, typeId, receiverType),
+    );
+  }
+  return result;
 }
 
 /** Rust's method-resolution precedence: an inherent method shadows a
@@ -8351,22 +8449,39 @@ function checkAssociatedCallArgs(
 
 /** Records the free-function `MethodTarget` for an impl-provided method
  * codegen should emit (`AnalysisResult.implMethodTargets`), keyed by the
- * method body's own tokenId. A receiver-less associated function and a
- * non-nominal impl target both emit nothing. */
+ * method body's own tokenId. A receiver-less associated function emits
+ * nothing; a blanket impl's own target has no concrete type, so it emits
+ * under its trait's identity instead (`emitKind: "blanket"`, mirroring
+ * `recordDefaultMethodTarget`'s per-trait keying) rather than the
+ * per-concrete-type `emitKind: "concrete"` shape. */
 function recordImplMethodTarget(
   ctx: AnalysisContext,
   decl: Parser.FunctionDef,
   targetType: Semantics.Type,
   traitName: Option<string>,
+  isBlanket: boolean,
 ): void {
-  if (!isSome(decl.signature.receiver) || !isNominalType(targetType)) return;
+  if (!isSome(decl.signature.receiver)) return;
+  if (isNominalType(targetType)) {
+    ctx.implMethodTargetTable.set(decl.tokenId, {
+      kind: "free",
+      typeId: targetType.name,
+      typeName: bareTypeName(targetType.name),
+      traitName: mapSome(traitName, bareTypeName),
+      methodName: decl.signature.name.text,
+      emitKind: "concrete",
+    });
+    return;
+  }
+  if (!isBlanket || !isSome(traitName)) return;
+  const trait = bareTypeName(traitName.value);
   ctx.implMethodTargetTable.set(decl.tokenId, {
     kind: "free",
-    typeId: targetType.name,
-    typeName: bareTypeName(targetType.name),
-    traitName: mapSome(traitName, bareTypeName),
+    typeId: traitName.value,
+    typeName: trait,
+    traitName: some(trait),
     methodName: decl.signature.name.text,
-    isDefaultBody: false,
+    emitKind: "blanket",
   });
 }
 
@@ -8403,7 +8518,7 @@ function recordDropImpl(
     typeName: bareTypeName(targetType.name),
     traitName: some(bareTypeName(traitName.value)),
     methodName: "drop",
-    isDefaultBody: false,
+    emitKind: "concrete",
   });
 }
 
@@ -8413,7 +8528,15 @@ function recordDropImpl(
  * (`x.a().b()`) shares the receiver token both call nodes carry as their
  * tokenId. A trait method the impl does not override dispatches to the
  * trait's `Trait$m$default` free function, which needs the `(type, trait)`
- * witness (recorded in `extraWitnesses` for codegen to hoist). */
+ * witness (recorded in `extraWitnesses` for codegen to hoist) - regardless of
+ * whether that witness is a concrete impl or a composed blanket one, since a
+ * default body dispatches its own sibling calls through it either way. A
+ * method a *blanket* impl provides directly has no per-concrete-type free
+ * function to call; it dispatches to the trait-scoped `Trait$m$blanket`
+ * instead, with the receiver's own witness for each of the blanket impl's
+ * bounds appended as trailing arguments (`methodCallWitnesses`, the same
+ * table a method's own generic bounds already thread extra witnesses
+ * through). */
 function recordMethodTarget(
   ctx: AnalysisContext,
   methodTokenId: number,
@@ -8428,7 +8551,7 @@ function recordMethodTarget(
       typeName: bareTypeName(receiverType.name),
       traitName: none(),
       methodName,
-      isDefaultBody: false,
+      emitKind: "concrete",
     });
     return;
   }
@@ -8437,20 +8560,46 @@ function recordMethodTarget(
     receiverType.name,
     method.origin.traitId,
   );
-  if (!isSome(witness) || witness.value.kind !== "Impl") return;
+  if (
+    !isSome(witness) ||
+    (witness.value.kind !== "Impl" && witness.value.kind !== "Composed")
+  ) {
+    return;
+  }
   const witnessMethod = witness.value.methods.find(
     (m) => m.name === methodName,
   );
   if (witnessMethod === undefined) return;
-  const isDefaultBody = witnessMethod.source === "default";
-  if (isDefaultBody) ctx.extraWitnessRefs.push(witness.value);
+  const trait = bareTypeName(method.origin.traitId);
+  if (witnessMethod.source === "default") {
+    ctx.extraWitnessRefs.push(witness.value);
+    ctx.methodTargetTable.set(methodTokenId, {
+      kind: "free",
+      typeId: receiverType.name,
+      typeName: bareTypeName(receiverType.name),
+      traitName: some(trait),
+      methodName,
+      emitKind: "default",
+    });
+    return;
+  }
+  if (witness.value.kind === "Composed") {
+    recordBlanketDispatchTarget(
+      ctx,
+      methodTokenId,
+      method.origin.traitId,
+      methodName,
+      witness.value.boundWitnesses,
+    );
+    return;
+  }
   ctx.methodTargetTable.set(methodTokenId, {
     kind: "free",
     typeId: receiverType.name,
     typeName: bareTypeName(receiverType.name),
-    traitName: some(bareTypeName(method.origin.traitId)),
+    traitName: some(trait),
     methodName,
-    isDefaultBody,
+    emitKind: "concrete",
   });
 }
 
@@ -8524,6 +8673,12 @@ function namesGenericParam(type: Semantics.Type, paramName: string): boolean {
  * arity-checked-not-type-checked state; the resulting argument-count
  * mismatch surfaces as a runtime error in the callee, not a compile
  * diagnostic, same as any other not-yet-type-checked method generic.
+ * Appends to (never overwrites) any witnesses `recordMethodDispatch` already
+ * recorded for this same token - a blanket-dispatched call
+ * (`recordBlanketDispatchTarget`) populates the same table with the blanket
+ * impl's own bound witnesses first, and those must stay ahead of a method's
+ * own bound witnesses in the trailing-argument list, matching the callee's
+ * own parameter order (`recordWitnessParams`'s outer-then-inner merge).
  */
 function recordMethodCallWitnesses(
   ctx: AnalysisContext,
@@ -8532,7 +8687,9 @@ function recordMethodCallWitnesses(
   args: readonly Semantics.Expression[],
 ): void {
   if (method.genericParamBounds.size === 0) return;
-  const witnesses: WitnessRef[] = [];
+  const witnesses: WitnessRef[] = [
+    ...(ctx.methodCallWitnessTable.get(methodTokenId) ?? []),
+  ];
   for (const [paramName, traitNames] of method.genericParamBounds) {
     const argIndex = method.params.findIndex((p) =>
       namesGenericParam(p, paramName),
@@ -8543,9 +8700,7 @@ function recordMethodCallWitnesses(
       arg.type.kind === "ReferenceType" ? arg.type.referent : arg.type;
     for (const traitName of traitNames) {
       const witness = resolveTraitBound(ctx, argType, traitName);
-      if (isSome(witness) && !witnessIsUnemittableBlanket(ctx, witness.value)) {
-        witnesses.push(witness.value);
-      }
+      if (isSome(witness)) witnesses.push(witness.value);
     }
   }
   if (witnesses.length > 0) {
@@ -10427,13 +10582,10 @@ function checkCallGenericBounds(
     for (const traitName of calleeType.genericParamBounds.get(paramName) ??
       []) {
       const witness = resolveTraitBound(ctx, binding.type, traitName);
-      if (isSome(witness) && !witnessIsUnemittableBlanket(ctx, witness.value)) {
+      if (isSome(witness)) {
         witnesses.push(witness.value);
         continue;
       }
-      // A blanket-satisfied bound is genuinely satisfied, but this call
-      // needs a real witness object to pass, and a blanket impl's methods
-      // don't emit as free functions - treated the same as unresolved here.
       allBoundsSatisfied = false;
       emitError(
         ctx,

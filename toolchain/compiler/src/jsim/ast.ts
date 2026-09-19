@@ -36,6 +36,11 @@ export interface WitnessSlot {
   /** The slot's emitted value: a free-function name, or an inline expression
    * for the synthesized primitive-equality witness. */
   readonly value: string;
+  /** For a closure slot, the trailing arguments appended after `self` and
+   * the call's own arguments - `["w"]` for a trait-default body's own
+   * witness, or the resolved names of a blanket impl's own bound witnesses
+   * for a method it provides directly. Unused by a direct slot. */
+  readonly extraArgs: readonly string[];
 }
 
 /**
