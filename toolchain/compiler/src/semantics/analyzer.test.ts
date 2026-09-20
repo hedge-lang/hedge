@@ -6763,6 +6763,7 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "Shape",
           definingTraitId: shapeId,
           blanketBoundWitnesses: none(),
+          ownWitnessParamCount: 0,
         },
         {
           name: "describe",
@@ -6770,6 +6771,7 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "Shape",
           definingTraitId: shapeId,
           blanketBoundWitnesses: none(),
+          ownWitnessParamCount: 0,
         },
       ]);
     });
@@ -6795,6 +6797,7 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "Ext",
           definingTraitId: traitIdOf(result, "Ext"),
           blanketBoundWitnesses: none(),
+          ownWitnessParamCount: 0,
         },
         {
           name: "base",
@@ -6802,6 +6805,7 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "Base",
           definingTraitId: traitIdOf(result, "Base"),
           blanketBoundWitnesses: none(),
+          ownWitnessParamCount: 0,
         },
       ]);
     });
@@ -6831,6 +6835,7 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "A",
           definingTraitId: traitIdOf(result, "A"),
           blanketBoundWitnesses: none(),
+          ownWitnessParamCount: 0,
         },
       ]);
     });
@@ -6858,6 +6863,7 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "Shape",
           definingTraitId: shapeId,
           blanketBoundWitnesses: none(),
+          ownWitnessParamCount: 0,
         },
         {
           name: "draw",
@@ -6865,6 +6871,7 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "Shape",
           definingTraitId: shapeId,
           blanketBoundWitnesses: none(),
+          ownWitnessParamCount: 0,
         },
       ]);
     });

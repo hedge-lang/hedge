@@ -1366,7 +1366,12 @@ function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
       kind: "WitnessObjectDecl",
       name: ctx.primitiveEqWitness.name,
       directSlots: [
-        { method: "eq", value: "(a, b) => a === b", extraArgs: [] },
+        {
+          method: "eq",
+          value: "(a, b) => a === b",
+          extraArgs: [],
+          ownWitnessParamCount: 0,
+        },
       ],
       closureSlots: [],
     });
@@ -1380,6 +1385,7 @@ function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
           method: "partial_cmp",
           value: `(a, b) => (a < b ? ${orderingTagLiteral("Less")} : a > b ? ${orderingTagLiteral("Greater")} : ${orderingTagLiteral("Equal")})`,
           extraArgs: [],
+          ownWitnessParamCount: 0,
         },
       ],
       closureSlots: [],
@@ -1393,15 +1399,31 @@ function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
         ctx,
         witnessSlotTarget(witness, method),
       );
+      const ownWitnessParamCount = method.ownWitnessParamCount;
       if (method.source === "default") {
-        closure.push({ method: method.name, value, extraArgs: ["w"] });
+        closure.push({
+          method: method.name,
+          value,
+          extraArgs: ["w"],
+          ownWitnessParamCount,
+        });
       } else if (isSome(method.blanketBoundWitnesses)) {
         const extraArgs = method.blanketBoundWitnesses.value.map((ref) =>
           witnessRefName(ctx, ref),
         );
-        closure.push({ method: method.name, value, extraArgs });
+        closure.push({
+          method: method.name,
+          value,
+          extraArgs,
+          ownWitnessParamCount,
+        });
       } else {
-        direct.push({ method: method.name, value, extraArgs: [] });
+        direct.push({
+          method: method.name,
+          value,
+          extraArgs: [],
+          ownWitnessParamCount: 0,
+        });
       }
     }
     decls.push({

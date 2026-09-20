@@ -1467,6 +1467,45 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["42"]);
   });
 
+  it("threads a witness for a blanket-provided method's own bounded generic parameter through a witness-object closure slot, in the callee's own parameter order", (): void => {
+    const js = emittedJs(`
+      trait A { fn a(&self) -> i32; }
+      trait C { fn c_val(&self) -> i32; }
+      trait B { fn f<U: C>(&self, u: U) -> i32; }
+      struct Point { x: i32 }
+      struct Helper { y: i32 }
+      impl A for Point { fn a(&self) -> i32 { self.x } }
+      impl C for Helper { fn c_val(&self) -> i32 { self.y } }
+      impl<T: A> B for T { fn f<U: C>(&self, u: U) -> i32 { self.a() + u.c_val() } }
+      fn call_it<X: B>(x: X, h: Helper) -> i32 { x.f(h) }
+      fn main() { print(call_it(Point { x: 40 }, Helper { y: 2 })); }
+    `);
+    expect(js).toContain(
+      "function B$f$blanket(self, u, _witness_T_A, _witness_U_C)",
+    );
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
+  it("threads a witness for a default method's own bounded generic parameter through a witness-object closure slot, in the callee's own parameter order", (): void => {
+    const js = emittedJs(`
+      trait C { fn c_val(&self) -> i32; }
+      trait B {
+        fn f(&self) -> i32;
+        fn g<U: C>(&self, u: U) -> i32 { self.f() + u.c_val() }
+      }
+      struct Point { x: i32 }
+      struct Helper { y: i32 }
+      impl C for Helper { fn c_val(&self) -> i32 { self.y } }
+      impl B for Point { fn f(&self) -> i32 { self.x } }
+      fn call_it<X: B>(x: X, h: Helper) -> i32 { x.g(h) }
+      fn main() { print(call_it(Point { x: 40 }, Helper { y: 2 })); }
+    `);
+    expect(js).toContain(
+      "function B$g$default(self, u, _witness_Self_B, _witness_U_C)",
+    );
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
   it("threads both a default method's own Self witness and its own bounded generic parameter's witness, in that order", (): void => {
     const js = emittedJs(`
       trait C { fn c_val(&self) -> i32; }

@@ -179,6 +179,13 @@ export interface WitnessMethod {
    * witnesses to thread even when a *sibling* method in the same flattened
    * witness comes from a genuinely blanket impl elsewhere in the chain. */
   readonly blanketBoundWitnesses: Option<readonly WitnessRef[]>;
+  /** How many trailing witness arguments a call to this method passes for
+   * its *own* declared generic bounds (one per `(param, bound trait)` pair,
+   * matching `recordWitnessParams`'s own count for the identical merged
+   * scope) - a witness-object closure slot needs this to correctly insert
+   * its own fixed extra witness(es) *before* these rather than after, since
+   * the free function's own declared parameter order is fixed-extra-first. */
+  readonly ownWitnessParamCount: number;
 }
 
 /**
@@ -3320,6 +3327,10 @@ function collectWitnessMethods(
     const isImplProvided =
       !method.isDefault ||
       (impl?.providedMethods.includes(method.name) ?? false);
+    let ownWitnessParamCount = 0;
+    for (const traits of method.genericParamBounds.values()) {
+      ownWitnessParamCount += traits.length;
+    }
     byName.set(method.name, {
       name: method.name,
       source: isImplProvided ? "impl" : "default",
@@ -3331,6 +3342,7 @@ function collectWitnessMethods(
         isImplProvided,
         impl,
       ),
+      ownWitnessParamCount,
     });
   }
   for (const supertrait of trait.supertraits) {

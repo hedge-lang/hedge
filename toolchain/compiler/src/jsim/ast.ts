@@ -36,11 +36,19 @@ export interface WitnessSlot {
   /** The slot's emitted value: a free-function name, or an inline expression
    * for the synthesized primitive-equality witness. */
   readonly value: string;
-  /** For a closure slot, the trailing arguments appended after `self` and
-   * the call's own arguments - `["w"]` for a trait-default body's own
-   * witness, or the resolved names of a blanket impl's own bound witnesses
-   * for a method it provides directly. Unused by a direct slot. */
+  /** For a closure slot, the fixed extra arguments this slot's own wrapper
+   * captures - `["w"]` for a trait-default body's own witness, or the
+   * resolved names of a blanket impl's own bound witnesses for a method it
+   * provides directly. Unused by a direct slot. */
   readonly extraArgs: readonly string[];
+  /** For a closure slot, how many of the call's own trailing arguments are
+   * the method's *own* bound-generic witnesses (already resolved by the
+   * caller) rather than real explicit arguments - these must land *after*
+   * `extraArgs` in the forwarded call, matching the callee's own declared
+   * parameter order, so a closure slot with a nonzero count splits the
+   * incoming `...args` around `extraArgs` instead of simply appending it.
+   * Unused by a direct slot. */
+  readonly ownWitnessParamCount: number;
 }
 
 /**
