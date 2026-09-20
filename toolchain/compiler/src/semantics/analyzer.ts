@@ -3302,7 +3302,7 @@ function blanketMethodBoundWitnesses(
   isImplProvided: boolean,
   impl: RegisteredImpl | undefined,
 ): Option<readonly WitnessRef[]> {
-  if (!isImplProvided || impl === undefined || !impl.isBlanket) return none();
+  if (!isImplProvided || !impl?.isBlanket) return none();
   const boundWitnesses = composeBlanketBoundWitnesses(
     ctx,
     typeName,
