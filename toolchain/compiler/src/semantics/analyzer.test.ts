@@ -4608,6 +4608,26 @@ describe("associated types and trait projections", (): void => {
       );
     });
 
+    it("rejects an ambiguous method name shared by a concrete impl and a blanket-satisfied trait", (): void => {
+      const result = diagnose(`
+        trait Marker {}
+        trait A { fn m(&self) -> i32; }
+        trait C { fn m(&self) -> i32; }
+        struct P { v: i32 }
+        impl Marker for P {}
+        impl A for P { fn m(&self) -> i32 { 0 } }
+        impl<T: Marker> C for T { fn m(&self) -> i32 { 1 } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.m();
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "method `m` on `P` is ambiguous between traits `A` and `C`",
+      );
+    });
+
     it("auto-borrows a by-value receiver for a `&self` method", (): void => {
       const result = diagnose(`
         struct P { v: i32 }
@@ -5831,7 +5851,7 @@ describe("dyn Trait unsize coercion", (): void => {
     expect(result.diagnostics).toHaveLength(1);
   });
 
-  it("rejects a `dyn` coercion satisfied only by a blanket impl, whose method bodies are not emitted", (): void => {
+  it("accepts a `dyn` coercion satisfied only by a blanket impl, composing a real witness for it", (): void => {
     const result = diagnose(`
       trait Draw { fn draw(&self) -> i32; }
       trait Marker {}
@@ -5841,9 +5861,7 @@ describe("dyn Trait unsize coercion", (): void => {
       fn render(d: dyn Draw) -> i32 { d.draw() }
       fn main() { print(render(Point { x: 1 })); }
     `);
-    expect(
-      result.diagnostics.filter((d) => d.severity === "error"),
-    ).toHaveLength(1);
+    expect(result.diagnostics).toEqual([]);
   });
 
   it("coerces a bounded generic parameter to `dyn Trait`, forwarding the caller's witness", (): void => {
@@ -6547,25 +6565,17 @@ describe("trait and impl declarations", (): void => {
   });
 
   describe("blanket impls and supertraits", (): void => {
-    it("rejects a generic bound satisfied only by a blanket impl, since its witness can't be built", (): void => {
-      // The bound `Point: B` genuinely holds (via the blanket `impl<T: A> B
-      // for T`), but a generic call site still needs a real witness object
-      // to pass, and a blanket impl's methods don't emit as free functions
-      // for one to reference - rejected here rather than producing a
-      // witness whose slots point at nothing.
+    it("accepts a generic bound satisfied only by a blanket impl, composing a real witness for it", (): void => {
       const result = diagnose(`
         trait A {}
         trait B { fn f(&self) -> str; }
         struct Point { x: i32, y: i32 }
         impl A for Point {}
         impl<T: A> B for T { fn f(&self) -> str { "a" } }
-        fn needs_b<U: B>(x: U) {}
-        fn main() { needs_b(Point { x: 0, y: 0 }); }
+        fn needs_b<U: B>(x: U) -> str { x.f() }
+        fn main() { print(needs_b(Point { x: 0, y: 0 })); }
       `);
-      expect(result.diagnostics).toHaveLength(1);
-      expect(messageOf(result.diagnostics[0])).toBe(
-        "the trait bound `Point: B` is not satisfied",
-      );
+      expect(result.diagnostics).toEqual([]);
     });
 
     it("rejects calling a function requiring a blanket-implemented trait for a concrete type that does not implement the blanket's own bound", (): void => {
@@ -6745,9 +6755,24 @@ describe("trait and impl declarations", (): void => {
       const [witnesses] = [...result.witnesses.values()];
       const witness = witnesses?.[0];
       assert(witness?.kind === "Impl", "expected an Impl witness");
+      const shapeId = traitIdOf(result, "Shape");
       expect(witness.methods).toEqual([
-        { name: "draw", source: "impl", definingTrait: "Shape" },
-        { name: "describe", source: "default", definingTrait: "Shape" },
+        {
+          name: "draw",
+          source: "impl",
+          definingTrait: "Shape",
+          definingTraitId: shapeId,
+          blanketBoundWitnesses: none(),
+          ownWitnessParamCount: 0,
+        },
+        {
+          name: "describe",
+          source: "default",
+          definingTrait: "Shape",
+          definingTraitId: shapeId,
+          blanketBoundWitnesses: none(),
+          ownWitnessParamCount: 0,
+        },
       ]);
     });
 
@@ -6766,8 +6791,22 @@ describe("trait and impl declarations", (): void => {
       const witness = witnesses?.[0];
       assert(witness?.kind === "Impl", "expected an Impl witness");
       expect(witness.methods).toEqual([
-        { name: "ext", source: "impl", definingTrait: "Ext" },
-        { name: "base", source: "impl", definingTrait: "Base" },
+        {
+          name: "ext",
+          source: "impl",
+          definingTrait: "Ext",
+          definingTraitId: traitIdOf(result, "Ext"),
+          blanketBoundWitnesses: none(),
+          ownWitnessParamCount: 0,
+        },
+        {
+          name: "base",
+          source: "impl",
+          definingTrait: "Base",
+          definingTraitId: traitIdOf(result, "Base"),
+          blanketBoundWitnesses: none(),
+          ownWitnessParamCount: 0,
+        },
       ]);
     });
 
@@ -6790,7 +6829,14 @@ describe("trait and impl declarations", (): void => {
       const witness = witnesses?.[0];
       assert(witness?.kind === "Impl", "expected an Impl witness");
       expect(witness.methods.filter((m) => m.name === "a")).toEqual([
-        { name: "a", source: "impl", definingTrait: "A" },
+        {
+          name: "a",
+          source: "impl",
+          definingTrait: "A",
+          definingTraitId: traitIdOf(result, "A"),
+          blanketBoundWitnesses: none(),
+          ownWitnessParamCount: 0,
+        },
       ]);
     });
 
@@ -6809,9 +6855,24 @@ describe("trait and impl declarations", (): void => {
       const [witnesses] = [...result.witnesses.values()];
       const witness = witnesses?.[0];
       assert(witness?.kind === "Impl", "expected an Impl witness");
+      const shapeId = traitIdOf(result, "Shape");
       expect(witness.methods).toEqual([
-        { name: "describe", source: "default", definingTrait: "Shape" },
-        { name: "draw", source: "impl", definingTrait: "Shape" },
+        {
+          name: "describe",
+          source: "default",
+          definingTrait: "Shape",
+          definingTraitId: shapeId,
+          blanketBoundWitnesses: none(),
+          ownWitnessParamCount: 0,
+        },
+        {
+          name: "draw",
+          source: "impl",
+          definingTrait: "Shape",
+          definingTraitId: shapeId,
+          blanketBoundWitnesses: none(),
+          ownWitnessParamCount: 0,
+        },
       ]);
     });
 
@@ -8252,7 +8313,7 @@ describe("ordering operators resolving through a PartialOrd/Ord impl", (): void 
     });
   });
 
-  it("rejects `<` on a type whose `PartialOrd` comes only from a blanket impl, since no callable target can be built", (): void => {
+  it("accepts `<` on a type whose `PartialOrd` comes only from a blanket impl, dispatching to the trait-scoped blanket free function", (): void => {
     const result = diagnoseWithPrelude(`
       trait Marker {}
       struct W { n: i32 }
@@ -8267,11 +8328,10 @@ describe("ordering operators resolving through a PartialOrd/Ord impl", (): void 
         if a < b { print(0); }
       }
     `);
-    expect(result.diagnostics).toHaveLength(1);
-    expect(messageOf(result.diagnostics[0])).toBe(
-      "the trait bound `W: PartialOrd` is not satisfied",
-    );
-    expect(result.methodTargets.size).toBe(0);
+    expect(result.diagnostics).toEqual([]);
+    expect([...result.methodTargets.values()]).toEqual([
+      expect.objectContaining({ kind: "free", emitKind: "blanket" }),
+    ]);
   });
 });
 
@@ -8902,7 +8962,7 @@ describe("arithmetic/bitwise/shift operators resolving through an operator-trait
     );
   });
 
-  it("rejects `+` on a type whose `Add` comes only from a blanket impl, since no callable target can be built", (): void => {
+  it("accepts `+` on a type whose `Add` comes only from a blanket impl, dispatching to the trait-scoped blanket free function", (): void => {
     const result = diagnoseWithPrelude(`
       trait Marker {}
       struct W { n: i32 }
@@ -8917,11 +8977,10 @@ describe("arithmetic/bitwise/shift operators resolving through an operator-trait
         let c = a + b;
       }
     `);
-    expect(result.diagnostics).toHaveLength(1);
-    expect(messageOf(result.diagnostics[0])).toBe(
-      "the trait bound `W: Add` is not satisfied",
-    );
-    expect(result.methodTargets.size).toBe(0);
+    expect(result.diagnostics).toEqual([]);
+    expect([...result.methodTargets.values()]).toEqual([
+      expect.objectContaining({ kind: "free", emitKind: "blanket" }),
+    ]);
   });
 
   it("rejects `a + b` on a struct whose only `Add` impl is against a shadowing block-local trait", (): void => {

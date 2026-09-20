@@ -886,8 +886,8 @@ describe("== / != on a type with a PartialEq impl", (): void => {
     expect(js).not.toContain("a.eq(b)");
   });
 
-  it("rejects `==` on a type whose `PartialEq` comes only from a blanket impl, since no callable target can be built", (): void => {
-    const result = compile(`
+  it("dispatches `==` on a type whose `PartialEq` comes only from a blanket impl, threading the receiver's own bound witness", (): void => {
+    const js = emittedJs(`
       trait Marker {}
       struct W { n: i32 }
       impl Marker for W {}
@@ -898,10 +898,10 @@ describe("== / != on a type with a PartialEq impl", (): void => {
         if a == b { print("done"); }
       }
     `);
-    expect(result.diagnostics).toHaveLength(1);
-    expect(messageOf(result.diagnostics[0])).toBe(
-      "the trait bound `W: PartialEq` is not satisfied",
+    expect(js).toContain(
+      "function PartialEq$eq$blanket(self, other, _witness_T_Marker)",
     );
+    expect(runEmittedJs(js)).toEqual(["done"]);
   });
 });
 
@@ -1115,7 +1115,7 @@ describe("- / ! on a type with a Neg/Not impl", (): void => {
     expect(js).not.toContain("x.neg()");
   });
 
-  it("leaves `-` on a type whose `Neg` comes only from a blanket impl as a method call", (): void => {
+  it("dispatches `-` on a type whose `Neg` comes only from a blanket impl, threading the receiver's own bound witness", (): void => {
     const js = emittedJs(`
       trait Marker {}
       struct W { n: i32 }
@@ -1130,8 +1130,8 @@ describe("- / ! on a type with a Neg/Not impl", (): void => {
         print("done");
       }
     `);
-    expect(js).toContain("a.neg()");
-    expect(js).not.toContain("W$Neg$neg");
+    expect(js).toContain("function Neg$neg$blanket(self, _witness_T_Marker)");
+    expect(runEmittedJs(js)).toEqual(["done"]);
   });
 });
 
@@ -1405,28 +1405,295 @@ describe("generic witness codegen", (): void => {
     expect(typedef.value).not.toContain("_witness");
   });
 
+  it("dispatches a concrete receiver's call to a blanket-provided method, threading the receiver's own bound witness", (): void => {
+    const js = emittedJs(`
+      trait A { fn value(&self) -> i32; }
+      trait B { fn f(&self) -> i32; }
+      struct Point { x: i32 }
+      impl A for Point { fn value(&self) -> i32 { self.x } }
+      impl<T: A> B for T { fn f(&self) -> i32 { self.value() + 1 } }
+      fn main() { print(Point { x: 41 }.f()); }
+    `);
+    expect(js).toContain("function B$f$blanket(self, _witness_T_A)");
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
+  it("dispatches a concrete receiver's call to a blanket-provided method threading two bound witnesses", (): void => {
+    const js = emittedJs(`
+      trait A { fn a_value(&self) -> i32; }
+      trait C { fn c_value(&self) -> i32; }
+      trait B { fn f(&self) -> i32; }
+      struct Point { x: i32, y: i32 }
+      impl A for Point { fn a_value(&self) -> i32 { self.x } }
+      impl C for Point { fn c_value(&self) -> i32 { self.y } }
+      impl<T: A + C> B for T {
+        fn f(&self) -> i32 { self.a_value() + self.c_value() }
+      }
+      fn main() { print(Point { x: 40, y: 2 }.f()); }
+    `);
+    expect(js).toContain(
+      "function B$f$blanket(self, _witness_T_A, _witness_T_C)",
+    );
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
+  it("dispatches a concrete receiver's call to a blanket-provided trait's own unoverridden default method", (): void => {
+    const js = emittedJs(`
+      trait A {}
+      trait B {
+        fn f(&self) -> i32;
+        fn g(&self) -> i32 { self.f() + 1 }
+      }
+      struct Point { x: i32 }
+      impl A for Point {}
+      impl<T: A> B for T { fn f(&self) -> i32 { 41 } }
+      fn main() { print(Point { x: 0 }.g()); }
+    `);
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
+  it("threads a witness for a trait-provided method's own bounded generic parameter through a generic receiver's own witness dispatch", (): void => {
+    const js = emittedJs(`
+      trait C { fn c_val(&self) -> i32; }
+      trait B { fn f<U: C>(&self, u: U) -> i32; }
+      struct Point { x: i32 }
+      struct Helper { y: i32 }
+      impl C for Helper { fn c_val(&self) -> i32 { self.y } }
+      impl B for Point { fn f<U: C>(&self, u: U) -> i32 { self.x + u.c_val() } }
+      fn call_it<T: B>(t: T, h: Helper) -> i32 { t.f(h) }
+      fn main() { print(call_it(Point { x: 40 }, Helper { y: 2 })); }
+    `);
+    expect(js).toContain("_witness_T_B.f(t, h, __witness_C_Helper)");
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
+  it("threads a witness for a blanket-provided method's own bounded generic parameter through a witness-object closure slot, in the callee's own parameter order", (): void => {
+    const js = emittedJs(`
+      trait A { fn a(&self) -> i32; }
+      trait C { fn c_val(&self) -> i32; }
+      trait B { fn f<U: C>(&self, u: U) -> i32; }
+      struct Point { x: i32 }
+      struct Helper { y: i32 }
+      impl A for Point { fn a(&self) -> i32 { self.x } }
+      impl C for Helper { fn c_val(&self) -> i32 { self.y } }
+      impl<T: A> B for T { fn f<U: C>(&self, u: U) -> i32 { self.a() + u.c_val() } }
+      fn call_it<X: B>(x: X, h: Helper) -> i32 { x.f(h) }
+      fn main() { print(call_it(Point { x: 40 }, Helper { y: 2 })); }
+    `);
+    expect(js).toContain(
+      "function B$f$blanket(self, u, _witness_T_A, _witness_U_C)",
+    );
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
+  it("threads a witness for a default method's own bounded generic parameter through a witness-object closure slot, in the callee's own parameter order", (): void => {
+    const js = emittedJs(`
+      trait C { fn c_val(&self) -> i32; }
+      trait B {
+        fn f(&self) -> i32;
+        fn g<U: C>(&self, u: U) -> i32 { self.f() + u.c_val() }
+      }
+      struct Point { x: i32 }
+      struct Helper { y: i32 }
+      impl C for Helper { fn c_val(&self) -> i32 { self.y } }
+      impl B for Point { fn f(&self) -> i32 { self.x } }
+      fn call_it<X: B>(x: X, h: Helper) -> i32 { x.g(h) }
+      fn main() { print(call_it(Point { x: 40 }, Helper { y: 2 })); }
+    `);
+    expect(js).toContain(
+      "function B$g$default(self, u, _witness_Self_B, _witness_U_C)",
+    );
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
+  it("threads both a default method's own Self witness and its own bounded generic parameter's witness, in that order", (): void => {
+    const js = emittedJs(`
+      trait C { fn c_val(&self) -> i32; }
+      trait B {
+        fn f(&self) -> i32;
+        fn g<U: C>(&self, u: U) -> i32 { self.f() + u.c_val() }
+      }
+      struct Point { x: i32 }
+      struct Helper { y: i32 }
+      impl C for Helper { fn c_val(&self) -> i32 { self.y } }
+      impl B for Point { fn f(&self) -> i32 { self.x } }
+      fn main() { print(Point { x: 40 }.g(Helper { y: 2 })); }
+    `);
+    expect(js).toContain(
+      "function B$g$default(self, u, _witness_Self_B, _witness_U_C)",
+    );
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
+  it("composes a witness through two levels of nested blanket impls", (): void => {
+    const js = emittedJs(`
+      trait A { fn a(&self) -> i32; }
+      trait B { fn b(&self) -> i32; }
+      trait C { fn c(&self) -> i32; }
+      struct Point { x: i32 }
+      impl A for Point { fn a(&self) -> i32 { self.x } }
+      impl<T: A> B for T { fn b(&self) -> i32 { self.a() + 1 } }
+      impl<T: B> C for T { fn c(&self) -> i32 { self.b() + 1 } }
+      fn main() { print(Point { x: 40 }.c()); }
+    `);
+    expect(js).toContain("function C$c$blanket(self, _witness_T_B)");
+    expect(js).toContain("function B$b$blanket(self, _witness_T_A)");
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
+  it("emits a blanket impl's free function once, reused across two different concrete types", (): void => {
+    const js = emittedJs(`
+      trait A { fn a(&self) -> i32; }
+      trait B { fn f(&self) -> i32; }
+      struct P { x: i32 }
+      struct Q { y: i32 }
+      impl A for P { fn a(&self) -> i32 { self.x } }
+      impl A for Q { fn a(&self) -> i32 { self.y } }
+      impl<T: A> B for T { fn f(&self) -> i32 { self.a() } }
+      fn main() {
+        print(P { x: 1 }.f());
+        print(Q { y: 2 }.f());
+      }
+    `);
+    expect(countOccurrences(js, "function B$f$blanket")).toBe(1);
+    expect(js).toContain("__witness_A_P");
+    expect(js).toContain("__witness_A_Q");
+    expect(runEmittedJs(js)).toEqual(["1", "2"]);
+  });
+
+  it("does not collide a blanket impl's free function with another blanket impl of a shadowed same-named trait", (): void => {
+    const result = compile(`
+      trait Marker1 {}
+      trait Marker2 {}
+      struct X { x: i32 }
+      struct Y { y: i32 }
+      impl Marker1 for X {}
+      impl Marker2 for Y {}
+
+      trait B { fn f(&self) -> i32; }
+      impl<T: Marker1> B for T { fn f(&self) -> i32 { 1 } }
+
+      fn call_inner(x: X) -> i32 {
+        trait B { fn f(&self) -> i32; }
+        impl<T: Marker2> B for T { fn f(&self) -> i32 { 2 } }
+        x.f()
+      }
+
+      fn main() {
+        print(call_inner(X { x: 0 }));
+        print(Y { y: 0 }.f());
+      }
+    `);
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toEqual([]);
+    assert(isSome(result.code), "Expected the program to compile");
+    const { javascript } = result.code.value;
+    assert(isSome(javascript), "Expected emitted JavaScript");
+    expect(runEmittedJs(javascript.value)).toEqual(["1", "2"]);
+  });
+
+  it("does not collide a composed witness object with another shadowed same-named trait's composed witness for the same concrete type", (): void => {
+    const result = compile(`
+      trait Marker1 {}
+      trait Marker2 {}
+      struct Point { x: i32 }
+      impl Marker1 for Point {}
+      impl Marker2 for Point {}
+
+      trait B { fn f(&self) -> i32; }
+      impl<T: Marker1> B for T { fn f(&self) -> i32 { 1 } }
+
+      fn call_inner(p: Point) -> i32 {
+        trait B { fn f(&self) -> i32; }
+        impl<T: Marker2> B for T { fn f(&self) -> i32 { 2 } }
+        fn call_it<X: B>(x: X) -> i32 { x.f() }
+        call_it(p)
+      }
+
+      fn call_outer<X: B>(x: X) -> i32 { x.f() }
+
+      fn main() {
+        print(call_outer(Point { x: 0 }));
+        print(call_inner(Point { x: 0 }));
+      }
+    `);
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toEqual([]);
+    assert(isSome(result.code), "Expected the program to compile");
+    const { javascript } = result.code.value;
+    assert(isSome(javascript), "Expected emitted JavaScript");
+    expect(runEmittedJs(javascript.value)).toEqual(["1", "2"]);
+  });
+
+  it("dispatches a witness slot for an unconstrained blanket impl's method through the trait-scoped free function, not a nonexistent per-type one", (): void => {
+    const js = emittedJs(`
+      trait B { fn f(&self) -> i32; }
+      impl<T> B for T { fn f(&self) -> i32 { 42 } }
+      struct Point { x: i32 }
+      fn call_it<X: B>(x: X) -> i32 { x.f() }
+      fn main() { print(call_it(Point { x: 1 })); }
+    `);
+    expect(js).toContain("function B$f$blanket(self)");
+    expect(js).toContain("B$f$blanket(self, ...args)");
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
+  it("dispatches a witness slot for a supertrait method from a concrete impl through its own free function, not the sibling blanket method's", (): void => {
+    const js = emittedJs(`
+      trait A { fn a(&self) -> i32; }
+      trait B: A { fn b(&self) -> i32; }
+      trait Marker {}
+      struct Point { x: i32 }
+      impl A for Point { fn a(&self) -> i32 { self.x } }
+      impl Marker for Point {}
+      impl<T: Marker> B for T { fn b(&self) -> i32 { 1 } }
+      fn call_it<X: B>(x: X) -> i32 { x.a() + x.b() }
+      fn main() { print(call_it(Point { x: 10 })); }
+    `);
+    expect(js).toContain("a: Point$A$a");
+    expect(js).toContain("w.b = (self, ...args) => B$b$blanket(self, ...args");
+    expect(runEmittedJs(js)).toEqual(["11"]);
+  });
+
+  it("threads a witness for a trait-provided method's own bounded generic parameter, matching an inherent method's own", (): void => {
+    const js = emittedJs(`
+      trait C { fn c_val(&self) -> i32; }
+      trait B { fn f<U: C>(&self, x: U) -> i32; }
+      struct Point { x: i32 }
+      struct Helper { y: i32 }
+      impl C for Helper { fn c_val(&self) -> i32 { self.y } }
+      impl B for Point { fn f<U: C>(&self, x: U) -> i32 { self.x + x.c_val() } }
+      fn main() { print(Point { x: 40 }.f(Helper { y: 2 })); }
+    `);
+    expect(js).toContain("function Point$B$f(self, x, _witness_U_C)");
+    expect(js).toContain("__witness_C_Helper");
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
+  it("threads both a blanket impl's own bound witness and a method's own bounded generic parameter, in declaration order", (): void => {
+    const js = emittedJs(`
+      trait A { fn a(&self) -> i32; }
+      trait C { fn c_val(&self) -> i32; }
+      trait B { fn f<U: C>(&self, x: U) -> i32; }
+      struct Point { x: i32 }
+      struct Helper { y: i32 }
+      impl A for Point { fn a(&self) -> i32 { self.x } }
+      impl C for Helper { fn c_val(&self) -> i32 { self.y } }
+      impl<T: A> B for T { fn f<U: C>(&self, x: U) -> i32 { self.a() + x.c_val() } }
+      fn main() { print(Point { x: 40 }.f(Helper { y: 2 })); }
+    `);
+    expect(js).toContain(
+      "function B$f$blanket(self, x, _witness_T_A, _witness_U_C)",
+    );
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
   it("does not emit witness codegen for an unsatisfied bound", (): void => {
     const result = compile(`
       trait Draw { fn draw(&self) -> i32; }
       struct P { x: i32 }
       fn draw_all<T: Draw>(t: &T) -> i32 { t.draw() }
       fn main() { let p = P { x: 1 }; print(draw_all(&p)); }
-    `);
-    const errors = result.diagnostics.filter((d) => d.severity === "error");
-    expect(errors).toHaveLength(1);
-    expect(errors[0]?.code).toBe("HEDGE-TRAIT-002");
-    expect(isNone(result.code)).toBe(true);
-  });
-
-  it("rejects a generic bound satisfied only by a blanket impl, instead of hoisting a witness pointing at an unemitted function", (): void => {
-    const result = compile(`
-      trait A {}
-      trait B { fn f(&self) -> i32; }
-      impl<T: A> B for T { fn f(&self) -> i32 { 42 } }
-      struct Point { x: i32 }
-      impl A for Point {}
-      fn g<T: B>(x: T) -> i32 { x.f() }
-      fn main() { print(g(Point { x: 1 })); }
     `);
     const errors = result.diagnostics.filter((d) => d.severity === "error");
     expect(errors).toHaveLength(1);
@@ -1858,6 +2125,34 @@ describe("dyn Trait runtime", (): void => {
     `);
     expect(js).toContain("witness: __witness_Draw_Circle");
     expect(js).toContain(".witness.draw(");
+    expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
+  it("threads a witness for a trait-provided method's own bounded generic parameter through dyn dispatch", (): void => {
+    const js = emittedJs(`
+      trait C { fn c_val(&self) -> i32; }
+      trait B { fn f<U: C>(&self, u: U) -> i32; }
+      struct Point { x: i32 }
+      struct Helper { y: i32 }
+      impl C for Helper { fn c_val(&self) -> i32 { self.y } }
+      impl B for Point { fn f<U: C>(&self, u: U) -> i32 { self.x + u.c_val() } }
+      fn call_it(d: dyn B, h: Helper) -> i32 { d.f(h) }
+      fn main() { print(call_it(Point { x: 40 }, Helper { y: 2 })); }
+    `);
+    expect(runEmittedJs(js)).toEqual(["42"]);
+  });
+
+  it("unsize-coerces a value whose trait comes only from a blanket impl, dispatching through its composed witness", (): void => {
+    const js = emittedJs(`
+      trait Marker { fn tag(&self) -> i32; }
+      trait Draw { fn draw(&self) -> i32; }
+      struct Circle { r: i32 }
+      impl Marker for Circle { fn tag(&self) -> i32 { self.r } }
+      impl<T: Marker> Draw for T { fn draw(&self) -> i32 { self.tag() } }
+      fn render(d: dyn Draw) -> i32 { d.draw() }
+      fn main() { print(render(Circle { r: 7 })); }
+    `);
+    expect(js).toContain("function Draw$draw$blanket(self, _witness_T_Marker)");
     expect(runEmittedJs(js)).toEqual(["7"]);
   });
 

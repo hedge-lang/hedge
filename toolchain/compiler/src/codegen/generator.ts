@@ -964,9 +964,20 @@ function emitWitnessObjectDecl(decl: WitnessObjectDecl): string {
   if (decl.closureSlots.length === 0) {
     return `const ${decl.name} = {${direct.join(", ")}};`;
   }
-  const closures = decl.closureSlots.map(
-    (s) => `w.${s.method} = (self, ...args) => ${s.value}(self, ...args, w);`,
-  );
+  const closures = decl.closureSlots.map((s) => {
+    const extra = s.extraArgs.map((arg) => `, ${arg}`).join("");
+    if (s.ownWitnessParamCount === 0) {
+      return `w.${s.method} = (self, ...args) => ${s.value}(self, ...args${extra});`;
+    }
+    // `Math.max(0, ...)` guards a call site where `methodCallWitnessArgs`
+    // resolved fewer than `n` witnesses (an unresolved bound is dropped, not
+    // padded - see `recordMethodCallWitnesses`'s own doc comment): without
+    // it, a negative `slice` start would silently pull real explicit
+    // arguments into the "own witness" tail instead of just leaving the
+    // callee's own extra witness parameter `undefined`.
+    const n = s.ownWitnessParamCount;
+    return `w.${s.method} = (self, ...args) => { const _n = Math.max(0, args.length - ${n}); return ${s.value}(self, ...args.slice(0, _n)${extra}, ...args.slice(_n)); };`;
+  });
   return `const ${decl.name} = (() => { const w = {${direct.join(", ")}}; ${closures.join(" ")} return w; })();`;
 }
 

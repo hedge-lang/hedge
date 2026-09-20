@@ -271,6 +271,11 @@ export interface TraitMethod {
    * not the trait's - so a call site can skip type-checking an argument bound
    * to one, the same way an inherent generic method's are skipped. */
   readonly genericParams: readonly string[];
+  /** Each `genericParams` name's own declared bound trait names (resolved
+   * `traitRegistry` keys), mirroring `IndexedMethod.genericParamBounds` for
+   * an inherent method - a call site's own bound argument threads a witness
+   * through `recordMethodCallWitnesses` using this. */
+  readonly genericParamBounds: ReadonlyMap<string, readonly string[]>;
 }
 
 /**
