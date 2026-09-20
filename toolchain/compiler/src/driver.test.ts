@@ -1592,6 +1592,39 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(javascript.value)).toEqual(["1", "2"]);
   });
 
+  it("does not collide a composed witness object with another shadowed same-named trait's composed witness for the same concrete type", (): void => {
+    const result = compile(`
+      trait Marker1 {}
+      trait Marker2 {}
+      struct Point { x: i32 }
+      impl Marker1 for Point {}
+      impl Marker2 for Point {}
+
+      trait B { fn f(&self) -> i32; }
+      impl<T: Marker1> B for T { fn f(&self) -> i32 { 1 } }
+
+      fn call_inner(p: Point) -> i32 {
+        trait B { fn f(&self) -> i32; }
+        impl<T: Marker2> B for T { fn f(&self) -> i32 { 2 } }
+        fn call_it<X: B>(x: X) -> i32 { x.f() }
+        call_it(p)
+      }
+
+      fn call_outer<X: B>(x: X) -> i32 { x.f() }
+
+      fn main() {
+        print(call_outer(Point { x: 0 }));
+        print(call_inner(Point { x: 0 }));
+      }
+    `);
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    expect(errors).toEqual([]);
+    assert(isSome(result.code), "Expected the program to compile");
+    const { javascript } = result.code.value;
+    assert(isSome(javascript), "Expected emitted JavaScript");
+    expect(runEmittedJs(javascript.value)).toEqual(["1", "2"]);
+  });
+
   it("dispatches a witness slot for an unconstrained blanket impl's method through the trait-scoped free function, not a nonexistent per-type one", (): void => {
     const js = emittedJs(`
       trait B { fn f(&self) -> i32; }

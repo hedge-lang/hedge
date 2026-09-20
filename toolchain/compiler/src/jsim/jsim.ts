@@ -153,6 +153,10 @@ interface HoistedWitness {
   readonly typeId: string;
   readonly typeName: string;
   readonly traitName: string;
+  /** `traitName`'s own scoped `traitRegistry` key - what this witness's own
+   * hoisting key actually disambiguates two shadowed same-named traits on,
+   * since `traitName` alone can't. */
+  readonly traitId: string;
   readonly methods: readonly WitnessMethod[];
   /** The concrete type's own witness for each of a *blanket* impl's own
    * bounds - empty for a witness built from a concrete `Impl`. A directly-
@@ -1163,22 +1167,27 @@ function witnessSlotTarget(
   };
 }
 
-/** The hoisted `const` name for the `(typeId, trait)` witness object,
- * allocated (collision-safe) and remembered on first reference - on first
- * creation, also reserves each of the witness's own methods' individual
- * blanket bound witnesses (`WitnessMethod.blanketBoundWitnesses`), which can
- * differ per method and aren't otherwise reachable from `boundWitnesses`
- * (the *enclosing* witness's own bounds, a separate, narrower set only a
- * concrete-receiver call site's trailing arguments need). */
+/** The hoisted `const` name for the `(typeId, traitId)` witness object,
+ * allocated (collision-safe) and remembered on first reference - keyed on
+ * `traitId` (the scoped `traitRegistry` identity), not the bare `traitName`
+ * used for the readable const text, so two shadowed same-named traits each
+ * satisfied for the same concrete type get their own separate hoisted
+ * consts instead of collapsing onto one. On first creation, also reserves
+ * each of the witness's own methods' individual blanket bound witnesses
+ * (`WitnessMethod.blanketBoundWitnesses`), which can differ per method and
+ * aren't otherwise reachable from `boundWitnesses` (the *enclosing*
+ * witness's own bounds, a separate, narrower set only a concrete-receiver
+ * call site's trailing arguments need). */
 function witnessConstName(
   ctx: JsimContext,
   typeId: string,
   typeName: string,
   traitName: string,
+  traitId: string,
   methods: readonly WitnessMethod[],
   boundWitnesses: readonly WitnessRef[] = [],
 ): string {
-  const key = `${typeId}#${traitName}`;
+  const key = `${typeId}#${traitId}`;
   const existing = ctx.hoistedWitnesses.get(key);
   if (existing !== undefined) return existing.name;
   const name = reserveTopLevelName(ctx, `__witness_${traitName}_${typeName}`);
@@ -1187,6 +1196,7 @@ function witnessConstName(
     typeId,
     typeName,
     traitName,
+    traitId,
     methods,
     boundWitnesses,
   });
@@ -1215,6 +1225,7 @@ function witnessRefName(ctx: JsimContext, ref: WitnessRef): string {
         ref.typeId,
         ref.typeName,
         ref.traitName,
+        ref.traitId,
         ref.methods,
       );
     case "Forwarded":
@@ -1230,6 +1241,7 @@ function witnessRefName(ctx: JsimContext, ref: WitnessRef): string {
         ref.typeId,
         ref.typeName,
         ref.traitName,
+        ref.traitId,
         ref.methods,
         ref.boundWitnesses,
       );
@@ -1260,7 +1272,7 @@ function defaultBodyWitnessArg(
   target: FreeMethodTarget,
 ): readonly JSIM.Expression[] {
   if (target.emitKind !== "default" || !isSome(target.traitName)) return [];
-  const key = `${target.typeId}#${target.traitName.value}`;
+  const key = `${target.typeId}#${target.scopeId}`;
   const witness = ctx.hoistedWitnesses.get(key);
   assert(
     witness !== undefined,
@@ -1298,6 +1310,7 @@ function reserveWitnessRef(ctx: JsimContext, ref: WitnessRef): void {
         ref.typeId,
         ref.typeName,
         ref.traitName,
+        ref.traitId,
         ref.methods,
       );
       return;
@@ -1308,6 +1321,7 @@ function reserveWitnessRef(ctx: JsimContext, ref: WitnessRef): void {
         ref.typeId,
         ref.typeName,
         ref.traitName,
+        ref.traitId,
         ref.methods,
         ref.boundWitnesses,
       );

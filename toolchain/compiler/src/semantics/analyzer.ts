@@ -204,6 +204,12 @@ export type WitnessRef =
   | {
       readonly kind: "Impl";
       readonly traitName: string;
+      /** `traitName`'s own scoped `traitRegistry` key - what codegen's
+       * hoisted-witness lookup key actually disambiguates on, since two
+       * shadowed traits can share a bare `traitName` (two block-local
+       * traits named the same, each concretely impl'd for the same
+       * concrete type, would otherwise collapse onto one hoisted const). */
+      readonly traitId: string;
       /** Bare readable type name (`Point`). */
       readonly typeName: string;
       /** Scope-qualified type identity, matching `FreeMethodTarget.typeId` -
@@ -216,6 +222,8 @@ export type WitnessRef =
   | {
       readonly kind: "Composed";
       readonly traitName: string;
+      /** Same role as `Impl.traitId` - see its own doc comment. */
+      readonly traitId: string;
       /** Bare readable type name (`Point`) - the *concrete* type the witness
        * is for, not the blanket impl's own abstract parameter. */
       readonly typeName: string;
@@ -3222,6 +3230,7 @@ function resolveTraitBoundForTypeName(
     return some({
       kind: "Composed",
       traitName: bareTypeName(traitName),
+      traitId: traitName,
       typeName: bareTypeName(typeName),
       typeId: typeName,
       implTokenId: impl.tokenId,
@@ -3232,6 +3241,7 @@ function resolveTraitBoundForTypeName(
   return some({
     kind: "Impl",
     traitName: bareTypeName(traitName),
+    traitId: traitName,
     typeName: bareTypeName(typeName),
     typeId: typeName,
     implTokenId: impl.tokenId,
