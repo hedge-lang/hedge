@@ -960,31 +960,24 @@ describe("execution tests", (): void => {
       );
     });
 
-    // TODO(Hedge-268): a generic parameter in an array's element-type
-    // position resolves today only as a side effect of the surrounding
-    // recursive type resolution, not by deliberate design - array-of-generic
-    // has no considered construction/copy/move/codegen story yet. These pin
-    // the rejection that gap calls for until the position gets real
-    // semantics.
-    it.fails(
-      "still rejects a generic type parameter used as a fixed-size array's element type",
-      (): void => {
-        assertRejectsWithMessage(
-          `struct Foo<T> { a: [T; 3] }`,
-          "generic type parameter `T` is not supported as an array element type",
-        );
-      },
-    );
+    it("resolves a generic type parameter used as a fixed-size array's element type", (): void => {
+      assertCompilesClean(`struct Foo<T> { a: [T; 3] }`);
+    });
 
-    it.fails(
-      "still rejects a generic type parameter used as an array element type behind a reference",
-      (): void => {
-        assertRejectsWithMessage(
-          `fn f<T>(x: &[T; 3]) {}`,
-          "generic type parameter `T` is not supported as an array element type",
-        );
-      },
-    );
+    it("resolves a generic function's own type parameter used as an array element type in a return type", (): void => {
+      assertCompilesClean(`fn identity<T>(x: [T; 2]) -> [T; 2] { x }`);
+    });
+
+    // A reference to an array of a generic element combines two hops that
+    // are each individually supported (`&T`, `[T; N]`) but not together -
+    // deliberately out of scope for now, same as any other doubly-nested
+    // compound position.
+    it("still rejects a generic type parameter used as an array element type behind a reference", (): void => {
+      assertRejectsWithMessage(
+        `fn f<T>(x: &[T; 3]) {}`,
+        "generic type parameter `T` is not yet supported as an array element type behind a reference",
+      );
+    });
 
     it("still rejects an undeclared name that is not a primitive, struct, or enum, with no generics involved at all", (): void => {
       assertRejectsWithMessage(
@@ -1485,6 +1478,58 @@ describe("execution tests", (): void => {
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-011");
+    });
+
+    it("infers a generic parameter from a fixed-size array argument", (): void => {
+      // Not `x[0]`: extracting a non-Copy-provable array element by value is
+      // a separate, pre-existing restriction unrelated to generic inference
+      // - an abstract `T` is never provably Copy inside the callee's own
+      // body, regardless of what a caller instantiates it with.
+      assertRunsTo(
+        `
+        fn describes<T>(x: [T; 2]) -> bool { true }
+        fn main() { print(describes([5, 9])); }
+        `,
+        ["true"],
+      );
+    });
+
+    it("substitutes a fixed-size-array return type from argument-inferred bindings", (): void => {
+      assertRunsTo(
+        `
+        fn identity<T>(a: T, b: T, c: T) -> [T; 3] { [a, b, c] }
+        fn main() {
+          let r = identity(1, 2, 3);
+          print(r[0]);
+          print(r[0]);
+        }
+        `,
+        ["1", "1"],
+      );
+    });
+
+    it("rejects a fixed-size array argument whose length does not match the declared element-type parameter", (): void => {
+      const result = compileHedgeCode(
+        `fn f<T>(x: [T; 3]) -> T { x[0] } fn main() { print(f([1, 2])); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-001");
+      expect(messageOf(errors[0])).toBe(
+        "argument 1 to function `f` type mismatch: expected `[T; 3]`, found `[i32; 2]`",
+      );
+    });
+
+    it("reports conflicting concrete element types inferred for the same type parameter across two fixed-size-array arguments", (): void => {
+      const result = compileHedgeCode(
+        `fn f<T>(a: [T; 2], b: [T; 2]) -> i32 { 0 } fn main() { print(f([1, 2], [true, false])); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(messageOf(errors[0])).toBe(
+        "argument 2 to function `f` type mismatch: expected `[i32; 2]`, found `[bool; 2]`",
+      );
     });
   });
 

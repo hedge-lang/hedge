@@ -1566,6 +1566,31 @@ function validateNamedType(
   return { kind: "UnitType", tokenId };
 }
 
+/**
+ * A reference to a fixed-size array of a bare declared generic parameter
+ * (`&[T; N]`, `&mut [T; N]`) combines two individually-supported single hops
+ * (`&T`, `[T; N]`) that are deliberately not supported together - each hop's
+ * own call-site inference/substitution only ever unwraps one level, so a
+ * signature combining both would resolve here but never actually be
+ * callable with a concrete argument. Returns the parameter's name when
+ * `type` is exactly this shape, so the caller can reject it deliberately
+ * instead of letting the ordinary recursive resolution silently accept it.
+ */
+function referencedArrayGenericElementName(
+  ctx: AnalysisContext,
+  type: Parser.ReferenceType,
+): string | undefined {
+  if (type.referent.kind !== "ArrayType") return undefined;
+  const element = type.referent.elementType;
+  if (element.kind !== "NamedType" || element.path.segments.length !== 1) {
+    return undefined;
+  }
+  const name = element.path.segments[0];
+  return name !== undefined && isDeclaredGenericParam(ctx, name)
+    ? name
+    : undefined;
+}
+
 function validateSlice1Type(
   ctx: AnalysisContext,
   type: Parser.Type,
@@ -1576,13 +1601,26 @@ function validateSlice1Type(
       return validateNamedType(ctx, type, tokenId);
     case "UnitType":
       return type;
-    case "ReferenceType":
+    case "ReferenceType": {
+      const genericArrayElement = referencedArrayGenericElementName(ctx, type);
+      if (genericArrayElement !== undefined) {
+        emitError(
+          ctx,
+          {
+            kind: "SemGenericArrayElementBehindReference",
+            name: genericArrayElement,
+          },
+          tokenId,
+        );
+        return { kind: "UnitType", tokenId };
+      }
       return {
         kind: "ReferenceType",
         tokenId,
         mutable: type.mutable,
         referent: validateSlice1Type(ctx, type.referent, type.referent.tokenId),
       };
+    }
     case "ArrayType": {
       const elementType = validateSlice1Type(
         ctx,
@@ -6101,6 +6139,28 @@ function resolveNamedType(
   return { kind: "UnitType", tokenId: fallbackTokenId };
 }
 
+/** `resolveSlice1Type`'s own `ReferenceType` case, split out to stay under
+ * the branch-count ceiling - mirrors `validateSlice1Type`'s rejection of a
+ * reference to an array of a generic element (see that function's own doc
+ * comment), non-emitting, landing on the same `UnitType` recovery
+ * placeholder `validateSlice1Type` reports for real once the declaration's
+ * own body is analyzed. */
+function resolveReferenceType(
+  ctx: AnalysisContext,
+  type: Parser.ReferenceType,
+  fallbackTokenId: number,
+): Semantics.Type {
+  if (referencedArrayGenericElementName(ctx, type) !== undefined) {
+    return { kind: "UnitType", tokenId: fallbackTokenId };
+  }
+  return {
+    kind: "ReferenceType",
+    tokenId: fallbackTokenId,
+    mutable: type.mutable,
+    referent: resolveSlice1Type(ctx, type.referent, type.referent.tokenId),
+  };
+}
+
 /**
  * Resolves a declared type without emitting, for building a signature
  * before the declaration is analyzed - emitting here would double-report.
@@ -6116,12 +6176,7 @@ function resolveSlice1Type(
     case "UnitType":
       return type;
     case "ReferenceType":
-      return {
-        kind: "ReferenceType",
-        tokenId: fallbackTokenId,
-        mutable: type.mutable,
-        referent: resolveSlice1Type(ctx, type.referent, type.referent.tokenId),
-      };
+      return resolveReferenceType(ctx, type, fallbackTokenId);
     case "ArrayType":
       return {
         kind: "ArrayType",
@@ -10953,9 +11008,10 @@ function bindingOrDefault(
 }
 
 /** Whether `declaredType` is a generic-parameter position at all - a bare
- * generic-named `NamedType`, or a single reference hop to one, the only two
- * shapes generic-parameter resolution currently supports. Anything else,
- * including a compound position, is never treated as generic here. */
+ * generic-named `NamedType`, a single reference hop to one, or a single
+ * fixed-size-array-element hop to one, the only shapes generic-parameter
+ * resolution currently supports. Anything else, including a compound
+ * position combining more than one hop, is never treated as generic here. */
 function involvesGenericParam(
   declaredType: Semantics.Type,
   genericNames: ReadonlySet<string>,
@@ -10963,7 +11019,9 @@ function involvesGenericParam(
   const base =
     declaredType.kind === "ReferenceType"
       ? declaredType.referent
-      : declaredType;
+      : declaredType.kind === "ArrayType"
+        ? declaredType.elementType
+        : declaredType;
   if (base.kind !== "NamedType" || base.path.segments.length !== 1) {
     return false;
   }
@@ -10972,10 +11030,10 @@ function involvesGenericParam(
 }
 
 /** Substitutes every generic-parameter-named `NamedType` position in `type`
- * for its bound concrete type, recursing through a single reference hop -
- * the only two shapes generic-parameter resolution currently supports. A
- * `NamedType` with no binding yet (or not a generic parameter at all)
- * passes through unchanged. */
+ * for its bound concrete type, recursing through a single reference or
+ * array-element hop - the shapes generic-parameter resolution currently
+ * supports. A `NamedType` with no binding yet (or not a generic parameter at
+ * all) passes through unchanged. */
 function substituteGenericType(
   type: Semantics.Type,
   bindings: GenericBindings,
@@ -10989,6 +11047,12 @@ function substituteGenericType(
     return {
       ...type,
       referent: substituteGenericType(type.referent, bindings),
+    };
+  }
+  if (type.kind === "ArrayType") {
+    return {
+      ...type,
+      elementType: substituteGenericType(type.elementType, bindings),
     };
   }
   return type;
@@ -11061,6 +11125,19 @@ function unifyGenericParam(
       bindings,
     );
   }
+  if (
+    declaredType.kind === "ArrayType" &&
+    actualType.kind === "ArrayType" &&
+    declaredType.length === actualType.length
+  ) {
+    return unifyGenericParam(
+      declaredType.elementType,
+      actualType.elementType,
+      tokenId,
+      genericNames,
+      bindings,
+    );
+  }
   bindMismatchedReferentPlaceholder(
     declaredType,
     tokenId,
@@ -11070,10 +11147,10 @@ function unifyGenericParam(
   return { kind: "Mismatch" };
 }
 
-/** The declared shape itself doesn't match (wrong mutability, or a
- * non-reference actual type against a `&T`/`&mut T` position), so the
- * referent's own generic name is never actually reached by
- * `unifyGenericParam`'s own recursion. Bind it to an error-recovery
+/** The declared shape itself doesn't match (wrong mutability, a mismatched
+ * array length, or a differently-shaped actual type against a `&T`/`&mut T`/
+ * `[T; N]` position), so the nested generic name is never actually reached
+ * by `unifyGenericParam`'s own recursion. Bind it to an error-recovery
  * placeholder anyway (unless something valid already bound it - a real
  * prior occurrence should never be clobbered by a later structural
  * failure), so a downstream "cannot be inferred" check doesn't cascade a
@@ -11084,14 +11161,20 @@ function bindMismatchedReferentPlaceholder(
   genericNames: ReadonlySet<string>,
   bindings: GenericBindings,
 ): void {
+  const nested =
+    declaredType.kind === "ReferenceType"
+      ? declaredType.referent
+      : declaredType.kind === "ArrayType"
+        ? declaredType.elementType
+        : undefined;
   if (
-    declaredType.kind !== "ReferenceType" ||
-    declaredType.referent.kind !== "NamedType" ||
-    declaredType.referent.path.segments.length !== 1
+    nested === undefined ||
+    nested.kind !== "NamedType" ||
+    nested.path.segments.length !== 1
   ) {
     return;
   }
-  const name = declaredType.referent.path.segments[0];
+  const name = nested.path.segments[0];
   if (name !== undefined && genericNames.has(name) && !bindings.has(name)) {
     bindings.set(name, {
       type: { kind: "UnitType", tokenId },
