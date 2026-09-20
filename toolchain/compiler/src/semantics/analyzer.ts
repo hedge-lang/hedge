@@ -1579,16 +1579,16 @@ function validateNamedType(
 function referencedArrayGenericElementName(
   ctx: AnalysisContext,
   type: Parser.ReferenceType,
-): string | undefined {
-  if (type.referent.kind !== "ArrayType") return undefined;
+): Option<string> {
+  if (type.referent.kind !== "ArrayType") return none();
   const element = type.referent.elementType;
   if (element.kind !== "NamedType" || element.path.segments.length !== 1) {
-    return undefined;
+    return none();
   }
   const name = element.path.segments[0];
   return name !== undefined && isDeclaredGenericParam(ctx, name)
-    ? name
-    : undefined;
+    ? some(name)
+    : none();
 }
 
 function validateSlice1Type(
@@ -1603,12 +1603,12 @@ function validateSlice1Type(
       return type;
     case "ReferenceType": {
       const genericArrayElement = referencedArrayGenericElementName(ctx, type);
-      if (genericArrayElement !== undefined) {
+      if (isSome(genericArrayElement)) {
         emitError(
           ctx,
           {
             kind: "SemGenericArrayElementBehindReference",
-            name: genericArrayElement,
+            name: genericArrayElement.value,
           },
           tokenId,
         );
@@ -6150,7 +6150,7 @@ function resolveReferenceType(
   type: Parser.ReferenceType,
   fallbackTokenId: number,
 ): Semantics.Type {
-  if (referencedArrayGenericElementName(ctx, type) !== undefined) {
+  if (isSome(referencedArrayGenericElementName(ctx, type))) {
     return { kind: "UnitType", tokenId: fallbackTokenId };
   }
   return {
