@@ -11526,7 +11526,7 @@ function checkPositionalCallArgs(
 function ambiguousEmptyArrayArg(
   declaredType: Semantics.Type,
   arg: Semantics.Expression,
-  bindings: GenericBindings,
+  substituted: Semantics.Type,
 ): Semantics.Expression | undefined {
   if (
     arg.kind !== "ArrayExpression" ||
@@ -11536,7 +11536,7 @@ function ambiguousEmptyArrayArg(
   ) {
     return undefined;
   }
-  return { ...arg, type: substituteGenericType(declaredType, bindings) };
+  return { ...arg, type: substituted };
 }
 
 /** Mirrors `checkGenericPositionalArg`'s own scalar unsuffixed-literal
@@ -11545,18 +11545,17 @@ function ambiguousEmptyArrayArg(
  * during the array's standalone analysis, before any generic context was in
  * view, so - unlike a bare scalar argument - they never get a second chance
  * to coerce against an already-known concrete element type. Returns `arg`
- * itself unchanged when nothing was actually coerced (declaredType's element
- * position isn't a concrete integer type yet, e.g. no binding exists yet),
- * so a still-unresolved parameter keeps seeding its binding from the
- * literal's own default type exactly as before. */
+ * itself unchanged when nothing was actually coerced (`substituted`'s
+ * element position isn't a concrete integer type yet, e.g. no binding
+ * exists yet), so a still-unresolved parameter keeps seeding its binding
+ * from the literal's own default type exactly as before. */
 function coerceArrayLiteralArg(
   arg: Semantics.Expression,
-  declaredType: Semantics.Type,
-  bindings: GenericBindings,
+  substituted: Semantics.Type,
 ): Semantics.Expression {
-  if (arg.kind !== "ArrayExpression") return arg;
-  const substituted = substituteGenericType(declaredType, bindings);
-  if (substituted.kind !== "ArrayType") return arg;
+  if (arg.kind !== "ArrayExpression" || substituted.kind !== "ArrayType") {
+    return arg;
+  }
   const elements = arg.elements.map((element) =>
     isUnsuffixedLiteralExpr(element)
       ? coerceToIntegerType(element, substituted.elementType)
@@ -11589,9 +11588,10 @@ function checkGenericPositionalArg(
   genericNames: ReadonlySet<string>,
   bindings: GenericBindings,
 ): Semantics.Expression {
-  const emptyArrayArg = ambiguousEmptyArrayArg(declaredType, arg, bindings);
+  const substituted = substituteGenericType(declaredType, bindings);
+  const emptyArrayArg = ambiguousEmptyArrayArg(declaredType, arg, substituted);
   if (emptyArrayArg !== undefined) return emptyArrayArg;
-  const arrayLiteralArg = coerceArrayLiteralArg(arg, declaredType, bindings);
+  const arrayLiteralArg = coerceArrayLiteralArg(arg, substituted);
   // An unsuffixed literal has no fixed type of its own yet - coerce it
   // against whatever concrete type this generic parameter has already
   // resolved to (from an earlier argument, turbofish, or an expected return
@@ -11600,10 +11600,7 @@ function checkGenericPositionalArg(
   // yet bound to anything concrete leaves `coercedArg` untouched, so the
   // literal's own default type still seeds the binding.
   const coercedArg = isUnsuffixedLiteralExpr(arrayLiteralArg)
-    ? coerceToIntegerType(
-        arrayLiteralArg,
-        substituteGenericType(declaredType, bindings),
-      )
+    ? coerceToIntegerType(arrayLiteralArg, substituted)
     : arrayLiteralArg;
   const coercedArgType = getType(coercedArg);
   const outcome = unifyGenericParam(
@@ -11630,11 +11627,12 @@ function checkGenericPositionalArg(
     case "Bound":
       break;
     case "Conflict": {
-      // Render `expected` at the same depth as `declaredType` itself (e.g.
-      // `&i32`, not the unwrapped `i32` a reference-hop binding stores) so
-      // it's directly comparable to `found`, which is the argument's own
-      // whole type.
-      const expectedType = substituteGenericType(declaredType, bindings);
+      // `substituted` is rendered here at the same depth as `declaredType`
+      // itself (e.g. `&i32`, not the unwrapped `i32` a reference-hop binding
+      // stores) so it's directly comparable to `found`, which is the
+      // argument's own whole type. Reusing it (rather than substituting
+      // again) is sound here specifically because `bindings` is never
+      // mutated on the `Conflict` path `unifyGenericParam` just returned.
       emitError(
         ctx,
         {
@@ -11642,7 +11640,7 @@ function checkGenericPositionalArg(
           argIndex: index + 1,
           calleeKind: site.kindLabel,
           calleeName: site.name,
-          expected: describeType(expectedType),
+          expected: describeType(substituted),
           found: describeType(coercedArgType),
         },
         coercedArg.tokenId,
