@@ -6025,18 +6025,21 @@ describe("generic parameter shadowing an outer type of the same name", (): void 
 });
 
 describe("generic parameter used as a fixed-size array's element type", (): void => {
-  it("resolves a struct field typed as a fixed-size array of its own declared type parameter", (): void => {
-    const result = diagnose("struct Container<T> { items: [T; 3] }");
-    expect(result.diagnostics).toEqual([]);
-  });
-
-  it("resolves an enum tuple-variant field typed as a fixed-size array of its own declared type parameter", (): void => {
-    const result = diagnose("enum Wrap<T> { V([T; 2]) }");
-    expect(result.diagnostics).toEqual([]);
-  });
-
-  it("resolves an empty fixed-size array of a declared generic type parameter", (): void => {
-    const result = diagnose("fn f<T>(x: [T; 0]) {}");
+  it.each([
+    [
+      "resolves a struct field typed as a fixed-size array of its own declared type parameter",
+      "struct Container<T> { items: [T; 3] }",
+    ],
+    [
+      "resolves an enum tuple-variant field typed as a fixed-size array of its own declared type parameter",
+      "enum Wrap<T> { V([T; 2]) }",
+    ],
+    [
+      "resolves an empty fixed-size array of a declared generic type parameter",
+      "fn f<T>(x: [T; 0]) {}",
+    ],
+  ])("%s", (_title, source): void => {
+    const result = diagnose(source);
     expect(result.diagnostics).toEqual([]);
   });
 
