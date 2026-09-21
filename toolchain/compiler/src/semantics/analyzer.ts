@@ -1582,7 +1582,11 @@ function referencedArrayGenericElementName(
 ): Option<string> {
   if (type.referent.kind !== "ArrayType") return none();
   const element = type.referent.elementType;
-  if (element.kind !== "NamedType" || element.path.segments.length !== 1) {
+  if (
+    element.kind !== "NamedType" ||
+    element.path.segments.length !== 1 ||
+    element.typeArguments.length > 0
+  ) {
     return none();
   }
   const name = element.path.segments[0];
