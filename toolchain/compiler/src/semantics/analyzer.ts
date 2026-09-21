@@ -11475,10 +11475,6 @@ function checkPositionalCallArgs(
   return { args: checkedArgs, bindings };
 }
 
-/** The generic-parameter-position branch of `checkPositionalCallArgs`'s
- * per-argument loop, split out to stay under the branch-count ceiling a
- * plain literal coercion plus range-check plus conflict-report combination
- * would otherwise push the loop body past. */
 /** An empty array literal (`[]`) against a `[T; 0]` position carries no
  * element to infer `T` from - `analyzeArrayExpression` gives it the same
  * ambiguous `elementType: UnitType` placeholder `reconcileExpressionType`
@@ -11505,6 +11501,10 @@ function ambiguousEmptyArrayArg(
   return { ...arg, type: substituteGenericType(declaredType, bindings) };
 }
 
+/** The generic-parameter-position branch of `checkPositionalCallArgs`'s
+ * per-argument loop, split out to stay under the branch-count ceiling a
+ * plain literal coercion plus range-check plus conflict-report combination
+ * would otherwise push the loop body past. */
 function checkGenericPositionalArg(
   ctx: AnalysisContext,
   site: CallSiteDescription,
