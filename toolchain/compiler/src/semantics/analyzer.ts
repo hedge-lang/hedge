@@ -11543,6 +11543,43 @@ function ambiguousEmptyArrayArg(
   return { ...arg, type: substituteGenericType(declaredType, bindings) };
 }
 
+/** Mirrors `checkGenericPositionalArg`'s own scalar unsuffixed-literal
+ * coercion, but for an array literal argument (`[T; N]` position): each of
+ * the array's own unsuffixed-integer elements already defaulted to `i32`
+ * during the array's standalone analysis, before any generic context was in
+ * view, so - unlike a bare scalar argument - they never get a second chance
+ * to coerce against an already-known concrete element type. Returns `arg`
+ * itself unchanged when nothing was actually coerced (declaredType's element
+ * position isn't a concrete integer type yet, e.g. no binding exists yet),
+ * so a still-unresolved parameter keeps seeding its binding from the
+ * literal's own default type exactly as before. */
+function coerceArrayLiteralArg(
+  arg: Semantics.Expression,
+  declaredType: Semantics.Type,
+  bindings: GenericBindings,
+): Semantics.Expression {
+  if (arg.kind !== "ArrayExpression") return arg;
+  const substituted = substituteGenericType(declaredType, bindings);
+  if (substituted.kind !== "ArrayType") return arg;
+  const elements = arg.elements.map((element) =>
+    isUnsuffixedLiteralExpr(element)
+      ? coerceToIntegerType(element, substituted.elementType)
+      : element,
+  );
+  const changed = elements.some((element, i) => element !== arg.elements[i]);
+  return changed
+    ? {
+        ...arg,
+        elements,
+        type: {
+          kind: "ArrayType",
+          elementType: substituted.elementType,
+          length: elements.length,
+        },
+      }
+    : arg;
+}
+
 /** The generic-parameter-position branch of `checkPositionalCallArgs`'s
  * per-argument loop, split out to stay under the branch-count ceiling a
  * plain literal coercion plus range-check plus conflict-report combination
@@ -11558,6 +11595,7 @@ function checkGenericPositionalArg(
 ): Semantics.Expression {
   const emptyArrayArg = ambiguousEmptyArrayArg(declaredType, arg, bindings);
   if (emptyArrayArg !== undefined) return emptyArrayArg;
+  const arrayLiteralArg = coerceArrayLiteralArg(arg, declaredType, bindings);
   // An unsuffixed literal has no fixed type of its own yet - coerce it
   // against whatever concrete type this generic parameter has already
   // resolved to (from an earlier argument, turbofish, or an expected return
@@ -11565,9 +11603,12 @@ function checkGenericPositionalArg(
   // applies for an ordinary (non-generic) declared type. A parameter not
   // yet bound to anything concrete leaves `coercedArg` untouched, so the
   // literal's own default type still seeds the binding.
-  const coercedArg = isUnsuffixedLiteralExpr(arg)
-    ? coerceToIntegerType(arg, substituteGenericType(declaredType, bindings))
-    : arg;
+  const coercedArg = isUnsuffixedLiteralExpr(arrayLiteralArg)
+    ? coerceToIntegerType(
+        arrayLiteralArg,
+        substituteGenericType(declaredType, bindings),
+      )
+    : arrayLiteralArg;
   const coercedArgType = getType(coercedArg);
   const outcome = unifyGenericParam(
     declaredType,

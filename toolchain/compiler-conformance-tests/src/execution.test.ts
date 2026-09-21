@@ -1266,6 +1266,16 @@ describe("execution tests", (): void => {
       );
     });
 
+    it("coerces a fixed-size array literal argument's own unsuffixed elements against an already-resolved concrete type", (): void => {
+      assertRunsTo(
+        `
+        fn same<T>(a: T, b: [T; 2]) -> T { a }
+        fn main() { print(same(1i8, [2, 3])); }
+        `,
+        ["1"],
+      );
+    });
+
     it("range-checks a negative unsuffixed literal against the already-resolved concrete type", (): void => {
       const result = compileHedgeCode(
         `fn same<T>(a: T, b: T) -> T { a } fn main() { print(same(5i8, -200)); }`,
