@@ -9458,8 +9458,25 @@ function analyzeArrayExpression(
       type: { kind: "ArrayType", elementType: UNIT, length: 0 },
     };
   }
-  const elementType = getType(first);
-  for (const elem of elements.slice(1)) {
+  // An unsuffixed literal has no fixed type of its own - if another
+  // element in the same array literal does (a different expression kind,
+  // or an explicitly-suffixed literal), every unsuffixed literal coerces
+  // to match it before the "elements must agree" check runs, the same way
+  // a generic call argument's own unsuffixed literals already get a
+  // second chance to coerce against context elsewhere. An array of
+  // unsuffixed literals only keeps its plain default (from `first`).
+  const anchor = elements.find((elem) => !isUnsuffixedLiteralExpr(elem));
+  const coercedElements =
+    anchor === undefined
+      ? elements
+      : elements.map((elem) => {
+          if (!isUnsuffixedLiteralExpr(elem)) return elem;
+          const coerced = coerceToIntegerType(elem, getType(anchor));
+          checkCoercedLiteralRange(ctx, coerced);
+          return coerced;
+        });
+  const elementType = anchor === undefined ? getType(first) : getType(anchor);
+  for (const elem of coercedElements) {
     const elemType = getType(elem);
     if (!typesEqual(elementType, elemType)) {
       emitError(
@@ -9476,8 +9493,12 @@ function analyzeArrayExpression(
   }
   return {
     ...expression,
-    elements,
-    type: { kind: "ArrayType", elementType, length: elements.length },
+    elements: coercedElements,
+    type: {
+      kind: "ArrayType",
+      elementType,
+      length: coercedElements.length,
+    },
   };
 }
 

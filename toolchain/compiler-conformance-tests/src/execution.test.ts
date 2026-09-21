@@ -1320,6 +1320,16 @@ describe("execution tests", (): void => {
       expect(messageOf(errors[0])).toBe("out of range for i8");
     });
 
+    it("accepts a fixed-size array literal argument mixing an explicitly-suffixed literal with unsuffixed ones", (): void => {
+      assertRunsTo(
+        `
+        fn same<T>(a: T, b: [T; 2]) -> T { a }
+        fn main() { print(same(1i8, [2, 3i8])); }
+        `,
+        ["1"],
+      );
+    });
+
     it("reports a structural mismatch (non-reference argument for a reference-hop parameter) as an ordinary type mismatch, not an unsolved variable", (): void => {
       const result = compileHedgeCode(
         `
@@ -1794,6 +1804,19 @@ describe("execution tests", (): void => {
         }
       `,
         ["10", "20", "30"],
+      );
+    });
+
+    it("accepts an array literal mixing an explicitly-suffixed integer literal with unsuffixed ones, with no call or annotation involved", (): void => {
+      assertRunsTo(
+        `
+        fn main() {
+          let x = [2, 3i8];
+          print(x[0]);
+          print(x[1]);
+        }
+      `,
+        ["2", "3"],
       );
     });
 
