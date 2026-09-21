@@ -11479,6 +11479,32 @@ function checkPositionalCallArgs(
  * per-argument loop, split out to stay under the branch-count ceiling a
  * plain literal coercion plus range-check plus conflict-report combination
  * would otherwise push the loop body past. */
+/** An empty array literal (`[]`) against a `[T; 0]` position carries no
+ * element to infer `T` from - `analyzeArrayExpression` gives it the same
+ * ambiguous `elementType: UnitType` placeholder `reconcileExpressionType`
+ * already special-cases for an ordinary (non-generic) declared array type.
+ * Unifying it would either wrongly bind `T` to `()` (an unsound inference
+ * nothing actually observed) or wrongly conflict against an already-bound
+ * `T` (`()` disagreeing with whatever `T` really is) - so this argument
+ * contributes no binding either way, substituting whatever is already known
+ * into its own type and leaving `T` for the ordinary "cannot infer" check to
+ * catch if nothing else ever binds it. */
+function ambiguousEmptyArrayArg(
+  declaredType: Semantics.Type,
+  arg: Semantics.Expression,
+  bindings: GenericBindings,
+): Semantics.Expression | undefined {
+  if (
+    arg.kind !== "ArrayExpression" ||
+    arg.elements.length !== 0 ||
+    declaredType.kind !== "ArrayType" ||
+    declaredType.length !== 0
+  ) {
+    return undefined;
+  }
+  return { ...arg, type: substituteGenericType(declaredType, bindings) };
+}
+
 function checkGenericPositionalArg(
   ctx: AnalysisContext,
   site: CallSiteDescription,
@@ -11488,6 +11514,8 @@ function checkGenericPositionalArg(
   genericNames: ReadonlySet<string>,
   bindings: GenericBindings,
 ): Semantics.Expression {
+  const emptyArrayArg = ambiguousEmptyArrayArg(declaredType, arg, bindings);
+  if (emptyArrayArg !== undefined) return emptyArrayArg;
   // An unsuffixed literal has no fixed type of its own yet - coerce it
   // against whatever concrete type this generic parameter has already
   // resolved to (from an earlier argument, turbofish, or an expected return

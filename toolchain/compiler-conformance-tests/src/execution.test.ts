@@ -1531,6 +1531,28 @@ describe("execution tests", (): void => {
         "argument 2 to function `f` type mismatch: expected `[i32; 2]`, found `[bool; 2]`",
       );
     });
+
+    it("reports a generic parameter as unsolved when the only argument for it is an empty fixed-size array, since an empty array carries no element to infer from", (): void => {
+      const result = compileHedgeCode(
+        `fn f<T>(x: [T; 0]) -> i32 { 0 } fn main() { print(f([])); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-006");
+      expect(messageOf(errors[0])).toBe(
+        "cannot infer type of generic parameter `T` without an explicit type annotation or turbofish",
+      );
+    });
+
+    it("accepts an empty fixed-size array argument against a type parameter already resolved by turbofish", (): void => {
+      assertRunsTo(
+        `
+        fn f<T>(x: [T; 0]) -> i32 { 0 }
+        fn main() { print(f::<i32>([])); }
+        `,
+        ["0"],
+      );
+    });
   });
 
   describe("generic enum-variant construction turbofish and unsolved-variable checks", (): void => {
