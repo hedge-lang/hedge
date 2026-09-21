@@ -11539,23 +11539,15 @@ function ambiguousEmptyArrayArg(
   return { ...arg, type: substituted };
 }
 
-/** Mirrors `checkGenericPositionalArg`'s own scalar unsuffixed-literal
- * coercion, but for an array literal argument (`[T; N]` position): each of
- * the array's own unsuffixed-integer elements already defaulted to `i32`
- * during the array's standalone analysis, before any generic context was in
- * view, so - unlike a bare scalar argument - they never get a second chance
- * to coerce against an already-known concrete element type. Returns `arg`
- * itself unchanged when nothing was actually coerced (`substituted`'s
- * element position isn't a concrete integer type yet, e.g. no binding
- * exists yet), so a still-unresolved parameter keeps seeding its binding
- * from the literal's own default type exactly as before. */
-function coerceArrayLiteralArg(
-  arg: Semantics.Expression,
-  substituted: Semantics.Type,
+/** The `ArrayExpression` (list-form) case of `coerceArrayLiteralArg` below:
+ * each unsuffixed-integer element gets a chance to coerce against the
+ * already-known element type. Returns `arg` unchanged when nothing was
+ * actually coerced, so a still-unresolved parameter keeps seeding its
+ * binding from the literal's own default type exactly as before. */
+function coerceArrayExpressionArg(
+  arg: Semantics.ArrayExpression,
+  substituted: Semantics.ArrayType,
 ): Semantics.Expression {
-  if (arg.kind !== "ArrayExpression" || substituted.kind !== "ArrayType") {
-    return arg;
-  }
   const elements = arg.elements.map((element) =>
     isUnsuffixedLiteralExpr(element)
       ? coerceToIntegerType(element, substituted.elementType)
@@ -11573,6 +11565,50 @@ function coerceArrayLiteralArg(
         },
       }
     : arg;
+}
+
+/** The `ArrayRepeatExpression` (`[value; N]`) case of `coerceArrayLiteralArg`
+ * below - the same coercion `coerceArrayExpressionArg` gives each list-form
+ * element, applied to the single repeated value instead. */
+function coerceArrayRepeatArg(
+  arg: Semantics.ArrayRepeatExpression,
+  substituted: Semantics.ArrayType,
+): Semantics.Expression {
+  if (!isUnsuffixedLiteralExpr(arg.value)) return arg;
+  const value = coerceToIntegerType(arg.value, substituted.elementType);
+  return value === arg.value
+    ? arg
+    : {
+        ...arg,
+        value,
+        type: {
+          kind: "ArrayType",
+          elementType: substituted.elementType,
+          length: arg.count,
+        },
+      };
+}
+
+/** Mirrors `checkGenericPositionalArg`'s own scalar unsuffixed-literal
+ * coercion, but for an array-typed argument (`[T; N]` position, list-form
+ * or repeat-form): its own unsuffixed-integer content already defaulted to
+ * `i32` during the argument's standalone analysis, before any generic
+ * context was in view, so - unlike a bare scalar argument - it never gets a
+ * second chance to coerce against an already-known concrete element type.
+ * A non-array argument, or one whose declared position isn't an array,
+ * passes through unchanged. */
+function coerceArrayLiteralArg(
+  arg: Semantics.Expression,
+  substituted: Semantics.Type,
+): Semantics.Expression {
+  if (substituted.kind !== "ArrayType") return arg;
+  if (arg.kind === "ArrayExpression") {
+    return coerceArrayExpressionArg(arg, substituted);
+  }
+  if (arg.kind === "ArrayRepeatExpression") {
+    return coerceArrayRepeatArg(arg, substituted);
+  }
+  return arg;
 }
 
 /** The generic-parameter-position branch of `checkPositionalCallArgs`'s
