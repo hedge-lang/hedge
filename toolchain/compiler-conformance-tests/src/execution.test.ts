@@ -972,7 +972,7 @@ describe("execution tests", (): void => {
     // are each individually supported (`&T`, `[T; N]`) but not together -
     // deliberately out of scope for now, same as any other doubly-nested
     // compound position.
-    it("still rejects a generic type parameter used as an array element type behind a reference", (): void => {
+    it("rejects a generic type parameter used as an array element type behind a reference", (): void => {
       assertRejectsWithMessage(
         `fn f<T>(x: &[T; 3]) {}`,
         "generic type parameter `T` is not yet supported as an array element type behind a reference",

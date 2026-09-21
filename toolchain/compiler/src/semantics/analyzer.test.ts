@@ -6040,13 +6040,13 @@ describe("generic parameter used as a fixed-size array's element type", (): void
     expect(result.diagnostics).toEqual([]);
   });
 
-  it("still rejects a generic type parameter used with a type-argument list inside an array's element-type position", (): void => {
+  it("rejects a generic type parameter used with a type-argument list inside an array's element-type position", (): void => {
     const result = diagnose("fn f<T>(x: [T<i32>; 3]) {}");
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.code).toBe("HEDGE-UNSUPPORTED-001");
   });
 
-  it("still rejects an undeclared name used as an array's element type, with no generics involved", (): void => {
+  it("rejects an undeclared name used as an array's element type, with no generics involved", (): void => {
     const result = diagnose("fn f(x: [Bogus; 3]) {}");
     expect(result.diagnostics).toHaveLength(1);
     expect(result.diagnostics[0]?.code).toBe("HEDGE-NAME-001");
