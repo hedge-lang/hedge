@@ -11565,6 +11565,46 @@ function ambiguousEmptyArrayArg(
   return { ...arg, type: substituted };
 }
 
+/** An array literal whose element (list-form: any element; repeat-form: the
+ * repeated value) already failed its own analysis carries the `UnitType`
+ * error-recovery placeholder as that element's type, not a genuine unit
+ * value - see `isAmbiguousUnitExpr`. Unifying the array's own type against
+ * `T` would wrongly bind `T` to `()`, or wrongly conflict against an
+ * already-bound `T`, cascading a second diagnostic off the element's own
+ * already-reported error - the same cascade `checkPositionalCallArgs`'s own
+ * top-level gate already avoids for a bare ambiguous argument, generalized
+ * to one nested inside an array. Returns `arg` unchanged (contributing no
+ * binding) when detected, `undefined` otherwise. */
+function arrayArgWithAmbiguousElement(
+  arg: Semantics.Expression,
+): Semantics.Expression | undefined {
+  const isAmbiguous = (element: Semantics.Expression): boolean =>
+    element.type.kind === "UnitType" && isAmbiguousUnitExpr(element);
+  if (arg.kind === "ArrayExpression" && arg.elements.some(isAmbiguous)) {
+    return arg;
+  }
+  if (arg.kind === "ArrayRepeatExpression" && isAmbiguous(arg.value)) {
+    return arg;
+  }
+  return undefined;
+}
+
+/** Tries each array-argument special case in turn - an ambiguous
+ * (error-recovery) element, then an ambiguous empty array - returning the
+ * first match's replacement `arg`, or `undefined` if neither applies.
+ * Combined into one call so `checkGenericPositionalArg` only needs a single
+ * early-return branch for both. */
+function specialArrayArg(
+  declaredType: Semantics.Type,
+  arg: Semantics.Expression,
+  substituted: Semantics.Type,
+): Semantics.Expression | undefined {
+  return (
+    arrayArgWithAmbiguousElement(arg) ??
+    ambiguousEmptyArrayArg(declaredType, arg, substituted)
+  );
+}
+
 /** The `ArrayExpression` (list-form) case of `coerceArrayLiteralArg` below:
  * each unsuffixed-integer element gets a chance to coerce against the
  * already-known element type. Returns `arg` unchanged when nothing was
@@ -11656,8 +11696,8 @@ function checkGenericPositionalArg(
   bindings: GenericBindings,
 ): Semantics.Expression {
   const substituted = substituteGenericType(declaredType, bindings);
-  const emptyArrayArg = ambiguousEmptyArrayArg(declaredType, arg, substituted);
-  if (emptyArrayArg !== undefined) return emptyArrayArg;
+  const specialArg = specialArrayArg(declaredType, arg, substituted);
+  if (specialArg !== undefined) return specialArg;
   const arrayLiteralArg = coerceArrayLiteralArg(ctx, arg, substituted);
   // An unsuffixed literal has no fixed type of its own yet - coerce it
   // against whatever concrete type this generic parameter has already

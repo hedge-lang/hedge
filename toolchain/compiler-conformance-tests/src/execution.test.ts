@@ -1183,6 +1183,18 @@ describe("execution tests", (): void => {
       );
     });
 
+    it("does not cascade a second diagnostic when a fixed-size array argument's own element is an unresolved name", (): void => {
+      assertNoCascade(
+        `fn same<T>(a: T, b: [T; 1]) {} fn main() { same(1, [missing]); }`,
+      );
+    });
+
+    it("does not cascade a second diagnostic when a repeat-form array argument's own value is an unresolved name", (): void => {
+      assertNoCascade(
+        `fn same<T>(a: T, b: [T; 2]) {} fn main() { same(1, [missing; 2]); }`,
+      );
+    });
+
     it("infers through a let binding's own type annotation, consistent with the argument", (): void => {
       assertRunsTo(
         `
