@@ -979,6 +979,20 @@ describe("execution tests", (): void => {
       );
     });
 
+    it("reports both an invalid element and an invalid length independently for a non-generic array behind a reference", (): void => {
+      const result = compileHedgeCode(`fn f(x: &[Bogus; MISSING]) {}`);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(2);
+      expect(errors.map((e) => e.code).sort()).toEqual([
+        "HEDGE-NAME-001",
+        "HEDGE-NAME-001",
+      ]);
+      expect(errors.map((e) => messageOf(e)).sort()).toEqual([
+        'Cannot find name "MISSING" in this scope.',
+        "cannot find type `Bogus` in this scope",
+      ]);
+    });
+
     it("still rejects an undeclared name that is not a primitive, struct, or enum, with no generics involved at all", (): void => {
       assertRejectsWithMessage(
         `fn f(x: Bogus) {}`,

@@ -1608,15 +1608,20 @@ function validateReferenceToArrayType(
   arrayReferent: Parser.ArrayType,
   tokenId: number,
 ): Semantics.Type {
-  const length = foldArrayLength(ctx, arrayReferent.length);
-  if (!isSome(length)) {
-    return { kind: "UnitType", tokenId };
-  }
   const genericElementName = bareGenericArrayElementName(
     ctx,
     arrayReferent.elementType,
   );
   if (isSome(genericElementName)) {
+    // The length is folded before this rejection, deliberately - a
+    // malformed length gets its own specific diagnostic, and the
+    // behind-reference rejection isn't added on top of it once that's
+    // already reported. A non-generic element (below) skips this ordering
+    // entirely and validates unconditionally, matching plain array
+    // validation.
+    if (!isSome(foldArrayLength(ctx, arrayReferent.length))) {
+      return { kind: "UnitType", tokenId };
+    }
     emitError(
       ctx,
       {
@@ -1627,20 +1632,20 @@ function validateReferenceToArrayType(
     );
     return { kind: "UnitType", tokenId };
   }
-  return {
-    kind: "ReferenceType",
-    tokenId,
-    mutable: type.mutable,
-    referent: {
-      kind: "ArrayType",
-      elementType: validateSlice1Type(
-        ctx,
-        arrayReferent.elementType,
-        arrayReferent.elementType.tokenId,
-      ),
-      length: length.value,
-    },
-  };
+  const elementType = validateSlice1Type(
+    ctx,
+    arrayReferent.elementType,
+    arrayReferent.elementType.tokenId,
+  );
+  const length = foldArrayLength(ctx, arrayReferent.length);
+  return isSome(length)
+    ? {
+        kind: "ReferenceType",
+        tokenId,
+        mutable: type.mutable,
+        referent: { kind: "ArrayType", elementType, length: length.value },
+      }
+    : { kind: "UnitType", tokenId };
 }
 
 function validateSlice1Type(
