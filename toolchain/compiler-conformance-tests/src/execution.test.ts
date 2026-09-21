@@ -1546,6 +1546,19 @@ describe("execution tests", (): void => {
       );
     });
 
+    it("destructures an empty fixed-size array argument with a rest binding, even when a later argument is what actually binds the type parameter", (): void => {
+      assertRunsTo(
+        `
+        fn f<T>(empty: [T; 0], value: T) -> [T; 0] { empty }
+        fn main() {
+          let [..rest] = f([], 1);
+          print(1);
+        }
+        `,
+        ["1"],
+      );
+    });
+
     it("reports a generic parameter as unsolved when the only argument for it is an empty fixed-size array, since an empty array carries no element to infer from", (): void => {
       const result = compileHedgeCode(
         `fn f<T>(x: [T; 0]) -> i32 { 0 } fn main() { print(f([])); }`,
