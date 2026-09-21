@@ -466,8 +466,7 @@ export interface ArrayRepeatExpression {
 
 /**
  * A slice pattern's rest binding (`..tail`) over `[start, start+length)` of
- * a fixed-length array. `numericKind` picks the codegen path, mirroring
- * {@link ArrayExpression}. Codegen picks `.subarray()` vs. the `Proxy`-based
+ * a fixed-length array. Codegen picks `.subarray()` vs. the `Proxy`-based
  * helper by checking `source`'s actual runtime shape, not a static element
  * type - see `emitArraySliceViewExpression`'s own doc comment for why a
  * static type can't be trusted here.
