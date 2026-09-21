@@ -1566,33 +1566,81 @@ function validateNamedType(
   return { kind: "UnitType", tokenId };
 }
 
-/**
- * A reference to a fixed-size array of a bare declared generic parameter
- * (`&[T; N]`, `&mut [T; N]`) combines two individually-supported single hops
- * (`&T`, `[T; N]`) that are deliberately not supported together - each hop's
- * own call-site inference/substitution only ever unwraps one level, so a
- * signature combining both would resolve here but never actually be
- * callable with a concrete argument. Returns the parameter's name when
- * `type` is exactly this shape, so the caller can reject it deliberately
- * instead of letting the ordinary recursive resolution silently accept it.
- */
-function referencedArrayGenericElementName(
+/** Whether `elementType` is a bare declared generic parameter with no type
+ * arguments - the shape that, as an array's element type behind a
+ * reference, combines two individually-supported single hops (`&T`,
+ * `[T; N]`) that are deliberately not supported together, since each hop's
+ * own call-site inference/substitution only ever unwraps one level. Returns
+ * the parameter's name when it matches, so the caller can reject the
+ * combined shape deliberately instead of letting the ordinary recursive
+ * resolution silently accept it. */
+function bareGenericArrayElementName(
   ctx: AnalysisContext,
-  type: Parser.ReferenceType,
+  elementType: Parser.Type,
 ): Option<string> {
-  if (type.referent.kind !== "ArrayType") return none();
-  const element = type.referent.elementType;
   if (
-    element.kind !== "NamedType" ||
-    element.path.segments.length !== 1 ||
-    element.typeArguments.length > 0
+    elementType.kind !== "NamedType" ||
+    elementType.path.segments.length !== 1 ||
+    elementType.typeArguments.length > 0
   ) {
     return none();
   }
-  const name = element.path.segments[0];
+  const name = elementType.path.segments[0];
   return name !== undefined && isDeclaredGenericParam(ctx, name)
     ? some(name)
     : none();
+}
+
+/**
+ * `validateSlice1Type`'s own `ReferenceType` case for a referent that's
+ * itself an `ArrayType` - split out so the array's length can be folded
+ * exactly once. Folding it here first (rather than deferring to a plain
+ * recursive call into the `ArrayType` case) means a malformed length
+ * (undeclared name, non-constant expression) gets its own specific
+ * diagnostic even when the element is also the deliberately-unsupported
+ * generic-behind-reference shape - reporting the combined-shape rejection
+ * on top would both be a real cascade and hide the array's own genuine
+ * problem behind an unrelated one.
+ */
+function validateReferenceToArrayType(
+  ctx: AnalysisContext,
+  type: Parser.ReferenceType,
+  arrayReferent: Parser.ArrayType,
+  tokenId: number,
+): Semantics.Type {
+  const length = foldArrayLength(ctx, arrayReferent.length);
+  if (!isSome(length)) {
+    return { kind: "UnitType", tokenId };
+  }
+  const genericElementName = bareGenericArrayElementName(
+    ctx,
+    arrayReferent.elementType,
+  );
+  if (isSome(genericElementName)) {
+    emitError(
+      ctx,
+      {
+        kind: "SemGenericArrayElementBehindReference",
+        name: genericElementName.value,
+      },
+      tokenId,
+    );
+    return { kind: "UnitType", tokenId };
+  }
+  return {
+    kind: "ReferenceType",
+    tokenId,
+    mutable: type.mutable,
+    referent: {
+      kind: "ArrayType",
+      elementType: validateSlice1Type(
+        ctx,
+        arrayReferent.elementType,
+        arrayReferent.elementType.tokenId,
+      ),
+      length: length.value,
+    },
+  };
 }
 
 function validateSlice1Type(
@@ -1606,17 +1654,8 @@ function validateSlice1Type(
     case "UnitType":
       return type;
     case "ReferenceType": {
-      const genericArrayElement = referencedArrayGenericElementName(ctx, type);
-      if (isSome(genericArrayElement)) {
-        emitError(
-          ctx,
-          {
-            kind: "SemGenericArrayElementBehindReference",
-            name: genericArrayElement.value,
-          },
-          tokenId,
-        );
-        return { kind: "UnitType", tokenId };
+      if (type.referent.kind === "ArrayType") {
+        return validateReferenceToArrayType(ctx, type, type.referent, tokenId);
       }
       return {
         kind: "ReferenceType",
@@ -6154,7 +6193,10 @@ function resolveReferenceType(
   type: Parser.ReferenceType,
   fallbackTokenId: number,
 ): Semantics.Type {
-  if (isSome(referencedArrayGenericElementName(ctx, type))) {
+  if (
+    type.referent.kind === "ArrayType" &&
+    isSome(bareGenericArrayElementName(ctx, type.referent.elementType))
+  ) {
     return { kind: "UnitType", tokenId: fallbackTokenId };
   }
   return {

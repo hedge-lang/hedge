@@ -6054,6 +6054,14 @@ describe("generic parameter used as a fixed-size array's element type", (): void
     );
   });
 
+  it("reports the array's own undeclared length name, not the behind-reference rejection, for a generic array element behind a reference with an invalid length", (): void => {
+    const result = diagnose("fn f<T>(x: &[T; MISSING]) {}");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      'Cannot find name "MISSING" in this scope.',
+    );
+  });
+
   it("rejects an undeclared name used as an array's element type, with no generics involved", (): void => {
     const result = diagnose("fn f(x: [Bogus; 3]) {}");
     expect(result.diagnostics).toHaveLength(1);
