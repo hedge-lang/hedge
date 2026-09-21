@@ -11545,14 +11545,16 @@ function ambiguousEmptyArrayArg(
  * actually coerced, so a still-unresolved parameter keeps seeding its
  * binding from the literal's own default type exactly as before. */
 function coerceArrayExpressionArg(
+  ctx: AnalysisContext,
   arg: Semantics.ArrayExpression,
   substituted: Semantics.ArrayType,
 ): Semantics.Expression {
-  const elements = arg.elements.map((element) =>
-    isUnsuffixedLiteralExpr(element)
-      ? coerceToIntegerType(element, substituted.elementType)
-      : element,
-  );
+  const elements = arg.elements.map((element) => {
+    if (!isUnsuffixedLiteralExpr(element)) return element;
+    const coerced = coerceToIntegerType(element, substituted.elementType);
+    checkCoercedLiteralRange(ctx, coerced);
+    return coerced;
+  });
   const changed = elements.some((element, i) => element !== arg.elements[i]);
   return changed
     ? {
@@ -11571,11 +11573,13 @@ function coerceArrayExpressionArg(
  * below - the same coercion `coerceArrayExpressionArg` gives each list-form
  * element, applied to the single repeated value instead. */
 function coerceArrayRepeatArg(
+  ctx: AnalysisContext,
   arg: Semantics.ArrayRepeatExpression,
   substituted: Semantics.ArrayType,
 ): Semantics.Expression {
   if (!isUnsuffixedLiteralExpr(arg.value)) return arg;
   const value = coerceToIntegerType(arg.value, substituted.elementType);
+  checkCoercedLiteralRange(ctx, value);
   return value === arg.value
     ? arg
     : {
@@ -11598,15 +11602,16 @@ function coerceArrayRepeatArg(
  * A non-array argument, or one whose declared position isn't an array,
  * passes through unchanged. */
 function coerceArrayLiteralArg(
+  ctx: AnalysisContext,
   arg: Semantics.Expression,
   substituted: Semantics.Type,
 ): Semantics.Expression {
   if (substituted.kind !== "ArrayType") return arg;
   if (arg.kind === "ArrayExpression") {
-    return coerceArrayExpressionArg(arg, substituted);
+    return coerceArrayExpressionArg(ctx, arg, substituted);
   }
   if (arg.kind === "ArrayRepeatExpression") {
-    return coerceArrayRepeatArg(arg, substituted);
+    return coerceArrayRepeatArg(ctx, arg, substituted);
   }
   return arg;
 }
@@ -11627,7 +11632,7 @@ function checkGenericPositionalArg(
   const substituted = substituteGenericType(declaredType, bindings);
   const emptyArrayArg = ambiguousEmptyArrayArg(declaredType, arg, substituted);
   if (emptyArrayArg !== undefined) return emptyArrayArg;
-  const arrayLiteralArg = coerceArrayLiteralArg(arg, substituted);
+  const arrayLiteralArg = coerceArrayLiteralArg(ctx, arg, substituted);
   // An unsuffixed literal has no fixed type of its own yet - coerce it
   // against whatever concrete type this generic parameter has already
   // resolved to (from an earlier argument, turbofish, or an expected return

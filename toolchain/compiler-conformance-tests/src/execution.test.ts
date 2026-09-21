@@ -1296,6 +1296,16 @@ describe("execution tests", (): void => {
       expect(messageOf(errors[0])).toBe("out of range for i8");
     });
 
+    it("range-checks a coerced fixed-size array literal element against the already-resolved concrete type", (): void => {
+      const result = compileHedgeCode(
+        `fn same<T>(a: T, b: [T; 2]) -> T { a } fn main() { print(same(1i8, [200, 3])); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-005");
+      expect(messageOf(errors[0])).toBe("out of range for i8");
+    });
+
     it("reports a structural mismatch (non-reference argument for a reference-hop parameter) as an ordinary type mismatch, not an unsolved variable", (): void => {
       const result = compileHedgeCode(
         `
