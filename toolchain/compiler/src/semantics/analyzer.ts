@@ -11217,11 +11217,7 @@ function bindMismatchedReferentPlaceholder(
   bindings: GenericBindings,
 ): void {
   const nested = singleHopNestedType(declaredType);
-  if (
-    nested === undefined ||
-    nested.kind !== "NamedType" ||
-    nested.path.segments.length !== 1
-  ) {
+  if (nested?.kind !== "NamedType" || nested.path.segments.length !== 1) {
     return;
   }
   const name = nested.path.segments[0];
