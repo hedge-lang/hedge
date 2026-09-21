@@ -1532,6 +1532,20 @@ describe("execution tests", (): void => {
       );
     });
 
+    it("destructures a fixed-size array returned by a generic function with a rest binding, even though the array was constructed inside the erased generic body", (): void => {
+      assertRunsTo(
+        `
+        fn make<T>(a: T, b: T) -> [T; 2] { [a, b] }
+        fn main() {
+          let [first, ..rest] = make(1, 2);
+          print(first);
+          print(rest[0]);
+        }
+        `,
+        ["1", "2"],
+      );
+    });
+
     it("reports a generic parameter as unsolved when the only argument for it is an empty fixed-size array, since an empty array carries no element to infer from", (): void => {
       const result = compileHedgeCode(
         `fn f<T>(x: [T; 0]) -> i32 { 0 } fn main() { print(f([])); }`,
