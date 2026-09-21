@@ -11007,6 +11007,20 @@ function bindingOrDefault(
   return binding;
 }
 
+/** Unwraps the single reference or array-element hop `declaredType` carries,
+ * or `undefined` if it carries neither - the two shapes, alongside a bare
+ * `NamedType` itself, that generic-parameter resolution currently supports
+ * one level into. Shared by every caller that needs to look past exactly
+ * one such hop; none of them recurse further, since a compound position
+ * combining more than one hop is never treated as generic. */
+function singleHopNestedType(
+  declaredType: Semantics.Type,
+): Semantics.Type | undefined {
+  if (declaredType.kind === "ReferenceType") return declaredType.referent;
+  if (declaredType.kind === "ArrayType") return declaredType.elementType;
+  return undefined;
+}
+
 /** Whether `declaredType` is a generic-parameter position at all - a bare
  * generic-named `NamedType`, a single reference hop to one, or a single
  * fixed-size-array-element hop to one, the only shapes generic-parameter
@@ -11016,12 +11030,7 @@ function involvesGenericParam(
   declaredType: Semantics.Type,
   genericNames: ReadonlySet<string>,
 ): boolean {
-  const base =
-    declaredType.kind === "ReferenceType"
-      ? declaredType.referent
-      : declaredType.kind === "ArrayType"
-        ? declaredType.elementType
-        : declaredType;
+  const base = singleHopNestedType(declaredType) ?? declaredType;
   if (base.kind !== "NamedType" || base.path.segments.length !== 1) {
     return false;
   }
@@ -11161,12 +11170,7 @@ function bindMismatchedReferentPlaceholder(
   genericNames: ReadonlySet<string>,
   bindings: GenericBindings,
 ): void {
-  const nested =
-    declaredType.kind === "ReferenceType"
-      ? declaredType.referent
-      : declaredType.kind === "ArrayType"
-        ? declaredType.elementType
-        : undefined;
+  const nested = singleHopNestedType(declaredType);
   if (
     nested === undefined ||
     nested.kind !== "NamedType" ||
