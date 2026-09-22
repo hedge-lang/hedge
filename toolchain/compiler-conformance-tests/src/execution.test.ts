@@ -1342,6 +1342,25 @@ describe("execution tests", (): void => {
       expect(messageOf(errors[0])).toBe("out of range for i8");
     });
 
+    it("still range-checks an all-unsuffixed array literal argument whose elements happen to already match the resolved generic type", (): void => {
+      const result = compileHedgeCode(
+        `fn same<T>(a: T, b: [T; 2]) {} fn main() { same(1, [2147483648, 0]); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-005");
+      expect(messageOf(errors[0])).toBe("out of range for i32");
+    });
+
+    it("reports a conflict rather than silently re-coercing when an array literal's own anchor type disagrees with the resolved generic type", (): void => {
+      const result = compileHedgeCode(
+        `fn same<T>(a: T, b: [T; 2]) {} fn main() { same(1u8, [2, 3i8]); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+    });
+
     it("accepts a fixed-size array literal argument mixing an explicitly-suffixed literal with unsuffixed ones", (): void => {
       assertRunsTo(
         `

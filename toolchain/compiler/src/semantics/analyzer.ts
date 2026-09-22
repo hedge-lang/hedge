@@ -11615,18 +11615,21 @@ function coerceArrayExpressionArg(
   arg: Semantics.ArrayExpression,
   substituted: Semantics.ArrayType,
 ): Semantics.Expression {
+  // A sibling that isn't an unsuffixed literal means `analyzeArrayExpression`
+  // already anchored every element to a real, range-checked type - this
+  // array's own type is already fully resolved. Coercing it again here
+  // would either double-report that same range check, or worse, silently
+  // paper over a genuine disagreement between the anchor's type and the
+  // generic parameter's own resolved type instead of letting the ordinary
+  // unification/conflict path below report the mismatch for real. An
+  // all-unsuffixed array (no anchor) is untouched so far, so every element
+  // still needs its first real coercion and range check here.
+  if (arg.elements.some((element) => !isUnsuffixedLiteralExpr(element))) {
+    return arg;
+  }
   const elements = arg.elements.map((element) => {
-    if (!isUnsuffixedLiteralExpr(element)) return element;
-    // Already at the target type - `analyzeArrayExpression`'s own anchor
-    // coercion (or an earlier pass through here) already range-checked this
-    // exact (value, type) pairing, and checking it again can only repeat
-    // the same verdict, never a different one.
-    const alreadyCoerced = typesEqual(
-      getType(element),
-      substituted.elementType,
-    );
     const coerced = coerceToIntegerType(element, substituted.elementType);
-    if (!alreadyCoerced) checkCoercedLiteralRange(ctx, coerced);
+    checkCoercedLiteralRange(ctx, coerced);
     return coerced;
   });
   const changed = elements.some((element, i) => element !== arg.elements[i]);
