@@ -960,31 +960,38 @@ describe("execution tests", (): void => {
       );
     });
 
-    // TODO(Hedge-268): a generic parameter in an array's element-type
-    // position resolves today only as a side effect of the surrounding
-    // recursive type resolution, not by deliberate design - array-of-generic
-    // has no considered construction/copy/move/codegen story yet. These pin
-    // the rejection that gap calls for until the position gets real
-    // semantics.
-    it.fails(
-      "still rejects a generic type parameter used as a fixed-size array's element type",
-      (): void => {
-        assertRejectsWithMessage(
-          `struct Foo<T> { a: [T; 3] }`,
-          "generic type parameter `T` is not supported as an array element type",
-        );
-      },
-    );
+    it("resolves a generic type parameter used as a fixed-size array's element type", (): void => {
+      assertCompilesClean(`struct Foo<T> { a: [T; 3] }`);
+    });
 
-    it.fails(
-      "still rejects a generic type parameter used as an array element type behind a reference",
-      (): void => {
-        assertRejectsWithMessage(
-          `fn f<T>(x: &[T; 3]) {}`,
-          "generic type parameter `T` is not supported as an array element type",
-        );
-      },
-    );
+    it("resolves a generic function's own type parameter used as an array element type in a return type", (): void => {
+      assertCompilesClean(`fn identity<T>(x: [T; 2]) -> [T; 2] { x }`);
+    });
+
+    // A reference to an array of a generic element combines two hops that
+    // are each individually supported (`&T`, `[T; N]`) but not together -
+    // deliberately out of scope for now, same as any other doubly-nested
+    // compound position.
+    it("rejects a generic type parameter used as an array element type behind a reference", (): void => {
+      assertRejectsWithMessage(
+        `fn f<T>(x: &[T; 3]) {}`,
+        "generic type parameter `T` is not yet supported as an array element type behind a reference",
+      );
+    });
+
+    it("reports both an invalid element and an invalid length independently for a non-generic array behind a reference", (): void => {
+      const result = compileHedgeCode(`fn f(x: &[Bogus; MISSING]) {}`);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(2);
+      expect(errors.map((e) => e.code).sort()).toEqual([
+        "HEDGE-NAME-001",
+        "HEDGE-NAME-001",
+      ]);
+      expect(errors.map((e) => messageOf(e)).sort()).toEqual([
+        'Cannot find name "MISSING" in this scope.',
+        "cannot find type `Bogus` in this scope",
+      ]);
+    });
 
     it("still rejects an undeclared name that is not a primitive, struct, or enum, with no generics involved at all", (): void => {
       assertRejectsWithMessage(
@@ -1176,6 +1183,26 @@ describe("execution tests", (): void => {
       );
     });
 
+    it("does not cascade a second diagnostic when a fixed-size array argument's own element is an unresolved name", (): void => {
+      assertNoCascade(
+        `fn same<T>(a: T, b: [T; 1]) {} fn main() { same(1, [missing]); }`,
+      );
+    });
+
+    it("does not cascade a second diagnostic when a repeat-form array argument's own value is an unresolved name", (): void => {
+      assertNoCascade(
+        `fn same<T>(a: T, b: [T; 2]) {} fn main() { same(1, [missing; 2]); }`,
+      );
+    });
+
+    it("does not cascade an unsolved-variable diagnostic when a list-form array argument's own element is unresolved and is the only occurrence of the type parameter", (): void => {
+      assertNoCascade(`fn f<T>(x: [T; 1]) {} fn main() { f([missing]); }`);
+    });
+
+    it("does not cascade an unsolved-variable diagnostic when a repeat-form array argument's own value is unresolved and is the only occurrence of the type parameter", (): void => {
+      assertNoCascade(`fn f<T>(x: [T; 2]) {} fn main() { f([missing; 2]); }`);
+    });
+
     it("infers through a let binding's own type annotation, consistent with the argument", (): void => {
       assertRunsTo(
         `
@@ -1273,6 +1300,26 @@ describe("execution tests", (): void => {
       );
     });
 
+    it("coerces a fixed-size array literal argument's own unsuffixed elements against an already-resolved concrete type", (): void => {
+      assertRunsTo(
+        `
+        fn same<T>(a: T, b: [T; 2]) -> T { a }
+        fn main() { print(same(1i8, [2, 3])); }
+        `,
+        ["1"],
+      );
+    });
+
+    it("coerces a repeat-form array literal argument's own unsuffixed value against an already-resolved concrete type", (): void => {
+      assertRunsTo(
+        `
+        fn same<T>(a: T, b: [T; 2]) -> T { a }
+        fn main() { print(same(1i8, [2; 2])); }
+        `,
+        ["1"],
+      );
+    });
+
     it("range-checks a negative unsuffixed literal against the already-resolved concrete type", (): void => {
       const result = compileHedgeCode(
         `fn same<T>(a: T, b: T) -> T { a } fn main() { print(same(5i8, -200)); }`,
@@ -1281,6 +1328,55 @@ describe("execution tests", (): void => {
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-005");
       expect(messageOf(errors[0])).toBe("out of range for i8");
+    });
+
+    it("range-checks a coerced fixed-size array literal element against the already-resolved concrete type", (): void => {
+      const result = compileHedgeCode(
+        `fn same<T>(a: T, b: [T; 2]) -> T { a } fn main() { print(same(1i8, [200, 3])); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-005");
+      expect(messageOf(errors[0])).toBe("out of range for i8");
+    });
+
+    it("does not cascade a duplicate range-check diagnostic when an array literal's own anchor coercion already validated the element", (): void => {
+      const result = compileHedgeCode(
+        `fn same<T>(a: T, b: [T; 2]) {} fn main() { same(1i8, [200, 3i8]); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-005");
+      expect(messageOf(errors[0])).toBe("out of range for i8");
+    });
+
+    it("still range-checks an all-unsuffixed array literal argument whose elements happen to already match the resolved generic type", (): void => {
+      const result = compileHedgeCode(
+        `fn same<T>(a: T, b: [T; 2]) {} fn main() { same(1, [2147483648, 0]); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-005");
+      expect(messageOf(errors[0])).toBe("out of range for i32");
+    });
+
+    it("reports a conflict rather than silently re-coercing when an array literal's own anchor type disagrees with the resolved generic type", (): void => {
+      const result = compileHedgeCode(
+        `fn same<T>(a: T, b: [T; 2]) {} fn main() { same(1u8, [2, 3i8]); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+    });
+
+    it("accepts a fixed-size array literal argument mixing an explicitly-suffixed literal with unsuffixed ones", (): void => {
+      assertRunsTo(
+        `
+        fn same<T>(a: T, b: [T; 2]) -> T { a }
+        fn main() { print(same(1i8, [2, 3i8])); }
+        `,
+        ["1"],
+      );
     });
 
     it("reports a structural mismatch (non-reference argument for a reference-hop parameter) as an ordinary type mismatch, not an unsolved variable", (): void => {
@@ -1486,6 +1582,107 @@ describe("execution tests", (): void => {
       expect(errors).toHaveLength(1);
       expect(errors[0]?.code).toBe("HEDGE-TYPE-011");
     });
+
+    it("infers a generic parameter from a fixed-size array argument", (): void => {
+      // Not `x[0]`: extracting a non-Copy-provable array element by value is
+      // a separate, pre-existing restriction unrelated to generic inference
+      // - an abstract `T` is never provably Copy inside the callee's own
+      // body, regardless of what a caller instantiates it with.
+      assertRunsTo(
+        `
+        fn describes<T>(x: [T; 2]) -> bool { true }
+        fn main() { print(describes([5, 9])); }
+        `,
+        ["true"],
+      );
+    });
+
+    it("substitutes a fixed-size-array return type from argument-inferred bindings", (): void => {
+      assertRunsTo(
+        `
+        fn identity<T>(a: T, b: T, c: T) -> [T; 3] { [a, b, c] }
+        fn main() {
+          let r = identity(1, 2, 3);
+          print(r[0]);
+          print(r[0]);
+        }
+        `,
+        ["1", "1"],
+      );
+    });
+
+    it("rejects a fixed-size array argument whose length does not match the declared element-type parameter", (): void => {
+      const result = compileHedgeCode(
+        `fn f<T>(x: [T; 3]) -> T { x[0] } fn main() { print(f([1, 2])); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-001");
+      expect(messageOf(errors[0])).toBe(
+        "argument 1 to function `f` type mismatch: expected `[T; 3]`, found `[i32; 2]`",
+      );
+    });
+
+    it("reports conflicting concrete element types inferred for the same type parameter across two fixed-size-array arguments", (): void => {
+      const result = compileHedgeCode(
+        `fn f<T>(a: [T; 2], b: [T; 2]) -> i32 { 0 } fn main() { print(f([1, 2], [true, false])); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(messageOf(errors[0])).toBe(
+        "argument 2 to function `f` type mismatch: expected `[i32; 2]`, found `[bool; 2]`",
+      );
+    });
+
+    it("destructures a fixed-size array returned by a generic function with a rest binding, even though the array was constructed inside the erased generic body", (): void => {
+      assertRunsTo(
+        `
+        fn make<T>(a: T, b: T) -> [T; 2] { [a, b] }
+        fn main() {
+          let [first, ..rest] = make(1, 2);
+          print(first);
+          print(rest[0]);
+        }
+        `,
+        ["1", "2"],
+      );
+    });
+
+    it("destructures an empty fixed-size array argument with a rest binding, even when a later argument is what actually binds the type parameter", (): void => {
+      assertRunsTo(
+        `
+        fn f<T>(empty: [T; 0], value: T) -> [T; 0] { empty }
+        fn main() {
+          let [..rest] = f([], 1);
+          print(1);
+        }
+        `,
+        ["1"],
+      );
+    });
+
+    it("reports a generic parameter as unsolved when the only argument for it is an empty fixed-size array, since an empty array carries no element to infer from", (): void => {
+      const result = compileHedgeCode(
+        `fn f<T>(x: [T; 0]) -> i32 { 0 } fn main() { print(f([])); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-006");
+      expect(messageOf(errors[0])).toBe(
+        "cannot infer type of generic parameter `T` without an explicit type annotation or turbofish",
+      );
+    });
+
+    it("accepts an empty fixed-size array argument against a type parameter already resolved by turbofish", (): void => {
+      assertRunsTo(
+        `
+        fn f<T>(x: [T; 0]) -> i32 { 0 }
+        fn main() { print(f::<i32>([])); }
+        `,
+        ["0"],
+      );
+    });
   });
 
   describe("generic enum-variant construction turbofish and unsolved-variable checks", (): void => {
@@ -1656,6 +1853,19 @@ describe("execution tests", (): void => {
         }
       `,
         ["10", "20", "30"],
+      );
+    });
+
+    it("accepts an array literal mixing an explicitly-suffixed integer literal with unsuffixed ones, with no call or annotation involved", (): void => {
+      assertRunsTo(
+        `
+        fn main() {
+          let x = [2, 3i8];
+          print(x[0]);
+          print(x[1]);
+        }
+      `,
+        ["2", "3"],
       );
     });
 

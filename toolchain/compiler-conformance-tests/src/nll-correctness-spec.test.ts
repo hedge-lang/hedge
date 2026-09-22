@@ -295,4 +295,25 @@ describe("NLL and lifetime correctness spec", (): void => {
       ["5"],
     );
   });
+
+  it("rejects moving an element out of a fixed-size-array parameter typed with a declared generic parameter, since it is not provably Copy", (): void => {
+    assertRejectsWithMessage(
+      `fn f<T>(x: [T; 2]) -> T { x[0] }`,
+      "cannot move out of `x[_]`; borrow it with `&x[_]` instead",
+    );
+  });
+
+  it("rejects reusing a generic-typed value more than once in a fixed-size array literal, since it is not provably Copy", (): void => {
+    assertRejectsWithMessage(
+      `fn f<T>(x: T) -> i32 { let arr = [x, x, x]; 0 }`,
+      "use of moved value `x`",
+    );
+  });
+
+  it("rejects a repeat-form array literal whose generic-typed value is not provably Copy", (): void => {
+    assertRejectsWithMessage(
+      `fn f<T>(x: T) -> i32 { let arr = [x; 3]; 0 }`,
+      "repeat-form array element type must be Copy, found `T`",
+    );
+  });
 });

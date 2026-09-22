@@ -511,14 +511,24 @@ function emitArrayRepeatExpression(expression: ArrayRepeatExpression): string {
   return `${ARRAY_DISPOSE_HELPER_NAME}(${value})`;
 }
 
+/**
+ * Whether `source` is backed by a real `TypedArray` (with a `.subarray()`
+ * zero-copy option) can't be decided from its static element type alone: a
+ * generic function's body lowers once, before any call-site substitution
+ * exists, so an array it constructs from its own type parameter always
+ * codegens as a plain `Array` even when a concrete caller's substituted
+ * type is numeric. Checking at runtime is what makes this correct for that
+ * value regardless of which side of the generic boundary constructed it.
+ */
 function emitArraySliceViewExpression(
   expression: ArraySliceViewExpression,
 ): string {
   const source = needsAtLeast(expression.source, "ArraySliceViewExpression");
   const { start, length } = expression;
-  const value = isSome(expression.numericKind)
-    ? `${source}.subarray(${String(start)}, ${String(start + length)})`
-    : `${ARRAY_SLICE_VIEW_HELPER_NAME}(${source}, ${String(start)}, ${String(length)})`;
+  const value =
+    `typeof ${source}.subarray === "function" ` +
+    `? ${source}.subarray(${String(start)}, ${String(start + length)}) ` +
+    `: ${ARRAY_SLICE_VIEW_HELPER_NAME}(${source}, ${String(start)}, ${String(length)})`;
   return `${ARRAY_DISPOSE_HELPER_NAME}(${value})`;
 }
 

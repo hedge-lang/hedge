@@ -1566,6 +1566,88 @@ function validateNamedType(
   return { kind: "UnitType", tokenId };
 }
 
+/** Whether `elementType` is a bare declared generic parameter with no type
+ * arguments - the shape that, as an array's element type behind a
+ * reference, combines two individually-supported single hops (`&T`,
+ * `[T; N]`) that are deliberately not supported together, since each hop's
+ * own call-site inference/substitution only ever unwraps one level. Returns
+ * the parameter's name when it matches, so the caller can reject the
+ * combined shape deliberately instead of letting the ordinary recursive
+ * resolution silently accept it. */
+function bareGenericArrayElementName(
+  ctx: AnalysisContext,
+  elementType: Parser.Type,
+): Option<string> {
+  if (
+    elementType.kind !== "NamedType" ||
+    elementType.path.segments.length !== 1 ||
+    elementType.typeArguments.length > 0
+  ) {
+    return none();
+  }
+  const name = elementType.path.segments[0];
+  return name !== undefined && isDeclaredGenericParam(ctx, name)
+    ? some(name)
+    : none();
+}
+
+/**
+ * `validateSlice1Type`'s own `ReferenceType` case for a referent that's
+ * itself an `ArrayType` - split out so the array's length can be folded
+ * exactly once. Folding it here first (rather than deferring to a plain
+ * recursive call into the `ArrayType` case) means a malformed length
+ * (undeclared name, non-constant expression) gets its own specific
+ * diagnostic even when the element is also the deliberately-unsupported
+ * generic-behind-reference shape - reporting the combined-shape rejection
+ * on top would both be a real cascade and hide the array's own genuine
+ * problem behind an unrelated one.
+ */
+function validateReferenceToArrayType(
+  ctx: AnalysisContext,
+  type: Parser.ReferenceType,
+  arrayReferent: Parser.ArrayType,
+  tokenId: number,
+): Semantics.Type {
+  const genericElementName = bareGenericArrayElementName(
+    ctx,
+    arrayReferent.elementType,
+  );
+  if (isSome(genericElementName)) {
+    // The length is folded before this rejection, deliberately - a
+    // malformed length gets its own specific diagnostic, and the
+    // behind-reference rejection isn't added on top of it once that's
+    // already reported. A non-generic element (below) skips this ordering
+    // entirely and validates unconditionally, matching plain array
+    // validation.
+    if (!isSome(foldArrayLength(ctx, arrayReferent.length))) {
+      return { kind: "UnitType", tokenId };
+    }
+    emitError(
+      ctx,
+      {
+        kind: "SemGenericArrayElementBehindReference",
+        name: genericElementName.value,
+      },
+      tokenId,
+    );
+    return { kind: "UnitType", tokenId };
+  }
+  const elementType = validateSlice1Type(
+    ctx,
+    arrayReferent.elementType,
+    arrayReferent.elementType.tokenId,
+  );
+  const length = foldArrayLength(ctx, arrayReferent.length);
+  return isSome(length)
+    ? {
+        kind: "ReferenceType",
+        tokenId,
+        mutable: type.mutable,
+        referent: { kind: "ArrayType", elementType, length: length.value },
+      }
+    : { kind: "UnitType", tokenId };
+}
+
 function validateSlice1Type(
   ctx: AnalysisContext,
   type: Parser.Type,
@@ -1576,13 +1658,17 @@ function validateSlice1Type(
       return validateNamedType(ctx, type, tokenId);
     case "UnitType":
       return type;
-    case "ReferenceType":
+    case "ReferenceType": {
+      if (type.referent.kind === "ArrayType") {
+        return validateReferenceToArrayType(ctx, type, type.referent, tokenId);
+      }
       return {
         kind: "ReferenceType",
         tokenId,
         mutable: type.mutable,
         referent: validateSlice1Type(ctx, type.referent, type.referent.tokenId),
       };
+    }
     case "ArrayType": {
       const elementType = validateSlice1Type(
         ctx,
@@ -6101,6 +6187,31 @@ function resolveNamedType(
   return { kind: "UnitType", tokenId: fallbackTokenId };
 }
 
+/** `resolveSlice1Type`'s own `ReferenceType` case, split out to stay under
+ * the branch-count ceiling - mirrors `validateSlice1Type`'s rejection of a
+ * reference to an array of a generic element (see that function's own doc
+ * comment), non-emitting, landing on the same `UnitType` recovery
+ * placeholder `validateSlice1Type` reports for real once the declaration's
+ * own body is analyzed. */
+function resolveReferenceType(
+  ctx: AnalysisContext,
+  type: Parser.ReferenceType,
+  fallbackTokenId: number,
+): Semantics.Type {
+  if (
+    type.referent.kind === "ArrayType" &&
+    isSome(bareGenericArrayElementName(ctx, type.referent.elementType))
+  ) {
+    return { kind: "UnitType", tokenId: fallbackTokenId };
+  }
+  return {
+    kind: "ReferenceType",
+    tokenId: fallbackTokenId,
+    mutable: type.mutable,
+    referent: resolveSlice1Type(ctx, type.referent, type.referent.tokenId),
+  };
+}
+
 /**
  * Resolves a declared type without emitting, for building a signature
  * before the declaration is analyzed - emitting here would double-report.
@@ -6116,12 +6227,7 @@ function resolveSlice1Type(
     case "UnitType":
       return type;
     case "ReferenceType":
-      return {
-        kind: "ReferenceType",
-        tokenId: fallbackTokenId,
-        mutable: type.mutable,
-        referent: resolveSlice1Type(ctx, type.referent, type.referent.tokenId),
-      };
+      return resolveReferenceType(ctx, type, fallbackTokenId);
     case "ArrayType":
       return {
         kind: "ArrayType",
@@ -9352,8 +9458,25 @@ function analyzeArrayExpression(
       type: { kind: "ArrayType", elementType: UNIT, length: 0 },
     };
   }
-  const elementType = getType(first);
-  for (const elem of elements.slice(1)) {
+  // An unsuffixed literal has no fixed type of its own - if another
+  // element in the same array literal does (a different expression kind,
+  // or an explicitly-suffixed literal), every unsuffixed literal coerces
+  // to match it before the "elements must agree" check runs, the same way
+  // a generic call argument's own unsuffixed literals already get a
+  // second chance to coerce against context elsewhere. An array of
+  // unsuffixed literals only keeps its plain default (from `first`).
+  const anchor = elements.find((elem) => !isUnsuffixedLiteralExpr(elem));
+  const coercedElements =
+    anchor === undefined
+      ? elements
+      : elements.map((elem) => {
+          if (!isUnsuffixedLiteralExpr(elem)) return elem;
+          const coerced = coerceToIntegerType(elem, getType(anchor));
+          checkCoercedLiteralRange(ctx, coerced);
+          return coerced;
+        });
+  const elementType = anchor === undefined ? getType(first) : getType(anchor);
+  for (const elem of coercedElements) {
     const elemType = getType(elem);
     if (!typesEqual(elementType, elemType)) {
       emitError(
@@ -9370,8 +9493,12 @@ function analyzeArrayExpression(
   }
   return {
     ...expression,
-    elements,
-    type: { kind: "ArrayType", elementType, length: elements.length },
+    elements: coercedElements,
+    type: {
+      kind: "ArrayType",
+      elementType,
+      length: coercedElements.length,
+    },
   };
 }
 
@@ -10952,18 +11079,30 @@ function bindingOrDefault(
   return binding;
 }
 
+/** Unwraps the single reference or array-element hop `declaredType` carries,
+ * or `undefined` if it carries neither - the two shapes, alongside a bare
+ * `NamedType` itself, that generic-parameter resolution currently supports
+ * one level into. Shared by every caller that needs to look past exactly
+ * one such hop; none of them recurse further, since a compound position
+ * combining more than one hop is never treated as generic. */
+function singleHopNestedType(
+  declaredType: Semantics.Type,
+): Semantics.Type | undefined {
+  if (declaredType.kind === "ReferenceType") return declaredType.referent;
+  if (declaredType.kind === "ArrayType") return declaredType.elementType;
+  return undefined;
+}
+
 /** Whether `declaredType` is a generic-parameter position at all - a bare
- * generic-named `NamedType`, or a single reference hop to one, the only two
- * shapes generic-parameter resolution currently supports. Anything else,
- * including a compound position, is never treated as generic here. */
+ * generic-named `NamedType`, a single reference hop to one, or a single
+ * fixed-size-array-element hop to one, the only shapes generic-parameter
+ * resolution currently supports. Anything else, including a compound
+ * position combining more than one hop, is never treated as generic here. */
 function involvesGenericParam(
   declaredType: Semantics.Type,
   genericNames: ReadonlySet<string>,
 ): boolean {
-  const base =
-    declaredType.kind === "ReferenceType"
-      ? declaredType.referent
-      : declaredType;
+  const base = singleHopNestedType(declaredType) ?? declaredType;
   if (base.kind !== "NamedType" || base.path.segments.length !== 1) {
     return false;
   }
@@ -10972,10 +11111,10 @@ function involvesGenericParam(
 }
 
 /** Substitutes every generic-parameter-named `NamedType` position in `type`
- * for its bound concrete type, recursing through a single reference hop -
- * the only two shapes generic-parameter resolution currently supports. A
- * `NamedType` with no binding yet (or not a generic parameter at all)
- * passes through unchanged. */
+ * for its bound concrete type, recursing through a single reference or
+ * array-element hop - the shapes generic-parameter resolution currently
+ * supports. A `NamedType` with no binding yet (or not a generic parameter at
+ * all) passes through unchanged. */
 function substituteGenericType(
   type: Semantics.Type,
   bindings: GenericBindings,
@@ -10989,6 +11128,12 @@ function substituteGenericType(
     return {
       ...type,
       referent: substituteGenericType(type.referent, bindings),
+    };
+  }
+  if (type.kind === "ArrayType") {
+    return {
+      ...type,
+      elementType: substituteGenericType(type.elementType, bindings),
     };
   }
   return type;
@@ -11061,6 +11206,19 @@ function unifyGenericParam(
       bindings,
     );
   }
+  if (
+    declaredType.kind === "ArrayType" &&
+    actualType.kind === "ArrayType" &&
+    declaredType.length === actualType.length
+  ) {
+    return unifyGenericParam(
+      declaredType.elementType,
+      actualType.elementType,
+      tokenId,
+      genericNames,
+      bindings,
+    );
+  }
   bindMismatchedReferentPlaceholder(
     declaredType,
     tokenId,
@@ -11070,10 +11228,10 @@ function unifyGenericParam(
   return { kind: "Mismatch" };
 }
 
-/** The declared shape itself doesn't match (wrong mutability, or a
- * non-reference actual type against a `&T`/`&mut T` position), so the
- * referent's own generic name is never actually reached by
- * `unifyGenericParam`'s own recursion. Bind it to an error-recovery
+/** The declared shape itself doesn't match (wrong mutability, a mismatched
+ * array length, or a differently-shaped actual type against a `&T`/`&mut T`/
+ * `[T; N]` position), so the nested generic name is never actually reached
+ * by `unifyGenericParam`'s own recursion. Bind it to an error-recovery
  * placeholder anyway (unless something valid already bound it - a real
  * prior occurrence should never be clobbered by a later structural
  * failure), so a downstream "cannot be inferred" check doesn't cascade a
@@ -11084,14 +11242,11 @@ function bindMismatchedReferentPlaceholder(
   genericNames: ReadonlySet<string>,
   bindings: GenericBindings,
 ): void {
-  if (
-    declaredType.kind !== "ReferenceType" ||
-    declaredType.referent.kind !== "NamedType" ||
-    declaredType.referent.path.segments.length !== 1
-  ) {
+  const nested = singleHopNestedType(declaredType);
+  if (nested?.kind !== "NamedType" || nested.path.segments.length !== 1) {
     return;
   }
-  const name = declaredType.referent.path.segments[0];
+  const name = nested.path.segments[0];
   if (name !== undefined && genericNames.has(name) && !bindings.has(name)) {
     bindings.set(name, {
       type: { kind: "UnitType", tokenId },
@@ -11384,6 +11539,176 @@ function checkPositionalCallArgs(
   return { args: checkedArgs, bindings };
 }
 
+/** An empty array literal (`[]`) against a `[T; 0]` position carries no
+ * element to infer `T` from - `analyzeArrayExpression` gives it the same
+ * ambiguous `elementType: UnitType` placeholder `reconcileExpressionType`
+ * already special-cases for an ordinary (non-generic) declared array type.
+ * Unifying it would either wrongly bind `T` to `()` (an unsound inference
+ * nothing actually observed) or wrongly conflict against an already-bound
+ * `T` (`()` disagreeing with whatever `T` really is) - so this argument
+ * contributes no binding either way, substituting whatever is already known
+ * into its own type and leaving `T` for the ordinary "cannot infer" check to
+ * catch if nothing else ever binds it. */
+function ambiguousEmptyArrayArg(
+  declaredType: Semantics.Type,
+  arg: Semantics.Expression,
+  substituted: Semantics.Type,
+): Semantics.Expression | undefined {
+  if (
+    arg.kind !== "ArrayExpression" ||
+    arg.elements.length !== 0 ||
+    declaredType.kind !== "ArrayType" ||
+    declaredType.length !== 0
+  ) {
+    return undefined;
+  }
+  return { ...arg, type: substituted };
+}
+
+/** An array literal whose element (list-form: any element; repeat-form: the
+ * repeated value) already failed its own analysis carries the `UnitType`
+ * error-recovery placeholder as that element's type, not a genuine unit
+ * value - see `isAmbiguousUnitExpr`. Unifying the array's own type against
+ * `T` would wrongly bind `T` to `()`, or wrongly conflict against an
+ * already-bound `T`, cascading a second diagnostic off the element's own
+ * already-reported error - the same cascade `checkPositionalCallArgs`'s own
+ * top-level gate already avoids for a bare ambiguous argument, generalized
+ * to one nested inside an array. Returns `arg` unchanged (contributing no
+ * binding) when detected, `undefined` otherwise. */
+function arrayArgWithAmbiguousElement(
+  arg: Semantics.Expression,
+): Semantics.Expression | undefined {
+  const isAmbiguous = (element: Semantics.Expression): boolean =>
+    element.type.kind === "UnitType" && isAmbiguousUnitExpr(element);
+  if (arg.kind === "ArrayExpression" && arg.elements.some(isAmbiguous)) {
+    return arg;
+  }
+  if (arg.kind === "ArrayRepeatExpression" && isAmbiguous(arg.value)) {
+    return arg;
+  }
+  return undefined;
+}
+
+/** Tries each array-argument special case in turn - an ambiguous
+ * (error-recovery) element, then an ambiguous empty array - returning the
+ * first match's replacement `arg`, or `undefined` if neither applies.
+ * Combined into one call so `checkGenericPositionalArg` only needs a single
+ * early-return branch for both.
+ *
+ * The two cases bind differently, deliberately: an ambiguous element's own
+ * error is already fully reported, so `T` gets an error-placeholder binding
+ * here (matching `bindMismatchedReferentPlaceholder`'s own convention) to
+ * stop a downstream "cannot infer" check from cascading a second, unrelated
+ * diagnostic when this array is `T`'s only occurrence. An empty array
+ * genuinely carries no information at all - it contributes no binding, so a
+ * later occurrence can still legitimately supply one. */
+function specialArrayArg(
+  declaredType: Semantics.Type,
+  arg: Semantics.Expression,
+  substituted: Semantics.Type,
+  genericNames: ReadonlySet<string>,
+  bindings: GenericBindings,
+): Semantics.Expression | undefined {
+  if (arrayArgWithAmbiguousElement(arg) !== undefined) {
+    bindMismatchedReferentPlaceholder(
+      declaredType,
+      arg.tokenId,
+      genericNames,
+      bindings,
+    );
+    return arg;
+  }
+  return ambiguousEmptyArrayArg(declaredType, arg, substituted);
+}
+
+/** The `ArrayExpression` (list-form) case of `coerceArrayLiteralArg` below:
+ * each unsuffixed-integer element gets a chance to coerce against the
+ * already-known element type. Returns `arg` unchanged when nothing was
+ * actually coerced, so a still-unresolved parameter keeps seeding its
+ * binding from the literal's own default type exactly as before. */
+function coerceArrayExpressionArg(
+  ctx: AnalysisContext,
+  arg: Semantics.ArrayExpression,
+  substituted: Semantics.ArrayType,
+): Semantics.Expression {
+  // A sibling that isn't an unsuffixed literal means `analyzeArrayExpression`
+  // already anchored every element to a real, range-checked type - this
+  // array's own type is already fully resolved. Coercing it again here
+  // would either double-report that same range check, or worse, silently
+  // paper over a genuine disagreement between the anchor's type and the
+  // generic parameter's own resolved type instead of letting the ordinary
+  // unification/conflict path below report the mismatch for real. An
+  // all-unsuffixed array (no anchor) is untouched so far, so every element
+  // still needs its first real coercion and range check here.
+  if (arg.elements.some((element) => !isUnsuffixedLiteralExpr(element))) {
+    return arg;
+  }
+  const elements = arg.elements.map((element) => {
+    const coerced = coerceToIntegerType(element, substituted.elementType);
+    checkCoercedLiteralRange(ctx, coerced);
+    return coerced;
+  });
+  const changed = elements.some((element, i) => element !== arg.elements[i]);
+  return changed
+    ? {
+        ...arg,
+        elements,
+        type: {
+          kind: "ArrayType",
+          elementType: substituted.elementType,
+          length: elements.length,
+        },
+      }
+    : arg;
+}
+
+/** The `ArrayRepeatExpression` (`[value; N]`) case of `coerceArrayLiteralArg`
+ * below - the same coercion `coerceArrayExpressionArg` gives each list-form
+ * element, applied to the single repeated value instead. */
+function coerceArrayRepeatArg(
+  ctx: AnalysisContext,
+  arg: Semantics.ArrayRepeatExpression,
+  substituted: Semantics.ArrayType,
+): Semantics.Expression {
+  if (!isUnsuffixedLiteralExpr(arg.value)) return arg;
+  const value = coerceToIntegerType(arg.value, substituted.elementType);
+  checkCoercedLiteralRange(ctx, value);
+  return value === arg.value
+    ? arg
+    : {
+        ...arg,
+        value,
+        type: {
+          kind: "ArrayType",
+          elementType: substituted.elementType,
+          length: arg.count,
+        },
+      };
+}
+
+/** Mirrors `checkGenericPositionalArg`'s own scalar unsuffixed-literal
+ * coercion, but for an array-typed argument (`[T; N]` position, list-form
+ * or repeat-form): its own unsuffixed-integer content already defaulted to
+ * `i32` during the argument's standalone analysis, before any generic
+ * context was in view, so - unlike a bare scalar argument - it never gets a
+ * second chance to coerce against an already-known concrete element type.
+ * A non-array argument, or one whose declared position isn't an array,
+ * passes through unchanged. */
+function coerceArrayLiteralArg(
+  ctx: AnalysisContext,
+  arg: Semantics.Expression,
+  substituted: Semantics.Type,
+): Semantics.Expression {
+  if (substituted.kind !== "ArrayType") return arg;
+  if (arg.kind === "ArrayExpression") {
+    return coerceArrayExpressionArg(ctx, arg, substituted);
+  }
+  if (arg.kind === "ArrayRepeatExpression") {
+    return coerceArrayRepeatArg(ctx, arg, substituted);
+  }
+  return arg;
+}
+
 /** The generic-parameter-position branch of `checkPositionalCallArgs`'s
  * per-argument loop, split out to stay under the branch-count ceiling a
  * plain literal coercion plus range-check plus conflict-report combination
@@ -11397,6 +11722,16 @@ function checkGenericPositionalArg(
   genericNames: ReadonlySet<string>,
   bindings: GenericBindings,
 ): Semantics.Expression {
+  const substituted = substituteGenericType(declaredType, bindings);
+  const specialArg = specialArrayArg(
+    declaredType,
+    arg,
+    substituted,
+    genericNames,
+    bindings,
+  );
+  if (specialArg !== undefined) return specialArg;
+  const arrayLiteralArg = coerceArrayLiteralArg(ctx, arg, substituted);
   // An unsuffixed literal has no fixed type of its own yet - coerce it
   // against whatever concrete type this generic parameter has already
   // resolved to (from an earlier argument, turbofish, or an expected return
@@ -11404,9 +11739,9 @@ function checkGenericPositionalArg(
   // applies for an ordinary (non-generic) declared type. A parameter not
   // yet bound to anything concrete leaves `coercedArg` untouched, so the
   // literal's own default type still seeds the binding.
-  const coercedArg = isUnsuffixedLiteralExpr(arg)
-    ? coerceToIntegerType(arg, substituteGenericType(declaredType, bindings))
-    : arg;
+  const coercedArg = isUnsuffixedLiteralExpr(arrayLiteralArg)
+    ? coerceToIntegerType(arrayLiteralArg, substituted)
+    : arrayLiteralArg;
   const coercedArgType = getType(coercedArg);
   const outcome = unifyGenericParam(
     declaredType,
@@ -11432,11 +11767,12 @@ function checkGenericPositionalArg(
     case "Bound":
       break;
     case "Conflict": {
-      // Render `expected` at the same depth as `declaredType` itself (e.g.
-      // `&i32`, not the unwrapped `i32` a reference-hop binding stores) so
-      // it's directly comparable to `found`, which is the argument's own
-      // whole type.
-      const expectedType = substituteGenericType(declaredType, bindings);
+      // `substituted` is rendered here at the same depth as `declaredType`
+      // itself (e.g. `&i32`, not the unwrapped `i32` a reference-hop binding
+      // stores) so it's directly comparable to `found`, which is the
+      // argument's own whole type. Reusing it (rather than substituting
+      // again) is sound here specifically because `bindings` is never
+      // mutated on the `Conflict` path `unifyGenericParam` just returned.
       emitError(
         ctx,
         {
@@ -11444,7 +11780,7 @@ function checkGenericPositionalArg(
           argIndex: index + 1,
           calleeKind: site.kindLabel,
           calleeName: site.name,
-          expected: describeType(expectedType),
+          expected: describeType(substituted),
           found: describeType(coercedArgType),
         },
         coercedArg.tokenId,

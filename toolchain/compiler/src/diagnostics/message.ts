@@ -288,6 +288,8 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return "`Drop` for an enum is not yet supported";
     case "SemGenericTypeParamNoArguments":
       return `generic type parameter \`${kind.name}\` does not accept type arguments`;
+    case "SemGenericArrayElementBehindReference":
+      return `generic type parameter \`${kind.name}\` is not yet supported as an array element type behind a reference`;
     case "SemPatternKindNotYetSupported":
       return "this pattern kind is not yet supported";
     case "SemWhileNotYetSupported":

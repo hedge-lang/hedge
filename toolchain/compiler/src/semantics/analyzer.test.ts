@@ -6024,6 +6024,54 @@ describe("generic parameter shadowing an outer type of the same name", (): void 
   });
 });
 
+describe("generic parameter used as a fixed-size array's element type", (): void => {
+  it.each([
+    [
+      "resolves a struct field typed as a fixed-size array of its own declared type parameter",
+      "struct Container<T> { items: [T; 3] }",
+    ],
+    [
+      "resolves an enum tuple-variant field typed as a fixed-size array of its own declared type parameter",
+      "enum Wrap<T> { V([T; 2]) }",
+    ],
+    [
+      "resolves an empty fixed-size array of a declared generic type parameter",
+      "fn f<T>(x: [T; 0]) {}",
+    ],
+  ])("%s", (_title, source): void => {
+    const result = diagnose(source);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a generic type parameter used with a type-argument list inside an array's element-type position", (): void => {
+    const result = diagnose("fn f<T>(x: [T<i32>; 3]) {}");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.code).toBe("HEDGE-UNSUPPORTED-001");
+  });
+
+  it("reports the type-argument-list diagnostic, not the behind-reference rejection, for a generic type parameter with type arguments inside an array element type behind a reference", (): void => {
+    const result = diagnose("fn f<T>(x: &[T<i32>; 3]) {}");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "generic type parameter `T` does not accept type arguments",
+    );
+  });
+
+  it("reports the array's own undeclared length name, not the behind-reference rejection, for a generic array element behind a reference with an invalid length", (): void => {
+    const result = diagnose("fn f<T>(x: &[T; MISSING]) {}");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      'Cannot find name "MISSING" in this scope.',
+    );
+  });
+
+  it("rejects an undeclared name used as an array's element type, with no generics involved", (): void => {
+    const result = diagnose("fn f(x: [Bogus; 3]) {}");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.code).toBe("HEDGE-NAME-001");
+  });
+});
+
 describe("declared generic parameter names survive onto a resolved signature", (): void => {
   it("carries a generic function's declared type-parameter name onto its resolved FunctionType", (): void => {
     const result = diagnose(`

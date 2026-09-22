@@ -466,16 +466,16 @@ export interface ArrayRepeatExpression {
 
 /**
  * A slice pattern's rest binding (`..tail`) over `[start, start+length)` of
- * a fixed-length array. `numericKind` picks the codegen path, mirroring
- * {@link ArrayExpression}: `some(...)` for a real `subarray` view, `none()`
- * for the `Proxy`-based helper (no `TypedArray` to slice otherwise).
+ * a fixed-length array. Codegen picks `.subarray()` vs. the `Proxy`-based
+ * helper by checking `source`'s actual runtime shape, not a static element
+ * type - see `emitArraySliceViewExpression`'s own doc comment for why a
+ * static type can't be trusted here.
  */
 export interface ArraySliceViewExpression {
   readonly kind: "ArraySliceViewExpression";
   readonly source: Expression;
   readonly start: number;
   readonly length: number;
-  readonly numericKind: Option<NumericKind>;
 }
 
 export interface RangeExpression {

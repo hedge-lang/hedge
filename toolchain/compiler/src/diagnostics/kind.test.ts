@@ -157,6 +157,7 @@ const SAMPLE_KINDS: readonly DiagnosticKind[] = [
   { kind: "SemQualifiedTypePathsUnsupported" },
   { kind: "SemDropImplForEnumUnsupported" },
   { kind: "SemGenericTypeParamNoArguments", name: "T" },
+  { kind: "SemGenericArrayElementBehindReference", name: "T" },
   { kind: "SemPatternKindNotYetSupported" },
   { kind: "SemWhileNotYetSupported" },
   { kind: "SemSignatureNoBodyTopLevel" },

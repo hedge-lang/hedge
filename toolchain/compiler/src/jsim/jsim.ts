@@ -2702,7 +2702,6 @@ function jsimArrayRepeatExpression(
  * `JSIM.ArraySliceViewExpression` for the codegen split this defers to. */
 function jsimArraySliceView(
   source: JSIM.Expression,
-  elementType: Semantics.Type,
   start: number,
   length: number,
 ): JSIM.Expression {
@@ -2711,7 +2710,6 @@ function jsimArraySliceView(
     source,
     start,
     length,
-    numericKind: hedgeTypeToNumericKind(elementType),
   };
 }
 
@@ -3370,7 +3368,7 @@ function compileSlicePatternInto(
     pattern.type.kind === "ArrayType",
     `Expected a SlicePattern to resolve to ArrayType, got "${pattern.type.kind}"`,
   );
-  const { elementType, length: totalLength } = pattern.type;
+  const { length: totalLength } = pattern.type;
   const restIndex = pattern.elements.findIndex(
     (el) => el.kind === "RestPattern",
   );
@@ -3398,12 +3396,7 @@ function compileSlicePatternInto(
     // Anonymous rest (`..`) - nothing to bind.
     if (!isSome(el.name)) return (rest) => rest;
     const restLength = totalLength - beforeCount - afterCount;
-    const viewExpr = jsimArraySliceView(
-      valueExpr,
-      elementType,
-      beforeCount,
-      restLength,
-    );
+    const viewExpr = jsimArraySliceView(valueExpr, beforeCount, restLength);
     const restMutable = el.mutable || ambientMutable;
     // Only a `&mut` rest binding's accessor cell needs a real lvalue
     // to close over (the view expression itself isn't assignable) -
