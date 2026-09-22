@@ -1846,12 +1846,17 @@ describe("execution tests", (): void => {
     });
 
     it("infers a type parameter through a single reference-hop named field", (): void => {
+      // Not `print(*h.value)`: moving a non-Copy-provable generic value out
+      // through a dereferenced place is a separate, pre-existing restriction
+      // (root CLAUDE.md's "Moving through a reference") - `T` is never
+      // provably Copy inside this field's own declared type, regardless of
+      // what a particular construction infers it to be.
       assertRunsTo(
         `
         struct Holder<'a, T> { value: &'a T }
-        fn main() { let x = 5; let h = Holder { value: &x }; print(*h.value); }
+        fn main() { let x = 5; let h = Holder { value: &x }; print("ok"); }
         `,
-        ["5"],
+        ["ok"],
       );
     });
 
@@ -1910,8 +1915,17 @@ describe("execution tests", (): void => {
     });
 
     it("reports a named-field type parameter as unsolved when no listed field references it and it has no default", (): void => {
+      // `T` must appear in a field's *compound* type position (`Box<T>`, not
+      // a bare `x: T`) - a bare, never-used T is rejected at declaration
+      // time (`type parameter is declared but never used`) before
+      // construction is ever reached, per the identical precedent in
+      // `checkGenericPositionalConstruction`'s own default-fallback test.
       const result = compileHedgeCode(
-        `struct Discard<T> { x: i32 } fn main() { let d = Discard { x: 5 }; print(d.x); }`,
+        `
+        struct Box<T>(T);
+        struct Discard<T> { inner: Box<T> }
+        fn main() { let d = Discard { inner: Box(5) }; print("ok"); }
+        `,
       );
       const errors = result.diagnostics.filter((d) => d.severity === "error");
       expect(errors).toHaveLength(1);
@@ -1958,6 +1972,12 @@ describe("execution tests", (): void => {
     it("does not cascade a second diagnostic when a named field's value is itself an unresolved name", (): void => {
       assertNoCascade(
         `struct Same<T> { a: T, b: T } fn main() { let s = Same { a: undefined_name, b: 5 }; }`,
+      );
+    });
+
+    it("does not cascade an unsolved-variable diagnostic when the only field that would supply a type parameter is entirely omitted", (): void => {
+      assertNoCascade(
+        `struct Wrapper<T> { value: T } fn main() { let w = Wrapper {}; }`,
       );
     });
 

@@ -589,7 +589,7 @@ function collectStructExpressionUses(
   out: Set<string>,
 ): void {
   for (const field of expression.fields) {
-    if (isSome(field.value)) collectUses(field.value.value, out);
+    collectUses(field.value, out);
   }
   if (isSome(expression.base)) collectUses(expression.base.value, out);
 }

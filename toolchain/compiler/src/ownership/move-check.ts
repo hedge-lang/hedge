@@ -530,9 +530,7 @@ function walkStructExpression(
   scopeStack: ScopeStack,
 ): void {
   for (const field of expression.fields) {
-    if (isSome(field.value)) {
-      walkExpression(ctx, field.value.value, state, scopeStack);
-    }
+    walkExpression(ctx, field.value, state, scopeStack);
   }
   if (isSome(expression.base)) {
     walkExpression(ctx, expression.base.value, state, scopeStack);

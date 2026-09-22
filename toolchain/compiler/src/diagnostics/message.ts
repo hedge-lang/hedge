@@ -319,6 +319,7 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
     case "SemArrayIndexMustBeUsize":
       return `array index must be \`usize\`, found \`${kind.found}\``;
     case "SemStructFieldTypeMismatch":
+    case "SemStructFieldTypeMismatchConflict":
       return `field \`${kind.field}\` type mismatch: expected \`${kind.expected}\`, found \`${kind.found}\``;
     case "SemArgumentTypeMismatch":
     case "SemArgumentTypeMismatchConflict":

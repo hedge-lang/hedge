@@ -879,8 +879,7 @@ export interface RangeExpression extends DecoratedAstNode {
 export interface FieldInit extends DecoratedAstNode {
   readonly kind: "FieldInit";
   readonly name: Identifier;
-  /** `none()` for shorthand `Foo { x }` (value inferred from binding in scope). */
-  readonly value: Option<Expression>;
+  readonly value: Expression;
 }
 
 export interface StructExpression extends DecoratedAstNode {

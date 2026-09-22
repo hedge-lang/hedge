@@ -179,6 +179,12 @@ const SAMPLE_KINDS: readonly DiagnosticKind[] = [
     found: "str",
   },
   {
+    kind: "SemStructFieldTypeMismatchConflict",
+    field: "x",
+    expected: "i32",
+    found: "str",
+  },
+  {
     kind: "SemArgumentTypeMismatch",
     argIndex: 1,
     calleeKind: "function",

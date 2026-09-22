@@ -772,6 +772,7 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "does not seed inference from a field supplied only via a ..base spread",
       "still infers normally when a ..base spread supplies only fields that do not carry generic information",
       "does not cascade a second diagnostic when a named field's value is itself an unresolved name",
+      "does not cascade an unsolved-variable diagnostic when the only field that would supply a type parameter is entirely omitted",
       "produces the same inferred result regardless of the order named fields are written in",
       "infers a type parameter from a shorthand named field's own binding type",
       "infers a type parameter from a single named field's value on an enum variant, with no annotation",
