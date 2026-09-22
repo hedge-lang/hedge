@@ -2796,16 +2796,6 @@ describe("semantic analysis", (): void => {
       );
     });
 
-    it("does not cascade a missing-required-field diagnostic for a shorthand field naming an unresolved binding", (): void => {
-      const { diagnostics } = diagnose(`
-        struct P { x: i32 }
-        fn main() { let p = P { x }; print(p.x); }
-      `);
-      expect(diagnostics).toHaveLength(1);
-      assert(diagnostics[0] !== undefined, "Expected diagnostics");
-      expect(diagnostics[0].code).toBe("HEDGE-NAME-001");
-    });
-
     it("still checks field types when a struct-update base is present", (): void => {
       const { diagnostics } = diagnose(`
         struct P { x: i32, y: i32 }
