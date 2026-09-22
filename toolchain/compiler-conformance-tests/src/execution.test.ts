@@ -1332,6 +1332,16 @@ describe("execution tests", (): void => {
       expect(messageOf(errors[0])).toBe("out of range for i8");
     });
 
+    it("does not cascade a duplicate range-check diagnostic when an array literal's own anchor coercion already validated the element", (): void => {
+      const result = compileHedgeCode(
+        `fn same<T>(a: T, b: [T; 2]) {} fn main() { same(1i8, [200, 3i8]); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-005");
+      expect(messageOf(errors[0])).toBe("out of range for i8");
+    });
+
     it("accepts a fixed-size array literal argument mixing an explicitly-suffixed literal with unsuffixed ones", (): void => {
       assertRunsTo(
         `

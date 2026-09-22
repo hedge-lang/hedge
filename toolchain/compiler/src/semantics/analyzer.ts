@@ -11617,8 +11617,16 @@ function coerceArrayExpressionArg(
 ): Semantics.Expression {
   const elements = arg.elements.map((element) => {
     if (!isUnsuffixedLiteralExpr(element)) return element;
+    // Already at the target type - `analyzeArrayExpression`'s own anchor
+    // coercion (or an earlier pass through here) already range-checked this
+    // exact (value, type) pairing, and checking it again can only repeat
+    // the same verdict, never a different one.
+    const alreadyCoerced = typesEqual(
+      getType(element),
+      substituted.elementType,
+    );
     const coerced = coerceToIntegerType(element, substituted.elementType);
-    checkCoercedLiteralRange(ctx, coerced);
+    if (!alreadyCoerced) checkCoercedLiteralRange(ctx, coerced);
     return coerced;
   });
   const changed = elements.some((element, i) => element !== arg.elements[i]);
