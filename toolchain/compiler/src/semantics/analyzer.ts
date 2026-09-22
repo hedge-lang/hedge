@@ -11593,16 +11593,32 @@ function arrayArgWithAmbiguousElement(
  * (error-recovery) element, then an ambiguous empty array - returning the
  * first match's replacement `arg`, or `undefined` if neither applies.
  * Combined into one call so `checkGenericPositionalArg` only needs a single
- * early-return branch for both. */
+ * early-return branch for both.
+ *
+ * The two cases bind differently, deliberately: an ambiguous element's own
+ * error is already fully reported, so `T` gets an error-placeholder binding
+ * here (matching `bindMismatchedReferentPlaceholder`'s own convention) to
+ * stop a downstream "cannot infer" check from cascading a second, unrelated
+ * diagnostic when this array is `T`'s only occurrence. An empty array
+ * genuinely carries no information at all - it contributes no binding, so a
+ * later occurrence can still legitimately supply one. */
 function specialArrayArg(
   declaredType: Semantics.Type,
   arg: Semantics.Expression,
   substituted: Semantics.Type,
+  genericNames: ReadonlySet<string>,
+  bindings: GenericBindings,
 ): Semantics.Expression | undefined {
-  return (
-    arrayArgWithAmbiguousElement(arg) ??
-    ambiguousEmptyArrayArg(declaredType, arg, substituted)
-  );
+  if (arrayArgWithAmbiguousElement(arg) !== undefined) {
+    bindMismatchedReferentPlaceholder(
+      declaredType,
+      arg.tokenId,
+      genericNames,
+      bindings,
+    );
+    return arg;
+  }
+  return ambiguousEmptyArrayArg(declaredType, arg, substituted);
 }
 
 /** The `ArrayExpression` (list-form) case of `coerceArrayLiteralArg` below:
@@ -11707,7 +11723,13 @@ function checkGenericPositionalArg(
   bindings: GenericBindings,
 ): Semantics.Expression {
   const substituted = substituteGenericType(declaredType, bindings);
-  const specialArg = specialArrayArg(declaredType, arg, substituted);
+  const specialArg = specialArrayArg(
+    declaredType,
+    arg,
+    substituted,
+    genericNames,
+    bindings,
+  );
   if (specialArg !== undefined) return specialArg;
   const arrayLiteralArg = coerceArrayLiteralArg(ctx, arg, substituted);
   // An unsuffixed literal has no fixed type of its own yet - coerce it

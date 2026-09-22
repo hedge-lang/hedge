@@ -1195,6 +1195,14 @@ describe("execution tests", (): void => {
       );
     });
 
+    it("does not cascade an unsolved-variable diagnostic when a list-form array argument's own element is unresolved and is the only occurrence of the type parameter", (): void => {
+      assertNoCascade(`fn f<T>(x: [T; 1]) {} fn main() { f([missing]); }`);
+    });
+
+    it("does not cascade an unsolved-variable diagnostic when a repeat-form array argument's own value is unresolved and is the only occurrence of the type parameter", (): void => {
+      assertNoCascade(`fn f<T>(x: [T; 2]) {} fn main() { f([missing; 2]); }`);
+    });
+
     it("infers through a let binding's own type annotation, consistent with the argument", (): void => {
       assertRunsTo(
         `
