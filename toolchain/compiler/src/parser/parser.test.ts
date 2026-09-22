@@ -2154,6 +2154,78 @@ describe("static declarations", (): void => {
   });
 });
 
+describe("type alias declarations", (): void => {
+  it("parses `pub type` at the top level with visibility populated", (): void => {
+    const ast = parseProgram("pub type Foo = i32;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "TypeAlias",
+          visibility: some({ kind: "Visibility", scope: none() }),
+          name: { text: "Foo" },
+          value: some({ kind: "NamedType", path: { segments: ["i32"] } }),
+        },
+      ],
+    });
+  });
+
+  it("parses a bare top-level type alias with visibility absent", (): void => {
+    const ast = parseProgram("type Foo = i32;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "TypeAlias",
+          visibility: none(),
+          name: { text: "Foo" },
+          value: some({ kind: "NamedType", path: { segments: ["i32"] } }),
+        },
+      ],
+    });
+  });
+
+  it("parses `pub type` with no definition, matching the unqualified form's optional value", (): void => {
+    const ast = parseProgram("pub type Item;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "TypeAlias",
+          visibility: some({ kind: "Visibility", scope: none() }),
+          name: { text: "Item" },
+          value: none(),
+        },
+      ],
+    });
+  });
+
+  it("parses `pub(package) type` with a scoped visibility", (): void => {
+    const ast = parseProgram("pub(package) type Foo = i32;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "TypeAlias",
+          visibility: some({ kind: "Visibility", scope: some("package") }),
+          name: { text: "Foo" },
+        },
+      ],
+    });
+  });
+
+  it("parses a generic `pub type` alias with its generics intact", (): void => {
+    const ast = parseProgram("pub type Foo<T> = T;");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "TypeAlias",
+          visibility: some({ kind: "Visibility", scope: none() }),
+          name: { text: "Foo" },
+          generics: [{ kind: "TypeParam", name: { text: "T" } }],
+          value: some({ kind: "NamedType", path: { segments: ["T"] } }),
+        },
+      ],
+    });
+  });
+});
+
 describe("attributes on let statements", (): void => {
   it("attaches an outer attribute to a top-level let", (): void => {
     const ast = parseProgram("#[attr] let x = 1;");
@@ -6896,6 +6968,16 @@ describe("trait declarations", (): void => {
     });
   });
 
+  it("rejects `pub` before an associated type inside a trait body, since TraitItem has no visibility slot", (): void => {
+    const { tokens } = tokenize("trait Iterator { pub type Item; }");
+    const { diagnostics } = parse(tokens);
+    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
+    expect(diagnostics[0].severity).toBe("error");
+    expect(messageOf(diagnostics[0])).toBe(
+      'expected a function, associated type, or const in trait body, found keyword "pub"',
+    );
+  });
+
   it("parses an associated type definition", (): void => {
     const ast = parseCleanly("trait Foo { type Item = i32; }");
     expect(ast).toMatchObject({
@@ -7220,6 +7302,25 @@ describe("impl declarations", (): void => {
     });
   });
 
+  it("parses a `pub type` declaration inside an impl body, since Impl's own grammar reuses the general Visibility?-bearing Item production", (): void => {
+    const ast = parseCleanly("impl Counter { pub type Item = i32; }");
+    expect(ast).toMatchObject({
+      items: [
+        {
+          kind: "Impl",
+          items: [
+            {
+              kind: "TypeAlias",
+              visibility: some({ kind: "Visibility", scope: none() }),
+              name: { text: "Item" },
+              value: some({ kind: "NamedType", path: { segments: ["i32"] } }),
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("parses a trait and an impl nested inside an impl body (the general Item* body)", (): void => {
     const ast = parseCleanly(
       "impl Foo { trait Nested {} impl Nested for i32 {} }",
@@ -7244,16 +7345,6 @@ describe("impl declarations", (): void => {
     expect(diagnostics[0].severity).toBe("error");
     expect(messageOf(diagnostics[0])).toBe(
       "visibility qualifiers are not allowed on impl blocks",
-    );
-  });
-
-  it("rejects `pub type`", (): void => {
-    const { tokens } = tokenize("pub type Foo = i32;");
-    const { diagnostics } = parse(tokens);
-    assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-    expect(diagnostics[0].severity).toBe("error");
-    expect(messageOf(diagnostics[0])).toBe(
-      "visibility qualifiers are not allowed on a type alias",
     );
   });
 
