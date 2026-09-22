@@ -1408,6 +1408,7 @@ function parseTypeAlias(
   diagnostics: Diagnostic[],
   pos: number,
   attributes: readonly Attribute[] = [],
+  visibility: Option<Visibility> = none(),
 ): PR<Parsed<TypeAliasDecl>> {
   const start = pos;
   const afterType = expectKeyword(tokens, pos, "type");
@@ -1441,6 +1442,7 @@ function parseTypeAlias(
     node: {
       kind: "TypeAlias",
       tokenId: start,
+      visibility,
       name: nameResult.value.node,
       generics: genericsResult.generics,
       value,
@@ -1976,6 +1978,7 @@ const VISIBLE_DECLARATION_PARSERS = new Map<string, VisibleDeclarationParser>([
   ["trait", parseTrait],
   ["const", parseConst],
   ["static", parseStatic],
+  ["type", parseTypeAlias],
 ]);
 
 /**
@@ -2018,13 +2021,6 @@ interface NoVisibilityEntry {
 
 /** The top-level keywords that reject a leading `pub` outright. */
 const NO_VISIBILITY_PARSERS = new Map<string, NoVisibilityEntry>([
-  [
-    "type",
-    {
-      visibilityRejectionLocation: "on a type alias",
-      parse: parseTypeAlias,
-    },
-  ],
   [
     "impl",
     {

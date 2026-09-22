@@ -634,6 +634,7 @@ export type TraitItem =
 
 export interface TypeAliasDecl extends AstNode {
   readonly kind: "TypeAlias";
+  readonly visibility: Option<Visibility>;
   readonly name: Identifier;
   readonly generics: readonly GenericParam[];
   readonly value: Option<Type>;
