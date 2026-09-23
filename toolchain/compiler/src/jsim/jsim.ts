@@ -3749,14 +3749,11 @@ function makeStructField(
   ctx: JsimContext,
   field: Semantics.FieldInit,
 ): JSIM.StructField {
-  const value = isSome(field.value)
-    ? some(parseExpression(ctx, field.value.value))
-    : some<JSIM.Expression>({
-        kind: "Identifier",
-        value: lookupLocalName(ctx, field.name.text),
-        type: none(),
-      });
-  return { kind: "StructField", name: field.name.text, value };
+  return {
+    kind: "StructField",
+    name: field.name.text,
+    value: some(parseExpression(ctx, field.value)),
+  };
 }
 
 function makeSpread(expression: JSIM.Expression): JSIM.SpreadExpression {

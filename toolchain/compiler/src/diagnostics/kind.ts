@@ -365,6 +365,14 @@ export type DiagnosticKind =
       readonly expected: string;
       readonly found: string;
     }
+  // Same rendered text as SemStructFieldTypeMismatch, but a generic-inference
+  // conflict carries HEDGE-TYPE-010, not HEDGE-TYPE-001.
+  | {
+      readonly kind: "SemStructFieldTypeMismatchConflict";
+      readonly field: string;
+      readonly expected: string;
+      readonly found: string;
+    }
   | {
       readonly kind: "SemArgumentTypeMismatch";
       readonly argIndex: number;
@@ -763,6 +771,7 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemAssignmentTypeMismatch", "HEDGE-TYPE-001"],
   ["SemArrayIndexMustBeUsize", "HEDGE-TYPE-001"],
   ["SemStructFieldTypeMismatch", "HEDGE-TYPE-001"],
+  ["SemStructFieldTypeMismatchConflict", "HEDGE-TYPE-010"],
   ["SemArgumentTypeMismatch", "HEDGE-TYPE-001"],
   ["SemArgumentTypeMismatchConflict", "HEDGE-TYPE-010"],
   ["SemCallReturnTypeMismatch", "HEDGE-TYPE-010"],

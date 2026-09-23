@@ -762,6 +762,8 @@ export interface FieldInit extends AstNode {
 export interface StructExpression extends AstNode {
   readonly kind: "StructExpression";
   readonly path: Path;
+  /** Explicit turbofish arguments (`Foo::<i32> { .. }`); empty for no turbofish. */
+  readonly typeArguments: readonly Type[];
   readonly fields: FieldInit[];
   /** `some(expr)` for `Foo { x: 1, ..base }` spread. Semantic analysis is deferred. */
   readonly base: Option<Expression>;

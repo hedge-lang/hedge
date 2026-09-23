@@ -2764,12 +2764,36 @@ describe("semantic analysis", (): void => {
       expect(messageOf(diagnostics[0])).toContain("type mismatch");
     });
 
-    it("leaves a shorthand field untouched", (): void => {
+    it("accepts a shorthand field whose in-scope binding type matches the declared field type", (): void => {
       const { diagnostics } = diagnose(`
         struct P { x: i32 }
         fn main() { let x: i32 = 1; let p = P { x }; print(p.x); }
       `);
       expect(diagnostics).toEqual([]);
+    });
+
+    it("rejects a shorthand field naming a binding not in scope", (): void => {
+      const { diagnostics } = diagnose(`
+        struct P { x: i32 }
+        fn main() { let p = P { x }; print(p.x); }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].code).toBe("HEDGE-NAME-001");
+      expect(messageOf(diagnostics[0])).toContain("x");
+    });
+
+    it("rejects a shorthand field whose in-scope binding type mismatches the declared field type", (): void => {
+      const { diagnostics } = diagnose(`
+        struct P { x: i32 }
+        fn main() { let x = "bad"; let p = P { x }; print(p.x); }
+      `);
+      expect(diagnostics).toHaveLength(1);
+      assert(diagnostics[0] !== undefined, "Expected diagnostics");
+      expect(diagnostics[0].severity).toBe("error");
+      expect(messageOf(diagnostics[0])).toBe(
+        "field `x` type mismatch: expected `i32`, found `str`",
+      );
     });
 
     it("still checks field types when a struct-update base is present", (): void => {

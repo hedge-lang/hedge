@@ -230,9 +230,7 @@ function recordStructExpressionUses(
   expression: Semantics.StructExpression,
 ): void {
   for (const field of expression.fields) {
-    if (isSome(field.value)) {
-      recordExpressionUses(target, scopeStack, field.value.value);
-    }
+    recordExpressionUses(target, scopeStack, field.value);
   }
   if (isSome(expression.base)) {
     recordExpressionUses(target, scopeStack, expression.base.value);

@@ -1101,6 +1101,7 @@ function parseStructExpression(
     kind: "StructExpression",
     tokenId: pathNode.tokenId,
     path: pathNode.path,
+    typeArguments: pathNode.typeArguments,
     fields,
     base,
   };

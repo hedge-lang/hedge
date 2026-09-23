@@ -1195,6 +1195,10 @@ describe("execution tests", (): void => {
       );
     });
 
+    it("does not cascade an unsolved-variable diagnostic when a bare type parameter's only occurrence is an array literal with an unresolved element", (): void => {
+      assertNoCascade(`fn f<T>(x: T) {} fn main() { f([missing]); }`);
+    });
+
     it("does not cascade an unsolved-variable diagnostic when a list-form array argument's own element is unresolved and is the only occurrence of the type parameter", (): void => {
       assertNoCascade(`fn f<T>(x: [T; 1]) {} fn main() { f([missing]); }`);
     });
@@ -1787,6 +1791,372 @@ describe("execution tests", (): void => {
         }
         `,
         ["ok"],
+      );
+    });
+  });
+
+  describe("generic named-field struct construction inference", (): void => {
+    it("infers a type parameter from a single named field's value, with no annotation", (): void => {
+      assertRunsTo(
+        `
+        struct Wrapper<T> { value: T }
+        fn main() { let w = Wrapper { value: 5 }; let Wrapper { value } = w; print(value); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("infers two independent type parameters from two named fields", (): void => {
+      assertRunsTo(
+        `
+        struct Pair<A, B> { first: A, second: B }
+        fn main() { let p = Pair { first: 1, second: "s" }; let Pair { first, second } = p; print(first); }
+        `,
+        ["1"],
+      );
+    });
+
+    it("infers a repeated type parameter consistently across two fields naming it", (): void => {
+      assertRunsTo(
+        `
+        struct Same<T> { a: T, b: T }
+        fn main() { let s = Same { a: 1, b: 2 }; let Same { a, b } = s; print(a); }
+        `,
+        ["1"],
+      );
+    });
+
+    it("reports a conflicting inference across two named fields, blaming the second", (): void => {
+      const source = `struct Same<T> { a: T, b: T } fn main() { let s = Same { a: 1, b: "s" }; print(s.a); }`;
+      const result = compileHedgeCode(source);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(messageOf(errors[0])).toBe(
+        "field `b` type mismatch: expected `i32`, found `str`",
+      );
+      const firstOneStart = source.indexOf("a: 1") + "a: ".length;
+      expect(
+        errors[0]?.relatedSpans.map((r) => ({
+          span: r.span,
+          label: renderRelatedLabel(r.label),
+        })),
+      ).toEqual([
+        {
+          span: { start: firstOneStart, end: firstOneStart + 1 },
+          label: "inferred as `i32` here",
+        },
+      ]);
+    });
+
+    it("reports a conflicting inference when a genuine unit literal disagrees with another field's type", (): void => {
+      const result = compileHedgeCode(
+        `struct Same<T> { a: T, b: T } fn main() { let s = Same { a: (), b: 1 }; print(1); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(messageOf(errors[0])).toBe(
+        "field `b` type mismatch: expected `()`, found `i32`",
+      );
+    });
+
+    it("reports a conflicting inference when a genuine unit literal inside an array-typed field disagrees with another field's type", (): void => {
+      const result = compileHedgeCode(
+        `struct Two<T> { a: T, b: [T; 1] } fn main() { let t = Two { a: 1, b: [()] }; print(1); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(messageOf(errors[0])).toBe(
+        "field `b` type mismatch: expected `[i32; 1]`, found `[(); 1]`",
+      );
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+    });
+
+    it("infers a type parameter through a single reference-hop named field", (): void => {
+      // Not `print(*h.value)`: moving a non-Copy-provable generic value out
+      // through a dereferenced place is a separate, pre-existing restriction
+      // (root CLAUDE.md's "Moving through a reference") - `T` is never
+      // provably Copy inside this field's own declared type, regardless of
+      // what a particular construction infers it to be.
+      assertRunsTo(
+        `
+        struct Holder<'a, T> { value: &'a T }
+        fn main() { let x = 5; let h = Holder { value: &x }; print("ok"); }
+        `,
+        ["ok"],
+      );
+    });
+
+    it("infers a type parameter from a fixed-size-array-element named field", (): void => {
+      // Not `b.items[0]`: extracting a non-Copy-provable array element by
+      // value is a separate, pre-existing restriction unrelated to generic
+      // inference (see the identical note on the matching positional-argument
+      // test above) - an abstract `T` is never provably Copy inside this
+      // construction's own field type, regardless of what's assigned to it.
+      assertRunsTo(
+        `
+        struct Bucket<T> { items: [T; 2] }
+        fn main() { let b = Bucket { items: [5, 9] }; print("ok"); }
+        `,
+        ["ok"],
+      );
+    });
+
+    it("reports a structural mismatch on a reference-hop named field as an ordinary type mismatch, not unsolved-variable", (): void => {
+      const result = compileHedgeCode(
+        `
+        struct Holder<'a, T> { value: &'a T }
+        fn main() { let h = Holder { value: 5 }; print(*h.value); }
+        `,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-001");
+      expect(messageOf(errors[0])).toBe(
+        "field `value` type mismatch: expected `&T`, found `i32`",
+      );
+    });
+
+    it("coerces an unsuffixed literal named field value against the already-resolved concrete type", (): void => {
+      assertRunsTo(
+        `
+        struct Same<T> { a: T, b: T }
+        fn main() { let s = Same { a: 5i64, b: 2 }; let Same { a, b } = s; print(a); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("resolves an otherwise-unsolved named-field type parameter to its declared default", (): void => {
+      assertRunsTo(
+        `
+        struct Box<T>(T);
+        struct Marker<T = i32> { inner: Box<T> }
+        fn main() {
+          let m = Marker { inner: Box(5) };
+          print("ok");
+        }
+        `,
+        ["ok"],
+      );
+    });
+
+    it("reports a named-field type parameter as unsolved when no listed field references it and it has no default", (): void => {
+      // `T` must appear in a field's *compound* type position (`Box<T>`, not
+      // a bare `x: T`) - a bare, never-used T is rejected at declaration
+      // time (`type parameter is declared but never used`) before
+      // construction is ever reached, per the identical precedent in
+      // `checkGenericPositionalConstruction`'s own default-fallback test.
+      const result = compileHedgeCode(
+        `
+        struct Box<T>(T);
+        struct Discard<T> { inner: Box<T> }
+        fn main() { let d = Discard { inner: Box(5) }; print("ok"); }
+        `,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-006");
+      expect(messageOf(errors[0])).toBe(
+        "cannot infer type of generic parameter `T` without an explicit type annotation or turbofish",
+      );
+    });
+
+    it("does not seed inference from a field supplied only via a ..base spread", (): void => {
+      const result = compileHedgeCode(
+        `
+        struct Wrapper<T> { value: T, tag: i32 }
+        fn main() {
+          let base = Wrapper { value: 1, tag: 2 };
+          let w = Wrapper { tag: 5, ..base };
+          print(w.tag);
+        }
+        `,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-006");
+      expect(messageOf(errors[0])).toBe(
+        "cannot infer type of generic parameter `T` without an explicit type annotation or turbofish",
+      );
+    });
+
+    it("still infers normally when a ..base spread supplies only fields that do not carry generic information", (): void => {
+      assertRunsTo(
+        `
+        struct Wrapper<T> { value: T, tag: i32 }
+        fn main() {
+          let base = Wrapper { value: 1, tag: 2 };
+          let w = Wrapper { value: 9, ..base };
+          let Wrapper { value, tag } = w;
+          print(value);
+        }
+        `,
+        ["9"],
+      );
+    });
+
+    it("does not cascade a second diagnostic when a named field's value is itself an unresolved name", (): void => {
+      assertNoCascade(
+        `struct Same<T> { a: T, b: T } fn main() { let s = Same { a: undefined_name, b: 5 }; }`,
+      );
+    });
+
+    it("does not cascade an unsolved-variable diagnostic when the only field that would supply a type parameter is entirely omitted", (): void => {
+      assertNoCascade(
+        `struct Wrapper<T> { value: T } fn main() { let w = Wrapper {}; }`,
+      );
+    });
+
+    it("does not cascade an unsolved-variable diagnostic when the only field that would supply a type parameter has an unresolved value", (): void => {
+      assertNoCascade(
+        `struct Wrapper<T> { value: T } fn main() { let w = Wrapper { value: missing_name }; }`,
+      );
+    });
+
+    it("does not cascade an unsolved-variable diagnostic when a bare named-field type parameter's only occurrence is an array literal with an unresolved element", (): void => {
+      assertNoCascade(
+        `struct Wrapper<T> { value: T } fn main() { let w = Wrapper { value: [missing_name] }; }`,
+      );
+    });
+
+    it("produces the same inferred result regardless of the order named fields are written in", (): void => {
+      assertRunsTo(
+        `
+        struct Pair<A, B> { first: A, second: B }
+        fn main() {
+          let p = Pair { second: "s", first: 1 };
+          let Pair { first, second } = p;
+          print(first);
+        }
+        `,
+        ["1"],
+      );
+    });
+
+    it("infers a type parameter from a shorthand named field's own binding type", (): void => {
+      assertRunsTo(
+        `
+        struct Wrapper<T> { value: T }
+        fn main() { let value = 5; let w = Wrapper { value }; let Wrapper { value: inner } = w; print(inner); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("lets an explicit turbofish resolve a named-field struct construction's type parameter", (): void => {
+      assertRunsTo(
+        `
+        struct Wrapper<T> { value: T }
+        fn main() { let w = Wrapper::<i64> { value: 5 }; let Wrapper { value } = w; print(value); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("reports a conflict when a named-field struct construction's turbofish disagrees with a field value", (): void => {
+      const result = compileHedgeCode(
+        `struct Wrapper<T> { value: T } fn main() { let w = Wrapper::<str> { value: 5 }; print(1); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(messageOf(errors[0])).toBe(
+        "field `value` type mismatch: expected `str`, found `i32`",
+      );
+    });
+  });
+
+  describe("generic named-field enum-variant construction inference", (): void => {
+    it("infers a type parameter from a single named field's value on an enum variant, with no annotation", (): void => {
+      assertRunsTo(
+        `
+        enum Holder<T> { Full { value: T } }
+        fn main() { let h = Holder::Full { value: 5 }; match h { Holder::Full { value } => print(value) } }
+        `,
+        ["5"],
+      );
+    });
+
+    it("infers two independent type parameters from two named fields on an enum variant", (): void => {
+      assertRunsTo(
+        `
+        enum Pair<A, B> { Both { first: A, second: B } }
+        fn main() { let p = Pair::Both { first: 1, second: "s" }; match p { Pair::Both { first, second } => print(first) } }
+        `,
+        ["1"],
+      );
+    });
+
+    it("reports a conflicting inference across two named fields on an enum variant", (): void => {
+      const result = compileHedgeCode(
+        `enum Same<T> { Both { a: T, b: T } } fn main() { let s = Same::Both { a: 1, b: "s" }; print("x"); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(messageOf(errors[0])).toBe(
+        "field `b` type mismatch: expected `i32`, found `str`",
+      );
+    });
+
+    it("resolves an otherwise-unsolved enum-variant type parameter to the enum's declared default", (): void => {
+      assertRunsTo(
+        `
+        struct Box<T>(T);
+        enum Marker<T = i32> { Full { inner: Box<T> } }
+        fn main() {
+          let m = Marker::Full { inner: Box(5) };
+          print("ok");
+        }
+        `,
+        ["ok"],
+      );
+    });
+
+    it("reports an enum generic parameter unused by the constructed named-fields variant as unsolved", (): void => {
+      const result = compileHedgeCode(
+        `
+        enum Two<A, B> { First { a: A }, Second { b: B } }
+        fn main() { let t = Two::First { a: 5 }; print("x"); }
+        `,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-006");
+      expect(messageOf(errors[0])).toBe(
+        "cannot infer type of generic parameter `B` without an explicit type annotation or turbofish",
+      );
+    });
+
+    it("does not seed inference from a field supplied only via a ..base spread on an enum-variant construction", (): void => {
+      const result = compileHedgeCode(
+        `
+        enum Wrapper<T> { Full { value: T, tag: i32 } }
+        fn main() {
+          let base = Wrapper::Full { value: 1, tag: 2 };
+          let w = Wrapper::Full { tag: 5, ..base };
+          print("x");
+        }
+        `,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-006");
+      expect(messageOf(errors[0])).toBe(
+        "cannot infer type of generic parameter `T` without an explicit type annotation or turbofish",
+      );
+    });
+
+    it("lets an explicit turbofish resolve a named-field enum-variant construction's type parameter", (): void => {
+      assertRunsTo(
+        `
+        enum Holder<T> { Full { value: T } }
+        fn main() { let h = Holder::Full::<i64> { value: 5 }; match h { Holder::Full { value } => print(value) } }
+        `,
+        ["5"],
       );
     });
   });

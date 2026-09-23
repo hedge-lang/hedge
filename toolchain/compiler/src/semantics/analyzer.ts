@@ -6358,13 +6358,10 @@ function checkEscapingStructExpression(
   expr: Semantics.StructExpression,
 ): void {
   for (const field of expr.fields) {
-    if (
-      !isSome(field.value) ||
-      field.value.value.kind !== "ReferenceExpression"
-    ) {
+    if (field.value.kind !== "ReferenceExpression") {
       continue;
     }
-    const fieldValue = field.value.value;
+    const fieldValue = field.value;
     const name = danglingReferenceOperandName(fieldValue.operand);
     if (name === undefined) {
       continue;
@@ -7152,6 +7149,40 @@ const AMBIGUOUS_UNIT_EXPR_KINDS: ReadonlySet<Semantics.ExpressionKind> =
 
 function isAmbiguousUnitExpr(expr: Semantics.Expression): boolean {
   return AMBIGUOUS_UNIT_EXPR_KINDS.has(expr.kind);
+}
+
+/** Whether `expr` is a real, source-parsed `()` literal - a genuine unit
+ * value - rather than the zero-element `TupleExpression` shape
+ * `analyzeExpressionPlaceholder` reuses as an error-recovery substitute for
+ * an unsupported construct. Both share the same kind, element count, and
+ * `UnitType`, so the only distinguishing signal is the node's own token: a
+ * parsed `()` always starts at a real `lparen`, while a synthesized
+ * placeholder's `tokenId` points at whatever construct it stands in for. */
+function isGenuineUnitLiteral(
+  ctx: AnalysisContext,
+  expr: Semantics.Expression,
+): boolean {
+  return (
+    expr.kind === "TupleExpression" &&
+    expr.elements.length === 0 &&
+    ctx.tokens[expr.tokenId]?.kind === "lparen"
+  );
+}
+
+/** Whether `expr`'s `UnitType` is the error-recovery placeholder rather than
+ * a genuine unit value, for deciding whether to unify against it or
+ * placeholder-bind past it - `isAmbiguousUnitExpr` alone over-classifies a
+ * genuine `()` literal as error-recovery too, since it can't tell it apart
+ * from a same-shaped synthesized recovery tuple (see `isGenuineUnitLiteral`). */
+function isErrorRecoveryUnitValue(
+  ctx: AnalysisContext,
+  expr: Semantics.Expression,
+): boolean {
+  return (
+    expr.type.kind === "UnitType" &&
+    isAmbiguousUnitExpr(expr) &&
+    !isGenuineUnitLiteral(ctx, expr)
+  );
 }
 
 /**
@@ -10281,8 +10312,12 @@ function analyzeEnumVariantStructConstruction(
     variantName,
     fields,
     hasBase,
-    structExpression.tokenId,
+    {
+      tokenId: structExpression.tokenId,
+      typeArguments: structExpression.typeArguments,
+    },
     variant.body.value,
+    { params: enumDecl.generics, defaults: enumDecl.genericParamDefaults },
   );
   return some({ type: enumDecl.type, fields: checkedFields });
 }
@@ -10293,14 +10328,18 @@ function analyzeStructExpression(
 ): Semantics.StructExpression {
   const analyzedFields = structExpression.fields.map(
     (field: Parser.FieldInit): Semantics.FieldInit => {
-      const analyzedValue = mapSome(field.value, (v) =>
-        analyzeExpression(ctx, v),
-      );
+      // Shorthand `Foo { x }` (field.value is none()) means `x` refers to a
+      // binding of the same name in scope - resolve it the same way a bare
+      // `x` expression would, so it gets the same name resolution and typing
+      // as an explicit `Foo { x: x }` would.
+      const analyzedValue = isSome(field.value)
+        ? analyzeExpression(ctx, field.value.value)
+        : analyzeIdentifierExpression(ctx, field.name);
       return {
         ...field,
         name: analyzeIdentifier(ctx, field.name, UNIT),
         value: analyzedValue,
-        type: unwrapSomeOr(mapSome(analyzedValue, getType), UNIT),
+        type: getType(analyzedValue),
       };
     },
   );
@@ -10367,8 +10406,15 @@ function analyzeStructExpression(
       structName,
       analyzedFields,
       isSome(analyzedBase),
-      structExpression.tokenId,
+      {
+        tokenId: structExpression.tokenId,
+        typeArguments: structExpression.typeArguments,
+      },
       structDecl.body,
+      {
+        params: structDecl.generics,
+        defaults: structDecl.genericParamDefaults,
+      },
     );
   } else if (
     structDecl.body.kind === "Unit" &&
@@ -10395,27 +10441,60 @@ function analyzeStructExpression(
   };
 }
 
+/** A struct or enum declaration's own generic-parameter names and defaults -
+ * bundled into one param so `analyzeStructNamedFields` stays under the
+ * parameter-count ceiling; `structDecl`/`enumDecl` already carry the same
+ * pair as two separate fields. */
+interface DeclGenerics {
+  readonly params: readonly string[];
+  readonly defaults: ReadonlyMap<string, Semantics.Type>;
+}
+
+/** Where and how a named-field construction was written - its own token
+ * (for a diagnostic with no more specific span) and any explicit turbofish
+ * type arguments, bundled for the same parameter-count reason as
+ * `DeclGenerics`. */
+interface NamedFieldConstructionSite {
+  readonly tokenId: number;
+  readonly typeArguments: readonly Parser.Type[];
+}
+
 /**
  * Checks each provided field against the struct's declaration: duplicate
  * names, unknown names, value-type mismatches (coercing an unsuffixed-
- * integer-literal value first), and - unless a `..base` spread is present -
- * missing required fields. Returns the fields with any coerced values
- * threaded back in, since downstream JSIM lowering reads each field value's
- * `.type` to pick numeric wrapping.
+ * integer-literal value first, and unifying a field naming one of
+ * `generics.params` instead of a plain `typesEqual` check), and - unless a
+ * `..base` spread is present - missing required fields. A spread never seeds
+ * or is checked against inference: a field it would have supplied is simply
+ * absent from `fields`, so it contributes no unification constraint, same as
+ * omitting that field's only occurrence of a parameter entirely. Returns the
+ * fields with any coerced values threaded back in, since downstream JSIM
+ * lowering reads each field value's `.type` to pick numeric wrapping.
  */
 function analyzeStructNamedFields(
   ctx: AnalysisContext,
   structName: string,
   fields: readonly Semantics.FieldInit[],
   hasBase: boolean,
-  structTokenId: number,
+  site: NamedFieldConstructionSite,
   namedFieldsBody: Semantics.NamedFieldsBody,
+  generics: DeclGenerics,
 ): Semantics.FieldInit[] {
   const declaredFields = new Map(
     namedFieldsBody.fields.map((f): [string, Semantics.StructField] => [
       f.name.text,
       f,
     ]),
+  );
+  const genericNames = new Set(generics.params);
+  const bindings: GenericBindings = new Map();
+  seedStructTurbofishBindings(
+    ctx,
+    site.tokenId,
+    site.typeArguments,
+    structName,
+    generics,
+    bindings,
   );
 
   const seenFields = new Set<string>();
@@ -10443,11 +10522,36 @@ function analyzeStructNamedFields(
       return field;
     }
 
-    // Shorthand `Foo { x }` (field.value is none()) - value-type inference
-    // for shorthand is a separate, pre-existing gap; out of scope here.
-    if (!isSome(field.value)) return field;
+    const value = field.value;
+    const isGenericField =
+      genericNames.size > 0 &&
+      involvesGenericParam(declaredField.type, genericNames);
+    if (isGenericField && isErrorRecoveryUnitValue(ctx, value)) {
+      // An already-diagnosed error-recovery value carries no real type to
+      // unify against - placeholder-bind so a downstream "cannot infer"
+      // check doesn't cascade a second diagnostic on top of the error
+      // already reported for this field's own value, while still letting a
+      // later valid occurrence of the same parameter replace the placeholder.
+      placeholderBindUnresolvedGenericParam(
+        declaredField.type,
+        value.tokenId,
+        genericNames,
+        bindings,
+      );
+    } else if (isGenericField) {
+      const expr = checkGenericNamedField(
+        ctx,
+        field.name.text,
+        declaredField.type,
+        value,
+        genericNames,
+        bindings,
+      );
+      return expr === value
+        ? field
+        : { ...field, value: expr, type: getType(expr) };
+    }
 
-    const value = field.value.value;
     const { expr, mismatch } = reconcileExpressionType(
       ctx,
       value,
@@ -10471,19 +10575,44 @@ function analyzeStructNamedFields(
     }
     return expr === value
       ? field
-      : { ...field, value: some(expr), type: getType(expr) };
+      : { ...field, value: expr, type: getType(expr) };
   });
 
   if (!hasBase) {
-    for (const fieldName of declaredFields.keys()) {
-      if (!seenFields.has(fieldName)) {
-        emitError(
-          ctx,
-          { kind: "SemMissingRequiredField", field: fieldName, structName },
-          structTokenId,
+    for (const [fieldName, declaredField] of declaredFields) {
+      if (seenFields.has(fieldName)) continue;
+      // An entirely omitted field supplies no unification information at
+      // all - placeholder-bind any generic parameter it would have been the
+      // only occurrence of, so the loop below doesn't also report it as
+      // unsolved on top of the missing-field diagnostic for the same cause.
+      if (genericNames.size > 0) {
+        placeholderBindUnresolvedGenericParam(
+          declaredField.type,
+          site.tokenId,
+          genericNames,
+          bindings,
         );
       }
+      emitError(
+        ctx,
+        { kind: "SemMissingRequiredField", field: fieldName, structName },
+        site.tokenId,
+      );
     }
+  }
+
+  for (const paramName of generics.params) {
+    if (
+      bindingOrDefault(paramName, generics.defaults, bindings, site.tokenId) !==
+      undefined
+    ) {
+      continue;
+    }
+    emitError(
+      ctx,
+      { kind: "SemCannotInferGenericParam", paramName },
+      site.tokenId,
+    );
   }
 
   return checkedFields;
@@ -11093,6 +11222,21 @@ function singleHopNestedType(
   return undefined;
 }
 
+/** The generic-parameter name at `declaredType`'s base position - a bare
+ * generic-named `NamedType`, or one unwrapped past a single reference/array
+ * hop - or `undefined` when that position isn't a generic parameter at all. */
+function genericParamNameAt(
+  declaredType: Semantics.Type,
+  genericNames: ReadonlySet<string>,
+): string | undefined {
+  const base = singleHopNestedType(declaredType) ?? declaredType;
+  if (base.kind !== "NamedType" || base.path.segments.length !== 1) {
+    return undefined;
+  }
+  const name = base.path.segments[0];
+  return name !== undefined && genericNames.has(name) ? name : undefined;
+}
+
 /** Whether `declaredType` is a generic-parameter position at all - a bare
  * generic-named `NamedType`, a single reference hop to one, or a single
  * fixed-size-array-element hop to one, the only shapes generic-parameter
@@ -11102,12 +11246,7 @@ function involvesGenericParam(
   declaredType: Semantics.Type,
   genericNames: ReadonlySet<string>,
 ): boolean {
-  const base = singleHopNestedType(declaredType) ?? declaredType;
-  if (base.kind !== "NamedType" || base.path.segments.length !== 1) {
-    return false;
-  }
-  const name = base.path.segments[0];
-  return name !== undefined && genericNames.has(name);
+  return genericParamNameAt(declaredType, genericNames) !== undefined;
 }
 
 /** Substitutes every generic-parameter-named `NamedType` position in `type`
@@ -11256,6 +11395,31 @@ function bindMismatchedReferentPlaceholder(
   }
 }
 
+/** Placeholder-binds the generic parameter at `declaredType`'s own base
+ * position (see `genericParamNameAt`) - covering the bare-name shape
+ * `bindMismatchedReferentPlaceholder` can't (it only unwraps a nested
+ * reference/array hop) - for an occurrence that supplies no real
+ * unification information: a field entirely omitted from a construction, a
+ * value carrying an already-diagnosed error-recovery type, or an argument
+ * (positional or named-field) whose array literal has an ambiguous element.
+ * So a downstream "cannot infer" check doesn't also fire on top of the
+ * diagnostic already reported for the same root cause. */
+function placeholderBindUnresolvedGenericParam(
+  declaredType: Semantics.Type,
+  tokenId: number,
+  genericNames: ReadonlySet<string>,
+  bindings: GenericBindings,
+): void {
+  const name = genericParamNameAt(declaredType, genericNames);
+  if (name !== undefined && !bindings.has(name)) {
+    bindings.set(name, {
+      type: { kind: "UnitType", tokenId },
+      tokenId,
+      isErrorPlaceholder: true,
+    });
+  }
+}
+
 /** Seeds `bindings` from a call's own turbofish type-argument list, if any -
  * these take priority over argument-driven inference, so they must run
  * before it (a later disagreement from an ordinary argument is then
@@ -11311,6 +11475,54 @@ function seedTurbofishBindings(
       // (validateSlice1Type, above) and resolves to the UnitType
       // error-recovery placeholder - marked so a real argument later in
       // the same call isn't wrongly reported as conflicting with it.
+      isErrorPlaceholder: isSelfType(argType),
+    });
+  });
+}
+
+/** `seedTurbofishBindings`'s named-field-construction twin - the same
+ * priority-over-field-inference seeding, `::<>`-as-full-inference, and
+ * partial-turbofish-with-defaults handling, for a `Foo::<T> { .. }` /
+ * `Enum::Variant::<T> { .. }` literal's own turbofish (parsed onto
+ * `Parser.StructExpression.typeArguments`) instead of a call's
+ * `f::<T>(..)`. */
+function seedStructTurbofishBindings(
+  ctx: AnalysisContext,
+  tokenId: number,
+  typeArgs: readonly Parser.Type[],
+  calleeNameText: string,
+  generics: DeclGenerics,
+  bindings: GenericBindings,
+): void {
+  if (typeArgs.length === 0) return;
+  const omittedTrailingParamsHaveDefaults =
+    typeArgs.length < generics.params.length &&
+    generics.params
+      .slice(typeArgs.length)
+      .every((name) => generics.defaults.has(name));
+  if (
+    typeArgs.length !== generics.params.length &&
+    !omittedTrailingParamsHaveDefaults
+  ) {
+    emitError(
+      ctx,
+      {
+        kind: "SemTurbofishArgCountMismatch",
+        calleeName: calleeNameText,
+        declared: generics.params.length,
+        supplied: typeArgs.length,
+      },
+      tokenId,
+    );
+    placeholderBindUnbound(bindings, generics.params, tokenId);
+    return;
+  }
+  generics.params.forEach((paramName, index) => {
+    const argType = typeArgs[index];
+    if (argType === undefined) return;
+    bindings.set(paramName, {
+      type: validateSlice1Type(ctx, argType, argType.tokenId),
+      tokenId: argType.tokenId,
       isErrorPlaceholder: isSelfType(argType),
     });
   });
@@ -11576,10 +11788,11 @@ function ambiguousEmptyArrayArg(
  * to one nested inside an array. Returns `arg` unchanged (contributing no
  * binding) when detected, `undefined` otherwise. */
 function arrayArgWithAmbiguousElement(
+  ctx: AnalysisContext,
   arg: Semantics.Expression,
 ): Semantics.Expression | undefined {
   const isAmbiguous = (element: Semantics.Expression): boolean =>
-    element.type.kind === "UnitType" && isAmbiguousUnitExpr(element);
+    isErrorRecoveryUnitValue(ctx, element);
   if (arg.kind === "ArrayExpression" && arg.elements.some(isAmbiguous)) {
     return arg;
   }
@@ -11597,20 +11810,22 @@ function arrayArgWithAmbiguousElement(
  *
  * The two cases bind differently, deliberately: an ambiguous element's own
  * error is already fully reported, so `T` gets an error-placeholder binding
- * here (matching `bindMismatchedReferentPlaceholder`'s own convention) to
- * stop a downstream "cannot infer" check from cascading a second, unrelated
+ * here (`placeholderBindUnresolvedGenericParam`, which covers a bare-name
+ * declared type too, unlike `bindMismatchedReferentPlaceholder`) to stop a
+ * downstream "cannot infer" check from cascading a second, unrelated
  * diagnostic when this array is `T`'s only occurrence. An empty array
  * genuinely carries no information at all - it contributes no binding, so a
  * later occurrence can still legitimately supply one. */
 function specialArrayArg(
+  ctx: AnalysisContext,
   declaredType: Semantics.Type,
   arg: Semantics.Expression,
   substituted: Semantics.Type,
   genericNames: ReadonlySet<string>,
   bindings: GenericBindings,
 ): Semantics.Expression | undefined {
-  if (arrayArgWithAmbiguousElement(arg) !== undefined) {
-    bindMismatchedReferentPlaceholder(
+  if (arrayArgWithAmbiguousElement(ctx, arg) !== undefined) {
+    placeholderBindUnresolvedGenericParam(
       declaredType,
       arg.tokenId,
       genericNames,
@@ -11724,6 +11939,7 @@ function checkGenericPositionalArg(
 ): Semantics.Expression {
   const substituted = substituteGenericType(declaredType, bindings);
   const specialArg = specialArrayArg(
+    ctx,
     declaredType,
     arg,
     substituted,
@@ -11818,6 +12034,101 @@ function checkGenericPositionalArg(
       );
   }
   return coercedArg;
+}
+
+/**
+ * `checkGenericPositionalArg`'s named-field twin: the same unification,
+ * coercion, and diagnostic shape, keyed by field name (`SemStructFieldTypeMismatch`/
+ * `SemStructFieldTypeMismatchConflict`) instead of argument index. No
+ * turbofish/expected-type seeding applies here - struct-literal syntax has
+ * no `Path Generics?` tail to carry a turbofish, and `StructType`/`EnumType`
+ * carry no argument-list identity to seed an expected type against (see
+ * `checkGenericPositionalConstruction`'s own doc comment).
+ */
+function checkGenericNamedField(
+  ctx: AnalysisContext,
+  fieldName: string,
+  declaredType: Semantics.Type,
+  value: Semantics.Expression,
+  genericNames: ReadonlySet<string>,
+  bindings: GenericBindings,
+): Semantics.Expression {
+  const substituted = substituteGenericType(declaredType, bindings);
+  const specialArg = specialArrayArg(
+    ctx,
+    declaredType,
+    value,
+    substituted,
+    genericNames,
+    bindings,
+  );
+  if (specialArg !== undefined) return specialArg;
+  const arrayLiteralArg = coerceArrayLiteralArg(ctx, value, substituted);
+  const coercedValue = isUnsuffixedLiteralExpr(arrayLiteralArg)
+    ? coerceToIntegerType(arrayLiteralArg, substituted)
+    : arrayLiteralArg;
+  const coercedValueType = getType(coercedValue);
+  const outcome = unifyGenericParam(
+    declaredType,
+    coercedValueType,
+    coercedValue.tokenId,
+    genericNames,
+    bindings,
+  );
+  if (coercedValue.kind === "IntLiteral") {
+    checkPosLiteralRange(ctx, coercedValue, coercedValueType);
+  } else if (
+    coercedValue.kind === "UnaryExpression" &&
+    coercedValue.operator === "Neg" &&
+    coercedValue.operand.kind === "IntLiteral" &&
+    !isSome(coercedValue.operand.suffix)
+  ) {
+    const rangeError = checkNegLiteralRange(
+      coercedValue.operand,
+      coercedValueType,
+    );
+    if (isSome(rangeError)) {
+      emitError(ctx, rangeError.value, coercedValue.tokenId);
+    }
+  }
+  switch (outcome.kind) {
+    case "Bound":
+      break;
+    case "Conflict":
+      emitError(
+        ctx,
+        {
+          kind: "SemStructFieldTypeMismatchConflict",
+          field: fieldName,
+          expected: describeType(substituted),
+          found: describeType(coercedValueType),
+        },
+        coercedValue.tokenId,
+        relatedSpanAt(ctx, outcome.previousTokenId, {
+          kind: "LabelInferredAsHere",
+          typeName: describeType(outcome.previous),
+        }),
+      );
+      break;
+    case "Mismatch":
+      emitError(
+        ctx,
+        {
+          kind: "SemStructFieldTypeMismatch",
+          field: fieldName,
+          expected: describeType(declaredType),
+          found: describeType(coercedValueType),
+        },
+        coercedValue.tokenId,
+      );
+      break;
+    default:
+      assertNever(
+        outcome,
+        `Unexpected unify outcome: ${JSON.stringify(outcome)}`,
+      );
+  }
+  return coercedValue;
 }
 
 /**
