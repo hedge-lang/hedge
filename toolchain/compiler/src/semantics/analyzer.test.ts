@@ -6120,6 +6120,70 @@ describe("generic struct/enum instantiation identity", (): void => {
   });
 });
 
+describe("match-pattern generic field-type substitution", (): void => {
+  it("binds a destructured named field to its real concrete type, not the bare declared parameter", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn main() {
+        let w = Wrapper { value: 5 };
+        match w {
+          Wrapper { value } => { print(value + 1); }
+        }
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("binds a destructured tuple-variant field to its real concrete type", (): void => {
+    const result = diagnose(`
+      enum Box<T> { Has(T) }
+      fn main() {
+        let b = Box::Has(5);
+        match b {
+          Box::Has(x) => { print(x + 1); }
+        }
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("substitutes a nested generic field's own type parameter, not just the outer one", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn main() {
+        let w = Wrapper { value: Wrapper { value: 5 } };
+        match w {
+          Wrapper { value } => {
+            match value {
+              Wrapper { value: inner } => { print(inner + 1); }
+            }
+          }
+        }
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("still rejects a genuine type mismatch on a substituted field", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn main() {
+        let w = Wrapper { value: 5 };
+        match w {
+          Wrapper { value } => { print(value + "x"); }
+        }
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(2);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "the trait bound `str: Add` is not satisfied",
+    );
+    expect(messageOf(result.diagnostics[1])).toBe(
+      "arithmetic operands must have the same type",
+    );
+  });
+});
+
 describe("generic parameter used as a fixed-size array's element type", (): void => {
   it.each([
     [

@@ -4742,10 +4742,37 @@ const NAMED_PATTERN_SPEC: PatternFieldSpec<Semantics.StructField> = {
 
 type PathRootedPattern = Parser.TupleStructPattern | Parser.StructPattern;
 
+/** Substitutes a struct/enum declaration's own generic parameters (in
+ * declaration order) for the scrutinee's real, concrete type arguments -
+ * `Wrapper { value }` against a `Wrapper<i32>` scrutinee binds `value` to
+ * `i32`, not the declaration's bare `T`. A non-generic declaration's
+ * scrutinee carries no type arguments, leaving every field untouched. */
+function substitutePatternFieldTypes<
+  F extends { readonly type: Semantics.Type },
+>(
+  fields: readonly F[],
+  declGenerics: readonly string[],
+  typeArguments: readonly Semantics.Type[],
+  tokenId: number,
+): readonly F[] {
+  if (typeArguments.length === 0) return fields;
+  const bindings: GenericBindings = new Map();
+  declGenerics.forEach((name, i) => {
+    const type = typeArguments[i];
+    if (type !== undefined) bindings.set(name, { type, tokenId });
+  });
+  return fields.map((field) => ({
+    ...field,
+    type: substituteGenericType(field.type, bindings),
+  }));
+}
+
 // A qualified path in enum-scrutinee position is genuinely supported syntax
 // now, so a wrong variant name/shape here gets its own real diagnostic
 // rather than falling back to `analyzePatternGuardrail`'s generic one.
-function resolveEnumVariantForPattern<F>(
+function resolveEnumVariantForPattern<
+  F extends { readonly type: Semantics.Type },
+>(
   ctx: AnalysisContext,
   pattern: PathRootedPattern,
   scrutineeType: Semantics.Type,
@@ -4776,7 +4803,16 @@ function resolveEnumVariantForPattern<F>(
     emitError(ctx, spec.notVariant(variantName), pattern.tokenId);
     return none();
   }
-  return fields;
+  const typeArguments =
+    scrutineeType.kind === "EnumType" ? scrutineeType.typeArguments : [];
+  return some(
+    substitutePatternFieldTypes(
+      fields.value,
+      enumDecl.value.generics,
+      typeArguments,
+      pattern.tokenId,
+    ),
+  );
 }
 
 interface ResolvedPatternFields<F> {
@@ -4804,7 +4840,9 @@ interface ResolvedPatternFields<F> {
  * path as a lookup key - otherwise a pattern naming an unrelated,
  * differently-typed struct that merely shares a field shape would silently
  * "resolve". */
-function resolvePlainStructForPattern<F>(
+function resolvePlainStructForPattern<
+  F extends { readonly type: Semantics.Type },
+>(
   ctx: AnalysisContext,
   pattern: PathRootedPattern,
   scrutineeType: Semantics.Type,
@@ -4831,13 +4869,21 @@ function resolvePlainStructForPattern<F>(
     emitError(ctx, spec.notPlainStruct(patternName), pattern.tokenId);
     return some({ fields: [], label, alreadyErrored: true });
   }
-  return some({ fields: fields.value, label, alreadyErrored: false });
+  const typeArguments =
+    scrutineeType.kind === "StructType" ? scrutineeType.typeArguments : [];
+  const substituted = substitutePatternFieldTypes(
+    fields.value,
+    structDecl.value.generics,
+    typeArguments,
+    pattern.tokenId,
+  );
+  return some({ fields: substituted, label, alreadyErrored: false });
 }
 
 /** Tries enum-variant resolution first, then plain-struct resolution -
  * mutually exclusive since a scrutinee type is never both `EnumType` and
  * `StructType`, so trying both never risks a duplicate diagnostic. */
-function resolvePatternFields<F>(
+function resolvePatternFields<F extends { readonly type: Semantics.Type }>(
   ctx: AnalysisContext,
   pattern: PathRootedPattern,
   scrutineeType: Semantics.Type,
