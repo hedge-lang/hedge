@@ -1855,6 +1855,30 @@ describe("generic witness codegen", (): void => {
     expect(js).toContain("_witness_T_Draw.draw(t)");
     expect(runEmittedJs(js)).toEqual(["8"]);
   });
+
+  it("threads a witness for an impl-level (not method-level) generic parameter's own bound, and runs", (): void => {
+    const js = emittedJs(`
+      struct Num { n: i32 }
+      impl Clone for Num {
+        fn clone(&self) -> Self {
+          print("cloning");
+          Num { n: self.n }
+        }
+      }
+      struct Wrapper<T> { value: T }
+      impl<T: Clone> Wrapper<T> {
+        fn dup(&self) -> Wrapper<T> {
+          Wrapper { value: self.value.clone() }
+        }
+      }
+      fn main() {
+        let w = Wrapper { value: Num { n: 5 } };
+        let w2 = w.dup();
+        print("done");
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["cloning", "done"]);
+  });
 });
 
 describe("trait default method codegen", (): void => {
