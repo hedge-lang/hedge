@@ -2045,6 +2045,28 @@ describe("execution tests", (): void => {
         ["5"],
       );
     });
+
+    it("lets an explicit turbofish resolve a named-field struct construction's type parameter", (): void => {
+      assertRunsTo(
+        `
+        struct Wrapper<T> { value: T }
+        fn main() { let w = Wrapper::<i64> { value: 5 }; let Wrapper { value } = w; print(value); }
+        `,
+        ["5"],
+      );
+    });
+
+    it("reports a conflict when a named-field struct construction's turbofish disagrees with a field value", (): void => {
+      const result = compileHedgeCode(
+        `struct Wrapper<T> { value: T } fn main() { let w = Wrapper::<str> { value: 5 }; print(1); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(messageOf(errors[0])).toBe(
+        "field `value` type mismatch: expected `str`, found `i32`",
+      );
+    });
   });
 
   describe("generic named-field enum-variant construction inference", (): void => {
@@ -2125,6 +2147,16 @@ describe("execution tests", (): void => {
       expect(errors[0]?.code).toBe("HEDGE-TYPE-006");
       expect(messageOf(errors[0])).toBe(
         "cannot infer type of generic parameter `T` without an explicit type annotation or turbofish",
+      );
+    });
+
+    it("lets an explicit turbofish resolve a named-field enum-variant construction's type parameter", (): void => {
+      assertRunsTo(
+        `
+        enum Holder<T> { Full { value: T } }
+        fn main() { let h = Holder::Full::<i64> { value: 5 }; match h { Holder::Full { value } => print(value) } }
+        `,
+        ["5"],
       );
     });
   });

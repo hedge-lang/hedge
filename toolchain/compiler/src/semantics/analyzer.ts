@@ -10312,7 +10312,10 @@ function analyzeEnumVariantStructConstruction(
     variantName,
     fields,
     hasBase,
-    structExpression.tokenId,
+    {
+      tokenId: structExpression.tokenId,
+      typeArguments: structExpression.typeArguments,
+    },
     variant.body.value,
     { params: enumDecl.generics, defaults: enumDecl.genericParamDefaults },
   );
@@ -10403,7 +10406,10 @@ function analyzeStructExpression(
       structName,
       analyzedFields,
       isSome(analyzedBase),
-      structExpression.tokenId,
+      {
+        tokenId: structExpression.tokenId,
+        typeArguments: structExpression.typeArguments,
+      },
       structDecl.body,
       {
         params: structDecl.generics,
@@ -10444,6 +10450,15 @@ interface DeclGenerics {
   readonly defaults: ReadonlyMap<string, Semantics.Type>;
 }
 
+/** Where and how a named-field construction was written - its own token
+ * (for a diagnostic with no more specific span) and any explicit turbofish
+ * type arguments, bundled for the same parameter-count reason as
+ * `DeclGenerics`. */
+interface NamedFieldConstructionSite {
+  readonly tokenId: number;
+  readonly typeArguments: readonly Parser.Type[];
+}
+
 /**
  * Checks each provided field against the struct's declaration: duplicate
  * names, unknown names, value-type mismatches (coercing an unsuffixed-
@@ -10461,7 +10476,7 @@ function analyzeStructNamedFields(
   structName: string,
   fields: readonly Semantics.FieldInit[],
   hasBase: boolean,
-  structTokenId: number,
+  site: NamedFieldConstructionSite,
   namedFieldsBody: Semantics.NamedFieldsBody,
   generics: DeclGenerics,
 ): Semantics.FieldInit[] {
@@ -10473,6 +10488,14 @@ function analyzeStructNamedFields(
   );
   const genericNames = new Set(generics.params);
   const bindings: GenericBindings = new Map();
+  seedStructTurbofishBindings(
+    ctx,
+    site.tokenId,
+    site.typeArguments,
+    structName,
+    generics,
+    bindings,
+  );
 
   const seenFields = new Set<string>();
   const checkedFields = fields.map((field): Semantics.FieldInit => {
@@ -10565,7 +10588,7 @@ function analyzeStructNamedFields(
       if (genericNames.size > 0) {
         placeholderBindUnresolvedGenericParam(
           declaredField.type,
-          structTokenId,
+          site.tokenId,
           genericNames,
           bindings,
         );
@@ -10573,26 +10596,22 @@ function analyzeStructNamedFields(
       emitError(
         ctx,
         { kind: "SemMissingRequiredField", field: fieldName, structName },
-        structTokenId,
+        site.tokenId,
       );
     }
   }
 
   for (const paramName of generics.params) {
     if (
-      bindingOrDefault(
-        paramName,
-        generics.defaults,
-        bindings,
-        structTokenId,
-      ) !== undefined
+      bindingOrDefault(paramName, generics.defaults, bindings, site.tokenId) !==
+      undefined
     ) {
       continue;
     }
     emitError(
       ctx,
       { kind: "SemCannotInferGenericParam", paramName },
-      structTokenId,
+      site.tokenId,
     );
   }
 
@@ -11456,6 +11475,54 @@ function seedTurbofishBindings(
       // (validateSlice1Type, above) and resolves to the UnitType
       // error-recovery placeholder - marked so a real argument later in
       // the same call isn't wrongly reported as conflicting with it.
+      isErrorPlaceholder: isSelfType(argType),
+    });
+  });
+}
+
+/** `seedTurbofishBindings`'s named-field-construction twin - the same
+ * priority-over-field-inference seeding, `::<>`-as-full-inference, and
+ * partial-turbofish-with-defaults handling, for a `Foo::<T> { .. }` /
+ * `Enum::Variant::<T> { .. }` literal's own turbofish (parsed onto
+ * `Parser.StructExpression.typeArguments`) instead of a call's
+ * `f::<T>(..)`. */
+function seedStructTurbofishBindings(
+  ctx: AnalysisContext,
+  tokenId: number,
+  typeArgs: readonly Parser.Type[],
+  calleeNameText: string,
+  generics: DeclGenerics,
+  bindings: GenericBindings,
+): void {
+  if (typeArgs.length === 0) return;
+  const omittedTrailingParamsHaveDefaults =
+    typeArgs.length < generics.params.length &&
+    generics.params
+      .slice(typeArgs.length)
+      .every((name) => generics.defaults.has(name));
+  if (
+    typeArgs.length !== generics.params.length &&
+    !omittedTrailingParamsHaveDefaults
+  ) {
+    emitError(
+      ctx,
+      {
+        kind: "SemTurbofishArgCountMismatch",
+        calleeName: calleeNameText,
+        declared: generics.params.length,
+        supplied: typeArgs.length,
+      },
+      tokenId,
+    );
+    placeholderBindUnbound(bindings, generics.params, tokenId);
+    return;
+  }
+  generics.params.forEach((paramName, index) => {
+    const argType = typeArgs[index];
+    if (argType === undefined) return;
+    bindings.set(paramName, {
+      type: validateSlice1Type(ctx, argType, argType.tokenId),
+      tokenId: argType.tokenId,
       isErrorPlaceholder: isSelfType(argType),
     });
   });
