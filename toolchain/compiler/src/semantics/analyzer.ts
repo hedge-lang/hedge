@@ -11759,9 +11759,11 @@ function mentionsGenericParamAnywhere(
 
 /** Substitutes every generic-parameter-named `NamedType` position in `type`
  * for its bound concrete type, recursing through a single reference or
- * array-element hop - the shapes generic-parameter resolution currently
- * supports. A `NamedType` with no binding yet (or not a generic parameter at
- * all) passes through unchanged. */
+ * array-element hop, or through a `StructType`/`EnumType`'s own nominal
+ * type arguments (`Wrapper<T>` -> `Wrapper<i32>` once `T` is bound) - the
+ * shapes generic-parameter resolution currently supports. A `NamedType`
+ * with no binding yet (or not a generic parameter at all) passes through
+ * unchanged. */
 function substituteGenericType(
   type: Semantics.Type,
   bindings: GenericBindings,
@@ -11781,6 +11783,14 @@ function substituteGenericType(
     return {
       ...type,
       elementType: substituteGenericType(type.elementType, bindings),
+    };
+  }
+  if (type.kind === "StructType" || type.kind === "EnumType") {
+    return {
+      ...type,
+      typeArguments: type.typeArguments.map((arg) =>
+        substituteGenericType(arg, bindings),
+      ),
     };
   }
   return type;

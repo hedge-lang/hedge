@@ -6120,6 +6120,19 @@ describe("generic struct/enum instantiation identity", (): void => {
   });
 });
 
+describe("generic substitution through a nominal type's own type arguments", (): void => {
+  it("substitutes a generic function's return type when it names a generic struct instantiated by the call's own binding", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn wrap<T>(x: T) -> Wrapper<T> { Wrapper { value: x } }
+      fn main() {
+        let a: Wrapper<i32> = wrap(1);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+});
+
 describe("match-pattern generic field-type substitution", (): void => {
   it("binds a destructured named field to its real concrete type, not the bare declared parameter", (): void => {
     const result = diagnose(`
@@ -6156,6 +6169,24 @@ describe("match-pattern generic field-type substitution", (): void => {
           Wrapper { value } => {
             match value {
               Wrapper { value: inner } => { print(inner + 1); }
+            }
+          }
+        }
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("substitutes a field declared as a different generic struct's own instantiation, not just a bare type parameter", (): void => {
+    const result = diagnose(`
+      struct Inner<T> { value: T }
+      struct Outer<T> { inner: Inner<T> }
+      fn main() {
+        let o = Outer::<i32> { inner: Inner { value: 5 } };
+        match o {
+          Outer { inner } => {
+            match inner {
+              Inner { value } => { print(value + 1); }
             }
           }
         }
