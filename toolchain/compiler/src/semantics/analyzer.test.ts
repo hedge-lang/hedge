@@ -6501,6 +6501,70 @@ describe("trait and impl declarations", (): void => {
     expect(result.diagnostics).toEqual([]);
   });
 
+  describe("generic impl-target instantiation coherence", (): void => {
+    it("accepts two impls of the same trait for different concrete instantiations of a generic struct", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Pair<T> { a: T, b: T }
+        impl Draw for Pair<i32> { fn draw(&self) -> str { "a" } }
+        impl Draw for Pair<str> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still rejects two impls of the same trait for the identical concrete instantiation", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Pair<T> { a: T, b: T }
+        impl Draw for Pair<i32> { fn draw(&self) -> str { "a" } }
+        impl Draw for Pair<i32> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Draw` is already implemented for type `Pair`",
+      );
+    });
+
+    it("rejects a fully generic impl target alongside a concrete instantiation of the same struct", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Pair<T> { a: T, b: T }
+        impl<T> Draw for Pair<T> { fn draw(&self) -> str { "a" } }
+        impl Draw for Pair<i32> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Draw` is already implemented for type `Pair`",
+      );
+    });
+
+    it("rejects two fully generic impl targets of the same struct", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Pair<T> { a: T, b: T }
+        impl<T> Draw for Pair<T> { fn draw(&self) -> str { "a" } }
+        impl<T> Draw for Pair<T> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Draw` is already implemented for type `Pair`",
+      );
+    });
+
+    it("leaves a fully blanket impl's own overlap behavior unaffected", (): void => {
+      const result = diagnose(`
+        trait A {}
+        trait B { fn f(&self) -> str; }
+        impl<T: A> B for T { fn f(&self) -> str { "a" } }
+        impl<T: A> B for T { fn f(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "conflicting implementations of trait `B`",
+      );
+    });
+  });
+
   describe("orphan rule", (): void => {
     it("analyzes an impl declared in the same package as both its trait and its type with no diagnostics", (): void => {
       // TODO(Hedge-264): cross-package enforcement (an impl written where

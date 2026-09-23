@@ -399,11 +399,23 @@ interface RegisteredTrait {
   readonly notObjectSafe: Option<SelfArgMethod>;
 }
 
+/** One position in an impl target's own type-argument list, for overlap
+ * checking - `Wildcard` when the position is filled by the impl's own
+ * declared generic parameter (`impl<T> Draw for Pair<T>`, which covers
+ * every instantiation of `Pair` and so conflicts with any other impl of the
+ * same trait for `Pair`, concrete or wildcard alike), `Concrete` when it's a
+ * fully resolved type (`impl Draw for Pair<i32>`, which conflicts only with
+ * an identical concrete type in the same position). */
+type TargetArgSlot =
+  | { readonly kind: "Wildcard" }
+  | { readonly kind: "Concrete"; readonly type: Semantics.Type };
+
 /** One registered trait impl, extracted just far enough for coherence and
  * bound checking. */
 interface RegisteredImpl {
   readonly traitName: string;
   readonly targetTypeName: string;
+  readonly targetTypeArguments: readonly TargetArgSlot[];
   readonly isBlanket: boolean;
   readonly blanketBounds: readonly string[];
   readonly providedMethods: readonly string[];
@@ -3098,15 +3110,39 @@ function checkAssociatedConst(
   }
 }
 
+/** Whether every position of two impl targets' own type-argument lists
+ * overlaps - a mismatched length can't happen for two impls of the same
+ * declared struct/enum (both instantiate the same fixed generic arity), but
+ * is treated as overlapping rather than silently missing a real conflict if
+ * it somehow did. */
+function targetTypeArgumentsOverlap(
+  a: readonly TargetArgSlot[],
+  b: readonly TargetArgSlot[],
+): boolean {
+  if (a.length !== b.length) return true;
+  return a.every((slot, i) => {
+    const other = b[i];
+    if (other === undefined) return true;
+    if (slot.kind === "Wildcard" || other.kind === "Wildcard") return true;
+    return typesEqual(slot.type, other.type);
+  });
+}
+
 /**
  * Two impls of the same trait overlap when either is blanket (a blanket
  * impl claims the trait for every type, regardless of its own bound - the
  * bound is a well-formedness constraint on the impl body, not something
- * overlap-checking consults) or when they target the exact same concrete
- * type.
+ * overlap-checking consults), or when they target the same base type and
+ * every position of their own type-argument lists overlaps (see
+ * `targetTypeArgumentsOverlap`).
  */
 function implsOverlap(a: RegisteredImpl, b: RegisteredImpl): boolean {
-  return a.isBlanket || b.isBlanket || a.targetTypeName === b.targetTypeName;
+  if (a.isBlanket || b.isBlanket) return true;
+  if (a.targetTypeName !== b.targetTypeName) return false;
+  return targetTypeArgumentsOverlap(
+    a.targetTypeArguments,
+    b.targetTypeArguments,
+  );
 }
 
 function implOverlapKind(
@@ -3987,6 +4023,35 @@ function reportExtraAssociatedTypes(
   }
 }
 
+/** Resolves an impl target's own type-argument list (`Pair<T>`,
+ * `Pair<i32>`) into `TargetArgSlot`s, under the impl's own generic-param
+ * scope (must be called with that scope already pushed, so a `T` referring
+ * to the impl's own declared parameter resolves as one). A non-`NamedType`
+ * target (a blanket impl's bare type parameter, or an unsupported non-path
+ * target) carries no type arguments to resolve. */
+function resolveTargetTypeArguments(
+  ctx: AnalysisContext,
+  targetType: Parser.Type,
+  implGenericNames: ReadonlySet<string>,
+): readonly TargetArgSlot[] {
+  if (targetType.kind !== "NamedType") return [];
+  return targetType.typeArguments.map((arg): TargetArgSlot => {
+    const bareParamName =
+      arg.kind === "NamedType" &&
+      arg.path.segments.length === 1 &&
+      arg.typeArguments.length === 0
+        ? arg.path.segments[0]
+        : undefined;
+    if (bareParamName !== undefined && implGenericNames.has(bareParamName)) {
+      return { kind: "Wildcard" };
+    }
+    return {
+      kind: "Concrete",
+      type: resolveSlice1Type(ctx, arg, arg.tokenId),
+    };
+  });
+}
+
 /** Registers one `impl`'s coherence/completeness/visibility facts, or
  * `undefined` for a not-yet-handled shape (no trait, or a target that
  * doesn't resolve to any struct/enum in scope). Split out of `registerImpls`
@@ -4033,10 +4098,16 @@ function registerOneImpl(
       resolveSlice1Type(ctx, alias.value.value, alias.value.value.tokenId),
     );
   }
+  const targetTypeArguments = resolveTargetTypeArguments(
+    ctx,
+    item.type,
+    new Set(genericParamNames(item.generics)),
+  );
   popGenericParams(ctx);
   const incoming: RegisteredImpl = {
     traitName,
     targetTypeName: targetTypeName.value,
+    targetTypeArguments,
     isBlanket: decl.isBlanket,
     blanketBounds: decl.blanketBounds.map((bound) =>
       resolveTraitIdentity(bound, scope),
