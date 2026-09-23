@@ -255,6 +255,14 @@ export interface MethodReceiver {
   readonly mutable: boolean;
 }
 
+/** A declared generic bound's own resolved trait identity and type
+ * arguments (`T: Convert<i32>`) - `typeArguments` is empty for an
+ * unparameterized trait bound, the overwhelmingly common case. */
+export interface BoundTraitRef {
+  readonly name: string;
+  readonly typeArguments: readonly Type[];
+}
+
 /** One of a trait's own methods, in declaration order. `isDefault` is true
  * for a method with a body in the trait declaration (needs no override) and
  * false for a bodiless required one (an impl must provide it). `params`/
@@ -271,11 +279,11 @@ export interface TraitMethod {
    * not the trait's - so a call site can skip type-checking an argument bound
    * to one, the same way an inherent generic method's are skipped. */
   readonly genericParams: readonly string[];
-  /** Each `genericParams` name's own declared bound trait names (resolved
-   * `traitRegistry` keys), mirroring `IndexedMethod.genericParamBounds` for
-   * an inherent method - a call site's own bound argument threads a witness
-   * through `recordMethodCallWitnesses` using this. */
-  readonly genericParamBounds: ReadonlyMap<string, readonly string[]>;
+  /** Each `genericParams` name's own declared bounds, mirroring
+   * `IndexedMethod.genericParamBounds` for an inherent method - a call
+   * site's own bound argument threads a witness through
+   * `recordMethodCallWitnesses` using this. */
+  readonly genericParamBounds: ReadonlyMap<string, readonly BoundTraitRef[]>;
 }
 
 /**
@@ -640,10 +648,10 @@ export interface FunctionType {
    */
   readonly paramsArePlaceholder: boolean;
   readonly genericParams: readonly string[];
-  /** Each declared generic parameter's own required trait names (`T: Draw`),
+  /** Each declared generic parameter's own required bounds (`T: Draw`),
    * keyed by parameter name; a parameter with no bounds still gets an empty
    * array, not a missing key. */
-  readonly genericParamBounds: ReadonlyMap<string, readonly string[]>;
+  readonly genericParamBounds: ReadonlyMap<string, readonly BoundTraitRef[]>;
   /** Each declared generic parameter's own default type (`T = i32`), keyed
    * by parameter name; a parameter with no default carries no entry. A
    * default naming an earlier parameter resolves to that parameter's own

@@ -6565,6 +6565,83 @@ describe("trait and impl declarations", (): void => {
     });
   });
 
+  describe("parameterized trait-bound instantiation coherence and selection", (): void => {
+    it("accepts two impls of a parameterized trait for different type arguments", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct P { x: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.x } }
+        impl Convert<str> for P { fn convert(&self) -> str { "s" } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still rejects two impls of a parameterized trait for the identical type argument", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct P { x: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.x } }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.x } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Convert` is already implemented for type `P`",
+      );
+    });
+
+    it("selects the impl matching a bound's own requested type argument, not any impl of the trait", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct P { x: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.x } }
+        impl Convert<str> for P { fn convert(&self) -> str { "s" } }
+        fn use_it<T: Convert<i32>>(x: T) {}
+        fn main() { use_it(P { x: 1 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a bound whose specific requested instantiation has no matching impl, even though the trait itself is implemented", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct P { x: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.x } }
+        fn use_it<T: Convert<bool>>(x: T) {}
+        fn main() { use_it(P { x: 1 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `P: Convert<bool>` is not satisfied",
+      );
+    });
+
+    it("does not falsely conflict two shadowed same-named traits, each impl'd for the same concrete type", (): void => {
+      const result = diagnose(`
+        trait Convert { fn convert(&self) -> i32; }
+        struct P { x: i32 }
+        impl Convert for P { fn convert(&self) -> i32 { self.x } }
+        fn scoped() {
+          trait Convert { fn convert(&self) -> str; }
+          impl Convert for P { fn convert(&self) -> str { "s" } }
+        }
+      `);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toEqual([]);
+    });
+
+    it("does not let a shadowed trait's own required methods corrupt an outer same-named trait's completeness checking", (): void => {
+      const result = diagnose(`
+        trait Convert { fn convert(&self) -> i32; }
+        struct P { x: i32 }
+        fn scoped() {
+          trait Convert { fn convert(&self) -> i32; fn other(&self); }
+        }
+        impl Convert for P { fn convert(&self) -> i32 { self.x } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
   describe("orphan rule", (): void => {
     it("analyzes an impl declared in the same package as both its trait and its type with no diagnostics", (): void => {
       // TODO(Hedge-264): cross-package enforcement (an impl written where

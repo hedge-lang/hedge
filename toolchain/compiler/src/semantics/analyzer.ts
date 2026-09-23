@@ -302,7 +302,10 @@ interface AnalysisContext {
    * generic body can check a still-abstract argument's bound against the
    * enclosing declaration's own bound list instead of searching
    * `implRegistry` for a concrete impl that doesn't exist yet. */
-  readonly genericParamBoundStack: ReadonlyMap<string, readonly string[]>[];
+  readonly genericParamBoundStack: ReadonlyMap<
+    string,
+    readonly ParsedBoundTraitRef[]
+  >[];
   /**
    * Every trait impl registered anywhere in the program, flat and
    * program-wide rather than scoped to a frame - an impl's existence is a
@@ -414,6 +417,7 @@ type TargetArgSlot =
  * bound checking. */
 interface RegisteredImpl {
   readonly traitName: string;
+  readonly traitTypeArguments: readonly TargetArgSlot[];
   readonly targetTypeName: string;
   readonly targetTypeArguments: readonly TargetArgSlot[];
   readonly isBlanket: boolean;
@@ -474,11 +478,11 @@ function genericParamNames(
 function genericParamBoundNames(
   generics: readonly Parser.GenericParam[],
   whereClause: Option<Parser.WhereClause> = none(),
-): ReadonlyMap<string, readonly string[]> {
-  const bounds = new Map<string, readonly string[]>();
+): ReadonlyMap<string, readonly ParsedBoundTraitRef[]> {
+  const bounds = new Map<string, readonly ParsedBoundTraitRef[]>();
   for (const param of generics) {
     if (param.kind !== "TypeParam") continue;
-    bounds.set(param.name.text, traitBoundNames(param.bounds));
+    bounds.set(param.name.text, traitBoundRefs(param.bounds));
   }
   for (const predicate of isSome(whereClause)
     ? whereClause.value.predicates
@@ -492,24 +496,30 @@ function genericParamBoundNames(
     const name = predicate.type.path.segments[0];
     const existing = name === undefined ? undefined : bounds.get(name);
     if (name === undefined || existing === undefined) continue;
-    bounds.set(name, [...existing, ...traitBoundNames(predicate.bounds)]);
+    bounds.set(name, [...existing, ...traitBoundRefs(predicate.bounds)]);
   }
   return bounds;
 }
 
 /** Resolves every bound name in a `param -> bound names` map to its
- * scope-qualified `traitRegistry` key, against the scope in effect now -
- * used when building a signature's persisted `genericParamBounds`, so a
- * later call site checks the trait visible where the callee was declared,
- * not where it's called. */
+ * scope-qualified `traitRegistry` key (and each bound's own type arguments
+ * to real resolved types), against the scope in effect now - used when
+ * building a signature's persisted `genericParamBounds`, so a later call
+ * site checks the trait visible where the callee was declared, not where
+ * it's called. */
 function resolveBoundNames(
   ctx: AnalysisContext,
-  bounds: ReadonlyMap<string, readonly string[]>,
-): ReadonlyMap<string, readonly string[]> {
+  bounds: ReadonlyMap<string, readonly ParsedBoundTraitRef[]>,
+): ReadonlyMap<string, readonly Semantics.BoundTraitRef[]> {
   return new Map(
-    [...bounds].map(([param, names]) => [
+    [...bounds].map(([param, refs]) => [
       param,
-      names.map((name) => lookupTrait(ctx, name) ?? name),
+      refs.map((ref) => ({
+        name: lookupTrait(ctx, ref.name) ?? ref.name,
+        typeArguments: ref.typeArguments.map((arg) =>
+          resolveSlice1Type(ctx, arg, arg.tokenId),
+        ),
+      })),
     ]),
   );
 }
@@ -539,15 +549,23 @@ function resolveGenericParamDefaults(
  * `LifetimeTraitBound` (`T: 'a`) contributes nothing, since it names no
  * trait. Shared by inline (`T: Draw`) and `where`-clause (`where T: Draw`)
  * bound lists alike. */
-function traitBoundNames(
+interface ParsedBoundTraitRef {
+  readonly name: string;
+  readonly typeArguments: readonly Parser.Type[];
+}
+
+function traitBoundRefs(
   bounds: readonly Parser.TraitBound[],
-): readonly string[] {
+): readonly ParsedBoundTraitRef[] {
   return bounds
     .filter(
       (bound): bound is Parser.PathTraitBound =>
         bound.kind === "PathTraitBound",
     )
-    .map((bound) => bound.path.segments.at(-1) ?? "");
+    .map((bound) => ({
+      name: bound.path.segments.at(-1) ?? "",
+      typeArguments: bound.typeArguments,
+    }));
 }
 
 /** Whether any registered trait carries this bare name, regardless of the
@@ -648,7 +666,7 @@ function declaredGenericParamBounds(
 ): readonly string[] {
   const innermost = ctx.genericParamBoundStack.at(-1);
   return (innermost?.get(name) ?? []).map(
-    (bound) => lookupTrait(ctx, bound) ?? bound,
+    (ref) => lookupTrait(ctx, ref.name) ?? ref.name,
   );
 }
 
@@ -2370,9 +2388,9 @@ function buildImplDecl(item: Parser.ImplDecl): Semantics.ImplDecl {
       isSome(targetTypeName) &&
       genericParamNames(item.generics).includes(targetTypeName.value),
     blanketBounds: isSome(targetTypeName)
-      ? (genericParamBoundNames(item.generics, item.whereClause).get(
-          targetTypeName.value,
-        ) ?? [])
+      ? (genericParamBoundNames(item.generics, item.whereClause)
+          .get(targetTypeName.value)
+          ?.map((ref) => ref.name) ?? [])
       : [],
     providedMethods: item.items
       .filter((decl): decl is Parser.FunctionDef => decl.kind === "Function")
@@ -3139,9 +3157,9 @@ function targetTypeArgumentsOverlap(
 function implsOverlap(a: RegisteredImpl, b: RegisteredImpl): boolean {
   if (a.isBlanket || b.isBlanket) return true;
   if (a.targetTypeName !== b.targetTypeName) return false;
-  return targetTypeArgumentsOverlap(
-    a.targetTypeArguments,
-    b.targetTypeArguments,
+  return (
+    targetTypeArgumentsOverlap(a.targetTypeArguments, b.targetTypeArguments) &&
+    targetTypeArgumentsOverlap(a.traitTypeArguments, b.traitTypeArguments)
   );
 }
 
@@ -3181,6 +3199,7 @@ function resolveTraitBound(
   ctx: AnalysisContext,
   type: Semantics.Type,
   traitName: string,
+  requestedTypeArguments: readonly Semantics.Type[] = [],
 ): Option<WitnessRef> {
   if (type.kind === "NamedType" && type.path.segments.length === 1) {
     const paramName = type.path.segments[0];
@@ -3198,9 +3217,16 @@ function resolveTraitBound(
         : none();
     }
   }
-  const primitiveWitness = resolvePrimitiveTraitBound(ctx, type, traitName);
-  if (isSome(primitiveWitness)) return primitiveWitness;
-  return resolveTraitBoundForTypeName(ctx, typeIdentity(type), traitName);
+  if (requestedTypeArguments.length === 0) {
+    const primitiveWitness = resolvePrimitiveTraitBound(ctx, type, traitName);
+    if (isSome(primitiveWitness)) return primitiveWitness;
+  }
+  return resolveTraitBoundForTypeName(
+    ctx,
+    typeIdentity(type),
+    traitName,
+    requestedTypeArguments,
+  );
 }
 
 /** A primitive argument satisfies the prelude `PartialEq`/`Eq` (any type
@@ -3274,20 +3300,47 @@ function typeIdentity(type: Semantics.Type): string {
   return isNominalType(type) ? type.name : describeType(type);
 }
 
+/** Whether an impl's own resolved trait type arguments satisfy a bound's
+ * requested ones. An unparameterized request (`requested` empty - every
+ * existing caller except a real `T: Trait<Args>` bound, including every
+ * operator-trait dispatch built on the prelude's own `Rhs = Self`-defaulted
+ * traits) matches any impl regardless of its own declared arguments -
+ * operator dispatch always looks up its trait bare and separately validates
+ * the found impl's own `Rhs`/`Output`, so a real (non-default) `Rhs` impl
+ * must stay findable this way. Only a genuinely parameterized request does
+ * per-position matching, where a mismatch is a real non-match, not (unlike
+ * `targetTypeArgumentsOverlap`'s coherence use) something to conservatively
+ * treat as a conflict. */
+function requestedTraitArgumentsSatisfied(
+  implSlots: readonly TargetArgSlot[],
+  requested: readonly Semantics.Type[],
+): boolean {
+  if (requested.length === 0) return true;
+  if (implSlots.length !== requested.length) return false;
+  return implSlots.every((slot, i) => {
+    const type = requested[i];
+    if (type === undefined) return false;
+    return slot.kind === "Wildcard" || typesEqual(slot.type, type);
+  });
+}
+
 /**
- * Finds the registered impl satisfying `typeName: traitName` - a concrete
- * registered impl, or a blanket impl whose own bound is satisfied (checked
- * recursively, since a blanket impl's own `A` in `impl<T: A> B for T` may
- * itself be satisfied only through another blanket impl). `typeName` is
- * always concrete here, so this never revisits `resolveTraitBound`'s
- * abstract-parameter case. Shared by `resolveTraitBoundForTypeName` (builds
- * a witness from the result) and `resolveAssociatedTypeViaSupertrait`
- * (reads the impl's own associated-type definitions instead).
+ * Finds the registered impl satisfying `typeName: traitName<requestedTypeArguments>`
+ * - a concrete registered impl, or a blanket impl whose own bound is
+ * satisfied (checked recursively, since a blanket impl's own `A` in
+ * `impl<T: A> B for T` may itself be satisfied only through another blanket
+ * impl). `typeName` is always concrete here, so this never revisits
+ * `resolveTraitBound`'s abstract-parameter case. Shared by
+ * `resolveTraitBoundForTypeName` (builds a witness from the result) and
+ * `resolveAssociatedTypeViaSupertrait` (reads the impl's own
+ * associated-type definitions instead, always for an unparameterized
+ * trait).
  */
 function findRegisteredImpl(
   ctx: AnalysisContext,
   typeName: string,
   traitName: string,
+  requestedTypeArguments: readonly Semantics.Type[] = [],
   visiting: ReadonlySet<string> = new Set(),
 ): RegisteredImpl | undefined {
   const key = `${typeName}::${traitName}`;
@@ -3295,10 +3348,19 @@ function findRegisteredImpl(
   const nextVisiting = new Set(visiting).add(key);
   return ctx.implRegistry.find((impl) => {
     if (impl.traitName !== traitName) return false;
+    if (
+      !requestedTraitArgumentsSatisfied(
+        impl.traitTypeArguments,
+        requestedTypeArguments,
+      )
+    ) {
+      return false;
+    }
     if (!impl.isBlanket) return impl.targetTypeName === typeName;
     return impl.blanketBounds.every(
       (bound) =>
-        findRegisteredImpl(ctx, typeName, bound, nextVisiting) !== undefined,
+        findRegisteredImpl(ctx, typeName, bound, [], nextVisiting) !==
+        undefined,
     );
   });
 }
@@ -3322,6 +3384,7 @@ function composeBlanketBoundWitnesses(
       ctx,
       typeName,
       bound,
+      [],
       visiting,
     );
     if (!isSome(witness)) return undefined;
@@ -3342,12 +3405,18 @@ function resolveTraitBoundForTypeName(
   ctx: AnalysisContext,
   typeName: string,
   traitName: string,
+  requestedTypeArguments: readonly Semantics.Type[] = [],
   visiting: ReadonlySet<string> = new Set(),
 ): Option<WitnessRef> {
   const key = `${typeName}::${traitName}`;
   if (visiting.has(key)) return none();
   const nextVisiting = new Set(visiting).add(key);
-  const impl = findRegisteredImpl(ctx, typeName, traitName);
+  const impl = findRegisteredImpl(
+    ctx,
+    typeName,
+    traitName,
+    requestedTypeArguments,
+  );
   if (impl === undefined) return none();
   if (impl.isBlanket) {
     const boundWitnesses = composeBlanketBoundWitnesses(
@@ -4029,13 +4098,16 @@ function reportExtraAssociatedTypes(
  * to the impl's own declared parameter resolves as one). A non-`NamedType`
  * target (a blanket impl's bare type parameter, or an unsupported non-path
  * target) carries no type arguments to resolve. */
-function resolveTargetTypeArguments(
+/** The shared resolver behind both `resolveTargetTypeArguments` (an impl's
+ * own `Pair<...>` target) and an impl's `TraitRef<...>` - either one's raw
+ * argument list, resolved into `TargetArgSlot`s under the impl's own
+ * generic-param scope (must be called with that scope already pushed). */
+function resolveTypeArgumentSlots(
   ctx: AnalysisContext,
-  targetType: Parser.Type,
+  typeArguments: readonly Parser.Type[],
   implGenericNames: ReadonlySet<string>,
 ): readonly TargetArgSlot[] {
-  if (targetType.kind !== "NamedType") return [];
-  return targetType.typeArguments.map((arg): TargetArgSlot => {
+  return typeArguments.map((arg): TargetArgSlot => {
     const bareParamName =
       arg.kind === "NamedType" &&
       arg.path.segments.length === 1 &&
@@ -4050,6 +4122,56 @@ function resolveTargetTypeArguments(
       type: resolveSlice1Type(ctx, arg, arg.tokenId),
     };
   });
+}
+
+function resolveTargetTypeArguments(
+  ctx: AnalysisContext,
+  targetType: Parser.Type,
+  implGenericNames: ReadonlySet<string>,
+): readonly TargetArgSlot[] {
+  if (targetType.kind !== "NamedType") return [];
+  return resolveTypeArgumentSlots(
+    ctx,
+    targetType.typeArguments,
+    implGenericNames,
+  );
+}
+
+/** The facts `registerOneImpl` needs resolved under the impl's own pushed
+ * generic-param scope: each associated-type definition, and the target's
+ * and trait ref's own type-argument slots. */
+function resolveImplRegistrationFacts(
+  ctx: AnalysisContext,
+  item: Parser.ImplDecl,
+  declaredAssocNames: readonly string[],
+): {
+  readonly associatedTypeDefs: Map<string, Semantics.Type>;
+  readonly targetTypeArguments: readonly TargetArgSlot[];
+  readonly traitTypeArguments: readonly TargetArgSlot[];
+} {
+  const associatedTypeDefs = new Map<string, Semantics.Type>();
+  for (const alias of item.items) {
+    if (alias.kind !== "TypeAlias" || !isSome(alias.value)) continue;
+    if (!declaredAssocNames.includes(alias.name.text)) continue;
+    associatedTypeDefs.set(
+      alias.name.text,
+      resolveSlice1Type(ctx, alias.value.value, alias.value.value.tokenId),
+    );
+  }
+  const implGenericNames = new Set(genericParamNames(item.generics));
+  const targetTypeArguments = resolveTargetTypeArguments(
+    ctx,
+    item.type,
+    implGenericNames,
+  );
+  const traitTypeArguments = isSome(item.traitRef)
+    ? resolveTypeArgumentSlots(
+        ctx,
+        item.traitRef.value.typeArguments,
+        implGenericNames,
+      )
+    : [];
+  return { associatedTypeDefs, targetTypeArguments, traitTypeArguments };
 }
 
 /** Registers one `impl`'s coherence/completeness/visibility facts, or
@@ -4089,23 +4211,12 @@ function registerOneImpl(
   }
   const declaredNames = declaredAssociatedTypeNames(ctx, traitName);
   pushGenericParams(ctx, item.generics, item.whereClause);
-  const associatedTypeDefs = new Map<string, Semantics.Type>();
-  for (const alias of item.items) {
-    if (alias.kind !== "TypeAlias" || !isSome(alias.value)) continue;
-    if (!declaredNames.includes(alias.name.text)) continue;
-    associatedTypeDefs.set(
-      alias.name.text,
-      resolveSlice1Type(ctx, alias.value.value, alias.value.value.tokenId),
-    );
-  }
-  const targetTypeArguments = resolveTargetTypeArguments(
-    ctx,
-    item.type,
-    new Set(genericParamNames(item.generics)),
-  );
+  const { associatedTypeDefs, targetTypeArguments, traitTypeArguments } =
+    resolveImplRegistrationFacts(ctx, item, declaredNames);
   popGenericParams(ctx);
   const incoming: RegisteredImpl = {
     traitName,
+    traitTypeArguments,
     targetTypeName: targetTypeName.value,
     targetTypeArguments,
     isBlanket: decl.isBlanket,
@@ -6715,15 +6826,15 @@ function recordWitnessParams(
   whereClause: Option<Parser.WhereClause>,
 ): void {
   const params: WitnessParam[] = [];
-  for (const [paramName, traitNames] of genericParamBoundNames(
+  for (const [paramName, traitRefs] of genericParamBoundNames(
     generics,
     whereClause,
   )) {
-    for (const traitName of traitNames) {
+    for (const traitRef of traitRefs) {
       params.push({
-        name: witnessParamName(paramName, traitName),
+        name: witnessParamName(paramName, traitRef.name),
         paramName,
-        traitName,
+        traitName: traitRef.name,
       });
     }
   }
@@ -7039,6 +7150,16 @@ function describeType(type: Semantics.Type): string {
     default:
       return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
+}
+
+/** A bound trait ref's diagnostic-facing name, including its own type
+ * arguments when parameterized (`Convert<i32>`), matching `describeType`'s
+ * `StructType`/`EnumType` rendering. */
+function describeTraitRef(ref: Semantics.BoundTraitRef): string {
+  const bareName = bareTypeName(ref.name);
+  return ref.typeArguments.length === 0
+    ? bareName
+    : `${bareName}<${ref.typeArguments.map(describeType).join(", ")}>`;
 }
 
 function checkNegLiteralRange(
@@ -8437,10 +8558,13 @@ interface IndexedMethod {
    * against one of them is arity-checked but not type-checked - unification
    * for method calls isn't implemented. */
   readonly genericParams: readonly string[];
-  /** Each `genericParams` name's own declared bound trait names (resolved
-   * `traitRegistry` keys) - `recordMethodCallWitnesses` uses this to resolve
-   * a witness per bound from the call site's own argument types. */
-  readonly genericParamBounds: ReadonlyMap<string, readonly string[]>;
+  /** Each `genericParams` name's own declared bounds -
+   * `recordMethodCallWitnesses` uses this to resolve a witness per bound
+   * from the call site's own argument types. */
+  readonly genericParamBounds: ReadonlyMap<
+    string,
+    readonly Semantics.BoundTraitRef[]
+  >;
   readonly origin:
     | { readonly kind: "inherent" }
     | { readonly kind: "trait"; readonly traitId: string };
@@ -9095,7 +9219,7 @@ function recordMethodCallWitnesses(
   const witnesses: WitnessRef[] = [
     ...(ctx.methodCallWitnessTable.get(methodTokenId) ?? []),
   ];
-  for (const [paramName, traitNames] of method.genericParamBounds) {
+  for (const [paramName, traitRefs] of method.genericParamBounds) {
     const argIndex = method.params.findIndex((p) =>
       namesGenericParam(p, paramName),
     );
@@ -9103,8 +9227,13 @@ function recordMethodCallWitnesses(
     if (arg === undefined) continue;
     const argType =
       arg.type.kind === "ReferenceType" ? arg.type.referent : arg.type;
-    for (const traitName of traitNames) {
-      const witness = resolveTraitBound(ctx, argType, traitName);
+    for (const traitRef of traitRefs) {
+      const witness = resolveTraitBound(
+        ctx,
+        argType,
+        traitRef.name,
+        traitRef.typeArguments,
+      );
       if (isSome(witness)) witnesses.push(witness.value);
     }
   }
@@ -11142,9 +11271,13 @@ function checkCallGenericBounds(
       continue;
     }
     if (binding.isErrorPlaceholder) continue;
-    for (const traitName of calleeType.genericParamBounds.get(paramName) ??
-      []) {
-      const witness = resolveTraitBound(ctx, binding.type, traitName);
+    for (const traitRef of calleeType.genericParamBounds.get(paramName) ?? []) {
+      const witness = resolveTraitBound(
+        ctx,
+        binding.type,
+        traitRef.name,
+        traitRef.typeArguments,
+      );
       if (isSome(witness)) {
         witnesses.push(witness.value);
         continue;
@@ -11155,7 +11288,7 @@ function checkCallGenericBounds(
         {
           kind: "SemTraitBoundNotSatisfied",
           typeName: describeType(binding.type),
-          trait: bareTypeName(traitName),
+          trait: describeTraitRef(traitRef),
         },
         call.tokenId,
       );
