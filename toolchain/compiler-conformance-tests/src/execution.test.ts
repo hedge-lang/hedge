@@ -1195,6 +1195,10 @@ describe("execution tests", (): void => {
       );
     });
 
+    it("does not cascade an unsolved-variable diagnostic when a bare type parameter's only occurrence is an array literal with an unresolved element", (): void => {
+      assertNoCascade(`fn f<T>(x: T) {} fn main() { f([missing]); }`);
+    });
+
     it("does not cascade an unsolved-variable diagnostic when a list-form array argument's own element is unresolved and is the only occurrence of the type parameter", (): void => {
       assertNoCascade(`fn f<T>(x: [T; 1]) {} fn main() { f([missing]); }`);
     });
@@ -2009,6 +2013,12 @@ describe("execution tests", (): void => {
     it("does not cascade an unsolved-variable diagnostic when the only field that would supply a type parameter has an unresolved value", (): void => {
       assertNoCascade(
         `struct Wrapper<T> { value: T } fn main() { let w = Wrapper { value: missing_name }; }`,
+      );
+    });
+
+    it("does not cascade an unsolved-variable diagnostic when a bare named-field type parameter's only occurrence is an array literal with an unresolved element", (): void => {
+      assertNoCascade(
+        `struct Wrapper<T> { value: T } fn main() { let w = Wrapper { value: [missing_name] }; }`,
       );
     });
 

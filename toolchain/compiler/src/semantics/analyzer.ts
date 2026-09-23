@@ -10509,7 +10509,7 @@ function analyzeStructNamedFields(
       // check doesn't cascade a second diagnostic on top of the error
       // already reported for this field's own value, while still letting a
       // later valid occurrence of the same parameter replace the placeholder.
-      placeholderBindUnresolvedFieldGenericParam(
+      placeholderBindUnresolvedGenericParam(
         declaredField.type,
         value.tokenId,
         genericNames,
@@ -10563,7 +10563,7 @@ function analyzeStructNamedFields(
       // only occurrence of, so the loop below doesn't also report it as
       // unsolved on top of the missing-field diagnostic for the same cause.
       if (genericNames.size > 0) {
-        placeholderBindUnresolvedFieldGenericParam(
+        placeholderBindUnresolvedGenericParam(
           declaredField.type,
           structTokenId,
           genericNames,
@@ -11377,12 +11377,15 @@ function bindMismatchedReferentPlaceholder(
 }
 
 /** Placeholder-binds the generic parameter at `declaredType`'s own base
- * position (see `genericParamNameAt`) for a field that supplies no real
- * unification information - entirely omitted from a construction, or
- * present but carrying an already-diagnosed error-recovery value - so a
- * downstream "cannot infer" check doesn't also fire for it on top of the
- * diagnostic already reported for the same cause. */
-function placeholderBindUnresolvedFieldGenericParam(
+ * position (see `genericParamNameAt`) - covering the bare-name shape
+ * `bindMismatchedReferentPlaceholder` can't (it only unwraps a nested
+ * reference/array hop) - for an occurrence that supplies no real
+ * unification information: a field entirely omitted from a construction, a
+ * value carrying an already-diagnosed error-recovery type, or an argument
+ * (positional or named-field) whose array literal has an ambiguous element.
+ * So a downstream "cannot infer" check doesn't also fire on top of the
+ * diagnostic already reported for the same root cause. */
+function placeholderBindUnresolvedGenericParam(
   declaredType: Semantics.Type,
   tokenId: number,
   genericNames: ReadonlySet<string>,
@@ -11740,8 +11743,9 @@ function arrayArgWithAmbiguousElement(
  *
  * The two cases bind differently, deliberately: an ambiguous element's own
  * error is already fully reported, so `T` gets an error-placeholder binding
- * here (matching `bindMismatchedReferentPlaceholder`'s own convention) to
- * stop a downstream "cannot infer" check from cascading a second, unrelated
+ * here (`placeholderBindUnresolvedGenericParam`, which covers a bare-name
+ * declared type too, unlike `bindMismatchedReferentPlaceholder`) to stop a
+ * downstream "cannot infer" check from cascading a second, unrelated
  * diagnostic when this array is `T`'s only occurrence. An empty array
  * genuinely carries no information at all - it contributes no binding, so a
  * later occurrence can still legitimately supply one. */
@@ -11754,7 +11758,7 @@ function specialArrayArg(
   bindings: GenericBindings,
 ): Semantics.Expression | undefined {
   if (arrayArgWithAmbiguousElement(ctx, arg) !== undefined) {
-    bindMismatchedReferentPlaceholder(
+    placeholderBindUnresolvedGenericParam(
       declaredType,
       arg.tokenId,
       genericNames,
