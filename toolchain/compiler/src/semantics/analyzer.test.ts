@@ -6048,6 +6048,22 @@ describe("generic parameter shadowing an outer type of the same name", (): void 
   });
 });
 
+describe("generic struct/enum instantiation identity", (): void => {
+  it("reports a conflict when a generic parameter is bound to two differently-instantiated arguments of the same generic struct", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn same<T>(a: T, b: T) {}
+      fn main() {
+        same(Wrapper { value: 1 }, Wrapper { value: "s" });
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "argument 2 to function `same` type mismatch: expected `Wrapper<i32>`, found `Wrapper<str>`",
+    );
+  });
+});
+
 describe("generic parameter used as a fixed-size array's element type", (): void => {
   it.each([
     [
