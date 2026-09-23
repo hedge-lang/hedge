@@ -1879,6 +1879,53 @@ describe("generic witness codegen", (): void => {
     `);
     expect(runEmittedJs(js)).toEqual(["cloning", "done"]);
   });
+
+  it("threads a witness for an impl-level generic bound through `==` operator dispatch, not just an explicit method call, and runs", (): void => {
+    const js = emittedJs(`
+      struct Num { n: i32 }
+      impl PartialEq for Num {
+        fn eq(&self, other: &Self) -> bool { self.n == other.n }
+      }
+      struct Wrapper<T> { value: T }
+      impl<T: PartialEq> PartialEq for Wrapper<T> {
+        fn eq(&self, other: &Self) -> bool { self.value == other.value }
+      }
+      fn main() {
+        let a = Wrapper { value: Num { n: 1 } };
+        let b = Wrapper { value: Num { n: 1 } };
+        let c = Wrapper { value: Num { n: 2 } };
+        if a == b { print("eq"); } else { print("ne"); }
+        if a == c { print("eq"); } else { print("ne"); }
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["eq", "ne"]);
+  });
+
+  it("threads a witness for an impl-level generic bound when the impl targets an enum, not just a struct, and runs", (): void => {
+    const js = emittedJs(`
+      struct Num { n: i32 }
+      impl Clone for Num {
+        fn clone(&self) -> Self {
+          print("cloning");
+          Num { n: self.n }
+        }
+      }
+      enum Holder<T> { Has(T) }
+      impl<T: Clone> Holder<T> {
+        fn dup(self) -> Holder<T> {
+          match self {
+            Holder::Has(value) => Holder::Has(value.clone()),
+          }
+        }
+      }
+      fn main() {
+        let h = Holder::Has(Num { n: 5 });
+        let h2 = h.dup();
+        print("done");
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["cloning", "done"]);
+  });
 });
 
 describe("trait default method codegen", (): void => {
