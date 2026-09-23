@@ -3193,7 +3193,11 @@ function implOverlapKind(
  * generic parameter) resolves against that declaration's own bound list,
  * since no concrete impl can exist for a type that isn't concrete yet -
  * codegen forwards the enclosing function's own received witness for it
- * instead of looking one up here.
+ * instead of looking one up here. Known gap: this "Forwarded" path checks
+ * only the declared bound's trait name, never `requestedTypeArguments` - a
+ * parameterized request forwarded through a still-generic body isn't
+ * verified against the declared bound's own type argument, only a concrete
+ * lookup is.
  */
 function resolveTraitBound(
   ctx: AnalysisContext,
@@ -11702,6 +11706,7 @@ function involvesGenericParam(
  * `involvesGenericParam` is false should skip strict comparison rather than
  * either binding `T` or reporting a false mismatch against the still-open
  * parameter. */
+// eslint-disable-next-line complexity -- Routing function over the full Type union
 function mentionsGenericParamAnywhere(
   declaredType: Semantics.Type,
   genericNames: ReadonlySet<string>,
@@ -11724,8 +11729,31 @@ function mentionsGenericParamAnywhere(
       return declaredType.typeArguments.some((arg) =>
         mentionsGenericParamAnywhere(arg, genericNames),
       );
-    default:
+    case "FunctionType":
+    case "UnitType":
+    case "Projection":
+    case "DynType":
+    case "PrimitiveI8Type":
+    case "PrimitiveI16Type":
+    case "PrimitiveI32Type":
+    case "PrimitiveI64Type":
+    case "PrimitiveIsizeType":
+    case "PrimitiveU8Type":
+    case "PrimitiveU16Type":
+    case "PrimitiveU32Type":
+    case "PrimitiveU64Type":
+    case "PrimitiveUsizeType":
+    case "PrimitiveF32Type":
+    case "PrimitiveF64Type":
+    case "PrimitiveBooleanType":
+    case "PrimitiveCharType":
+    case "PrimitiveStringType":
       return false;
+    default:
+      return assertNever(
+        declaredType,
+        `Unexpected type: ${JSON.stringify(declaredType)}`,
+      );
   }
 }
 
