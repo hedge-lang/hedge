@@ -10280,8 +10280,7 @@ function analyzeEnumVariantStructConstruction(
     hasBase,
     structExpression.tokenId,
     variant.body.value,
-    enumDecl.generics,
-    enumDecl.genericParamDefaults,
+    { params: enumDecl.generics, defaults: enumDecl.genericParamDefaults },
   );
   return some({ type: enumDecl.type, fields: checkedFields });
 }
@@ -10372,8 +10371,10 @@ function analyzeStructExpression(
       isSome(analyzedBase),
       structExpression.tokenId,
       structDecl.body,
-      structDecl.generics,
-      structDecl.genericParamDefaults,
+      {
+        params: structDecl.generics,
+        defaults: structDecl.genericParamDefaults,
+      },
     );
   } else if (
     structDecl.body.kind === "Unit" &&
@@ -10400,11 +10401,20 @@ function analyzeStructExpression(
   };
 }
 
+/** A struct or enum declaration's own generic-parameter names and defaults -
+ * bundled into one param so `analyzeStructNamedFields` stays under the
+ * parameter-count ceiling; `structDecl`/`enumDecl` already carry the same
+ * pair as two separate fields. */
+interface DeclGenerics {
+  readonly params: readonly string[];
+  readonly defaults: ReadonlyMap<string, Semantics.Type>;
+}
+
 /**
  * Checks each provided field against the struct's declaration: duplicate
  * names, unknown names, value-type mismatches (coercing an unsuffixed-
  * integer-literal value first, and unifying a field naming one of
- * `genericParams` instead of a plain `typesEqual` check), and - unless a
+ * `generics.params` instead of a plain `typesEqual` check), and - unless a
  * `..base` spread is present - missing required fields. A spread never seeds
  * or is checked against inference: a field it would have supplied is simply
  * absent from `fields`, so it contributes no unification constraint, same as
@@ -10419,8 +10429,7 @@ function analyzeStructNamedFields(
   hasBase: boolean,
   structTokenId: number,
   namedFieldsBody: Semantics.NamedFieldsBody,
-  genericParams: readonly string[],
-  genericParamDefaults: ReadonlyMap<string, Semantics.Type>,
+  generics: DeclGenerics,
 ): Semantics.FieldInit[] {
   const declaredFields = new Map(
     namedFieldsBody.fields.map((f): [string, Semantics.StructField] => [
@@ -10428,7 +10437,7 @@ function analyzeStructNamedFields(
       f,
     ]),
   );
-  const genericNames = new Set(genericParams);
+  const genericNames = new Set(generics.params);
   const bindings: GenericBindings = new Map();
 
   const seenFields = new Set<string>();
@@ -10539,11 +10548,11 @@ function analyzeStructNamedFields(
     }
   }
 
-  for (const paramName of genericParams) {
+  for (const paramName of generics.params) {
     if (
       bindingOrDefault(
         paramName,
-        genericParamDefaults,
+        generics.defaults,
         bindings,
         structTokenId,
       ) !== undefined
