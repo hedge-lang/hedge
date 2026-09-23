@@ -7151,6 +7151,40 @@ function isAmbiguousUnitExpr(expr: Semantics.Expression): boolean {
   return AMBIGUOUS_UNIT_EXPR_KINDS.has(expr.kind);
 }
 
+/** Whether `expr` is a real, source-parsed `()` literal - a genuine unit
+ * value - rather than the zero-element `TupleExpression` shape
+ * `analyzeExpressionPlaceholder` reuses as an error-recovery substitute for
+ * an unsupported construct. Both share the same kind, element count, and
+ * `UnitType`, so the only distinguishing signal is the node's own token: a
+ * parsed `()` always starts at a real `lparen`, while a synthesized
+ * placeholder's `tokenId` points at whatever construct it stands in for. */
+function isGenuineUnitLiteral(
+  ctx: AnalysisContext,
+  expr: Semantics.Expression,
+): boolean {
+  return (
+    expr.kind === "TupleExpression" &&
+    expr.elements.length === 0 &&
+    ctx.tokens[expr.tokenId]?.kind === "lparen"
+  );
+}
+
+/** Whether `expr`'s `UnitType` is the error-recovery placeholder rather than
+ * a genuine unit value, for deciding whether to unify against it or
+ * placeholder-bind past it - `isAmbiguousUnitExpr` alone over-classifies a
+ * genuine `()` literal as error-recovery too, since it can't tell it apart
+ * from a same-shaped synthesized recovery tuple (see `isGenuineUnitLiteral`). */
+function isErrorRecoveryUnitValue(
+  ctx: AnalysisContext,
+  expr: Semantics.Expression,
+): boolean {
+  return (
+    expr.type.kind === "UnitType" &&
+    isAmbiguousUnitExpr(expr) &&
+    !isGenuineUnitLiteral(ctx, expr)
+  );
+}
+
 /**
  * What a position expects of the expression that fills it. The `HasType` type
  * is carried into analysis so a nested construct can be checked against it
@@ -10469,11 +10503,7 @@ function analyzeStructNamedFields(
     const isGenericField =
       genericNames.size > 0 &&
       involvesGenericParam(declaredField.type, genericNames);
-    if (
-      isGenericField &&
-      value.type.kind === "UnitType" &&
-      isAmbiguousUnitExpr(value)
-    ) {
+    if (isGenericField && isErrorRecoveryUnitValue(ctx, value)) {
       // An already-diagnosed error-recovery value carries no real type to
       // unify against - placeholder-bind so a downstream "cannot infer"
       // check doesn't cascade a second diagnostic on top of the error
@@ -11688,10 +11718,11 @@ function ambiguousEmptyArrayArg(
  * to one nested inside an array. Returns `arg` unchanged (contributing no
  * binding) when detected, `undefined` otherwise. */
 function arrayArgWithAmbiguousElement(
+  ctx: AnalysisContext,
   arg: Semantics.Expression,
 ): Semantics.Expression | undefined {
   const isAmbiguous = (element: Semantics.Expression): boolean =>
-    element.type.kind === "UnitType" && isAmbiguousUnitExpr(element);
+    isErrorRecoveryUnitValue(ctx, element);
   if (arg.kind === "ArrayExpression" && arg.elements.some(isAmbiguous)) {
     return arg;
   }
@@ -11715,13 +11746,14 @@ function arrayArgWithAmbiguousElement(
  * genuinely carries no information at all - it contributes no binding, so a
  * later occurrence can still legitimately supply one. */
 function specialArrayArg(
+  ctx: AnalysisContext,
   declaredType: Semantics.Type,
   arg: Semantics.Expression,
   substituted: Semantics.Type,
   genericNames: ReadonlySet<string>,
   bindings: GenericBindings,
 ): Semantics.Expression | undefined {
-  if (arrayArgWithAmbiguousElement(arg) !== undefined) {
+  if (arrayArgWithAmbiguousElement(ctx, arg) !== undefined) {
     bindMismatchedReferentPlaceholder(
       declaredType,
       arg.tokenId,
@@ -11836,6 +11868,7 @@ function checkGenericPositionalArg(
 ): Semantics.Expression {
   const substituted = substituteGenericType(declaredType, bindings);
   const specialArg = specialArrayArg(
+    ctx,
     declaredType,
     arg,
     substituted,
@@ -11951,6 +11984,7 @@ function checkGenericNamedField(
 ): Semantics.Expression {
   const substituted = substituteGenericType(declaredType, bindings);
   const specialArg = specialArrayArg(
+    ctx,
     declaredType,
     value,
     substituted,

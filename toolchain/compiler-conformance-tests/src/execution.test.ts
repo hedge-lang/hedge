@@ -1845,6 +1845,31 @@ describe("execution tests", (): void => {
       ]);
     });
 
+    it("reports a conflicting inference when a genuine unit literal disagrees with another field's type", (): void => {
+      const result = compileHedgeCode(
+        `struct Same<T> { a: T, b: T } fn main() { let s = Same { a: (), b: 1 }; print(1); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(messageOf(errors[0])).toBe(
+        "field `b` type mismatch: expected `()`, found `i32`",
+      );
+    });
+
+    it("reports a conflicting inference when a genuine unit literal inside an array-typed field disagrees with another field's type", (): void => {
+      const result = compileHedgeCode(
+        `struct Two<T> { a: T, b: [T; 1] } fn main() { let t = Two { a: 1, b: [()] }; print(1); }`,
+      );
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+      expect(messageOf(errors[0])).toBe(
+        "field `b` type mismatch: expected `[i32; 1]`, found `[(); 1]`",
+      );
+      expect(errors[0]?.code).toBe("HEDGE-TYPE-010");
+    });
+
     it("infers a type parameter through a single reference-hop named field", (): void => {
       // Not `print(*h.value)`: moving a non-Copy-provable generic value out
       // through a dereferenced place is a separate, pre-existing restriction

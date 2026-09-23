@@ -763,6 +763,8 @@ export const CROSS_DOMAIN_CONFORMANCE_RULES: readonly ConformanceRule[] = [
       "infers two independent type parameters from two named fields",
       "infers a repeated type parameter consistently across two fields naming it",
       "reports a conflicting inference across two named fields, blaming the second",
+      "reports a conflicting inference when a genuine unit literal disagrees with another field's type",
+      "reports a conflicting inference when a genuine unit literal inside an array-typed field disagrees with another field's type",
       "infers a type parameter through a single reference-hop named field",
       "infers a type parameter from a fixed-size-array-element named field",
       "reports a structural mismatch on a reference-hop named field as an ordinary type mismatch, not unsolved-variable",
