@@ -1503,19 +1503,25 @@ function validateProjectionType(
   });
 }
 
-/** Validates each of a struct/enum reference's own type arguments, purely
- * for their diagnostics - `Semantics.StructType`/`EnumType` carry no
- * argument list of their own yet, so nothing here can substitute a struct's
- * declared generic fields against the concrete arguments; this only makes a
- * projection (or any other malformed type) nested inside one, e.g.
- * `Option<Self::Item>`, actually get visited instead of silently skipped. */
+/** Resolves each of a struct/enum reference's own type arguments, emitting
+ * their diagnostics and returning the resolved list so the caller can
+ * attach it to the returned `StructType`/`EnumType`'s own `typeArguments`. */
 function validateTypeArguments(
   ctx: AnalysisContext,
   typeArguments: readonly Parser.Type[],
-): void {
-  for (const arg of typeArguments) {
-    validateSlice1Type(ctx, arg, arg.tokenId);
-  }
+): readonly Semantics.Type[] {
+  return typeArguments.map((arg) => validateSlice1Type(ctx, arg, arg.tokenId));
+}
+
+/** Attaches a resolved type-argument list to a struct/enum's own type,
+ * leaving any other `Semantics.Type` kind untouched. */
+function withTypeArguments(
+  type: Semantics.Type,
+  typeArguments: readonly Semantics.Type[],
+): Semantics.Type {
+  return type.kind === "StructType" || type.kind === "EnumType"
+    ? { ...type, typeArguments }
+    : type;
 }
 
 function validateNamedType(
@@ -1559,8 +1565,8 @@ function validateNamedType(
   }
   const resolved = lookupStructOrEnumType(ctx, name);
   if (resolved !== undefined) {
-    validateTypeArguments(ctx, type.typeArguments);
-    return resolved;
+    const typeArguments = validateTypeArguments(ctx, type.typeArguments);
+    return withTypeArguments(resolved, typeArguments);
   }
   emitError(ctx, { kind: "SemCannotFindType", name }, tokenId);
   return { kind: "UnitType", tokenId };
@@ -2204,6 +2210,7 @@ function declareStructName(
   const type: Semantics.Type = {
     kind: "StructType",
     name: scopedTypeName(item.name.tokenId, item.name.text),
+    typeArguments: [],
   };
   warnIfShadowsOuterDeclaration(
     ctx,
@@ -2245,6 +2252,7 @@ function declareEnumName(
   const type: Semantics.Type = {
     kind: "EnumType",
     name: scopedTypeName(item.name.tokenId, item.name.text),
+    typeArguments: [],
   };
   warnIfShadowsOuterDeclaration(
     ctx,
@@ -3856,11 +3864,19 @@ function structuralStructOrEnumType(
 ): Semantics.Type | undefined {
   const structTokenId = scope.structs.get(name);
   if (structTokenId !== undefined) {
-    return { kind: "StructType", name: scopedTypeName(structTokenId, name) };
+    return {
+      kind: "StructType",
+      name: scopedTypeName(structTokenId, name),
+      typeArguments: [],
+    };
   }
   const enumTokenId = scope.enums.get(name);
   if (enumTokenId !== undefined) {
-    return { kind: "EnumType", name: scopedTypeName(enumTokenId, name) };
+    return {
+      kind: "EnumType",
+      name: scopedTypeName(enumTokenId, name),
+      typeArguments: [],
+    };
   }
   return undefined;
 }
@@ -4329,7 +4345,11 @@ function analyzeEnum(
   item: Parser.EnumDecl,
 ): Semantics.EnumDecl {
   const scopedName = scopedTypeName(item.name.tokenId, item.name.text);
-  const enumType: Semantics.Type = { kind: "EnumType", name: scopedName };
+  const enumType: Semantics.Type = {
+    kind: "EnumType",
+    name: scopedName,
+    typeArguments: [],
+  };
   const seenVariantNames = new Set<string>();
   for (const variant of item.variants) {
     if (seenVariantNames.has(variant.name.text)) {
@@ -5969,7 +5989,10 @@ function analyzeStruct(
   popGenericParams(ctx);
   return {
     ...item,
-    name: { ...item.name, type: { kind: "StructType", name: scopedName } },
+    name: {
+      ...item.name,
+      type: { kind: "StructType", name: scopedName, typeArguments: [] },
+    },
     generics: genericParamNames(item.generics),
     genericParamDefaults,
     attributes: item.attributes.map((attr) => analyzeAttribute(ctx, attr)),
@@ -5977,6 +6000,7 @@ function analyzeStruct(
     type: {
       kind: "StructType",
       name: scopedName,
+      typeArguments: [],
     },
   };
 }
@@ -6178,7 +6202,12 @@ function resolveNamedType(
     const prim = namedTypeToPrimitive(name);
     if (isSome(prim)) return prim.value;
     const resolved = lookupStructOrEnumType(ctx, name);
-    if (resolved !== undefined) return resolved;
+    if (resolved !== undefined) {
+      const typeArguments = type.typeArguments.map((arg) =>
+        resolveSlice1Type(ctx, arg, arg.tokenId),
+      );
+      return withTypeArguments(resolved, typeArguments);
+    }
   }
   if (type.path.segments.length === 2) {
     const projection = resolveProjectionType(ctx, type, fallbackTokenId);
@@ -6857,8 +6886,12 @@ function describeType(type: Semantics.Type): string {
     case "PrimitiveCharType":
       return "char";
     case "StructType":
-    case "EnumType":
-      return type.name.split("::").pop() ?? type.name;
+    case "EnumType": {
+      const bareName = type.name.split("::").pop() ?? type.name;
+      return type.typeArguments.length === 0
+        ? bareName
+        : `${bareName}<${type.typeArguments.map(describeType).join(", ")}>`;
+    }
     case "UnitType":
       return "()";
     case "ReferenceType":
@@ -7046,14 +7079,33 @@ function checkCoercedLiteralRange(
  * whole comparison, and the exhaustive switch forces a new payload-bearing
  * `Type` variant to be classified here rather than silently landing in it.
  */
+function typeArgumentsEqual(
+  a: readonly Semantics.Type[],
+  b: readonly Semantics.Type[],
+): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((arg, i) => {
+    const other = b[i];
+    return other !== undefined && typesEqual(arg, other);
+  });
+}
+
 // eslint-disable-next-line complexity -- Routing function over the full Type union
 function typesEqual(a: Semantics.Type, b: Semantics.Type): boolean {
   if (a.kind !== b.kind) return false;
   switch (a.kind) {
     case "StructType":
-      return b.kind === "StructType" && a.name === b.name;
+      return (
+        b.kind === "StructType" &&
+        a.name === b.name &&
+        typeArgumentsEqual(a.typeArguments, b.typeArguments)
+      );
     case "EnumType":
-      return b.kind === "EnumType" && a.name === b.name;
+      return (
+        b.kind === "EnumType" &&
+        a.name === b.name &&
+        typeArgumentsEqual(a.typeArguments, b.typeArguments)
+      );
     case "NamedType":
       return (
         b.kind === "NamedType" &&
@@ -8944,6 +8996,22 @@ function recordMethodCallWitnesses(
   }
 }
 
+/** `-> Self` on a `dyn` receiver, or on a bound generic parameter dispatched
+ * through its witness, yields another value of that same receiver type -
+ * re-wrapped with the receiver's witness in codegen. A concrete nominal
+ * receiver's method return type is already substituted at impl-analysis
+ * time and never carries a literal `Self` here. */
+function methodCallResultType(
+  receiverType: Semantics.Type,
+  methodReturnType: Semantics.Type,
+): Semantics.Type {
+  const selfRooted =
+    receiverType.kind === "DynType" || receiverType.kind === "NamedType";
+  return selfRooted && isAbstractSelfType(methodReturnType)
+    ? receiverType
+    : methodReturnType;
+}
+
 function analyzeMethodCallExpression(
   ctx: AnalysisContext,
   expression: Parser.MethodCallExpression,
@@ -9010,12 +9078,7 @@ function analyzeMethodCallExpression(
   // params - `method.genericParamBounds` is only ever populated for those
   // (see `IndexedMethod`'s own doc comment).
   recordMethodCallWitnesses(ctx, expression.method.tokenId, method, args);
-  // `-> Self` on a `dyn` receiver yields another value of that same trait
-  // object - re-wrapped with the receiver's witness in codegen.
-  const resultType =
-    lookupType.kind === "DynType" && isAbstractSelfType(method.returnType)
-      ? lookupType
-      : method.returnType;
+  const resultType = methodCallResultType(lookupType, method.returnType);
   return {
     ...base,
     arguments: [
@@ -10307,7 +10370,7 @@ function analyzeEnumVariantStructConstruction(
     );
     return some({ type: enumDecl.type, fields: [...fields] });
   }
-  const checkedFields = analyzeStructNamedFields(
+  const { fields: checkedFields, typeArguments } = analyzeStructNamedFields(
     ctx,
     variantName,
     fields,
@@ -10319,7 +10382,10 @@ function analyzeEnumVariantStructConstruction(
     variant.body.value,
     { params: enumDecl.generics, defaults: enumDecl.genericParamDefaults },
   );
-  return some({ type: enumDecl.type, fields: checkedFields });
+  return some({
+    type: withTypeArguments(enumDecl.type, typeArguments),
+    fields: checkedFields,
+  });
 }
 
 function analyzeStructExpression(
@@ -10400,8 +10466,9 @@ function analyzeStructExpression(
   }
 
   let checkedFields = analyzedFields;
+  let resolvedType = structDecl.type;
   if (structDecl.body.kind === "NamedFields") {
-    checkedFields = analyzeStructNamedFields(
+    const result = analyzeStructNamedFields(
       ctx,
       structName,
       analyzedFields,
@@ -10416,6 +10483,8 @@ function analyzeStructExpression(
         defaults: structDecl.genericParamDefaults,
       },
     );
+    checkedFields = result.fields;
+    resolvedType = withTypeArguments(structDecl.type, result.typeArguments);
   } else if (
     structDecl.body.kind === "Unit" &&
     structExpression.fields.length > 0
@@ -10437,7 +10506,7 @@ function analyzeStructExpression(
     ...structExpression,
     fields: checkedFields,
     base: analyzedBase,
-    type: structDecl.type,
+    type: resolvedType,
   };
 }
 
@@ -10457,6 +10526,41 @@ interface DeclGenerics {
 interface NamedFieldConstructionSite {
   readonly tokenId: number;
   readonly typeArguments: readonly Parser.Type[];
+}
+
+/** The non-generic path for a named field's own value: reconcile against the
+ * declared type (coercing an unsuffixed-integer literal, range-checking it),
+ * and report a mismatch if it still disagrees. */
+function reconcileOrdinaryNamedField(
+  ctx: AnalysisContext,
+  field: Semantics.FieldInit,
+  declaredType: Semantics.Type,
+  value: Semantics.Expression,
+): Semantics.FieldInit {
+  const { expr, mismatch } = reconcileExpressionType(
+    ctx,
+    value,
+    declaredType,
+    value.tokenId,
+  );
+  if (expr.kind === "IntLiteral") {
+    checkPosLiteralRange(ctx, expr, declaredType);
+  }
+  if (mismatch) {
+    emitError(
+      ctx,
+      {
+        kind: "SemStructFieldTypeMismatch",
+        field: field.name.text,
+        expected: describeType(declaredType),
+        found: describeType(getType(expr)),
+      },
+      value.tokenId,
+    );
+  }
+  return expr === value
+    ? field
+    : { ...field, value: expr, type: getType(expr) };
 }
 
 /**
@@ -10479,7 +10583,10 @@ function analyzeStructNamedFields(
   site: NamedFieldConstructionSite,
   namedFieldsBody: Semantics.NamedFieldsBody,
   generics: DeclGenerics,
-): Semantics.FieldInit[] {
+): {
+  readonly fields: Semantics.FieldInit[];
+  readonly typeArguments: readonly Semantics.Type[];
+} {
   const declaredFields = new Map(
     namedFieldsBody.fields.map((f): [string, Semantics.StructField] => [
       f.name.text,
@@ -10551,31 +10658,13 @@ function analyzeStructNamedFields(
         ? field
         : { ...field, value: expr, type: getType(expr) };
     }
-
-    const { expr, mismatch } = reconcileExpressionType(
-      ctx,
-      value,
-      declaredField.type,
-      value.tokenId,
-    );
-    if (expr.kind === "IntLiteral") {
-      checkPosLiteralRange(ctx, expr, declaredField.type);
+    if (
+      genericNames.size > 0 &&
+      mentionsGenericParamAnywhere(declaredField.type, genericNames)
+    ) {
+      return field;
     }
-    if (mismatch) {
-      emitError(
-        ctx,
-        {
-          kind: "SemStructFieldTypeMismatch",
-          field: field.name.text,
-          expected: describeType(declaredField.type),
-          found: describeType(getType(expr)),
-        },
-        value.tokenId,
-      );
-    }
-    return expr === value
-      ? field
-      : { ...field, value: expr, type: getType(expr) };
+    return reconcileOrdinaryNamedField(ctx, field, declaredField.type, value);
   });
 
   if (!hasBase) {
@@ -10601,21 +10690,23 @@ function analyzeStructNamedFields(
     }
   }
 
-  for (const paramName of generics.params) {
-    if (
-      bindingOrDefault(paramName, generics.defaults, bindings, site.tokenId) !==
-      undefined
-    ) {
-      continue;
-    }
+  const typeArguments = generics.params.map((paramName): Semantics.Type => {
+    const binding = bindingOrDefault(
+      paramName,
+      generics.defaults,
+      bindings,
+      site.tokenId,
+    );
+    if (binding !== undefined) return binding.type;
     emitError(
       ctx,
       { kind: "SemCannotInferGenericParam", paramName },
       site.tokenId,
     );
-  }
+    return { kind: "UnitType", tokenId: site.tokenId };
+  });
 
-  return checkedFields;
+  return { fields: checkedFields, typeArguments };
 }
 
 /**
@@ -11132,16 +11223,20 @@ function analyzeEnumVariantCallConstruction(
     );
     return some({ type: enumDecl.type, args: [...args] });
   }
-  const checkedArgs = checkGenericPositionalConstruction(
-    ctx,
-    call,
-    { kindLabel: "variant", name: variantName },
-    variant.body.value.fields,
-    args,
-    enumDecl.generics,
-    enumDecl.genericParamDefaults,
-  );
-  return some({ type: enumDecl.type, args: checkedArgs });
+  const { args: checkedArgs, typeArguments } =
+    checkGenericPositionalConstruction(
+      ctx,
+      call,
+      { kindLabel: "variant", name: variantName },
+      variant.body.value.fields,
+      args,
+      enumDecl.generics,
+      enumDecl.genericParamDefaults,
+    );
+  return some({
+    type: withTypeArguments(enumDecl.type, typeArguments),
+    args: checkedArgs,
+  });
 }
 
 /** A generic-parameter name's inferred concrete type, alongside the token
@@ -11247,6 +11342,43 @@ function involvesGenericParam(
   genericNames: ReadonlySet<string>,
 ): boolean {
   return genericParamNameAt(declaredType, genericNames) !== undefined;
+}
+
+/** Whether `declaredType` mentions one of `genericNames` anywhere at all,
+ * including nested inside a `StructType`/`EnumType`'s own `typeArguments`
+ * (`Box<T>`) - a strictly wider check than `involvesGenericParam`, which
+ * only recognizes the shapes unification can actually bind `T` from. A
+ * position this finds but `involvesGenericParam` doesn't carries no
+ * inferable information (there is no unification through a struct/enum's
+ * own type-argument list yet), so a caller finding this true where
+ * `involvesGenericParam` is false should skip strict comparison rather than
+ * either binding `T` or reporting a false mismatch against the still-open
+ * parameter. */
+function mentionsGenericParamAnywhere(
+  declaredType: Semantics.Type,
+  genericNames: ReadonlySet<string>,
+): boolean {
+  switch (declaredType.kind) {
+    case "NamedType":
+      return (
+        declaredType.path.segments.length === 1 &&
+        genericNames.has(declaredType.path.segments[0] ?? "")
+      );
+    case "ReferenceType":
+      return mentionsGenericParamAnywhere(declaredType.referent, genericNames);
+    case "ArrayType":
+      return mentionsGenericParamAnywhere(
+        declaredType.elementType,
+        genericNames,
+      );
+    case "StructType":
+    case "EnumType":
+      return declaredType.typeArguments.some((arg) =>
+        mentionsGenericParamAnywhere(arg, genericNames),
+      );
+    default:
+      return false;
+  }
 }
 
 /** Substitutes every generic-parameter-named `NamedType` position in `type`
@@ -11544,7 +11676,10 @@ function checkGenericPositionalConstruction(
   args: readonly Semantics.Expression[],
   genericParams: readonly string[],
   genericParamDefaults: ReadonlyMap<string, Semantics.Type>,
-): Semantics.Expression[] {
+): {
+  readonly args: Semantics.Expression[];
+  readonly typeArguments: readonly Semantics.Type[];
+} {
   const turbofishBindings: GenericBindings = new Map();
   seedTurbofishBindings(
     ctx,
@@ -11562,24 +11697,22 @@ function checkGenericPositionalConstruction(
     genericParams,
     turbofishBindings,
   );
-  for (const paramName of genericParams) {
-    if (
-      bindingOrDefault(
-        paramName,
-        genericParamDefaults,
-        bindings,
-        call.tokenId,
-      ) !== undefined
-    ) {
-      continue;
-    }
+  const typeArguments = genericParams.map((paramName): Semantics.Type => {
+    const binding = bindingOrDefault(
+      paramName,
+      genericParamDefaults,
+      bindings,
+      call.tokenId,
+    );
+    if (binding !== undefined) return binding.type;
     emitError(
       ctx,
       { kind: "SemCannotInferGenericParam", paramName },
       call.tokenId,
     );
-  }
-  return checkedArgs;
+    return { kind: "UnitType", tokenId: call.tokenId };
+  });
+  return { args: checkedArgs, typeArguments };
 }
 
 /** Seeds `bindings` from a calling context's already-known expected type - a
@@ -11722,6 +11855,12 @@ function checkPositionalCallArgs(
         genericNames,
         bindings,
       );
+    }
+    if (
+      genericNames.size > 0 &&
+      mentionsGenericParamAnywhere(field.type, genericNames)
+    ) {
+      return arg;
     }
     const { expr, mismatch } = reconcileExpressionType(
       ctx,
@@ -12179,16 +12318,21 @@ function analyzeTupleStructCallConstruction(
     );
     return some({ callee, type: structDecl.type, args: [...args] });
   }
-  const checkedArgs = checkGenericPositionalConstruction(
-    ctx,
-    call,
-    { kindLabel: "struct", name: structName },
-    structDecl.body.fields,
-    args,
-    structDecl.generics,
-    structDecl.genericParamDefaults,
-  );
-  return some({ callee, type: structDecl.type, args: checkedArgs });
+  const { args: checkedArgs, typeArguments } =
+    checkGenericPositionalConstruction(
+      ctx,
+      call,
+      { kindLabel: "struct", name: structName },
+      structDecl.body.fields,
+      args,
+      structDecl.generics,
+      structDecl.genericParamDefaults,
+    );
+  return some({
+    callee,
+    type: withTypeArguments(structDecl.type, typeArguments),
+    args: checkedArgs,
+  });
 }
 
 /**

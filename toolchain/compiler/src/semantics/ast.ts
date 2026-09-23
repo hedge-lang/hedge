@@ -758,14 +758,26 @@ interface PrimitiveStringType {
   readonly kind: "PrimitiveStringType";
 }
 
+/**
+ * `typeArguments` is the resolved concrete (or, inside a generic
+ * declaration's own scope, still-abstract) instantiation this particular
+ * `StructType` value carries - empty for a non-generic struct, or for the
+ * bare declaration-identity type every field/param/return resolves to
+ * before any instantiation exists. `typesEqual` compares it structurally,
+ * so `Wrapper<i32>` and `Wrapper<str>` are genuinely distinct types now,
+ * not just two values that happen to share a bare name.
+ */
 export interface StructType {
   readonly kind: "StructType";
   readonly name: string;
+  readonly typeArguments: readonly Type[];
 }
 
+/** See `StructType.typeArguments`. */
 export interface EnumType {
   readonly kind: "EnumType";
   readonly name: string;
+  readonly typeArguments: readonly Type[];
 }
 
 interface NamedType extends AstNode {

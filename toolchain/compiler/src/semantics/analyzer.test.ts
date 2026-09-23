@@ -6062,6 +6062,62 @@ describe("generic struct/enum instantiation identity", (): void => {
       "argument 2 to function `same` type mismatch: expected `Wrapper<i32>`, found `Wrapper<str>`",
     );
   });
+
+  it("does not report a conflict when a generic parameter is bound to the same instantiation from two separate construction sites", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn same<T>(a: T, b: T) {}
+      fn main() {
+        same(Wrapper { value: 1 }, Wrapper { value: 2 });
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("compares nested generic instantiations structurally", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn same<T>(a: T, b: T) {}
+      fn main() {
+        same(
+          Wrapper { value: Wrapper { value: 1 } },
+          Wrapper { value: Wrapper { value: "s" } },
+        );
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "argument 2 to function `same` type mismatch: expected `Wrapper<Wrapper<i32>>`, found `Wrapper<Wrapper<str>>`",
+    );
+  });
+
+  it("distinguishes two differently-instantiated enum values the same way it does for structs", (): void => {
+    const result = diagnose(`
+      enum GenericBox<T> { Has(T) }
+      fn same<T>(a: T, b: T) {}
+      fn main() {
+        same(GenericBox::Has(1), GenericBox::Has("s"));
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "argument 2 to function `same` type mismatch: expected `GenericBox<i32>`, found `GenericBox<str>`",
+    );
+  });
+
+  it("enforces a concrete generic instantiation declared on a function parameter", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn take(w: Wrapper<i32>) {}
+      fn main() {
+        take(Wrapper { value: "s" });
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "argument 1 to function `take` type mismatch: expected `Wrapper<i32>`, found `Wrapper<str>`",
+    );
+  });
 });
 
 describe("generic parameter used as a fixed-size array's element type", (): void => {
