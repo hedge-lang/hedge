@@ -10457,11 +10457,26 @@ function analyzeStructNamedFields(
     }
 
     const value = field.value;
-    if (
+    const isGenericField =
       genericNames.size > 0 &&
-      involvesGenericParam(declaredField.type, genericNames) &&
-      !(value.type.kind === "UnitType" && isAmbiguousUnitExpr(value))
+      involvesGenericParam(declaredField.type, genericNames);
+    if (
+      isGenericField &&
+      value.type.kind === "UnitType" &&
+      isAmbiguousUnitExpr(value)
     ) {
+      // An already-diagnosed error-recovery value carries no real type to
+      // unify against - placeholder-bind so a downstream "cannot infer"
+      // check doesn't cascade a second diagnostic on top of the error
+      // already reported for this field's own value, while still letting a
+      // later valid occurrence of the same parameter replace the placeholder.
+      placeholderBindUnresolvedFieldGenericParam(
+        declaredField.type,
+        value.tokenId,
+        genericNames,
+        bindings,
+      );
+    } else if (isGenericField) {
       const expr = checkGenericNamedField(
         ctx,
         field.name.text,
@@ -10509,7 +10524,7 @@ function analyzeStructNamedFields(
       // only occurrence of, so the loop below doesn't also report it as
       // unsolved on top of the missing-field diagnostic for the same cause.
       if (genericNames.size > 0) {
-        placeholderBindOmittedFieldGenericParam(
+        placeholderBindUnresolvedFieldGenericParam(
           declaredField.type,
           structTokenId,
           genericNames,
@@ -11323,11 +11338,12 @@ function bindMismatchedReferentPlaceholder(
 }
 
 /** Placeholder-binds the generic parameter at `declaredType`'s own base
- * position (see `genericParamNameAt`) for a field entirely omitted from a
- * construction - an omitted field supplies no unification information at
- * all, so a downstream "cannot infer" check doesn't also fire for it on top
- * of the missing-field diagnostic already reported for the same cause. */
-function placeholderBindOmittedFieldGenericParam(
+ * position (see `genericParamNameAt`) for a field that supplies no real
+ * unification information - entirely omitted from a construction, or
+ * present but carrying an already-diagnosed error-recovery value - so a
+ * downstream "cannot infer" check doesn't also fire for it on top of the
+ * diagnostic already reported for the same cause. */
+function placeholderBindUnresolvedFieldGenericParam(
   declaredType: Semantics.Type,
   tokenId: number,
   genericNames: ReadonlySet<string>,

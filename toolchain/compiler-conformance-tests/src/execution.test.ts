@@ -1981,6 +1981,12 @@ describe("execution tests", (): void => {
       );
     });
 
+    it("does not cascade an unsolved-variable diagnostic when the only field that would supply a type parameter has an unresolved value", (): void => {
+      assertNoCascade(
+        `struct Wrapper<T> { value: T } fn main() { let w = Wrapper { value: missing_name }; }`,
+      );
+    });
+
     it("produces the same inferred result regardless of the order named fields are written in", (): void => {
       assertRunsTo(
         `
