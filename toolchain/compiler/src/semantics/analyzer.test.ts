@@ -7825,6 +7825,34 @@ describe("trait and impl declarations", (): void => {
       expect(result.diagnostics).toEqual([]);
       expect(result.methodTargets.size).toBe(0);
     });
+
+    it("records an impl-level bound's witness when the bound parameter is nested inside the impl target's own type argument", (): void => {
+      const result = diagnoseWithPrelude(`
+        trait Marker { fn mark(&self) -> i32; }
+        struct Num { v: i32 }
+        impl Marker for Num { fn mark(&self) -> i32 { self.v } }
+        struct Wrapper<T> { value: T }
+        struct Outer<T> { inner: T }
+        impl<T: Marker> Outer<Wrapper<T>> {
+          fn touch(&self) -> i32 { 0 }
+        }
+        fn main() {
+          let o = Outer { inner: Wrapper { value: Num { v: 1 } } };
+          let x = o.touch();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.methodCallWitnesses.values()];
+      assert(
+        witnesses !== undefined,
+        "expected a recorded method-call witness",
+      );
+      expect(witnesses).toHaveLength(1);
+      const witness = witnesses[0];
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(witness.traitName).toBe("Marker");
+      expect(witness.typeName).toBe("Num");
+    });
   });
 
   describe("nested impl registration and visibility", (): void => {
