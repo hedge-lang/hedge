@@ -10667,6 +10667,22 @@ function analyzeCompoundAssignmentExpression(
   };
 }
 
+/** Each named field's own raw (unanalyzed) value expression, keyed by field
+ * name - a shorthand field (`Foo { x }`, `field.value` is `none()`) has no
+ * raw value expression of its own to re-check, so it's simply absent. Used
+ * to re-analyze a field's value against its real substituted type once
+ * that's known, rather than reconciling whatever it independently
+ * defaulted to on its own first pass. */
+function rawNamedFieldValues(
+  fields: readonly Parser.FieldInit[],
+): ReadonlyMap<string, Parser.Expression> {
+  const values = new Map<string, Parser.Expression>();
+  for (const field of fields) {
+    if (isSome(field.value)) values.set(field.name.text, field.value.value);
+  }
+  return values;
+}
+
 /**
  * `Message::Write { text: "hi" }`-shaped construction struct-literals.
  * `none()` unless the path is a known enum + variant, falling back to
@@ -10680,6 +10696,7 @@ function analyzeEnumVariantStructConstruction(
   structExpression: Parser.StructExpression,
   fields: readonly Semantics.FieldInit[],
   hasBase: boolean,
+  rawFieldValues: ReadonlyMap<string, Parser.Expression>,
 ): Option<{
   readonly type: Semantics.Type;
   readonly fields: Semantics.FieldInit[];
@@ -10726,6 +10743,7 @@ function analyzeEnumVariantStructConstruction(
     {
       tokenId: structExpression.tokenId,
       typeArguments: structExpression.typeArguments,
+      rawFieldValues,
     },
     variant.body.value,
     { params: enumDecl.generics, defaults: enumDecl.genericParamDefaults },
@@ -10757,6 +10775,7 @@ function analyzeStructExpression(
       };
     },
   );
+  const rawFieldValues = rawNamedFieldValues(structExpression.fields);
 
   const analyzedBase = mapSome(structExpression.base, (base) =>
     analyzeExpression(ctx, base),
@@ -10768,6 +10787,7 @@ function analyzeStructExpression(
       structExpression,
       analyzedFields,
       isSome(analyzedBase),
+      rawFieldValues,
     );
     if (isSome(construction)) {
       return {
@@ -10824,6 +10844,7 @@ function analyzeStructExpression(
       {
         tokenId: structExpression.tokenId,
         typeArguments: structExpression.typeArguments,
+        rawFieldValues,
       },
       structDecl.body,
       {
@@ -10874,6 +10895,7 @@ interface DeclGenerics {
 interface NamedFieldConstructionSite {
   readonly tokenId: number;
   readonly typeArguments: readonly Parser.Type[];
+  readonly rawFieldValues: ReadonlyMap<string, Parser.Expression>;
 }
 
 /** The non-generic path for a named field's own value: reconcile against the
@@ -11006,11 +11028,32 @@ function analyzeStructNamedFields(
         ? field
         : { ...field, value: expr, type: getType(expr) };
     }
-    if (
-      genericNames.size > 0 &&
-      mentionsGenericParamAnywhere(declaredField.type, genericNames)
-    ) {
-      return field;
+    if (genericNames.size > 0) {
+      const substituted = substituteGenericType(declaredField.type, bindings);
+      if (mentionsGenericParamAnywhere(substituted, genericNames)) {
+        return field;
+      }
+      // Re-analyze the raw field value against the now-concrete substituted
+      // type, rather than reconciling the already-analyzed `value` - see
+      // the identical note on the positional-argument path. Never for an
+      // already-error-recovery value (e.g. an unresolved name) - it fell
+      // through the placeholder-binding branch above precisely because
+      // nothing more can be learned from it, so re-analyzing it here would
+      // just re-run the same failed lookup and double-report it.
+      const rawValue = site.rawFieldValues.get(field.name.text);
+      const recheckedValue =
+        rawValue !== undefined && !isErrorRecoveryUnitValue(ctx, value)
+          ? checkExpression(ctx, rawValue, {
+              kind: "HasType",
+              type: substituted,
+            })
+          : value;
+      return reconcileOrdinaryNamedField(
+        ctx,
+        field,
+        substituted,
+        recheckedValue,
+      );
     }
     return reconcileOrdinaryNamedField(ctx, field, declaredField.type, value);
   });
@@ -11413,6 +11456,7 @@ function analyzeCall(
     ctx,
     call,
     args,
+    expectedType,
   );
   if (isSome(structConstruction)) {
     return {
@@ -11438,7 +11482,12 @@ function analyzeCall(
     };
   }
   const callee = analyzeExpression(ctx, call.callee);
-  const enumConstruction = analyzeEnumVariantCallConstruction(ctx, call, args);
+  const enumConstruction = analyzeEnumVariantCallConstruction(
+    ctx,
+    call,
+    args,
+    expectedType,
+  );
   if (isSome(enumConstruction)) {
     return {
       ...call,
@@ -11537,6 +11586,7 @@ function analyzeEnumVariantCallConstruction(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
   args: readonly Semantics.Expression[],
+  expectedType: Semantics.Type | undefined,
 ): Option<{
   readonly type: Semantics.Type;
   readonly args: Semantics.Expression[];
@@ -11584,6 +11634,8 @@ function analyzeEnumVariantCallConstruction(
       args,
       enumDecl.generics,
       enumDecl.genericParamDefaults,
+      enumDecl.type,
+      expectedType,
     );
   return some({
     type: withTypeArguments(enumDecl.type, typeArguments),
@@ -11824,6 +11876,35 @@ function relatedSpanAt(
  * against its existing binding. Only called once `involvesGenericParam` has
  * already confirmed `declaredType` is a real generic-parameter position, so
  * a `NamedType` reached here is always in `genericNames`. */
+/** `unifyGenericParam`'s own base case: `declaredPath` is a bare generic
+ * parameter name itself, so `actualType` either establishes its first
+ * binding or must agree with an existing one. */
+function unifyBareGenericParam(
+  declaredPath: Semantics.Path,
+  actualType: Semantics.Type,
+  tokenId: number,
+  genericNames: ReadonlySet<string>,
+  bindings: GenericBindings,
+): UnifyOutcome {
+  const name = declaredPath.segments[0];
+  assert(
+    name !== undefined && genericNames.has(name),
+    "unifyGenericParam called on a non-generic NamedType",
+  );
+  const existing = bindings.get(name);
+  if (existing === undefined || existing.isErrorPlaceholder) {
+    bindings.set(name, { type: actualType, tokenId });
+    return { kind: "Bound" };
+  }
+  return typesEqual(existing.type, actualType)
+    ? { kind: "Bound" }
+    : {
+        kind: "Conflict",
+        previous: existing.type,
+        previousTokenId: existing.tokenId,
+      };
+}
+
 function unifyGenericParam(
   declaredType: Semantics.Type,
   actualType: Semantics.Type,
@@ -11832,23 +11913,13 @@ function unifyGenericParam(
   bindings: GenericBindings,
 ): UnifyOutcome {
   if (declaredType.kind === "NamedType") {
-    const name = declaredType.path.segments[0];
-    assert(
-      name !== undefined && genericNames.has(name),
-      "unifyGenericParam called on a non-generic NamedType",
+    return unifyBareGenericParam(
+      declaredType.path,
+      actualType,
+      tokenId,
+      genericNames,
+      bindings,
     );
-    const existing = bindings.get(name);
-    if (existing === undefined || existing.isErrorPlaceholder) {
-      bindings.set(name, { type: actualType, tokenId });
-      return { kind: "Bound" };
-    }
-    return typesEqual(existing.type, actualType)
-      ? { kind: "Bound" }
-      : {
-          kind: "Conflict",
-          previous: existing.type,
-          previousTokenId: existing.tokenId,
-        };
   }
   if (
     declaredType.kind === "ReferenceType" &&
@@ -11876,6 +11947,19 @@ function unifyGenericParam(
       bindings,
     );
   }
+  if (
+    isNominalType(declaredType) &&
+    isNominalType(actualType) &&
+    sameNominalIdentity(declaredType, actualType)
+  ) {
+    return unifyNominalTypeArguments(
+      declaredType.typeArguments,
+      actualType.typeArguments,
+      tokenId,
+      genericNames,
+      bindings,
+    );
+  }
   bindMismatchedReferentPlaceholder(
     declaredType,
     tokenId,
@@ -11883,6 +11967,54 @@ function unifyGenericParam(
     bindings,
   );
   return { kind: "Mismatch" };
+}
+
+/** Whether two nominal types are the same declaration with the same
+ * arity of type arguments - the shape `unifyGenericParam` needs before it
+ * can unify their argument lists position by position. */
+function sameNominalIdentity(
+  a: Semantics.StructType | Semantics.EnumType,
+  b: Semantics.StructType | Semantics.EnumType,
+): boolean {
+  return (
+    a.kind === b.kind &&
+    a.name === b.name &&
+    a.typeArguments.length === b.typeArguments.length
+  );
+}
+
+/** Unifies a nominal type's own type-argument list position by position -
+ * a position that itself mentions a generic parameter recurses through
+ * `unifyGenericParam` (binding it); a fully concrete position only needs a
+ * plain equality check, never a binding attempt (`unifyGenericParam`
+ * asserts its `NamedType` case is always a real generic parameter, which a
+ * concrete position never is). Stops at the first non-`Bound` position,
+ * matching `unifyGenericParam`'s own short-circuit shape. */
+function unifyNominalTypeArguments(
+  declaredArgs: readonly Semantics.Type[],
+  actualArgs: readonly Semantics.Type[],
+  tokenId: number,
+  genericNames: ReadonlySet<string>,
+  bindings: GenericBindings,
+): UnifyOutcome {
+  for (let i = 0; i < declaredArgs.length; i++) {
+    const declaredArg = declaredArgs[i];
+    const actualArg = actualArgs[i];
+    if (declaredArg === undefined || actualArg === undefined) continue;
+    if (!involvesGenericParam(declaredArg, genericNames)) {
+      if (!typesEqual(declaredArg, actualArg)) return { kind: "Mismatch" };
+      continue;
+    }
+    const outcome = unifyGenericParam(
+      declaredArg,
+      actualArg,
+      tokenId,
+      genericNames,
+      bindings,
+    );
+    if (outcome.kind !== "Bound") return outcome;
+  }
+  return { kind: "Bound" };
 }
 
 /** The declared shape itself doesn't match (wrong mutability, a mismatched
@@ -12046,13 +12178,15 @@ function seedStructTurbofishBindings(
   });
 }
 
-/** Seeds turbofish, then argument-driven unification, then checks every
- * declared generic parameter got resolved - the same sequence `analyzeCall`
- * runs for an ordinary function call, minus the expected-return-type seed
- * (a constructed value's own type never reifies which concrete types its
- * generics resolved to - `EnumType`/`StructType` compare by name alone, see
- * `typesEqual` - so there's no return type for an outer expected type to
- * seed against the way an ordinary function call has one). Shared by
+/** Seeds turbofish, then an outer expected type (post Layer A, a
+ * constructed value's own type carries real type arguments, so this can
+ * unify the same way `analyzeCall` seeds an ordinary function's own
+ * declared return type), then argument-driven unification, then checks
+ * every declared generic parameter got resolved. `declaredType` is the
+ * struct/enum's own bare declaration type (`typeArguments: []`), with
+ * abstract per-param `NamedType`s substituted in here so it can be unified
+ * against `expectedType` - the same "declared shape, still abstract" role
+ * an ordinary function's own return type already plays. Shared by
  * `analyzeEnumVariantCallConstruction` and `analyzeTupleStructCallConstruction`. */
 function checkGenericPositionalConstruction(
   ctx: AnalysisContext,
@@ -12062,6 +12196,8 @@ function checkGenericPositionalConstruction(
   args: readonly Semantics.Expression[],
   genericParams: readonly string[],
   genericParamDefaults: ReadonlyMap<string, Semantics.Type>,
+  declaredType: Semantics.Type,
+  expectedType: Semantics.Type | undefined,
 ): {
   readonly args: Semantics.Expression[];
   readonly typeArguments: readonly Semantics.Type[];
@@ -12074,6 +12210,24 @@ function checkGenericPositionalConstruction(
     genericParamDefaults,
     turbofishBindings,
   );
+  if (expectedType !== undefined) {
+    const abstractDeclaredType = withTypeArguments(
+      declaredType,
+      genericParams.map((name): Semantics.Type => ({
+        kind: "NamedType",
+        tokenId: call.tokenId,
+        path: { absolute: false, segments: [name] },
+      })),
+    );
+    seedExpectedReturnType(
+      ctx,
+      call,
+      abstractDeclaredType,
+      expectedType,
+      new Set(genericParams),
+      turbofishBindings,
+    );
+  }
   const { args: checkedArgs, bindings } = checkPositionalCallArgs(
     ctx,
     call,
@@ -12124,7 +12278,7 @@ function seedExpectedReturnType(
   genericNames: ReadonlySet<string>,
   bindings: GenericBindings,
 ): boolean {
-  if (!involvesGenericParam(returnType, genericNames)) return false;
+  if (!mentionsGenericParamAnywhere(returnType, genericNames)) return false;
   const outcome = unifyGenericParam(
     returnType,
     expectedType,
@@ -12242,38 +12396,78 @@ function checkPositionalCallArgs(
         bindings,
       );
     }
-    if (
-      genericNames.size > 0 &&
-      mentionsGenericParamAnywhere(field.type, genericNames)
-    ) {
-      return arg;
-    }
-    const { expr, mismatch } = reconcileExpressionType(
+    return reconcileOrdinaryPositionalArg(
       ctx,
-      arg,
+      call,
+      site,
+      i,
       field.type,
-      arg.tokenId,
+      arg,
+      argType,
+      genericNames,
+      bindings,
     );
-    if (expr.kind === "IntLiteral") {
-      checkPosLiteralRange(ctx, expr, field.type);
-    }
-    if (mismatch) {
-      emitError(
-        ctx,
-        {
-          kind: "SemArgumentTypeMismatch",
-          argIndex: i + 1,
-          calleeKind: site.kindLabel,
-          calleeName: site.name,
-          expected: describeType(field.type),
-          found: describeType(getType(expr)),
-        },
-        arg.tokenId,
-      );
-    }
-    return expr;
   });
   return { args: checkedArgs, bindings };
+}
+
+/** The non-generic-unification path for a positional argument: substitute
+ * any already-known bindings into the declared type, skip (contribute no
+ * binding) if it's still genuinely abstract, else reconcile against it -
+ * re-analyzing the raw argument first when doing so could change the
+ * result (see the identical note on the named-field path). */
+function reconcileOrdinaryPositionalArg(
+  ctx: AnalysisContext,
+  call: Parser.CallExpression,
+  site: CallSiteDescription,
+  index: number,
+  declaredType: Semantics.Type,
+  arg: Semantics.Expression,
+  argType: Semantics.Type,
+  genericNames: ReadonlySet<string>,
+  bindings: GenericBindings,
+): Semantics.Expression {
+  const substitutedType =
+    genericNames.size > 0
+      ? substituteGenericType(declaredType, bindings)
+      : declaredType;
+  if (
+    genericNames.size > 0 &&
+    mentionsGenericParamAnywhere(substitutedType, genericNames)
+  ) {
+    return arg;
+  }
+  const rawArg = call.arguments[index];
+  const isErrorRecoveryArg =
+    argType.kind === "UnitType" && isAmbiguousUnitExpr(arg);
+  const recheckedArg =
+    genericNames.size > 0 && rawArg !== undefined && !isErrorRecoveryArg
+      ? checkExpression(ctx, rawArg, { kind: "HasType", type: substitutedType })
+      : arg;
+  const { expr, mismatch } = reconcileExpressionType(
+    ctx,
+    recheckedArg,
+    substitutedType,
+    arg.tokenId,
+  );
+  if (expr.kind === "IntLiteral") {
+    checkPosLiteralRange(ctx, expr, substitutedType);
+  }
+  if (mismatch) {
+    emitError(
+      ctx,
+      {
+        kind: "SemArgumentTypeMismatch",
+        argIndex: index + 1,
+        calleeKind: site.kindLabel,
+        calleeName: site.name,
+        expected: describeType(substitutedType),
+        found: describeType(getType(expr)),
+      },
+      arg.tokenId,
+    );
+  }
+  return expr;
 }
 
 /** An empty array literal (`[]`) against a `[T; 0]` position carries no
@@ -12666,6 +12860,7 @@ function analyzeTupleStructCallConstruction(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
   args: readonly Semantics.Expression[],
+  expectedType: Semantics.Type | undefined,
 ): Option<{
   readonly callee: Semantics.PathExpression;
   readonly type: Semantics.Type;
@@ -12713,6 +12908,8 @@ function analyzeTupleStructCallConstruction(
       args,
       structDecl.generics,
       structDecl.genericParamDefaults,
+      structDecl.type,
+      expectedType,
     );
   return some({
     callee,

@@ -6133,6 +6133,36 @@ describe("generic substitution through a nominal type's own type arguments", ():
   });
 });
 
+describe("nested generic field validation at construction, when a turbofish already fixes it", (): void => {
+  it("reconciles a named field's nested generic type once a turbofish already resolves it", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      struct Outer<T> { inner: Wrapper<T> }
+      fn main() {
+        let o = Outer::<i32> { inner: Wrapper { value: "s" } };
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "field `inner` type mismatch: expected `Wrapper<i32>`, found `Wrapper<str>`",
+    );
+  });
+
+  it("reconciles a positional field's nested generic type once a turbofish already resolves it", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T>(T);
+      struct Outer<T>(Wrapper<T>);
+      fn main() {
+        let o = Outer::<i32>(Wrapper("s"));
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "argument 1 to struct `Wrapper` type mismatch: expected `i32`, found `str`",
+    );
+  });
+});
+
 describe("match-pattern generic field-type substitution", (): void => {
   it("binds a destructured named field to its real concrete type, not the bare declared parameter", (): void => {
     const result = diagnose(`
