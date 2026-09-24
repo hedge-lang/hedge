@@ -1926,6 +1926,37 @@ describe("generic witness codegen", (): void => {
     `);
     expect(runEmittedJs(js)).toEqual(["cloning", "done"]);
   });
+
+  it("resolves an impl-level generic bound by its target-argument position, not its declaration order, when an impl reorders them", (): void => {
+    const js = emittedJs(`
+      struct Num { n: i32 }
+      impl Clone for Num {
+        fn clone(&self) -> Self {
+          print("cloned num");
+          Num { n: self.n }
+        }
+      }
+      struct Text { s: str }
+      impl Clone for Text {
+        fn clone(&self) -> Self {
+          print("cloned text");
+          Text { s: self.s }
+        }
+      }
+      struct Pair<A, B> { first: A, second: B }
+      impl<A: Clone, B> Pair<B, A> {
+        fn dup_first(&self) -> A {
+          self.first.clone()
+        }
+      }
+      fn main() {
+        let p = Pair { first: Text { s: "hi" }, second: Num { n: 5 } };
+        p.dup_first();
+        print("done");
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["cloned num", "done"]);
+  });
 });
 
 describe("trait default method codegen", (): void => {

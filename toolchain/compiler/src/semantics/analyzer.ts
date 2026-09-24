@@ -8579,12 +8579,14 @@ interface IndexedMethod {
     string,
     readonly Semantics.BoundTraitRef[]
   >;
-  /** The enclosing impl's own declared generic parameter names, in
-   * declaration order (empty for a non-generic impl) - a bound on one of
+  /** Each of the enclosing impl's own declared generic parameter names,
+   * mapped to its position within the impl's own *target* type-argument
+   * list (`impl<A, B> Pair<B, A>` maps `A -> 1`, `B -> 0`) - not
+   * necessarily the parameter's own declaration order. A bound on one of
    * these is only ever reachable through `self`, never a directly-typed
    * method argument, so `recordMethodCallWitnesses` resolves it from the
-   * receiver's own type arguments instead. */
-  readonly implGenericParams: readonly string[];
+   * receiver's own type arguments (in *this* position order) instead. */
+  readonly implGenericParamPositions: ReadonlyMap<string, number>;
   readonly origin:
     | { readonly kind: "inherent" }
     | { readonly kind: "trait"; readonly traitId: string };
@@ -8641,13 +8643,42 @@ function traitMethodSet(
     returnType: m.returnType,
     genericParams: [...trait.genericParams, ...m.genericParams],
     genericParamBounds: m.genericParamBounds,
-    implGenericParams: [],
+    implGenericParamPositions: new Map(),
     origin: { kind: "trait", traitId },
   }));
   const inherited = trait.supertraits.flatMap((s) =>
     traitMethodSet(ctx, s, nextVisiting),
   );
   return [...own, ...inherited];
+}
+
+/** Maps each of the impl's own declared generic parameter names to its
+ * position within the impl's own *target* type-argument list (`impl<A, B>
+ * Pair<B, A>` maps `A -> 1`, `B -> 0`) - the position a receiver's own
+ * concrete type-argument list carries that parameter's binding at, which
+ * is not necessarily the parameter's own declaration order. Mirrors the
+ * wildcard-position detection `resolveTypeArgumentSlots` already does for
+ * coherence, reading positions instead of building `TargetArgSlot`s. */
+function implGenericParamTargetPositions(
+  implGenericNames: ReadonlySet<string>,
+  targetType: Parser.Type,
+): ReadonlyMap<string, number> {
+  const positions = new Map<string, number>();
+  if (targetType.kind !== "NamedType") return positions;
+  targetType.typeArguments.forEach((arg, index) => {
+    if (
+      arg.kind !== "NamedType" ||
+      arg.path.segments.length !== 1 ||
+      arg.typeArguments.length !== 0
+    ) {
+      return;
+    }
+    const name = arg.path.segments[0];
+    if (name !== undefined && implGenericNames.has(name)) {
+      positions.set(name, index);
+    }
+  });
+  return positions;
 }
 
 function buildMethodIndex(
@@ -8665,6 +8696,10 @@ function buildMethodIndex(
     if (targetType === undefined) continue;
     const targetId = typeIdentity(targetType);
     const entries = [...(ctx.methodIndex.get(targetId) ?? [])];
+    const implGenericParamPositions = implGenericParamTargetPositions(
+      new Set(genericParamNames(item.generics)),
+      item.type,
+    );
     if (isSome(shallow.traitRef)) {
       const traitId = resolveTraitIdentity(shallow.traitRef.value.name, scope);
       entries.push(
@@ -8673,7 +8708,7 @@ function buildMethodIndex(
           traitId,
           targetId,
           targetType,
-          genericParamNames(item.generics),
+          implGenericParamPositions,
           resolveBoundNames(
             ctx,
             genericParamBoundNames(item.generics, item.whereClause),
@@ -8681,7 +8716,14 @@ function buildMethodIndex(
         ),
       );
     } else {
-      entries.push(...indexInherentMethods(ctx, item, targetType));
+      entries.push(
+        ...indexInherentMethods(
+          ctx,
+          item,
+          targetType,
+          implGenericParamPositions,
+        ),
+      );
     }
     ctx.methodIndex.set(targetId, entries);
     indexAssociatedConsts(ctx, item, targetType, targetId);
@@ -8717,7 +8759,7 @@ function indexTraitImplMethods(
   traitId: string,
   targetId: string,
   targetType: Semantics.Type,
-  implGenericParams: readonly string[],
+  implGenericParamPositions: ReadonlyMap<string, number>,
   implGenericParamBounds: ReadonlyMap<
     string,
     readonly Semantics.BoundTraitRef[]
@@ -8736,7 +8778,7 @@ function indexTraitImplMethods(
       substituteSelfType(p, targetType, associatedTypes),
     ),
     returnType: substituteSelfType(m.returnType, targetType, associatedTypes),
-    implGenericParams,
+    implGenericParamPositions,
     genericParamBounds: mergedGenericParamBounds(
       implGenericParamBounds,
       m.genericParamBounds,
@@ -8771,6 +8813,7 @@ function indexInherentMethods(
   ctx: AnalysisContext,
   item: Parser.ImplDecl,
   targetType: Semantics.Type,
+  implGenericParamPositions: ReadonlyMap<string, number>,
 ): readonly IndexedMethod[] {
   pushSelfContext(ctx, inherentSelfContext(targetType));
   const implGenerics = genericParamNames(item.generics);
@@ -8803,7 +8846,7 @@ function indexInherentMethods(
           ctx,
           genericParamBoundNames(merged.generics, merged.whereClause),
         ),
-        implGenericParams: implGenerics,
+        implGenericParamPositions,
         origin: { kind: "inherent" },
       },
     ];
@@ -8869,7 +8912,7 @@ function blanketMethodCandidates(
         impl.traitName,
         typeId,
         receiverType,
-        [],
+        new Map(),
         new Map(),
       ),
     );
@@ -9267,11 +9310,11 @@ function namesGenericParam(type: Semantics.Type, paramName: string): boolean {
  * type carrying a matching argument list. */
 function implGenericParamType(
   receiverType: Semantics.Type,
-  implGenericParams: readonly string[],
+  implGenericParamPositions: ReadonlyMap<string, number>,
   paramName: string,
 ): Semantics.Type | undefined {
-  const index = implGenericParams.indexOf(paramName);
-  if (index === -1 || !isNominalType(receiverType)) return undefined;
+  const index = implGenericParamPositions.get(paramName);
+  if (index === undefined || !isNominalType(receiverType)) return undefined;
   return receiverType.typeArguments[index];
 }
 
@@ -9319,7 +9362,7 @@ function recordMethodCallWitnesses(
           : arg.type
         : implGenericParamType(
             receiverType,
-            method.implGenericParams,
+            method.implGenericParamPositions,
             paramName,
           );
     if (argType === undefined) continue;
