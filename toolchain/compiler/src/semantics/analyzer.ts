@@ -3175,6 +3175,45 @@ function checkAssociatedConst(
   }
 }
 
+/** `TargetArgSlot` with every `Wildcard.paramName` made globally unique
+ * across the two impl patterns being compared, via a `side#name` key -
+ * needed because the two patterns' own wildcards are independent variables
+ * even when they share a literal name (`impl<T> ...` vs `impl<U> ...`, or
+ * even `impl<T> ...` vs `impl<T> ...` from two unrelated impls), so a single
+ * shared binding map can only track them correctly once the key itself
+ * carries which side a wildcard came from - see `slotsOverlap`'s own doc
+ * comment for why a single shared map (rather than one map per side) is
+ * required in the first place. */
+type TaggedTargetArgSlot =
+  | { readonly kind: "Wildcard"; readonly key: string }
+  | { readonly kind: "Concrete"; readonly type: Semantics.Type }
+  | {
+      readonly kind: "Nominal";
+      readonly nominalKind: "StructType" | "EnumType";
+      readonly name: string;
+      readonly typeArguments: readonly TaggedTargetArgSlot[];
+    };
+
+function tagTargetArgSlot(
+  slot: TargetArgSlot,
+  side: "a" | "b",
+): TaggedTargetArgSlot {
+  if (slot.kind === "Wildcard") {
+    return { kind: "Wildcard", key: `${side}#${slot.paramName}` };
+  }
+  if (slot.kind === "Nominal") {
+    return {
+      kind: "Nominal",
+      nominalKind: slot.nominalKind,
+      name: slot.name,
+      typeArguments: slot.typeArguments.map((arg) =>
+        tagTargetArgSlot(arg, side),
+      ),
+    };
+  }
+  return slot;
+}
+
 /** Whether every position of two impl targets' own type-argument lists
  * overlaps - a mismatched length can't happen for two impls of the same
  * declared struct/enum (both instantiate the same fixed generic arity), but
@@ -3184,58 +3223,62 @@ function targetTypeArgumentsOverlap(
   a: readonly TargetArgSlot[],
   b: readonly TargetArgSlot[],
 ): boolean {
-  return slotListsOverlap(a, b, new Map(), new Map());
+  return taggedSlotListsOverlap(
+    a.map((slot) => tagTargetArgSlot(slot, "a")),
+    b.map((slot) => tagTargetArgSlot(slot, "b")),
+    new Map(),
+  );
 }
 
-function slotListsOverlap(
-  a: readonly TargetArgSlot[],
-  b: readonly TargetArgSlot[],
-  aBindings: Map<string, TargetArgSlot>,
-  bBindings: Map<string, TargetArgSlot>,
+function taggedSlotListsOverlap(
+  a: readonly TaggedTargetArgSlot[],
+  b: readonly TaggedTargetArgSlot[],
+  bindings: Map<string, TaggedTargetArgSlot>,
 ): boolean {
   if (a.length !== b.length) return true;
   return a.every((slot, i) => {
     const other = b[i];
-    return (
-      other === undefined || slotsOverlap(slot, other, aBindings, bBindings)
-    );
+    return other === undefined || slotsOverlap(slot, other, bindings);
   });
 }
 
 /** Whether two impl targets' own argument slots could describe the same
- * concrete instantiation. A repeated wildcard on one side (`Pair<T, T>`)
- * must bind to one consistent slot across every occurrence - `aBindings`/
- * `bBindings` record each side's own first sighting (one map per impl,
- * since the two sides' parameters are independent even when they share a
- * literal name like `T`), and a repeat sighting is checked against that
- * recorded slot instead of trivially overlapping. */
+ * concrete instantiation - real unification against one shared `bindings`
+ * map, keyed by each wildcard's already side-tagged identity (see
+ * `TaggedTargetArgSlot`). A single shared map is required, not one per
+ * side: once a wildcard from one side binds to a wildcard from the other
+ * (`T` vs `U`), a later occurrence of *either* one must resolve through the
+ * same substitution, or two patterns that both contain variables can
+ * silently interpret a slot captured from the opposite side against the
+ * wrong side's own bindings - unsound for a case like `Triple<T, T, i32>`
+ * vs `Triple<U, str, U>`, whose equations (`T = U`, `T = str`, `i32 = U`)
+ * only satisfy if `i32 == str`, which they don't. */
 function slotsOverlap(
-  a: TargetArgSlot,
-  b: TargetArgSlot,
-  aBindings: Map<string, TargetArgSlot>,
-  bBindings: Map<string, TargetArgSlot>,
+  a: TaggedTargetArgSlot,
+  b: TaggedTargetArgSlot,
+  bindings: Map<string, TaggedTargetArgSlot>,
 ): boolean {
   if (a.kind === "Wildcard") {
-    const existing = aBindings.get(a.paramName);
+    const existing = bindings.get(a.key);
     if (existing === undefined) {
-      aBindings.set(a.paramName, b);
+      bindings.set(a.key, b);
       return true;
     }
-    return slotsOverlap(existing, b, aBindings, bBindings);
+    return slotsOverlap(existing, b, bindings);
   }
   if (b.kind === "Wildcard") {
-    const existing = bBindings.get(b.paramName);
+    const existing = bindings.get(b.key);
     if (existing === undefined) {
-      bBindings.set(b.paramName, a);
+      bindings.set(b.key, a);
       return true;
     }
-    return slotsOverlap(a, existing, aBindings, bBindings);
+    return slotsOverlap(a, existing, bindings);
   }
   if (a.kind === "Nominal" && b.kind === "Nominal") {
     return (
       a.nominalKind === b.nominalKind &&
       a.name === b.name &&
-      slotListsOverlap(a.typeArguments, b.typeArguments, aBindings, bBindings)
+      taggedSlotListsOverlap(a.typeArguments, b.typeArguments, bindings)
     );
   }
   if (a.kind === "Concrete" && b.kind === "Concrete") {

@@ -6755,6 +6755,29 @@ describe("trait and impl declarations", (): void => {
       `);
       expect(result.diagnostics).toEqual([]);
     });
+
+    it("does not falsely report overlap when both impl patterns have their own repeated wildcards whose equations disagree", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Triple<A, B, C> { a: A, b: B, c: C }
+        impl<T> Draw for Triple<T, T, i32> { fn draw(&self) -> str { "a" } }
+        impl<U> Draw for Triple<U, str, U> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still rejects two impl patterns whose repeated wildcards jointly overlap across both sides", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Triple<A, B, C> { a: A, b: B, c: C }
+        impl<T> Draw for Triple<T, T, i32> { fn draw(&self) -> str { "a" } }
+        impl<U> Draw for Triple<U, i32, U> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Draw` is already implemented for type `Triple`",
+      );
+    });
   });
 
   describe("parameterized trait-bound instantiation coherence and selection", (): void => {
