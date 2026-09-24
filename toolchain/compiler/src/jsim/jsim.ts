@@ -16,6 +16,7 @@ import {
   constValueToLiteralExpression,
   type FreeMethodTarget,
   type MethodTarget,
+  monomorphizedTypeIdentity,
   type UnsizeCoercion,
   witnessParamName,
   type WitnessMethod,
@@ -2729,7 +2730,7 @@ function jsimRangeExpression(
  * Enum `Drop` is not wired yet (a later ticket). */
 function structDropFn(ctx: JsimContext, type: Semantics.Type): Option<string> {
   if (type.kind !== "StructType") return none();
-  const target = ctx.dropImpls.get(type.name);
+  const target = ctx.dropImpls.get(monomorphizedTypeIdentity(type));
   return target === undefined
     ? none()
     : some(resolvedMethodFreeFnName(ctx, target));

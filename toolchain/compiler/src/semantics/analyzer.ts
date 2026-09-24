@@ -66,9 +66,11 @@ export interface AnalysisResult {
    * `sourceType` on the wrapped node (its own `.type` was rewritten to the
    * `dyn` target here) so struct/enum lowering still sees the concrete type. */
   readonly unsizeCoercions: ReadonlyMap<number, UnsizeCoercion>;
-  /** Struct/enum scope-qualified type ids that have a `Drop` impl, mapped to
-   * the `drop` method's free-function target. Codegen calls it from the
-   * type's `[Symbol.dispose]` before releasing the fields. */
+  /** Structs with a `Drop` impl, keyed by their own monomorphized type id
+   * (`monomorphizedTypeIdentity`, so `Pair<i32>` and `Pair<str>` each get
+   * their own entry) and mapped to the `drop` method's free-function
+   * target. Codegen calls it from the type's `[Symbol.dispose]` before
+   * releasing the fields. */
   readonly dropImpls: ReadonlyMap<string, FreeMethodTarget>;
   /** Witnesses resolved for a concrete-receiver method call's own bounded
    * generic parameters (the method's own `<U: Trait>`), keyed by the
@@ -3430,9 +3432,12 @@ function nominalTypeArguments(type: Semantics.Type): readonly Semantics.Type[] {
  * `TargetArgSlot`'s own `Wildcard` matching for that filter instead. Two
  * distinct instantiations sharing one bare identity is exactly what let
  * `impl Draw for Pair<i32>` and `impl Draw for Pair<str>` silently collapse
- * onto the same emitted free function / hoisted witness const.
+ * onto the same emitted free function / hoisted witness const. Exported so
+ * `jsim.ts`'s `structDropFn` can compute the identical key its own read of
+ * `AnalysisResult.dropImpls` needs - the write side (`recordDropImpl`) and
+ * read side must never drift onto two different algorithms.
  */
-function monomorphizedTypeIdentity(type: Semantics.Type): string {
+export function monomorphizedTypeIdentity(type: Semantics.Type): string {
   return isNominalType(type)
     ? monomorphizeIdentity(type.name, type.typeArguments)
     : typeIdentity(type);
@@ -9550,10 +9555,11 @@ function recordDropImpl(
     );
     return;
   }
-  ctx.dropImplTable.set(targetType.name, {
+  const monomorphizedTypeId = monomorphizedTypeIdentity(targetType);
+  ctx.dropImplTable.set(monomorphizedTypeId, {
     kind: "free",
-    typeId: targetType.name,
-    scopeId: targetType.name,
+    typeId: monomorphizedTypeId,
+    scopeId: monomorphizedTypeId,
     typeName: bareTypeName(targetType.name),
     traitName: some(bareTypeName(traitName.value)),
     methodName: "drop",

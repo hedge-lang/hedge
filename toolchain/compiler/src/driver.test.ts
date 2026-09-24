@@ -2582,6 +2582,21 @@ describe("Drop::drop dispose body", (): void => {
     expect(js).toContain("Res$Drop$drop(");
     expect(runEmittedJs(js)).toEqual(["0", "42"]);
   });
+
+  it("runs each instantiation's own `drop` body, not whichever one was registered last", (): void => {
+    const js = emittedJs(`
+      struct Pair<T> { a: T }
+      impl Drop for Pair<i32> { fn drop(&mut self) { print(1); } }
+      impl Drop for Pair<str> { fn drop(&mut self) { print(2); } }
+      fn main() {
+        let a = Pair { a: 1 };
+        let b = Pair { a: "s" };
+        print(0);
+      }
+    `);
+    // Scope-end disposal is LIFO: `b` (Pair<str>) first, then `a` (Pair<i32>).
+    expect(runEmittedJs(js)).toEqual(["0", "2", "1"]);
+  });
 });
 
 describe("std prelude", (): void => {
