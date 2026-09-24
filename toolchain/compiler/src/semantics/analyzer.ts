@@ -421,7 +421,7 @@ interface RegisteredImpl {
   readonly targetTypeName: string;
   readonly targetTypeArguments: readonly TargetArgSlot[];
   readonly isBlanket: boolean;
-  readonly blanketBounds: readonly string[];
+  readonly blanketBounds: readonly Semantics.BoundTraitRef[];
   readonly providedMethods: readonly string[];
   /** Every `type Name = Value;` this impl defines, resolved eagerly during
    * registration (not left for `analyzeImplDecl`'s own real pass) so a
@@ -3363,8 +3363,13 @@ function findRegisteredImpl(
     if (!impl.isBlanket) return impl.targetTypeName === typeName;
     return impl.blanketBounds.every(
       (bound) =>
-        findRegisteredImpl(ctx, typeName, bound, [], nextVisiting) !==
-        undefined,
+        findRegisteredImpl(
+          ctx,
+          typeName,
+          bound.name,
+          bound.typeArguments,
+          nextVisiting,
+        ) !== undefined,
     );
   });
 }
@@ -3379,7 +3384,7 @@ function findRegisteredImpl(
 function composeBlanketBoundWitnesses(
   ctx: AnalysisContext,
   typeName: string,
-  blanketBounds: readonly string[],
+  blanketBounds: readonly Semantics.BoundTraitRef[],
   visiting: ReadonlySet<string>,
 ): readonly WitnessRef[] | undefined {
   const witnesses: WitnessRef[] = [];
@@ -3387,8 +3392,8 @@ function composeBlanketBoundWitnesses(
     const witness = resolveTraitBoundForTypeName(
       ctx,
       typeName,
-      bound,
-      [],
+      bound.name,
+      bound.typeArguments,
       visiting,
     );
     if (!isSome(witness)) return undefined;
@@ -4152,6 +4157,7 @@ function resolveImplRegistrationFacts(
   readonly associatedTypeDefs: Map<string, Semantics.Type>;
   readonly targetTypeArguments: readonly TargetArgSlot[];
   readonly traitTypeArguments: readonly TargetArgSlot[];
+  readonly blanketBounds: readonly Semantics.BoundTraitRef[];
 } {
   const associatedTypeDefs = new Map<string, Semantics.Type>();
   for (const alias of item.items) {
@@ -4175,7 +4181,26 @@ function resolveImplRegistrationFacts(
         implGenericNames,
       )
     : [];
-  return { associatedTypeDefs, targetTypeArguments, traitTypeArguments };
+  // A blanket impl's own bound (`impl<T: Convert<i32>> Show for T`) can be
+  // parameterized too - resolved the same way an ordinary generic-param
+  // bound is, under this impl's own generic scope, so its type arguments
+  // (not just its bare trait name) carry through to satisfiability
+  // checking and witness composition.
+  const bareTargetName =
+    item.type.kind === "NamedType" ? item.type.path.segments.at(-1) : undefined;
+  const blanketBounds =
+    bareTargetName !== undefined
+      ? (resolveBoundNames(
+          ctx,
+          genericParamBoundNames(item.generics, item.whereClause),
+        ).get(bareTargetName) ?? [])
+      : [];
+  return {
+    associatedTypeDefs,
+    targetTypeArguments,
+    traitTypeArguments,
+    blanketBounds,
+  };
 }
 
 /** Registers one `impl`'s coherence/completeness/visibility facts, or
@@ -4215,8 +4240,12 @@ function registerOneImpl(
   }
   const declaredNames = declaredAssociatedTypeNames(ctx, traitName);
   pushGenericParams(ctx, item.generics, item.whereClause);
-  const { associatedTypeDefs, targetTypeArguments, traitTypeArguments } =
-    resolveImplRegistrationFacts(ctx, item, declaredNames);
+  const {
+    associatedTypeDefs,
+    targetTypeArguments,
+    traitTypeArguments,
+    blanketBounds,
+  } = resolveImplRegistrationFacts(ctx, item, declaredNames);
   popGenericParams(ctx);
   const incoming: RegisteredImpl = {
     traitName,
@@ -4224,9 +4253,7 @@ function registerOneImpl(
     targetTypeName: targetTypeName.value,
     targetTypeArguments,
     isBlanket: decl.isBlanket,
-    blanketBounds: decl.blanketBounds.map((bound) =>
-      resolveTraitIdentity(bound, scope),
-    ),
+    blanketBounds,
     providedMethods: decl.providedMethods,
     associatedTypeDefs,
     tokenId: item.tokenId,

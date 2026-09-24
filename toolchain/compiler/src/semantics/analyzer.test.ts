@@ -6703,6 +6703,41 @@ describe("trait and impl declarations", (): void => {
     });
   });
 
+  describe("parameterized blanket-impl bounds", (): void => {
+    it("rejects a receiver satisfying only a different instantiation of a blanket impl's own parameterized bound", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        trait Show { fn show(&self) -> str; }
+        struct P { x: i32 }
+        impl Convert<str> for P { fn convert(&self) -> str { "s" } }
+        impl<T: Convert<i32>> Show for T { fn show(&self) -> str { "shown" } }
+        fn main() {
+          let p = P { x: 1 };
+          p.show();
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "no method `show` found for type `P`",
+      );
+    });
+
+    it("accepts a receiver satisfying a blanket impl's own parameterized bound", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        trait Show { fn show(&self) -> str; }
+        struct P { x: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.x } }
+        impl<T: Convert<i32>> Show for T { fn show(&self) -> str { "shown" } }
+        fn main() {
+          let p = P { x: 1 };
+          p.show();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
   describe("orphan rule", (): void => {
     it("analyzes an impl declared in the same package as both its trait and its type with no diagnostics", (): void => {
       // TODO(Hedge-264): cross-package enforcement (an impl written where
