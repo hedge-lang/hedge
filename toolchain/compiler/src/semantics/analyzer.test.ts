@@ -6778,6 +6778,26 @@ describe("trait and impl declarations", (): void => {
         "trait `Draw` is already implemented for type `Triple`",
       );
     });
+
+    it("does not falsely conflict when a shared impl-level parameter's trait argument and target argument disagree", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct Box<T> { value: T }
+        impl<T> Convert<T> for Box<T> { fn convert(&self) -> T { self.value } }
+        impl Convert<i32> for Box<str> { fn convert(&self) -> i32 { 0 } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("checks a blanket impl's own trait argument before assuming it conflicts with everything", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct P { x: i32 }
+        impl<T> Convert<str> for T { fn convert(&self) -> str { "s" } }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.x } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
   });
 
   describe("parameterized trait-bound instantiation coherence and selection", (): void => {
@@ -6812,6 +6832,31 @@ describe("trait and impl declarations", (): void => {
         impl Convert<str> for P { fn convert(&self) -> str { "s" } }
         fn use_it<T: Convert<i32>>(x: T) {}
         fn main() { use_it(P { x: 1 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a bound against an impl whose own trait argument and target argument, matched to the same shared parameter, disagree", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct Box<T> { value: T }
+        impl<T> Convert<T> for Box<T> { fn convert(&self) -> T { self.value } }
+        fn use_it<U: Convert<i32>>(x: U) {}
+        fn main() { use_it(Box { value: "s" }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `Box<str>: Convert<i32>` is not satisfied",
+      );
+    });
+
+    it("still accepts a bound when the shared parameter's trait argument and target argument agree", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct Box<T> { value: T }
+        impl<T> Convert<T> for Box<T> { fn convert(&self) -> T { self.value } }
+        fn use_it<U: Convert<i32>>(x: U) {}
+        fn main() { use_it(Box { value: 5 }); }
       `);
       expect(result.diagnostics).toEqual([]);
     });

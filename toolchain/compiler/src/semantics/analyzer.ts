@@ -3218,15 +3218,18 @@ function tagTargetArgSlot(
  * overlaps - a mismatched length can't happen for two impls of the same
  * declared struct/enum (both instantiate the same fixed generic arity), but
  * is treated as overlapping rather than silently missing a real conflict if
- * it somehow did. */
-function targetTypeArgumentsOverlap(
+ * it somehow did. `bindings` is caller-supplied (not created fresh here) so
+ * `implsOverlap` can reuse one shared map across its own trait-argument and
+ * target-argument checks - see that function's own doc comment for why. */
+function tagAndOverlap(
   a: readonly TargetArgSlot[],
   b: readonly TargetArgSlot[],
+  bindings: Map<string, TaggedTargetArgSlot>,
 ): boolean {
   return taggedSlotListsOverlap(
     a.map((slot) => tagTargetArgSlot(slot, "a")),
     b.map((slot) => tagTargetArgSlot(slot, "b")),
-    new Map(),
+    bindings,
   );
 }
 
@@ -3288,20 +3291,28 @@ function slotsOverlap(
 }
 
 /**
- * Two impls of the same trait overlap when either is blanket (a blanket
- * impl claims the trait for every type, regardless of its own bound - the
- * bound is a well-formedness constraint on the impl body, not something
- * overlap-checking consults), or when they target the same base type and
- * every position of their own type-argument lists overlaps (see
- * `targetTypeArgumentsOverlap`).
+ * Two impls of the same trait overlap when their own trait-argument
+ * patterns overlap, and (either is blanket, or they target the same base
+ * type with overlapping target-argument patterns too). The trait-argument
+ * check runs unconditionally, before the blanket bypass - a blanket impl's
+ * own trait argument can still rule out overlap with a differently-
+ * parameterized trait (`impl<T> Convert<str> for T` never conflicts with
+ * `impl Convert<i32> for P`), so a blanket impl isn't a free pass past it.
+ * One shared `bindings` map carries a matched generic parameter's binding
+ * from the trait-argument check into the target-argument check, since both
+ * patterns come from the same single impl's own generic scope
+ * (`impl<T> Convert<T> for Box<T>`'s `T` means the same thing in both
+ * positions) - two independently-fresh maps would let `T` resolve to a
+ * different concrete type on each side without the two ever being compared.
  */
 function implsOverlap(a: RegisteredImpl, b: RegisteredImpl): boolean {
+  const bindings = new Map<string, TaggedTargetArgSlot>();
+  if (!tagAndOverlap(a.traitTypeArguments, b.traitTypeArguments, bindings)) {
+    return false;
+  }
   if (a.isBlanket || b.isBlanket) return true;
   if (a.targetTypeName !== b.targetTypeName) return false;
-  return (
-    targetTypeArgumentsOverlap(a.targetTypeArguments, b.targetTypeArguments) &&
-    targetTypeArgumentsOverlap(a.traitTypeArguments, b.traitTypeArguments)
-  );
+  return tagAndOverlap(a.targetTypeArguments, b.targetTypeArguments, bindings);
 }
 
 function implOverlapKind(
@@ -3506,15 +3517,19 @@ function monomorphizeIdentity(
  * the found impl's own `Rhs`/`Output`, so a real (non-default) `Rhs` impl
  * must stay findable this way. Only a genuinely parameterized request does
  * per-position matching, where a mismatch is a real non-match, not (unlike
- * `targetTypeArgumentsOverlap`'s coherence use) something to conservatively
- * treat as a conflict. */
+ * `implsOverlap`'s coherence use) something to conservatively treat as a
+ * conflict. `bindings` is caller-supplied so `findRegisteredImpl` can reuse
+ * one shared map across its own trait-argument and target-argument checks -
+ * both patterns come from the same single impl's own generic scope, so a
+ * shared parameter (`impl<T> Convert<T> for Box<T>`'s `T`) must resolve
+ * consistently across both checks, not independently per check. */
 function requestedTraitArgumentsSatisfied(
   implSlots: readonly TargetArgSlot[],
   requested: readonly Semantics.Type[],
+  bindings: Map<string, Semantics.Type>,
 ): boolean {
   if (requested.length === 0) return true;
   if (implSlots.length !== requested.length) return false;
-  const bindings = new Map<string, Semantics.Type>();
   return implSlots.every((slot, i) => {
     const type = requested[i];
     return type !== undefined && slotSatisfiesType(slot, type, bindings);
@@ -3524,10 +3539,11 @@ function requestedTraitArgumentsSatisfied(
 /** Whether `type` matches `slot`'s pattern - a repeated wildcard (the same
  * impl-level generic parameter at more than one position, e.g. `Pair<T, T>`)
  * must bind to the same concrete type at every occurrence, tracked in
- * `bindings` across the whole call (a fresh map per top-level
- * `requestedTraitArgumentsSatisfied` call, threaded through nested `Nominal`
- * recursion). `type` is always fully concrete here (a real receiver/operand),
- * unlike `slotsOverlap`'s two-pattern coherence comparison. */
+ * `bindings` across the whole call (threaded through nested `Nominal`
+ * recursion, and across sibling calls when a caller shares one map - see
+ * `requestedTraitArgumentsSatisfied`'s own doc comment). `type` is always
+ * fully concrete here (a real receiver/operand), unlike `slotsOverlap`'s
+ * two-pattern coherence comparison. */
 function slotSatisfiesType(
   slot: TargetArgSlot,
   type: Semantics.Type,
@@ -3580,10 +3596,12 @@ function findRegisteredImpl(
   const nextVisiting = new Set(visiting).add(key);
   return ctx.implRegistry.find((impl) => {
     if (impl.traitName !== traitName) return false;
+    const bindings = new Map<string, Semantics.Type>();
     if (
       !requestedTraitArgumentsSatisfied(
         impl.traitTypeArguments,
         requestedTypeArguments,
+        bindings,
       )
     ) {
       return false;
@@ -3594,6 +3612,7 @@ function findRegisteredImpl(
         requestedTraitArgumentsSatisfied(
           impl.targetTypeArguments,
           receiverTypeArguments,
+          bindings,
         )
       );
     }
@@ -9315,6 +9334,7 @@ function methodCandidatesForNominalType(
     requestedTraitArgumentsSatisfied(
       m.targetTypeArguments,
       receiverType.typeArguments,
+      new Map(),
     ),
   );
 }
