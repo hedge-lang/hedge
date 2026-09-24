@@ -2840,32 +2840,26 @@ function analyzeTraitDecl(
   return { ...shallow, methods, methodBodies };
 }
 
-/** The impl's own concrete `Self` type - a blanket impl's target is its own
- * type parameter, represented the same abstract way a declared generic
- * parameter is (see `ProjectionType`'s own doc comment); a concrete impl's
- * target resolves through ordinary struct/enum lookup, the same path
- * `validateNamedType` itself would take for the same bare name. */
+/** The impl's own concrete `Self` type, resolved from the impl's own
+ * declared target (`item.type`) under its own pushed generic-param scope -
+ * a blanket impl's bare `T` resolves to the same abstract `NamedType` a
+ * declared generic parameter always does (see `ProjectionType`'s own doc
+ * comment), and a concrete impl's target resolves through the same
+ * `resolveSlice1Type` a field/param/return type reference would, so its own
+ * type arguments (`Pair<i32>`) carry through to `Self` instead of collapsing
+ * to the struct's bare declaration identity - needed for `recordImplMethodTarget`/
+ * `recordDropImpl`'s own per-instantiation codegen identity, not just method
+ * body type-checking. Must be called with the impl's own generic scope
+ * already pushed. */
 function resolveImplSelfTargetType(
   ctx: AnalysisContext,
+  item: Parser.ImplDecl,
   shallow: Semantics.ImplDecl,
 ): Semantics.Type {
-  const bareTargetTypeName = shallow.targetTypeName;
-  if (!isSome(bareTargetTypeName)) {
+  if (!isSome(shallow.targetTypeName)) {
     return { kind: "UnitType", tokenId: shallow.tokenId };
   }
-  if (shallow.isBlanket) {
-    return {
-      kind: "NamedType",
-      tokenId: shallow.tokenId,
-      path: { absolute: false, segments: [bareTargetTypeName.value] },
-    };
-  }
-  return (
-    lookupStructOrEnumType(ctx, bareTargetTypeName.value) ?? {
-      kind: "UnitType",
-      tokenId: shallow.tokenId,
-    }
-  );
+  return resolveSlice1Type(ctx, item.type, item.type.tokenId);
 }
 
 /** The ten binary arithmetic/bitwise/shift traits, each declared
@@ -3019,7 +3013,9 @@ function analyzeImplDecl(
   item: Parser.ImplDecl,
 ): Semantics.ImplDecl {
   const shallow = buildImplDecl(item);
-  const targetType = resolveImplSelfTargetType(ctx, shallow);
+  pushGenericParams(ctx, item.generics, item.whereClause);
+  const targetType = resolveImplSelfTargetType(ctx, item, shallow);
+  popGenericParams(ctx);
   const traitName = mapSome(
     shallow.traitRef,
     (t) => lookupTrait(ctx, t.name) ?? t.name,
@@ -3254,6 +3250,7 @@ function resolveTraitBound(
     typeIdentity(type),
     traitName,
     requestedTypeArguments,
+    nominalTypeArguments(type),
   );
 }
 
@@ -3328,6 +3325,43 @@ function typeIdentity(type: Semantics.Type): string {
   return isNominalType(type) ? type.name : describeType(type);
 }
 
+/** A nominal type's own resolved type arguments, or none for anything else -
+ * the shape `findRegisteredImpl`'s new instantiation filter and
+ * `methodCandidates`' own filter both need from an already-resolved
+ * receiver/operand. */
+function nominalTypeArguments(type: Semantics.Type): readonly Semantics.Type[] {
+  return isNominalType(type) ? type.typeArguments : [];
+}
+
+/**
+ * `typeIdentity` widened to fold in a nominal type's own type arguments
+ * (`Pair<i32>` vs `Pair<str>`) - used only where the type is already fully
+ * concrete (a call site's own resolved receiver/operand, or a non-blanket
+ * impl's own resolved target), never for `methodIndex`/`findRegisteredImpl`'s
+ * own grouping lookups, which must stay bare so a fully generic impl
+ * (`impl<T> Draw for Pair<T>`) is still found for every instantiation - see
+ * `TargetArgSlot`'s own `Wildcard` matching for that filter instead. Two
+ * distinct instantiations sharing one bare identity is exactly what let
+ * `impl Draw for Pair<i32>` and `impl Draw for Pair<str>` silently collapse
+ * onto the same emitted free function / hoisted witness const.
+ */
+function monomorphizedTypeIdentity(type: Semantics.Type): string {
+  return isNominalType(type)
+    ? monomorphizeIdentity(type.name, type.typeArguments)
+    : typeIdentity(type);
+}
+
+/** Same as `monomorphizedTypeIdentity`, from an already-bare identity string
+ * plus a separately-carried type-argument list - the shape a `typeName`
+ * threaded through `findRegisteredImpl`'s own call chain comes in as. */
+function monomorphizeIdentity(
+  name: string,
+  typeArguments: readonly Semantics.Type[],
+): string {
+  if (typeArguments.length === 0) return name;
+  return `${name}<${typeArguments.map(monomorphizedTypeIdentity).join(",")}>`;
+}
+
 /** Whether an impl's own resolved trait type arguments satisfy a bound's
  * requested ones. An unparameterized request (`requested` empty - every
  * existing caller except a real `T: Trait<Args>` bound, including every
@@ -3384,6 +3418,7 @@ function findRegisteredImpl(
   typeName: string,
   traitName: string,
   requestedTypeArguments: readonly Semantics.Type[] = [],
+  receiverTypeArguments: readonly Semantics.Type[] = [],
   visiting: ReadonlySet<string> = new Set(),
 ): RegisteredImpl | undefined {
   const key = `${typeName}::${traitName}`;
@@ -3399,7 +3434,15 @@ function findRegisteredImpl(
     ) {
       return false;
     }
-    if (!impl.isBlanket) return impl.targetTypeName === typeName;
+    if (!impl.isBlanket) {
+      return (
+        impl.targetTypeName === typeName &&
+        requestedTraitArgumentsSatisfied(
+          impl.targetTypeArguments,
+          receiverTypeArguments,
+        )
+      );
+    }
     return impl.blanketBounds.every(
       (bound) =>
         findRegisteredImpl(
@@ -3407,6 +3450,7 @@ function findRegisteredImpl(
           typeName,
           bound.name,
           bound.typeArguments,
+          receiverTypeArguments,
           nextVisiting,
         ) !== undefined,
     );
@@ -3424,6 +3468,7 @@ function composeBlanketBoundWitnesses(
   ctx: AnalysisContext,
   typeName: string,
   blanketBounds: readonly Semantics.BoundTraitRef[],
+  receiverTypeArguments: readonly Semantics.Type[],
   visiting: ReadonlySet<string>,
 ): readonly WitnessRef[] | undefined {
   const witnesses: WitnessRef[] = [];
@@ -3433,6 +3478,7 @@ function composeBlanketBoundWitnesses(
       typeName,
       bound.name,
       bound.typeArguments,
+      receiverTypeArguments,
       visiting,
     );
     if (!isSome(witness)) return undefined;
@@ -3454,6 +3500,7 @@ function resolveTraitBoundForTypeName(
   typeName: string,
   traitName: string,
   requestedTypeArguments: readonly Semantics.Type[] = [],
+  receiverTypeArguments: readonly Semantics.Type[] = [],
   visiting: ReadonlySet<string> = new Set(),
 ): Option<WitnessRef> {
   const key = `${typeName}::${traitName}`;
@@ -3464,13 +3511,19 @@ function resolveTraitBoundForTypeName(
     typeName,
     traitName,
     requestedTypeArguments,
+    receiverTypeArguments,
   );
   if (impl === undefined) return none();
+  const monomorphizedTypeId = monomorphizeIdentity(
+    typeName,
+    receiverTypeArguments,
+  );
   if (impl.isBlanket) {
     const boundWitnesses = composeBlanketBoundWitnesses(
       ctx,
       typeName,
       impl.blanketBounds,
+      receiverTypeArguments,
       nextVisiting,
     );
     if (boundWitnesses === undefined) return none();
@@ -3479,9 +3532,9 @@ function resolveTraitBoundForTypeName(
       traitName: bareTypeName(traitName),
       traitId: traitName,
       typeName: bareTypeName(typeName),
-      typeId: typeName,
+      typeId: monomorphizedTypeId,
       implTokenId: impl.tokenId,
-      methods: witnessMethods(ctx, traitName, typeName),
+      methods: witnessMethods(ctx, traitName, typeName, receiverTypeArguments),
       boundWitnesses,
     });
   }
@@ -3490,9 +3543,9 @@ function resolveTraitBoundForTypeName(
     traitName: bareTypeName(traitName),
     traitId: traitName,
     typeName: bareTypeName(typeName),
-    typeId: typeName,
+    typeId: monomorphizedTypeId,
     implTokenId: impl.tokenId,
-    methods: witnessMethods(ctx, traitName, typeName),
+    methods: witnessMethods(ctx, traitName, typeName, receiverTypeArguments),
   });
 }
 
@@ -3518,6 +3571,8 @@ function resolveAssociatedTypeViaSupertrait(
     ctx,
     typeIdentity(targetType),
     result.traitName,
+    [],
+    nominalTypeArguments(targetType),
   );
   return impl?.associatedTypeDefs.get(assocName);
 }
@@ -3530,9 +3585,17 @@ function witnessMethods(
   ctx: AnalysisContext,
   traitId: string,
   typeName: string,
+  receiverTypeArguments: readonly Semantics.Type[] = [],
 ): readonly WitnessMethod[] {
   const byName = new Map<string, WitnessMethod>();
-  collectWitnessMethods(ctx, traitId, typeName, new Set(), byName);
+  collectWitnessMethods(
+    ctx,
+    traitId,
+    typeName,
+    receiverTypeArguments,
+    new Set(),
+    byName,
+  );
   return [...byName.values()];
 }
 
@@ -3546,6 +3609,7 @@ function witnessMethods(
 function blanketMethodBoundWitnesses(
   ctx: AnalysisContext,
   typeName: string,
+  receiverTypeArguments: readonly Semantics.Type[],
   isImplProvided: boolean,
   impl: RegisteredImpl | undefined,
 ): Option<readonly WitnessRef[]> {
@@ -3554,6 +3618,7 @@ function blanketMethodBoundWitnesses(
     ctx,
     typeName,
     impl.blanketBounds,
+    receiverTypeArguments,
     new Set(),
   );
   assert(
@@ -3570,6 +3635,7 @@ function collectWitnessMethods(
   ctx: AnalysisContext,
   traitId: string,
   typeName: string,
+  receiverTypeArguments: readonly Semantics.Type[],
   seen: Set<string>,
   byName: Map<string, WitnessMethod>,
 ): void {
@@ -3577,7 +3643,13 @@ function collectWitnessMethods(
   seen.add(traitId);
   const trait = ctx.traitRegistry.get(traitId);
   if (trait === undefined) return;
-  const impl = findRegisteredImpl(ctx, typeName, traitId);
+  const impl = findRegisteredImpl(
+    ctx,
+    typeName,
+    traitId,
+    [],
+    receiverTypeArguments,
+  );
   const bareTrait = bareTypeName(traitId);
   for (const method of trait.methods) {
     if (byName.has(method.name)) continue;
@@ -3596,6 +3668,7 @@ function collectWitnessMethods(
       blanketBoundWitnesses: blanketMethodBoundWitnesses(
         ctx,
         typeName,
+        receiverTypeArguments,
         isImplProvided,
         impl,
       ),
@@ -3603,7 +3676,14 @@ function collectWitnessMethods(
     });
   }
   for (const supertrait of trait.supertraits) {
-    collectWitnessMethods(ctx, supertrait, typeName, seen, byName);
+    collectWitnessMethods(
+      ctx,
+      supertrait,
+      typeName,
+      receiverTypeArguments,
+      seen,
+      byName,
+    );
   }
 }
 
@@ -7942,7 +8022,13 @@ function recordOperatorDispatchTarget(
   tokenId: number,
 ): void {
   if (isNominalType(operandType)) {
-    const witness = resolveTraitBoundForTypeName(ctx, operandType.name, trait);
+    const witness = resolveTraitBoundForTypeName(
+      ctx,
+      operandType.name,
+      trait,
+      [],
+      operandType.typeArguments,
+    );
     if (!isSome(witness)) return;
     if (witness.value.kind === "Composed") {
       recordBlanketDispatchTarget(
@@ -7954,10 +8040,11 @@ function recordOperatorDispatchTarget(
       );
       return;
     }
+    const monomorphizedTypeId = monomorphizedTypeIdentity(operandType);
     ctx.methodTargetTable.set(tokenId, {
       kind: "free",
-      typeId: operandType.name,
-      scopeId: operandType.name,
+      typeId: monomorphizedTypeId,
+      scopeId: monomorphizedTypeId,
       typeName: bareTypeName(operandType.name),
       traitName: some(bareTypeName(trait)),
       methodName,
@@ -7967,9 +8054,9 @@ function recordOperatorDispatchTarget(
     // Wrapper<T>`) - its own bound is only ever reachable through the
     // operand, never a positional argument, so this resolves the same way
     // a method call's own impl-level bound does.
-    const indexedMethod = ctx.methodIndex
-      .get(operandType.name)
-      ?.find((m) => m.name === methodName);
+    const indexedMethod = methodCandidatesForNominalType(ctx, operandType).find(
+      (m) => m.name === methodName,
+    );
     if (indexedMethod !== undefined) {
       recordMethodCallWitnesses(ctx, tokenId, indexedMethod, [], operandType);
     }
@@ -8674,6 +8761,14 @@ interface IndexedMethod {
    * method argument, so `recordMethodCallWitnesses` resolves it from the
    * receiver's own type arguments (in *this* position order) instead. */
   readonly implGenericParamPositions: ReadonlyMap<string, number>;
+  /** The enclosing impl's own resolved target-argument slots (mirrors
+   * `RegisteredImpl.targetTypeArguments`) - `methodCandidatesForNominalType`
+   * filters `ctx.methodIndex`'s per-base-name bucket by this against the
+   * receiver's own actual type arguments, so `impl Draw for Pair<i32>` and
+   * `impl Draw for Pair<str>` (both indexed under bare `Pair`) resolve to
+   * the impl matching the receiver's own instantiation, not whichever
+   * entry happens to come first in registration order. */
+  readonly targetTypeArguments: readonly TargetArgSlot[];
   readonly origin:
     | { readonly kind: "inherent" }
     | { readonly kind: "trait"; readonly traitId: string };
@@ -8731,6 +8826,7 @@ function traitMethodSet(
     genericParams: [...trait.genericParams, ...m.genericParams],
     genericParamBounds: m.genericParamBounds,
     implGenericParamPositions: new Map(),
+    targetTypeArguments: [],
     origin: { kind: "trait", traitId },
   }));
   const inherited = trait.supertraits.flatMap((s) =>
@@ -8783,10 +8879,23 @@ function buildMethodIndex(
     if (targetType === undefined) continue;
     const targetId = typeIdentity(targetType);
     const entries = [...(ctx.methodIndex.get(targetId) ?? [])];
+    const implGenericNames = new Set(genericParamNames(item.generics));
     const implGenericParamPositions = implGenericParamTargetPositions(
-      new Set(genericParamNames(item.generics)),
+      implGenericNames,
       item.type,
     );
+    pushGenericParams(ctx, item.generics, item.whereClause);
+    const targetTypeArguments = resolveTargetTypeArguments(
+      ctx,
+      item.type,
+      implGenericNames,
+    );
+    const resolvedTargetType = resolveConcreteImplTargetType(
+      ctx,
+      targetType,
+      item.type,
+    );
+    popGenericParams(ctx);
     if (isSome(shallow.traitRef)) {
       const traitId = resolveTraitIdentity(shallow.traitRef.value.name, scope);
       entries.push(
@@ -8794,8 +8903,9 @@ function buildMethodIndex(
           ctx,
           traitId,
           targetId,
-          targetType,
+          resolvedTargetType,
           implGenericParamPositions,
+          targetTypeArguments,
           resolveBoundNames(
             ctx,
             genericParamBoundNames(item.generics, item.whereClause),
@@ -8807,14 +8917,39 @@ function buildMethodIndex(
         ...indexInherentMethods(
           ctx,
           item,
-          targetType,
+          resolvedTargetType,
           implGenericParamPositions,
+          targetTypeArguments,
         ),
       );
     }
     ctx.methodIndex.set(targetId, entries);
-    indexAssociatedConsts(ctx, item, targetType, targetId);
+    indexAssociatedConsts(ctx, item, resolvedTargetType, targetId);
   }
+}
+
+/** `structuralStructOrEnumType`'s bare `{name, typeArguments: []}` widened
+ * with the impl's own actually-declared target arguments, resolved under
+ * the impl's own pushed generic scope - what `Self` substitutes to inside
+ * a method's own signature. Without this, `-> Self` on `impl Pair<i32>` and
+ * `impl Pair<str>` both resolve to the struct's bare declaration identity,
+ * so a chained call off either one's result (`p.make().tag()`) can't tell
+ * which instantiation it's actually looking at and falls back to whichever
+ * impl's method happens to be indexed first. */
+function resolveConcreteImplTargetType(
+  ctx: AnalysisContext,
+  structuralTargetType: Semantics.Type,
+  itemType: Parser.Type,
+): Semantics.Type {
+  if (!isNominalType(structuralTargetType) || itemType.kind !== "NamedType") {
+    return structuralTargetType;
+  }
+  return {
+    ...structuralTargetType,
+    typeArguments: itemType.typeArguments.map((arg) =>
+      resolveSlice1Type(ctx, arg, arg.tokenId),
+    ),
+  };
 }
 
 /** `outer` (an impl's own declared bounds) merged ahead of `inner` (a
@@ -8847,6 +8982,7 @@ function indexTraitImplMethods(
   targetId: string,
   targetType: Semantics.Type,
   implGenericParamPositions: ReadonlyMap<string, number>,
+  targetTypeArguments: readonly TargetArgSlot[],
   implGenericParamBounds: ReadonlyMap<
     string,
     readonly Semantics.BoundTraitRef[]
@@ -8857,8 +8993,8 @@ function indexTraitImplMethods(
     return traitMethods;
   }
   const associatedTypes =
-    findRegisteredImpl(ctx, targetId, traitId)?.associatedTypeDefs ??
-    new Map<string, Semantics.Type>();
+    findRegisteredImpl(ctx, targetId, traitId, [], targetType.typeArguments)
+      ?.associatedTypeDefs ?? new Map<string, Semantics.Type>();
   return traitMethods.map((m): IndexedMethod => ({
     ...m,
     params: m.params.map((p) =>
@@ -8866,6 +9002,7 @@ function indexTraitImplMethods(
     ),
     returnType: substituteSelfType(m.returnType, targetType, associatedTypes),
     implGenericParamPositions,
+    targetTypeArguments,
     genericParamBounds: mergedGenericParamBounds(
       implGenericParamBounds,
       m.genericParamBounds,
@@ -8901,6 +9038,7 @@ function indexInherentMethods(
   item: Parser.ImplDecl,
   targetType: Semantics.Type,
   implGenericParamPositions: ReadonlyMap<string, number>,
+  targetTypeArguments: readonly TargetArgSlot[],
 ): readonly IndexedMethod[] {
   pushSelfContext(ctx, inherentSelfContext(targetType));
   const implGenerics = genericParamNames(item.generics);
@@ -8934,6 +9072,7 @@ function indexInherentMethods(
           genericParamBoundNames(merged.generics, merged.whereClause),
         ),
         implGenericParamPositions,
+        targetTypeArguments,
         origin: { kind: "inherent" },
       },
     ];
@@ -8967,10 +9106,34 @@ function methodCandidates(
       );
     }
   }
+  if (isNominalType(receiverType)) {
+    return methodCandidatesForNominalType(ctx, receiverType);
+  }
+  return ctx.methodIndex.get(typeIdentity(receiverType)) ?? [];
+}
+
+/** `methodCandidates`' concrete-receiver path: `methodIndex`'s per-base-name
+ * bucket (which holds every impl of every instantiation of that base type,
+ * since it's keyed by bare name) plus any applicable blanket-impl methods,
+ * filtered down to the entries whose own impl's target-argument slots are
+ * actually satisfied by the receiver's own concrete type arguments - what
+ * keeps a `Pair<i32>` receiver from picking up `impl Draw for Pair<str>`'s
+ * methods, or vice versa. */
+function methodCandidatesForNominalType(
+  ctx: AnalysisContext,
+  receiverType: Semantics.StructType | Semantics.EnumType,
+): readonly IndexedMethod[] {
   const indexed = ctx.methodIndex.get(typeIdentity(receiverType)) ?? [];
-  return isNominalType(receiverType)
-    ? [...indexed, ...blanketMethodCandidates(ctx, receiverType)]
-    : indexed;
+  const candidates = [
+    ...indexed,
+    ...blanketMethodCandidates(ctx, receiverType),
+  ];
+  return candidates.filter((m) =>
+    requestedTraitArgumentsSatisfied(
+      m.targetTypeArguments,
+      receiverType.typeArguments,
+    ),
+  );
 }
 
 /** Every method a blanket impl (`impl<T: Bound> Trait for T`) provides for
@@ -8979,18 +9142,32 @@ function methodCandidates(
  * itself, since whether a blanket impl applies depends on the receiver's own
  * bound, not on anything knowable at index-build time. Bound satisfaction is
  * `findRegisteredImpl`'s own job (already recursive/blanket-aware); this
- * only asks it per blanket impl in the registry. */
+ * only asks it per blanket impl in the registry. `targetTypeArguments` on
+ * the returned entries is classified purely-concrete (`receiverType` is
+ * already a real instantiation here, never the blanket impl's own bare `T`),
+ * so `methodCandidatesForNominalType`'s own filter is a trivial match. */
 function blanketMethodCandidates(
   ctx: AnalysisContext,
   receiverType: Semantics.StructType | Semantics.EnumType,
 ): readonly IndexedMethod[] {
   const typeId = receiverType.name;
+  const targetTypeArguments = receiverType.typeArguments.map((arg) =>
+    classifyTargetArgSlot(arg, new Set()),
+  );
   const seenTraits = new Set<string>();
   const result: IndexedMethod[] = [];
   for (const impl of ctx.implRegistry) {
     if (!impl.isBlanket || seenTraits.has(impl.traitName)) continue;
     seenTraits.add(impl.traitName);
-    if (findRegisteredImpl(ctx, typeId, impl.traitName) === undefined) {
+    if (
+      findRegisteredImpl(
+        ctx,
+        typeId,
+        impl.traitName,
+        [],
+        receiverType.typeArguments,
+      ) === undefined
+    ) {
       continue;
     }
     result.push(
@@ -9000,6 +9177,7 @@ function blanketMethodCandidates(
         typeId,
         receiverType,
         new Map(),
+        targetTypeArguments,
         new Map(),
       ),
     );
@@ -9185,10 +9363,11 @@ function recordImplMethodTarget(
 ): void {
   if (!isSome(decl.signature.receiver)) return;
   if (isNominalType(targetType)) {
+    const monomorphizedTypeId = monomorphizedTypeIdentity(targetType);
     ctx.implMethodTargetTable.set(decl.tokenId, {
       kind: "free",
-      typeId: targetType.name,
-      scopeId: targetType.name,
+      typeId: monomorphizedTypeId,
+      scopeId: monomorphizedTypeId,
       typeName: bareTypeName(targetType.name),
       traitName: mapSome(traitName, bareTypeName),
       methodName: decl.signature.name.text,
@@ -9269,11 +9448,12 @@ function recordMethodTarget(
   method: IndexedMethod,
   methodName: string,
 ): void {
+  const monomorphizedTypeId = monomorphizedTypeIdentity(receiverType);
   if (method.origin.kind !== "trait") {
     ctx.methodTargetTable.set(methodTokenId, {
       kind: "free",
-      typeId: receiverType.name,
-      scopeId: receiverType.name,
+      typeId: monomorphizedTypeId,
+      scopeId: monomorphizedTypeId,
       typeName: bareTypeName(receiverType.name),
       traitName: none(),
       methodName,
@@ -9285,6 +9465,8 @@ function recordMethodTarget(
     ctx,
     receiverType.name,
     method.origin.traitId,
+    [],
+    receiverType.typeArguments,
   );
   if (
     !isSome(witness) ||
@@ -9301,7 +9483,7 @@ function recordMethodTarget(
     ctx.extraWitnessRefs.push(witness.value);
     ctx.methodTargetTable.set(methodTokenId, {
       kind: "free",
-      typeId: receiverType.name,
+      typeId: monomorphizedTypeId,
       scopeId: method.origin.traitId,
       typeName: bareTypeName(receiverType.name),
       traitName: some(trait),
@@ -9322,8 +9504,8 @@ function recordMethodTarget(
   }
   ctx.methodTargetTable.set(methodTokenId, {
     kind: "free",
-    typeId: receiverType.name,
-    scopeId: receiverType.name,
+    typeId: monomorphizedTypeId,
+    scopeId: monomorphizedTypeId,
     typeName: bareTypeName(receiverType.name),
     traitName: some(trait),
     methodName,
@@ -9643,7 +9825,13 @@ function checkUfcsReceiverImplementsTrait(
   if (!isNominalType(receiverType)) return;
   if (
     !isSome(
-      resolveTraitBoundForTypeName(ctx, typeIdentity(receiverType), traitId),
+      resolveTraitBoundForTypeName(
+        ctx,
+        typeIdentity(receiverType),
+        traitId,
+        [],
+        receiverType.typeArguments,
+      ),
     )
   ) {
     emitError(
@@ -10176,6 +10364,27 @@ function analyzeIndexExpression(
   return { ...expression, object, index, type: arrayType.elementType };
 }
 
+/** A struct field's declared type substituted against the concrete
+ * instantiation it was actually accessed through (`Pair<i32>`'s field
+ * `a: T` resolves to `i32`, not the struct's own bare declaration-identity
+ * `T`) - `structDecl.generics`' positional order matches `structType`'s own
+ * `typeArguments`, the same convention construction/coherence already
+ * assume. */
+function substituteStructFieldType(
+  fieldType: Semantics.Type,
+  structDecl: Semantics.StructDecl,
+  structType: Semantics.StructType,
+  tokenId: number,
+): Semantics.Type {
+  if (structDecl.generics.length === 0) return fieldType;
+  const bindings: GenericBindings = new Map();
+  structDecl.generics.forEach((name, index) => {
+    const arg = structType.typeArguments[index];
+    if (arg !== undefined) bindings.set(name, { type: arg, tokenId });
+  });
+  return substituteGenericType(fieldType, bindings);
+}
+
 function analyzeFieldAccessExpression(
   ctx: AnalysisContext,
   expression: Parser.FieldAccessExpression,
@@ -10233,11 +10442,17 @@ function analyzeFieldAccessExpression(
     return unresolved();
   }
 
+  const fieldType = substituteStructFieldType(
+    matchedField.type,
+    structDecl,
+    structType,
+    expression.field.tokenId,
+  );
   return {
     ...expression,
     object,
-    field: { ...expression.field, type: matchedField.type },
-    type: matchedField.type,
+    field: { ...expression.field, type: fieldType },
+    type: fieldType,
   };
 }
 

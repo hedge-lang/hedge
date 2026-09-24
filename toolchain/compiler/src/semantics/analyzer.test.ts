@@ -6131,6 +6131,35 @@ describe("generic substitution through a nominal type's own type arguments", ():
     `);
     expect(result.diagnostics).toEqual([]);
   });
+
+  it("substitutes a struct field's declared generic type against the object's own resolved instantiation", (): void => {
+    const result = diagnose(`
+      struct Pair<T> { a: T }
+      fn get_a(p: Pair<i32>) -> i32 { p.a }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("still rejects a field access whose substituted type disagrees with the declared return type", (): void => {
+    const result = diagnose(`
+      struct Pair<T> { a: T }
+      fn get_a(p: Pair<i32>) -> str { p.a }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "return type mismatch: expected `str`, found `i32`",
+    );
+  });
+
+  it("substitutes a field's declared type against the receiver's own instantiation inside a method body", (): void => {
+    const result = diagnose(`
+      struct Pair<T> { a: T }
+      impl Pair<i32> {
+        fn get_a(&self) -> i32 { self.a }
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
 });
 
 describe("nested generic field validation at construction, when a turbofish already fixes it", (): void => {

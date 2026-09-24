@@ -1945,17 +1945,69 @@ describe("generic witness codegen", (): void => {
       }
       struct Pair<A, B> { first: A, second: B }
       impl<A: Clone, B> Pair<B, A> {
-        fn dup_first(&self) -> A {
-          self.first.clone()
+        fn dup_second(&self) -> A {
+          self.second.clone()
         }
       }
       fn main() {
         let p = Pair { first: Text { s: "hi" }, second: Num { n: 5 } };
-        p.dup_first();
+        p.dup_second();
         print("done");
       }
     `);
     expect(runEmittedJs(js)).toEqual(["cloned num", "done"]);
+  });
+
+  it("dispatches a trait method to the impl matching the receiver's own instantiation, not the first-registered impl of the same base struct", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> str; }
+      struct Pair<T> { a: T }
+      impl Draw for Pair<i32> { fn draw(&self) -> str { "int" } }
+      impl Draw for Pair<str> { fn draw(&self) -> str { "string" } }
+      fn main() {
+        let a = Pair { a: 5 };
+        let b = Pair { a: "hi" };
+        print(a.draw());
+        print(b.draw());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["int", "string"]);
+  });
+
+  it("dispatches an inherent method to the impl matching the receiver's own instantiation", (): void => {
+    const js = emittedJs(`
+      struct Pair<T> { a: T }
+      impl Pair<i32> { fn describe(&self) -> str { "int" } }
+      impl Pair<str> { fn describe(&self) -> str { "string" } }
+      fn main() {
+        let a = Pair { a: 5 };
+        let b = Pair { a: "hi" };
+        print(a.describe());
+        print(b.describe());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["int", "string"]);
+  });
+
+  it("constructs the receiver's own instantiation from a `-> Self` method on each of two impls of the same struct", (): void => {
+    const js = emittedJs(`
+      struct Pair<T> { a: T }
+      impl Pair<i32> {
+        fn make(&self) -> Self { Self { a: self.a } }
+        fn tag(&self) -> str { "int" }
+      }
+      impl Pair<str> {
+        fn make(&self) -> Self { Self { a: self.a } }
+        fn tag(&self) -> str { "string" }
+      }
+      fn main() {
+        let a = Pair { a: 5 };
+        let b = Pair { a: "hi" };
+        print(a.make().tag());
+        print(b.make().tag());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["int", "string"]);
   });
 });
 
