@@ -9608,6 +9608,28 @@ function implGenericParamType(
  * argument list, matching the callee's own parameter order
  * (`recordWitnessParams`'s outer-then-inner merge).
  */
+/** A method-call generic bound's resolvable type: the positionally-matching
+ * argument's own (unwrapped-through-one-borrow) analyzed type, or, when the
+ * bound belongs to the enclosing impl rather than the method itself, the
+ * receiver's own type argument at that impl parameter's position. */
+function methodCallGenericArgType(
+  args: readonly Semantics.Expression[],
+  argIndex: number,
+  receiverType: Semantics.Type,
+  implGenericParamPositions: ReadonlyMap<string, number>,
+  paramName: string,
+): Semantics.Type | undefined {
+  const arg = argIndex === -1 ? undefined : args[argIndex];
+  if (arg === undefined) {
+    return implGenericParamType(
+      receiverType,
+      implGenericParamPositions,
+      paramName,
+    );
+  }
+  return arg.type.kind === "ReferenceType" ? arg.type.referent : arg.type;
+}
+
 function recordMethodCallWitnesses(
   ctx: AnalysisContext,
   methodTokenId: number,
@@ -9623,17 +9645,13 @@ function recordMethodCallWitnesses(
     const argIndex = method.params.findIndex((p) =>
       namesGenericParam(p, paramName),
     );
-    const arg = argIndex === -1 ? undefined : args[argIndex];
-    const argType =
-      arg !== undefined
-        ? arg.type.kind === "ReferenceType"
-          ? arg.type.referent
-          : arg.type
-        : implGenericParamType(
-            receiverType,
-            method.implGenericParamPositions,
-            paramName,
-          );
+    const argType = methodCallGenericArgType(
+      args,
+      argIndex,
+      receiverType,
+      method.implGenericParamPositions,
+      paramName,
+    );
     if (argType === undefined) continue;
     for (const traitRef of traitRefs) {
       const witness = resolveTraitBound(
