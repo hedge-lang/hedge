@@ -3571,6 +3571,23 @@ function slotSatisfiesType(
   return typesEqual(slot.type, type);
 }
 
+/** The cycle-guard key for a `typeName<receiverTypeArguments>:
+ * traitName<requestedTypeArguments>` bound resolution, shared by
+ * `findRegisteredImpl` and `resolveTraitBoundForTypeName`'s own separate
+ * `visiting` sets. Folds in both instantiations, not just the bare names -
+ * a bare-name key would conflate a blanket impl's own chain from
+ * `Convert<i32>` to a required `Convert<str>` bound as "already visiting
+ * P::Convert" and reject it as cyclic, even though the two are unrelated
+ * instantiations and the chain is perfectly acyclic. */
+function boundVisitingKey(
+  typeName: string,
+  receiverTypeArguments: readonly Semantics.Type[],
+  traitName: string,
+  requestedTypeArguments: readonly Semantics.Type[],
+): string {
+  return `${monomorphizeIdentity(typeName, receiverTypeArguments)}::${monomorphizeIdentity(traitName, requestedTypeArguments)}`;
+}
+
 /**
  * Finds the registered impl satisfying `typeName: traitName<requestedTypeArguments>`
  * - a concrete registered impl, or a blanket impl whose own bound is
@@ -3591,7 +3608,12 @@ function findRegisteredImpl(
   receiverTypeArguments: readonly Semantics.Type[] = [],
   visiting: ReadonlySet<string> = new Set(),
 ): RegisteredImpl | undefined {
-  const key = `${typeName}::${traitName}`;
+  const key = boundVisitingKey(
+    typeName,
+    receiverTypeArguments,
+    traitName,
+    requestedTypeArguments,
+  );
   if (visiting.has(key)) return undefined;
   const nextVisiting = new Set(visiting).add(key);
   return ctx.implRegistry.find((impl) => {
@@ -3676,7 +3698,12 @@ function resolveTraitBoundForTypeName(
   receiverTypeArguments: readonly Semantics.Type[] = [],
   visiting: ReadonlySet<string> = new Set(),
 ): Option<WitnessRef> {
-  const key = `${typeName}::${traitName}`;
+  const key = boundVisitingKey(
+    typeName,
+    receiverTypeArguments,
+    traitName,
+    requestedTypeArguments,
+  );
   if (visiting.has(key)) return none();
   const nextVisiting = new Set(visiting).add(key);
   const impl = findRegisteredImpl(

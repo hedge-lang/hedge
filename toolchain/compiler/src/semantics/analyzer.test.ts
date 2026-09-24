@@ -6935,6 +6935,18 @@ describe("trait and impl declarations", (): void => {
       `);
       expect(result.diagnostics).toEqual([]);
     });
+
+    it("resolves a blanket impl's own bound through a different instantiation of the same trait, not a false cycle", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct P { x: i32 }
+        impl Convert<str> for P { fn convert(&self) -> str { "s" } }
+        impl<T: Convert<str>> Convert<i32> for T { fn convert(&self) -> i32 { 0 } }
+        fn use_it<U: Convert<i32>>(x: U) {}
+        fn main() { use_it(P { x: 1 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
   });
 
   describe("orphan rule", (): void => {
