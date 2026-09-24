@@ -431,6 +431,12 @@ interface RegisteredImpl {
   readonly traitTypeArguments: readonly TargetArgSlot[];
   readonly targetTypeName: string;
   readonly targetTypeArguments: readonly TargetArgSlot[];
+  /** The impl's own concrete `Self` type (mirrors `resolveImplSelfTargetType`
+   * - see that function's own doc comment) - `checkSupertraitCompleteness`
+   * needs the receiver's real type arguments, not just `targetTypeName`'s
+   * bare identity, so a supertrait impl for one instantiation of a generic
+   * struct doesn't get credited toward a different instantiation. */
+  readonly resolvedTargetType: Semantics.Type;
   readonly isBlanket: boolean;
   readonly blanketBounds: readonly Semantics.BoundTraitRef[];
   readonly providedMethods: readonly string[];
@@ -4220,16 +4226,6 @@ function reportExtraAssociatedTypes(
   }
 }
 
-/** Resolves an impl target's own type-argument list (`Pair<T>`,
- * `Pair<i32>`) into `TargetArgSlot`s, under the impl's own generic-param
- * scope (must be called with that scope already pushed, so a `T` referring
- * to the impl's own declared parameter resolves as one). A non-`NamedType`
- * target (a blanket impl's bare type parameter, or an unsupported non-path
- * target) carries no type arguments to resolve. */
-/** The shared resolver behind both `resolveTargetTypeArguments` (an impl's
- * own `Pair<...>` target) and an impl's `TraitRef<...>` - either one's raw
- * argument list, resolved into `TargetArgSlot`s under the impl's own
- * generic-param scope (must be called with that scope already pushed). */
 /** `resolveSlice1Type` resolves an unbound impl-level generic parameter to
  * its own abstract `NamedType`, wherever it appears - including nested
  * inside a further struct/enum instantiation - so recognizing that shape is
@@ -4260,6 +4256,10 @@ function classifyTargetArgSlot(
   return { kind: "Concrete", type: resolvedType };
 }
 
+/** The shared resolver behind both `resolveTargetTypeArguments` (an impl's
+ * own `Pair<...>` target) and an impl's `TraitRef<...>` - either one's raw
+ * argument list, resolved into `TargetArgSlot`s under the impl's own
+ * generic-param scope (must be called with that scope already pushed). */
 function resolveTypeArgumentSlots(
   ctx: AnalysisContext,
   typeArguments: readonly Parser.Type[],
@@ -4298,6 +4298,7 @@ function resolveImplRegistrationFacts(
   readonly targetTypeArguments: readonly TargetArgSlot[];
   readonly traitTypeArguments: readonly TargetArgSlot[];
   readonly blanketBounds: readonly Semantics.BoundTraitRef[];
+  readonly resolvedTargetType: Semantics.Type;
 } {
   const associatedTypeDefs = new Map<string, Semantics.Type>();
   for (const alias of item.items) {
@@ -4340,6 +4341,7 @@ function resolveImplRegistrationFacts(
     targetTypeArguments,
     traitTypeArguments,
     blanketBounds,
+    resolvedTargetType: resolveSlice1Type(ctx, item.type, item.type.tokenId),
   };
 }
 
@@ -4385,6 +4387,7 @@ function registerOneImpl(
     targetTypeArguments,
     traitTypeArguments,
     blanketBounds,
+    resolvedTargetType,
   } = resolveImplRegistrationFacts(ctx, item, declaredNames);
   popGenericParams(ctx);
   const incoming: RegisteredImpl = {
@@ -4392,6 +4395,7 @@ function registerOneImpl(
     traitTypeArguments,
     targetTypeName: targetTypeName.value,
     targetTypeArguments,
+    resolvedTargetType,
     isBlanket: decl.isBlanket,
     blanketBounds,
     providedMethods: decl.providedMethods,
@@ -4452,7 +4456,13 @@ function checkSupertraitCompleteness(
       ?.supertraits ?? []) {
       if (
         isSome(
-          resolveTraitBoundForTypeName(ctx, impl.targetTypeName, supertrait),
+          resolveTraitBoundForTypeName(
+            ctx,
+            impl.targetTypeName,
+            supertrait,
+            [],
+            nominalTypeArguments(impl.resolvedTargetType),
+          ),
         )
       ) {
         continue;

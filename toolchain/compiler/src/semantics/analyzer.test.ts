@@ -7117,6 +7117,31 @@ describe("trait and impl declarations", (): void => {
       );
     });
 
+    it("rejects a supertrait impl satisfied only for a different instantiation of the same generic struct", (): void => {
+      const result = diagnose(`
+        trait Eq {}
+        trait Ord: Eq {}
+        struct Pair<T> { a: T }
+        impl Eq for Pair<str> {}
+        impl Ord for Pair<i32> {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `Pair: Eq` is not satisfied",
+      );
+    });
+
+    it("accepts a supertrait impl satisfied for the matching instantiation of a generic struct", (): void => {
+      const result = diagnose(`
+        trait Eq {}
+        trait Ord: Eq {}
+        struct Pair<T> { a: T }
+        impl Eq for Pair<i32> {}
+        impl Ord for Pair<i32> {}
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("resolves a two-level supertrait chain, each impl already requiring the level below it", (): void => {
       const result = diagnose(`
         trait A {}
