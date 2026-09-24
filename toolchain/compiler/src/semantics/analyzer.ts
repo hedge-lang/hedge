@@ -12119,8 +12119,23 @@ function analyzeEnumVariantCallConstruction(
         },
         call.tokenId,
       );
+      return some({ type: enumDecl.type, args: [...args] });
     }
-    return some({ type: enumDecl.type, args: [...args] });
+    const { typeArguments } = checkGenericPositionalConstruction(
+      ctx,
+      call,
+      { kindLabel: "variant", name: variantName },
+      [],
+      [],
+      enumDecl.generics,
+      enumDecl.genericParamDefaults,
+      enumDecl.type,
+      expectedType,
+    );
+    return some({
+      type: withTypeArguments(enumDecl.type, typeArguments),
+      args: [...args],
+    });
   }
   if (variant.body.value.kind !== "TupleFields") {
     emitError(

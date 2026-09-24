@@ -836,6 +836,30 @@ describe("semantic analysis", (): void => {
       );
     });
 
+    it("propagates an expected type's own type argument to a called unit variant of a generic enum", () => {
+      const result = diagnose(`
+        enum Maybe<T> { None, Some(T) }
+        fn main() { let m: Maybe<i32> = Maybe::None(); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "m")).toMatchObject({
+        kind: "EnumType",
+        typeArguments: [{ kind: "PrimitiveI32Type" }],
+      });
+    });
+
+    it("propagates a turbofish's own type argument to a called unit variant of a generic enum", () => {
+      const result = diagnose(`
+        enum Maybe<T> { None, Some(T) }
+        fn main() { let m = Maybe::None::<i32>(); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "m")).toMatchObject({
+        kind: "EnumType",
+        typeArguments: [{ kind: "PrimitiveI32Type" }],
+      });
+    });
+
     it("accepts a tuple variant called with the correct arity and types", () => {
       const result = diagnose(`
         enum Message { Move(i32, i32) }
