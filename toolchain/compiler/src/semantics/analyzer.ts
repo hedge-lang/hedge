@@ -12127,10 +12127,8 @@ function analyzeEnumVariantCallConstruction(
       { kindLabel: "variant", name: variantName },
       [],
       [],
-      enumDecl.generics,
-      enumDecl.genericParamDefaults,
-      enumDecl.type,
-      expectedType,
+      { params: enumDecl.generics, defaults: enumDecl.genericParamDefaults },
+      { declaredType: enumDecl.type, expectedType },
     );
     return some({
       type: withTypeArguments(enumDecl.type, typeArguments),
@@ -12152,10 +12150,8 @@ function analyzeEnumVariantCallConstruction(
       { kindLabel: "variant", name: variantName },
       variant.body.value.fields,
       args,
-      enumDecl.generics,
-      enumDecl.genericParamDefaults,
-      enumDecl.type,
-      expectedType,
+      { params: enumDecl.generics, defaults: enumDecl.genericParamDefaults },
+      { declaredType: enumDecl.type, expectedType },
     );
   return some({
     type: withTypeArguments(enumDecl.type, typeArguments),
@@ -12698,42 +12694,50 @@ function seedStructTurbofishBindings(
   });
 }
 
+/** `declaredType` (the struct/enum's own bare declaration type,
+ * `typeArguments: []`) and the caller's own already-known `expectedType` (a
+ * `let` annotation or enclosing return type, when known) - bundled to keep
+ * `checkGenericPositionalConstruction` under the params-count cap. */
+interface GenericConstructionContext {
+  readonly declaredType: Semantics.Type;
+  readonly expectedType: Semantics.Type | undefined;
+}
+
 /** Seeds turbofish, then an outer expected type (post Layer A, a
  * constructed value's own type carries real type arguments, so this can
  * unify the same way `analyzeCall` seeds an ordinary function's own
  * declared return type), then argument-driven unification, then checks
- * every declared generic parameter got resolved. `declaredType` is the
- * struct/enum's own bare declaration type (`typeArguments: []`), with
- * abstract per-param `NamedType`s substituted in here so it can be unified
- * against `expectedType` - the same "declared shape, still abstract" role
- * an ordinary function's own return type already plays. Shared by
- * `analyzeEnumVariantCallConstruction` and `analyzeTupleStructCallConstruction`. */
+ * every declared generic parameter got resolved. `context.declaredType`'s
+ * abstract per-param `NamedType`s are substituted in here so it can be
+ * unified against `context.expectedType` - the same "declared shape, still
+ * abstract" role an ordinary function's own return type already plays.
+ * Shared by `analyzeEnumVariantCallConstruction` and
+ * `analyzeTupleStructCallConstruction`. */
 function checkGenericPositionalConstruction(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
   site: CallSiteDescription,
   params: readonly { readonly type: Semantics.Type }[],
   args: readonly Semantics.Expression[],
-  genericParams: readonly string[],
-  genericParamDefaults: ReadonlyMap<string, Semantics.Type>,
-  declaredType: Semantics.Type,
-  expectedType: Semantics.Type | undefined,
+  generics: DeclGenerics,
+  context: GenericConstructionContext,
 ): {
   readonly args: Semantics.Expression[];
   readonly typeArguments: readonly Semantics.Type[];
 } {
+  const { declaredType, expectedType } = context;
   const turbofishBindings: GenericBindings = new Map();
   seedTurbofishBindings(
     ctx,
     call,
-    genericParams,
-    genericParamDefaults,
+    generics.params,
+    generics.defaults,
     turbofishBindings,
   );
   if (expectedType !== undefined) {
     const abstractDeclaredType = withTypeArguments(
       declaredType,
-      genericParams.map((name): Semantics.Type => ({
+      generics.params.map((name): Semantics.Type => ({
         kind: "NamedType",
         tokenId: call.tokenId,
         path: { absolute: false, segments: [name] },
@@ -12744,7 +12748,7 @@ function checkGenericPositionalConstruction(
       call,
       abstractDeclaredType,
       expectedType,
-      new Set(genericParams),
+      new Set(generics.params),
       turbofishBindings,
     );
   }
@@ -12754,13 +12758,13 @@ function checkGenericPositionalConstruction(
     site,
     params,
     args,
-    genericParams,
+    generics.params,
     turbofishBindings,
   );
-  const typeArguments = genericParams.map((paramName): Semantics.Type => {
+  const typeArguments = generics.params.map((paramName): Semantics.Type => {
     const binding = bindingOrDefault(
       paramName,
-      genericParamDefaults,
+      generics.defaults,
       bindings,
       call.tokenId,
     );
@@ -13426,10 +13430,11 @@ function analyzeTupleStructCallConstruction(
       { kindLabel: "struct", name: structName },
       structDecl.body.fields,
       args,
-      structDecl.generics,
-      structDecl.genericParamDefaults,
-      structDecl.type,
-      expectedType,
+      {
+        params: structDecl.generics,
+        defaults: structDecl.genericParamDefaults,
+      },
+      { declaredType: structDecl.type, expectedType },
     );
   return some({
     callee,
