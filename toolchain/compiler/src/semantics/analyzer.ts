@@ -687,6 +687,38 @@ function declaredGenericParamBounds(
   );
 }
 
+/** Whether `paramName`'s own declared bounds include `traitName` with type
+ * arguments matching `requestedTypeArguments` exactly - `resolveTraitBound`'s
+ * Forwarded-path counterpart to `requestedTraitArgumentsSatisfied`'s impl-side
+ * check, since a still-abstract parameter has no impl to look arguments up
+ * on, only its own declared bound list. Must be called with the
+ * declaration's own generic-param scope still pushed, same as
+ * `declaredGenericParamBounds`, since a bound's own type arguments resolve
+ * against that scope (e.g. a declared `T: Convert<U>` naming a sibling
+ * parameter). */
+function declaredBoundMatchesRequestedArguments(
+  ctx: AnalysisContext,
+  paramName: string,
+  traitName: string,
+  requestedTypeArguments: readonly Semantics.Type[],
+): boolean {
+  const innermost = ctx.genericParamBoundStack.at(-1);
+  const refs = innermost?.get(paramName) ?? [];
+  return refs.some((ref) => {
+    if ((lookupTrait(ctx, ref.name) ?? ref.name) !== traitName) return false;
+    if (ref.typeArguments.length !== requestedTypeArguments.length) {
+      return false;
+    }
+    return ref.typeArguments.every((arg, i) => {
+      const requested = requestedTypeArguments[i];
+      return (
+        requested !== undefined &&
+        typesEqual(resolveSlice1Type(ctx, arg, arg.tokenId), requested)
+      );
+    });
+  });
+}
+
 function pushSelfContext(ctx: AnalysisContext, self: SelfContext): void {
   ctx.selfContextStack.push(self);
 }
@@ -3219,11 +3251,13 @@ function implOverlapKind(
  * generic parameter) resolves against that declaration's own bound list,
  * since no concrete impl can exist for a type that isn't concrete yet -
  * codegen forwards the enclosing function's own received witness for it
- * instead of looking one up here. Known gap: this "Forwarded" path checks
- * only the declared bound's trait name, never `requestedTypeArguments` - a
- * parameterized request forwarded through a still-generic body isn't
- * verified against the declared bound's own type argument, only a concrete
- * lookup is.
+ * instead of looking one up here. A parameterized request
+ * (`requestedTypeArguments` non-empty) must match one declared bound's own
+ * type arguments exactly (`declaredBoundMatchesRequestedArguments`) -
+ * supertrait implication is skipped in that case, since this codebase's
+ * trait model never carries type arguments through a supertrait chain
+ * (`RegisteredTrait.supertraits` is bare names), so there is nothing to
+ * check a parameterized request against past the directly declared bound.
  */
 function resolveTraitBound(
   ctx: AnalysisContext,
@@ -3234,11 +3268,20 @@ function resolveTraitBound(
   if (type.kind === "NamedType" && type.path.segments.length === 1) {
     const paramName = type.path.segments[0];
     if (paramName !== undefined && isDeclaredGenericParam(ctx, paramName)) {
-      return boundsImplyTrait(
-        ctx,
-        declaredGenericParamBounds(ctx, paramName),
-        traitName,
-      )
+      const satisfied =
+        requestedTypeArguments.length === 0
+          ? boundsImplyTrait(
+              ctx,
+              declaredGenericParamBounds(ctx, paramName),
+              traitName,
+            )
+          : declaredBoundMatchesRequestedArguments(
+              ctx,
+              paramName,
+              traitName,
+              requestedTypeArguments,
+            );
+      return satisfied
         ? some({
             kind: "Forwarded",
             traitName: bareTypeName(traitName),

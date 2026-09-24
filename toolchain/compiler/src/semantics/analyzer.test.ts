@@ -7429,6 +7429,31 @@ describe("trait and impl declarations", (): void => {
         { kind: "Forwarded", traitName: "Draw", paramName: "T" },
       ]);
     });
+
+    it("rejects forwarding a parameterized bound whose declared type argument doesn't match the request", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        fn inner<U: Convert<i32>>(x: U) {}
+        fn outer<T: Convert<str>>(x: T) { inner(x); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `T: Convert<i32>` is not satisfied",
+      );
+    });
+
+    it("records a forwarded witness when a parameterized bound's declared type argument matches the request", (): void => {
+      const { result } = analyzeWithTokens(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        fn inner<U: Convert<i32>>(x: U) {}
+        fn outer<T: Convert<i32>>(x: T) { inner(x); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      expect(witnesses).toEqual([
+        { kind: "Forwarded", traitName: "Convert", paramName: "T" },
+      ]);
+    });
   });
 
   describe("witness parameters", (): void => {
