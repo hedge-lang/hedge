@@ -415,7 +415,7 @@ interface RegisteredTrait {
  * (`impl Draw for Pair<i32>`, which conflicts only with an identical
  * concrete type in the same position). */
 type TargetArgSlot =
-  | { readonly kind: "Wildcard" }
+  | { readonly kind: "Wildcard"; readonly paramName: string }
   | { readonly kind: "Concrete"; readonly type: Semantics.Type }
   | {
       readonly kind: "Nominal";
@@ -3182,20 +3182,58 @@ function targetTypeArgumentsOverlap(
   a: readonly TargetArgSlot[],
   b: readonly TargetArgSlot[],
 ): boolean {
+  return slotListsOverlap(a, b, new Map(), new Map());
+}
+
+function slotListsOverlap(
+  a: readonly TargetArgSlot[],
+  b: readonly TargetArgSlot[],
+  aBindings: Map<string, TargetArgSlot>,
+  bBindings: Map<string, TargetArgSlot>,
+): boolean {
   if (a.length !== b.length) return true;
   return a.every((slot, i) => {
     const other = b[i];
-    return other === undefined || slotsOverlap(slot, other);
+    return (
+      other === undefined || slotsOverlap(slot, other, aBindings, bBindings)
+    );
   });
 }
 
-function slotsOverlap(a: TargetArgSlot, b: TargetArgSlot): boolean {
-  if (a.kind === "Wildcard" || b.kind === "Wildcard") return true;
+/** Whether two impl targets' own argument slots could describe the same
+ * concrete instantiation. A repeated wildcard on one side (`Pair<T, T>`)
+ * must bind to one consistent slot across every occurrence - `aBindings`/
+ * `bBindings` record each side's own first sighting (one map per impl,
+ * since the two sides' parameters are independent even when they share a
+ * literal name like `T`), and a repeat sighting is checked against that
+ * recorded slot instead of trivially overlapping. */
+function slotsOverlap(
+  a: TargetArgSlot,
+  b: TargetArgSlot,
+  aBindings: Map<string, TargetArgSlot>,
+  bBindings: Map<string, TargetArgSlot>,
+): boolean {
+  if (a.kind === "Wildcard") {
+    const existing = aBindings.get(a.paramName);
+    if (existing === undefined) {
+      aBindings.set(a.paramName, b);
+      return true;
+    }
+    return slotsOverlap(existing, b, aBindings, bBindings);
+  }
+  if (b.kind === "Wildcard") {
+    const existing = bBindings.get(b.paramName);
+    if (existing === undefined) {
+      bBindings.set(b.paramName, a);
+      return true;
+    }
+    return slotsOverlap(a, existing, aBindings, bBindings);
+  }
   if (a.kind === "Nominal" && b.kind === "Nominal") {
     return (
       a.nominalKind === b.nominalKind &&
       a.name === b.name &&
-      targetTypeArgumentsOverlap(a.typeArguments, b.typeArguments)
+      slotListsOverlap(a.typeArguments, b.typeArguments, aBindings, bBindings)
     );
   }
   if (a.kind === "Concrete" && b.kind === "Concrete") {
@@ -3428,14 +3466,33 @@ function requestedTraitArgumentsSatisfied(
 ): boolean {
   if (requested.length === 0) return true;
   if (implSlots.length !== requested.length) return false;
+  const bindings = new Map<string, Semantics.Type>();
   return implSlots.every((slot, i) => {
     const type = requested[i];
-    return type !== undefined && slotSatisfiesType(slot, type);
+    return type !== undefined && slotSatisfiesType(slot, type, bindings);
   });
 }
 
-function slotSatisfiesType(slot: TargetArgSlot, type: Semantics.Type): boolean {
-  if (slot.kind === "Wildcard") return true;
+/** Whether `type` matches `slot`'s pattern - a repeated wildcard (the same
+ * impl-level generic parameter at more than one position, e.g. `Pair<T, T>`)
+ * must bind to the same concrete type at every occurrence, tracked in
+ * `bindings` across the whole call (a fresh map per top-level
+ * `requestedTraitArgumentsSatisfied` call, threaded through nested `Nominal`
+ * recursion). `type` is always fully concrete here (a real receiver/operand),
+ * unlike `slotsOverlap`'s two-pattern coherence comparison. */
+function slotSatisfiesType(
+  slot: TargetArgSlot,
+  type: Semantics.Type,
+  bindings: Map<string, Semantics.Type>,
+): boolean {
+  if (slot.kind === "Wildcard") {
+    const existing = bindings.get(slot.paramName);
+    if (existing === undefined) {
+      bindings.set(slot.paramName, type);
+      return true;
+    }
+    return typesEqual(existing, type);
+  }
   if (slot.kind === "Nominal") {
     return (
       type.kind === slot.nominalKind &&
@@ -3443,7 +3500,7 @@ function slotSatisfiesType(slot: TargetArgSlot, type: Semantics.Type): boolean {
       type.typeArguments.length === slot.typeArguments.length &&
       slot.typeArguments.every((s, i) => {
         const t = type.typeArguments[i];
-        return t !== undefined && slotSatisfiesType(s, t);
+        return t !== undefined && slotSatisfiesType(s, t, bindings);
       })
     );
   }
@@ -4283,7 +4340,7 @@ function classifyTargetArgSlot(
   ) {
     const name = resolvedType.path.segments[0];
     if (name !== undefined && implGenericNames.has(name)) {
-      return { kind: "Wildcard" };
+      return { kind: "Wildcard", paramName: name };
     }
   }
   if (resolvedType.kind === "StructType" || resolvedType.kind === "EnumType") {

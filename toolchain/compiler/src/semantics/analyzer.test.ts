@@ -6679,6 +6679,58 @@ describe("trait and impl declarations", (): void => {
       `);
       expect(result.diagnostics).toEqual([]);
     });
+
+    it("accepts impl<T> Draw for Pair<T, T> alongside impl Draw for Pair<i32, str>, since no single T satisfies both positions", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Pair<T, U> { a: T, b: U }
+        impl<T> Draw for Pair<T, T> { fn draw(&self) -> str { "a" } }
+        impl Draw for Pair<i32, str> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still rejects impl<T> Draw for Pair<T, T> alongside impl Draw for Pair<i32, i32>, a real overlap", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Pair<T, U> { a: T, b: U }
+        impl<T> Draw for Pair<T, T> { fn draw(&self) -> str { "a" } }
+        impl Draw for Pair<i32, i32> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Draw` is already implemented for type `Pair`",
+      );
+    });
+
+    it("does not let impl<T> Draw for Pair<T, T>'s method match a Pair<i32, str> receiver whose positions disagree", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Pair<T, U> { a: T, b: U }
+        impl<T> Draw for Pair<T, T> { fn draw(&self) -> str { "a" } }
+        fn main() {
+          let p = Pair { a: 1, b: "s" };
+          p.draw();
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "no method `draw` found for type `Pair`",
+      );
+    });
+
+    it("still lets impl<T> Draw for Pair<T, T>'s method match a Pair<i32, i32> receiver whose positions agree", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Pair<T, U> { a: T, b: U }
+        impl<T> Draw for Pair<T, T> { fn draw(&self) -> str { "a" } }
+        fn main() {
+          let p = Pair { a: 1, b: 2 };
+          p.draw();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
   });
 
   describe("parameterized trait-bound instantiation coherence and selection", (): void => {
