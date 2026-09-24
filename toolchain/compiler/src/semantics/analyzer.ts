@@ -12922,17 +12922,25 @@ function checkPositionalCallArgs(
     }
     return reconcileOrdinaryPositionalArg(
       ctx,
-      call,
       site,
-      i,
-      field.type,
-      arg,
-      argType,
+      { index: i, declaredType: field.type, arg, rawArg: call.arguments[i] },
       genericNames,
       bindings,
     );
   });
   return { args: checkedArgs, bindings };
+}
+
+/** A positional argument's own site data - bundled to keep
+ * `reconcileOrdinaryPositionalArg` under the params-count cap. `rawArg` is
+ * the unanalyzed `Parser.Expression` at this position (for re-analysis under
+ * a substituted expected type), separate from `arg`, its already-analyzed
+ * `Semantics.Expression` form. */
+interface PositionalArgSite {
+  readonly index: number;
+  readonly declaredType: Semantics.Type;
+  readonly arg: Semantics.Expression;
+  readonly rawArg: Parser.Expression | undefined;
 }
 
 /** The non-generic-unification path for a positional argument: substitute
@@ -12942,15 +12950,12 @@ function checkPositionalCallArgs(
  * result (see the identical note on the named-field path). */
 function reconcileOrdinaryPositionalArg(
   ctx: AnalysisContext,
-  call: Parser.CallExpression,
   site: CallSiteDescription,
-  index: number,
-  declaredType: Semantics.Type,
-  arg: Semantics.Expression,
-  argType: Semantics.Type,
+  argSite: PositionalArgSite,
   genericNames: ReadonlySet<string>,
   bindings: GenericBindings,
 ): Semantics.Expression {
+  const { index, declaredType, arg, rawArg } = argSite;
   const substitutedType =
     genericNames.size > 0
       ? substituteGenericType(declaredType, bindings)
@@ -12961,9 +12966,8 @@ function reconcileOrdinaryPositionalArg(
   ) {
     return arg;
   }
-  const rawArg = call.arguments[index];
   const isErrorRecoveryArg =
-    argType.kind === "UnitType" && isAmbiguousUnitExpr(arg);
+    getType(arg).kind === "UnitType" && isAmbiguousUnitExpr(arg);
   const recheckedArg =
     genericNames.size > 0 && rawArg !== undefined && !isErrorRecoveryArg
       ? checkExpression(ctx, rawArg, { kind: "HasType", type: substitutedType })
