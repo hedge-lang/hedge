@@ -9719,6 +9719,35 @@ describe("arithmetic/bitwise/shift operators resolving through an operator-trait
     });
   });
 
+  it("records the generic Add impl's own bound witness for `+`, not an unrelated same-named inherent method's", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Marker { fn mark(&self) -> i32; }
+      struct Num { v: i32 }
+      impl Marker for Num { fn mark(&self) -> i32 { self.v } }
+      struct Wrapper<T> { value: T }
+      impl<T> Wrapper<T> {
+        fn add(&self) -> i32 { 0 }
+      }
+      impl<T: Marker> Add for Wrapper<T> {
+        type Output = Self;
+        fn add(self, rhs: Self) -> Self { self }
+      }
+      fn main() {
+        let a = Wrapper { value: Num { v: 1 } };
+        let b = Wrapper { value: Num { v: 2 } };
+        let c = a + b;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    const [witnesses] = [...result.methodCallWitnesses.values()];
+    assert(witnesses !== undefined, "expected a recorded method-call witness");
+    expect(witnesses).toHaveLength(1);
+    const witness = witnesses[0];
+    assert(witness?.kind === "Impl", "expected an Impl witness");
+    expect(witness.traitName).toBe("Marker");
+    expect(witness.typeName).toBe("Num");
+  });
+
   it("does not validate the shift amount's type at all once the shifted value resolves through a `Shl` impl", (): void => {
     const result = diagnoseWithPrelude(`
       struct V { x: i32 }

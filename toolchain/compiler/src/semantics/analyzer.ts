@@ -8163,9 +8163,15 @@ function recordOperatorDispatchTarget(
     // The dispatched impl may itself be generic (`impl<T: Bound> Trait for
     // Wrapper<T>`) - its own bound is only ever reachable through the
     // operand, never a positional argument, so this resolves the same way
-    // a method call's own impl-level bound does.
+    // a method call's own impl-level bound does. Filtered by trait origin,
+    // not just name - an inherent method or another trait's own same-named
+    // method would otherwise shadow the operator trait's own indexed
+    // method, silently dropping its bound witness.
     const indexedMethod = methodCandidatesForNominalType(ctx, operandType).find(
-      (m) => m.name === methodName,
+      (m) =>
+        m.name === methodName &&
+        m.origin.kind === "trait" &&
+        m.origin.traitId === trait,
     );
     if (indexedMethod !== undefined) {
       recordMethodCallWitnesses(ctx, tokenId, indexedMethod, [], operandType);
