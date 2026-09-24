@@ -406,12 +406,23 @@ interface RegisteredTrait {
  * checking - `Wildcard` when the position is filled by the impl's own
  * declared generic parameter (`impl<T> Draw for Pair<T>`, which covers
  * every instantiation of `Pair` and so conflicts with any other impl of the
- * same trait for `Pair`, concrete or wildcard alike), `Concrete` when it's a
- * fully resolved type (`impl Draw for Pair<i32>`, which conflicts only with
- * an identical concrete type in the same position). */
+ * same trait for `Pair`, concrete or wildcard alike), `Nominal` when it's a
+ * struct/enum instantiation whose own type arguments recurse into this same
+ * representation (`impl<T> Draw for Pair<Wrapper<T>>` - the `T` nested
+ * inside `Wrapper<T>` is itself a `Wildcard` slot, so it's recognized as
+ * overlapping `Pair<Wrapper<i32>>` structurally, not misclassified as one
+ * opaque concrete type), `Concrete` when it's any other fully resolved type
+ * (`impl Draw for Pair<i32>`, which conflicts only with an identical
+ * concrete type in the same position). */
 type TargetArgSlot =
   | { readonly kind: "Wildcard" }
-  | { readonly kind: "Concrete"; readonly type: Semantics.Type };
+  | { readonly kind: "Concrete"; readonly type: Semantics.Type }
+  | {
+      readonly kind: "Nominal";
+      readonly nominalKind: "StructType" | "EnumType";
+      readonly name: string;
+      readonly typeArguments: readonly TargetArgSlot[];
+    };
 
 /** One registered trait impl, extracted just far enough for coherence and
  * bound checking. */
@@ -3140,10 +3151,23 @@ function targetTypeArgumentsOverlap(
   if (a.length !== b.length) return true;
   return a.every((slot, i) => {
     const other = b[i];
-    if (other === undefined) return true;
-    if (slot.kind === "Wildcard" || other.kind === "Wildcard") return true;
-    return typesEqual(slot.type, other.type);
+    return other === undefined || slotsOverlap(slot, other);
   });
+}
+
+function slotsOverlap(a: TargetArgSlot, b: TargetArgSlot): boolean {
+  if (a.kind === "Wildcard" || b.kind === "Wildcard") return true;
+  if (a.kind === "Nominal" && b.kind === "Nominal") {
+    return (
+      a.nominalKind === b.nominalKind &&
+      a.name === b.name &&
+      targetTypeArgumentsOverlap(a.typeArguments, b.typeArguments)
+    );
+  }
+  if (a.kind === "Concrete" && b.kind === "Concrete") {
+    return typesEqual(a.type, b.type);
+  }
+  return false;
 }
 
 /**
@@ -3323,9 +3347,24 @@ function requestedTraitArgumentsSatisfied(
   if (implSlots.length !== requested.length) return false;
   return implSlots.every((slot, i) => {
     const type = requested[i];
-    if (type === undefined) return false;
-    return slot.kind === "Wildcard" || typesEqual(slot.type, type);
+    return type !== undefined && slotSatisfiesType(slot, type);
   });
+}
+
+function slotSatisfiesType(slot: TargetArgSlot, type: Semantics.Type): boolean {
+  if (slot.kind === "Wildcard") return true;
+  if (slot.kind === "Nominal") {
+    return (
+      type.kind === slot.nominalKind &&
+      type.name === slot.name &&
+      type.typeArguments.length === slot.typeArguments.length &&
+      slot.typeArguments.every((s, i) => {
+        const t = type.typeArguments[i];
+        return t !== undefined && slotSatisfiesType(s, t);
+      })
+    );
+  }
+  return typesEqual(slot.type, type);
 }
 
 /**
@@ -4111,26 +4150,47 @@ function reportExtraAssociatedTypes(
  * own `Pair<...>` target) and an impl's `TraitRef<...>` - either one's raw
  * argument list, resolved into `TargetArgSlot`s under the impl's own
  * generic-param scope (must be called with that scope already pushed). */
+/** `resolveSlice1Type` resolves an unbound impl-level generic parameter to
+ * its own abstract `NamedType`, wherever it appears - including nested
+ * inside a further struct/enum instantiation - so recognizing that shape is
+ * enough to recurse correctly without a separate parser-level walk. */
+function classifyTargetArgSlot(
+  resolvedType: Semantics.Type,
+  implGenericNames: ReadonlySet<string>,
+): TargetArgSlot {
+  if (
+    resolvedType.kind === "NamedType" &&
+    resolvedType.path.segments.length === 1
+  ) {
+    const name = resolvedType.path.segments[0];
+    if (name !== undefined && implGenericNames.has(name)) {
+      return { kind: "Wildcard" };
+    }
+  }
+  if (resolvedType.kind === "StructType" || resolvedType.kind === "EnumType") {
+    return {
+      kind: "Nominal",
+      nominalKind: resolvedType.kind,
+      name: resolvedType.name,
+      typeArguments: resolvedType.typeArguments.map((arg) =>
+        classifyTargetArgSlot(arg, implGenericNames),
+      ),
+    };
+  }
+  return { kind: "Concrete", type: resolvedType };
+}
+
 function resolveTypeArgumentSlots(
   ctx: AnalysisContext,
   typeArguments: readonly Parser.Type[],
   implGenericNames: ReadonlySet<string>,
 ): readonly TargetArgSlot[] {
-  return typeArguments.map((arg): TargetArgSlot => {
-    const bareParamName =
-      arg.kind === "NamedType" &&
-      arg.path.segments.length === 1 &&
-      arg.typeArguments.length === 0
-        ? arg.path.segments[0]
-        : undefined;
-    if (bareParamName !== undefined && implGenericNames.has(bareParamName)) {
-      return { kind: "Wildcard" };
-    }
-    return {
-      kind: "Concrete",
-      type: resolveSlice1Type(ctx, arg, arg.tokenId),
-    };
-  });
+  return typeArguments.map((arg) =>
+    classifyTargetArgSlot(
+      resolveSlice1Type(ctx, arg, arg.tokenId),
+      implGenericNames,
+    ),
+  );
 }
 
 function resolveTargetTypeArguments(

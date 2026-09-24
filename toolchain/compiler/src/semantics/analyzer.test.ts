@@ -6624,6 +6624,32 @@ describe("trait and impl declarations", (): void => {
         "conflicting implementations of trait `B`",
       );
     });
+
+    it("rejects a nested generic impl target that structurally overlaps a concrete instantiation nested the same way", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Wrapper<T> { value: T }
+        struct Pair<T> { a: T, b: T }
+        impl<T> Draw for Pair<Wrapper<T>> { fn draw(&self) -> str { "a" } }
+        impl Draw for Pair<Wrapper<i32>> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Draw` is already implemented for type `Pair`",
+      );
+    });
+
+    it("still accepts two nested generic impl targets whose nested nominal shapes differ", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Wrapper<T> { value: T }
+        struct Other<T> { value: T }
+        struct Pair<T> { a: T, b: T }
+        impl Draw for Pair<Wrapper<i32>> { fn draw(&self) -> str { "a" } }
+        impl Draw for Pair<Other<i32>> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
   });
 
   describe("parameterized trait-bound instantiation coherence and selection", (): void => {
