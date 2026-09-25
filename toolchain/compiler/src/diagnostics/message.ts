@@ -332,6 +332,8 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return `method \`${kind.method}\` on \`${kind.typeName}\` is ambiguous between traits ${kind.traits
         .map((t) => `\`${t}\``)
         .join(" and ")}`;
+    case "SemAmbiguousTraitInstantiation":
+      return `method \`${kind.method}\` on \`${kind.typeName}\` is ambiguous between multiple instantiations of trait \`${kind.trait}\``;
     case "SemNoAssociatedItem":
       return `no associated item \`${kind.name}\` found for \`${kind.typeName}\``;
     case "SemLogicalOperandsMustBeBool":

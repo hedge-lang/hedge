@@ -16,6 +16,7 @@ import {
   constValueToLiteralExpression,
   type FreeMethodTarget,
   type MethodTarget,
+  monomorphizedTypeIdentity,
   type UnsizeCoercion,
   witnessParamName,
   type WitnessMethod,
@@ -1159,7 +1160,7 @@ function witnessSlotTarget(
   return {
     kind: "free",
     typeId: witness.typeId,
-    scopeId: witness.typeId,
+    scopeId: `${witness.typeId}#${witness.traitId}`,
     typeName: witness.typeName,
     traitName: some(method.definingTrait),
     methodName: method.name,
@@ -1231,7 +1232,7 @@ function witnessRefName(ctx: JsimContext, ref: WitnessRef): string {
     case "Forwarded":
       return resolvedWitnessParamName(
         ctx,
-        witnessParamName(ref.paramName, ref.traitName),
+        witnessParamName(ref.paramName, ref.traitName, ref.typeArguments),
       );
     case "Primitive":
       return resolvedPrimitiveWitnessName(ctx, ref.traitName);
@@ -2729,7 +2730,7 @@ function jsimRangeExpression(
  * Enum `Drop` is not wired yet (a later ticket). */
 function structDropFn(ctx: JsimContext, type: Semantics.Type): Option<string> {
   if (type.kind !== "StructType") return none();
-  const target = ctx.dropImpls.get(type.name);
+  const target = ctx.dropImpls.get(monomorphizedTypeIdentity(type));
   return target === undefined
     ? none()
     : some(resolvedMethodFreeFnName(ctx, target));
