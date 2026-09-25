@@ -1363,6 +1363,23 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["3"]);
   });
 
+  it("forwards the matching instantiation's own witness when a type parameter is bound twice to the same parameterized trait", (): void => {
+    const js = emittedJs(`
+      trait Tag<T> { fn tag(&self) -> str; }
+      struct P { x: i32 }
+      impl Tag<i32> for P { fn tag(&self) -> str { "int" } }
+      impl Tag<str> for P { fn tag(&self) -> str { "string" } }
+      fn use_i32<U: Tag<i32>>(u: &U) -> str { u.tag() }
+      fn use_str<U: Tag<str>>(u: &U) -> str { u.tag() }
+      fn outer<T: Tag<i32> + Tag<str>>(t: &T) {
+        print(use_i32(t));
+        print(use_str(t));
+      }
+      fn main() { let p = P { x: 0 }; outer(&p); }
+    `);
+    expect(runEmittedJs(js)).toEqual(["int", "string"]);
+  });
+
   it("emits one JS function for a bounded generic instantiated at two concrete types", (): void => {
     const js = emittedJs(`
       trait Draw { fn draw(&self) -> i32; }

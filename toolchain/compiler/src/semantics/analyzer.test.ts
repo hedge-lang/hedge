@@ -4676,6 +4676,51 @@ describe("associated types and trait projections", (): void => {
       );
     });
 
+    it("rejects a method call ambiguous between two instantiations of the same parameterized trait", (): void => {
+      const result = diagnose(`
+        trait Tag<T> { fn tag(&self) -> str; }
+        struct P { v: i32 }
+        impl Tag<i32> for P { fn tag(&self) -> str { "int" } }
+        impl Tag<str> for P { fn tag(&self) -> str { "string" } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.tag();
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "method `tag` on `P` is ambiguous between multiple instantiations of trait `Tag`",
+      );
+    });
+
+    it("resolves a method call unambiguously when only one instantiation of a parameterized trait targets the receiver", (): void => {
+      const result = diagnose(`
+        trait Tag<T> { fn tag(&self) -> str; }
+        struct P { v: i32 }
+        impl Tag<i32> for P { fn tag(&self) -> str { "int" } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.tag();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("does not flag two instantiations of a parameterized trait targeting different structs as ambiguous", (): void => {
+      const result = diagnose(`
+        trait Tag<T> { fn tag(&self) -> str; }
+        struct P { v: i32 }
+        struct Q { v: i32 }
+        impl Tag<i32> for P { fn tag(&self) -> str { "int" } }
+        impl Tag<str> for Q { fn tag(&self) -> str { "string" } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.tag();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("auto-borrows a by-value receiver for a `&self` method", (): void => {
       const result = diagnose(`
         struct P { v: i32 }
@@ -7582,7 +7627,12 @@ describe("trait and impl declarations", (): void => {
       expect(result.diagnostics).toEqual([]);
       const [witnesses] = [...result.witnesses.values()];
       expect(witnesses).toEqual([
-        { kind: "Forwarded", traitName: "Draw", paramName: "T" },
+        {
+          kind: "Forwarded",
+          traitName: "Draw",
+          paramName: "T",
+          typeArguments: [],
+        },
       ]);
     });
 
@@ -7607,7 +7657,12 @@ describe("trait and impl declarations", (): void => {
       expect(result.diagnostics).toEqual([]);
       const [witnesses] = [...result.witnesses.values()];
       expect(witnesses).toEqual([
-        { kind: "Forwarded", traitName: "Convert", paramName: "T" },
+        {
+          kind: "Forwarded",
+          traitName: "Convert",
+          paramName: "T",
+          typeArguments: [{ kind: "PrimitiveI32Type" }],
+        },
       ]);
     });
   });

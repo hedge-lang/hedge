@@ -48,6 +48,7 @@ export type DiagnosticCode =
   | "HEDGE-TYPE-013" // method name resolves to more than one applicable trait method
   | "HEDGE-TYPE-014" // no associated function or constant with the given name
   | "HEDGE-TYPE-015" // generic parameter default references a parameter not declared earlier
+  | "HEDGE-TYPE-016" // method name resolves to more than one instantiation of the same trait
   // Patterns.
   | "HEDGE-PATTERN-001" // refutable pattern in an irrefutable position
   | "HEDGE-PATTERN-002" // non-exhaustive match

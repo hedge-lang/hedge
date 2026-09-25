@@ -91,9 +91,22 @@ export interface WitnessParam {
 
 /** The one place the `_witness_<param>_<trait>` naming scheme is defined -
  * `param` is a type-parameter name or `Self` (a trait default body), `trait`
- * is a bare trait name. */
-export function witnessParamName(param: string, trait: string): string {
-  return `_witness_${param}_${trait}`;
+ * is a bare trait name. `typeArguments`, when non-empty, disambiguates two
+ * bounds on the same parameter naming the same parameterized trait with
+ * different arguments (`T: Convert<i32> + Convert<str>`) - without it both
+ * would produce the identical raw name, and `reserveWitnessParamName`'s
+ * `witnessParamNames` map would silently resolve every forwarding reference
+ * to whichever bound was declared last. */
+export function witnessParamName(
+  param: string,
+  trait: string,
+  typeArguments: readonly Semantics.Type[] = [],
+): string {
+  if (typeArguments.length === 0) return `_witness_${param}_${trait}`;
+  const argsSuffix = typeArguments
+    .map((arg) => describeType(arg).replace(/[^A-Za-z0-9_$]+/g, "_"))
+    .join("_");
+  return `_witness_${param}_${trait}_${argsSuffix}`;
 }
 
 /** Which free function a `FreeMethodTarget` names: `concrete` -
@@ -242,6 +255,7 @@ export type WitnessRef =
       readonly kind: "Forwarded";
       readonly traitName: string;
       readonly paramName: string;
+      readonly typeArguments: readonly Semantics.Type[];
     }
   | {
       readonly kind: "Primitive";
@@ -687,6 +701,26 @@ function declaredGenericParamBounds(
   return (innermost?.get(name) ?? []).map(
     (ref) => lookupTrait(ctx, ref.name) ?? ref.name,
   );
+}
+
+/** Same as `declaredGenericParamBounds`, but keeps each bound's own resolved
+ * type arguments - `abstractWitnessParamName` needs them to reproduce
+ * `recordWitnessParams`'s parameterized witness name exactly, not just the
+ * bare trait name `declaredGenericParamBounds` reduces to. */
+function declaredGenericParamBoundRefs(
+  ctx: AnalysisContext,
+  name: string,
+): readonly {
+  readonly traitName: string;
+  readonly typeArguments: readonly Semantics.Type[];
+}[] {
+  const innermost = ctx.genericParamBoundStack.at(-1);
+  return (innermost?.get(name) ?? []).map((ref) => ({
+    traitName: lookupTrait(ctx, ref.name) ?? ref.name,
+    typeArguments: ref.typeArguments.map((arg) =>
+      resolveSlice1Type(ctx, arg, arg.tokenId),
+    ),
+  }));
 }
 
 /** Whether `paramName`'s own declared bounds include `traitName` with type
@@ -3056,6 +3090,13 @@ function analyzeImplDecl(
   pushGenericParams(ctx, item.generics, item.whereClause);
   const targetType = resolveImplSelfTargetType(ctx, item, shallow);
   popGenericParams(ctx);
+  // Reuses the coherence prepass's own already-resolved trait-argument
+  // slots (`registerOneImpl`, which ran before this whole pass) instead of
+  // re-resolving them here - `item`'s own generic-param scope is no longer
+  // pushed at the point this impl's methods are recorded below.
+  const registeredImpl = ctx.implRegistry.find(
+    (impl) => impl.tokenId === item.tokenId,
+  );
   const traitName = mapSome(
     shallow.traitRef,
     (t) => lookupTrait(ctx, t.name) ?? t.name,
@@ -3124,9 +3165,16 @@ function analyzeImplDecl(
           decl,
           targetType,
           traitName,
+          registeredImpl?.traitTypeArguments ?? [],
           shallow.isBlanket,
         );
-        recordDropImpl(ctx, decl, targetType, traitName);
+        recordDropImpl(
+          ctx,
+          decl,
+          targetType,
+          traitName,
+          registeredImpl?.traitTypeArguments ?? [],
+        );
       }
       return [
         {
@@ -3380,6 +3428,7 @@ function resolveTraitBound(
             kind: "Forwarded",
             traitName: bareTypeName(traitName),
             paramName,
+            typeArguments: requestedTypeArguments,
           })
         : none();
     }
@@ -3506,6 +3555,36 @@ function monomorphizeIdentity(
 ): string {
   if (typeArguments.length === 0) return name;
   return `${name}<${typeArguments.map(monomorphizedTypeIdentity).join(",")}>`;
+}
+
+/** A `TargetArgSlot`'s own stable identity string, for keying an impl's own
+ * declared (not caller-requested) trait/target argument list - `Wildcard`
+ * stringifies to its bare `paramName` rather than a bound concrete type,
+ * which is fine for this purpose: coherence already treats any `Wildcard`
+ * slot as conflicting with every other impl of the same trait for the same
+ * target, so a `Wildcard`-bearing impl is always alone there and never needs
+ * to be told apart from a sibling. */
+function targetArgSlotIdentity(slot: TargetArgSlot): string {
+  switch (slot.kind) {
+    case "Wildcard":
+      return slot.paramName;
+    case "Concrete":
+      return monomorphizedTypeIdentity(slot.type);
+    case "Nominal":
+      return targetArgSlotsIdentity(slot.name, slot.typeArguments);
+    default:
+      return assertNever(slot, `target arg slot: ${JSON.stringify(slot)}`);
+  }
+}
+
+/** `monomorphizeIdentity`'s own counterpart for a `TargetArgSlot` list - see
+ * `targetArgSlotIdentity`. */
+function targetArgSlotsIdentity(
+  name: string,
+  slots: readonly TargetArgSlot[],
+): string {
+  if (slots.length === 0) return name;
+  return `${name}<${slots.map(targetArgSlotIdentity).join(",")}>`;
 }
 
 /** Whether an impl's own resolved trait type arguments satisfy a bound's
@@ -3718,6 +3797,16 @@ function resolveTraitBoundForTypeName(
     typeName,
     receiverTypeArguments,
   );
+  // Keyed off the matched impl's own declared trait arguments, not the
+  // caller's (possibly empty/unspecified) request - `Tag<i32>` and
+  // `Tag<str>` need to be two distinct hoisted-witness identities for the
+  // same target, since coherence allows a concrete type to implement the
+  // same parameterized trait more than once, and a plain concrete-receiver
+  // call site (`p.tag()`) never has a specific request to fall back on.
+  const traitInstanceId = targetArgSlotsIdentity(
+    traitName,
+    impl.traitTypeArguments,
+  );
   if (impl.isBlanket) {
     const boundWitnesses = composeBlanketBoundWitnesses(
       ctx,
@@ -3730,7 +3819,7 @@ function resolveTraitBoundForTypeName(
     return some({
       kind: "Composed",
       traitName: bareTypeName(traitName),
-      traitId: traitName,
+      traitId: traitInstanceId,
       typeName: bareTypeName(typeName),
       typeId: monomorphizedTypeId,
       implTokenId: impl.tokenId,
@@ -3741,7 +3830,7 @@ function resolveTraitBoundForTypeName(
   return some({
     kind: "Impl",
     traitName: bareTypeName(traitName),
-    traitId: traitName,
+    traitId: traitInstanceId,
     typeName: bareTypeName(typeName),
     typeId: monomorphizedTypeId,
     implTokenId: impl.tokenId,
@@ -7206,8 +7295,11 @@ function recordWitnessParams(
     whereClause,
   )) {
     for (const traitRef of traitRefs) {
+      const typeArguments = traitRef.typeArguments.map((arg) =>
+        resolveSlice1Type(ctx, arg, arg.tokenId),
+      );
       params.push({
-        name: witnessParamName(paramName, traitRef.name),
+        name: witnessParamName(paramName, traitRef.name, typeArguments),
         paramName,
         traitName: traitRef.name,
       });
@@ -8350,12 +8442,16 @@ function abstractWitnessParamName(
     return witnessParamName("Self", bareTypeName(selfContext.traitName));
   }
   if (!isDeclaredGenericParam(ctx, name)) return undefined;
-  for (const bound of declaredGenericParamBounds(ctx, name)) {
+  for (const bound of declaredGenericParamBoundRefs(ctx, name)) {
     if (
-      bound === requiredTrait ||
-      boundsImplyTrait(ctx, [bound], requiredTrait)
+      bound.traitName === requiredTrait ||
+      boundsImplyTrait(ctx, [bound.traitName], requiredTrait)
     ) {
-      return witnessParamName(name, bareTypeName(bound));
+      return witnessParamName(
+        name,
+        bareTypeName(bound.traitName),
+        bound.typeArguments,
+      );
     }
   }
   return undefined;
@@ -9415,6 +9511,32 @@ function blanketMethodCandidates(
   return result;
 }
 
+/** Every non-blanket registered impl of `traitName` (bare) whose own target
+ * matches `receiverTypeArguments` exactly - the per-instantiation impl count
+ * `resolveMethodCall` needs to detect an ambiguity `methodIndex`/
+ * `traitMethodSet` can't see on their own, since both resolve a trait's
+ * methods once per trait declaration, not once per impl: two impls of the
+ * same parameterized trait for the same target (`impl Tag<i32> for P` +
+ * `impl Tag<str> for P` - coherence allows this, since their own trait
+ * arguments differ) look identical to a single-impl case there. */
+function registeredImplsForReceiver(
+  ctx: AnalysisContext,
+  typeName: string,
+  traitName: string,
+  receiverTypeArguments: readonly Semantics.Type[],
+): readonly RegisteredImpl[] {
+  return ctx.implRegistry.filter((impl) => {
+    if (impl.traitName !== traitName || impl.isBlanket) return false;
+    if (impl.targetTypeName !== typeName) return false;
+    const bindings = new Map<string, Semantics.Type>();
+    return requestedTraitArgumentsSatisfied(
+      impl.targetTypeArguments,
+      receiverTypeArguments,
+      bindings,
+    );
+  });
+}
+
 /** Rust's method-resolution precedence: an inherent method shadows a
  * same-named trait method silently; a name shared by two or more implemented
  * traits with no inherent method is ambiguous. */
@@ -9437,8 +9559,32 @@ function resolveMethodCall(
       ),
     ),
   ];
-  if (traitIds.length === 1) return traitMatches[0];
   const typeName = bareTypeName(typeIdentity(receiverType));
+  const [onlyTraitId] = traitIds;
+  if (traitIds.length === 1 && onlyTraitId !== undefined) {
+    if (
+      isNominalType(receiverType) &&
+      registeredImplsForReceiver(
+        ctx,
+        receiverType.name,
+        onlyTraitId,
+        receiverType.typeArguments,
+      ).length > 1
+    ) {
+      emitError(
+        ctx,
+        {
+          kind: "SemAmbiguousTraitInstantiation",
+          method: methodName,
+          typeName,
+          trait: bareTypeName(onlyTraitId),
+        },
+        tokenId,
+      );
+      return undefined;
+    }
+    return traitMatches[0];
+  }
   if (traitIds.length === 0) {
     emitError(
       ctx,
@@ -9577,6 +9723,27 @@ function checkAssociatedCallArgs(
       );
 }
 
+/** The `scopeId` a `concrete`-emitKind `FreeMethodTarget` reserves its free
+ * function's name under, for a trait-provided method - folds the impl's own
+ * declared trait arguments in, not just the target's, so a plain type-only
+ * key doesn't collapse two impls of the same parameterized trait for the
+ * same target (`impl Tag<i32> for P` / `impl Tag<str> for P`) onto one
+ * reservation. Shared by `recordImplMethodTarget`'s own emission and
+ * `recordDropImpl`'s - `recordMethodTarget`'s own call-site counterpart
+ * builds the identical string a different way (from a witness's own
+ * already-instance-aware `typeId`/`traitId`, since it never has a raw
+ * `TargetArgSlot` list to hand this function), so a write side and a read
+ * side can't silently drift onto two different algorithms. */
+function concreteMethodTargetScopeId(
+  monomorphizedTypeId: string,
+  traitName: Option<string>,
+  traitTypeArguments: readonly TargetArgSlot[],
+): string {
+  return isSome(traitName)
+    ? `${monomorphizedTypeId}#${targetArgSlotsIdentity(traitName.value, traitTypeArguments)}`
+    : monomorphizedTypeId;
+}
+
 /** Records the free-function `MethodTarget` for an impl-provided method
  * codegen should emit (`AnalysisResult.implMethodTargets`), keyed by the
  * method body's own tokenId. A receiver-less associated function emits
@@ -9589,6 +9756,7 @@ function recordImplMethodTarget(
   decl: Parser.FunctionDef,
   targetType: Semantics.Type,
   traitName: Option<string>,
+  traitTypeArguments: readonly TargetArgSlot[],
   isBlanket: boolean,
 ): void {
   if (!isSome(decl.signature.receiver)) return;
@@ -9597,7 +9765,11 @@ function recordImplMethodTarget(
     ctx.implMethodTargetTable.set(decl.tokenId, {
       kind: "free",
       typeId: monomorphizedTypeId,
-      scopeId: monomorphizedTypeId,
+      scopeId: concreteMethodTargetScopeId(
+        monomorphizedTypeId,
+        traitName,
+        traitTypeArguments,
+      ),
       typeName: bareTypeName(targetType.name),
       traitName: mapSome(traitName, bareTypeName),
       methodName: decl.signature.name.text,
@@ -9627,6 +9799,7 @@ function recordDropImpl(
   decl: Parser.FunctionDef,
   targetType: Semantics.Type,
   traitName: Option<string>,
+  traitTypeArguments: readonly TargetArgSlot[],
 ): void {
   if (
     decl.signature.name.text !== "drop" ||
@@ -9649,7 +9822,11 @@ function recordDropImpl(
   ctx.dropImplTable.set(monomorphizedTypeId, {
     kind: "free",
     typeId: monomorphizedTypeId,
-    scopeId: monomorphizedTypeId,
+    scopeId: concreteMethodTargetScopeId(
+      monomorphizedTypeId,
+      traitName,
+      traitTypeArguments,
+    ),
     typeName: bareTypeName(targetType.name),
     traitName: some(bareTypeName(traitName.value)),
     methodName: "drop",
@@ -9736,7 +9913,7 @@ function recordMethodTarget(
   ctx.methodTargetTable.set(methodTokenId, {
     kind: "free",
     typeId: monomorphizedTypeId,
-    scopeId: monomorphizedTypeId,
+    scopeId: `${monomorphizedTypeId}#${witness.value.traitId}`,
     typeName: bareTypeName(receiverType.name),
     traitName: some(trait),
     methodName,

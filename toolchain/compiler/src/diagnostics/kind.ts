@@ -409,6 +409,12 @@ export type DiagnosticKind =
       readonly traits: readonly string[];
     }
   | {
+      readonly kind: "SemAmbiguousTraitInstantiation";
+      readonly method: string;
+      readonly typeName: string;
+      readonly trait: string;
+    }
+  | {
       readonly kind: "SemNoAssociatedItem";
       readonly name: string;
       readonly typeName: string;
@@ -777,6 +783,7 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemCallReturnTypeMismatch", "HEDGE-TYPE-010"],
   ["SemNoMethodOnType", "HEDGE-TYPE-012"],
   ["SemAmbiguousMethod", "HEDGE-TYPE-013"],
+  ["SemAmbiguousTraitInstantiation", "HEDGE-TYPE-016"],
   ["SemNoAssociatedItem", "HEDGE-TYPE-014"],
   ["SemLogicalOperandsMustBeBool", "HEDGE-TYPE-002"],
   ["SemShiftAmountMustBeInteger", "HEDGE-TYPE-002"],
