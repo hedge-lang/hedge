@@ -14,9 +14,10 @@ import {
 import { collectMethodOwners } from "../ownership/owned-functions.js";
 import {
   constValueToLiteralExpression,
+  type DropImplEntry,
+  findDropTarget,
   type FreeMethodTarget,
   type MethodTarget,
-  monomorphizedTypeIdentity,
   type UnsizeCoercion,
   witnessParamName,
   type WitnessMethod,
@@ -124,9 +125,10 @@ interface JsimContext {
   /** `AnalysisResult.unsizeCoercions` - each expression unsize-coerced to
    * `dyn Trait`, keyed by its tokenId, mapped to the impl witness. */
   readonly unsizeCoercions: ReadonlyMap<number, UnsizeCoercion>;
-  /** `AnalysisResult.dropImpls` - struct/enum type ids with a `Drop` impl,
-   * mapped to the `drop` free-function target. */
-  readonly dropImpls: ReadonlyMap<string, FreeMethodTarget>;
+  /** `AnalysisResult.dropImpls` - `Drop` impls bucketed by target type name,
+   * matched against a constructed value's own type arguments by
+   * `findDropTarget`. */
+  readonly dropImpls: ReadonlyMap<string, readonly DropImplEntry[]>;
   /** `AnalysisResult.methodCallWitnesses` - witnesses resolved for a
    * concrete-receiver method call's own bounded generic parameters, keyed
    * by the method-name token (same convention as `methodTargets`). */
@@ -895,7 +897,7 @@ export interface JsimInfo {
   readonly witnesses?: ReadonlyMap<number, readonly WitnessRef[]>;
   readonly extraWitnesses?: readonly WitnessRef[];
   readonly unsizeCoercions?: ReadonlyMap<number, UnsizeCoercion>;
-  readonly dropImpls?: ReadonlyMap<string, FreeMethodTarget>;
+  readonly dropImpls?: ReadonlyMap<string, readonly DropImplEntry[]>;
   readonly methodCallWitnesses?: ReadonlyMap<number, readonly WitnessRef[]>;
 }
 
@@ -1150,7 +1152,9 @@ function witnessSlotTarget(
     return {
       kind: "free",
       typeId: method.definingTraitId,
-      scopeId: method.definingTraitId,
+      scopeId: isSome(method.blanketImplScopeId)
+        ? method.blanketImplScopeId.value
+        : method.definingTraitId,
       typeName: method.definingTrait,
       traitName: some(method.definingTrait),
       methodName: method.name,
@@ -2730,7 +2734,7 @@ function jsimRangeExpression(
  * Enum `Drop` is not wired yet (a later ticket). */
 function structDropFn(ctx: JsimContext, type: Semantics.Type): Option<string> {
   if (type.kind !== "StructType") return none();
-  const target = ctx.dropImpls.get(monomorphizedTypeIdentity(type));
+  const target = findDropTarget(ctx.dropImpls, type.name, type.typeArguments);
   return target === undefined
     ? none()
     : some(resolvedMethodFreeFnName(ctx, target));

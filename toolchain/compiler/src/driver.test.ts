@@ -1578,6 +1578,19 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["1", "2"]);
   });
 
+  it("does not collide two blanket impls' free functions for different instantiations of the same parameterized trait", (): void => {
+    const js = emittedJs(`
+      trait Tag<T> { fn tag(&self) -> str; }
+      impl<T> Tag<i32> for T { fn tag(&self) -> str { "int" } }
+      impl<T> Tag<str> for T { fn tag(&self) -> str { "string" } }
+      fn main() { print(0); }
+    `);
+    expect(js).toContain("function Tag$tag$blanket(self)");
+    expect(js).toContain("function Tag$tag$blanket_2(self)");
+    expect(countOccurrences(js, 'return "int";')).toBe(1);
+    expect(countOccurrences(js, 'return "string";')).toBe(1);
+  });
+
   it("does not collide a blanket impl's free function with another blanket impl of a shadowed same-named trait", (): void => {
     const result = compile(`
       trait Marker1 {}
@@ -2613,6 +2626,30 @@ describe("Drop::drop dispose body", (): void => {
     `);
     // Scope-end disposal is LIFO: `b` (Pair<str>) first, then `a` (Pair<i32>).
     expect(runEmittedJs(js)).toEqual(["0", "2", "1"]);
+  });
+
+  it("runs a generic impl's own `drop` body for every instantiation of its target", (): void => {
+    const js = emittedJs(`
+      struct Pair<T> { a: T }
+      impl<T> Drop for Pair<T> { fn drop(&mut self) { print(1); } }
+      fn main() {
+        let a = Pair { a: 1 };
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "1"]);
+  });
+
+  it("prefers a concrete instantiation's own `drop` body over a generic impl covering the same target", (): void => {
+    const js = emittedJs(`
+      struct Pair<T> { a: T }
+      impl Drop for Pair<i32> { fn drop(&mut self) { print(1); } }
+      fn main() {
+        let a = Pair { a: 1 };
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "1"]);
   });
 });
 

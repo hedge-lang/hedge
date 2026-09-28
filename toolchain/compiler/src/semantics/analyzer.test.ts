@@ -4721,6 +4721,40 @@ describe("associated types and trait projections", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
+    it("rejects a method call ambiguous between two unconstrained blanket impls of different instantiations of the same parameterized trait", (): void => {
+      const result = diagnose(`
+        trait Tag<T> { fn tag(&self) -> str; }
+        struct P { v: i32 }
+        impl<T> Tag<i32> for T { fn tag(&self) -> str { "int" } }
+        impl<T> Tag<str> for T { fn tag(&self) -> str { "string" } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.tag();
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "method `tag` on `P` is ambiguous between multiple instantiations of trait `Tag`",
+      );
+    });
+
+    it("does not flag two blanket impls of different instantiations of the same trait as ambiguous when their bounds are mutually exclusive for the receiver", (): void => {
+      const result = diagnose(`
+        trait Marker {}
+        trait OtherMarker {}
+        trait Tag<T> { fn tag(&self) -> str; }
+        struct P { v: i32 }
+        impl Marker for P {}
+        impl<T: Marker> Tag<i32> for T { fn tag(&self) -> str { "int" } }
+        impl<T: OtherMarker> Tag<str> for T { fn tag(&self) -> str { "string" } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.tag();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("auto-borrows a by-value receiver for a `&self` method", (): void => {
       const result = diagnose(`
         struct P { v: i32 }
@@ -6824,6 +6858,19 @@ describe("trait and impl declarations", (): void => {
       );
     });
 
+    it("rejects two impl patterns whose own wildcard is repeated at every position on both sides, without recursing forever", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Triple<A, B, C> { a: A, b: B, c: C }
+        impl<T> Draw for Triple<T, T, T> { fn draw(&self) -> str { "a" } }
+        impl<U> Draw for Triple<U, U, U> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Draw` is already implemented for type `Triple`",
+      );
+    });
+
     it("does not falsely conflict when a shared impl-level parameter's trait argument and target argument disagree", (): void => {
       const result = diagnose(`
         trait Convert<T> { fn convert(&self) -> T; }
@@ -6842,6 +6889,29 @@ describe("trait and impl declarations", (): void => {
         impl Convert<i32> for P { fn convert(&self) -> i32 { self.x } }
       `);
       expect(result.diagnostics).toEqual([]);
+    });
+
+    it("does not falsely conflict when the blanket's own target parameter, bound by its trait argument, disagrees with the other impl's concrete target", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> bool; }
+        struct P { x: i32 }
+        impl<T> Convert<T> for T { fn convert(&self) -> bool { true } }
+        impl Convert<i32> for P { fn convert(&self) -> bool { true } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still rejects a blanket impl whose own target parameter, bound by its trait argument, agrees with the other impl's concrete target", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> bool; }
+        struct P { x: i32 }
+        impl<T> Convert<T> for T { fn convert(&self) -> bool { true } }
+        impl Convert<P> for P { fn convert(&self) -> bool { true } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "conflicting implementations of trait `Convert` for type `P`",
+      );
     });
   });
 
@@ -7489,6 +7559,7 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "Shape",
           definingTraitId: shapeId,
           blanketBoundWitnesses: none(),
+          blanketImplScopeId: none(),
           ownWitnessParamCount: 0,
         },
         {
@@ -7497,6 +7568,7 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "Shape",
           definingTraitId: shapeId,
           blanketBoundWitnesses: none(),
+          blanketImplScopeId: none(),
           ownWitnessParamCount: 0,
         },
       ]);
@@ -7523,6 +7595,7 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "Ext",
           definingTraitId: traitIdOf(result, "Ext"),
           blanketBoundWitnesses: none(),
+          blanketImplScopeId: none(),
           ownWitnessParamCount: 0,
         },
         {
@@ -7531,6 +7604,7 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "Base",
           definingTraitId: traitIdOf(result, "Base"),
           blanketBoundWitnesses: none(),
+          blanketImplScopeId: none(),
           ownWitnessParamCount: 0,
         },
       ]);
@@ -7561,6 +7635,7 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "A",
           definingTraitId: traitIdOf(result, "A"),
           blanketBoundWitnesses: none(),
+          blanketImplScopeId: none(),
           ownWitnessParamCount: 0,
         },
       ]);
@@ -7589,6 +7664,7 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "Shape",
           definingTraitId: shapeId,
           blanketBoundWitnesses: none(),
+          blanketImplScopeId: none(),
           ownWitnessParamCount: 0,
         },
         {
@@ -7597,6 +7673,7 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "Shape",
           definingTraitId: shapeId,
           blanketBoundWitnesses: none(),
+          blanketImplScopeId: none(),
           ownWitnessParamCount: 0,
         },
       ]);

@@ -66,12 +66,13 @@ export interface AnalysisResult {
    * `sourceType` on the wrapped node (its own `.type` was rewritten to the
    * `dyn` target here) so struct/enum lowering still sees the concrete type. */
   readonly unsizeCoercions: ReadonlyMap<number, UnsizeCoercion>;
-  /** Structs with a `Drop` impl, keyed by their own monomorphized type id
-   * (`monomorphizedTypeIdentity`, so `Pair<i32>` and `Pair<str>` each get
-   * their own entry) and mapped to the `drop` method's free-function
-   * target. Codegen calls it from the type's `[Symbol.dispose]` before
-   * releasing the fields. */
-  readonly dropImpls: ReadonlyMap<string, FreeMethodTarget>;
+  /** Structs with a `Drop` impl, bucketed by their target's bare type name
+   * (so both a generic impl and one or more concrete instantiation impls
+   * for the same struct share a bucket) - see `findDropTarget` for how
+   * codegen picks the entry matching a given constructed value's own type
+   * arguments, called from the type's `[Symbol.dispose]` before releasing
+   * the fields. */
+  readonly dropImpls: ReadonlyMap<string, readonly DropImplEntry[]>;
   /** Witnesses resolved for a concrete-receiver method call's own bounded
    * generic parameters (the method's own `<U: Trait>`), keyed by the
    * method-name token (same convention as `methodTargets`), one entry per
@@ -152,6 +153,38 @@ export interface FreeMethodTarget {
   readonly emitKind: MethodEmitKind;
 }
 
+/** One `Drop` impl bucketed under its target's bare type name
+ * (`AnalysisResult.dropImpls`) - `targetTypeArguments` is the impl's own
+ * declared target-argument pattern (concrete or an impl-level `Wildcard`,
+ * same shape coherence already uses for overlap checking), so a generic
+ * impl covering every instantiation (`impl<T> Drop for Pair<T>`) and a
+ * concrete one covering a single instantiation (`impl Drop for Pair<i32>`)
+ * can coexist in the same bucket and `findDropTarget` can tell which one a
+ * given constructed value's own type arguments actually match. */
+export interface DropImplEntry {
+  readonly targetTypeArguments: readonly TargetArgSlot[];
+  readonly target: FreeMethodTarget;
+}
+
+/** The `Drop` impl applicable to a constructed value of `typeName<typeArguments>`,
+ * if any - codegen's own read side of `AnalysisResult.dropImpls`, matching
+ * `findRegisteredImpl`'s target-pattern matching so a generic impl's
+ * `Wildcard` target still resolves for every concrete instantiation. */
+export function findDropTarget(
+  dropImpls: ReadonlyMap<string, readonly DropImplEntry[]>,
+  typeName: string,
+  typeArguments: readonly Semantics.Type[],
+): FreeMethodTarget | undefined {
+  const bindings = new Map<string, Semantics.Type>();
+  return (dropImpls.get(typeName) ?? []).find((entry) =>
+    requestedTraitArgumentsSatisfied(
+      entry.targetTypeArguments,
+      typeArguments,
+      bindings,
+    ),
+  )?.target;
+}
+
 interface WitnessMethodTarget {
   readonly kind: "witness";
   readonly witnessName: string;
@@ -194,6 +227,16 @@ export interface WitnessMethod {
    * witnesses to thread even when a *sibling* method in the same flattened
    * witness comes from a genuinely blanket impl elsewhere in the chain. */
   readonly blanketBoundWitnesses: Option<readonly WitnessRef[]>;
+  /** `some(...)` under the exact same condition as `blanketBoundWitnesses`
+   * - the providing blanket impl's own trait arguments folded into
+   * `definingTraitId`, so two legal blanket impls of different
+   * instantiations of the same trait (`impl<T> Tag<i32> for T` /
+   * `impl<T> Tag<str> for T`) get distinct free-function identities instead
+   * of colliding on the bare trait name. Kept separate from
+   * `definingTraitId` itself rather than widening that field in place,
+   * since a default-method body's own free-function identity is the
+   * trait's alone and has no per-impl instantiation to fold in. */
+  readonly blanketImplScopeId: Option<string>;
   /** How many trailing witness arguments a call to this method passes for
    * its *own* declared generic bounds (one per `(param, bound trait)` pair,
    * matching `recordWitnessParams`'s own count for the identical merged
@@ -357,7 +400,7 @@ interface AnalysisContext {
   /** Mutable build-up of `AnalysisResult.unsizeCoercions`. */
   readonly unsizeCoercionTable: Map<number, UnsizeCoercion>;
   /** Mutable build-up of `AnalysisResult.dropImpls`. */
-  readonly dropImplTable: Map<string, FreeMethodTarget>;
+  readonly dropImplTable: Map<string, DropImplEntry[]>;
   /** Mutable build-up of `AnalysisResult.methodCallWitnesses`. */
   readonly methodCallWitnessTable: Map<number, readonly WitnessRef[]>;
   /**
@@ -3174,6 +3217,7 @@ function analyzeImplDecl(
           targetType,
           traitName,
           registeredImpl?.traitTypeArguments ?? [],
+          registeredImpl?.targetTypeArguments ?? [],
         );
       }
       return [
@@ -3293,6 +3337,25 @@ function taggedSlotListsOverlap(
   });
 }
 
+/** Chases a wildcard's binding chain to its current end - `bindings` only
+ * ever records one hop per `slotsOverlap` call, so a wildcard bound earlier
+ * in the same comparison (`a#T -> b#U`) needs a fresh walk here to reach
+ * `b#U`'s own binding, if any, rather than the caller re-deriving it via
+ * recursion (see `slotsOverlap`'s own doc comment for why that recursion
+ * used to be able to loop forever). */
+function resolveTaggedSlot(
+  slot: TaggedTargetArgSlot,
+  bindings: ReadonlyMap<string, TaggedTargetArgSlot>,
+): TaggedTargetArgSlot {
+  let current = slot;
+  while (current.kind === "Wildcard") {
+    const next = bindings.get(current.key);
+    if (next === undefined) return current;
+    current = next;
+  }
+  return current;
+}
+
 /** Whether two impl targets' own argument slots could describe the same
  * concrete instantiation - real unification against one shared `bindings`
  * map, keyed by each wildcard's already side-tagged identity (see
@@ -3303,39 +3366,64 @@ function taggedSlotListsOverlap(
  * silently interpret a slot captured from the opposite side against the
  * wrong side's own bindings - unsound for a case like `Triple<T, T, i32>`
  * vs `Triple<U, str, U>`, whose equations (`T = U`, `T = str`, `i32 = U`)
- * only satisfy if `i32 == str`, which they don't. */
+ * only satisfy if `i32 == str`, which they don't.
+ *
+ * Both sides are resolved to their current binding-chain end *before*
+ * comparing or binding anything - binding a not-yet-resolved slot directly
+ * (the earlier shape of this function) could set a wildcard's own entry to
+ * something that itself resolves back to that same wildcard (`Triple<T, T,
+ * T>` vs `Triple<U, U, U>`: comparing the second `T`/`U` pair looks up `T`'s
+ * existing binding to `U`, then binds `U` to itself), and every later
+ * lookup of that key would recurse into the same self-reference forever. */
 function slotsOverlap(
   a: TaggedTargetArgSlot,
   b: TaggedTargetArgSlot,
   bindings: Map<string, TaggedTargetArgSlot>,
 ): boolean {
-  if (a.kind === "Wildcard") {
-    const existing = bindings.get(a.key);
-    if (existing === undefined) {
-      bindings.set(a.key, b);
-      return true;
-    }
-    return slotsOverlap(existing, b, bindings);
+  const ra = resolveTaggedSlot(a, bindings);
+  const rb = resolveTaggedSlot(b, bindings);
+  if (ra.kind === "Wildcard") {
+    if (rb.kind === "Wildcard" && rb.key === ra.key) return true;
+    bindings.set(ra.key, rb);
+    return true;
   }
-  if (b.kind === "Wildcard") {
-    const existing = bindings.get(b.key);
-    if (existing === undefined) {
-      bindings.set(b.key, a);
-      return true;
-    }
-    return slotsOverlap(a, existing, bindings);
+  if (rb.kind === "Wildcard") {
+    bindings.set(rb.key, ra);
+    return true;
   }
-  if (a.kind === "Nominal" && b.kind === "Nominal") {
+  if (ra.kind === "Nominal" && rb.kind === "Nominal") {
     return (
-      a.nominalKind === b.nominalKind &&
-      a.name === b.name &&
-      taggedSlotListsOverlap(a.typeArguments, b.typeArguments, bindings)
+      ra.nominalKind === rb.nominalKind &&
+      ra.name === rb.name &&
+      taggedSlotListsOverlap(ra.typeArguments, rb.typeArguments, bindings)
     );
   }
-  if (a.kind === "Concrete" && b.kind === "Concrete") {
-    return typesEqual(a.type, b.type);
+  if (ra.kind === "Concrete" && rb.kind === "Concrete") {
+    return typesEqual(ra.type, rb.type);
   }
   return false;
+}
+
+/** An impl's own target, as a single `TargetArgSlot` unifiable against the
+ * trait-argument check's own bindings - a blanket impl's target *is* its
+ * own bare generic parameter (`impl<T> Convert<T> for T`'s target is `T`
+ * itself), so it's a `Wildcard` under that same parameter name; a concrete
+ * impl's target is its declared struct/enum, reusing the already-classified
+ * `targetTypeArguments` for its own nested slots. */
+function implTargetSlot(impl: RegisteredImpl): TargetArgSlot {
+  if (impl.isBlanket) {
+    return { kind: "Wildcard", paramName: impl.targetTypeName };
+  }
+  const nominalKind = impl.resolvedTargetType.kind;
+  if (nominalKind !== "StructType" && nominalKind !== "EnumType") {
+    return { kind: "Concrete", type: impl.resolvedTargetType };
+  }
+  return {
+    kind: "Nominal",
+    nominalKind,
+    name: impl.targetTypeName,
+    typeArguments: impl.targetTypeArguments,
+  };
 }
 
 /**
@@ -3352,13 +3440,27 @@ function slotsOverlap(
  * (`impl<T> Convert<T> for Box<T>`'s `T` means the same thing in both
  * positions) - two independently-fresh maps would let `T` resolve to a
  * different concrete type on each side without the two ever being compared.
+ *
+ * The blanket branch unifies each side's own target (`implTargetSlot`) into
+ * that same shared map rather than returning `true` outright - a blanket
+ * impl's target parameter can itself be constrained by the trait-argument
+ * check just resolved (`impl<T> Convert<T> for T`'s `T` is both its trait
+ * argument and its target), so `impl Convert<i32> for P` only actually
+ * overlaps it when `P` is also consistent with that same binding, not
+ * merely because the trait arguments matched.
  */
 function implsOverlap(a: RegisteredImpl, b: RegisteredImpl): boolean {
   const bindings = new Map<string, TaggedTargetArgSlot>();
   if (!tagAndOverlap(a.traitTypeArguments, b.traitTypeArguments, bindings)) {
     return false;
   }
-  if (a.isBlanket || b.isBlanket) return true;
+  if (a.isBlanket || b.isBlanket) {
+    return slotsOverlap(
+      tagTargetArgSlot(implTargetSlot(a), "a"),
+      tagTargetArgSlot(implTargetSlot(b), "b"),
+      bindings,
+    );
+  }
   if (a.targetTypeName !== b.targetTypeName) return false;
   return tagAndOverlap(a.targetTypeArguments, b.targetTypeArguments, bindings);
 }
@@ -3961,6 +4063,10 @@ function collectWitnessMethods(
         isImplProvided,
         impl,
       ),
+      blanketImplScopeId:
+        isImplProvided && impl?.isBlanket
+          ? some(targetArgSlotsIdentity(traitId, impl.traitTypeArguments))
+          : none(),
       ownWitnessParamCount,
     });
   }
@@ -8283,6 +8389,7 @@ function recordBlanketDispatchTarget(
   ctx: AnalysisContext,
   tokenId: number,
   traitId: string,
+  traitScopeId: string,
   methodName: string,
   boundWitnesses: readonly WitnessRef[],
 ): void {
@@ -8291,7 +8398,7 @@ function recordBlanketDispatchTarget(
   ctx.methodTargetTable.set(tokenId, {
     kind: "free",
     typeId: trait,
-    scopeId: traitId,
+    scopeId: traitScopeId,
     typeName: trait,
     traitName: some(trait),
     methodName,
@@ -8331,6 +8438,7 @@ function recordOperatorDispatchTarget(
         ctx,
         tokenId,
         trait,
+        witness.value.traitId,
         methodName,
         witness.value.boundWitnesses,
       );
@@ -9511,28 +9619,44 @@ function blanketMethodCandidates(
   return result;
 }
 
-/** Every non-blanket registered impl of `traitName` (bare) whose own target
- * matches `receiverTypeArguments` exactly - the per-instantiation impl count
- * `resolveMethodCall` needs to detect an ambiguity `methodIndex`/
+/** Every registered impl of `traitName` (bare) applicable to a receiver of
+ * `typeName<receiverTypeArguments>` - concrete (target matches exactly) or
+ * blanket (own bound satisfiable for this receiver, mirroring
+ * `findRegisteredImpl`'s own recursive blanket check) - the per-instantiation
+ * impl count `resolveMethodCall` needs to detect an ambiguity `methodIndex`/
  * `traitMethodSet` can't see on their own, since both resolve a trait's
- * methods once per trait declaration, not once per impl: two impls of the
- * same parameterized trait for the same target (`impl Tag<i32> for P` +
- * `impl Tag<str> for P` - coherence allows this, since their own trait
- * arguments differ) look identical to a single-impl case there. */
-function registeredImplsForReceiver(
+ * methods once per trait declaration, not once per impl. Two impls of the
+ * same parameterized trait applicable to the same receiver (`impl Tag<i32>
+ * for P` + `impl Tag<str> for P`, or two unconstrained blanket impls
+ * `impl<T> Tag<i32> for T` + `impl<T> Tag<str> for T` - coherence allows
+ * both, since their own trait arguments differ) look identical to a
+ * single-impl case there. */
+function applicableImplsForReceiver(
   ctx: AnalysisContext,
   typeName: string,
   traitName: string,
   receiverTypeArguments: readonly Semantics.Type[],
 ): readonly RegisteredImpl[] {
   return ctx.implRegistry.filter((impl) => {
-    if (impl.traitName !== traitName || impl.isBlanket) return false;
-    if (impl.targetTypeName !== typeName) return false;
-    const bindings = new Map<string, Semantics.Type>();
-    return requestedTraitArgumentsSatisfied(
-      impl.targetTypeArguments,
-      receiverTypeArguments,
-      bindings,
+    if (impl.traitName !== traitName) return false;
+    if (!impl.isBlanket) {
+      if (impl.targetTypeName !== typeName) return false;
+      const bindings = new Map<string, Semantics.Type>();
+      return requestedTraitArgumentsSatisfied(
+        impl.targetTypeArguments,
+        receiverTypeArguments,
+        bindings,
+      );
+    }
+    return impl.blanketBounds.every(
+      (bound) =>
+        findRegisteredImpl(
+          ctx,
+          typeName,
+          bound.name,
+          bound.typeArguments,
+          receiverTypeArguments,
+        ) !== undefined,
     );
   });
 }
@@ -9564,7 +9688,7 @@ function resolveMethodCall(
   if (traitIds.length === 1 && onlyTraitId !== undefined) {
     if (
       isNominalType(receiverType) &&
-      registeredImplsForReceiver(
+      applicableImplsForReceiver(
         ctx,
         receiverType.name,
         onlyTraitId,
@@ -9782,7 +9906,7 @@ function recordImplMethodTarget(
   ctx.implMethodTargetTable.set(decl.tokenId, {
     kind: "free",
     typeId: traitName.value,
-    scopeId: traitName.value,
+    scopeId: targetArgSlotsIdentity(traitName.value, traitTypeArguments),
     typeName: trait,
     traitName: some(trait),
     methodName: decl.signature.name.text,
@@ -9800,6 +9924,7 @@ function recordDropImpl(
   targetType: Semantics.Type,
   traitName: Option<string>,
   traitTypeArguments: readonly TargetArgSlot[],
+  targetTypeArguments: readonly TargetArgSlot[],
 ): void {
   if (
     decl.signature.name.text !== "drop" ||
@@ -9819,7 +9944,7 @@ function recordDropImpl(
     return;
   }
   const monomorphizedTypeId = monomorphizedTypeIdentity(targetType);
-  ctx.dropImplTable.set(monomorphizedTypeId, {
+  const target: FreeMethodTarget = {
     kind: "free",
     typeId: monomorphizedTypeId,
     scopeId: concreteMethodTargetScopeId(
@@ -9831,7 +9956,12 @@ function recordDropImpl(
     traitName: some(bareTypeName(traitName.value)),
     methodName: "drop",
     emitKind: "concrete",
-  });
+  };
+  const existing = ctx.dropImplTable.get(targetType.name) ?? [];
+  ctx.dropImplTable.set(targetType.name, [
+    ...existing,
+    { targetTypeArguments, target },
+  ]);
 }
 
 /** Records how a resolved call on a concrete receiver dispatches, for
@@ -9905,6 +10035,7 @@ function recordMethodTarget(
       ctx,
       methodTokenId,
       method.origin.traitId,
+      witness.value.traitId,
       methodName,
       witness.value.boundWitnesses,
     );
