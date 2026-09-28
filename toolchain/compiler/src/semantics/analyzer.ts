@@ -668,7 +668,12 @@ function validateTraitBoundNames(
   for (const bound of bounds) {
     if (bound.kind !== "PathTraitBound") continue;
     const name = bound.path.segments.at(-1) ?? "";
-    if (traitNameIsRegistered(ctx, name)) continue;
+    if (traitNameIsRegistered(ctx, name)) {
+      for (const arg of bound.typeArguments) {
+        validateSlice1Type(ctx, arg, arg.tokenId);
+      }
+      continue;
+    }
     emitError(ctx, { kind: "SemCannotFindTrait", name }, bound.tokenId);
   }
 }
@@ -3637,12 +3642,9 @@ function nominalTypeArguments(type: Semantics.Type): readonly Semantics.Type[] {
  * `TargetArgSlot`'s own `Wildcard` matching for that filter instead. Two
  * distinct instantiations sharing one bare identity is exactly what let
  * `impl Draw for Pair<i32>` and `impl Draw for Pair<str>` silently collapse
- * onto the same emitted free function / hoisted witness const. Exported so
- * `jsim.ts`'s `structDropFn` can compute the identical key its own read of
- * `AnalysisResult.dropImpls` needs - the write side (`recordDropImpl`) and
- * read side must never drift onto two different algorithms.
+ * onto the same emitted free function / hoisted witness const.
  */
-export function monomorphizedTypeIdentity(type: Semantics.Type): string {
+function monomorphizedTypeIdentity(type: Semantics.Type): string {
   return isNominalType(type)
     ? monomorphizeIdentity(type.name, type.typeArguments)
     : typeIdentity(type);
@@ -4019,6 +4021,18 @@ function blanketMethodBoundWitnesses(
   return some(boundWitnesses);
 }
 
+/** `WitnessMethod.blanketImplScopeId` - `some(...)` under the same condition
+ * as `blanketMethodBoundWitnesses`, so the two always agree on whether a
+ * method is blanket-provided. */
+function resolveBlanketImplScopeId(
+  traitId: string,
+  isImplProvided: boolean,
+  impl: RegisteredImpl | undefined,
+): Option<string> {
+  if (!isImplProvided || !impl?.isBlanket) return none();
+  return some(targetArgSlotsIdentity(traitId, impl.traitTypeArguments));
+}
+
 /** Walks one supertrait DAG, filling `byName`. `seen` and `byName` are shared
  * across the whole walk - not copied per branch - so a diamond's shared
  * ancestor is visited (and its methods recorded) exactly once. */
@@ -4063,10 +4077,11 @@ function collectWitnessMethods(
         isImplProvided,
         impl,
       ),
-      blanketImplScopeId:
-        isImplProvided && impl?.isBlanket
-          ? some(targetArgSlotsIdentity(traitId, impl.traitTypeArguments))
-          : none(),
+      blanketImplScopeId: resolveBlanketImplScopeId(
+        traitId,
+        isImplProvided,
+        impl,
+      ),
       ownWitnessParamCount,
     });
   }
@@ -4750,8 +4765,10 @@ function registerOneImpl(
   topLevelStructEnumNames: ReadonlySet<string>,
 ): RegisteredImpl | undefined {
   const decl = buildImplDecl(item);
+  pushGenericParams(ctx, item.generics, item.whereClause);
   validateGenericParamBounds(ctx, item.generics, item.whereClause);
   validateGenericParamDefaults(ctx, item.generics);
+  popGenericParams(ctx);
   const traitRef = decl.traitRef;
   const bareTargetTypeName = decl.targetTypeName;
   if (!isSome(traitRef) || !isSome(bareTargetTypeName)) return undefined;
@@ -11763,10 +11780,7 @@ function analyzeStructExpression(
     );
     checkedFields = result.fields;
     resolvedType = withTypeArguments(structDecl.type, result.typeArguments);
-  } else if (
-    structDecl.body.kind === "Unit" &&
-    structExpression.fields.length > 0
-  ) {
+  } else if (structDecl.body.kind === "Unit") {
     for (const field of structExpression.fields) {
       emitError(
         ctx,
@@ -11778,6 +11792,19 @@ function analyzeStructExpression(
         field.name.tokenId,
       );
     }
+    resolvedType = withTypeArguments(
+      structDecl.type,
+      checkGenericUnitStructConstruction(
+        ctx,
+        structExpression.tokenId,
+        structExpression.typeArguments,
+        structName,
+        {
+          params: structDecl.generics,
+          defaults: structDecl.genericParamDefaults,
+        },
+      ),
+    );
   }
 
   return {
@@ -12007,6 +12034,49 @@ function analyzeStructNamedFields(
   });
 
   return { fields: checkedFields, typeArguments };
+}
+
+/** `analyzeStructNamedFields`'s own turbofish/default-then-unsolved-check
+ * tail (its final `typeArguments` computation), extracted for a unit-bodied
+ * struct - there are no fields to iterate for per-field inference, so
+ * turbofish and declared defaults are the only two sources a unit
+ * construction's own type arguments can come from.
+ *
+ * Currently unreachable from any valid program: a unit struct has zero
+ * fields, so `checkUnusedGenericParams` (which does not count a
+ * bound-only or default-only mention as "used" - see the "Generic
+ * parameters, bounds, and where clauses" note in this package's CLAUDE.md)
+ * always rejects a unit struct's own declared generic parameter as unused
+ * before construction is ever analyzed. Kept in step with
+ * `analyzeStructNamedFields`'s identical field-less tail anyway, so the
+ * two don't silently diverge if that rejection is ever loosened. */
+function checkGenericUnitStructConstruction(
+  ctx: AnalysisContext,
+  tokenId: number,
+  typeArgs: readonly Parser.Type[],
+  structName: string,
+  generics: DeclGenerics,
+): readonly Semantics.Type[] {
+  const bindings: GenericBindings = new Map();
+  seedStructTurbofishBindings(
+    ctx,
+    tokenId,
+    typeArgs,
+    structName,
+    generics,
+    bindings,
+  );
+  return generics.params.map((paramName): Semantics.Type => {
+    const binding = bindingOrDefault(
+      paramName,
+      generics.defaults,
+      bindings,
+      tokenId,
+    );
+    if (binding !== undefined) return binding.type;
+    emitError(ctx, { kind: "SemCannotInferGenericParam", paramName }, tokenId);
+    return { kind: "UnitType", tokenId };
+  });
 }
 
 /**

@@ -8336,6 +8336,46 @@ describe("trait and impl declarations", (): void => {
         "cannot find trait `Missing` in this scope",
       );
     });
+
+    it("rejects a bound's own type argument naming an unknown type", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        fn f<T: Convert<Missing>>(x: T) {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "cannot find type `Missing` in this scope",
+      );
+    });
+
+    it("resolves a bound's own type argument naming a sibling generic parameter", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        fn f<T: Convert<U>, U>(x: T) {}
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects an impl bound's own type argument naming an unknown type", (): void => {
+      const result = diagnose(`
+        trait Marker {}
+        trait Convert<T> { fn convert(&self) -> T; }
+        impl<T: Convert<Missing>> Marker for T {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "cannot find type `Missing` in this scope",
+      );
+    });
+
+    it("resolves an impl bound's own type argument naming a sibling generic parameter", (): void => {
+      const result = diagnose(`
+        trait Marker {}
+        trait Convert<T> { fn convert(&self) -> T; }
+        impl<T: Convert<U>, U> Marker for T {}
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
   });
 
   describe("duplicate trait declarations", (): void => {
