@@ -9395,6 +9395,11 @@ function buildMethodIndex(
       ctx,
       genericParamBoundNames(item.generics, item.whereClause),
     );
+    const traitRefTypeArguments = isSome(item.traitRef)
+      ? item.traitRef.value.typeArguments.map((arg) =>
+          resolveSlice1Type(ctx, arg, arg.tokenId),
+        )
+      : [];
     popGenericParams(ctx);
     if (isSome(shallow.traitRef)) {
       const traitId = resolveTraitIdentity(shallow.traitRef.value.name, scope);
@@ -9406,6 +9411,7 @@ function buildMethodIndex(
           implGenericParamPositions,
           targetTypeArguments,
           implGenericParamBounds,
+          traitRefTypeArguments,
         ),
       );
     } else {
@@ -9482,6 +9488,7 @@ function indexTraitImplMethods(
     string,
     readonly Semantics.BoundTraitRef[]
   >,
+  traitRefTypeArguments: readonly Semantics.Type[] = [],
 ): readonly IndexedMethod[] {
   const traitMethods = traitMethodSet(ctx, traitId);
   if (!isNominalType(targetType)) {
@@ -9490,12 +9497,23 @@ function indexTraitImplMethods(
   const associatedTypes =
     findRegisteredImpl(ctx, targetType, traitId, [])?.associatedTypeDefs ??
     new Map<string, Semantics.Type>();
+  const traitGenericParams = ctx.traitRegistry.get(traitId)?.genericParams;
+  const substituteTraitMethodType = (type: Semantics.Type): Semantics.Type =>
+    substituteSelfType(
+      traitGenericParams === undefined
+        ? type
+        : substituteTraitGenericParams(
+            type,
+            traitGenericParams,
+            traitRefTypeArguments,
+          ),
+      targetType,
+      associatedTypes,
+    );
   return traitMethods.map((m): IndexedMethod => ({
     ...m,
-    params: m.params.map((p) =>
-      substituteSelfType(p, targetType, associatedTypes),
-    ),
-    returnType: substituteSelfType(m.returnType, targetType, associatedTypes),
+    params: m.params.map(substituteTraitMethodType),
+    returnType: substituteTraitMethodType(m.returnType),
     implGenericParamPositions,
     targetTypeArguments,
     genericParamBounds: mergedGenericParamBounds(
@@ -9503,6 +9521,25 @@ function indexTraitImplMethods(
       m.genericParamBounds,
     ),
   }));
+}
+
+/** `params`/`returnType` reference a trait's own declared generic parameter
+ * names directly (`trait Convert<T> { fn convert(&self) -> T; }`'s `T`) -
+ * distinct from `Self`, which `substituteSelfType` already handles.
+ * `traitRefTypeArguments` is the impl's own requested instantiation
+ * (`impl Convert<i32> for P`'s `[i32]`), positionally zipped against the
+ * trait's declared names. */
+function substituteTraitGenericParams(
+  type: Semantics.Type,
+  traitGenericParams: readonly string[],
+  traitRefTypeArguments: readonly Semantics.Type[],
+): Semantics.Type {
+  const bindings: GenericBindings = new Map();
+  for (const [i, name] of traitGenericParams.entries()) {
+    const arg = traitRefTypeArguments[i];
+    if (arg !== undefined) bindings.set(name, { type: arg, tokenId: 0 });
+  }
+  return substituteGenericType(type, bindings);
 }
 
 function indexAssociatedConsts(

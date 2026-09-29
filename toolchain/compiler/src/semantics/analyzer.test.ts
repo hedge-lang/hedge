@@ -4726,6 +4726,18 @@ describe("associated types and trait projections", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
+    it("substitutes the trait's own generic parameter with the impl's requested instantiation in an indexed method's return type", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct P { v: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.v } }
+        fn main() {
+          let r: i32 = P { v: 1 }.convert();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("does not flag two instantiations of a parameterized trait targeting different structs as ambiguous", (): void => {
       const result = diagnose(`
         trait Tag<T> { fn tag(&self) -> str; }
