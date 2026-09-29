@@ -539,6 +539,22 @@ describe("method-call codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["7", "0"]);
   });
 
+  it("suffixes a generated generic inherent method free-function that collides with a user function", (): void => {
+    const js = emittedJs(`
+      struct Wrapper<T> { value: T }
+      impl<T> Wrapper<T> { fn get(&self) -> i32 { 7 } }
+      fn Wrapper$get() -> i32 { 0 }
+      fn main() {
+        let w = Wrapper { value: 7 };
+        print(w.get());
+        print(Wrapper$get());
+      }
+    `);
+    expect(js).toContain("function Wrapper$get_2(self)");
+    expect(js).toContain("Wrapper$get_2(w)");
+    expect(runEmittedJs(js)).toEqual(["7", "0"]);
+  });
+
   it("alpha-renames a local that collides with a generated method free-function's name, and still dispatches to the method", (): void => {
     const js = emittedJs(`
       struct Point { x: i32 }
@@ -1378,6 +1394,19 @@ describe("generic witness codegen", (): void => {
       fn main() { let p = P { x: 0 }; outer(&p); }
     `);
     expect(runEmittedJs(js)).toEqual(["int", "string"]);
+  });
+
+  it("dispatches through the requested instantiation's own witness methods, not an earlier unrelated one", (): void => {
+    const js = emittedJs(`
+      trait Tag<T> { fn tag(&self) -> str { "default" } }
+      trait Show { fn show(&self) -> str; }
+      struct P { v: i32 }
+      impl Tag<i32> for P {}
+      impl Tag<str> for P { fn tag(&self) -> str { "string" } }
+      impl<T: Tag<str>> Show for T { fn show(&self) -> str { self.tag() } }
+      fn main() { let p = P { v: 0 }; print(p.show()); }
+    `);
+    expect(runEmittedJs(js)).toEqual(["string"]);
   });
 
   it("emits one JS function for a bounded generic instantiated at two concrete types", (): void => {
