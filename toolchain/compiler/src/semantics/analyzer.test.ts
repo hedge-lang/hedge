@@ -7017,6 +7017,23 @@ describe("trait and impl declarations", (): void => {
       `);
       expect(result.diagnostics).toEqual([]);
     });
+
+    it("rejects a blanket impl's reflexive bound at a call site whose requested instantiation disagrees with the receiver", (): void => {
+      const result = diagnose(`
+        trait Convert<T> {}
+        impl<T> Convert<T> for T {}
+        struct P { v: i32 }
+        fn needs<X: Convert<i32>>(x: &X) {}
+        fn main() {
+          let p = P { v: 1 };
+          needs(&p);
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `P: Convert<i32>` is not satisfied",
+      );
+    });
   });
 
   describe("parameterized trait-bound instantiation coherence and selection", (): void => {

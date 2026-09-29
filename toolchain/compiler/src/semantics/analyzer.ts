@@ -3845,6 +3845,22 @@ function findRegisteredImpl(
         )
       );
     }
+    // A blanket impl's own target is its own bare parameter (`T` in
+    // `impl<T> Convert<T> for T`) - it must unify with `receiverType`
+    // through the same `bindings` the trait-argument check above just
+    // populated, or a trait argument bound to something other than the
+    // receiver (`impl<T> Convert<T> for T` against `P: Convert<i32>`,
+    // `P != i32`) is wrongly accepted since an unbound target was never
+    // checked against anything.
+    if (
+      !slotSatisfiesType(
+        { kind: "Wildcard", paramName: impl.targetTypeName },
+        receiverType,
+        bindings,
+      )
+    ) {
+      return false;
+    }
     return impl.blanketBounds.every(
       (bound) =>
         findRegisteredImpl(
