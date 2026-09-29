@@ -3943,12 +3943,22 @@ function resolveTraitBoundForTypeName(
       boundWitnesses,
     });
   }
+  // A non-blanket impl's free function is emitted once under its own
+  // declared target pattern (`Wrapper<T>` for `impl<T> Clone for
+  // Wrapper<T>`), shared across every instantiation - keying `typeId` by
+  // the receiver's own concrete args instead (`Wrapper<Num>`) would mismatch
+  // that reservation for any impl whose target isn't fully concrete, the
+  // same collision class the trait-argument fold above already closed.
+  const implTargetInstanceId = targetArgSlotsIdentity(
+    typeName,
+    impl.targetTypeArguments,
+  );
   return some({
     kind: "Impl",
     traitName: bareTypeName(traitName),
     traitId: traitInstanceId,
     typeName: bareTypeName(typeName),
-    typeId: monomorphizedTypeId,
+    typeId: implTargetInstanceId,
     implTokenId: impl.tokenId,
     methods: witnessMethods(ctx, traitName, typeName, receiverTypeArguments),
   });
@@ -8473,11 +8483,17 @@ function recordOperatorDispatchTarget(
       );
       return;
     }
+    // Only `Impl` is reachable here - `resolveTraitBoundForTypeName` never
+    // returns `Forwarded`/`Primitive` (a concrete nominal operand, already
+    // confirmed above, is neither an abstract bound nor a primitive), and
+    // `Composed` already returned - but the type is the general `WitnessRef`
+    // union, so narrow explicitly before reading `Impl`-only fields.
+    if (witness.value.kind !== "Impl") return;
     const monomorphizedTypeId = monomorphizedTypeIdentity(operandType);
     ctx.methodTargetTable.set(tokenId, {
       kind: "free",
       typeId: monomorphizedTypeId,
-      scopeId: monomorphizedTypeId,
+      scopeId: `${witness.value.typeId}#${witness.value.traitId}`,
       typeName: bareTypeName(operandType.name),
       traitName: some(bareTypeName(trait)),
       methodName,
@@ -10066,7 +10082,7 @@ function recordMethodTarget(
   ctx.methodTargetTable.set(methodTokenId, {
     kind: "free",
     typeId: monomorphizedTypeId,
-    scopeId: `${monomorphizedTypeId}#${witness.value.traitId}`,
+    scopeId: `${witness.value.typeId}#${witness.value.traitId}`,
     typeName: bareTypeName(receiverType.name),
     traitName: some(trait),
     methodName,

@@ -1591,6 +1591,37 @@ describe("generic witness codegen", (): void => {
     expect(countOccurrences(js, 'return "string";')).toBe(1);
   });
 
+  it("dispatches a concrete-receiver method call to a generic-target impl's own reserved name, not a colliding user function", (): void => {
+    const js = emittedJs(`
+      struct Wrapper<T> { v: T }
+      trait Greet { fn hello(&self) -> i32; }
+      impl<T> Greet for Wrapper<T> { fn hello(&self) -> i32 { 1 } }
+      fn Wrapper$Greet$hello() -> i32 { 99 }
+      fn main() {
+        let w = Wrapper { v: 5 };
+        print(w.hello());
+        print(Wrapper$Greet$hello());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["1", "99"]);
+  });
+
+  it("dispatches a witness slot for a generic-target impl's own reserved name, not a colliding user function", (): void => {
+    const js = emittedJs(`
+      struct Wrapper<T> { v: T }
+      trait Greet { fn hello(&self) -> i32; }
+      impl<T> Greet for Wrapper<T> { fn hello(&self) -> i32 { 1 } }
+      fn Wrapper$Greet$hello() -> i32 { 99 }
+      fn call_hello<G: Greet>(g: &G) -> i32 { g.hello() }
+      fn main() {
+        let w = Wrapper { v: 5 };
+        print(call_hello(&w));
+        print(Wrapper$Greet$hello());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["1", "99"]);
+  });
+
   it("does not collide a blanket impl's free function with another blanket impl of a shadowed same-named trait", (): void => {
     const result = compile(`
       trait Marker1 {}
@@ -2751,6 +2782,25 @@ describe("+ / & / << on a type with an operator-trait impl", (): void => {
     expect(js).toContain("Point$Add$add(a, b)");
     expect(js).not.toContain("a.add(b)");
     expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
+  it("dispatches an operator on a generic-target impl's own reserved name, not a colliding user function", (): void => {
+    const js = emittedJs(`
+      struct Wrapper<T> { v: T }
+      impl<T> Add for Wrapper<T> {
+        type Output = Self;
+        fn add(self, rhs: Self) -> Self::Output { self }
+      }
+      fn Wrapper$Add$add() -> i32 { 99 }
+      fn main() {
+        let a = Wrapper { v: 3 };
+        let b = Wrapper { v: 4 };
+        let c = a + b;
+        print(c.v);
+        print(Wrapper$Add$add());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["3", "99"]);
   });
 
   it("lowers `&` on a struct to a call of the impl's `bitand` free function and runs it", (): void => {
