@@ -12606,9 +12606,10 @@ function constructionResultType(
   declaredType: Semantics.Type,
   typeArguments: readonly Semantics.Type[],
 ): Semantics.Type {
-  return expectedTypeConflicted && expectedType !== undefined
-    ? expectedType
-    : withTypeArguments(declaredType, typeArguments);
+  if (expectedTypeConflicted && expectedType !== undefined) {
+    return expectedType;
+  }
+  return withTypeArguments(declaredType, typeArguments);
 }
 
 /**
