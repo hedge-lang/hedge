@@ -6293,6 +6293,19 @@ describe("generic struct/enum instantiation identity", (): void => {
       "call to `Pair::Has` type mismatch: expected `Pair<i32>`, found `Pair<str>`",
     );
   });
+
+  it("reports exactly one diagnostic when a unit-variant construction's own turbofish conflicts with an outer expected type", (): void => {
+    const result = diagnose(`
+      enum Pair<T> { Has, Other(T) }
+      fn main() {
+        let p: Pair<str> = Pair::Has::<i32>();
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "call to `Pair::Has` type mismatch: expected `Pair<i32>`, found `Pair<str>`",
+    );
+  });
 });
 
 describe("generic substitution through a nominal type's own type arguments", (): void => {
