@@ -12614,6 +12614,22 @@ function calleeName(call: Parser.CallExpression): string {
   return "this call";
 }
 
+/** A positional construction's own result type - `expectedType` itself when
+ * `checkGenericPositionalConstruction` already reported a conflict against
+ * it (matching `analyzeCall`'s identical handling, see
+ * `expectedTypeConflicted`'s own doc comment), otherwise the declared type
+ * substituted with the resolved type arguments. */
+function constructionResultType(
+  expectedTypeConflicted: boolean,
+  expectedType: Semantics.Type | undefined,
+  declaredType: Semantics.Type,
+  typeArguments: readonly Semantics.Type[],
+): Semantics.Type {
+  return expectedTypeConflicted && expectedType !== undefined
+    ? expectedType
+    : withTypeArguments(declaredType, typeArguments);
+}
+
 /**
  * `Message::Move(1, 2)`-shaped construction calls. `none()` when
  * `call.callee` isn't a two-segment path naming a known enum + variant,
@@ -12656,17 +12672,23 @@ function analyzeEnumVariantCallConstruction(
       );
       return some({ type: enumDecl.type, args: [...args] });
     }
-    const { typeArguments } = checkGenericPositionalConstruction(
-      ctx,
-      call,
-      { kindLabel: "variant", name: variantName },
-      [],
-      [],
-      { params: enumDecl.generics, defaults: enumDecl.genericParamDefaults },
-      { declaredType: enumDecl.type, expectedType },
-    );
+    const { typeArguments, expectedTypeConflicted } =
+      checkGenericPositionalConstruction(
+        ctx,
+        call,
+        { kindLabel: "variant", name: variantName },
+        [],
+        [],
+        { params: enumDecl.generics, defaults: enumDecl.genericParamDefaults },
+        { declaredType: enumDecl.type, expectedType },
+      );
     return some({
-      type: withTypeArguments(enumDecl.type, typeArguments),
+      type: constructionResultType(
+        expectedTypeConflicted,
+        expectedType,
+        enumDecl.type,
+        typeArguments,
+      ),
       args: [...args],
     });
   }
@@ -12678,18 +12700,26 @@ function analyzeEnumVariantCallConstruction(
     );
     return some({ type: enumDecl.type, args: [...args] });
   }
-  const { args: checkedArgs, typeArguments } =
-    checkGenericPositionalConstruction(
-      ctx,
-      call,
-      { kindLabel: "variant", name: variantName },
-      variant.body.value.fields,
-      args,
-      { params: enumDecl.generics, defaults: enumDecl.genericParamDefaults },
-      { declaredType: enumDecl.type, expectedType },
-    );
+  const {
+    args: checkedArgs,
+    typeArguments,
+    expectedTypeConflicted,
+  } = checkGenericPositionalConstruction(
+    ctx,
+    call,
+    { kindLabel: "variant", name: variantName },
+    variant.body.value.fields,
+    args,
+    { params: enumDecl.generics, defaults: enumDecl.genericParamDefaults },
+    { declaredType: enumDecl.type, expectedType },
+  );
   return some({
-    type: withTypeArguments(enumDecl.type, typeArguments),
+    type: constructionResultType(
+      expectedTypeConflicted,
+      expectedType,
+      enumDecl.type,
+      typeArguments,
+    ),
     args: checkedArgs,
   });
 }
@@ -13238,6 +13268,40 @@ interface GenericConstructionContext {
   readonly expectedType: Semantics.Type | undefined;
 }
 
+/** Substitutes `declaredType`'s own generic parameters with abstract
+ * per-param `NamedType`s, then seeds `bindings` by unifying that against
+ * `expectedType` - `checkGenericPositionalConstruction`'s own
+ * turbofish-then-expected-type step, factored out to keep that function's
+ * branch count under the complexity cap. Returns whether a conflict was
+ * already reported, the same signal `seedExpectedReturnType` itself
+ * returns. */
+function seedConstructionExpectedType(
+  ctx: AnalysisContext,
+  call: Parser.CallExpression,
+  declaredType: Semantics.Type,
+  expectedType: Semantics.Type,
+  genericParams: readonly string[],
+  bindings: GenericBindings,
+): boolean {
+  const abstractDeclaredType = withTypeArguments(
+    declaredType,
+    genericParams.map((name): Semantics.Type => ({
+      kind: "NamedType",
+      tokenId: call.tokenId,
+      path: { absolute: false, segments: [name] },
+    })),
+  );
+  return seedExpectedReturnType(
+    ctx,
+    call.tokenId,
+    calleeName(call),
+    abstractDeclaredType,
+    expectedType,
+    new Set(genericParams),
+    bindings,
+  );
+}
+
 /** Seeds turbofish, then an outer expected type (post Layer A, a
  * constructed value's own type carries real type arguments, so this can
  * unify the same way `analyzeCall` seeds an ordinary function's own
@@ -13259,6 +13323,12 @@ function checkGenericPositionalConstruction(
 ): {
   readonly args: Semantics.Expression[];
   readonly typeArguments: readonly Semantics.Type[];
+  /** `true` when `seedExpectedReturnType` already reported a conflict
+   * between the constructed type and an outer expected type - the caller
+   * reports the construction's own type as `expectedType` itself in that
+   * case (matching `analyzeCall`'s identical handling), so the enclosing
+   * `let`/return reconciliation doesn't double-report the same conflict. */
+  readonly expectedTypeConflicted: boolean;
 } {
   const { declaredType, expectedType } = context;
   const turbofishBindings: GenericBindings = new Map();
@@ -13269,25 +13339,16 @@ function checkGenericPositionalConstruction(
     generics.defaults,
     turbofishBindings,
   );
-  if (expectedType !== undefined) {
-    const abstractDeclaredType = withTypeArguments(
-      declaredType,
-      generics.params.map((name): Semantics.Type => ({
-        kind: "NamedType",
-        tokenId: call.tokenId,
-        path: { absolute: false, segments: [name] },
-      })),
-    );
-    seedExpectedReturnType(
+  const expectedTypeConflicted =
+    expectedType !== undefined &&
+    seedConstructionExpectedType(
       ctx,
-      call.tokenId,
-      calleeName(call),
-      abstractDeclaredType,
+      call,
+      declaredType,
       expectedType,
-      new Set(generics.params),
+      generics.params,
       turbofishBindings,
     );
-  }
   const { args: checkedArgs, bindings } = checkPositionalCallArgs(
     ctx,
     call,
@@ -13312,7 +13373,7 @@ function checkGenericPositionalConstruction(
     );
     return { kind: "UnitType", tokenId: call.tokenId };
   });
-  return { args: checkedArgs, typeArguments };
+  return { args: checkedArgs, typeArguments, expectedTypeConflicted };
 }
 
 /** Seeds `bindings` from a calling context's already-known expected type - a
@@ -13964,22 +14025,30 @@ function analyzeTupleStructCallConstruction(
     );
     return some({ callee, type: structDecl.type, args: [...args] });
   }
-  const { args: checkedArgs, typeArguments } =
-    checkGenericPositionalConstruction(
-      ctx,
-      call,
-      { kindLabel: "struct", name: structName },
-      structDecl.body.fields,
-      args,
-      {
-        params: structDecl.generics,
-        defaults: structDecl.genericParamDefaults,
-      },
-      { declaredType: structDecl.type, expectedType },
-    );
+  const {
+    args: checkedArgs,
+    typeArguments,
+    expectedTypeConflicted,
+  } = checkGenericPositionalConstruction(
+    ctx,
+    call,
+    { kindLabel: "struct", name: structName },
+    structDecl.body.fields,
+    args,
+    {
+      params: structDecl.generics,
+      defaults: structDecl.genericParamDefaults,
+    },
+    { declaredType: structDecl.type, expectedType },
+  );
   return some({
     callee,
-    type: withTypeArguments(structDecl.type, typeArguments),
+    type: constructionResultType(
+      expectedTypeConflicted,
+      expectedType,
+      structDecl.type,
+      typeArguments,
+    ),
     args: checkedArgs,
   });
 }

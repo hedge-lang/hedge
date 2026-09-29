@@ -6267,6 +6267,32 @@ describe("generic struct/enum instantiation identity", (): void => {
     assert(type.kind === "EnumType", "expected an EnumType");
     expect(type.typeArguments).toEqual([{ kind: "PrimitiveI64Type" }]);
   });
+
+  it("reports exactly one diagnostic when a tuple-struct construction's own turbofish conflicts with an outer expected type", (): void => {
+    const result = diagnose(`
+      struct Pair<T>(T);
+      fn main() {
+        let p: Pair<str> = Pair::<i32>(5);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "call to `Pair` type mismatch: expected `Pair<i32>`, found `Pair<str>`",
+    );
+  });
+
+  it("reports exactly one diagnostic when an enum-variant construction's own turbofish conflicts with an outer expected type", (): void => {
+    const result = diagnose(`
+      enum Pair<T> { Has(T) }
+      fn main() {
+        let p: Pair<str> = Pair::Has::<i32>(5);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "call to `Pair::Has` type mismatch: expected `Pair<i32>`, found `Pair<str>`",
+    );
+  });
 });
 
 describe("generic substitution through a nominal type's own type arguments", (): void => {
