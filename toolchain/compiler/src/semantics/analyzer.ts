@@ -11719,7 +11719,11 @@ function analyzeEnumVariantStructConstruction(
     );
     return some({ type: enumDecl.type, fields: [...fields] });
   }
-  const { fields: checkedFields, typeArguments } = analyzeStructNamedFields(
+  const {
+    fields: checkedFields,
+    typeArguments,
+    expectedTypeConflicted,
+  } = analyzeStructNamedFields(
     ctx,
     variantName,
     fields,
@@ -11735,7 +11739,12 @@ function analyzeEnumVariantStructConstruction(
     { params: enumDecl.generics, defaults: enumDecl.genericParamDefaults },
   );
   return some({
-    type: withTypeArguments(enumDecl.type, typeArguments),
+    type: constructionResultType(
+      expectedTypeConflicted,
+      expected,
+      enumDecl.type,
+      typeArguments,
+    ),
     fields: checkedFields,
   });
 }
@@ -11843,7 +11852,12 @@ function analyzeStructExpression(
       },
     );
     checkedFields = result.fields;
-    resolvedType = withTypeArguments(structDecl.type, result.typeArguments);
+    resolvedType = constructionResultType(
+      result.expectedTypeConflicted,
+      expected,
+      structDecl.type,
+      result.typeArguments,
+    );
   } else if (structDecl.body.kind === "Unit") {
     for (const field of structExpression.fields) {
       emitError(
@@ -11967,6 +11981,13 @@ function analyzeStructNamedFields(
 ): {
   readonly fields: Semantics.FieldInit[];
   readonly typeArguments: readonly Semantics.Type[];
+  /** `true` when `seedExpectedReturnType` already reported a conflict
+   * between the constructed type and an outer expected type - mirrors
+   * `checkGenericPositionalConstruction`'s own field of the same name and
+   * purpose (see its doc comment); the caller feeds this into
+   * `constructionResultType` instead of double-reporting the same conflict
+   * via the enclosing `let`/return reconciliation. */
+  readonly expectedTypeConflicted: boolean;
 } {
   const declaredFields = new Map(
     namedFieldsBody.fields.map((f): [string, Semantics.StructField] => [
@@ -11984,25 +12005,24 @@ function analyzeStructNamedFields(
     generics,
     bindings,
   );
-  if (site.expectedType !== undefined) {
-    const abstractDeclaredType = withTypeArguments(
-      site.declaredType,
-      generics.params.map((name): Semantics.Type => ({
-        kind: "NamedType",
-        tokenId: site.tokenId,
-        path: { absolute: false, segments: [name] },
-      })),
-    );
+  const expectedTypeConflicted =
+    site.expectedType !== undefined &&
     seedExpectedReturnType(
       ctx,
       site.tokenId,
       structName,
-      abstractDeclaredType,
+      withTypeArguments(
+        site.declaredType,
+        generics.params.map((name): Semantics.Type => ({
+          kind: "NamedType",
+          tokenId: site.tokenId,
+          path: { absolute: false, segments: [name] },
+        })),
+      ),
       site.expectedType,
       genericNames,
       bindings,
     );
-  }
 
   const seenFields = new Set<string>();
   const checkedFields = fields.map((field): Semantics.FieldInit => {
@@ -12127,7 +12147,7 @@ function analyzeStructNamedFields(
     return { kind: "UnitType", tokenId: site.tokenId };
   });
 
-  return { fields: checkedFields, typeArguments };
+  return { fields: checkedFields, typeArguments, expectedTypeConflicted };
 }
 
 /** `analyzeStructNamedFields`'s own turbofish/default-then-unsolved-check

@@ -6280,6 +6280,32 @@ describe("generic struct/enum instantiation identity", (): void => {
     expect(type.typeArguments).toEqual([{ kind: "PrimitiveI64Type" }]);
   });
 
+  it("reports exactly one diagnostic when a named-field struct construction's own turbofish conflicts with an outer expected type", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn main() {
+        let w: Wrapper<str> = Wrapper::<i32> { value: 1 };
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "call to `Wrapper` type mismatch: expected `Wrapper<i32>`, found `Wrapper<str>`",
+    );
+  });
+
+  it("reports exactly one diagnostic when a named-field enum-variant construction's own turbofish conflicts with an outer expected type", (): void => {
+    const result = diagnose(`
+      enum Wrapper<T> { Has { value: T } }
+      fn main() {
+        let w: Wrapper<str> = Wrapper::Has::<i32> { value: 1 };
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "call to `Has` type mismatch: expected `Wrapper<i32>`, found `Wrapper<str>`",
+    );
+  });
+
   it("reports exactly one diagnostic when a tuple-struct construction's own turbofish conflicts with an outer expected type", (): void => {
     const result = diagnose(`
       struct Pair<T>(T);
