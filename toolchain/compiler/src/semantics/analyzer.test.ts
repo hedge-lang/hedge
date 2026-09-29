@@ -7002,6 +7002,21 @@ describe("trait and impl declarations", (): void => {
         "conflicting implementations of trait `Convert` for type `P`",
       );
     });
+
+    it("resolves a blanket impl's own self-referential bound by substituting the concrete receiver, not the impl's own abstract parameter", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        trait Show { fn show(&self) -> bool; }
+        struct P { v: i32 }
+        impl Convert<P> for P { fn convert(&self) -> P { P { v: self.v } } }
+        impl<T: Convert<T>> Show for T { fn show(&self) -> bool { true } }
+        fn main() {
+          let p = P { v: 1 };
+          p.show();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
   });
 
   describe("parameterized trait-bound instantiation coherence and selection", (): void => {

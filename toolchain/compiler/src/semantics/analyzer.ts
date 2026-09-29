@@ -3558,10 +3558,9 @@ function resolveTraitBound(
   }
   return resolveTraitBoundForTypeName(
     ctx,
-    typeIdentity(type),
+    type,
     traitName,
     requestedTypeArguments,
-    nominalTypeArguments(type),
   );
 }
 
@@ -3775,20 +3774,37 @@ function slotSatisfiesType(
  * P::Convert" and reject it as cyclic, even though the two are unrelated
  * instantiations and the chain is perfectly acyclic. */
 function boundVisitingKey(
-  typeName: string,
-  receiverTypeArguments: readonly Semantics.Type[],
+  receiverType: Semantics.Type,
   traitName: string,
   requestedTypeArguments: readonly Semantics.Type[],
 ): string {
-  return `${monomorphizeIdentity(typeName, receiverTypeArguments)}::${monomorphizeIdentity(traitName, requestedTypeArguments)}`;
+  return `${monomorphizedTypeIdentity(receiverType)}::${monomorphizeIdentity(traitName, requestedTypeArguments)}`;
+}
+
+/** A blanket impl's own bound arguments (`impl<T: Convert<T>> Show for T`'s
+ * `Convert<T>`) are declared against the impl's own abstract parameter, not
+ * the concrete type being tested - substituting `receiverType` in for that
+ * parameter (`impl.targetTypeName`, a blanket impl's own bare parameter
+ * name) before checking or composing the bound is what makes a
+ * self-referential bound like this resolve against `impl Convert<P> for P`
+ * instead of futilely requesting the never-registered `Convert<T>`. */
+function substituteBlanketBoundArguments(
+  impl: RegisteredImpl,
+  receiverType: Semantics.Type,
+  typeArguments: readonly Semantics.Type[],
+): readonly Semantics.Type[] {
+  const bindings: GenericBindings = new Map([
+    [impl.targetTypeName, { type: receiverType, tokenId: 0 }],
+  ]);
+  return typeArguments.map((arg) => substituteGenericType(arg, bindings));
 }
 
 /**
- * Finds the registered impl satisfying `typeName: traitName<requestedTypeArguments>`
+ * Finds the registered impl satisfying `receiverType: traitName<requestedTypeArguments>`
  * - a concrete registered impl, or a blanket impl whose own bound is
  * satisfied (checked recursively, since a blanket impl's own `A` in
  * `impl<T: A> B for T` may itself be satisfied only through another blanket
- * impl). `typeName` is always concrete here, so this never revisits
+ * impl). `receiverType` is always concrete here, so this never revisits
  * `resolveTraitBound`'s abstract-parameter case. Shared by
  * `resolveTraitBoundForTypeName` (builds a witness from the result) and
  * `resolveAssociatedTypeViaSupertrait` (reads the impl's own
@@ -3797,18 +3813,14 @@ function boundVisitingKey(
  */
 function findRegisteredImpl(
   ctx: AnalysisContext,
-  typeName: string,
+  receiverType: Semantics.Type,
   traitName: string,
   requestedTypeArguments: readonly Semantics.Type[] = [],
-  receiverTypeArguments: readonly Semantics.Type[] = [],
   visiting: ReadonlySet<string> = new Set(),
 ): RegisteredImpl | undefined {
-  const key = boundVisitingKey(
-    typeName,
-    receiverTypeArguments,
-    traitName,
-    requestedTypeArguments,
-  );
+  const typeName = typeIdentity(receiverType);
+  const receiverTypeArguments = nominalTypeArguments(receiverType);
+  const key = boundVisitingKey(receiverType, traitName, requestedTypeArguments);
   if (visiting.has(key)) return undefined;
   const nextVisiting = new Set(visiting).add(key);
   return ctx.implRegistry.find((impl) => {
@@ -3837,10 +3849,13 @@ function findRegisteredImpl(
       (bound) =>
         findRegisteredImpl(
           ctx,
-          typeName,
+          receiverType,
           bound.name,
-          bound.typeArguments,
-          receiverTypeArguments,
+          substituteBlanketBoundArguments(
+            impl,
+            receiverType,
+            bound.typeArguments,
+          ),
           nextVisiting,
         ) !== undefined,
     );
@@ -3852,23 +3867,22 @@ function findRegisteredImpl(
  * mirrors `findRegisteredImpl`'s cycle guard, since a bound may itself be
  * satisfied only through another blanket impl. `undefined` only on a
  * genuine cycle; by the time this runs, `findRegisteredImpl` has already
- * confirmed every bound is satisfied, so an ordinary (non-cyclic) blanket
- * chain always composes successfully here. */
+ * confirmed every bound is satisfied (via the identical substitution this
+ * applies), so an ordinary (non-cyclic) blanket chain always composes
+ * successfully here. */
 function composeBlanketBoundWitnesses(
   ctx: AnalysisContext,
-  typeName: string,
-  blanketBounds: readonly Semantics.BoundTraitRef[],
-  receiverTypeArguments: readonly Semantics.Type[],
+  receiverType: Semantics.Type,
+  impl: RegisteredImpl,
   visiting: ReadonlySet<string>,
 ): readonly WitnessRef[] | undefined {
   const witnesses: WitnessRef[] = [];
-  for (const bound of blanketBounds) {
+  for (const bound of impl.blanketBounds) {
     const witness = resolveTraitBoundForTypeName(
       ctx,
-      typeName,
+      receiverType,
       bound.name,
-      bound.typeArguments,
-      receiverTypeArguments,
+      substituteBlanketBoundArguments(impl, receiverType, bound.typeArguments),
       visiting,
     );
     if (!isSome(witness)) return undefined;
@@ -3887,32 +3901,23 @@ function composeBlanketBoundWitnesses(
  * satisfiability. */
 function resolveTraitBoundForTypeName(
   ctx: AnalysisContext,
-  typeName: string,
+  receiverType: Semantics.Type,
   traitName: string,
   requestedTypeArguments: readonly Semantics.Type[] = [],
-  receiverTypeArguments: readonly Semantics.Type[] = [],
   visiting: ReadonlySet<string> = new Set(),
 ): Option<WitnessRef> {
-  const key = boundVisitingKey(
-    typeName,
-    receiverTypeArguments,
-    traitName,
-    requestedTypeArguments,
-  );
+  const typeName = typeIdentity(receiverType);
+  const key = boundVisitingKey(receiverType, traitName, requestedTypeArguments);
   if (visiting.has(key)) return none();
   const nextVisiting = new Set(visiting).add(key);
   const impl = findRegisteredImpl(
     ctx,
-    typeName,
+    receiverType,
     traitName,
     requestedTypeArguments,
-    receiverTypeArguments,
   );
   if (impl === undefined) return none();
-  const monomorphizedTypeId = monomorphizeIdentity(
-    typeName,
-    receiverTypeArguments,
-  );
+  const monomorphizedTypeId = monomorphizedTypeIdentity(receiverType);
   // Keyed off the matched impl's own declared trait arguments, not the
   // caller's (possibly empty/unspecified) request - `Tag<i32>` and
   // `Tag<str>` need to be two distinct hoisted-witness identities for the
@@ -3926,9 +3931,8 @@ function resolveTraitBoundForTypeName(
   if (impl.isBlanket) {
     const boundWitnesses = composeBlanketBoundWitnesses(
       ctx,
-      typeName,
-      impl.blanketBounds,
-      receiverTypeArguments,
+      receiverType,
+      impl,
       nextVisiting,
     );
     if (boundWitnesses === undefined) return none();
@@ -3939,7 +3943,12 @@ function resolveTraitBoundForTypeName(
       typeName: bareTypeName(typeName),
       typeId: monomorphizedTypeId,
       implTokenId: impl.tokenId,
-      methods: witnessMethods(ctx, traitName, typeName, receiverTypeArguments),
+      methods: witnessMethods(
+        ctx,
+        traitName,
+        receiverType,
+        requestedTypeArguments,
+      ),
       boundWitnesses,
     });
   }
@@ -3960,7 +3969,12 @@ function resolveTraitBoundForTypeName(
     typeName: bareTypeName(typeName),
     typeId: implTargetInstanceId,
     implTokenId: impl.tokenId,
-    methods: witnessMethods(ctx, traitName, typeName, receiverTypeArguments),
+    methods: witnessMethods(
+      ctx,
+      traitName,
+      receiverType,
+      requestedTypeArguments,
+    ),
   });
 }
 
@@ -3982,32 +3996,29 @@ function resolveAssociatedTypeViaSupertrait(
 ): Semantics.Type | undefined {
   const result = resolveAssociatedTypeTrait(ctx, [traitName], assocName);
   if (result.kind !== "Found") return undefined;
-  const impl = findRegisteredImpl(
-    ctx,
-    typeIdentity(targetType),
-    result.traitName,
-    [],
-    nominalTypeArguments(targetType),
-  );
+  const impl = findRegisteredImpl(ctx, targetType, result.traitName, []);
   return impl?.associatedTypeDefs.get(assocName);
 }
 
-/** Every method a `typeName: traitId` witness carries, flattened across
- * `traitId`'s supertrait chain (cycle-guarded, deduplicated by method name -
- * the nearest trait in the chain wins). A supertrait method's `source`
- * consults *that* supertrait's own impl for `typeName`. */
+/** Every method a `receiverType: traitId<requestedTypeArguments>` witness
+ * carries, flattened across `traitId`'s supertrait chain (cycle-guarded,
+ * deduplicated by method name - the nearest trait in the chain wins). A
+ * supertrait method's `source` consults *that* supertrait's own impl for
+ * `receiverType` - always requested unparameterized, since this codebase's
+ * trait model doesn't carry type arguments through a supertrait chain (see
+ * `boundsImplyTrait`'s own doc comment). */
 function witnessMethods(
   ctx: AnalysisContext,
   traitId: string,
-  typeName: string,
-  receiverTypeArguments: readonly Semantics.Type[] = [],
+  receiverType: Semantics.Type,
+  requestedTypeArguments: readonly Semantics.Type[] = [],
 ): readonly WitnessMethod[] {
   const byName = new Map<string, WitnessMethod>();
   collectWitnessMethods(
     ctx,
     traitId,
-    typeName,
-    receiverTypeArguments,
+    receiverType,
+    requestedTypeArguments,
     new Set(),
     byName,
   );
@@ -4023,17 +4034,15 @@ function witnessMethods(
  * case to recover from. */
 function blanketMethodBoundWitnesses(
   ctx: AnalysisContext,
-  typeName: string,
-  receiverTypeArguments: readonly Semantics.Type[],
+  receiverType: Semantics.Type,
   isImplProvided: boolean,
   impl: RegisteredImpl | undefined,
 ): Option<readonly WitnessRef[]> {
   if (!isImplProvided || !impl?.isBlanket) return none();
   const boundWitnesses = composeBlanketBoundWitnesses(
     ctx,
-    typeName,
-    impl.blanketBounds,
-    receiverTypeArguments,
+    receiverType,
+    impl,
     new Set(),
   );
   assert(
@@ -4057,12 +4066,19 @@ function resolveBlanketImplScopeId(
 
 /** Walks one supertrait DAG, filling `byName`. `seen` and `byName` are shared
  * across the whole walk - not copied per branch - so a diamond's shared
- * ancestor is visited (and its methods recorded) exactly once. */
+ * ancestor is visited (and its methods recorded) exactly once.
+ * `requestedTypeArguments` is only ever passed for `traitId` itself, the
+ * witness's own directly-requested trait - re-deriving it with an empty
+ * request here (instead of the specific instantiation already matched
+ * upstream, e.g. `Tag<str>`) could silently pick an earlier, different
+ * impl of the same bare trait (`Tag<i32>`) and record the wrong method
+ * source/scope. Never threaded into the supertrait recursion below, since a
+ * supertrait's own bound is unparameterized here regardless. */
 function collectWitnessMethods(
   ctx: AnalysisContext,
   traitId: string,
-  typeName: string,
-  receiverTypeArguments: readonly Semantics.Type[],
+  receiverType: Semantics.Type,
+  requestedTypeArguments: readonly Semantics.Type[],
   seen: Set<string>,
   byName: Map<string, WitnessMethod>,
 ): void {
@@ -4072,10 +4088,9 @@ function collectWitnessMethods(
   if (trait === undefined) return;
   const impl = findRegisteredImpl(
     ctx,
-    typeName,
+    receiverType,
     traitId,
-    [],
-    receiverTypeArguments,
+    requestedTypeArguments,
   );
   const bareTrait = bareTypeName(traitId);
   for (const method of trait.methods) {
@@ -4094,8 +4109,7 @@ function collectWitnessMethods(
       definingTraitId: traitId,
       blanketBoundWitnesses: blanketMethodBoundWitnesses(
         ctx,
-        typeName,
-        receiverTypeArguments,
+        receiverType,
         isImplProvided,
         impl,
       ),
@@ -4108,14 +4122,7 @@ function collectWitnessMethods(
     });
   }
   for (const supertrait of trait.supertraits) {
-    collectWitnessMethods(
-      ctx,
-      supertrait,
-      typeName,
-      receiverTypeArguments,
-      seen,
-      byName,
-    );
+    collectWitnessMethods(ctx, supertrait, receiverType, [], seen, byName);
   }
 }
 
@@ -4886,10 +4893,9 @@ function checkSupertraitCompleteness(
         isSome(
           resolveTraitBoundForTypeName(
             ctx,
-            impl.targetTypeName,
+            impl.resolvedTargetType,
             supertrait,
             [],
-            nominalTypeArguments(impl.resolvedTargetType),
           ),
         )
       ) {
@@ -8466,13 +8472,7 @@ function recordOperatorDispatchTarget(
   tokenId: number,
 ): void {
   if (isNominalType(operandType)) {
-    const witness = resolveTraitBoundForTypeName(
-      ctx,
-      operandType.name,
-      trait,
-      [],
-      operandType.typeArguments,
-    );
+    const witness = resolveTraitBoundForTypeName(ctx, operandType, trait, []);
     if (!isSome(witness)) return;
     if (witness.value.kind === "Composed") {
       recordBlanketDispatchTarget(
@@ -9386,7 +9386,6 @@ function buildMethodIndex(
         ...indexTraitImplMethods(
           ctx,
           traitId,
-          targetId,
           resolvedTargetType,
           implGenericParamPositions,
           targetTypeArguments,
@@ -9460,7 +9459,6 @@ function mergedGenericParamBounds(
 function indexTraitImplMethods(
   ctx: AnalysisContext,
   traitId: string,
-  targetId: string,
   targetType: Semantics.Type,
   implGenericParamPositions: ReadonlyMap<string, readonly number[]>,
   targetTypeArguments: readonly TargetArgSlot[],
@@ -9474,8 +9472,8 @@ function indexTraitImplMethods(
     return traitMethods;
   }
   const associatedTypes =
-    findRegisteredImpl(ctx, targetId, traitId, [], targetType.typeArguments)
-      ?.associatedTypeDefs ?? new Map<string, Semantics.Type>();
+    findRegisteredImpl(ctx, targetType, traitId, [])?.associatedTypeDefs ??
+    new Map<string, Semantics.Type>();
   return traitMethods.map((m): IndexedMethod => ({
     ...m,
     params: m.params.map((p) =>
@@ -9624,7 +9622,6 @@ function blanketMethodCandidates(
   ctx: AnalysisContext,
   receiverType: Semantics.StructType | Semantics.EnumType,
 ): readonly IndexedMethod[] {
-  const typeId = receiverType.name;
   const targetTypeArguments = receiverType.typeArguments.map((arg) =>
     classifyTargetArgSlot(arg, new Set()),
   );
@@ -9634,13 +9631,7 @@ function blanketMethodCandidates(
     if (!impl.isBlanket || seenTraits.has(impl.traitName)) continue;
     seenTraits.add(impl.traitName);
     if (
-      findRegisteredImpl(
-        ctx,
-        typeId,
-        impl.traitName,
-        [],
-        receiverType.typeArguments,
-      ) === undefined
+      findRegisteredImpl(ctx, receiverType, impl.traitName, []) === undefined
     ) {
       continue;
     }
@@ -9648,7 +9639,6 @@ function blanketMethodCandidates(
       ...indexTraitImplMethods(
         ctx,
         impl.traitName,
-        typeId,
         receiverType,
         new Map(),
         targetTypeArguments,
@@ -9673,10 +9663,11 @@ function blanketMethodCandidates(
  * single-impl case there. */
 function applicableImplsForReceiver(
   ctx: AnalysisContext,
-  typeName: string,
+  receiverType: Semantics.Type,
   traitName: string,
-  receiverTypeArguments: readonly Semantics.Type[],
 ): readonly RegisteredImpl[] {
+  const typeName = typeIdentity(receiverType);
+  const receiverTypeArguments = nominalTypeArguments(receiverType);
   return ctx.implRegistry.filter((impl) => {
     if (impl.traitName !== traitName) return false;
     if (!impl.isBlanket) {
@@ -9692,10 +9683,13 @@ function applicableImplsForReceiver(
       (bound) =>
         findRegisteredImpl(
           ctx,
-          typeName,
+          receiverType,
           bound.name,
-          bound.typeArguments,
-          receiverTypeArguments,
+          substituteBlanketBoundArguments(
+            impl,
+            receiverType,
+            bound.typeArguments,
+          ),
         ) !== undefined,
     );
   });
@@ -9728,12 +9722,7 @@ function resolveMethodCall(
   if (traitIds.length === 1 && onlyTraitId !== undefined) {
     if (
       isNominalType(receiverType) &&
-      applicableImplsForReceiver(
-        ctx,
-        receiverType.name,
-        onlyTraitId,
-        receiverType.typeArguments,
-      ).length > 1
+      applicableImplsForReceiver(ctx, receiverType, onlyTraitId).length > 1
     ) {
       emitError(
         ctx,
@@ -10031,7 +10020,10 @@ function recordMethodTarget(
     ctx.methodTargetTable.set(methodTokenId, {
       kind: "free",
       typeId: monomorphizedTypeId,
-      scopeId: monomorphizedTypeId,
+      scopeId: targetArgSlotsIdentity(
+        receiverType.name,
+        method.targetTypeArguments,
+      ),
       typeName: bareTypeName(receiverType.name),
       traitName: none(),
       methodName,
@@ -10041,10 +10033,9 @@ function recordMethodTarget(
   }
   const witness = resolveTraitBoundForTypeName(
     ctx,
-    receiverType.name,
+    receiverType,
     method.origin.traitId,
     [],
-    receiverType.typeArguments,
   );
   if (
     !isSome(witness) ||
@@ -10427,17 +10418,7 @@ function checkUfcsReceiverImplementsTrait(
       ? receiverArg.type.referent
       : receiverArg.type;
   if (!isNominalType(receiverType)) return;
-  if (
-    !isSome(
-      resolveTraitBoundForTypeName(
-        ctx,
-        typeIdentity(receiverType),
-        traitId,
-        [],
-        receiverType.typeArguments,
-      ),
-    )
-  ) {
+  if (!isSome(resolveTraitBoundForTypeName(ctx, receiverType, traitId, []))) {
     emitError(
       ctx,
       {
