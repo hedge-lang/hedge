@@ -6241,6 +6241,32 @@ describe("generic struct/enum instantiation identity", (): void => {
       "argument 1 to function `take` type mismatch: expected `Wrapper<i32>`, found `Wrapper<str>`",
     );
   });
+
+  it("constructs a named-field struct against an outer expected instantiation instead of defaulting the field independently", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn main() {
+        let w: Wrapper<i64> = Wrapper { value: 1 };
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    const type = mainLetType(result, "w");
+    assert(type.kind === "StructType", "expected a StructType");
+    expect(type.typeArguments).toEqual([{ kind: "PrimitiveI64Type" }]);
+  });
+
+  it("constructs a named-field enum variant against an outer expected instantiation instead of defaulting the field independently", (): void => {
+    const result = diagnose(`
+      enum Wrapper<T> { Has { value: T } }
+      fn main() {
+        let w: Wrapper<i64> = Wrapper::Has { value: 1 };
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    const type = mainLetType(result, "w");
+    assert(type.kind === "EnumType", "expected an EnumType");
+    expect(type.typeArguments).toEqual([{ kind: "PrimitiveI64Type" }]);
+  });
 });
 
 describe("generic substitution through a nominal type's own type arguments", (): void => {
@@ -6295,8 +6321,12 @@ describe("nested generic field validation at construction, when a turbofish alre
       }
     `);
     expect(result.diagnostics).toHaveLength(1);
+    // The nested `Wrapper { value: "s" }` now checks against the outer
+    // turbofish's own expected instantiation (`Wrapper<i32>`), so the
+    // mismatch is reported at its own innermost offending field, not
+    // re-derived one level up as a whole-type mismatch on `inner`.
     expect(messageOf(result.diagnostics[0])).toBe(
-      "field `inner` type mismatch: expected `Wrapper<i32>`, found `Wrapper<str>`",
+      "field `value` type mismatch: expected `i32`, found `str`",
     );
   });
 

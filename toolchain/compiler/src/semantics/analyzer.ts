@@ -8125,6 +8125,8 @@ function checkExpression(
       return analyzeMatchExpression(ctx, expr, type);
     case "Block":
       return analyzeBlock(ctx, expr, type);
+    case "StructExpression":
+      return analyzeStructExpression(ctx, expr, type);
     default:
       return analyzeExpression(ctx, expr);
   }
@@ -11644,6 +11646,7 @@ function analyzeEnumVariantStructConstruction(
   fields: readonly Semantics.FieldInit[],
   hasBase: boolean,
   rawFieldValues: ReadonlyMap<string, Parser.Expression>,
+  expected: Semantics.Type | undefined,
 ): Option<{
   readonly type: Semantics.Type;
   readonly fields: Semantics.FieldInit[];
@@ -11691,6 +11694,8 @@ function analyzeEnumVariantStructConstruction(
       tokenId: structExpression.tokenId,
       typeArguments: structExpression.typeArguments,
       rawFieldValues,
+      declaredType: enumDecl.type,
+      expectedType: expected,
     },
     variant.body.value,
     { params: enumDecl.generics, defaults: enumDecl.genericParamDefaults },
@@ -11704,6 +11709,7 @@ function analyzeEnumVariantStructConstruction(
 function analyzeStructExpression(
   ctx: AnalysisContext,
   structExpression: Parser.StructExpression,
+  expected?: Semantics.Type,
 ): Semantics.StructExpression {
   const analyzedFields = structExpression.fields.map(
     (field: Parser.FieldInit): Semantics.FieldInit => {
@@ -11735,6 +11741,7 @@ function analyzeStructExpression(
       analyzedFields,
       isSome(analyzedBase),
       rawFieldValues,
+      expected,
     );
     if (isSome(construction)) {
       return {
@@ -11792,6 +11799,8 @@ function analyzeStructExpression(
         tokenId: structExpression.tokenId,
         typeArguments: structExpression.typeArguments,
         rawFieldValues,
+        declaredType: structDecl.type,
+        expectedType: expected,
       },
       structDecl.body,
       {
@@ -11853,6 +11862,17 @@ interface NamedFieldConstructionSite {
   readonly tokenId: number;
   readonly typeArguments: readonly Parser.Type[];
   readonly rawFieldValues: ReadonlyMap<string, Parser.Expression>;
+  /** The struct/enum's own bare declared type (e.g. `Wrapper<T>`'s `T`
+   * un-substituted) - needed to seed `expectedType` against, the same way
+   * `checkGenericPositionalConstruction` builds an abstract return type to
+   * unify a call's own expected type against. */
+  readonly declaredType: Semantics.Type;
+  /** An outer expected type this construction should unify its own
+   * generics against before field inference (a `let` annotation or
+   * function return type), mirroring the tuple-construction/enum-call
+   * paths - `undefined` when there is no such context (an isolated
+   * expression). */
+  readonly expectedType: Semantics.Type | undefined;
 }
 
 /** The non-generic path for a named field's own value: reconcile against the
@@ -11930,6 +11950,25 @@ function analyzeStructNamedFields(
     generics,
     bindings,
   );
+  if (site.expectedType !== undefined) {
+    const abstractDeclaredType = withTypeArguments(
+      site.declaredType,
+      generics.params.map((name): Semantics.Type => ({
+        kind: "NamedType",
+        tokenId: site.tokenId,
+        path: { absolute: false, segments: [name] },
+      })),
+    );
+    seedExpectedReturnType(
+      ctx,
+      site.tokenId,
+      structName,
+      abstractDeclaredType,
+      site.expectedType,
+      genericNames,
+      bindings,
+    );
+  }
 
   const seenFields = new Set<string>();
   const checkedFields = fields.map((field): Semantics.FieldInit => {
@@ -12525,7 +12564,8 @@ function analyzeCall(
     expectedType !== undefined &&
     seedExpectedReturnType(
       ctx,
-      call,
+      call.tokenId,
+      calleeName(call),
       calleeType.returnType,
       expectedType,
       new Set(calleeType.genericParams),
@@ -13240,7 +13280,8 @@ function checkGenericPositionalConstruction(
     );
     seedExpectedReturnType(
       ctx,
-      call,
+      call.tokenId,
+      calleeName(call),
       abstractDeclaredType,
       expectedType,
       new Set(generics.params),
@@ -13291,7 +13332,8 @@ function checkGenericPositionalConstruction(
  * the same problem under a different, more confusing message. */
 function seedExpectedReturnType(
   ctx: AnalysisContext,
-  call: Parser.CallExpression,
+  tokenId: number,
+  calleeNameText: string,
   returnType: Semantics.Type,
   expectedType: Semantics.Type,
   genericNames: ReadonlySet<string>,
@@ -13301,7 +13343,7 @@ function seedExpectedReturnType(
   const outcome = unifyGenericParam(
     returnType,
     expectedType,
-    call.tokenId,
+    tokenId,
     genericNames,
     bindings,
   );
@@ -13313,11 +13355,11 @@ function seedExpectedReturnType(
         ctx,
         {
           kind: "SemCallReturnTypeMismatch",
-          calleeName: calleeName(call),
+          calleeName: calleeNameText,
           expected: describeType(substituteGenericType(returnType, bindings)),
           found: describeType(expectedType),
         },
-        call.tokenId,
+        tokenId,
         relatedSpanAt(ctx, outcome.previousTokenId, {
           kind: "LabelInferredAsHere",
           typeName: describeType(outcome.previous),
