@@ -175,12 +175,11 @@ export function findDropTarget(
   typeName: string,
   typeArguments: readonly Semantics.Type[],
 ): FreeMethodTarget | undefined {
-  const bindings = new Map<string, Semantics.Type>();
   return (dropImpls.get(typeName) ?? []).find((entry) =>
     requestedTraitArgumentsSatisfied(
       entry.targetTypeArguments,
       typeArguments,
-      bindings,
+      new Map(),
     ),
   )?.target;
 }

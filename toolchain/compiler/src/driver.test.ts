@@ -2651,6 +2651,19 @@ describe("Drop::drop dispose body", (): void => {
     `);
     expect(runEmittedJs(js)).toEqual(["0", "1"]);
   });
+
+  it("matches the right drop impl when an earlier disjoint pattern only partially binds before failing", (): void => {
+    const js = emittedJs(`
+      struct Triple<A, B, C> { a: A, b: B, c: C }
+      impl<T> Drop for Triple<T, i32, T> { fn drop(&mut self) { print(1); } }
+      impl<T> Drop for Triple<str, T, T> { fn drop(&mut self) { print(2); } }
+      fn main() {
+        let v = Triple { a: "s", b: true, c: true };
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "2"]);
+  });
 });
 
 describe("std prelude", (): void => {
