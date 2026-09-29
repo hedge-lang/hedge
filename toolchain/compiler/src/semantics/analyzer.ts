@@ -2636,7 +2636,11 @@ function resolveMethodSignatureTypes(
     type: Parser.Type,
     fallbackTokenId: number,
   ) => Semantics.Type = validateSlice1Type,
-): { params: readonly Semantics.Type[]; returnType: Semantics.Type } {
+): {
+  params: readonly Semantics.Type[];
+  returnType: Semantics.Type;
+  genericParamBounds: ReadonlyMap<string, readonly Semantics.BoundTraitRef[]>;
+} {
   const merged = mergedGenericScope(
     outerGenerics,
     outerWhereClause,
@@ -2647,6 +2651,7 @@ function resolveMethodSignatureTypes(
   const result: {
     params: readonly Semantics.Type[];
     returnType: Semantics.Type;
+    genericParamBounds: ReadonlyMap<string, readonly Semantics.BoundTraitRef[]>;
   } = {
     params: signature.params.map((p) =>
       resolveType(ctx, p.type, p.type.tokenId),
@@ -2658,6 +2663,14 @@ function resolveMethodSignatureTypes(
           signature.returnType.value.tokenId,
         )
       : { kind: "UnitType", tokenId: signature.tokenId },
+    // Resolved here, while `merged`'s own scope is still pushed - a bound
+    // naming a sibling generic parameter (`V: Convert<U>`) only resolves
+    // correctly with that scope active, and every caller of this function
+    // needs the identical merged scope this function already computes.
+    genericParamBounds: resolveBoundNames(
+      ctx,
+      genericParamBoundNames(merged.generics, merged.whereClause),
+    ),
   };
   popGenericParams(ctx);
   return result;
@@ -2681,21 +2694,15 @@ function resolveTraitMethodSignature(
     fallbackTokenId: number,
   ) => Semantics.Type,
 ): Semantics.TraitMethod {
-  const merged = mergedGenericScope(
-    outerGenerics,
-    outerWhereClause,
-    signature.generics,
-    signature.whereClause,
-  );
   return {
     name: signature.name.text,
     isDefault,
     receiver: toMethodReceiver(signature.receiver),
     genericParams: genericParamNames(signature.generics),
-    genericParamBounds: resolveBoundNames(
-      ctx,
-      genericParamBoundNames(merged.generics, merged.whereClause),
-    ),
+    // genericParamBounds comes from the spread below, resolved under
+    // resolveMethodSignatureTypes's own pushed scope - resolving it here
+    // instead, before that scope exists, left a bound naming a sibling
+    // generic parameter (or an outer trait/impl parameter) unresolved.
     ...resolveMethodSignatureTypes(
       ctx,
       outerGenerics,
@@ -2745,6 +2752,16 @@ interface AnalyzedMethod {
    * parameter, for the ownership passes to walk; `none()` for a bodiless
    * trait method. */
   readonly ownershipView: Option<Semantics.FunctionDef>;
+  /** Resolved under this method's own merged (outer-plus-method) generic
+   * scope, before that scope is popped - a trait method's own bound naming
+   * a sibling or outer generic parameter only resolves correctly while it's
+   * still active. Only `analyzeTraitDecl` (a trait method's own bounds
+   * carry real meaning) reads this; `analyzeImplDecl`'s `Semantics.ImplMethod`
+   * has no such field to fill. */
+  readonly genericParamBounds: ReadonlyMap<
+    string,
+    readonly Semantics.BoundTraitRef[]
+  >;
 }
 
 function syntheticSelfParam(
@@ -2846,12 +2863,17 @@ function analyzeMethodItem(
       body,
     });
   }
+  const genericParamBounds = resolveBoundNames(
+    ctx,
+    genericParamBoundNames(merged.generics, merged.whereClause),
+  );
   popGenericParams(ctx);
   popFrame(ctx);
   return {
     params: signature.params.map((p) => p.type),
     returnType: expectedReturnType,
     ownershipView,
+    genericParamBounds,
   };
 }
 
@@ -2935,12 +2957,6 @@ function analyzeTraitDecl(
         methodBodies.push(analyzed.ownershipView.value);
         recordDefaultMethodTarget(ctx, decl, shallow.traitId);
       }
-      const merged = mergedGenericScope(
-        item.generics,
-        item.whereClause,
-        sig.generics,
-        sig.whereClause,
-      );
       return [
         {
           name: sig.name.text,
@@ -2949,10 +2965,7 @@ function analyzeTraitDecl(
           params: analyzed.params,
           returnType: analyzed.returnType,
           genericParams: genericParamNames(sig.generics),
-          genericParamBounds: resolveBoundNames(
-            ctx,
-            genericParamBoundNames(merged.generics, merged.whereClause),
-          ),
+          genericParamBounds: analyzed.genericParamBounds,
         },
       ];
     },
@@ -9344,6 +9357,10 @@ function buildMethodIndex(
       targetType,
       item.type,
     );
+    const implGenericParamBounds = resolveBoundNames(
+      ctx,
+      genericParamBoundNames(item.generics, item.whereClause),
+    );
     popGenericParams(ctx);
     if (isSome(shallow.traitRef)) {
       const traitId = resolveTraitIdentity(shallow.traitRef.value.name, scope);
@@ -9355,10 +9372,7 @@ function buildMethodIndex(
           resolvedTargetType,
           implGenericParamPositions,
           targetTypeArguments,
-          resolveBoundNames(
-            ctx,
-            genericParamBoundNames(item.generics, item.whereClause),
-          ),
+          implGenericParamBounds,
         ),
       );
     } else {
@@ -9493,19 +9507,14 @@ function indexInherentMethods(
   const implGenerics = genericParamNames(item.generics);
   const methods = item.items.flatMap((decl): readonly IndexedMethod[] => {
     if (decl.kind !== "Function") return [];
-    const { params, returnType } = resolveMethodSignatureTypes(
-      ctx,
-      item.generics,
-      item.whereClause,
-      decl.signature,
-      resolveSlice1Type,
-    );
-    const merged = mergedGenericScope(
-      item.generics,
-      item.whereClause,
-      decl.signature.generics,
-      decl.signature.whereClause,
-    );
+    const { params, returnType, genericParamBounds } =
+      resolveMethodSignatureTypes(
+        ctx,
+        item.generics,
+        item.whereClause,
+        decl.signature,
+        resolveSlice1Type,
+      );
     return [
       {
         name: decl.signature.name.text,
@@ -9516,10 +9525,7 @@ function indexInherentMethods(
           ...implGenerics,
           ...genericParamNames(decl.signature.generics),
         ],
-        genericParamBounds: resolveBoundNames(
-          ctx,
-          genericParamBoundNames(merged.generics, merged.whereClause),
-        ),
+        genericParamBounds,
         implGenericParamPositions,
         targetTypeArguments,
         origin: { kind: "inherent" },

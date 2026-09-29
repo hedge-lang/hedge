@@ -4060,6 +4060,26 @@ describe("associated types and trait projections", (): void => {
       `);
       expect(result.diagnostics).toEqual([]);
     });
+
+    it("resolves a trait method's own bound referencing a sibling generic parameter, not persisting it as an unresolved unit type", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        trait Foo { fn use_it<V: Convert<W>, W>(&self, x: V) -> W; }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const trait = result.program.items.find(
+        (item) => item.kind === "Trait" && item.name === "Foo",
+      );
+      assert(trait?.kind === "Trait", "expected a top-level trait named Foo");
+      const method = trait.methods.find((m) => m.name === "use_it");
+      assert(method !== undefined, "expected a use_it method");
+      const bounds = method.genericParamBounds.get("V") ?? [];
+      expect(bounds).toHaveLength(1);
+      expect(bounds[0]?.name).toBe(traitIdOf(result, "Convert"));
+      const arg = bounds[0]?.typeArguments[0];
+      assert(arg?.kind === "NamedType", "expected W to resolve as a NamedType");
+      expect(arg.path.segments).toEqual(["W"]);
+    });
   });
 
   describe("an impl missing a required associated type", (): void => {
