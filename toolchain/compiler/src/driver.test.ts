@@ -1396,6 +1396,25 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["int", "string"]);
   });
 
+  it("forwards the matching instantiation's own witness when two bound type arguments sanitize to the same raw name", (): void => {
+    const js = emittedJs(`
+      struct Wrapper<T> { v: T }
+      struct Wrapper_i32_ { v: i32 }
+      struct P { n: i32 }
+      trait Convert<T> { fn convert(&self) -> str; }
+      impl Convert<Wrapper<i32>> for P { fn convert(&self) -> str { "nested" } }
+      impl Convert<Wrapper_i32_> for P { fn convert(&self) -> str { "flat" } }
+      fn use_nested<U: Convert<Wrapper<i32>>>(u: &U) -> str { u.convert() }
+      fn use_flat<U: Convert<Wrapper_i32_>>(u: &U) -> str { u.convert() }
+      fn outer<T: Convert<Wrapper<i32>> + Convert<Wrapper_i32_>>(t: &T) {
+        print(use_nested(t));
+        print(use_flat(t));
+      }
+      fn main() { let p = P { n: 0 }; outer(&p); }
+    `);
+    expect(runEmittedJs(js)).toEqual(["nested", "flat"]);
+  });
+
   it("dispatches through the requested instantiation's own witness methods, not an earlier unrelated one", (): void => {
     const js = emittedJs(`
       trait Tag<T> { fn tag(&self) -> str { "default" } }

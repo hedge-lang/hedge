@@ -90,6 +90,16 @@ export interface WitnessParam {
   readonly traitName: string;
 }
 
+/** An identifier-safe, injective encoding of `text` - every character outside
+ * `[A-Za-z0-9_]` (`$` included, so it only ever appears as part of an escape)
+ * becomes `$<code>$`. Unlike a lossy collapse (mapping every such character
+ * to the same `_`), this never conflates two different structural identities
+ * that happen to sanitize to the same text - see `witnessParamName`'s own
+ * doc comment for the case that motivated it. */
+function escapeForIdentifier(text: string): string {
+  return text.replace(/[^A-Za-z0-9_]/g, (ch) => `$${ch.charCodeAt(0)}$`);
+}
+
 /** The one place the `_witness_<param>_<trait>` naming scheme is defined -
  * `param` is a type-parameter name or `Self` (a trait default body), `trait`
  * is a bare trait name. `typeArguments`, when non-empty, disambiguates two
@@ -97,7 +107,11 @@ export interface WitnessParam {
  * different arguments (`T: Convert<i32> + Convert<str>`) - without it both
  * would produce the identical raw name, and `reserveWitnessParamName`'s
  * `witnessParamNames` map would silently resolve every forwarding reference
- * to whichever bound was declared last. */
+ * to whichever bound was declared last. Built on `monomorphizedTypeIdentity`
+ * (which preserves nesting via literal `<`/`>`/`,`) rather than `describeType`
+ * collapsed through a lossy sanitize - `Convert<Wrapper<i32>>` and a
+ * differently-typed `Convert<Wrapper_i32_>` used to both flatten to the same
+ * raw name once their `<`/`>` got replaced with `_`. */
 export function witnessParamName(
   param: string,
   trait: string,
@@ -105,7 +119,7 @@ export function witnessParamName(
 ): string {
   if (typeArguments.length === 0) return `_witness_${param}_${trait}`;
   const argsSuffix = typeArguments
-    .map((arg) => describeType(arg).replace(/[^A-Za-z0-9_$]+/g, "_"))
+    .map((arg) => escapeForIdentifier(monomorphizedTypeIdentity(arg)))
     .join("_");
   return `_witness_${param}_${trait}_${argsSuffix}`;
 }
