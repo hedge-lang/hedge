@@ -9478,14 +9478,15 @@ function mergedGenericParamBounds(
 }
 
 /** A trait impl's methods, with the trait's abstract `Self` / `Self::Assoc`
- * rewritten against this impl's concrete target and its own associated-type
- * definitions. A target the structural scope can't resolve to a struct/enum
- * leaves the signatures abstract. `implGenericParamBounds` is the impl's own
- * declared bounds (`impl<T: Bound> Trait for X`) - unlike
- * `indexInherentMethods`, a trait method's shallow signature never went
- * through the impl's own generic scope, so this merges them in here instead
- * of relying on `traitMethodSet`'s already-built `genericParamBounds` to
- * carry them. */
+ * and the trait's own declared generic parameters (via `traitRefTypeArguments`)
+ * rewritten against this impl's concrete target, its own associated-type
+ * definitions, and its requested instantiation. A target the structural
+ * scope can't resolve to a struct/enum leaves the signatures abstract.
+ * `implGenericParamBounds` is the impl's own declared bounds
+ * (`impl<T: Bound> Trait for X`) - unlike `indexInherentMethods`, a trait
+ * method's shallow signature never went through the impl's own generic
+ * scope, so this merges them in here instead of relying on
+ * `traitMethodSet`'s already-built `genericParamBounds` to carry them. */
 function indexTraitImplMethods(
   ctx: AnalysisContext,
   traitId: string,
@@ -9678,7 +9679,12 @@ function methodCandidatesForNominalType(
  * only asks it per blanket impl in the registry. `targetTypeArguments` on
  * the returned entries is classified purely-concrete (`receiverType` is
  * already a real instantiation here, never the blanket impl's own bare `T`),
- * so `methodCandidatesForNominalType`'s own filter is a trivial match. */
+ * so `methodCandidatesForNominalType`'s own filter is a trivial match.
+ * Known gap: unlike `buildMethodIndex`'s own concrete-impl path, a
+ * blanket-provided method's own trait generic parameter (`T` in
+ * `impl<T: Bound> Convert<i32> for T`'s `fn convert(&self) -> T`) is not
+ * substituted with the trait's requested instantiation here - needs a
+ * `TargetArgSlot -> Semantics.Type` resolver that doesn't exist yet. */
 function blanketMethodCandidates(
   ctx: AnalysisContext,
   receiverType: Semantics.StructType | Semantics.EnumType,
