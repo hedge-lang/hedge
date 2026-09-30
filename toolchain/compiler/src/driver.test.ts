@@ -1715,6 +1715,26 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(javascript.value)).toEqual(["1", "2"]);
   });
 
+  it("dispatches a flattened supertrait method's witness slot through its own defining trait's scope, not the enclosing witness's", (): void => {
+    const js = emittedJs(`
+      trait Base { fn base(&self) -> i32; }
+      trait Ext: Base {}
+      struct S { v: i32 }
+      impl Base for S { fn base(&self) -> i32 { self.v } }
+      impl Ext for S {}
+      fn S$Base$base() -> i32 { -1 }
+      fn use_ext<T: Ext>(t: &T) -> i32 { t.base() }
+      fn main() {
+        let s = S { v: 7 };
+        print(use_ext(&s));
+        print(S$Base$base());
+      }
+    `);
+    expect(js).toContain("function S$Base$base_2(self)");
+    expect(js).toContain("__witness_Ext_S = {base: S$Base$base_2}");
+    expect(runEmittedJs(js)).toEqual(["7", "-1"]);
+  });
+
   it("dispatches a witness slot for an unconstrained blanket impl's method through the trait-scoped free function, not a nonexistent per-type one", (): void => {
     const js = emittedJs(`
       trait B { fn f(&self) -> i32; }

@@ -1164,7 +1164,9 @@ function witnessSlotTarget(
   return {
     kind: "free",
     typeId: witness.typeId,
-    scopeId: `${witness.typeId}#${witness.traitId}`,
+    scopeId: isSome(method.concreteImplScopeId)
+      ? method.concreteImplScopeId.value
+      : `${witness.typeId}#${witness.traitId}`,
     typeName: witness.typeName,
     traitName: some(method.definingTrait),
     methodName: method.name,

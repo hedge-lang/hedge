@@ -236,6 +236,14 @@ export interface WitnessMethod {
    * since a default-method body's own free-function identity is the
    * trait's alone and has no per-impl instantiation to fold in. */
   readonly blanketImplScopeId: Option<string>;
+  /** `some(...)` only when `source === "impl"` and the impl providing this
+   * specific method is a *concrete* (non-blanket) one - that impl's own
+   * `typeId#traitId` scope, matching `recordImplMethodTarget`'s emission-side
+   * key for it. A flattened supertrait method's providing impl need not be
+   * the same impl - or even the same declared target pattern - as whatever
+   * impl satisfies the enclosing witness's own top-level trait, so codegen
+   * can't derive this from the enclosing witness alone. */
+  readonly concreteImplScopeId: Option<string>;
   /** How many trailing witness arguments a call to this method passes for
    * its *own* declared generic bounds (one per `(param, bound trait)` pair,
    * matching `recordWitnessParams`'s own count for the identical merged
@@ -4080,6 +4088,20 @@ function resolveBlanketImplScopeId(
   return some(targetArgSlotsIdentity(traitId, impl.traitTypeArguments));
 }
 
+/** `WitnessMethod.concreteImplScopeId` - `some(...)` for a method a
+ * *concrete* impl provides, the mirror case to `resolveBlanketImplScopeId`. */
+function resolveConcreteImplScopeId(
+  receiverType: Semantics.Type,
+  traitId: string,
+  isImplProvided: boolean,
+  impl: RegisteredImpl | undefined,
+): Option<string> {
+  if (!isImplProvided || impl === undefined || impl.isBlanket) return none();
+  return some(
+    `${targetArgSlotsIdentity(typeIdentity(receiverType), impl.targetTypeArguments)}#${targetArgSlotsIdentity(traitId, impl.traitTypeArguments)}`,
+  );
+}
+
 /** Walks one supertrait DAG, filling `byName`. `seen` and `byName` are shared
  * across the whole walk - not copied per branch - so a diamond's shared
  * ancestor is visited (and its methods recorded) exactly once.
@@ -4130,6 +4152,12 @@ function collectWitnessMethods(
         impl,
       ),
       blanketImplScopeId: resolveBlanketImplScopeId(
+        traitId,
+        isImplProvided,
+        impl,
+      ),
+      concreteImplScopeId: resolveConcreteImplScopeId(
+        receiverType,
         traitId,
         isImplProvided,
         impl,

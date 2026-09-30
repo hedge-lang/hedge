@@ -7733,6 +7733,7 @@ describe("trait and impl declarations", (): void => {
           definingTraitId: shapeId,
           blanketBoundWitnesses: none(),
           blanketImplScopeId: none(),
+          concreteImplScopeId: some(`${witness.typeId}#${witness.traitId}`),
           ownWitnessParamCount: 0,
         },
         {
@@ -7742,6 +7743,7 @@ describe("trait and impl declarations", (): void => {
           definingTraitId: shapeId,
           blanketBoundWitnesses: none(),
           blanketImplScopeId: none(),
+          concreteImplScopeId: none(),
           ownWitnessParamCount: 0,
         },
       ]);
@@ -7769,6 +7771,7 @@ describe("trait and impl declarations", (): void => {
           definingTraitId: traitIdOf(result, "Ext"),
           blanketBoundWitnesses: none(),
           blanketImplScopeId: none(),
+          concreteImplScopeId: some(`${witness.typeId}#${witness.traitId}`),
           ownWitnessParamCount: 0,
         },
         {
@@ -7778,6 +7781,9 @@ describe("trait and impl declarations", (): void => {
           definingTraitId: traitIdOf(result, "Base"),
           blanketBoundWitnesses: none(),
           blanketImplScopeId: none(),
+          concreteImplScopeId: some(
+            `${witness.typeId}#${traitIdOf(result, "Base")}`,
+          ),
           ownWitnessParamCount: 0,
         },
       ]);
@@ -7809,6 +7815,9 @@ describe("trait and impl declarations", (): void => {
           definingTraitId: traitIdOf(result, "A"),
           blanketBoundWitnesses: none(),
           blanketImplScopeId: none(),
+          concreteImplScopeId: some(
+            `${witness.typeId}#${traitIdOf(result, "A")}`,
+          ),
           ownWitnessParamCount: 0,
         },
       ]);
@@ -7838,6 +7847,7 @@ describe("trait and impl declarations", (): void => {
           definingTraitId: shapeId,
           blanketBoundWitnesses: none(),
           blanketImplScopeId: none(),
+          concreteImplScopeId: none(),
           ownWitnessParamCount: 0,
         },
         {
@@ -7847,6 +7857,7 @@ describe("trait and impl declarations", (): void => {
           definingTraitId: shapeId,
           blanketBoundWitnesses: none(),
           blanketImplScopeId: none(),
+          concreteImplScopeId: some(`${witness.typeId}#${witness.traitId}`),
           ownWitnessParamCount: 0,
         },
       ]);
