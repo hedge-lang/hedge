@@ -9282,6 +9282,14 @@ function substituteSelfType(
       referent: substituteSelfType(type.referent, target, associatedTypes),
     };
   }
+  if (type.kind === "StructType" || type.kind === "EnumType") {
+    return {
+      ...type,
+      typeArguments: type.typeArguments.map((arg) =>
+        substituteSelfType(arg, target, associatedTypes),
+      ),
+    };
+  }
   return type;
 }
 

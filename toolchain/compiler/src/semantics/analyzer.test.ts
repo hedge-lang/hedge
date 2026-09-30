@@ -4738,6 +4738,20 @@ describe("associated types and trait projections", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
+    it("substitutes Self nested inside a struct type argument in an indexed trait method's return type", (): void => {
+      const result = diagnose(`
+        struct Box<T> { value: T }
+        trait Wrap { fn wrap(&self) -> Box<Self>; }
+        struct P { v: i32 }
+        impl Wrap for P { fn wrap(&self) -> Box<P> { Box { value: P { v: self.v } } } }
+        fn main() {
+          let p = P { v: 1 };
+          let b: Box<P> = p.wrap();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("does not flag two instantiations of a parameterized trait targeting different structs as ambiguous", (): void => {
       const result = diagnose(`
         trait Tag<T> { fn tag(&self) -> str; }
