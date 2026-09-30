@@ -3844,14 +3844,6 @@ function requestedTraitArgumentsSatisfied(
   });
 }
 
-/** Whether `type` matches `slot`'s pattern - a repeated wildcard (the same
- * impl-level generic parameter at more than one position, e.g. `Pair<T, T>`)
- * must bind to the same concrete type at every occurrence, tracked in
- * `bindings` across the whole call (threaded through nested `Nominal`
- * recursion, and across sibling calls when a caller shares one map - see
- * `requestedTraitArgumentsSatisfied`'s own doc comment). `type` is always
- * fully concrete here (a real receiver/operand), unlike `slotsOverlap`'s
- * two-pattern coherence comparison. */
 /** `slotSatisfiesType`'s own comparison once `slot` isn't a `Wildcard` -
  * split out for the same reason as `nonWildcardSlotsOverlap`. */
 function nonWildcardSlotSatisfiesType(
@@ -3887,6 +3879,14 @@ function nonWildcardSlotSatisfiesType(
   return slot.kind === "Concrete" && typesEqual(slot.type, type);
 }
 
+/** Whether `type` matches `slot`'s pattern - a repeated wildcard (the same
+ * impl-level generic parameter at more than one position, e.g. `Pair<T, T>`)
+ * must bind to the same concrete type at every occurrence, tracked in
+ * `bindings` across the whole call (threaded through nested `Nominal`
+ * recursion, and across sibling calls when a caller shares one map - see
+ * `requestedTraitArgumentsSatisfied`'s own doc comment). `type` is always
+ * fully concrete here (a real receiver/operand), unlike `slotsOverlap`'s
+ * two-pattern coherence comparison. */
 function slotSatisfiesType(
   slot: TargetArgSlot,
   type: Semantics.Type,
