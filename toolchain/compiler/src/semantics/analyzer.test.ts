@@ -6912,6 +6912,32 @@ describe("trait and impl declarations", (): void => {
       );
     });
 
+    it("rejects a generic impl target nested inside a fixed-size array that structurally overlaps a concrete instantiation nested the same way", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Box<T> { value: T }
+        impl<T> Draw for Box<[T; 1]> { fn draw(&self) -> str { "a" } }
+        impl Draw for Box<[i32; 1]> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Draw` is already implemented for type `Box`",
+      );
+    });
+
+    it("resolves a method call against a generic impl target nested inside a fixed-size array", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> i32; }
+        struct Box<T> { v: T }
+        impl<T> Draw for Box<[T; 1]> { fn draw(&self) -> i32 { 42 } }
+        fn main() {
+          let b = Box { v: [1] };
+          b.draw();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("still accepts two nested generic impl targets whose nested nominal shapes differ", (): void => {
       const result = diagnose(`
         trait Draw { fn draw(&self) -> str; }

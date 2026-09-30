@@ -502,6 +502,16 @@ type TargetArgSlot =
       readonly nominalKind: "StructType" | "EnumType";
       readonly name: string;
       readonly typeArguments: readonly TargetArgSlot[];
+    }
+  | {
+      readonly kind: "Array";
+      readonly length: number;
+      readonly elementType: TargetArgSlot;
+    }
+  | {
+      readonly kind: "Reference";
+      readonly mutable: boolean;
+      readonly referent: TargetArgSlot;
     };
 
 /** One registered trait impl, extracted just far enough for coherence and
@@ -3315,15 +3325,31 @@ function checkAssociatedConst(
  * carries which side a wildcard came from - see `slotsOverlap`'s own doc
  * comment for why a single shared map (rather than one map per side) is
  * required in the first place. */
+interface NominalTaggedSlot {
+  readonly kind: "Nominal";
+  readonly nominalKind: "StructType" | "EnumType";
+  readonly name: string;
+  readonly typeArguments: readonly TaggedTargetArgSlot[];
+}
+
+interface ArrayTaggedSlot {
+  readonly kind: "Array";
+  readonly length: number;
+  readonly elementType: TaggedTargetArgSlot;
+}
+
+interface ReferenceTaggedSlot {
+  readonly kind: "Reference";
+  readonly mutable: boolean;
+  readonly referent: TaggedTargetArgSlot;
+}
+
 type TaggedTargetArgSlot =
   | { readonly kind: "Wildcard"; readonly key: string }
   | { readonly kind: "Concrete"; readonly type: Semantics.Type }
-  | {
-      readonly kind: "Nominal";
-      readonly nominalKind: "StructType" | "EnumType";
-      readonly name: string;
-      readonly typeArguments: readonly TaggedTargetArgSlot[];
-    };
+  | NominalTaggedSlot
+  | ArrayTaggedSlot
+  | ReferenceTaggedSlot;
 
 function tagTargetArgSlot(
   slot: TargetArgSlot,
@@ -3340,6 +3366,20 @@ function tagTargetArgSlot(
       typeArguments: slot.typeArguments.map((arg) =>
         tagTargetArgSlot(arg, side),
       ),
+    };
+  }
+  if (slot.kind === "Array") {
+    return {
+      kind: "Array",
+      length: slot.length,
+      elementType: tagTargetArgSlot(slot.elementType, side),
+    };
+  }
+  if (slot.kind === "Reference") {
+    return {
+      kind: "Reference",
+      mutable: slot.mutable,
+      referent: tagTargetArgSlot(slot.referent, side),
     };
   }
   return slot;
@@ -3395,6 +3435,64 @@ function resolveTaggedSlot(
   return current;
 }
 
+function nominalSlotsOverlap(
+  ra: NominalTaggedSlot,
+  rb: NominalTaggedSlot,
+  bindings: Map<string, TaggedTargetArgSlot>,
+): boolean {
+  return (
+    ra.nominalKind === rb.nominalKind &&
+    ra.name === rb.name &&
+    taggedSlotListsOverlap(ra.typeArguments, rb.typeArguments, bindings)
+  );
+}
+
+function arraySlotsOverlap(
+  ra: ArrayTaggedSlot,
+  rb: ArrayTaggedSlot,
+  bindings: Map<string, TaggedTargetArgSlot>,
+): boolean {
+  return (
+    ra.length === rb.length &&
+    slotsOverlap(ra.elementType, rb.elementType, bindings)
+  );
+}
+
+function referenceSlotsOverlap(
+  ra: ReferenceTaggedSlot,
+  rb: ReferenceTaggedSlot,
+  bindings: Map<string, TaggedTargetArgSlot>,
+): boolean {
+  return (
+    ra.mutable === rb.mutable &&
+    slotsOverlap(ra.referent, rb.referent, bindings)
+  );
+}
+
+/** `slotsOverlap`'s own comparison once neither side is an unresolved
+ * `Wildcard` - split out, and each compound case split out again into its
+ * own named function, to keep every function under the complexity cap now
+ * that `Array`/`Reference` joined `Nominal`/`Concrete`. */
+function nonWildcardSlotsOverlap(
+  ra: TaggedTargetArgSlot,
+  rb: TaggedTargetArgSlot,
+  bindings: Map<string, TaggedTargetArgSlot>,
+): boolean {
+  if (ra.kind === "Nominal" && rb.kind === "Nominal") {
+    return nominalSlotsOverlap(ra, rb, bindings);
+  }
+  if (ra.kind === "Array" && rb.kind === "Array") {
+    return arraySlotsOverlap(ra, rb, bindings);
+  }
+  if (ra.kind === "Reference" && rb.kind === "Reference") {
+    return referenceSlotsOverlap(ra, rb, bindings);
+  }
+  if (ra.kind === "Concrete" && rb.kind === "Concrete") {
+    return typesEqual(ra.type, rb.type);
+  }
+  return false;
+}
+
 /** Whether two impl targets' own argument slots could describe the same
  * concrete instantiation - real unification against one shared `bindings`
  * map, keyed by each wildcard's already side-tagged identity (see
@@ -3430,17 +3528,7 @@ function slotsOverlap(
     bindings.set(rb.key, ra);
     return true;
   }
-  if (ra.kind === "Nominal" && rb.kind === "Nominal") {
-    return (
-      ra.nominalKind === rb.nominalKind &&
-      ra.name === rb.name &&
-      taggedSlotListsOverlap(ra.typeArguments, rb.typeArguments, bindings)
-    );
-  }
-  if (ra.kind === "Concrete" && rb.kind === "Concrete") {
-    return typesEqual(ra.type, rb.type);
-  }
-  return false;
+  return nonWildcardSlotsOverlap(ra, rb, bindings);
 }
 
 /** An impl's own target, as a single `TargetArgSlot` unifiable against the
@@ -3709,6 +3797,10 @@ function targetArgSlotIdentity(slot: TargetArgSlot): string {
       return monomorphizedTypeIdentity(slot.type);
     case "Nominal":
       return targetArgSlotsIdentity(slot.name, slot.typeArguments);
+    case "Array":
+      return `[${targetArgSlotIdentity(slot.elementType)};${slot.length}]`;
+    case "Reference":
+      return `${slot.mutable ? "&mut " : "&"}${targetArgSlotIdentity(slot.referent)}`;
     default:
       return assertNever(slot, `target arg slot: ${JSON.stringify(slot)}`);
   }
@@ -3760,6 +3852,41 @@ function requestedTraitArgumentsSatisfied(
  * `requestedTraitArgumentsSatisfied`'s own doc comment). `type` is always
  * fully concrete here (a real receiver/operand), unlike `slotsOverlap`'s
  * two-pattern coherence comparison. */
+/** `slotSatisfiesType`'s own comparison once `slot` isn't a `Wildcard` -
+ * split out for the same reason as `nonWildcardSlotsOverlap`. */
+function nonWildcardSlotSatisfiesType(
+  slot: TargetArgSlot,
+  type: Semantics.Type,
+  bindings: Map<string, Semantics.Type>,
+): boolean {
+  if (slot.kind === "Nominal") {
+    return (
+      type.kind === slot.nominalKind &&
+      type.name === slot.name &&
+      type.typeArguments.length === slot.typeArguments.length &&
+      slot.typeArguments.every((s, i) => {
+        const t = type.typeArguments[i];
+        return t !== undefined && slotSatisfiesType(s, t, bindings);
+      })
+    );
+  }
+  if (slot.kind === "Array") {
+    return (
+      type.kind === "ArrayType" &&
+      type.length === slot.length &&
+      slotSatisfiesType(slot.elementType, type.elementType, bindings)
+    );
+  }
+  if (slot.kind === "Reference") {
+    return (
+      type.kind === "ReferenceType" &&
+      type.mutable === slot.mutable &&
+      slotSatisfiesType(slot.referent, type.referent, bindings)
+    );
+  }
+  return slot.kind === "Concrete" && typesEqual(slot.type, type);
+}
+
 function slotSatisfiesType(
   slot: TargetArgSlot,
   type: Semantics.Type,
@@ -3773,18 +3900,7 @@ function slotSatisfiesType(
     }
     return typesEqual(existing, type);
   }
-  if (slot.kind === "Nominal") {
-    return (
-      type.kind === slot.nominalKind &&
-      type.name === slot.name &&
-      type.typeArguments.length === slot.typeArguments.length &&
-      slot.typeArguments.every((s, i) => {
-        const t = type.typeArguments[i];
-        return t !== undefined && slotSatisfiesType(s, t, bindings);
-      })
-    );
-  }
-  return typesEqual(slot.type, type);
+  return nonWildcardSlotSatisfiesType(slot, type, bindings);
 }
 
 /** The cycle-guard key for a `typeName<receiverTypeArguments>:
@@ -4742,6 +4858,23 @@ function classifyTargetArgSlot(
       typeArguments: resolvedType.typeArguments.map((arg) =>
         classifyTargetArgSlot(arg, implGenericNames),
       ),
+    };
+  }
+  if (resolvedType.kind === "ArrayType") {
+    return {
+      kind: "Array",
+      length: resolvedType.length,
+      elementType: classifyTargetArgSlot(
+        resolvedType.elementType,
+        implGenericNames,
+      ),
+    };
+  }
+  if (resolvedType.kind === "ReferenceType") {
+    return {
+      kind: "Reference",
+      mutable: resolvedType.mutable,
+      referent: classifyTargetArgSlot(resolvedType.referent, implGenericNames),
     };
   }
   return { kind: "Concrete", type: resolvedType };
@@ -9369,7 +9502,12 @@ function traitMethodSet(
  * tree carries that parameter's binding at, which is not necessarily the
  * parameter's own declaration order or nesting depth. Mirrors the
  * wildcard-position detection `resolveTypeArgumentSlots` already does for
- * coherence, reading positions instead of building `TargetArgSlot`s. */
+ * coherence, reading positions instead of building `TargetArgSlot`s. Known
+ * gap, unlike that coherence-facing sibling: a path only ever indexes
+ * through nested `StructType`/`EnumType` arguments (`implGenericParamType`'s
+ * own walk requires `isNominalType` at each step) - `impl<T> Outer<[T; 1]>`
+ * has no path for `T` at all, so a method's own extra generic bound nested
+ * that way can't resolve its witness argument. */
 function implGenericParamTargetPositions(
   implGenericNames: ReadonlySet<string>,
   targetType: Parser.Type,
