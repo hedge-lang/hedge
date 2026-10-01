@@ -97,7 +97,7 @@ export interface WitnessParam {
  * that happen to sanitize to the same text - see `witnessParamName`'s own
  * doc comment for the case that motivated it. */
 function escapeForIdentifier(text: string): string {
-  return text.replace(/[^A-Za-z0-9_]/g, (ch) => `$${ch.charCodeAt(0)}$`);
+  return text.replace(/\W/g, (ch) => `$${ch.codePointAt(0)}$`);
 }
 
 /** The one place the `_witness_<param>_<trait>` naming scheme is defined -
