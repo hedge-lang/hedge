@@ -3940,20 +3940,27 @@ function boundVisitingKey(
 }
 
 /** A blanket impl's own bound arguments (`impl<T: Convert<T>> Show for T`'s
- * `Convert<T>`) are declared against the impl's own abstract parameter, not
- * the concrete type being tested - substituting `receiverType` in for that
- * parameter (`impl.targetTypeName`, a blanket impl's own bare parameter
- * name) before checking or composing the bound is what makes a
- * self-referential bound like this resolve against `impl Convert<P> for P`
- * instead of futilely requesting the never-registered `Convert<T>`. */
+ * `Convert<T>`) are declared against the impl's own abstract parameters, not
+ * the concrete type being tested - substituting `receiverType` in for the
+ * target parameter (`impl.targetTypeName`, a blanket impl's own bare
+ * parameter name) is what makes a self-referential bound like this resolve
+ * against `impl Convert<P> for P` instead of futilely requesting the
+ * never-registered `Convert<T>`. `knownBindings` folds in whatever the
+ * caller's own trait-argument unification already bound - `impl<T:
+ * Convert<U>, U> Show<U> for T` resolving `P: Show<i32>` already binds `U`
+ * to `i32` from `Show`'s own argument; without carrying that binding here
+ * too, the recursive bound check would request the never-registered
+ * `Convert<U>` instead of `Convert<i32>`. */
 function substituteBlanketBoundArguments(
   impl: RegisteredImpl,
   receiverType: Semantics.Type,
   typeArguments: readonly Semantics.Type[],
+  knownBindings: ReadonlyMap<string, Semantics.Type> = new Map(),
 ): readonly Semantics.Type[] {
-  const bindings: GenericBindings = new Map([
-    [impl.targetTypeName, { type: receiverType, tokenId: 0 }],
-  ]);
+  const bindings: GenericBindings = new Map(
+    [...knownBindings].map(([name, type]) => [name, { type, tokenId: 0 }]),
+  );
+  bindings.set(impl.targetTypeName, { type: receiverType, tokenId: 0 });
   return typeArguments.map((arg) => substituteGenericType(arg, bindings));
 }
 
@@ -3975,14 +3982,15 @@ function findRegisteredImpl(
   traitName: string,
   requestedTypeArguments: readonly Semantics.Type[] = [],
   visiting: ReadonlySet<string> = new Set(),
+  outBindings?: Map<string, Semantics.Type>,
 ): RegisteredImpl | undefined {
   const typeName = typeIdentity(receiverType);
   const receiverTypeArguments = nominalTypeArguments(receiverType);
   const key = boundVisitingKey(receiverType, traitName, requestedTypeArguments);
   if (visiting.has(key)) return undefined;
   const nextVisiting = new Set(visiting).add(key);
-  return ctx.implRegistry.find((impl) => {
-    if (impl.traitName !== traitName) return false;
+  for (const impl of ctx.implRegistry) {
+    if (impl.traitName !== traitName) continue;
     const bindings = new Map<string, Semantics.Type>();
     if (
       !requestedTraitArgumentsSatisfied(
@@ -3991,49 +3999,64 @@ function findRegisteredImpl(
         bindings,
       )
     ) {
-      return false;
+      continue;
     }
-    if (!impl.isBlanket) {
-      return (
-        impl.targetTypeName === typeName &&
+    const matched = !impl.isBlanket
+      ? impl.targetTypeName === typeName &&
         requestedTraitArgumentsSatisfied(
           impl.targetTypeArguments,
           receiverTypeArguments,
           bindings,
         )
-      );
-    }
-    // A blanket impl's own target is its own bare parameter (`T` in
-    // `impl<T> Convert<T> for T`) - it must unify with `receiverType`
-    // through the same `bindings` the trait-argument check above just
-    // populated, or a trait argument bound to something other than the
-    // receiver (`impl<T> Convert<T> for T` against `P: Convert<i32>`,
-    // `P != i32`) is wrongly accepted since an unbound target was never
-    // checked against anything.
-    if (
-      !slotSatisfiesType(
-        { kind: "Wildcard", paramName: impl.targetTypeName },
+      : blanketImplMatches(ctx, impl, receiverType, bindings, nextVisiting);
+    if (!matched) continue;
+    for (const [name, type] of bindings) outBindings?.set(name, type);
+    return impl;
+  }
+  return undefined;
+}
+
+/** `findRegisteredImpl`'s own blanket-impl branch, split out to keep that
+ * function under the complexity cap. A blanket impl's own target is its own
+ * bare parameter (`T` in `impl<T> Convert<T> for T`) - it must unify with
+ * `receiverType` through the same `bindings` the trait-argument check
+ * already populated, or a trait argument bound to something other than the
+ * receiver (`impl<T> Convert<T> for T` against `P: Convert<i32>`, `P !=
+ * i32`) is wrongly accepted since an unbound target was never checked
+ * against anything. `bindings` is also carried into each recursively
+ * checked bound (`substituteBlanketBoundArguments`'s own `knownBindings`) -
+ * see that function's doc comment for why. */
+function blanketImplMatches(
+  ctx: AnalysisContext,
+  impl: RegisteredImpl,
+  receiverType: Semantics.Type,
+  bindings: Map<string, Semantics.Type>,
+  visiting: ReadonlySet<string>,
+): boolean {
+  if (
+    !slotSatisfiesType(
+      { kind: "Wildcard", paramName: impl.targetTypeName },
+      receiverType,
+      bindings,
+    )
+  ) {
+    return false;
+  }
+  return impl.blanketBounds.every(
+    (bound) =>
+      findRegisteredImpl(
+        ctx,
         receiverType,
-        bindings,
-      )
-    ) {
-      return false;
-    }
-    return impl.blanketBounds.every(
-      (bound) =>
-        findRegisteredImpl(
-          ctx,
+        bound.name,
+        substituteBlanketBoundArguments(
+          impl,
           receiverType,
-          bound.name,
-          substituteBlanketBoundArguments(
-            impl,
-            receiverType,
-            bound.typeArguments,
-          ),
-          nextVisiting,
-        ) !== undefined,
-    );
-  });
+          bound.typeArguments,
+          bindings,
+        ),
+        visiting,
+      ) !== undefined,
+  );
 }
 
 /** The concrete type's own witness for each of a blanket impl's own bounds
@@ -4048,6 +4071,7 @@ function composeBlanketBoundWitnesses(
   ctx: AnalysisContext,
   receiverType: Semantics.Type,
   impl: RegisteredImpl,
+  bindings: ReadonlyMap<string, Semantics.Type>,
   visiting: ReadonlySet<string>,
 ): readonly WitnessRef[] | undefined {
   const witnesses: WitnessRef[] = [];
@@ -4056,7 +4080,12 @@ function composeBlanketBoundWitnesses(
       ctx,
       receiverType,
       bound.name,
-      substituteBlanketBoundArguments(impl, receiverType, bound.typeArguments),
+      substituteBlanketBoundArguments(
+        impl,
+        receiverType,
+        bound.typeArguments,
+        bindings,
+      ),
       visiting,
     );
     if (!isSome(witness)) return undefined;
@@ -4084,11 +4113,14 @@ function resolveTraitBoundForTypeName(
   const key = boundVisitingKey(receiverType, traitName, requestedTypeArguments);
   if (visiting.has(key)) return none();
   const nextVisiting = new Set(visiting).add(key);
+  const outBindings = new Map<string, Semantics.Type>();
   const impl = findRegisteredImpl(
     ctx,
     receiverType,
     traitName,
     requestedTypeArguments,
+    new Set(),
+    outBindings,
   );
   if (impl === undefined) return none();
   const monomorphizedTypeId = monomorphizedTypeIdentity(receiverType);
@@ -4107,6 +4139,7 @@ function resolveTraitBoundForTypeName(
       ctx,
       receiverType,
       impl,
+      outBindings,
       nextVisiting,
     );
     if (boundWitnesses === undefined) return none();
@@ -4211,12 +4244,14 @@ function blanketMethodBoundWitnesses(
   receiverType: Semantics.Type,
   isImplProvided: boolean,
   impl: RegisteredImpl | undefined,
+  bindings: ReadonlyMap<string, Semantics.Type>,
 ): Option<readonly WitnessRef[]> {
   if (!isImplProvided || !impl?.isBlanket) return none();
   const boundWitnesses = composeBlanketBoundWitnesses(
     ctx,
     receiverType,
     impl,
+    bindings,
     new Set(),
   );
   assert(
@@ -4274,11 +4309,14 @@ function collectWitnessMethods(
   seen.add(traitId);
   const trait = ctx.traitRegistry.get(traitId);
   if (trait === undefined) return;
+  const bindings = new Map<string, Semantics.Type>();
   const impl = findRegisteredImpl(
     ctx,
     receiverType,
     traitId,
     requestedTypeArguments,
+    new Set(),
+    bindings,
   );
   const bareTrait = bareTypeName(traitId);
   for (const method of trait.methods) {
@@ -4300,6 +4338,7 @@ function collectWitnessMethods(
         receiverType,
         isImplProvided,
         impl,
+        bindings,
       ),
       blanketImplScopeId: resolveBlanketImplScopeId(
         traitId,

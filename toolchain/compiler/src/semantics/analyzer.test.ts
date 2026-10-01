@@ -7144,6 +7144,22 @@ describe("trait and impl declarations", (): void => {
         "the trait bound `P: Convert<i32>` is not satisfied",
       );
     });
+
+    it("carries a blanket bound's own trait-argument binding into its recursively-checked bound", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        trait Show<T> {}
+        struct P { v: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.v } }
+        impl<T: Convert<U>, U> Show<U> for T {}
+        fn needs<X: Show<i32>>(x: &X) {}
+        fn main() {
+          let p = P { v: 1 };
+          needs(&p);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
   });
 
   describe("parameterized trait-bound instantiation coherence and selection", (): void => {
