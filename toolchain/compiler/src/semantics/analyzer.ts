@@ -768,6 +768,26 @@ function isDeclaredGenericParam(ctx: AnalysisContext, name: string): boolean {
   return innermost?.has(name) ?? false;
 }
 
+/** `receiverType`'s own declared generic-parameter name, when it's a bare
+ * reference to one - shared by `methodCandidates` and
+ * `applicableInstantiationCount`, which both need to tell an abstract
+ * bounded receiver apart from a concrete one the same way. */
+function abstractGenericParamName(
+  ctx: AnalysisContext,
+  receiverType: Semantics.Type,
+): string | undefined {
+  if (
+    receiverType.kind !== "NamedType" ||
+    receiverType.path.segments.length !== 1
+  ) {
+    return undefined;
+  }
+  const name = receiverType.path.segments[0];
+  return name !== undefined && isDeclaredGenericParam(ctx, name)
+    ? name
+    : undefined;
+}
+
 /** The innermost open item's own declared bounds for one of its type
  * parameters, each resolved to its scope-qualified `traitRegistry` key -
  * empty for a parameter with no bounds, or one not declared by the innermost
@@ -9495,6 +9515,44 @@ function traitMethodSet(
   return [...own, ...inherited];
 }
 
+/** `traitMethodSet(ctx, traitId)`, with `traitId`'s own declared generic
+ * parameters substituted by `traitTypeArguments` (an abstract receiver's
+ * own `T: Convert<i32>` bound, mirroring what `indexTraitImplMethods` does
+ * for a concrete impl's `impl Convert<i32> for P`) - never a supertrait's
+ * method, since this codebase's trait model doesn't carry type arguments
+ * through a supertrait chain (see `boundsImplyTrait`'s own doc comment);
+ * `m.origin.traitId === traitId` is what tells a directly-declared method
+ * apart from a flattened-in inherited one sharing the same array. */
+function instantiatedTraitMethodSet(
+  ctx: AnalysisContext,
+  traitId: string,
+  traitTypeArguments: readonly Semantics.Type[],
+): readonly IndexedMethod[] {
+  const methods = traitMethodSet(ctx, traitId);
+  if (traitTypeArguments.length === 0) return methods;
+  const traitGenericParams =
+    ctx.traitRegistry.get(traitId)?.genericParams ?? [];
+  return methods.map((m) =>
+    m.origin.kind === "trait" && m.origin.traitId === traitId
+      ? {
+          ...m,
+          params: m.params.map((p) =>
+            substituteTraitGenericParams(
+              p,
+              traitGenericParams,
+              traitTypeArguments,
+            ),
+          ),
+          returnType: substituteTraitGenericParams(
+            m.returnType,
+            traitGenericParams,
+            traitTypeArguments,
+          ),
+        }
+      : m,
+  );
+}
+
 /** Maps each of the impl's own declared generic parameter names to its
  * access path within the impl's own *target* type-argument list (`impl<A,
  * B> Pair<B, A>` maps `A -> [1]`, `B -> [0]`; `impl<T> Outer<Wrapper<T>>`
@@ -9814,8 +9872,8 @@ function methodCandidates(
       return traitMethodSet(ctx, selfContext.traitName);
     }
     if (isDeclaredGenericParam(ctx, name)) {
-      return declaredGenericParamBounds(ctx, name).flatMap((traitId) =>
-        traitMethodSet(ctx, traitId),
+      return declaredGenericParamBoundRefs(ctx, name).flatMap((ref) =>
+        instantiatedTraitMethodSet(ctx, ref.traitName, ref.typeArguments),
       );
     }
   }
@@ -9942,6 +10000,28 @@ function applicableImplsForReceiver(
   });
 }
 
+/** How many of `receiverType`'s own applicable instantiations of `traitId`
+ * provide the method being resolved - `resolveMethodCall`'s own ambiguity
+ * check needs this for both a concrete receiver (counting registered impls,
+ * via `applicableImplsForReceiver`) and an abstract bounded one (counting
+ * the declared bound list's own entries naming `traitId`, e.g. `U: Tag<i32>
+ * + Tag<str>`) - a receiver that's neither never has more than one
+ * instantiation to begin with. */
+function applicableInstantiationCount(
+  ctx: AnalysisContext,
+  receiverType: Semantics.Type,
+  traitId: string,
+): number {
+  if (isNominalType(receiverType)) {
+    return applicableImplsForReceiver(ctx, receiverType, traitId).length;
+  }
+  const paramName = abstractGenericParamName(ctx, receiverType);
+  if (paramName === undefined) return 1;
+  return declaredGenericParamBoundRefs(ctx, paramName).filter(
+    (ref) => ref.traitName === traitId,
+  ).length;
+}
+
 /** Rust's method-resolution precedence: an inherent method shadows a
  * same-named trait method silently; a name shared by two or more implemented
  * traits with no inherent method is ambiguous. */
@@ -9967,10 +10047,7 @@ function resolveMethodCall(
   const typeName = bareTypeName(typeIdentity(receiverType));
   const [onlyTraitId] = traitIds;
   if (traitIds.length === 1 && onlyTraitId !== undefined) {
-    if (
-      isNominalType(receiverType) &&
-      applicableImplsForReceiver(ctx, receiverType, onlyTraitId).length > 1
-    ) {
+    if (applicableInstantiationCount(ctx, receiverType, onlyTraitId) > 1) {
       emitError(
         ctx,
         {

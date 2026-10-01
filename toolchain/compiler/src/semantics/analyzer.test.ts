@@ -4752,6 +4752,38 @@ describe("associated types and trait projections", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
+    it("substitutes a parameterized trait bound's own type arguments into an abstract receiver's method return type", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct P { v: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.v } }
+        fn f<U: Convert<i32>>(u: &U) -> i32 { u.convert() }
+        fn main() {
+          let p = P { v: 1 };
+          f(&p);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a method call ambiguous between two instantiations of a parameterized trait both bounding an abstract receiver", (): void => {
+      const result = diagnose(`
+        trait Tag<T> { fn tag(&self) -> str; }
+        struct P { v: i32 }
+        impl Tag<i32> for P { fn tag(&self) -> str { "int" } }
+        impl Tag<str> for P { fn tag(&self) -> str { "string" } }
+        fn f<U: Tag<i32> + Tag<str>>(u: &U) -> str { u.tag() }
+        fn main() {
+          let p = P { v: 1 };
+          f(&p);
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "method `tag` on `U` is ambiguous between multiple instantiations of trait `Tag`",
+      );
+    });
+
     it("does not flag two instantiations of a parameterized trait targeting different structs as ambiguous", (): void => {
       const result = diagnose(`
         trait Tag<T> { fn tag(&self) -> str; }
