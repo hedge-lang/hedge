@@ -3974,7 +3974,10 @@ function substituteBlanketBoundArguments(
  * `resolveTraitBoundForTypeName` (builds a witness from the result) and
  * `resolveAssociatedTypeViaSupertrait` (reads the impl's own
  * associated-type definitions instead, always for an unparameterized
- * trait).
+ * trait). `outBindings`, when given, is filled with the winning candidate's
+ * own generic-parameter bindings (target plus any bound from its trait
+ * arguments) - a caller composing or substituting that impl's own further
+ * bounds needs these, not just the impl itself.
  */
 function findRegisteredImpl(
   ctx: AnalysisContext,
