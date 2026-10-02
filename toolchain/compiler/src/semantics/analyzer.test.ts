@@ -4752,6 +4752,20 @@ describe("associated types and trait projections", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
+    it("substitutes Self nested inside a fixed-size array nested inside a struct type argument", (): void => {
+      const result = diagnose(`
+        struct Box<T> { value: T }
+        trait Wrap { fn wrap(&self) -> Box<[Self; 1]>; }
+        struct P { v: i32 }
+        impl Wrap for P { fn wrap(&self) -> Box<[P; 1]> { Box { value: [P { v: self.v }] } } }
+        fn main() {
+          let p = P { v: 1 };
+          let b: Box<[P; 1]> = p.wrap();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("substitutes a parameterized trait bound's own type arguments into an abstract receiver's method return type", (): void => {
       const result = diagnose(`
         trait Convert<T> { fn convert(&self) -> T; }

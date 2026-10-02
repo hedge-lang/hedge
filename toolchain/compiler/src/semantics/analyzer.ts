@@ -9540,6 +9540,16 @@ function substituteSelfType(
       ),
     };
   }
+  if (type.kind === "ArrayType") {
+    return {
+      ...type,
+      elementType: substituteSelfType(
+        type.elementType,
+        target,
+        associatedTypes,
+      ),
+    };
+  }
   return type;
 }
 
