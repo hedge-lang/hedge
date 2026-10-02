@@ -1426,6 +1426,21 @@ describe("generic witness codegen", (): void => {
     );
   });
 
+  it("resolves a generic inherent method's own bound witness from the receiver's matched target arguments", (): void => {
+    const js = emittedJs(`
+      trait Convert<T> { fn convert(&self) -> T; }
+      struct Pair<A, B> { a: A, b: B }
+      struct P { n: i32 }
+      impl Convert<i32> for P { fn convert(&self) -> i32 { self.n } }
+      impl<A: Convert<B>, B> Pair<A, B> { fn first(&self) -> B { self.a.convert() } }
+      fn main() {
+        let pair = Pair { a: P { n: 7 }, b: 0 };
+        print(pair.first());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
   it("dispatches through the requested instantiation's own witness methods, not an earlier unrelated one", (): void => {
     const js = emittedJs(`
       trait Tag<T> { fn tag(&self) -> str { "default" } }

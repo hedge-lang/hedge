@@ -6970,6 +6970,21 @@ describe("trait and impl declarations", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
+    it("substitutes a generic inherent impl's own matched target-argument bindings into an indexed method's return type", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct Pair<A, B> { a: A, b: B }
+        struct P { n: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.n } }
+        impl<A: Convert<B>, B> Pair<A, B> { fn first(&self) -> B { self.a.convert() } }
+        fn main() {
+          let pair = Pair { a: P { n: 1 }, b: 0 };
+          let x: i32 = pair.first();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("still accepts two nested generic impl targets whose nested nominal shapes differ", (): void => {
       const result = diagnose(`
         trait Draw { fn draw(&self) -> str; }

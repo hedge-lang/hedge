@@ -9944,7 +9944,12 @@ function methodCandidates(
  * filtered down to the entries whose own impl's target-argument slots are
  * actually satisfied by the receiver's own concrete type arguments - what
  * keeps a `Pair<i32>` receiver from picking up `impl Draw for Pair<str>`'s
- * methods, or vice versa. */
+ * methods, or vice versa. The match against a *generic* impl's own slots
+ * (`impl<A: Convert<B>, B> Pair<A, B>`) binds the impl's own parameters to
+ * the receiver's own concrete arguments (`A -> P`, `B -> i32`) - substituted
+ * into the returned method via `substituteIndexedMethodBindings`, or a
+ * generic impl's indexed signature (and its own `genericParamBounds`, e.g.
+ * `A: Convert<B>`) would stay abstract at this concrete call site. */
 function methodCandidatesForNominalType(
   ctx: AnalysisContext,
   receiverType: Semantics.StructType | Semantics.EnumType,
@@ -9954,13 +9959,54 @@ function methodCandidatesForNominalType(
     ...indexed,
     ...blanketMethodCandidates(ctx, receiverType),
   ];
-  return candidates.filter((m) =>
-    requestedTraitArgumentsSatisfied(
-      m.targetTypeArguments,
-      receiverType.typeArguments,
-      new Map(),
-    ),
+  return candidates.flatMap((m) => {
+    const bindings = new Map<string, Semantics.Type>();
+    if (
+      !requestedTraitArgumentsSatisfied(
+        m.targetTypeArguments,
+        receiverType.typeArguments,
+        bindings,
+      )
+    ) {
+      return [];
+    }
+    return [substituteIndexedMethodBindings(m, bindings)];
+  });
+}
+
+/** Folds `bindings` (an impl's own generic parameters, bound to the
+ * receiver's own concrete type arguments by `methodCandidatesForNominalType`'s
+ * own match) into one indexed method's `params`, `returnType`, and each of
+ * its own `genericParamBounds`' `typeArguments` - the method-level bound's
+ * own trait arguments (`A: Convert<B>`'s `B`) need this exactly as much as
+ * the signature itself does, or `recordMethodCallWitnesses` resolves the
+ * witness for the impl's still-abstract parameter instead of the receiver's
+ * concrete one. A no-op passthrough when nothing was bound (the common,
+ * non-generic-impl case). */
+function substituteIndexedMethodBindings(
+  method: IndexedMethod,
+  bindings: ReadonlyMap<string, Semantics.Type>,
+): IndexedMethod {
+  if (bindings.size === 0) return method;
+  const generic: GenericBindings = new Map(
+    [...bindings].map(([name, type]) => [name, { type, tokenId: 0 }]),
   );
+  return {
+    ...method,
+    params: method.params.map((p) => substituteGenericType(p, generic)),
+    returnType: substituteGenericType(method.returnType, generic),
+    genericParamBounds: new Map(
+      [...method.genericParamBounds].map(([paramName, refs]) => [
+        paramName,
+        refs.map((ref) => ({
+          ...ref,
+          typeArguments: ref.typeArguments.map((arg) =>
+            substituteGenericType(arg, generic),
+          ),
+        })),
+      ]),
+    ),
+  };
 }
 
 /** Every method a blanket impl (`impl<T: Bound> Trait for T`) provides for
