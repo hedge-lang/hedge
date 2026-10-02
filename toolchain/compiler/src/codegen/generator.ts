@@ -289,8 +289,11 @@ function structDisposer(
   disposableFields: readonly string[],
   dropFn: Option<{ name: string; witnessArgs: readonly string[] }>,
 ): string {
+  const witnessArgs = isSome(dropFn)
+    ? dropFn.value.witnessArgs.map((w) => `, ${w}`).join("")
+    : "";
   const dropCall = isSome(dropFn)
-    ? `let _s = this; ${dropFn.value.name}({ get v() { return _s; }, set v(nv) { _s = nv; } }${dropFn.value.witnessArgs.map((w) => `, ${w}`).join("")}); `
+    ? `let _s = this; ${dropFn.value.name}({ get v() { return _s; }, set v(nv) { _s = nv; } }${witnessArgs}); `
     : "";
   const fieldReleases = disposableFields
     .map((name, i) => `using _d${String(i)} = ${ownFieldAccess(name)};`)
