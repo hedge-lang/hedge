@@ -6999,6 +6999,18 @@ describe("trait and impl declarations", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
+    it("does not substitute a generic impl's own matched binding into a method's own generic parameter of the same name", (): void => {
+      const result = diagnose(`
+        struct Pair<T> { v: T }
+        impl<T> Pair<T> { fn get<T>(&self, x: T) -> T { x } }
+        fn main() {
+          let p = Pair { v: "hello" };
+          p.get(5);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("still accepts two nested generic impl targets whose nested nominal shapes differ", (): void => {
       const result = diagnose(`
         trait Draw { fn draw(&self) -> str; }

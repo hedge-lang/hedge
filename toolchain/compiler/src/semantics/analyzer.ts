@@ -9496,6 +9496,15 @@ interface IndexedMethod {
    * the impl matching the receiver's own instantiation, not whichever
    * entry happens to come first in registration order. */
   readonly targetTypeArguments: readonly TargetArgSlot[];
+  /** The method's *own* declared generic parameter names only - never the
+   * enclosing impl/trait's, even though both share `genericParams`. A
+   * method can redeclare (shadow) an enclosing name (`impl<T> Pair<T> { fn
+   * get<T>(&self, x: T) -> T { x } }`'s two `T`s are unrelated), so
+   * `substituteIndexedMethodBindings` needs this to know which occurrences
+   * of a bound name inside `params`/`returnType` are actually the impl's
+   * own (safe to substitute) versus the method's own shadowing one (must
+   * stay abstract). */
+  readonly ownGenericParams: ReadonlySet<string>;
   readonly origin:
     | { readonly kind: "inherent" }
     | { readonly kind: "trait"; readonly traitId: string };
@@ -9572,6 +9581,7 @@ function traitMethodSet(
     genericParamBounds: m.genericParamBounds,
     implGenericParamPositions: new Map(),
     targetTypeArguments: [],
+    ownGenericParams: new Set(m.genericParams),
     origin: { kind: "trait", traitId },
   }));
   const inherited = trait.supertraits.flatMap((s) =>
@@ -9606,12 +9616,14 @@ function instantiatedTraitMethodSet(
               p,
               traitGenericParams,
               traitTypeArguments,
+              m.ownGenericParams,
             ),
           ),
           returnType: substituteTraitGenericParams(
             m.returnType,
             traitGenericParams,
             traitTypeArguments,
+            m.ownGenericParams,
           ),
         }
       : m,
@@ -9810,7 +9822,10 @@ function indexTraitImplMethods(
     findRegisteredImpl(ctx, targetType, traitId, [])?.associatedTypeDefs ??
     new Map<string, Semantics.Type>();
   const traitGenericParams = ctx.traitRegistry.get(traitId)?.genericParams;
-  const substituteTraitMethodType = (type: Semantics.Type): Semantics.Type =>
+  const substituteTraitMethodType = (
+    type: Semantics.Type,
+    ownGenericParams: ReadonlySet<string>,
+  ): Semantics.Type =>
     substituteSelfType(
       traitGenericParams === undefined
         ? type
@@ -9818,14 +9833,17 @@ function indexTraitImplMethods(
             type,
             traitGenericParams,
             traitRefTypeArguments,
+            ownGenericParams,
           ),
       targetType,
       associatedTypes,
     );
   return traitMethods.map((m): IndexedMethod => ({
     ...m,
-    params: m.params.map(substituteTraitMethodType),
-    returnType: substituteTraitMethodType(m.returnType),
+    params: m.params.map((p) =>
+      substituteTraitMethodType(p, m.ownGenericParams),
+    ),
+    returnType: substituteTraitMethodType(m.returnType, m.ownGenericParams),
     implGenericParamPositions,
     targetTypeArguments,
     genericParamBounds: mergedGenericParamBounds(
@@ -9840,14 +9858,19 @@ function indexTraitImplMethods(
  * distinct from `Self`, which `substituteSelfType` already handles.
  * `traitRefTypeArguments` is the impl's own requested instantiation
  * (`impl Convert<i32> for P`'s `[i32]`), positionally zipped against the
- * trait's declared names. */
+ * trait's declared names. `ownGenericParams` excludes any trait-level name
+ * the method itself redeclares (`trait Convert<T> { fn id<T>(&self, x: T)
+ * -> T; }`'s two `T`s are unrelated) from binding at all - see
+ * `IndexedMethod.ownGenericParams`'s own doc comment. */
 function substituteTraitGenericParams(
   type: Semantics.Type,
   traitGenericParams: readonly string[],
   traitRefTypeArguments: readonly Semantics.Type[],
+  ownGenericParams: ReadonlySet<string>,
 ): Semantics.Type {
   const bindings: GenericBindings = new Map();
   for (const [i, name] of traitGenericParams.entries()) {
+    if (ownGenericParams.has(name)) continue;
     const arg = traitRefTypeArguments[i];
     if (arg !== undefined) bindings.set(name, { type: arg, tokenId: 0 });
   }
@@ -9909,6 +9932,7 @@ function indexInherentMethods(
         genericParamBounds,
         implGenericParamPositions,
         targetTypeArguments,
+        ownGenericParams: new Set(genericParamNames(decl.signature.generics)),
         origin: { kind: "inherent" },
       },
     ];
@@ -9998,8 +10022,14 @@ function substituteIndexedMethodBindings(
   bindings: ReadonlyMap<string, Semantics.Type>,
 ): IndexedMethod {
   if (bindings.size === 0) return method;
+  // A binding whose name the method itself redeclares (`impl<T> Pair<T> {
+  // fn get<T>(&self, x: T) -> T { x } }`'s two `T`s are unrelated) must not
+  // substitute - every occurrence of that bare name inside this method's own
+  // signature is the method's own shadowing parameter, never the impl's.
   const generic: GenericBindings = new Map(
-    [...bindings].map(([name, type]) => [name, { type, tokenId: 0 }]),
+    [...bindings]
+      .filter(([name]) => !method.ownGenericParams.has(name))
+      .map(([name, type]) => [name, { type, tokenId: 0 }]),
   );
   return {
     ...method,
