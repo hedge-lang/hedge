@@ -2753,6 +2753,20 @@ describe("Drop::drop dispose body", (): void => {
     expect(runEmittedJs(js)).toEqual(["0", "2", "1"]);
   });
 
+  it("runs each instantiation's own `drop` body for a tuple struct too, not whichever one was registered last", (): void => {
+    const js = emittedJs(`
+      struct Pair<T>(T);
+      impl Drop for Pair<i32> { fn drop(&mut self) { print(1); } }
+      impl Drop for Pair<str> { fn drop(&mut self) { print(2); } }
+      fn main() {
+        let a = Pair(1);
+        let b = Pair("s");
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "2", "1"]);
+  });
+
   it("runs a generic impl's own `drop` body for every instantiation of its target", (): void => {
     const js = emittedJs(`
       struct Pair<T> { a: T }

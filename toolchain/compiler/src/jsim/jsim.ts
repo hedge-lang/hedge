@@ -2160,7 +2160,7 @@ function parseExpressionDispatch(
         return jsimTupleStructConstruction(
           ctx,
           expression.arguments,
-          expression.callee.type,
+          expression.type,
           expression.tokenId,
         );
       }
