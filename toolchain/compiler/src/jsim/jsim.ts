@@ -1371,6 +1371,9 @@ function reserveHoistedWitnessConsts(ctx: JsimContext): void {
   for (const refs of ctx.methodCallWitnesses.values()) {
     for (const ref of refs) reserveWitnessRef(ctx, ref);
   }
+  for (const refs of ctx.dropWitnesses.values()) {
+    for (const ref of refs) reserveWitnessRef(ctx, ref);
+  }
 }
 
 /** A JS expression string constructing the `Ordering` tagged object

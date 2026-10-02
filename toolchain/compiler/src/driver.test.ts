@@ -2823,6 +2823,25 @@ describe("Drop::drop dispose body", (): void => {
     `);
     expect(runEmittedJs(js)).toEqual(["0", "7"]);
   });
+
+  it("pre-reserves a generic Drop impl's own hoisted witness name before an earlier local can claim it", (): void => {
+    const js = emittedJs(`
+      trait Marker { fn mark(&self) -> i32; }
+      struct Num { v: i32 }
+      impl Marker for Num { fn mark(&self) -> i32 { self.v } }
+      struct Wrapper<T> { value: T }
+      impl<T: Marker> Drop for Wrapper<T> {
+        fn drop(&mut self) { print(self.value.mark()); }
+      }
+      fn main() {
+        let __witness_Marker_Num = 99;
+        let w = Wrapper { value: Num { v: 7 } };
+        print(0);
+        print(__witness_Marker_Num);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "99", "7"]);
+  });
 });
 
 describe("std prelude", (): void => {
