@@ -9625,6 +9625,22 @@ function instantiatedTraitMethodSet(
             traitTypeArguments,
             m.ownGenericParams,
           ),
+          genericParamBounds: new Map(
+            [...m.genericParamBounds].map(([paramName, refs]) => [
+              paramName,
+              refs.map((ref) => ({
+                ...ref,
+                typeArguments: ref.typeArguments.map((arg) =>
+                  substituteTraitGenericParams(
+                    arg,
+                    traitGenericParams,
+                    traitTypeArguments,
+                    m.ownGenericParams,
+                  ),
+                ),
+              })),
+            ]),
+          ),
         }
       : m,
   );

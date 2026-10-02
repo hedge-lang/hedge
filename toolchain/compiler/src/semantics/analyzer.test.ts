@@ -8411,6 +8411,32 @@ describe("trait and impl declarations", (): void => {
       expect(witness.traitName).toBe("Marker");
       expect(witness.typeName).toBe("Num");
     });
+
+    it("instantiates a method-level bound's own trait argument from the abstract receiver's own bound type argument", (): void => {
+      const result = diagnoseWithPrelude(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct X { v: i32 }
+        impl Convert<i32> for X { fn convert(&self) -> i32 { self.v } }
+        trait Factory<T> {
+          fn make<U: Convert<T>>(&self, u: U) -> T;
+        }
+        fn use_factory<R: Factory<i32>>(r: &R, x: X) -> i32 {
+          r.make(x)
+        }
+        fn main() { print(0); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.methodCallWitnesses.values()];
+      assert(
+        witnesses !== undefined,
+        "expected a recorded method-call witness",
+      );
+      expect(witnesses).toHaveLength(1);
+      const witness = witnesses[0];
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(witness.traitName).toBe("Convert");
+      expect(witness.typeName).toBe("X");
+    });
   });
 
   describe("nested impl registration and visibility", (): void => {
