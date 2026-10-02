@@ -7011,6 +7011,29 @@ describe("trait and impl declarations", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
+    it("does not substitute a trait bound's own type argument into a bounded receiver's method's own generic parameter of the same name", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn get<T>(&self, x: T) -> T; }
+        fn use_it<R: Convert<str>>(r: &R, x: i32) {
+          r.get(x);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("does not substitute a trait impl's own trait-argument binding into a concrete receiver's method's own generic parameter of the same name", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn get<T>(&self, x: T) -> T; }
+        struct P { n: i32 }
+        impl Convert<str> for P { fn get<T>(&self, x: T) -> T { x } }
+        fn main() {
+          let p = P { n: 1 };
+          p.get(5);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("still accepts two nested generic impl targets whose nested nominal shapes differ", (): void => {
       const result = diagnose(`
         trait Draw { fn draw(&self) -> str; }
