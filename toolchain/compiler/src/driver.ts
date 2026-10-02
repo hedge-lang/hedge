@@ -84,6 +84,7 @@ export function compile(
           unsizeCoercions: analysis.unsizeCoercions,
           dropImpls: analysis.dropImpls,
           methodCallWitnesses: analysis.methodCallWitnesses,
+          dropWitnesses: analysis.dropWitnesses,
         }),
       ),
     ),

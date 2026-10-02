@@ -287,10 +287,10 @@ function ownFieldAccess(name: string): string {
  */
 function structDisposer(
   disposableFields: readonly string[],
-  dropFn: Option<string>,
+  dropFn: Option<{ name: string; witnessArgs: readonly string[] }>,
 ): string {
   const dropCall = isSome(dropFn)
-    ? `let _s = this; ${dropFn.value}({ get v() { return _s; }, set v(nv) { _s = nv; } }); `
+    ? `let _s = this; ${dropFn.value.name}({ get v() { return _s; }, set v(nv) { _s = nv; } }${dropFn.value.witnessArgs.map((w) => `, ${w}`).join("")}); `
     : "";
   const fieldReleases = disposableFields
     .map((name, i) => `using _d${String(i)} = ${ownFieldAccess(name)};`)

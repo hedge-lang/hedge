@@ -133,6 +133,10 @@ interface JsimContext {
    * concrete-receiver method call's own bounded generic parameters, keyed
    * by the method-name token (same convention as `methodTargets`). */
   readonly methodCallWitnesses: ReadonlyMap<number, readonly WitnessRef[]>;
+  /** `AnalysisResult.dropWitnesses` - witnesses resolved for a generic
+   * `Drop` impl's own bound(s), keyed by the disposed value's own
+   * construction-expression tokenId. */
+  readonly dropWitnesses: ReadonlyMap<number, readonly WitnessRef[]>;
   /** Each emitted method free function's `methodKey` mapped to the name
    * actually emitted - identical to the readable `methodFreeFnName` unless it
    * collided with a user top-level binding. Both the emission and call sites
@@ -195,6 +199,7 @@ function createJsimContext(
     unsizeCoercions: info.unsizeCoercions ?? new Map(),
     dropImpls: info.dropImpls ?? new Map(),
     methodCallWitnesses: info.methodCallWitnesses ?? new Map(),
+    dropWitnesses: info.dropWitnesses ?? new Map(),
     methodFreeFnNames: new Map(),
     hoistedWitnesses: new Map(),
     primitiveEqWitness: { name: undefined },
@@ -899,6 +904,7 @@ export interface JsimInfo {
   readonly unsizeCoercions?: ReadonlyMap<number, UnsizeCoercion>;
   readonly dropImpls?: ReadonlyMap<string, readonly DropImplEntry[]>;
   readonly methodCallWitnesses?: ReadonlyMap<number, readonly WitnessRef[]>;
+  readonly dropWitnesses?: ReadonlyMap<number, readonly WitnessRef[]>;
 }
 
 export function toJsim(
@@ -2152,6 +2158,7 @@ function parseExpressionDispatch(
           ctx,
           expression.arguments,
           expression.callee.type,
+          expression.tokenId,
         );
       }
       return {
@@ -2732,19 +2739,29 @@ function jsimRangeExpression(
   };
 }
 
-/** The free-function name of a struct type's `Drop::drop` body.
- * Enum `Drop` is not wired yet (a later ticket). */
-function structDropFn(ctx: JsimContext, type: Semantics.Type): Option<string> {
+/** The free function name and resolved bound witness arguments of a struct
+ * type's `Drop::drop` body. Enum `Drop` is not wired yet (a later ticket).
+ * `tokenId` is the constructing expression's own tokenId -
+ * `AnalysisResult.dropWitnesses`' key for a generic impl's own bound(s). */
+function structDropFn(
+  ctx: JsimContext,
+  type: Semantics.Type,
+  tokenId: number,
+): Option<{ name: string; witnessArgs: readonly string[] }> {
   if (type.kind !== "StructType") return none();
   const target = findDropTarget(ctx.dropImpls, type.name, type.typeArguments);
-  return target === undefined
-    ? none()
-    : some(resolvedMethodFreeFnName(ctx, target));
+  if (target === undefined) return none();
+  return some({
+    name: resolvedMethodFreeFnName(ctx, target),
+    witnessArgs: (ctx.dropWitnesses.get(tokenId) ?? []).map((ref) =>
+      witnessRefName(ctx, ref),
+    ),
+  });
 }
 
 function jsimStructExpression(
   ctx: JsimContext,
-  { base, fields, path, type }: Semantics.StructExpression,
+  { base, fields, path, type, tokenId }: Semantics.StructExpression,
 ): JSIM.Expression {
   const spreads = [base]
     .filter(isSome)
@@ -2774,7 +2791,7 @@ function jsimStructExpression(
     kind: "StructExpression",
     fields: ownFields,
     disposableFields,
-    dropFn: structDropFn(ctx, type),
+    dropFn: structDropFn(ctx, type, tokenId),
   };
 }
 
@@ -2825,6 +2842,7 @@ function jsimTupleStructConstruction(
   ctx: JsimContext,
   args: readonly Semantics.Expression[],
   type: Semantics.Type,
+  tokenId: number,
 ): JSIM.Expression {
   return {
     kind: "StructExpression",
@@ -2837,7 +2855,7 @@ function jsimTupleStructConstruction(
       .map((arg, i) => ({ arg, name: String(i) }))
       .filter(({ arg }) => !hasCapability(arg.type, "copy"))
       .map(({ name }) => name),
-    dropFn: structDropFn(ctx, type),
+    dropFn: structDropFn(ctx, type, tokenId),
   };
 }
 

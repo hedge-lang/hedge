@@ -2789,6 +2789,23 @@ describe("Drop::drop dispose body", (): void => {
     `);
     expect(runEmittedJs(js)).toEqual(["0", "2"]);
   });
+
+  it("passes a generic Drop impl's own bound witness to the disposed value's drop call", (): void => {
+    const js = emittedJs(`
+      trait Marker { fn mark(&self) -> i32; }
+      struct Num { v: i32 }
+      impl Marker for Num { fn mark(&self) -> i32 { self.v } }
+      struct Wrapper<T> { value: T }
+      impl<T: Marker> Drop for Wrapper<T> {
+        fn drop(&mut self) { print(self.value.mark()); }
+      }
+      fn main() {
+        let w = Wrapper { value: Num { v: 7 } };
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "7"]);
+  });
 });
 
 describe("std prelude", (): void => {

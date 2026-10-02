@@ -80,6 +80,14 @@ export interface AnalysisResult {
    * trailing arguments alongside the call, mirroring an ordinary generic
    * function call's `witnesses`. */
   readonly methodCallWitnesses: ReadonlyMap<number, readonly WitnessRef[]>;
+  /** Witnesses resolved for a generic `Drop` impl's own bound(s) (`impl<T:
+   * Marker> Drop for Wrapper<T>`'s `T: Marker`), keyed by the disposed
+   * value's own construction-expression tokenId - `drop` has no explicit
+   * call site in user source for `methodCallWitnesses` to key against, so
+   * this resolves once, at construction time, from the constructed value's
+   * own concrete type arguments. Codegen passes these as trailing arguments
+   * to the matched drop free function, alongside the self-cell. */
+  readonly dropWitnesses: ReadonlyMap<number, readonly WitnessRef[]>;
 }
 
 /** One hidden witness parameter of a generic function: `_witness_T_Draw` for
@@ -437,6 +445,8 @@ interface AnalysisContext {
   readonly dropImplTable: Map<string, DropImplEntry[]>;
   /** Mutable build-up of `AnalysisResult.methodCallWitnesses`. */
   readonly methodCallWitnessTable: Map<number, readonly WitnessRef[]>;
+  /** Mutable build-up of `AnalysisResult.dropWitnesses`. */
+  readonly dropWitnessTable: Map<number, readonly WitnessRef[]>;
   /**
    * What `Self` means at the innermost currently-open trait or impl body -
    * only the top is ever consulted, same lifecycle as `genericParamStack`. A
@@ -10474,6 +10484,58 @@ function recordDropImpl(
   ]);
 }
 
+/** Resolves the witness(es) a constructed value's own applicable `Drop`
+ * impl needs for its impl-level bound(s) (`impl<T: Marker> Drop for
+ * Wrapper<T>`'s `T: Marker`) - there is no explicit call site in user
+ * source for `recordMethodCallWitnesses` to key against (disposal is
+ * implicit), so this runs once, right where the construction's own final
+ * concrete type is known, reusing `methodIndex`'s already-resolved
+ * `genericParamBounds`/`implGenericParamPositions` for the matched `drop`
+ * method - the same data `recordMethodCallWitnesses` reads for an ordinary
+ * impl-level bound on a real method call. */
+function recordDropWitnesses(
+  ctx: AnalysisContext,
+  tokenId: number,
+  constructedType: Semantics.Type,
+): void {
+  if (constructedType.kind !== "StructType") return;
+  const dropTraitId = lookupPreludeTrait(ctx, "Drop");
+  if (dropTraitId === undefined) return;
+  const method = (
+    ctx.methodIndex.get(typeIdentity(constructedType)) ?? []
+  ).find(
+    (m) =>
+      m.name === "drop" &&
+      m.origin.kind === "trait" &&
+      m.origin.traitId === dropTraitId &&
+      requestedTraitArgumentsSatisfied(
+        m.targetTypeArguments,
+        constructedType.typeArguments,
+        new Map(),
+      ),
+  );
+  if (method === undefined || method.genericParamBounds.size === 0) return;
+  const witnesses: WitnessRef[] = [];
+  for (const [paramName, traitRefs] of method.genericParamBounds) {
+    const argType = implGenericParamType(
+      constructedType,
+      method.implGenericParamPositions,
+      paramName,
+    );
+    if (argType === undefined) continue;
+    for (const traitRef of traitRefs) {
+      const witness = resolveTraitBound(
+        ctx,
+        argType,
+        traitRef.name,
+        traitRef.typeArguments,
+      );
+      if (isSome(witness)) witnesses.push(witness.value);
+    }
+  }
+  if (witnesses.length > 0) ctx.dropWitnessTable.set(tokenId, witnesses);
+}
+
 /** Records how a resolved call on a concrete receiver dispatches, for
  * codegen's free-function naming (`AnalysisResult.methodTargets`). Keyed by
  * the *method name* token, not the call's own tokenId - a chained call
@@ -12313,6 +12375,7 @@ function analyzeStructExpression(
     );
   }
 
+  recordDropWitnesses(ctx, structExpression.tokenId, resolvedType);
   return {
     ...structExpression,
     fields: checkedFields,
@@ -14534,16 +14597,14 @@ function analyzeTupleStructCallConstruction(
     },
     { declaredType: structDecl.type, expectedType },
   );
-  return some({
-    callee,
-    type: constructionResultType(
-      expectedTypeConflicted,
-      expectedType,
-      structDecl.type,
-      typeArguments,
-    ),
-    args: checkedArgs,
-  });
+  const type = constructionResultType(
+    expectedTypeConflicted,
+    expectedType,
+    structDecl.type,
+    typeArguments,
+  );
+  recordDropWitnesses(ctx, call.tokenId, type);
+  return some({ callee, type, args: checkedArgs });
 }
 
 /**
@@ -14658,6 +14719,7 @@ export function analyze(
     unsizeCoercionTable: new Map(),
     dropImplTable: new Map(),
     methodCallWitnessTable: new Map(),
+    dropWitnessTable: new Map(),
     selfContextStack: [],
   };
   // Before functions, so a signature can name any declared type.
@@ -14723,5 +14785,6 @@ export function analyze(
     unsizeCoercions: ctx.unsizeCoercionTable,
     dropImpls: ctx.dropImplTable,
     methodCallWitnesses: ctx.methodCallWitnessTable,
+    dropWitnesses: ctx.dropWitnessTable,
   };
 }
