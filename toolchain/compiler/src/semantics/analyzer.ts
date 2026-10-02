@@ -10484,6 +10484,29 @@ function recordDropImpl(
   ]);
 }
 
+/** Every impl-level generic parameter's own concrete binding, read from the
+ * constructed value's own type arguments - a bound's own type arguments
+ * (`A: Convert<B>`'s `B`) can themselves name another of the impl's own
+ * parameters, so every one needs resolving up front rather than just the
+ * single parameter a given bound is declared on. */
+function implGenericParamBindings(
+  constructedType: Semantics.Type,
+  implGenericParamPositions: ReadonlyMap<string, readonly number[]>,
+): GenericBindings {
+  const bindings: GenericBindings = new Map();
+  for (const paramName of implGenericParamPositions.keys()) {
+    const argType = implGenericParamType(
+      constructedType,
+      implGenericParamPositions,
+      paramName,
+    );
+    if (argType !== undefined) {
+      bindings.set(paramName, { type: argType, tokenId: 0 });
+    }
+  }
+  return bindings;
+}
+
 /** Resolves the witness(es) a constructed value's own applicable `Drop`
  * impl needs for its impl-level bound(s) (`impl<T: Marker> Drop for
  * Wrapper<T>`'s `T: Marker`) - there is no explicit call site in user
@@ -10515,6 +10538,10 @@ function recordDropWitnesses(
       ),
   );
   if (method === undefined || method.genericParamBounds.size === 0) return;
+  const bindings = implGenericParamBindings(
+    constructedType,
+    method.implGenericParamPositions,
+  );
   const witnesses: WitnessRef[] = [];
   for (const [paramName, traitRefs] of method.genericParamBounds) {
     const argType = implGenericParamType(
@@ -10528,7 +10555,9 @@ function recordDropWitnesses(
         ctx,
         argType,
         traitRef.name,
-        traitRef.typeArguments,
+        traitRef.typeArguments.map((arg) =>
+          substituteGenericType(arg, bindings),
+        ),
       );
       if (isSome(witness)) witnesses.push(witness.value);
     }

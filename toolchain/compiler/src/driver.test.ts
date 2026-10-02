@@ -2806,6 +2806,23 @@ describe("Drop::drop dispose body", (): void => {
     `);
     expect(runEmittedJs(js)).toEqual(["0", "7"]);
   });
+
+  it("substitutes a dependent impl-level bound's own type argument before resolving its drop witness", (): void => {
+    const js = emittedJs(`
+      trait Convert<T> { fn convert(&self) -> T; }
+      struct P { n: i32 }
+      impl Convert<i32> for P { fn convert(&self) -> i32 { self.n } }
+      struct Pair<A, B> { a: A, b: B }
+      impl<A: Convert<B>, B> Drop for Pair<A, B> {
+        fn drop(&mut self) { print(self.a.convert()); }
+      }
+      fn main() {
+        let pair = Pair { a: P { n: 7 }, b: 0 };
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "7"]);
+  });
 });
 
 describe("std prelude", (): void => {
