@@ -1415,6 +1415,17 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["nested", "flat"]);
   });
 
+  it("does not collide two instantiations of a multi-argument trait bound into the same raw witness parameter name", (): void => {
+    const js = emittedJs(`
+      trait Convert<X, Y> { fn tag(&self) -> str; }
+      fn outer<A_B, C, A, B_C, T: Convert<A_B, C> + Convert<A, B_C>>(t: &T) {}
+      fn main() {}
+    `);
+    expect(js).not.toContain(
+      "_witness_T_Convert_A_B_C, _witness_T_Convert_A_B_C$1",
+    );
+  });
+
   it("dispatches through the requested instantiation's own witness methods, not an earlier unrelated one", (): void => {
     const js = emittedJs(`
       trait Tag<T> { fn tag(&self) -> str { "default" } }

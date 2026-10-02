@@ -100,6 +100,19 @@ function escapeForIdentifier(text: string): string {
   return text.replace(/\W/g, (ch) => `$${ch.codePointAt(0)}$`);
 }
 
+/** `escapeForIdentifier(text)`, length-prefixed (`<length>_<text>`) so
+ * concatenating several of these stays injective - a plain `_`-join between
+ * two already-escaped, multi-argument segments is not: `["A_B", "C"]` and
+ * `["A", "B_C"]` both join to `"A_B_C"`, since the separator is just another
+ * `_` indistinguishable from one already inside an escaped segment. The
+ * length prefix fixes exactly where each segment ends, so decoding one
+ * fixed way (read digits, then `_`, then exactly that many characters)
+ * always recovers the original split. */
+function lengthPrefixedIdentifier(text: string): string {
+  const escaped = escapeForIdentifier(text);
+  return `${escaped.length}_${escaped}`;
+}
+
 /** The one place the `_witness_<param>_<trait>` naming scheme is defined -
  * `param` is a type-parameter name or `Self` (a trait default body), `trait`
  * is a bare trait name. `typeArguments`, when non-empty, disambiguates two
@@ -107,11 +120,11 @@ function escapeForIdentifier(text: string): string {
  * different arguments (`T: Convert<i32> + Convert<str>`) - without it both
  * would produce the identical raw name, and `reserveWitnessParamName`'s
  * `witnessParamNames` map would silently resolve every forwarding reference
- * to whichever bound was declared last. Built on `monomorphizedTypeIdentity`
- * (which preserves nesting via literal `<`/`>`/`,`) rather than `describeType`
- * collapsed through a lossy sanitize - `Convert<Wrapper<i32>>` and a
- * differently-typed `Convert<Wrapper_i32_>` used to both flatten to the same
- * raw name once their `<`/`>` got replaced with `_`. */
+ * to whichever bound was declared last. Each argument's `monomorphizedTypeIdentity`
+ * (which preserves nesting via literal `<`/`>`/`,`) is escaped and
+ * length-prefixed before concatenating - see `lengthPrefixedIdentifier`'s own
+ * doc comment for why a plain `_`-join between multiple arguments isn't
+ * enough on its own. */
 export function witnessParamName(
   param: string,
   trait: string,
@@ -119,7 +132,7 @@ export function witnessParamName(
 ): string {
   if (typeArguments.length === 0) return `_witness_${param}_${trait}`;
   const argsSuffix = typeArguments
-    .map((arg) => escapeForIdentifier(monomorphizedTypeIdentity(arg)))
+    .map((arg) => lengthPrefixedIdentifier(monomorphizedTypeIdentity(arg)))
     .join("_");
   return `_witness_${param}_${trait}_${argsSuffix}`;
 }
