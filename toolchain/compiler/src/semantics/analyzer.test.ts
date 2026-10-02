@@ -7326,6 +7326,20 @@ describe("trait and impl declarations", (): void => {
       `);
       expect(result.diagnostics).toEqual([]);
     });
+
+    it("substitutes the call's own completed bindings into a bound's own requested type argument before resolving it", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct P { n: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.n } }
+        fn f<T: Convert<U>, U>(x: T, y: U) {}
+        fn main() {
+          let p = P { n: 1 };
+          f(p, 1);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
   });
 
   describe("parameterized blanket-impl bounds", (): void => {

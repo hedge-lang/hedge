@@ -12938,11 +12938,21 @@ function checkCallGenericBounds(
     }
     if (binding.isErrorPlaceholder) continue;
     for (const traitRef of calleeType.genericParamBounds.get(paramName) ?? []) {
+      // A bound's own type arguments (`T: Convert<U>`'s `U`) can themselves
+      // name another of this call's generic parameters - resolve against
+      // the completed bindings (`U -> i32`), not the literal declared
+      // argument, or a valid `impl Convert<i32> for P` is never found.
+      const resolvedTraitRef: Semantics.BoundTraitRef = {
+        ...traitRef,
+        typeArguments: traitRef.typeArguments.map((arg) =>
+          substituteGenericType(arg, bindings),
+        ),
+      };
       const witness = resolveTraitBound(
         ctx,
         binding.type,
-        traitRef.name,
-        traitRef.typeArguments,
+        resolvedTraitRef.name,
+        resolvedTraitRef.typeArguments,
       );
       if (isSome(witness)) {
         witnesses.push(witness.value);
@@ -12954,7 +12964,7 @@ function checkCallGenericBounds(
         {
           kind: "SemTraitBoundNotSatisfied",
           typeName: describeType(binding.type),
-          trait: describeTraitRef(traitRef),
+          trait: describeTraitRef(resolvedTraitRef),
         },
         call.tokenId,
       );
