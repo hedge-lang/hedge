@@ -2856,6 +2856,22 @@ describe("Drop::drop dispose body", (): void => {
     `);
     expect(runEmittedJs(js)).toEqual(["0", "99", "7"]);
   });
+
+  it("does not attach a generic Drop impl's own drop body when its bound is not satisfied by the constructed value", (): void => {
+    const js = emittedJs(`
+      trait Marker { fn mark(&self) -> i32; }
+      struct Plain { v: i32 }
+      struct Wrapper<T> { value: T }
+      impl<T: Marker> Drop for Wrapper<T> {
+        fn drop(&mut self) { print(self.value.mark()); }
+      }
+      fn main() {
+        let w = Wrapper { value: Plain { v: 1 } };
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0"]);
+  });
 });
 
 describe("std prelude", (): void => {

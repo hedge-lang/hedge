@@ -137,6 +137,10 @@ interface JsimContext {
    * `Drop` impl's own bound(s), keyed by the disposed value's own
    * construction-expression tokenId. */
   readonly dropWitnesses: ReadonlyMap<number, readonly WitnessRef[]>;
+  /** `AnalysisResult.dropBoundsUnsatisfied` - construction tokenIds whose
+   * only matching `Drop` impl doesn't apply (its own bound isn't
+   * satisfied). */
+  readonly dropBoundsUnsatisfied: ReadonlySet<number>;
   /** Each emitted method free function's `methodKey` mapped to the name
    * actually emitted - identical to the readable `methodFreeFnName` unless it
    * collided with a user top-level binding. Both the emission and call sites
@@ -200,6 +204,7 @@ function createJsimContext(
     dropImpls: info.dropImpls ?? new Map(),
     methodCallWitnesses: info.methodCallWitnesses ?? new Map(),
     dropWitnesses: info.dropWitnesses ?? new Map(),
+    dropBoundsUnsatisfied: info.dropBoundsUnsatisfied ?? new Set(),
     methodFreeFnNames: new Map(),
     hoistedWitnesses: new Map(),
     primitiveEqWitness: { name: undefined },
@@ -905,6 +910,7 @@ export interface JsimInfo {
   readonly dropImpls?: ReadonlyMap<string, readonly DropImplEntry[]>;
   readonly methodCallWitnesses?: ReadonlyMap<number, readonly WitnessRef[]>;
   readonly dropWitnesses?: ReadonlyMap<number, readonly WitnessRef[]>;
+  readonly dropBoundsUnsatisfied?: ReadonlySet<number>;
 }
 
 export function toJsim(
@@ -2752,6 +2758,7 @@ function structDropFn(
   tokenId: number,
 ): Option<{ name: string; witnessArgs: readonly string[] }> {
   if (type.kind !== "StructType") return none();
+  if (ctx.dropBoundsUnsatisfied.has(tokenId)) return none();
   const target = findDropTarget(ctx.dropImpls, type.name, type.typeArguments);
   if (target === undefined) return none();
   return some({

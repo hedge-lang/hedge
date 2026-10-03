@@ -7011,6 +7011,25 @@ describe("trait and impl declarations", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
+    it("rejects a method call on a generic impl whose own bound the receiver's concrete type argument does not satisfy", (): void => {
+      const result = diagnose(`
+        trait Marker { fn mark(&self) -> i32; }
+        struct Plain { v: i32 }
+        struct Wrapper<T> { value: T }
+        impl<T: Marker> Wrapper<T> {
+          fn touch(&self) -> i32 { self.value.mark() }
+        }
+        fn main() {
+          let w = Wrapper { value: Plain { v: 1 } };
+          w.touch();
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "no method `touch` found for type `Wrapper`",
+      );
+    });
+
     it("does not substitute a trait bound's own type argument into a bounded receiver's method's own generic parameter of the same name", (): void => {
       const result = diagnose(`
         trait Convert<T> { fn get<T>(&self, x: T) -> T; }

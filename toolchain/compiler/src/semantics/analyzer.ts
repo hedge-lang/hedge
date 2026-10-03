@@ -88,6 +88,13 @@ export interface AnalysisResult {
    * own concrete type arguments. Codegen passes these as trailing arguments
    * to the matched drop free function, alongside the self-cell. */
   readonly dropWitnesses: ReadonlyMap<number, readonly WitnessRef[]>;
+  /** Construction-expression tokenIds whose only matching `Drop` impl's own
+   * bound is not satisfied by the constructed value (`Wrapper<Plain>`
+   * against `impl<T: Marker> Drop for Wrapper<T>`) - that impl simply
+   * doesn't apply here, so codegen falls back to the ordinary no-op/
+   * field-only disposer instead of attaching a call missing its required
+   * witness argument. */
+  readonly dropBoundsUnsatisfied: ReadonlySet<number>;
 }
 
 /** One hidden witness parameter of a generic function: `_witness_T_Draw` for
@@ -447,6 +454,8 @@ interface AnalysisContext {
   readonly methodCallWitnessTable: Map<number, readonly WitnessRef[]>;
   /** Mutable build-up of `AnalysisResult.dropWitnesses`. */
   readonly dropWitnessTable: Map<number, readonly WitnessRef[]>;
+  /** Mutable build-up of `AnalysisResult.dropBoundsUnsatisfied`. */
+  readonly dropBoundsUnsatisfiedTable: Set<number>;
   /**
    * What `Self` means at the innermost currently-open trait or impl body -
    * only the top is ever consulted, same lifecycle as `genericParamStack`. A
@@ -10030,6 +10039,18 @@ function methodCandidatesForNominalType(
     ) {
       return [];
     }
+    if (
+      !isSome(
+        resolveImplBoundWitnesses(
+          ctx,
+          bindings,
+          m.genericParamBounds,
+          m.implGenericParamPositions,
+        ),
+      )
+    ) {
+      return [];
+    }
     return [substituteIndexedMethodBindings(m, bindings)];
   });
 }
@@ -10485,26 +10506,63 @@ function recordDropImpl(
 }
 
 /** Every impl-level generic parameter's own concrete binding, read from the
- * constructed value's own type arguments - a bound's own type arguments
- * (`A: Convert<B>`'s `B`) can themselves name another of the impl's own
- * parameters, so every one needs resolving up front rather than just the
- * single parameter a given bound is declared on. */
+ * constructed/receiving value's own type arguments - a bound's own type
+ * arguments (`A: Convert<B>`'s `B`) can themselves name another of the
+ * impl's own parameters, so every one needs resolving up front rather than
+ * just the single parameter a given bound is declared on. */
 function implGenericParamBindings(
   constructedType: Semantics.Type,
   implGenericParamPositions: ReadonlyMap<string, readonly number[]>,
-): GenericBindings {
-  const bindings: GenericBindings = new Map();
+): ReadonlyMap<string, Semantics.Type> {
+  const bindings = new Map<string, Semantics.Type>();
   for (const paramName of implGenericParamPositions.keys()) {
     const argType = implGenericParamType(
       constructedType,
       implGenericParamPositions,
       paramName,
     );
-    if (argType !== undefined) {
-      bindings.set(paramName, { type: argType, tokenId: 0 });
-    }
+    if (argType !== undefined) bindings.set(paramName, argType);
   }
   return bindings;
+}
+
+/** Whether every one of an impl's own declared bound(s) - identified by
+ * `implGenericParamPositions`'s own keys, never a method's separately-bound
+ * `<U>` sharing the same `genericParamBounds` map - is satisfied by
+ * `bindings`' already-matched concrete type, returning the resolved
+ * witness(es) when it is. A bound unresolvable only because its own
+ * position can't be walked (nested behind an array/reference - a known,
+ * separate gap) is skipped rather than treated as unsatisfied, since there
+ * is nothing to check it against. `none()` on the first bound that *can* be
+ * checked and fails - the whole impl doesn't apply, so a partially-resolved
+ * witness list would be misleading. */
+function resolveImplBoundWitnesses(
+  ctx: AnalysisContext,
+  bindings: ReadonlyMap<string, Semantics.Type>,
+  genericParamBounds: ReadonlyMap<string, readonly Semantics.BoundTraitRef[]>,
+  implGenericParamPositions: ReadonlyMap<string, readonly number[]>,
+): Option<readonly WitnessRef[]> {
+  const generic: GenericBindings = new Map(
+    [...bindings].map(([name, type]) => [name, { type, tokenId: 0 }]),
+  );
+  const witnesses: WitnessRef[] = [];
+  for (const paramName of implGenericParamPositions.keys()) {
+    const boundType = bindings.get(paramName);
+    if (boundType === undefined) continue;
+    for (const traitRef of genericParamBounds.get(paramName) ?? []) {
+      const witness = resolveTraitBound(
+        ctx,
+        boundType,
+        traitRef.name,
+        traitRef.typeArguments.map((arg) =>
+          substituteGenericType(arg, generic),
+        ),
+      );
+      if (!isSome(witness)) return none();
+      witnesses.push(witness.value);
+    }
+  }
+  return some(witnesses);
 }
 
 /** Resolves the witness(es) a constructed value's own applicable `Drop`
@@ -10515,7 +10573,12 @@ function implGenericParamBindings(
  * concrete type is known, reusing `methodIndex`'s already-resolved
  * `genericParamBounds`/`implGenericParamPositions` for the matched `drop`
  * method - the same data `recordMethodCallWitnesses` reads for an ordinary
- * impl-level bound on a real method call. */
+ * impl-level bound on a real method call. When the bound isn't satisfied
+ * (`Wrapper<Plain>` against `impl<T: Marker> Drop for Wrapper<T>`), this
+ * impl simply doesn't apply - `tokenId` is recorded in
+ * `AnalysisResult.dropBoundsUnsatisfied` so codegen falls back to the
+ * ordinary no-op/field-only disposer instead of attaching a call that's
+ * missing its required witness argument. */
 function recordDropWitnesses(
   ctx: AnalysisContext,
   tokenId: number,
@@ -10542,27 +10605,19 @@ function recordDropWitnesses(
     constructedType,
     method.implGenericParamPositions,
   );
-  const witnesses: WitnessRef[] = [];
-  for (const [paramName, traitRefs] of method.genericParamBounds) {
-    const argType = implGenericParamType(
-      constructedType,
-      method.implGenericParamPositions,
-      paramName,
-    );
-    if (argType === undefined) continue;
-    for (const traitRef of traitRefs) {
-      const witness = resolveTraitBound(
-        ctx,
-        argType,
-        traitRef.name,
-        traitRef.typeArguments.map((arg) =>
-          substituteGenericType(arg, bindings),
-        ),
-      );
-      if (isSome(witness)) witnesses.push(witness.value);
-    }
+  const resolved = resolveImplBoundWitnesses(
+    ctx,
+    bindings,
+    method.genericParamBounds,
+    method.implGenericParamPositions,
+  );
+  if (!isSome(resolved)) {
+    ctx.dropBoundsUnsatisfiedTable.add(tokenId);
+    return;
   }
-  if (witnesses.length > 0) ctx.dropWitnessTable.set(tokenId, witnesses);
+  if (resolved.value.length > 0) {
+    ctx.dropWitnessTable.set(tokenId, resolved.value);
+  }
 }
 
 /** Records how a resolved call on a concrete receiver dispatches, for
@@ -14749,6 +14804,7 @@ export function analyze(
     dropImplTable: new Map(),
     methodCallWitnessTable: new Map(),
     dropWitnessTable: new Map(),
+    dropBoundsUnsatisfiedTable: new Set(),
     selfContextStack: [],
   };
   // Before functions, so a signature can name any declared type.
@@ -14815,5 +14871,6 @@ export function analyze(
     dropImpls: ctx.dropImplTable,
     methodCallWitnesses: ctx.methodCallWitnessTable,
     dropWitnesses: ctx.dropWitnessTable,
+    dropBoundsUnsatisfied: ctx.dropBoundsUnsatisfiedTable,
   };
 }

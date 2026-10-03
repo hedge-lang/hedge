@@ -85,6 +85,7 @@ export function compile(
           dropImpls: analysis.dropImpls,
           methodCallWitnesses: analysis.methodCallWitnesses,
           dropWitnesses: analysis.dropWitnesses,
+          dropBoundsUnsatisfied: analysis.dropBoundsUnsatisfied,
         }),
       ),
     ),
