@@ -8445,6 +8445,33 @@ describe("trait and impl declarations", (): void => {
       expect(witness.typeName).toBe("Num");
     });
 
+    it("records an impl-level bound's witness when the bound parameter is nested inside the impl target's own fixed-size array argument", (): void => {
+      const result = diagnoseWithPrelude(`
+        trait Marker { fn mark(&self) -> i32; }
+        struct Num { v: i32 }
+        impl Marker for Num { fn mark(&self) -> i32 { self.v } }
+        struct Outer<U> { inner: U }
+        impl<T: Marker> Outer<[T; 1]> {
+          fn touch(&self) -> i32 { 0 }
+        }
+        fn main() {
+          let o = Outer { inner: [Num { v: 1 }] };
+          let x = o.touch();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.methodCallWitnesses.values()];
+      assert(
+        witnesses !== undefined,
+        "expected a recorded method-call witness",
+      );
+      expect(witnesses).toHaveLength(1);
+      const witness = witnesses[0];
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(witness.traitName).toBe("Marker");
+      expect(witness.typeName).toBe("Num");
+    });
+
     it("instantiates a method-level bound's own trait argument from the abstract receiver's own bound type argument", (): void => {
       const result = diagnoseWithPrelude(`
         trait Convert<T> { fn convert(&self) -> T; }

@@ -9527,7 +9527,7 @@ interface IndexedMethod {
    * these is only ever reachable through `self`, never a directly-typed
    * method argument, so `recordMethodCallWitnesses` resolves it from the
    * receiver's own type arguments (in *this* position order) instead. */
-  readonly implGenericParamPositions: ReadonlyMap<string, readonly number[]>;
+  readonly implGenericParamPositions: ImplGenericParamPositions;
   /** The enclosing impl's own resolved target-argument slots (mirrors
    * `RegisteredImpl.targetTypeArguments`) - `methodCandidatesForNominalType`
    * filters `ctx.methodIndex`'s per-base-name bucket by this against the
@@ -9686,24 +9686,37 @@ function instantiatedTraitMethodSet(
   );
 }
 
+/** One step deeper into the impl's own target shape, on the way to an
+ * impl-level generic parameter's own position - `Arg` indexes a
+ * `NamedType`'s own nested type-argument list (a struct/enum's own type
+ * arguments), `ArrayElement` steps into a fixed-size array's element type,
+ * `Reference` into a reference's referent - the same three shapes
+ * `substituteSelfType`'s own `StructType`/`EnumType`, `ArrayType`, and
+ * `ReferenceType` cases already walk. */
+type ImplParamPathStep =
+  | { readonly kind: "Arg"; readonly index: number }
+  | { readonly kind: "ArrayElement" }
+  | { readonly kind: "Reference" };
+
+type ImplGenericParamPositions = ReadonlyMap<
+  string,
+  readonly ImplParamPathStep[]
+>;
+
 /** Maps each of the impl's own declared generic parameter names to its
- * access path within the impl's own *target* type-argument list (`impl<A,
- * B> Pair<B, A>` maps `A -> [1]`, `B -> [0]`; `impl<T> Outer<Wrapper<T>>`
- * maps `T -> [0, 0]`) - the path a receiver's own concrete type-argument
- * tree carries that parameter's binding at, which is not necessarily the
+ * access path within the impl's own *target* type (`impl<A, B> Pair<B, A>`
+ * maps `A -> [Arg 1]`, `B -> [Arg 0]`; `impl<T> Outer<Wrapper<T>>` maps
+ * `T -> [Arg 0, Arg 0]`; `impl<T> Outer<[T; 1]>` maps `T -> [Arg 0,
+ * ArrayElement]`) - the path a receiver's own concrete type-argument tree
+ * carries that parameter's binding at, which is not necessarily the
  * parameter's own declaration order or nesting depth. Mirrors the
  * wildcard-position detection `resolveTypeArgumentSlots` already does for
- * coherence, reading positions instead of building `TargetArgSlot`s. Known
- * gap, unlike that coherence-facing sibling: a path only ever indexes
- * through nested `StructType`/`EnumType` arguments (`implGenericParamType`'s
- * own walk requires `isNominalType` at each step) - `impl<T> Outer<[T; 1]>`
- * has no path for `T` at all, so a method's own extra generic bound nested
- * that way can't resolve its witness argument. */
+ * coherence, reading positions instead of building `TargetArgSlot`s. */
 function implGenericParamTargetPositions(
   implGenericNames: ReadonlySet<string>,
   targetType: Parser.Type,
-): ReadonlyMap<string, readonly number[]> {
-  const positions = new Map<string, readonly number[]>();
+): ImplGenericParamPositions {
+  const positions = new Map<string, readonly ImplParamPathStep[]>();
   if (targetType.kind !== "NamedType") return positions;
   collectImplGenericParamPositions(
     implGenericNames,
@@ -9717,12 +9730,26 @@ function implGenericParamTargetPositions(
 function collectImplGenericParamPositions(
   implGenericNames: ReadonlySet<string>,
   typeArguments: readonly Parser.Type[],
-  prefix: readonly number[],
-  positions: Map<string, readonly number[]>,
+  prefix: readonly ImplParamPathStep[],
+  positions: Map<string, readonly ImplParamPathStep[]>,
 ): void {
   typeArguments.forEach((arg, index) => {
-    const path = [...prefix, index];
-    if (arg.kind !== "NamedType") return;
+    recordImplGenericParamPosition(
+      implGenericNames,
+      arg,
+      [...prefix, { kind: "Arg", index }],
+      positions,
+    );
+  });
+}
+
+function recordImplGenericParamPosition(
+  implGenericNames: ReadonlySet<string>,
+  arg: Parser.Type,
+  path: readonly ImplParamPathStep[],
+  positions: Map<string, readonly ImplParamPathStep[]>,
+): void {
+  if (arg.kind === "NamedType") {
     if (arg.path.segments.length === 1 && arg.typeArguments.length === 0) {
       const name = arg.path.segments[0];
       if (name !== undefined && implGenericNames.has(name)) {
@@ -9736,7 +9763,25 @@ function collectImplGenericParamPositions(
       path,
       positions,
     );
-  });
+    return;
+  }
+  if (arg.kind === "ArrayType") {
+    recordImplGenericParamPosition(
+      implGenericNames,
+      arg.elementType,
+      [...path, { kind: "ArrayElement" }],
+      positions,
+    );
+    return;
+  }
+  if (arg.kind === "ReferenceType") {
+    recordImplGenericParamPosition(
+      implGenericNames,
+      arg.referent,
+      [...path, { kind: "Reference" }],
+      positions,
+    );
+  }
 }
 
 function buildMethodIndex(
@@ -9862,7 +9907,7 @@ function indexTraitImplMethods(
   ctx: AnalysisContext,
   traitId: string,
   targetType: Semantics.Type,
-  implGenericParamPositions: ReadonlyMap<string, readonly number[]>,
+  implGenericParamPositions: ImplGenericParamPositions,
   targetTypeArguments: readonly TargetArgSlot[],
   implGenericParamBounds: ReadonlyMap<
     string,
@@ -9960,7 +10005,7 @@ function indexInherentMethods(
   ctx: AnalysisContext,
   item: Parser.ImplDecl,
   targetType: Semantics.Type,
-  implGenericParamPositions: ReadonlyMap<string, readonly number[]>,
+  implGenericParamPositions: ImplGenericParamPositions,
   targetTypeArguments: readonly TargetArgSlot[],
 ): readonly IndexedMethod[] {
   pushSelfContext(ctx, inherentSelfContext(targetType));
@@ -10533,7 +10578,7 @@ function recordDropImpl(
  * just the single parameter a given bound is declared on. */
 function implGenericParamBindings(
   constructedType: Semantics.Type,
-  implGenericParamPositions: ReadonlyMap<string, readonly number[]>,
+  implGenericParamPositions: ImplGenericParamPositions,
 ): ReadonlyMap<string, Semantics.Type> {
   const bindings = new Map<string, Semantics.Type>();
   for (const paramName of implGenericParamPositions.keys()) {
@@ -10561,7 +10606,7 @@ function resolveImplBoundWitnesses(
   ctx: AnalysisContext,
   bindings: ReadonlyMap<string, Semantics.Type>,
   genericParamBounds: ReadonlyMap<string, readonly Semantics.BoundTraitRef[]>,
-  implGenericParamPositions: ReadonlyMap<string, readonly number[]>,
+  implGenericParamPositions: ImplGenericParamPositions,
 ): Option<readonly WitnessRef[]> {
   const generic: GenericBindings = new Map(
     [...bindings].map(([name, type]) => [name, { type, tokenId: 0 }]),
@@ -10790,22 +10835,45 @@ function namesGenericParam(type: Semantics.Type, paramName: string): boolean {
   );
 }
 
+/** `implGenericParamType`'s own single-step walk, one `ImplParamPathStep`
+ * at a time - `undefined` when `current`'s own shape doesn't match what
+ * the step expects (a `Reference` step over a non-reference type, etc). */
+function stepIntoImplGenericParamType(
+  current: Semantics.Type,
+  step: ImplParamPathStep,
+): Semantics.Type | undefined {
+  switch (step.kind) {
+    case "Arg":
+      return isNominalType(current)
+        ? current.typeArguments[step.index]
+        : undefined;
+    case "ArrayElement":
+      return current.kind === "ArrayType" ? current.elementType : undefined;
+    case "Reference":
+      return current.kind === "ReferenceType" ? current.referent : undefined;
+    default:
+      return assertNever(
+        step,
+        `impl generic param path step: ${JSON.stringify(step)}`,
+      );
+  }
+}
+
 /** The concrete type bound to an impl-level generic parameter, read from
  * the receiver's own resolved type arguments (post Layer A) by walking the
  * parameter's declared access path in the impl - `undefined` when
  * `paramName` isn't one of the impl's own, or the receiver's own type
- * argument tree doesn't have a nominal type at every step of the path. */
+ * argument tree doesn't match the path's own shape at every step. */
 function implGenericParamType(
   receiverType: Semantics.Type,
-  implGenericParamPositions: ReadonlyMap<string, readonly number[]>,
+  implGenericParamPositions: ImplGenericParamPositions,
   paramName: string,
 ): Semantics.Type | undefined {
   const path = implGenericParamPositions.get(paramName);
   if (path === undefined) return undefined;
   let current = receiverType;
-  for (const index of path) {
-    if (!isNominalType(current)) return undefined;
-    const next = current.typeArguments[index];
+  for (const step of path) {
+    const next = stepIntoImplGenericParamType(current, step);
     if (next === undefined) return undefined;
     current = next;
   }
@@ -10841,7 +10909,7 @@ function methodCallGenericArgType(
   args: readonly Semantics.Expression[],
   argIndex: number,
   receiverType: Semantics.Type,
-  implGenericParamPositions: ReadonlyMap<string, readonly number[]>,
+  implGenericParamPositions: ImplGenericParamPositions,
   paramName: string,
 ): Semantics.Type | undefined {
   const arg = argIndex === -1 ? undefined : args[argIndex];
