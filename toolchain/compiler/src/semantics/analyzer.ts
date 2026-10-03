@@ -645,16 +645,21 @@ function genericParamBoundNames(
  * to real resolved types), against the scope in effect now - used when
  * building a signature's persisted `genericParamBounds`, so a later call
  * site checks the trait visible where the callee was declared, not where
- * it's called. */
+ * it's called. `resolveTraitName` defaults to live-frame `lookupTrait`;
+ * `registerTraits`'s own prepass passes a `StructuralScope`-based resolver
+ * instead, since live frames don't yet reflect a nested trait's own scope
+ * that early (see that resolver's own doc comment). */
 function resolveBoundNames(
   ctx: AnalysisContext,
   bounds: ReadonlyMap<string, readonly ParsedBoundTraitRef[]>,
+  resolveTraitName: (name: string) => string = (name) =>
+    lookupTrait(ctx, name) ?? name,
 ): ReadonlyMap<string, readonly Semantics.BoundTraitRef[]> {
   return new Map(
     [...bounds].map(([param, refs]) => [
       param,
       refs.map((ref) => ({
-        name: lookupTrait(ctx, ref.name) ?? ref.name,
+        name: resolveTraitName(ref.name),
         typeArguments: ref.typeArguments.map((arg) =>
           resolveSlice1Type(ctx, arg, arg.tokenId),
         ),
@@ -2720,6 +2725,7 @@ function resolveMethodSignatureTypes(
     type: Parser.Type,
     fallbackTokenId: number,
   ) => Semantics.Type = validateSlice1Type,
+  resolveTraitName?: (name: string) => string,
 ): {
   params: readonly Semantics.Type[];
   returnType: Semantics.Type;
@@ -2754,6 +2760,7 @@ function resolveMethodSignatureTypes(
     genericParamBounds: resolveBoundNames(
       ctx,
       genericParamBoundNames(merged.generics, merged.whereClause),
+      resolveTraitName,
     ),
   };
   popGenericParams(ctx);
@@ -2777,6 +2784,7 @@ function resolveTraitMethodSignature(
     type: Parser.Type,
     fallbackTokenId: number,
   ) => Semantics.Type,
+  resolveTraitName?: (name: string) => string,
 ): Semantics.TraitMethod {
   return {
     name: signature.name.text,
@@ -2793,6 +2801,7 @@ function resolveTraitMethodSignature(
       outerWhereClause,
       signature,
       resolveType,
+      resolveTraitName,
     ),
   };
 }
@@ -4639,7 +4648,7 @@ function registerTraits(
   ctx: AnalysisContext,
   allItems: readonly DepthedItem[],
 ): void {
-  const traitItems: Parser.TraitDecl[] = [];
+  const traitItems: { item: Parser.TraitDecl; scope: StructuralScope }[] = [];
   for (const { item, scope } of allItems) {
     if (item.kind !== "Trait") continue;
     const decl = buildTraitDecl(item);
@@ -4652,32 +4661,42 @@ function registerTraits(
       genericParams: genericParamNames(item.generics),
       notObjectSafe: ownSelfArgMethod(item),
     });
-    traitItems.push(item);
+    traitItems.push({ item, scope });
   }
-  for (const item of traitItems) {
+  for (const { item } of traitItems) {
     validateTraitBoundNames(ctx, item.supertraits);
   }
   // A third pass, once every trait name is registered, resolves each method's
   // real signature (quietly - `analyzeTraitDecl` re-resolves and owns the
   // diagnostics) so a call site or `dyn Trait` can read a trait method's
   // actual return type instead of `buildTraitDecl`'s unit placeholder.
-  for (const item of traitItems) {
+  for (const { item, scope } of traitItems) {
     const traitId = scopedTypeName(item.name.tokenId, item.name.text);
     const existing = ctx.traitRegistry.get(traitId);
     if (existing === undefined) continue;
     ctx.traitRegistry.set(traitId, {
       ...existing,
-      methods: resolveTraitMethodsQuiet(ctx, item, traitId),
+      methods: resolveTraitMethodsQuiet(ctx, item, traitId, scope),
     });
   }
   propagateSupertraitObjectSafety(ctx);
 }
 
+/** `scope` is the `StructuralScope` at this trait's own declaration point -
+ * live `ctx.frames` don't yet reflect a nested trait's own block scope this
+ * early in `analyze()` (no block has actually been walked yet), so a bound
+ * naming a trait declared in that same nested scope (`fn f<T: Local>(...)`
+ * inside a nested `trait Container` sharing a block with a nested `trait
+ * Local`) must resolve against `scope` instead of `lookupTrait`, or it
+ * silently resolves to an unrelated outer same-named trait (or nothing). */
 function resolveTraitMethodsQuiet(
   ctx: AnalysisContext,
   item: Parser.TraitDecl,
   traitId: string,
+  scope: StructuralScope,
 ): readonly Semantics.TraitMethod[] {
+  const resolveTraitName = (name: string): string =>
+    resolveTraitIdentity(name, scope);
   pushSelfContext(ctx, {
     kind: "Trait",
     traitName: traitId,
@@ -4694,6 +4713,7 @@ function resolveTraitMethodsQuiet(
             decl,
             false,
             resolveSlice1Type,
+            resolveTraitName,
           ),
         ];
       }
@@ -4706,6 +4726,7 @@ function resolveTraitMethodsQuiet(
             decl.signature,
             true,
             resolveSlice1Type,
+            resolveTraitName,
           ),
         ];
       }

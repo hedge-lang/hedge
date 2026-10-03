@@ -1760,6 +1760,25 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(javascript.value)).toEqual(["1", "2"]);
   });
 
+  it("resolves a nested trait method's own bound against the same nested scope's shadowed trait, not an outer same-named one", (): void => {
+    const js = emittedJs(`
+      trait Local { fn outer_mark(&self) -> i32; }
+      fn scoped() -> i32 {
+        trait Local { fn mark(&self) -> i32; }
+        trait Container { fn f<T: Local>(&self, t: T) -> i32; }
+        struct X { v: i32 }
+        impl Local for X { fn mark(&self) -> i32 { self.v } }
+        struct C {}
+        impl Container for C { fn f<T: Local>(&self, t: T) -> i32 { t.mark() } }
+        C {}.f(X { v: 9 })
+      }
+      fn main() {
+        print(scoped());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["9"]);
+  });
+
   it("dispatches a flattened supertrait method's witness slot through its own defining trait's scope, not the enclosing witness's", (): void => {
     const js = emittedJs(`
       trait Base { fn base(&self) -> i32; }
