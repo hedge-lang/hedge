@@ -539,6 +539,22 @@ describe("method-call codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["7", "0"]);
   });
 
+  it("suffixes a generated generic inherent method free-function that collides with a user function", (): void => {
+    const js = emittedJs(`
+      struct Wrapper<T> { value: T }
+      impl<T> Wrapper<T> { fn get(&self) -> i32 { 7 } }
+      fn Wrapper$get() -> i32 { 0 }
+      fn main() {
+        let w = Wrapper { value: 7 };
+        print(w.get());
+        print(Wrapper$get());
+      }
+    `);
+    expect(js).toContain("function Wrapper$get_2(self)");
+    expect(js).toContain("Wrapper$get_2(w)");
+    expect(runEmittedJs(js)).toEqual(["7", "0"]);
+  });
+
   it("alpha-renames a local that collides with a generated method free-function's name, and still dispatches to the method", (): void => {
     const js = emittedJs(`
       struct Point { x: i32 }
@@ -1363,6 +1379,81 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["3"]);
   });
 
+  it("forwards the matching instantiation's own witness when a type parameter is bound twice to the same parameterized trait", (): void => {
+    const js = emittedJs(`
+      trait Tag<T> { fn tag(&self) -> str; }
+      struct P { x: i32 }
+      impl Tag<i32> for P { fn tag(&self) -> str { "int" } }
+      impl Tag<str> for P { fn tag(&self) -> str { "string" } }
+      fn use_i32<U: Tag<i32>>(u: &U) -> str { u.tag() }
+      fn use_str<U: Tag<str>>(u: &U) -> str { u.tag() }
+      fn outer<T: Tag<i32> + Tag<str>>(t: &T) {
+        print(use_i32(t));
+        print(use_str(t));
+      }
+      fn main() { let p = P { x: 0 }; outer(&p); }
+    `);
+    expect(runEmittedJs(js)).toEqual(["int", "string"]);
+  });
+
+  it("forwards the matching instantiation's own witness when two bound type arguments sanitize to the same raw name", (): void => {
+    const js = emittedJs(`
+      struct Wrapper<T> { v: T }
+      struct Wrapper_i32_ { v: i32 }
+      struct P { n: i32 }
+      trait Convert<T> { fn convert(&self) -> str; }
+      impl Convert<Wrapper<i32>> for P { fn convert(&self) -> str { "nested" } }
+      impl Convert<Wrapper_i32_> for P { fn convert(&self) -> str { "flat" } }
+      fn use_nested<U: Convert<Wrapper<i32>>>(u: &U) -> str { u.convert() }
+      fn use_flat<U: Convert<Wrapper_i32_>>(u: &U) -> str { u.convert() }
+      fn outer<T: Convert<Wrapper<i32>> + Convert<Wrapper_i32_>>(t: &T) {
+        print(use_nested(t));
+        print(use_flat(t));
+      }
+      fn main() { let p = P { n: 0 }; outer(&p); }
+    `);
+    expect(runEmittedJs(js)).toEqual(["nested", "flat"]);
+  });
+
+  it("does not collide two instantiations of a multi-argument trait bound into the same raw witness parameter name", (): void => {
+    const js = emittedJs(`
+      trait Convert<X, Y> { fn tag(&self) -> str; }
+      fn outer<A_B, C, A, B_C, T: Convert<A_B, C> + Convert<A, B_C>>(t: &T) {}
+      fn main() {}
+    `);
+    expect(js).not.toContain(
+      "_witness_T_Convert_A_B_C, _witness_T_Convert_A_B_C$1",
+    );
+  });
+
+  it("resolves a generic inherent method's own bound witness from the receiver's matched target arguments", (): void => {
+    const js = emittedJs(`
+      trait Convert<T> { fn convert(&self) -> T; }
+      struct Pair<A, B> { a: A, b: B }
+      struct P { n: i32 }
+      impl Convert<i32> for P { fn convert(&self) -> i32 { self.n } }
+      impl<A: Convert<B>, B> Pair<A, B> { fn first(&self) -> B { self.a.convert() } }
+      fn main() {
+        let pair = Pair { a: P { n: 7 }, b: 0 };
+        print(pair.first());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
+  it("dispatches through the requested instantiation's own witness methods, not an earlier unrelated one", (): void => {
+    const js = emittedJs(`
+      trait Tag<T> { fn tag(&self) -> str { "default" } }
+      trait Show { fn show(&self) -> str; }
+      struct P { v: i32 }
+      impl Tag<i32> for P {}
+      impl Tag<str> for P { fn tag(&self) -> str { "string" } }
+      impl<T: Tag<str>> Show for T { fn show(&self) -> str { self.tag() } }
+      fn main() { let p = P { v: 0 }; print(p.show()); }
+    `);
+    expect(runEmittedJs(js)).toEqual(["string"]);
+  });
+
   it("emits one JS function for a bounded generic instantiated at two concrete types", (): void => {
     const js = emittedJs(`
       trait Draw { fn draw(&self) -> i32; }
@@ -1561,6 +1652,50 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["1", "2"]);
   });
 
+  it("does not collide two blanket impls' free functions for different instantiations of the same parameterized trait", (): void => {
+    const js = emittedJs(`
+      trait Tag<T> { fn tag(&self) -> str; }
+      impl<T> Tag<i32> for T { fn tag(&self) -> str { "int" } }
+      impl<T> Tag<str> for T { fn tag(&self) -> str { "string" } }
+      fn main() { print(0); }
+    `);
+    expect(js).toContain("function Tag$tag$blanket(self)");
+    expect(js).toContain("function Tag$tag$blanket_2(self)");
+    expect(countOccurrences(js, 'return "int";')).toBe(1);
+    expect(countOccurrences(js, 'return "string";')).toBe(1);
+  });
+
+  it("dispatches a concrete-receiver method call to a generic-target impl's own reserved name, not a colliding user function", (): void => {
+    const js = emittedJs(`
+      struct Wrapper<T> { v: T }
+      trait Greet { fn hello(&self) -> i32; }
+      impl<T> Greet for Wrapper<T> { fn hello(&self) -> i32 { 1 } }
+      fn Wrapper$Greet$hello() -> i32 { 99 }
+      fn main() {
+        let w = Wrapper { v: 5 };
+        print(w.hello());
+        print(Wrapper$Greet$hello());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["1", "99"]);
+  });
+
+  it("dispatches a witness slot for a generic-target impl's own reserved name, not a colliding user function", (): void => {
+    const js = emittedJs(`
+      struct Wrapper<T> { v: T }
+      trait Greet { fn hello(&self) -> i32; }
+      impl<T> Greet for Wrapper<T> { fn hello(&self) -> i32 { 1 } }
+      fn Wrapper$Greet$hello() -> i32 { 99 }
+      fn call_hello<G: Greet>(g: &G) -> i32 { g.hello() }
+      fn main() {
+        let w = Wrapper { v: 5 };
+        print(call_hello(&w));
+        print(Wrapper$Greet$hello());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["1", "99"]);
+  });
+
   it("does not collide a blanket impl's free function with another blanket impl of a shadowed same-named trait", (): void => {
     const result = compile(`
       trait Marker1 {}
@@ -1623,6 +1758,45 @@ describe("generic witness codegen", (): void => {
     const { javascript } = result.code.value;
     assert(isSome(javascript), "Expected emitted JavaScript");
     expect(runEmittedJs(javascript.value)).toEqual(["1", "2"]);
+  });
+
+  it("resolves a nested trait method's own bound against the same nested scope's shadowed trait, not an outer same-named one", (): void => {
+    const js = emittedJs(`
+      trait Local { fn outer_mark(&self) -> i32; }
+      fn scoped() -> i32 {
+        trait Local { fn mark(&self) -> i32; }
+        trait Container { fn f<T: Local>(&self, t: T) -> i32; }
+        struct X { v: i32 }
+        impl Local for X { fn mark(&self) -> i32 { self.v } }
+        struct C {}
+        impl Container for C { fn f<T: Local>(&self, t: T) -> i32 { t.mark() } }
+        C {}.f(X { v: 9 })
+      }
+      fn main() {
+        print(scoped());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["9"]);
+  });
+
+  it("dispatches a flattened supertrait method's witness slot through its own defining trait's scope, not the enclosing witness's", (): void => {
+    const js = emittedJs(`
+      trait Base { fn base(&self) -> i32; }
+      trait Ext: Base {}
+      struct S { v: i32 }
+      impl Base for S { fn base(&self) -> i32 { self.v } }
+      impl Ext for S {}
+      fn S$Base$base() -> i32 { -1 }
+      fn use_ext<T: Ext>(t: &T) -> i32 { t.base() }
+      fn main() {
+        let s = S { v: 7 };
+        print(use_ext(&s));
+        print(S$Base$base());
+      }
+    `);
+    expect(js).toContain("function S$Base$base_2(self)");
+    expect(js).toContain("__witness_Ext_S = {base: S$Base$base_2}");
+    expect(runEmittedJs(js)).toEqual(["7", "-1"]);
   });
 
   it("dispatches a witness slot for an unconstrained blanket impl's method through the trait-scoped free function, not a nonexistent per-type one", (): void => {
@@ -1854,6 +2028,160 @@ describe("generic witness codegen", (): void => {
     expect(js).toContain("function run(t, _witness_T_Draw)");
     expect(js).toContain("_witness_T_Draw.draw(t)");
     expect(runEmittedJs(js)).toEqual(["8"]);
+  });
+
+  it("threads a witness for an impl-level (not method-level) generic parameter's own bound, and runs", (): void => {
+    const js = emittedJs(`
+      struct Num { n: i32 }
+      impl Clone for Num {
+        fn clone(&self) -> Self {
+          print("cloning");
+          Num { n: self.n }
+        }
+      }
+      struct Wrapper<T> { value: T }
+      impl<T: Clone> Wrapper<T> {
+        fn dup(&self) -> Wrapper<T> {
+          Wrapper { value: self.value.clone() }
+        }
+      }
+      fn main() {
+        let w = Wrapper { value: Num { n: 5 } };
+        let w2 = w.dup();
+        print("done");
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["cloning", "done"]);
+  });
+
+  it("threads a witness for an impl-level generic bound through `==` operator dispatch, not just an explicit method call, and runs", (): void => {
+    const js = emittedJs(`
+      struct Num { n: i32 }
+      impl PartialEq for Num {
+        fn eq(&self, other: &Self) -> bool { self.n == other.n }
+      }
+      struct Wrapper<T> { value: T }
+      impl<T: PartialEq> PartialEq for Wrapper<T> {
+        fn eq(&self, other: &Self) -> bool { self.value == other.value }
+      }
+      fn main() {
+        let a = Wrapper { value: Num { n: 1 } };
+        let b = Wrapper { value: Num { n: 1 } };
+        let c = Wrapper { value: Num { n: 2 } };
+        if a == b { print("eq"); } else { print("ne"); }
+        if a == c { print("eq"); } else { print("ne"); }
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["eq", "ne"]);
+  });
+
+  it("threads a witness for an impl-level generic bound when the impl targets an enum, not just a struct, and runs", (): void => {
+    const js = emittedJs(`
+      struct Num { n: i32 }
+      impl Clone for Num {
+        fn clone(&self) -> Self {
+          print("cloning");
+          Num { n: self.n }
+        }
+      }
+      enum Holder<T> { Has(T) }
+      impl<T: Clone> Holder<T> {
+        fn dup(self) -> Holder<T> {
+          match self {
+            Holder::Has(value) => Holder::Has(value.clone()),
+          }
+        }
+      }
+      fn main() {
+        let h = Holder::Has(Num { n: 5 });
+        let h2 = h.dup();
+        print("done");
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["cloning", "done"]);
+  });
+
+  it("resolves an impl-level generic bound by its target-argument position, not its declaration order, when an impl reorders them", (): void => {
+    const js = emittedJs(`
+      struct Num { n: i32 }
+      impl Clone for Num {
+        fn clone(&self) -> Self {
+          print("cloned num");
+          Num { n: self.n }
+        }
+      }
+      struct Text { s: str }
+      impl Clone for Text {
+        fn clone(&self) -> Self {
+          print("cloned text");
+          Text { s: self.s }
+        }
+      }
+      struct Pair<A, B> { first: A, second: B }
+      impl<A: Clone, B> Pair<B, A> {
+        fn dup_second(&self) -> A {
+          self.second.clone()
+        }
+      }
+      fn main() {
+        let p = Pair { first: Text { s: "hi" }, second: Num { n: 5 } };
+        p.dup_second();
+        print("done");
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["cloned num", "done"]);
+  });
+
+  it("dispatches a trait method to the impl matching the receiver's own instantiation, not the first-registered impl of the same base struct", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> str; }
+      struct Pair<T> { a: T }
+      impl Draw for Pair<i32> { fn draw(&self) -> str { "int" } }
+      impl Draw for Pair<str> { fn draw(&self) -> str { "string" } }
+      fn main() {
+        let a = Pair { a: 5 };
+        let b = Pair { a: "hi" };
+        print(a.draw());
+        print(b.draw());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["int", "string"]);
+  });
+
+  it("dispatches an inherent method to the impl matching the receiver's own instantiation", (): void => {
+    const js = emittedJs(`
+      struct Pair<T> { a: T }
+      impl Pair<i32> { fn describe(&self) -> str { "int" } }
+      impl Pair<str> { fn describe(&self) -> str { "string" } }
+      fn main() {
+        let a = Pair { a: 5 };
+        let b = Pair { a: "hi" };
+        print(a.describe());
+        print(b.describe());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["int", "string"]);
+  });
+
+  it("constructs the receiver's own instantiation from a `-> Self` method on each of two impls of the same struct", (): void => {
+    const js = emittedJs(`
+      struct Pair<T> { a: T }
+      impl Pair<i32> {
+        fn make(&self) -> Self { Self { a: self.a } }
+        fn tag(&self) -> str { "int" }
+      }
+      impl Pair<str> {
+        fn make(&self) -> Self { Self { a: self.a } }
+        fn tag(&self) -> str { "string" }
+      }
+      fn main() {
+        let a = Pair { a: 5 };
+        let b = Pair { a: "hi" };
+        print(a.make().tag());
+        print(b.make().tag());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["int", "string"]);
   });
 });
 
@@ -2428,6 +2756,141 @@ describe("Drop::drop dispose body", (): void => {
     expect(js).toContain("Res$Drop$drop(");
     expect(runEmittedJs(js)).toEqual(["0", "42"]);
   });
+
+  it("runs each instantiation's own `drop` body, not whichever one was registered last", (): void => {
+    const js = emittedJs(`
+      struct Pair<T> { a: T }
+      impl Drop for Pair<i32> { fn drop(&mut self) { print(1); } }
+      impl Drop for Pair<str> { fn drop(&mut self) { print(2); } }
+      fn main() {
+        let a = Pair { a: 1 };
+        let b = Pair { a: "s" };
+        print(0);
+      }
+    `);
+    // Scope-end disposal is LIFO: `b` (Pair<str>) first, then `a` (Pair<i32>).
+    expect(runEmittedJs(js)).toEqual(["0", "2", "1"]);
+  });
+
+  it("runs each instantiation's own `drop` body for a tuple struct too, not whichever one was registered last", (): void => {
+    const js = emittedJs(`
+      struct Pair<T>(T);
+      impl Drop for Pair<i32> { fn drop(&mut self) { print(1); } }
+      impl Drop for Pair<str> { fn drop(&mut self) { print(2); } }
+      fn main() {
+        let a = Pair(1);
+        let b = Pair("s");
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "2", "1"]);
+  });
+
+  it("runs a generic impl's own `drop` body for every instantiation of its target", (): void => {
+    const js = emittedJs(`
+      struct Pair<T> { a: T }
+      impl<T> Drop for Pair<T> { fn drop(&mut self) { print(1); } }
+      fn main() {
+        let a = Pair { a: 1 };
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "1"]);
+  });
+
+  it("prefers a concrete instantiation's own `drop` body over a generic impl covering the same target", (): void => {
+    const js = emittedJs(`
+      struct Pair<T> { a: T }
+      impl Drop for Pair<i32> { fn drop(&mut self) { print(1); } }
+      fn main() {
+        let a = Pair { a: 1 };
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "1"]);
+  });
+
+  it("matches the right drop impl when an earlier disjoint pattern only partially binds before failing", (): void => {
+    const js = emittedJs(`
+      struct Triple<A, B, C> { a: A, b: B, c: C }
+      impl<T> Drop for Triple<T, i32, T> { fn drop(&mut self) { print(1); } }
+      impl<T> Drop for Triple<str, T, T> { fn drop(&mut self) { print(2); } }
+      fn main() {
+        let v = Triple { a: "s", b: true, c: true };
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "2"]);
+  });
+
+  it("passes a generic Drop impl's own bound witness to the disposed value's drop call", (): void => {
+    const js = emittedJs(`
+      trait Marker { fn mark(&self) -> i32; }
+      struct Num { v: i32 }
+      impl Marker for Num { fn mark(&self) -> i32 { self.v } }
+      struct Wrapper<T> { value: T }
+      impl<T: Marker> Drop for Wrapper<T> {
+        fn drop(&mut self) { print(self.value.mark()); }
+      }
+      fn main() {
+        let w = Wrapper { value: Num { v: 7 } };
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "7"]);
+  });
+
+  it("substitutes a dependent impl-level bound's own type argument before resolving its drop witness", (): void => {
+    const js = emittedJs(`
+      trait Convert<T> { fn convert(&self) -> T; }
+      struct P { n: i32 }
+      impl Convert<i32> for P { fn convert(&self) -> i32 { self.n } }
+      struct Pair<A, B> { a: A, b: B }
+      impl<A: Convert<B>, B> Drop for Pair<A, B> {
+        fn drop(&mut self) { print(self.a.convert()); }
+      }
+      fn main() {
+        let pair = Pair { a: P { n: 7 }, b: 0 };
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "7"]);
+  });
+
+  it("pre-reserves a generic Drop impl's own hoisted witness name before an earlier local can claim it", (): void => {
+    const js = emittedJs(`
+      trait Marker { fn mark(&self) -> i32; }
+      struct Num { v: i32 }
+      impl Marker for Num { fn mark(&self) -> i32 { self.v } }
+      struct Wrapper<T> { value: T }
+      impl<T: Marker> Drop for Wrapper<T> {
+        fn drop(&mut self) { print(self.value.mark()); }
+      }
+      fn main() {
+        let __witness_Marker_Num = 99;
+        let w = Wrapper { value: Num { v: 7 } };
+        print(0);
+        print(__witness_Marker_Num);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "99", "7"]);
+  });
+
+  it("does not attach a generic Drop impl's own drop body when its bound is not satisfied by the constructed value", (): void => {
+    const js = emittedJs(`
+      trait Marker { fn mark(&self) -> i32; }
+      struct Plain { v: i32 }
+      struct Wrapper<T> { value: T }
+      impl<T: Marker> Drop for Wrapper<T> {
+        fn drop(&mut self) { print(self.value.mark()); }
+      }
+      fn main() {
+        let w = Wrapper { value: Plain { v: 1 } };
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0"]);
+  });
 });
 
 describe("std prelude", (): void => {
@@ -2515,6 +2978,25 @@ describe("+ / & / << on a type with an operator-trait impl", (): void => {
     expect(js).toContain("Point$Add$add(a, b)");
     expect(js).not.toContain("a.add(b)");
     expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
+  it("dispatches an operator on a generic-target impl's own reserved name, not a colliding user function", (): void => {
+    const js = emittedJs(`
+      struct Wrapper<T> { v: T }
+      impl<T> Add for Wrapper<T> {
+        type Output = Self;
+        fn add(self, rhs: Self) -> Self::Output { self }
+      }
+      fn Wrapper$Add$add() -> i32 { 99 }
+      fn main() {
+        let a = Wrapper { v: 3 };
+        let b = Wrapper { v: 4 };
+        let c = a + b;
+        print(c.v);
+        print(Wrapper$Add$add());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["3", "99"]);
   });
 
   it("lowers `&` on a struct to a call of the impl's `bitand` free function and runs it", (): void => {
