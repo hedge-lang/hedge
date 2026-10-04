@@ -712,15 +712,21 @@ function traitBoundRefs(
     }));
 }
 
-/** Whether any registered trait carries this bare name, regardless of the
- * scope it was declared in - an existence check, not identity resolution
- * (which happens at the reference's own use site). */
-function traitNameIsRegistered(ctx: AnalysisContext, name: string): boolean {
-  const suffix = `::${name}`;
-  for (const key of ctx.traitRegistry.keys()) {
-    if (key === name || key.endsWith(suffix)) return true;
-  }
-  return false;
+/** Whether `name` resolves to a real trait in the scope actually in effect
+ * for this reference. Defaults to live-frame `lookupTrait`; a prepass
+ * caller with no live scope yet (`registerTraits`'s own supertrait pass,
+ * `registerOneImpl`'s own bound validation) passes a `StructuralScope`-based
+ * resolver instead - the same duality `resolveBoundNames` already needs for
+ * the identical reason. Deliberately *not* a bare scan of every registered
+ * trait's own key regardless of nesting - that would wrongly accept a name
+ * only an unrelated, inaccessible nested trait happens to share, passing
+ * validation for a reference that would then fail to resolve for real. */
+function traitNameIsRegistered(
+  ctx: AnalysisContext,
+  name: string,
+  resolveTraitName: (name: string) => string = (n) => lookupTrait(ctx, n) ?? n,
+): boolean {
+  return ctx.traitRegistry.has(resolveTraitName(name));
 }
 
 /** Rejects any trait bound naming a trait that isn't declared - a sibling
@@ -732,11 +738,12 @@ function traitNameIsRegistered(ctx: AnalysisContext, name: string): boolean {
 function validateTraitBoundNames(
   ctx: AnalysisContext,
   bounds: readonly Parser.TraitBound[],
+  resolveTraitName?: (name: string) => string,
 ): void {
   for (const bound of bounds) {
     if (bound.kind !== "PathTraitBound") continue;
     const name = bound.path.segments.at(-1) ?? "";
-    if (traitNameIsRegistered(ctx, name)) {
+    if (traitNameIsRegistered(ctx, name, resolveTraitName)) {
       for (const arg of bound.typeArguments) {
         validateSlice1Type(ctx, arg, arg.tokenId);
       }
@@ -755,15 +762,16 @@ function validateGenericParamBounds(
   ctx: AnalysisContext,
   generics: readonly Parser.GenericParam[],
   whereClause: Option<Parser.WhereClause>,
+  resolveTraitName?: (name: string) => string,
 ): void {
   for (const param of generics) {
     if (param.kind !== "TypeParam") continue;
-    validateTraitBoundNames(ctx, param.bounds);
+    validateTraitBoundNames(ctx, param.bounds, resolveTraitName);
   }
   for (const predicate of isSome(whereClause)
     ? whereClause.value.predicates
     : []) {
-    validateTraitBoundNames(ctx, predicate.bounds);
+    validateTraitBoundNames(ctx, predicate.bounds, resolveTraitName);
   }
 }
 
@@ -4663,8 +4671,10 @@ function registerTraits(
     });
     traitItems.push({ item, scope });
   }
-  for (const { item } of traitItems) {
-    validateTraitBoundNames(ctx, item.supertraits);
+  for (const { item, scope } of traitItems) {
+    validateTraitBoundNames(ctx, item.supertraits, (name) =>
+      resolveTraitIdentity(name, scope),
+    );
   }
   // A third pass, once every trait name is registered, resolves each method's
   // real signature (quietly - `analyzeTraitDecl` re-resolves and owns the
@@ -5101,7 +5111,9 @@ function registerOneImpl(
 ): RegisteredImpl | undefined {
   const decl = buildImplDecl(item);
   pushGenericParams(ctx, item.generics, item.whereClause);
-  validateGenericParamBounds(ctx, item.generics, item.whereClause);
+  validateGenericParamBounds(ctx, item.generics, item.whereClause, (name) =>
+    resolveTraitIdentity(name, scope),
+  );
   validateGenericParamDefaults(ctx, item.generics);
   popGenericParams(ctx);
   const traitRef = decl.traitRef;

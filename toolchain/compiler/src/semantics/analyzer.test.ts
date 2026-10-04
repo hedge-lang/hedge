@@ -8767,6 +8767,19 @@ describe("trait and impl declarations", (): void => {
       );
     });
 
+    it("rejects a generic function's bound naming a trait declared in an unrelated, inaccessible nested scope", (): void => {
+      const result = diagnose(`
+        fn outer() {
+          trait Local { fn mark(&self) -> i32; }
+        }
+        fn f<T: Local>(t: &T) -> i32 { 0 }
+        fn main() { print(0); }
+      `);
+      expect(result.diagnostics.map((d) => messageOf(d))).toContain(
+        "cannot find trait `Local` in this scope",
+      );
+    });
+
     it("rejects an ordinary generic function's where-clause bound naming an undeclared trait", (): void => {
       const result = diagnose(`
         fn f<T>(x: T) where T: Missing {}
