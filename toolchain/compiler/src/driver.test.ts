@@ -1779,6 +1779,23 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["9"]);
   });
 
+  it("substitutes a method call's own sibling argument into a dependent method-level bound before resolving its witness", (): void => {
+    const js = emittedJs(`
+      trait Convert<T> { fn convert(&self) -> T; }
+      struct P { n: i32 }
+      impl Convert<i32> for P { fn convert(&self) -> i32 { self.n } }
+      struct S {}
+      impl S {
+        fn use_it<U: Convert<V>, V>(&self, u: U, v: V) { print(u.convert()); }
+      }
+      fn main() {
+        let s = S {};
+        s.use_it(P { n: 7 }, 2);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
   it("dispatches a flattened supertrait method's witness slot through its own defining trait's scope, not the enclosing witness's", (): void => {
     const js = emittedJs(`
       trait Base { fn base(&self) -> i32; }

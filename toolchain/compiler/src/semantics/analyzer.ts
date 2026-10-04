@@ -10962,6 +10962,7 @@ function appendBoundWitnesses(
   witnesses: WitnessRef[],
   bounds: ReadonlyMap<string, readonly Semantics.BoundTraitRef[]>,
   argTypeFor: (paramName: string) => Semantics.Type | undefined,
+  substitution: GenericBindings,
 ): void {
   for (const [paramName, traitRefs] of bounds) {
     const argType = argTypeFor(paramName);
@@ -10971,11 +10972,50 @@ function appendBoundWitnesses(
         ctx,
         argType,
         traitRef.name,
-        traitRef.typeArguments,
+        traitRef.typeArguments.map((arg) =>
+          substituteGenericType(arg, substitution),
+        ),
       );
       if (isSome(witness)) witnesses.push(witness.value);
     }
   }
+}
+
+/** Every bound parameter's own resolved concrete type, from either
+ * `appendBoundWitnesses` pass - a bound's own type arguments (`U: Convert<V>`'s
+ * `V`) can themselves name another of the call's own bound parameters, so
+ * every one needs resolving up front rather than just the single parameter
+ * a given bound is declared on (mirrors `implGenericParamBindings`'s
+ * identical need for a constructed value's own impl-level parameters). */
+function methodCallBoundParamBindings(
+  method: IndexedMethod,
+  args: readonly Semantics.Expression[],
+  receiverType: Semantics.Type,
+): GenericBindings {
+  const bindings: GenericBindings = new Map();
+  for (const paramName of method.implOnlyGenericParamBounds.keys()) {
+    const argType = implGenericParamType(
+      receiverType,
+      method.implGenericParamPositions,
+      paramName,
+    );
+    if (argType !== undefined) {
+      bindings.set(paramName, { type: argType, tokenId: 0 });
+    }
+  }
+  for (const paramName of method.genericParamBounds.keys()) {
+    const argType = methodCallGenericArgType(
+      args,
+      method.params.findIndex((p) => namesGenericParam(p, paramName)),
+      receiverType,
+      method.implGenericParamPositions,
+      paramName,
+    );
+    if (argType !== undefined) {
+      bindings.set(paramName, { type: argType, tokenId: 0 });
+    }
+  }
+  return bindings;
 }
 
 function recordMethodCallWitnesses(
@@ -10994,6 +11034,7 @@ function recordMethodCallWitnesses(
   const witnesses: WitnessRef[] = [
     ...(ctx.methodCallWitnessTable.get(methodTokenId) ?? []),
   ];
+  const substitution = methodCallBoundParamBindings(method, args, receiverType);
   // A trait-impl method's own impl-level bound (kept separate from
   // `genericParamBounds` - see `IndexedMethod.implOnlyGenericParamBounds`'s
   // own doc comment) is only ever reachable through the receiver's own
@@ -11009,15 +11050,21 @@ function recordMethodCallWitnesses(
         method.implGenericParamPositions,
         paramName,
       ),
+    substitution,
   );
-  appendBoundWitnesses(ctx, witnesses, method.genericParamBounds, (paramName) =>
-    methodCallGenericArgType(
-      args,
-      method.params.findIndex((p) => namesGenericParam(p, paramName)),
-      receiverType,
-      method.implGenericParamPositions,
-      paramName,
-    ),
+  appendBoundWitnesses(
+    ctx,
+    witnesses,
+    method.genericParamBounds,
+    (paramName) =>
+      methodCallGenericArgType(
+        args,
+        method.params.findIndex((p) => namesGenericParam(p, paramName)),
+        receiverType,
+        method.implGenericParamPositions,
+        paramName,
+      ),
+    substitution,
   );
   if (witnesses.length > 0) {
     ctx.methodCallWitnessTable.set(methodTokenId, witnesses);
