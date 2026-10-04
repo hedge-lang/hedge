@@ -4726,6 +4726,24 @@ describe("associated types and trait projections", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
+    it("resolves a method call unambiguously when only one of two generic-target instantiations has its own bound satisfied", (): void => {
+      const result = diagnose(`
+        trait A { fn a(&self) -> i32; }
+        trait B { fn b(&self) -> i32; }
+        trait Tag<T> { fn tag(&self) -> T; }
+        struct Wrapper<T> { value: T }
+        impl<T: A> Tag<i32> for Wrapper<T> { fn tag(&self) -> i32 { 1 } }
+        impl<T: B> Tag<str> for Wrapper<T> { fn tag(&self) -> str { "s" } }
+        struct X { v: i32 }
+        impl A for X { fn a(&self) -> i32 { self.v } }
+        fn main() {
+          let w = Wrapper { value: X { v: 1 } };
+          w.tag();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("substitutes the trait's own generic parameter with the impl's requested instantiation in an indexed method's return type", (): void => {
       const result = diagnose(`
         trait Convert<T> { fn convert(&self) -> T; }

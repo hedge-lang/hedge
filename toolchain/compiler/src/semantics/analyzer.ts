@@ -561,6 +561,18 @@ interface RegisteredImpl {
   readonly resolvedTargetType: Semantics.Type;
   readonly isBlanket: boolean;
   readonly blanketBounds: readonly Semantics.BoundTraitRef[];
+  /** A non-blanket impl's own declared bound(s) (`impl<T: A> Tag<i32> for
+   * Wrapper<T>`'s `T: A`) and the position each bound parameter occupies
+   * within the target's own type-argument tree - `applicableImplsForReceiver`
+   * needs these to tell whether this impl genuinely applies to a given
+   * receiver, the same way `methodCandidatesForNominalType` already checks
+   * `IndexedMethod.implOnlyGenericParamBounds`. Always empty for a blanket
+   * impl, which uses `blanketBounds` instead. */
+  readonly genericParamBounds: ReadonlyMap<
+    string,
+    readonly Semantics.BoundTraitRef[]
+  >;
+  readonly implGenericParamPositions: ImplGenericParamPositions;
   readonly providedMethods: readonly string[];
   /** Every `type Name = Value;` this impl defines, resolved eagerly during
    * registration (not left for `analyzeImplDecl`'s own real pass) so a
@@ -5142,7 +5154,20 @@ function registerOneImpl(
     blanketBounds,
     resolvedTargetType,
   } = resolveImplRegistrationFacts(ctx, item, declaredNames);
+  const genericParamBounds = decl.isBlanket
+    ? new Map<string, readonly Semantics.BoundTraitRef[]>()
+    : resolveBoundNames(
+        ctx,
+        genericParamBoundNames(item.generics, item.whereClause),
+        (name) => resolveTraitIdentity(name, scope),
+      );
   popGenericParams(ctx);
+  const implGenericParamPositions = decl.isBlanket
+    ? new Map<string, readonly ImplParamPathStep[]>()
+    : implGenericParamTargetPositions(
+        new Set(genericParamNames(item.generics)),
+        item.type,
+      );
   const incoming: RegisteredImpl = {
     traitName,
     traitTypeArguments,
@@ -5151,6 +5176,8 @@ function registerOneImpl(
     resolvedTargetType,
     isBlanket: decl.isBlanket,
     blanketBounds,
+    genericParamBounds,
+    implGenericParamPositions,
     providedMethods: decl.providedMethods,
     associatedTypeDefs,
     tokenId: item.tokenId,
@@ -10271,10 +10298,22 @@ function applicableImplsForReceiver(
     if (!impl.isBlanket) {
       if (impl.targetTypeName !== typeName) return false;
       const bindings = new Map<string, Semantics.Type>();
-      return requestedTraitArgumentsSatisfied(
-        impl.targetTypeArguments,
-        receiverTypeArguments,
-        bindings,
+      if (
+        !requestedTraitArgumentsSatisfied(
+          impl.targetTypeArguments,
+          receiverTypeArguments,
+          bindings,
+        )
+      ) {
+        return false;
+      }
+      return isSome(
+        resolveImplBoundWitnesses(
+          ctx,
+          bindings,
+          impl.genericParamBounds,
+          impl.implGenericParamPositions,
+        ),
       );
     }
     return impl.blanketBounds.every(
