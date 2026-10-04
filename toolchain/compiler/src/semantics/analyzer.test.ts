@@ -8472,6 +8472,38 @@ describe("trait and impl declarations", (): void => {
       expect(witness.typeName).toBe("Num");
     });
 
+    it("does not conflate a trait impl's own bound with a shadowing method-level bound of the same parameter name", (): void => {
+      const result = diagnoseWithPrelude(`
+        trait Marker { fn mark(&self) -> i32; }
+        struct X { v: i32 }
+        impl Marker for X { fn mark(&self) -> i32 { self.v } }
+        trait Printable { fn label(&self) -> i32; }
+        struct Y { v: i32 }
+        impl Printable for Y { fn label(&self) -> i32 { self.v } }
+
+        trait Greet { fn f<T: Printable>(&self, x: T) -> i32; }
+        struct Wrapper<T> { value: T }
+        impl<T: Marker> Greet for Wrapper<T> {
+          fn f<T: Printable>(&self, x: T) -> i32 { x.label() }
+        }
+        fn main() {
+          let w = Wrapper { value: X { v: 1 } };
+          w.f(Y { v: 2 });
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.methodCallWitnesses.values()];
+      assert(
+        witnesses !== undefined,
+        "expected a recorded method-call witness",
+      );
+      expect(witnesses).toHaveLength(1);
+      const witness = witnesses[0];
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(witness.traitName).toBe("Printable");
+      expect(witness.typeName).toBe("Y");
+    });
+
     it("instantiates a method-level bound's own trait argument from the abstract receiver's own bound type argument", (): void => {
       const result = diagnoseWithPrelude(`
         trait Convert<T> { fn convert(&self) -> T; }

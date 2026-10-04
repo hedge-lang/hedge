@@ -9515,8 +9515,23 @@ interface IndexedMethod {
   readonly genericParams: readonly string[];
   /** Each `genericParams` name's own declared bounds -
    * `recordMethodCallWitnesses` uses this to resolve a witness per bound
-   * from the call site's own argument types. */
+   * from the call site's own argument types. Method-only - see
+   * `implOnlyGenericParamBounds` for why an impl-level bound can't share
+   * this map, even under a shadowed name. */
   readonly genericParamBounds: ReadonlyMap<
+    string,
+    readonly Semantics.BoundTraitRef[]
+  >;
+  /** The enclosing impl's own declared bounds, excluding any name the
+   * method itself redeclares. Kept out of `genericParamBounds` rather than
+   * merged into it: a shadowed name (`impl<T: Marker> Trait for
+   * Wrapper<T> { fn f<T: Printable>(&self, x: T) }`'s two `T`s) would
+   * otherwise collide under one key, so an impl-level bound (receiver-
+   * position-only) got checked against whatever the shadowing method
+   * parameter bound instead. Empty for an inherent impl's own method (a
+   * separate, unfixed gap in `indexInherentMethods`'s pre-merged scope)
+   * and for a bare trait method with no enclosing impl. */
+  readonly implOnlyGenericParamBounds: ReadonlyMap<
     string,
     readonly Semantics.BoundTraitRef[]
   >;
@@ -9619,6 +9634,7 @@ function traitMethodSet(
     returnType: m.returnType,
     genericParams: [...trait.genericParams, ...m.genericParams],
     genericParamBounds: m.genericParamBounds,
+    implOnlyGenericParamBounds: new Map(),
     implGenericParamPositions: new Map(),
     targetTypeArguments: [],
     ownGenericParams: new Set(m.genericParams),
@@ -9878,21 +9894,6 @@ function resolveConcreteImplTargetType(
   };
 }
 
-/** `outer` (an impl's own declared bounds) merged ahead of `inner` (a
- * trait method's own), matching `recordWitnessParams`'s outer-then-inner
- * convention for the same reason: the callee's own hidden witness
- * parameters are appended in this order. */
-function mergedGenericParamBounds(
-  outer: ReadonlyMap<string, readonly Semantics.BoundTraitRef[]>,
-  inner: ReadonlyMap<string, readonly Semantics.BoundTraitRef[]>,
-): ReadonlyMap<string, readonly Semantics.BoundTraitRef[]> {
-  const merged = new Map(outer);
-  for (const [name, refs] of inner) {
-    merged.set(name, [...(merged.get(name) ?? []), ...refs]);
-  }
-  return merged;
-}
-
 /** A trait impl's methods, with the trait's abstract `Self` / `Self::Assoc`
  * and the trait's own declared generic parameters (via `traitRefTypeArguments`)
  * rewritten against this impl's concrete target, its own associated-type
@@ -9947,9 +9948,10 @@ function indexTraitImplMethods(
     returnType: substituteTraitMethodType(m.returnType, m.ownGenericParams),
     implGenericParamPositions,
     targetTypeArguments,
-    genericParamBounds: mergedGenericParamBounds(
-      implGenericParamBounds,
-      m.genericParamBounds,
+    implOnlyGenericParamBounds: new Map(
+      [...implGenericParamBounds].filter(
+        ([name]) => !m.ownGenericParams.has(name),
+      ),
     ),
   }));
 }
@@ -10031,6 +10033,7 @@ function indexInherentMethods(
           ...genericParamNames(decl.signature.generics),
         ],
         genericParamBounds,
+        implOnlyGenericParamBounds: new Map(),
         implGenericParamPositions,
         targetTypeArguments,
         ownGenericParams: new Set(genericParamNames(decl.signature.generics)),
@@ -10073,6 +10076,21 @@ function methodCandidates(
   return ctx.methodIndex.get(typeIdentity(receiverType)) ?? [];
 }
 
+/** The bounds a method's own enclosing impl declares, for checks that must
+ * only ever see the impl's side - never a method-level bound, even one
+ * sharing a shadowed name. A trait-impl method keeps the two separate
+ * (`implOnlyGenericParamBounds`); an inherent method's own
+ * `genericParamBounds` is still the pre-merged impl+method scope
+ * (`indexInherentMethods`'s own gap, not fixed here) and is always empty
+ * in the other field, so this picks whichever one actually holds it. */
+function implLevelGenericParamBounds(
+  method: IndexedMethod,
+): ReadonlyMap<string, readonly Semantics.BoundTraitRef[]> {
+  return method.origin.kind === "trait"
+    ? method.implOnlyGenericParamBounds
+    : method.genericParamBounds;
+}
+
 /** `methodCandidates`' concrete-receiver path: `methodIndex`'s per-base-name
  * bucket (which holds every impl of every instantiation of that base type,
  * since it's keyed by bare name) plus any applicable blanket-impl methods,
@@ -10110,7 +10128,7 @@ function methodCandidatesForNominalType(
         resolveImplBoundWitnesses(
           ctx,
           bindings,
-          m.genericParamBounds,
+          implLevelGenericParamBounds(m),
           m.implGenericParamPositions,
         ),
       )
@@ -10144,12 +10162,11 @@ function substituteIndexedMethodBindings(
       .filter(([name]) => !method.ownGenericParams.has(name))
       .map(([name, type]) => [name, { type, tokenId: 0 }]),
   );
-  return {
-    ...method,
-    params: method.params.map((p) => substituteGenericType(p, generic)),
-    returnType: substituteGenericType(method.returnType, generic),
-    genericParamBounds: new Map(
-      [...method.genericParamBounds].map(([paramName, refs]) => [
+  const substituteBoundsTypeArguments = (
+    bounds: ReadonlyMap<string, readonly Semantics.BoundTraitRef[]>,
+  ): ReadonlyMap<string, readonly Semantics.BoundTraitRef[]> =>
+    new Map(
+      [...bounds].map(([paramName, refs]) => [
         paramName,
         refs.map((ref) => ({
           ...ref,
@@ -10158,6 +10175,16 @@ function substituteIndexedMethodBindings(
           ),
         })),
       ]),
+    );
+  return {
+    ...method,
+    params: method.params.map((p) => substituteGenericType(p, generic)),
+    returnType: substituteGenericType(method.returnType, generic),
+    genericParamBounds: substituteBoundsTypeArguments(
+      method.genericParamBounds,
+    ),
+    implOnlyGenericParamBounds: substituteBoundsTypeArguments(
+      method.implOnlyGenericParamBounds,
     ),
   };
 }
@@ -10666,7 +10693,9 @@ function recordDropWitnesses(
         new Map(),
       ),
   );
-  if (method === undefined || method.genericParamBounds.size === 0) return;
+  if (method === undefined) return;
+  const implBounds = implLevelGenericParamBounds(method);
+  if (implBounds.size === 0) return;
   const bindings = implGenericParamBindings(
     constructedType,
     method.implGenericParamPositions,
@@ -10674,7 +10703,7 @@ function recordDropWitnesses(
   const resolved = resolveImplBoundWitnesses(
     ctx,
     bindings,
-    method.genericParamBounds,
+    implBounds,
     method.implGenericParamPositions,
   );
   if (!isSome(resolved)) {
@@ -10923,28 +10952,19 @@ function methodCallGenericArgType(
   return arg.type.kind === "ReferenceType" ? arg.type.referent : arg.type;
 }
 
-function recordMethodCallWitnesses(
+/** Resolves and appends a witness for each `bounds` entry whose own
+ * `argTypeFor` lookup succeeds - shared between `recordMethodCallWitnesses`'
+ * two passes (impl-level bounds, resolved purely by receiver position, and
+ * the method's own, resolved from the call's own arguments), which differ
+ * only in how they look up each bound's concrete type. */
+function appendBoundWitnesses(
   ctx: AnalysisContext,
-  methodTokenId: number,
-  method: IndexedMethod,
-  args: readonly Semantics.Expression[],
-  receiverType: Semantics.Type,
+  witnesses: WitnessRef[],
+  bounds: ReadonlyMap<string, readonly Semantics.BoundTraitRef[]>,
+  argTypeFor: (paramName: string) => Semantics.Type | undefined,
 ): void {
-  if (method.genericParamBounds.size === 0) return;
-  const witnesses: WitnessRef[] = [
-    ...(ctx.methodCallWitnessTable.get(methodTokenId) ?? []),
-  ];
-  for (const [paramName, traitRefs] of method.genericParamBounds) {
-    const argIndex = method.params.findIndex((p) =>
-      namesGenericParam(p, paramName),
-    );
-    const argType = methodCallGenericArgType(
-      args,
-      argIndex,
-      receiverType,
-      method.implGenericParamPositions,
-      paramName,
-    );
+  for (const [paramName, traitRefs] of bounds) {
+    const argType = argTypeFor(paramName);
     if (argType === undefined) continue;
     for (const traitRef of traitRefs) {
       const witness = resolveTraitBound(
@@ -10956,6 +10976,49 @@ function recordMethodCallWitnesses(
       if (isSome(witness)) witnesses.push(witness.value);
     }
   }
+}
+
+function recordMethodCallWitnesses(
+  ctx: AnalysisContext,
+  methodTokenId: number,
+  method: IndexedMethod,
+  args: readonly Semantics.Expression[],
+  receiverType: Semantics.Type,
+): void {
+  if (
+    method.genericParamBounds.size === 0 &&
+    method.implOnlyGenericParamBounds.size === 0
+  ) {
+    return;
+  }
+  const witnesses: WitnessRef[] = [
+    ...(ctx.methodCallWitnessTable.get(methodTokenId) ?? []),
+  ];
+  // A trait-impl method's own impl-level bound (kept separate from
+  // `genericParamBounds` - see `IndexedMethod.implOnlyGenericParamBounds`'s
+  // own doc comment) is only ever reachable through the receiver's own
+  // position, never a method argument, so it resolves before - and
+  // differently from - the method's own bounds below.
+  appendBoundWitnesses(
+    ctx,
+    witnesses,
+    method.implOnlyGenericParamBounds,
+    (paramName) =>
+      implGenericParamType(
+        receiverType,
+        method.implGenericParamPositions,
+        paramName,
+      ),
+  );
+  appendBoundWitnesses(ctx, witnesses, method.genericParamBounds, (paramName) =>
+    methodCallGenericArgType(
+      args,
+      method.params.findIndex((p) => namesGenericParam(p, paramName)),
+      receiverType,
+      method.implGenericParamPositions,
+      paramName,
+    ),
+  );
   if (witnesses.length > 0) {
     ctx.methodCallWitnessTable.set(methodTokenId, witnesses);
   }
