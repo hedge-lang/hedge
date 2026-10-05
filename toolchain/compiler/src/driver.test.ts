@@ -1665,6 +1665,16 @@ describe("generic witness codegen", (): void => {
     expect(countOccurrences(js, 'return "string";')).toBe(1);
   });
 
+  it("resolves a parameterized blanket impl's method return type to its own requested trait argument, not the trait's abstract parameter", (): void => {
+    const js = emittedJs(`
+      trait Convert<U> { fn convert(&self) -> U; }
+      struct P { x: i32 }
+      impl<T> Convert<i32> for T { fn convert(&self) -> i32 { 99 } }
+      fn main() { let v: i32 = P { x: 1 }.convert(); print(v); }
+    `);
+    expect(runEmittedJs(js)).toEqual(["99"]);
+  });
+
   it("dispatches a concrete-receiver method call to a generic-target impl's own reserved name, not a colliding user function", (): void => {
     const js = emittedJs(`
       struct Wrapper<T> { v: T }

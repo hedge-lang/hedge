@@ -10309,6 +10309,61 @@ function substituteIndexedMethodBindings(
   };
 }
 
+/** Resolves a classified `TargetArgSlot` back into a real `Semantics.Type` -
+ * the inverse of `classifyTargetArgSlot`. `bindings` (typically
+ * `findRegisteredImpl`'s own `outBindings`) supplies the concrete type a
+ * `Wildcard` slot's impl-level parameter was bound to while matching the
+ * impl against a receiver. An unbound `Wildcard` (the parameter appears
+ * only in a trait-argument position no binding pass ever populated -
+ * e.g. an impl matched with no requested trait arguments at all) falls
+ * back to a bare `NamedType` naming the parameter, same abstract shape a
+ * caller would have seen before this resolver existed. */
+function resolveTargetArgSlotType(
+  slot: TargetArgSlot,
+  bindings: ReadonlyMap<string, Semantics.Type>,
+  tokenId: number,
+): Semantics.Type {
+  switch (slot.kind) {
+    case "Wildcard":
+      return (
+        bindings.get(slot.paramName) ?? {
+          kind: "NamedType",
+          tokenId,
+          path: { absolute: false, segments: [slot.paramName] },
+        }
+      );
+    case "Concrete":
+      return slot.type;
+    case "Nominal":
+      return {
+        kind: slot.nominalKind,
+        name: slot.name,
+        typeArguments: slot.typeArguments.map((s) =>
+          resolveTargetArgSlotType(s, bindings, tokenId),
+        ),
+      };
+    case "Array":
+      return {
+        kind: "ArrayType",
+        length: slot.length,
+        elementType: resolveTargetArgSlotType(
+          slot.elementType,
+          bindings,
+          tokenId,
+        ),
+      };
+    case "Reference":
+      return {
+        kind: "ReferenceType",
+        tokenId,
+        mutable: slot.mutable,
+        referent: resolveTargetArgSlotType(slot.referent, bindings, tokenId),
+      };
+    default:
+      return assertNever(slot, `target arg slot: ${JSON.stringify(slot)}`);
+  }
+}
+
 /** Every method a blanket impl (`impl<T: Bound> Trait for T`) provides for
  * `receiverType`, once per trait (coherence guarantees at most one blanket
  * impl per trait) - `buildMethodIndex` never adds these to `methodIndex`
@@ -10319,11 +10374,14 @@ function substituteIndexedMethodBindings(
  * the returned entries is classified purely-concrete (`receiverType` is
  * already a real instantiation here, never the blanket impl's own bare `T`),
  * so `methodCandidatesForNominalType`'s own filter is a trivial match.
- * Known gap: unlike `buildMethodIndex`'s own concrete-impl path, a
- * blanket-provided method's own trait generic parameter (`T` in
- * `impl<T: Bound> Convert<i32> for T`'s `fn convert(&self) -> T`) is not
- * substituted with the trait's requested instantiation here - needs a
- * `TargetArgSlot -> Semantics.Type` resolver that doesn't exist yet. */
+ * The matched impl's own declared trait arguments (`impl<T> Convert<i32> for
+ * T`'s `[i32]`), resolved back from `TargetArgSlot` via
+ * `resolveTargetArgSlotType` using the target-match's own bindings, are
+ * threaded into `indexTraitImplMethods` as `traitRefTypeArguments` so a
+ * method whose signature references the trait's own generic parameter
+ * (`fn convert(&self) -> T` where `T` is `Convert`'s declared parameter, not
+ * the impl's) resolves to the requested instantiation instead of staying
+ * abstract. */
 function blanketMethodCandidates(
   ctx: AnalysisContext,
   receiverType: Semantics.StructType | Semantics.EnumType,
@@ -10336,11 +10394,22 @@ function blanketMethodCandidates(
   for (const impl of ctx.implRegistry) {
     if (!impl.isBlanket || seenTraits.has(impl.traitName)) continue;
     seenTraits.add(impl.traitName);
+    const outBindings = new Map<string, Semantics.Type>();
     if (
-      findRegisteredImpl(ctx, receiverType, impl.traitName, []) === undefined
+      findRegisteredImpl(
+        ctx,
+        receiverType,
+        impl.traitName,
+        [],
+        new Set(),
+        outBindings,
+      ) === undefined
     ) {
       continue;
     }
+    const traitRefTypeArguments = impl.traitTypeArguments.map((slot) =>
+      resolveTargetArgSlotType(slot, outBindings, impl.tokenId),
+    );
     result.push(
       ...indexTraitImplMethods(
         ctx,
@@ -10349,6 +10418,7 @@ function blanketMethodCandidates(
         new Map(),
         targetTypeArguments,
         new Map(),
+        traitRefTypeArguments,
       ),
     );
   }
