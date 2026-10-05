@@ -4162,6 +4162,36 @@ function substituteBlanketBoundArguments(
  * arguments) - a caller composing or substituting that impl's own further
  * bounds needs these, not just the impl itself.
  */
+/** `findRegisteredImpl`'s own non-blanket branch, split out to keep that
+ * function under the complexity cap - a concrete target match alone isn't
+ * enough, since the impl's own bound (`impl<T: Marker> Trait for
+ * Wrapper<T>`'s `T: Marker`) can still be false for the receiver's matched
+ * target argument. */
+function nonBlanketImplMatches(
+  ctx: AnalysisContext,
+  impl: RegisteredImpl,
+  typeName: string,
+  receiverTypeArguments: readonly Semantics.Type[],
+  bindings: Map<string, Semantics.Type>,
+): boolean {
+  return (
+    impl.targetTypeName === typeName &&
+    requestedTraitArgumentsSatisfied(
+      impl.targetTypeArguments,
+      receiverTypeArguments,
+      bindings,
+    ) &&
+    isSome(
+      resolveImplBoundWitnesses(
+        ctx,
+        bindings,
+        impl.genericParamBounds,
+        impl.implGenericParamPositions,
+      ),
+    )
+  );
+}
+
 function findRegisteredImpl(
   ctx: AnalysisContext,
   receiverType: Semantics.Type,
@@ -4188,9 +4218,10 @@ function findRegisteredImpl(
       continue;
     }
     const matched = !impl.isBlanket
-      ? impl.targetTypeName === typeName &&
-        requestedTraitArgumentsSatisfied(
-          impl.targetTypeArguments,
+      ? nonBlanketImplMatches(
+          ctx,
+          impl,
+          typeName,
           receiverTypeArguments,
           bindings,
         )

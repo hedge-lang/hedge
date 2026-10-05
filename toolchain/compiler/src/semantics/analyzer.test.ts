@@ -7078,6 +7078,25 @@ describe("trait and impl declarations", (): void => {
       );
     });
 
+    it("rejects a generic call's trait bound satisfied only by a target impl whose own bound the receiver's concrete argument does not satisfy", (): void => {
+      const result = diagnose(`
+        trait Marker { fn mark(&self) -> i32; }
+        trait Show { fn show(&self) -> i32; }
+        struct Plain { v: i32 }
+        struct Wrapper<T> { value: T }
+        impl<T: Marker> Show for Wrapper<T> { fn show(&self) -> i32 { self.value.mark() } }
+        fn needs<U: Show>(u: U) -> i32 { u.show() }
+        fn main() {
+          let w = Wrapper { value: Plain { v: 1 } };
+          needs(w);
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `Wrapper<Plain>: Show` is not satisfied",
+      );
+    });
+
     it("does not substitute a trait bound's own type argument into a bounded receiver's method's own generic parameter of the same name", (): void => {
       const result = diagnose(`
         trait Convert<T> { fn get<T>(&self, x: T) -> T; }
