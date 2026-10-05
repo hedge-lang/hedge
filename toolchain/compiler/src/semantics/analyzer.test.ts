@@ -8853,6 +8853,19 @@ describe("trait and impl declarations", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
+    it("reports an impl's own generic bound arity mismatch exactly once, not once per pass that resolves it", (): void => {
+      const result = diagnose(`
+        trait Convert<U> { fn convert(&self) -> U; }
+        struct Wrapper<T> { value: T }
+        impl<T: Convert<i32, str>> Wrapper<T> { fn touch(&self) {} }
+        fn main() { print(0); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Convert` declares 1 generic parameter(s), but 2 were supplied",
+      );
+    });
+
     it("rejects an ordinary generic function's where-clause bound naming an undeclared trait", (): void => {
       const result = diagnose(`
         fn f<T>(x: T) where T: Missing {}

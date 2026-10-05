@@ -675,22 +675,12 @@ function resolveBoundNames(
   return new Map(
     [...bounds].map(([param, refs]) => [
       param,
-      refs.map((ref) => {
-        const name = resolveTraitName(ref.name);
-        checkTraitArgCount(
-          ctx,
-          name,
-          ref.name,
-          ref.typeArguments.length,
-          ref.tokenId,
-        );
-        return {
-          name,
-          typeArguments: ref.typeArguments.map((arg) =>
-            resolveSlice1Type(ctx, arg, arg.tokenId),
-          ),
-        };
-      }),
+      refs.map((ref) => ({
+        name: resolveTraitName(ref.name),
+        typeArguments: ref.typeArguments.map((arg) =>
+          resolveSlice1Type(ctx, arg, arg.tokenId),
+        ),
+      })),
     ]),
   );
 }
@@ -723,7 +713,6 @@ function resolveGenericParamDefaults(
 interface ParsedBoundTraitRef {
   readonly name: string;
   readonly typeArguments: readonly Parser.Type[];
-  readonly tokenId: number;
 }
 
 function traitBoundRefs(
@@ -737,7 +726,6 @@ function traitBoundRefs(
     .map((bound) => ({
       name: bound.path.segments.at(-1) ?? "",
       typeArguments: bound.typeArguments,
-      tokenId: bound.tokenId,
     }));
 }
 
@@ -771,38 +759,42 @@ function checkTraitArgCount(
   }
 }
 
-/** Whether `name` resolves to a real trait in the scope actually in effect
- * for this reference. Defaults to live-frame `lookupTrait`; a prepass
- * caller with no live scope yet (`registerTraits`'s own supertrait pass,
- * `registerOneImpl`'s own bound validation) passes a `StructuralScope`-based
- * resolver instead - the same duality `resolveBoundNames` already needs for
- * the identical reason. Deliberately *not* a bare scan of every registered
- * trait's own key regardless of nesting - that would wrongly accept a name
- * only an unrelated, inaccessible nested trait happens to share, passing
+/** Rejects any trait bound naming a trait that isn't declared, or whose own
+ * type-argument count doesn't fit the trait's declared parameters (see
+ * `checkTraitArgCount`) - a sibling of `traitBoundRefs`, which only
+ * extracts names and never checks them. Callers run this once
+ * `ctx.traitRegistry` is known to be fully populated for whatever it's
+ * checking against (immediately for a bound list that can't forward-
+ * reference anything still being registered, or after a dedicated first
+ * pass when it can, as trait supertraits do) - exactly once per
+ * declaration, so this is the only place a bound's own existence/arity
+ * gets checked, not every place a bound gets resolved
+ * (`resolveBoundNames` runs repeatedly, for different purposes, and must
+ * never also emit here). `resolveTraitName` defaults to live-frame
+ * `lookupTrait`; a prepass caller with no live scope yet
+ * (`registerTraits`'s own supertrait pass, `registerOneImpl`'s own bound
+ * validation) passes a `StructuralScope`-based resolver instead.
+ * Deliberately *not* a bare scan of every registered trait's own key
+ * regardless of nesting - that would wrongly accept a name only an
+ * unrelated, inaccessible nested trait happens to share, passing
  * validation for a reference that would then fail to resolve for real. */
-function traitNameIsRegistered(
-  ctx: AnalysisContext,
-  name: string,
-  resolveTraitName: (name: string) => string = (n) => lookupTrait(ctx, n) ?? n,
-): boolean {
-  return ctx.traitRegistry.has(resolveTraitName(name));
-}
-
-/** Rejects any trait bound naming a trait that isn't declared - a sibling
- * of `traitBoundNames`, which only extracts names and never checks them.
- * Callers run this once `ctx.traitRegistry` is known to be fully populated
- * for whatever it's checking against (immediately for a bound list that
- * can't forward-reference anything still being registered, or after a
- * dedicated first pass when it can, as trait supertraits do). */
 function validateTraitBoundNames(
   ctx: AnalysisContext,
   bounds: readonly Parser.TraitBound[],
-  resolveTraitName?: (name: string) => string,
+  resolveTraitName: (name: string) => string = (n) => lookupTrait(ctx, n) ?? n,
 ): void {
   for (const bound of bounds) {
     if (bound.kind !== "PathTraitBound") continue;
     const name = bound.path.segments.at(-1) ?? "";
-    if (traitNameIsRegistered(ctx, name, resolveTraitName)) {
+    const resolvedName = resolveTraitName(name);
+    if (ctx.traitRegistry.has(resolvedName)) {
+      checkTraitArgCount(
+        ctx,
+        resolvedName,
+        name,
+        bound.typeArguments.length,
+        bound.tokenId,
+      );
       for (const arg of bound.typeArguments) {
         validateSlice1Type(ctx, arg, arg.tokenId);
       }
