@@ -286,6 +286,17 @@ export interface WitnessMethod {
    * impl satisfies the enclosing witness's own top-level trait, so codegen
    * can't derive this from the enclosing witness alone. */
   readonly concreteImplScopeId: Option<string>;
+  /** The concrete receiver's own witness for each of a *concrete, generic*
+   * impl's own bounds (`impl<T: Marker> Show for Wrapper<T>`'s `T: Marker`),
+   * mirroring `blanketBoundWitnesses` for the non-blanket case - the free
+   * function this method resolves to still gets the same trailing
+   * `_witness_<param>_<bound>` parameters `recordWitnessParams` gives any
+   * other impl-level bound, so a witness-object slot dispatching to it needs
+   * these threaded through as extra closure arguments too, not just a
+   * concrete blanket-provided one. `none()` for an impl with no generic
+   * parameters of its own, so an ordinary non-generic impl's method keeps
+   * its simpler direct slot. */
+  readonly concreteBoundWitnesses: Option<readonly WitnessRef[]>;
   /** How many trailing witness arguments a call to this method passes for
    * its *own* declared generic bounds (one per `(param, bound trait)` pair,
    * matching `recordWitnessParams`'s own count for the identical merged
@@ -4402,6 +4413,39 @@ function resolveBlanketImplScopeId(
   return some(targetArgSlotsIdentity(traitId, impl.traitTypeArguments));
 }
 
+/** `WitnessMethod.concreteBoundWitnesses` - the mirror case to
+ * `blanketMethodBoundWitnesses` for a *concrete, generic* impl's own bound
+ * (`impl<T: Marker> Show for Wrapper<T>`'s `T: Marker`). Gated on
+ * `implGenericParamPositions` being non-empty, not just `isImplProvided`,
+ * so an ordinary non-generic impl (no bounds to ever thread) keeps its
+ * simpler direct slot rather than an always-empty closure wrapper. */
+function concreteMethodBoundWitnesses(
+  ctx: AnalysisContext,
+  isImplProvided: boolean,
+  impl: RegisteredImpl | undefined,
+  bindings: ReadonlyMap<string, Semantics.Type>,
+): Option<readonly WitnessRef[]> {
+  if (
+    !isImplProvided ||
+    impl === undefined ||
+    impl.isBlanket ||
+    impl.implGenericParamPositions.size === 0
+  ) {
+    return none();
+  }
+  const boundWitnesses = resolveImplBoundWitnesses(
+    ctx,
+    bindings,
+    impl.genericParamBounds,
+    impl.implGenericParamPositions,
+  );
+  assert(
+    isSome(boundWitnesses),
+    "ICE: a concrete impl's own bounds failed to resolve after findRegisteredImpl already matched it against this receiver",
+  );
+  return boundWitnesses;
+}
+
 /** `WitnessMethod.concreteImplScopeId` - `some(...)` for a method a
  * *concrete* impl provides, the mirror case to `resolveBlanketImplScopeId`. */
 function resolveConcreteImplScopeId(
@@ -4479,6 +4523,12 @@ function collectWitnessMethods(
         traitId,
         isImplProvided,
         impl,
+      ),
+      concreteBoundWitnesses: concreteMethodBoundWitnesses(
+        ctx,
+        isImplProvided,
+        impl,
+        bindings,
       ),
       ownWitnessParamCount,
     });

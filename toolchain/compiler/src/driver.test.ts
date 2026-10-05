@@ -1706,6 +1706,23 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["1", "99"]);
   });
 
+  it("threads a concrete generic impl's own bound witness through a witness-slot dispatch, not an unwitnessed direct call", (): void => {
+    const js = emittedJs(`
+      trait Marker { fn mark(&self) -> i32; }
+      trait Show { fn show(&self) -> i32; }
+      struct Flag { v: i32 }
+      struct Wrapper<T> { value: T }
+      impl Marker for Flag { fn mark(&self) -> i32 { 7 } }
+      impl<T: Marker> Show for Wrapper<T> { fn show(&self) -> i32 { self.value.mark() } }
+      fn call_show<U: Show>(u: &U) -> i32 { u.show() }
+      fn main() {
+        let w = Wrapper { value: Flag { v: 7 } };
+        print(call_show(&w));
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
   it("does not collide a blanket impl's free function with another blanket impl of a shadowed same-named trait", (): void => {
     const result = compile(`
       trait Marker1 {}

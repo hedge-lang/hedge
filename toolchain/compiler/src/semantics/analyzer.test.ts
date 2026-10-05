@@ -7944,6 +7944,7 @@ describe("trait and impl declarations", (): void => {
           blanketBoundWitnesses: none(),
           blanketImplScopeId: none(),
           concreteImplScopeId: some(`${witness.typeId}#${witness.traitId}`),
+          concreteBoundWitnesses: none(),
           ownWitnessParamCount: 0,
         },
         {
@@ -7954,6 +7955,7 @@ describe("trait and impl declarations", (): void => {
           blanketBoundWitnesses: none(),
           blanketImplScopeId: none(),
           concreteImplScopeId: none(),
+          concreteBoundWitnesses: none(),
           ownWitnessParamCount: 0,
         },
       ]);
@@ -7982,6 +7984,7 @@ describe("trait and impl declarations", (): void => {
           blanketBoundWitnesses: none(),
           blanketImplScopeId: none(),
           concreteImplScopeId: some(`${witness.typeId}#${witness.traitId}`),
+          concreteBoundWitnesses: none(),
           ownWitnessParamCount: 0,
         },
         {
@@ -7994,6 +7997,7 @@ describe("trait and impl declarations", (): void => {
           concreteImplScopeId: some(
             `${witness.typeId}#${traitIdOf(result, "Base")}`,
           ),
+          concreteBoundWitnesses: none(),
           ownWitnessParamCount: 0,
         },
       ]);
@@ -8028,6 +8032,7 @@ describe("trait and impl declarations", (): void => {
           concreteImplScopeId: some(
             `${witness.typeId}#${traitIdOf(result, "A")}`,
           ),
+          concreteBoundWitnesses: none(),
           ownWitnessParamCount: 0,
         },
       ]);
@@ -8058,6 +8063,7 @@ describe("trait and impl declarations", (): void => {
           blanketBoundWitnesses: none(),
           blanketImplScopeId: none(),
           concreteImplScopeId: none(),
+          concreteBoundWitnesses: none(),
           ownWitnessParamCount: 0,
         },
         {
@@ -8068,6 +8074,7 @@ describe("trait and impl declarations", (): void => {
           blanketBoundWitnesses: none(),
           blanketImplScopeId: none(),
           concreteImplScopeId: some(`${witness.typeId}#${witness.traitId}`),
+          concreteBoundWitnesses: none(),
           ownWitnessParamCount: 0,
         },
       ]);

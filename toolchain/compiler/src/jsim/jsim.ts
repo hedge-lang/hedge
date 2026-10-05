@@ -1220,9 +1220,15 @@ function witnessConstName(
     boundWitnesses,
   });
   for (const method of methods) {
-    if (!isSome(method.blanketBoundWitnesses)) continue;
-    for (const bound of method.blanketBoundWitnesses.value) {
-      reserveWitnessRef(ctx, bound);
+    if (isSome(method.blanketBoundWitnesses)) {
+      for (const bound of method.blanketBoundWitnesses.value) {
+        reserveWitnessRef(ctx, bound);
+      }
+    }
+    if (isSome(method.concreteBoundWitnesses)) {
+      for (const bound of method.concreteBoundWitnesses.value) {
+        reserveWitnessRef(ctx, bound);
+      }
     }
   }
   return name;
@@ -1445,6 +1451,16 @@ function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
         });
       } else if (isSome(method.blanketBoundWitnesses)) {
         const extraArgs = method.blanketBoundWitnesses.value.map((ref) =>
+          witnessRefName(ctx, ref),
+        );
+        closure.push({
+          method: method.name,
+          value,
+          extraArgs,
+          ownWitnessParamCount,
+        });
+      } else if (isSome(method.concreteBoundWitnesses)) {
+        const extraArgs = method.concreteBoundWitnesses.value.map((ref) =>
           witnessRefName(ctx, ref),
         );
         closure.push({
