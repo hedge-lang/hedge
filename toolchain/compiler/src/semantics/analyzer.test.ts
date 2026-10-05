@@ -6287,6 +6287,27 @@ describe("generic struct/enum instantiation identity", (): void => {
     expect(result.diagnostics).toEqual([]);
   });
 
+  it("rejects a nominal type reference supplying more type arguments than the struct declares", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn f(x: Wrapper<i32, str>) {}
+      fn main() { print(0); }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "type `Wrapper` declares 1 generic parameter(s), but 2 were supplied",
+    );
+  });
+
+  it("accepts a nominal type reference omitting a trailing generic parameter that has a default", (): void => {
+    const result = diagnose(`
+      struct Marker<T = i32> { value: T }
+      fn f(x: Marker) {}
+      fn main() { print(0); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
   it("compares nested generic instantiations structurally", (): void => {
     const result = diagnose(`
       struct Wrapper<T> { value: T }

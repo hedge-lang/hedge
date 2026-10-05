@@ -1842,6 +1842,31 @@ function withTypeArguments(
     : type;
 }
 
+/** Rejects a nominal type reference (`Wrapper<i32, str>`) whose own
+ * type-argument count doesn't fit the struct/enum's declared parameters,
+ * accounting for any trailing ones with a default - mirrors
+ * `checkTraitArgCount`'s identical need for a trait reference. */
+function checkNominalArgCount(
+  ctx: AnalysisContext,
+  name: string,
+  supplied: number,
+  tokenId: number,
+): void {
+  const decl = lookupStruct(ctx, name) ?? lookupEnum(ctx, name);
+  if (decl === undefined) return;
+  const declared = decl.generics.length;
+  const required = decl.generics.filter(
+    (paramName) => !decl.genericParamDefaults.has(paramName),
+  ).length;
+  if (supplied > declared || supplied < required) {
+    emitError(
+      ctx,
+      { kind: "SemTypeArgCountMismatch", name, declared, supplied },
+      tokenId,
+    );
+  }
+}
+
 function validateNamedType(
   ctx: AnalysisContext,
   type: Parser.NamedType,
@@ -1883,6 +1908,7 @@ function validateNamedType(
   }
   const resolved = lookupStructOrEnumType(ctx, name);
   if (resolved !== undefined) {
+    checkNominalArgCount(ctx, name, type.typeArguments.length, tokenId);
     const typeArguments = validateTypeArguments(ctx, type.typeArguments);
     return withTypeArguments(resolved, typeArguments);
   }
