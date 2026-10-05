@@ -6308,6 +6308,15 @@ describe("generic struct/enum instantiation identity", (): void => {
     expect(result.diagnostics).toEqual([]);
   });
 
+  it("materializes a nominal type reference's omitted default so it matches an explicit spelling of the same instantiation", (): void => {
+    const result = diagnose(`
+      struct Marker<T = i32> { value: T }
+      fn want_i32(m: Marker<i32>) {}
+      fn main() { let m: Marker = Marker { value: 1 }; want_i32(m); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
   it("compares nested generic instantiations structurally", (): void => {
     const result = diagnose(`
       struct Wrapper<T> { value: T }

@@ -1870,6 +1870,44 @@ function checkNominalArgCount(
   }
 }
 
+/** Fills in any trailing generic parameter(s) a nominal type reference
+ * omits (`Marker` against `struct Marker<T = i32>`) with their own declared
+ * default, substituted against whatever earlier parameters the same
+ * reference did supply (`bindingOrDefault`'s own forward-substitution rule)
+ * - so an omitted-default reference and its fully explicit spelling resolve
+ * to the identical `typeArguments` list instead of comparing unequal via
+ * `typesEqual`'s structural check. A no-op once every declared parameter is
+ * already supplied. */
+function materializeNominalTypeArguments(
+  decl: {
+    readonly generics: readonly string[];
+    readonly genericParamDefaults: ReadonlyMap<string, Semantics.Type>;
+  },
+  typeArguments: readonly Semantics.Type[],
+  tokenId: number,
+): readonly Semantics.Type[] {
+  if (typeArguments.length >= decl.generics.length) return typeArguments;
+  const bindings: GenericBindings = new Map();
+  for (const [i, name] of decl.generics
+    .slice(0, typeArguments.length)
+    .entries()) {
+    const type = typeArguments[i];
+    if (type !== undefined) bindings.set(name, { type, tokenId });
+  }
+  const result: Semantics.Type[] = [...typeArguments];
+  for (const name of decl.generics.slice(typeArguments.length)) {
+    const binding = bindingOrDefault(
+      name,
+      decl.genericParamDefaults,
+      bindings,
+      tokenId,
+    );
+    if (binding === undefined) break;
+    result.push(binding.type);
+  }
+  return result;
+}
+
 function validateNamedType(
   ctx: AnalysisContext,
   type: Parser.NamedType,
@@ -1912,7 +1950,15 @@ function validateNamedType(
   const resolved = lookupStructOrEnumType(ctx, name);
   if (resolved !== undefined) {
     checkNominalArgCount(ctx, name, type.typeArguments.length, tokenId);
-    const typeArguments = validateTypeArguments(ctx, type.typeArguments);
+    const suppliedTypeArguments = validateTypeArguments(
+      ctx,
+      type.typeArguments,
+    );
+    const decl = lookupStruct(ctx, name) ?? lookupEnum(ctx, name);
+    const typeArguments =
+      decl === undefined
+        ? suppliedTypeArguments
+        : materializeNominalTypeArguments(decl, suppliedTypeArguments, tokenId);
     return withTypeArguments(resolved, typeArguments);
   }
   emitError(ctx, { kind: "SemCannotFindType", name }, tokenId);
@@ -7522,9 +7568,18 @@ function resolveNamedType(
     if (isSome(prim)) return prim.value;
     const resolved = lookupStructOrEnumType(ctx, name);
     if (resolved !== undefined) {
-      const typeArguments = type.typeArguments.map((arg) =>
+      const suppliedTypeArguments = type.typeArguments.map((arg) =>
         resolveSlice1Type(ctx, arg, arg.tokenId),
       );
+      const decl = lookupStruct(ctx, name) ?? lookupEnum(ctx, name);
+      const typeArguments =
+        decl === undefined
+          ? suppliedTypeArguments
+          : materializeNominalTypeArguments(
+              decl,
+              suppliedTypeArguments,
+              fallbackTokenId,
+            );
       return withTypeArguments(resolved, typeArguments);
     }
   }
