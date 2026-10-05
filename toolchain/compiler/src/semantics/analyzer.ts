@@ -514,6 +514,14 @@ interface SelfArgMethod {
  * associated-type names for projection resolution. */
 interface RegisteredTrait {
   readonly supertraits: readonly string[];
+  /** Each supertrait's own declared type arguments (`trait Ord<T>: Eq<T>`'s
+   * `Eq<T>` - `T` here is this trait's *own* generic parameter, resolved
+   * under its scope but not yet substituted against any particular impl's
+   * instantiation), keyed by the same resolved id `supertraits` carries -
+   * `checkSupertraitCompleteness` substitutes these against a specific
+   * impl's own `traitTypeArguments` before checking the supertrait bound,
+   * so `Ord<i32>` requires `Eq<i32>` specifically, not a bare `Eq`. */
+  readonly supertraitArgs: ReadonlyMap<string, readonly Semantics.Type[]>;
   readonly methods: readonly Semantics.TraitMethod[];
   readonly associatedTypes: readonly string[];
   /** This trait's own declared type-parameter names - a call-site argument
@@ -4847,6 +4855,31 @@ function firstNonObjectSafeSupertrait(
   return none();
 }
 
+/** `RegisteredTrait.supertraitArgs` - each supertrait bound's own written
+ * type arguments (`trait Ord<T>: Eq<T>`'s `[T]`), resolved under the
+ * caller's already-pushed generic scope so a reference to this trait's own
+ * parameter resolves to that parameter's `NamedType`, left for
+ * `checkSupertraitCompleteness` to substitute per impl. Keyed by the same
+ * resolved supertrait id `RegisteredTrait.supertraits` carries. */
+function resolveSupertraitArgs(
+  ctx: AnalysisContext,
+  item: Parser.TraitDecl,
+  scope: StructuralScope,
+): ReadonlyMap<string, readonly Semantics.Type[]> {
+  const result = new Map<string, readonly Semantics.Type[]>();
+  for (const bound of item.supertraits) {
+    if (bound.kind !== "PathTraitBound") continue;
+    const bareName = bound.path.segments.at(-1) ?? "";
+    result.set(
+      resolveTraitIdentity(bareName, scope),
+      bound.typeArguments.map((arg) =>
+        resolveSlice1Type(ctx, arg, arg.tokenId),
+      ),
+    );
+  }
+  return result;
+}
+
 /**
  * Registers every `trait`'s own name and supertraits into `ctx.traitRegistry`
  * first, then validates every supertrait reference in a second pass over
@@ -4869,11 +4902,13 @@ function registerTraits(
       ctx,
       item.generics,
     );
+    const supertraitArgs = resolveSupertraitArgs(ctx, item, scope);
     popGenericParams(ctx);
     ctx.traitRegistry.set(decl.traitId, {
       supertraits: decl.supertraits.map((name) =>
         resolveTraitIdentity(name, scope),
       ),
+      supertraitArgs,
       methods: decl.methods,
       associatedTypes: decl.associatedTypes,
       genericParams: genericParamNames(item.generics),
@@ -5490,6 +5525,33 @@ function registerOneImpl(
   return incoming;
 }
 
+/** The concrete type arguments a supertrait bound actually requires for one
+ * specific impl of the child trait (`impl Ord<i32> for P` requiring
+ * `Eq<i32>`, not a bare `Eq`) - substitutes the child trait's own declared
+ * generic parameters, positionally bound to `impl`'s own resolved trait
+ * arguments, into the supertrait bound's declared (still-abstract)
+ * arguments. Empty when the supertrait bound itself takes none. */
+function substitutedSupertraitRequest(
+  trait: RegisteredTrait,
+  supertrait: string,
+  impl: RegisteredImpl,
+  tokenId: number,
+): readonly Semantics.Type[] {
+  const args = trait.supertraitArgs.get(supertrait);
+  if (args === undefined || args.length === 0) return [];
+  const bindings: GenericBindings = new Map();
+  for (const [i, name] of trait.genericParams.entries()) {
+    const slot = impl.traitTypeArguments[i];
+    if (slot !== undefined) {
+      bindings.set(name, {
+        type: resolveTargetArgSlotType(slot, new Map(), tokenId),
+        tokenId,
+      });
+    }
+  }
+  return args.map((arg) => substituteGenericType(arg, bindings));
+}
+
 /** A concrete impl missing one of its trait's own supertrait
  * implementations - deferred until every impl is registered, so
  * declaration order within the program doesn't matter. */
@@ -5498,15 +5560,22 @@ function checkSupertraitCompleteness(
   concreteImpls: readonly RegisteredImpl[],
 ): void {
   for (const impl of concreteImpls) {
-    for (const supertrait of ctx.traitRegistry.get(impl.traitName)
-      ?.supertraits ?? []) {
+    const trait = ctx.traitRegistry.get(impl.traitName);
+    if (trait === undefined) continue;
+    for (const supertrait of trait.supertraits) {
+      const requestedTypeArguments = substitutedSupertraitRequest(
+        trait,
+        supertrait,
+        impl,
+        impl.tokenId,
+      );
       if (
         isSome(
           resolveTraitBoundForTypeName(
             ctx,
             impl.resolvedTargetType,
             supertrait,
-            [],
+            requestedTypeArguments,
           ),
         )
       ) {

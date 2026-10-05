@@ -7824,6 +7824,31 @@ describe("trait and impl declarations", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
+    it("rejects a parameterized supertrait bound satisfied only by an impl of a different instantiation of that supertrait", (): void => {
+      const result = diagnose(`
+        trait Measure<T> {}
+        trait Rank: Measure<i32> {}
+        struct Pair { a: i32 }
+        impl Measure<str> for Pair {}
+        impl Rank for Pair {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `Pair: Measure` is not satisfied",
+      );
+    });
+
+    it("accepts a parameterized supertrait bound satisfied by an impl of the matching instantiation of that supertrait", (): void => {
+      const result = diagnose(`
+        trait Measure<T> {}
+        trait Rank: Measure<i32> {}
+        struct Pair { a: i32 }
+        impl Measure<i32> for Pair {}
+        impl Rank for Pair {}
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("resolves a two-level supertrait chain, each impl already requiring the level below it", (): void => {
       const result = diagnose(`
         trait A {}
