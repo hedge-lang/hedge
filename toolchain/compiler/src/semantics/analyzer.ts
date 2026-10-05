@@ -509,6 +509,11 @@ interface RegisteredTrait {
    * against one of them can't be type-checked (no trait-argument
    * substitution yet), only arity-checked. */
   readonly genericParams: readonly string[];
+  /** Each `genericParams` name's own default type, if declared
+   * (`trait Shl<Rhs = Self>`'s `Rhs`) - `checkTraitArgCount` needs this to
+   * know a trailing parameter can be omitted, not just how many are
+   * declared in total. */
+  readonly genericParamDefaults: ReadonlyMap<string, Semantics.Type>;
   /** `none()` when the trait is object-safe, accounting for its supertraits
    * (see `propagateSupertraitObjectSafety`). */
   readonly notObjectSafe: Option<SelfArgMethod>;
@@ -670,12 +675,22 @@ function resolveBoundNames(
   return new Map(
     [...bounds].map(([param, refs]) => [
       param,
-      refs.map((ref) => ({
-        name: resolveTraitName(ref.name),
-        typeArguments: ref.typeArguments.map((arg) =>
-          resolveSlice1Type(ctx, arg, arg.tokenId),
-        ),
-      })),
+      refs.map((ref) => {
+        const name = resolveTraitName(ref.name);
+        checkTraitArgCount(
+          ctx,
+          name,
+          ref.name,
+          ref.typeArguments.length,
+          ref.tokenId,
+        );
+        return {
+          name,
+          typeArguments: ref.typeArguments.map((arg) =>
+            resolveSlice1Type(ctx, arg, arg.tokenId),
+          ),
+        };
+      }),
     ]),
   );
 }
@@ -708,6 +723,7 @@ function resolveGenericParamDefaults(
 interface ParsedBoundTraitRef {
   readonly name: string;
   readonly typeArguments: readonly Parser.Type[];
+  readonly tokenId: number;
 }
 
 function traitBoundRefs(
@@ -721,7 +737,38 @@ function traitBoundRefs(
     .map((bound) => ({
       name: bound.path.segments.at(-1) ?? "",
       typeArguments: bound.typeArguments,
+      tokenId: bound.tokenId,
     }));
+}
+
+/** Rejects a trait reference (a generic bound, an impl's own trait-ref)
+ * whose own type-argument count doesn't fit the trait's declared
+ * parameters, accounting for any trailing ones with a default
+ * (`trait Shl<Rhs = Self>` accepts 0 or 1 arguments, not just 1) -
+ * `resolveBoundNames`'s own per-argument resolution validates each
+ * argument's own type but never checks the count against what the trait
+ * actually declares, so `Convert<i32, str>` against `trait Convert<U>`
+ * would otherwise persist silently. */
+function checkTraitArgCount(
+  ctx: AnalysisContext,
+  traitId: string,
+  bareName: string,
+  supplied: number,
+  tokenId: number,
+): void {
+  const trait = ctx.traitRegistry.get(traitId);
+  if (trait === undefined) return;
+  const declared = trait.genericParams.length;
+  const required = trait.genericParams.filter(
+    (name) => !trait.genericParamDefaults.has(name),
+  ).length;
+  if (supplied > declared || supplied < required) {
+    emitError(
+      ctx,
+      { kind: "SemTraitArgCountMismatch", name: bareName, declared, supplied },
+      tokenId,
+    );
+  }
 }
 
 /** Whether `name` resolves to a real trait in the scope actually in effect
@@ -4672,6 +4719,12 @@ function registerTraits(
   for (const { item, scope } of allItems) {
     if (item.kind !== "Trait") continue;
     const decl = buildTraitDecl(item);
+    pushGenericParams(ctx, item.generics, item.whereClause);
+    const genericParamDefaults = resolveGenericParamDefaults(
+      ctx,
+      item.generics,
+    );
+    popGenericParams(ctx);
     ctx.traitRegistry.set(decl.traitId, {
       supertraits: decl.supertraits.map((name) =>
         resolveTraitIdentity(name, scope),
@@ -4679,6 +4732,7 @@ function registerTraits(
       methods: decl.methods,
       associatedTypes: decl.associatedTypes,
       genericParams: genericParamNames(item.generics),
+      genericParamDefaults,
       notObjectSafe: ownSelfArgMethod(item),
     });
     traitItems.push({ item, scope });
@@ -5144,6 +5198,15 @@ function registerOneImpl(
       traitRef.value.tokenId,
     );
     return undefined;
+  }
+  if (isSome(item.traitRef)) {
+    checkTraitArgCount(
+      ctx,
+      traitName,
+      bareTraitName,
+      item.traitRef.value.typeArguments.length,
+      traitRef.value.tokenId,
+    );
   }
   const declaredNames = declaredAssociatedTypeNames(ctx, traitName);
   pushGenericParams(ctx, item.generics, item.whereClause);

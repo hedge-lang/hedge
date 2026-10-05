@@ -404,6 +404,10 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return `${kind.calleeKind} \`${kind.name}\` takes ${kind.expected} argument(s), but ${kind.count} ${kind.count === 1 ? "was" : "were"} supplied`;
     case "SemTurbofishArgCountMismatch":
       return `\`${kind.calleeName}\` declares ${kind.declared} generic parameter(s), but the turbofish supplies ${kind.supplied}`;
+    case "SemTraitArgCountMismatch":
+      return `trait \`${kind.name}\` declares ${kind.declared} generic parameter(s), but ${kind.supplied} ${kind.supplied === 1 ? "was" : "were"} supplied`;
+    case "SemTypeArgCountMismatch":
+      return `type \`${kind.name}\` declares ${kind.declared} generic parameter(s), but ${kind.supplied} ${kind.supplied === 1 ? "was" : "were"} supplied`;
     case "SemNonExhaustivePatterns":
       return `non-exhaustive patterns: \`${kind.missing}\` not covered`;
     case "SemUnreachablePattern":

@@ -514,6 +514,18 @@ export type DiagnosticKind =
       readonly declared: number;
       readonly supplied: number;
     }
+  | {
+      readonly kind: "SemTraitArgCountMismatch";
+      readonly name: string;
+      readonly declared: number;
+      readonly supplied: number;
+    }
+  | {
+      readonly kind: "SemTypeArgCountMismatch";
+      readonly name: string;
+      readonly declared: number;
+      readonly supplied: number;
+    }
   | { readonly kind: "SemNonExhaustivePatterns"; readonly missing: string }
   | { readonly kind: "SemUnreachablePattern" }
   | {
@@ -819,6 +831,8 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemVariantIsUnitVariantConstruct", "HEDGE-TYPE-008"],
   ["SemConstructorArgCountMismatch", "HEDGE-TYPE-008"],
   ["SemTurbofishArgCountMismatch", "HEDGE-TYPE-011"],
+  ["SemTraitArgCountMismatch", "HEDGE-TYPE-017"],
+  ["SemTypeArgCountMismatch", "HEDGE-TYPE-018"],
   ["SemNonExhaustivePatterns", "HEDGE-PATTERN-002"],
   ["SemUnreachablePattern", "HEDGE-PATTERN-003"],
   ["SemOrPatternInconsistentNames", "HEDGE-PATTERN-004"],

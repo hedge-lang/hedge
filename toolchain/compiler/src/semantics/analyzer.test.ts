@@ -8798,6 +8798,40 @@ describe("trait and impl declarations", (): void => {
       );
     });
 
+    it("rejects a generic bound supplying more type arguments than the trait declares", (): void => {
+      const result = diagnose(`
+        trait Convert<U> { fn convert(&self) -> U; }
+        fn f<T: Convert<i32, str>>(t: T) {}
+        fn main() { print(0); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Convert` declares 1 generic parameter(s), but 2 were supplied",
+      );
+    });
+
+    it("rejects an impl's own trait reference supplying more type arguments than the trait declares", (): void => {
+      const result = diagnose(`
+        trait Convert<U> { fn convert(&self) -> U; }
+        struct P { x: i32 }
+        impl Convert<i32, str> for P { fn convert(&self) -> i32 { self.x } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Convert` declares 1 generic parameter(s), but 2 were supplied",
+      );
+    });
+
+    it("accepts a trait reference omitting a trailing generic parameter that has a default", (): void => {
+      const result = diagnose(`
+        trait Thing<T = i32> { fn get(&self) -> T; }
+        struct P { x: i32 }
+        impl Thing for P { fn get(&self) -> i32 { self.x } }
+        fn main() { print(0); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("rejects an ordinary generic function's where-clause bound naming an undeclared trait", (): void => {
       const result = diagnose(`
         fn f<T>(x: T) where T: Missing {}
