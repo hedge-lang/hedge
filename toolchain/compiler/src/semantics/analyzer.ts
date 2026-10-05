@@ -5215,12 +5215,64 @@ function resolveTargetTypeArguments(
   );
 }
 
+/** Fills in any trailing trait generic parameter(s) an impl's own trait
+ * reference omits (`impl Thing for P` against `trait Thing<T = i32>`) with
+ * the trait's own declared default, classified back into a `TargetArgSlot`
+ * under this impl's own generic names - the `TargetArgSlot` analog of
+ * `materializeNominalTypeArguments`, needed so `requestedTraitArgumentsSatisfied`
+ * sees the same argument-count identity for `impl Thing for P` as it would
+ * for an explicit `impl Thing<i32> for P`, instead of rejecting a real
+ * `Thing<i32>` bound against this impl (or, symmetrically, letting an
+ * unparameterized `Thing` request wrongly match a *different* impl's
+ * explicit `Thing<str>`) on an argument-count mismatch that the default
+ * alone resolves. */
+function materializeTraitTypeArgumentSlots(
+  ctx: AnalysisContext,
+  traitId: string,
+  suppliedSlots: readonly TargetArgSlot[],
+  implGenericNames: ReadonlySet<string>,
+  tokenId: number,
+): readonly TargetArgSlot[] {
+  const trait = ctx.traitRegistry.get(traitId);
+  if (
+    trait === undefined ||
+    suppliedSlots.length >= trait.genericParams.length
+  ) {
+    return suppliedSlots;
+  }
+  const bindings: GenericBindings = new Map();
+  for (const [i, name] of trait.genericParams
+    .slice(0, suppliedSlots.length)
+    .entries()) {
+    const slot = suppliedSlots[i];
+    if (slot !== undefined) {
+      bindings.set(name, {
+        type: resolveTargetArgSlotType(slot, new Map(), tokenId),
+        tokenId,
+      });
+    }
+  }
+  const result: TargetArgSlot[] = [...suppliedSlots];
+  for (const name of trait.genericParams.slice(suppliedSlots.length)) {
+    const binding = bindingOrDefault(
+      name,
+      trait.genericParamDefaults,
+      bindings,
+      tokenId,
+    );
+    if (binding === undefined) break;
+    result.push(classifyTargetArgSlot(binding.type, implGenericNames));
+  }
+  return result;
+}
+
 /** The facts `registerOneImpl` needs resolved under the impl's own pushed
  * generic-param scope: each associated-type definition, and the target's
  * and trait ref's own type-argument slots. */
 function resolveImplRegistrationFacts(
   ctx: AnalysisContext,
   item: Parser.ImplDecl,
+  traitId: string,
   declaredAssocNames: readonly string[],
 ): {
   readonly associatedTypeDefs: Map<string, Semantics.Type>;
@@ -5245,10 +5297,16 @@ function resolveImplRegistrationFacts(
     implGenericNames,
   );
   const traitTypeArguments = isSome(item.traitRef)
-    ? resolveTypeArgumentSlots(
+    ? materializeTraitTypeArgumentSlots(
         ctx,
-        item.traitRef.value.typeArguments,
+        traitId,
+        resolveTypeArgumentSlots(
+          ctx,
+          item.traitRef.value.typeArguments,
+          implGenericNames,
+        ),
         implGenericNames,
+        item.traitRef.value.tokenId,
       )
     : [];
   // A blanket impl's own bound (`impl<T: Convert<i32>> Show for T`) can be
@@ -5330,7 +5388,7 @@ function registerOneImpl(
     traitTypeArguments,
     blanketBounds,
     resolvedTargetType,
-  } = resolveImplRegistrationFacts(ctx, item, declaredNames);
+  } = resolveImplRegistrationFacts(ctx, item, traitName, declaredNames);
   const genericParamBounds = decl.isBlanket
     ? new Map<string, readonly Semantics.BoundTraitRef[]>()
     : resolveBoundNames(

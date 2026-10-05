@@ -8869,6 +8869,17 @@ describe("trait and impl declarations", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
+    it("satisfies a bound requesting a trait's default instantiation against an impl that omitted the trait argument", (): void => {
+      const result = diagnose(`
+        trait Thing<T = i32> { fn get(&self) -> T; }
+        struct P { x: i32 }
+        impl Thing for P { fn get(&self) -> i32 { self.x } }
+        fn use_thing<U: Thing<i32>>(u: U) -> i32 { u.get() }
+        fn main() { print(use_thing(P { x: 7 })); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("reports an impl's own generic bound arity mismatch exactly once, not once per pass that resolves it", (): void => {
       const result = diagnose(`
         trait Convert<U> { fn convert(&self) -> U; }
