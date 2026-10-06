@@ -676,15 +676,53 @@ function genericParamBoundNames(
   return bounds;
 }
 
+/** `materializeTrailingGenericDefaults`, keyed by a trait's resolved
+ * `traitRegistry` id instead of a `StructDecl`/`EnumDecl` - every reader of
+ * a declared bound's own type arguments (the persisted `genericParamBounds`
+ * built below, `declaredGenericParamBoundRefs`, `declaredBoundMatchesRequestedArguments`,
+ * and `recordWitnessParams`' own witness naming) needs the same omitted
+ * defaults filled in, or a bare `T: Thing` against `trait Thing<U = i32>`
+ * persists as an unparameterized request that wrongly matches any
+ * `Thing<...>` impl and leaves `Thing`'s own `U` unsubstituted in every
+ * method resolved through the bound. `undefined`/not-yet-registered trait
+ * is left alone - callers already treat an unresolvable trait name as a
+ * separate problem. A default resolving to `Self` (`trait Add<Rhs = Self>`)
+ * is excluded from the materialized set - unlike an impl's own trait-ref
+ * default (a concrete receiver to resolve `Self` against always exists
+ * there), a declared bound like `T: Add` has no receiver at all, so `Self`
+ * would persist as a dangling, forever-unresolvable placeholder instead of
+ * the pre-existing (and correct) "stays unparameterized" behavior. */
+function materializeTraitTypeArguments(
+  ctx: AnalysisContext,
+  traitId: string,
+  suppliedTypeArguments: readonly Semantics.Type[],
+  tokenId: number,
+): readonly Semantics.Type[] {
+  const trait = ctx.traitRegistry.get(traitId);
+  if (trait === undefined) return suppliedTypeArguments;
+  const genericParamDefaults = new Map(
+    [...trait.genericParamDefaults].filter(
+      ([, type]) => !isAbstractSelfType(type),
+    ),
+  );
+  return materializeTrailingGenericDefaults(
+    { generics: trait.genericParams, genericParamDefaults },
+    suppliedTypeArguments,
+    tokenId,
+  );
+}
+
 /** Resolves every bound name in a `param -> bound names` map to its
  * scope-qualified `traitRegistry` key (and each bound's own type arguments
- * to real resolved types), against the scope in effect now - used when
- * building a signature's persisted `genericParamBounds`, so a later call
- * site checks the trait visible where the callee was declared, not where
- * it's called. `resolveTraitName` defaults to live-frame `lookupTrait`;
- * `registerTraits`'s own prepass passes a `StructuralScope`-based resolver
- * instead, since live frames don't yet reflect a nested trait's own scope
- * that early (see that resolver's own doc comment). */
+ * to real resolved types, with any trailing default materialized - see
+ * `materializeTraitTypeArguments`), against the scope in effect now - used
+ * when building a signature's persisted `genericParamBounds`, so a later
+ * call site checks the trait visible where the callee was declared, not
+ * where it's called. `resolveTraitName` defaults to live-frame
+ * `lookupTrait`; `registerTraits`'s own prepass passes a
+ * `StructuralScope`-based resolver instead, since live frames don't yet
+ * reflect a nested trait's own scope that early (see that resolver's own
+ * doc comment). */
 function resolveBoundNames(
   ctx: AnalysisContext,
   bounds: ReadonlyMap<string, readonly ParsedBoundTraitRef[]>,
@@ -694,12 +732,21 @@ function resolveBoundNames(
   return new Map(
     [...bounds].map(([param, refs]) => [
       param,
-      refs.map((ref) => ({
-        name: resolveTraitName(ref.name),
-        typeArguments: ref.typeArguments.map((arg) =>
+      refs.map((ref) => {
+        const name = resolveTraitName(ref.name);
+        const typeArguments = ref.typeArguments.map((arg) =>
           resolveSlice1Type(ctx, arg, arg.tokenId),
-        ),
-      })),
+        );
+        return {
+          name,
+          typeArguments: materializeTraitTypeArguments(
+            ctx,
+            name,
+            typeArguments,
+            0,
+          ),
+        };
+      }),
     ]),
   );
 }
@@ -929,12 +976,21 @@ function declaredGenericParamBoundRefs(
   readonly typeArguments: readonly Semantics.Type[];
 }[] {
   const innermost = ctx.genericParamBoundStack.at(-1);
-  return (innermost?.get(name) ?? []).map((ref) => ({
-    traitName: lookupTrait(ctx, ref.name) ?? ref.name,
-    typeArguments: ref.typeArguments.map((arg) =>
+  return (innermost?.get(name) ?? []).map((ref) => {
+    const traitName = lookupTrait(ctx, ref.name) ?? ref.name;
+    const typeArguments = ref.typeArguments.map((arg) =>
       resolveSlice1Type(ctx, arg, arg.tokenId),
-    ),
-  }));
+    );
+    return {
+      traitName,
+      typeArguments: materializeTraitTypeArguments(
+        ctx,
+        traitName,
+        typeArguments,
+        0,
+      ),
+    };
+  });
 }
 
 /** Whether `paramName`'s own declared bounds include `traitName` with type
@@ -955,16 +1011,20 @@ function declaredBoundMatchesRequestedArguments(
   const innermost = ctx.genericParamBoundStack.at(-1);
   const refs = innermost?.get(paramName) ?? [];
   return refs.some((ref) => {
-    if ((lookupTrait(ctx, ref.name) ?? ref.name) !== traitName) return false;
-    if (ref.typeArguments.length !== requestedTypeArguments.length) {
+    const resolvedTraitName = lookupTrait(ctx, ref.name) ?? ref.name;
+    if (resolvedTraitName !== traitName) return false;
+    const declaredTypeArguments = materializeTraitTypeArguments(
+      ctx,
+      resolvedTraitName,
+      ref.typeArguments.map((arg) => resolveSlice1Type(ctx, arg, arg.tokenId)),
+      0,
+    );
+    if (declaredTypeArguments.length !== requestedTypeArguments.length) {
       return false;
     }
-    return ref.typeArguments.every((arg, i) => {
+    return declaredTypeArguments.every((arg, i) => {
       const requested = requestedTypeArguments[i];
-      return (
-        requested !== undefined &&
-        typesEqual(resolveSlice1Type(ctx, arg, arg.tokenId), requested)
-      );
+      return requested !== undefined && typesEqual(arg, requested);
     });
   });
 }
@@ -1878,15 +1938,18 @@ function checkNominalArgCount(
   }
 }
 
-/** Fills in any trailing generic parameter(s) a nominal type reference
- * omits (`Marker` against `struct Marker<T = i32>`) with their own declared
- * default, substituted against whatever earlier parameters the same
- * reference did supply (`bindingOrDefault`'s own forward-substitution rule)
- * - so an omitted-default reference and its fully explicit spelling resolve
- * to the identical `typeArguments` list instead of comparing unequal via
- * `typesEqual`'s structural check. A no-op once every declared parameter is
- * already supplied. */
-function materializeNominalTypeArguments(
+/** Fills in any trailing generic parameter(s) a reference to `decl` omits
+ * (`Marker` against `struct Marker<T = i32>`, or a declared bound `T: Thing`
+ * against `trait Thing<U = i32>`) with their own declared default,
+ * substituted against whatever earlier parameters the same reference did
+ * supply (`bindingOrDefault`'s own forward-substitution rule) - so an
+ * omitted-default reference and its fully explicit spelling resolve to the
+ * identical `typeArguments` list, instead of comparing unequal via
+ * `typesEqual`'s structural check (a nominal type reference) or being
+ * treated as an unparameterized request that matches any instantiation (a
+ * trait bound, via `materializeTraitTypeArguments` below). A no-op once
+ * every declared parameter is already supplied. */
+function materializeTrailingGenericDefaults(
   decl: {
     readonly generics: readonly string[];
     readonly genericParamDefaults: ReadonlyMap<string, Semantics.Type>;
@@ -1966,7 +2029,11 @@ function validateNamedType(
     const typeArguments =
       decl === undefined
         ? suppliedTypeArguments
-        : materializeNominalTypeArguments(decl, suppliedTypeArguments, tokenId);
+        : materializeTrailingGenericDefaults(
+            decl,
+            suppliedTypeArguments,
+            tokenId,
+          );
     return withTypeArguments(resolved, typeArguments);
   }
   emitError(ctx, { kind: "SemCannotFindType", name }, tokenId);
@@ -4898,10 +4965,21 @@ function registerTraits(
     if (item.kind !== "Trait") continue;
     const decl = buildTraitDecl(item);
     pushGenericParams(ctx, item.generics, item.whereClause);
+    // A default naming `Self` (`trait Add<Rhs = Self>`) needs this trait's
+    // own abstract Self pushed to resolve to the symbolic `NamedType{Self}`
+    // placeholder `resolveTraitMethodsQuiet` already produces for method
+    // signatures - without it, `resolveSelfNamedType` sees no SelfContext at
+    // all and silently degrades to the `UnitType` error-recovery placeholder.
+    pushSelfContext(ctx, {
+      kind: "Trait",
+      traitName: decl.traitId,
+      associatedTypes: decl.associatedTypes,
+    });
     const genericParamDefaults = resolveGenericParamDefaults(
       ctx,
       item.generics,
     );
+    popSelfContext(ctx);
     const supertraitArgs = resolveSupertraitArgs(ctx, item, scope);
     popGenericParams(ctx);
     ctx.traitRegistry.set(decl.traitId, {
@@ -5285,7 +5363,7 @@ function resolveTargetTypeArguments(
  * reference omits (`impl Thing for P` against `trait Thing<T = i32>`) with
  * the trait's own declared default, classified back into a `TargetArgSlot`
  * under this impl's own generic names - the `TargetArgSlot` analog of
- * `materializeNominalTypeArguments`, needed so `requestedTraitArgumentsSatisfied`
+ * `materializeTrailingGenericDefaults`, needed so `requestedTraitArgumentsSatisfied`
  * sees the same argument-count identity for `impl Thing for P` as it would
  * for an explicit `impl Thing<i32> for P`, instead of rejecting a real
  * `Thing<i32>` bound against this impl (or, symmetrically, letting an
@@ -7733,7 +7811,7 @@ function resolveNamedType(
       const typeArguments =
         decl === undefined
           ? suppliedTypeArguments
-          : materializeNominalTypeArguments(
+          : materializeTrailingGenericDefaults(
               decl,
               suppliedTypeArguments,
               fallbackTokenId,
@@ -8135,8 +8213,15 @@ function recordWitnessParams(
     whereClause,
   )) {
     for (const traitRef of traitRefs) {
-      const typeArguments = traitRef.typeArguments.map((arg) =>
-        resolveSlice1Type(ctx, arg, arg.tokenId),
+      const resolvedTraitName =
+        lookupTrait(ctx, traitRef.name) ?? traitRef.name;
+      const typeArguments = materializeTraitTypeArguments(
+        ctx,
+        resolvedTraitName,
+        traitRef.typeArguments.map((arg) =>
+          resolveSlice1Type(ctx, arg, arg.tokenId),
+        ),
+        0,
       );
       params.push({
         name: witnessParamName(paramName, traitRef.name, typeArguments),

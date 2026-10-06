@@ -8924,6 +8924,31 @@ describe("trait and impl declarations", (): void => {
       expect(result.diagnostics).toEqual([]);
     });
 
+    it("substitutes a declared bound's own defaulted trait argument into a method called through it", (): void => {
+      const result = diagnose(`
+        trait Thing<T = i32> { fn get(&self) -> T; }
+        struct Q { v: i32 }
+        impl Thing<i32> for Q { fn get(&self) -> i32 { self.v } }
+        fn f<U: Thing>(u: U) -> i32 { u.get() }
+        fn main() { print(f(Q { v: 7 })); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a declared bound's own defaulted trait argument when the receiver only implements a different instantiation", (): void => {
+      const result = diagnose(`
+        trait Thing<T = i32> { fn get(&self) -> T; }
+        struct Q { v: str }
+        impl Thing<str> for Q { fn get(&self) -> str { self.v } }
+        fn f<U: Thing>(u: U) {}
+        fn main() { f(Q { v: "x" }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `Q: Thing<i32>` is not satisfied",
+      );
+    });
+
     it("reports an impl's own generic bound arity mismatch exactly once, not once per pass that resolves it", (): void => {
       const result = diagnose(`
         trait Convert<U> { fn convert(&self) -> U; }
