@@ -409,6 +409,12 @@ export type DiagnosticKind =
       readonly traits: readonly string[];
     }
   | {
+      readonly kind: "SemAmbiguousTraitInstantiation";
+      readonly method: string;
+      readonly typeName: string;
+      readonly trait: string;
+    }
+  | {
       readonly kind: "SemNoAssociatedItem";
       readonly name: string;
       readonly typeName: string;
@@ -505,6 +511,18 @@ export type DiagnosticKind =
   | {
       readonly kind: "SemTurbofishArgCountMismatch";
       readonly calleeName: string;
+      readonly declared: number;
+      readonly supplied: number;
+    }
+  | {
+      readonly kind: "SemTraitArgCountMismatch";
+      readonly name: string;
+      readonly declared: number;
+      readonly supplied: number;
+    }
+  | {
+      readonly kind: "SemTypeArgCountMismatch";
+      readonly name: string;
       readonly declared: number;
       readonly supplied: number;
     }
@@ -777,6 +795,7 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemCallReturnTypeMismatch", "HEDGE-TYPE-010"],
   ["SemNoMethodOnType", "HEDGE-TYPE-012"],
   ["SemAmbiguousMethod", "HEDGE-TYPE-013"],
+  ["SemAmbiguousTraitInstantiation", "HEDGE-TYPE-016"],
   ["SemNoAssociatedItem", "HEDGE-TYPE-014"],
   ["SemLogicalOperandsMustBeBool", "HEDGE-TYPE-002"],
   ["SemShiftAmountMustBeInteger", "HEDGE-TYPE-002"],
@@ -812,6 +831,8 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemVariantIsUnitVariantConstruct", "HEDGE-TYPE-008"],
   ["SemConstructorArgCountMismatch", "HEDGE-TYPE-008"],
   ["SemTurbofishArgCountMismatch", "HEDGE-TYPE-011"],
+  ["SemTraitArgCountMismatch", "HEDGE-TYPE-017"],
+  ["SemTypeArgCountMismatch", "HEDGE-TYPE-018"],
   ["SemNonExhaustivePatterns", "HEDGE-PATTERN-002"],
   ["SemUnreachablePattern", "HEDGE-PATTERN-003"],
   ["SemOrPatternInconsistentNames", "HEDGE-PATTERN-004"],

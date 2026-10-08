@@ -495,11 +495,16 @@ export interface StructExpression {
    */
   readonly disposableFields: readonly string[];
   /**
-   * The free-function name of the type's `Drop::drop` body, when it has one -
-   * the disposer calls it (with `this` in a `&mut self` cell) before
-   * releasing the fields.
+   * The type's `Drop::drop` body, when it has one - the disposer calls the
+   * free function (with `this` in a `&mut self` cell) before releasing the
+   * fields. `witnessArgs` are the resolved witness(es) a generic `Drop`
+   * impl's own bound(s) need, passed as trailing arguments alongside the
+   * self cell; empty for a non-generic impl.
    */
-  readonly dropFn: Option<string>;
+  readonly dropFn: Option<{
+    readonly name: string;
+    readonly witnessArgs: readonly string[];
+  }>;
 }
 
 /**
