@@ -18,7 +18,11 @@ describe("copy capability", (): void => {
   });
 
   it("struct types are not Copy", (): void => {
-    const type: Semantics.Type = { kind: "StructType", name: "Boxed" };
+    const type: Semantics.Type = {
+      kind: "StructType",
+      name: "Boxed",
+      typeArguments: [],
+    };
     expect(hasCapability(type, "copy")).toBe(false);
   });
 
@@ -38,7 +42,7 @@ describe("copy capability", (): void => {
       kind: "ReferenceType",
       tokenId: 0,
       mutable: true,
-      referent: { kind: "StructType", name: "Boxed" },
+      referent: { kind: "StructType", name: "Boxed", typeArguments: [] },
     };
     expect(hasCapability(sharedStr, "copy")).toBe(true);
     expect(hasCapability(mutStruct, "copy")).toBe(true);

@@ -14,6 +14,8 @@ import {
 import { collectMethodOwners } from "../ownership/owned-functions.js";
 import {
   constValueToLiteralExpression,
+  type DropImplEntry,
+  findDropTarget,
   type FreeMethodTarget,
   type MethodTarget,
   type UnsizeCoercion,
@@ -123,13 +125,22 @@ interface JsimContext {
   /** `AnalysisResult.unsizeCoercions` - each expression unsize-coerced to
    * `dyn Trait`, keyed by its tokenId, mapped to the impl witness. */
   readonly unsizeCoercions: ReadonlyMap<number, UnsizeCoercion>;
-  /** `AnalysisResult.dropImpls` - struct/enum type ids with a `Drop` impl,
-   * mapped to the `drop` free-function target. */
-  readonly dropImpls: ReadonlyMap<string, FreeMethodTarget>;
+  /** `AnalysisResult.dropImpls` - `Drop` impls bucketed by target type name,
+   * matched against a constructed value's own type arguments by
+   * `findDropTarget`. */
+  readonly dropImpls: ReadonlyMap<string, readonly DropImplEntry[]>;
   /** `AnalysisResult.methodCallWitnesses` - witnesses resolved for a
    * concrete-receiver method call's own bounded generic parameters, keyed
    * by the method-name token (same convention as `methodTargets`). */
   readonly methodCallWitnesses: ReadonlyMap<number, readonly WitnessRef[]>;
+  /** `AnalysisResult.dropWitnesses` - witnesses resolved for a generic
+   * `Drop` impl's own bound(s), keyed by the disposed value's own
+   * construction-expression tokenId. */
+  readonly dropWitnesses: ReadonlyMap<number, readonly WitnessRef[]>;
+  /** `AnalysisResult.dropBoundsUnsatisfied` - construction tokenIds whose
+   * only matching `Drop` impl doesn't apply (its own bound isn't
+   * satisfied). */
+  readonly dropBoundsUnsatisfied: ReadonlySet<number>;
   /** Each emitted method free function's `methodKey` mapped to the name
    * actually emitted - identical to the readable `methodFreeFnName` unless it
    * collided with a user top-level binding. Both the emission and call sites
@@ -192,6 +203,8 @@ function createJsimContext(
     unsizeCoercions: info.unsizeCoercions ?? new Map(),
     dropImpls: info.dropImpls ?? new Map(),
     methodCallWitnesses: info.methodCallWitnesses ?? new Map(),
+    dropWitnesses: info.dropWitnesses ?? new Map(),
+    dropBoundsUnsatisfied: info.dropBoundsUnsatisfied ?? new Set(),
     methodFreeFnNames: new Map(),
     hoistedWitnesses: new Map(),
     primitiveEqWitness: { name: undefined },
@@ -894,8 +907,10 @@ export interface JsimInfo {
   readonly witnesses?: ReadonlyMap<number, readonly WitnessRef[]>;
   readonly extraWitnesses?: readonly WitnessRef[];
   readonly unsizeCoercions?: ReadonlyMap<number, UnsizeCoercion>;
-  readonly dropImpls?: ReadonlyMap<string, FreeMethodTarget>;
+  readonly dropImpls?: ReadonlyMap<string, readonly DropImplEntry[]>;
   readonly methodCallWitnesses?: ReadonlyMap<number, readonly WitnessRef[]>;
+  readonly dropWitnesses?: ReadonlyMap<number, readonly WitnessRef[]>;
+  readonly dropBoundsUnsatisfied?: ReadonlySet<number>;
 }
 
 export function toJsim(
@@ -1149,7 +1164,9 @@ function witnessSlotTarget(
     return {
       kind: "free",
       typeId: method.definingTraitId,
-      scopeId: method.definingTraitId,
+      scopeId: isSome(method.blanketImplScopeId)
+        ? method.blanketImplScopeId.value
+        : method.definingTraitId,
       typeName: method.definingTrait,
       traitName: some(method.definingTrait),
       methodName: method.name,
@@ -1159,7 +1176,9 @@ function witnessSlotTarget(
   return {
     kind: "free",
     typeId: witness.typeId,
-    scopeId: witness.typeId,
+    scopeId: isSome(method.concreteImplScopeId)
+      ? method.concreteImplScopeId.value
+      : `${witness.typeId}#${witness.traitId}`,
     typeName: witness.typeName,
     traitName: some(method.definingTrait),
     methodName: method.name,
@@ -1201,9 +1220,15 @@ function witnessConstName(
     boundWitnesses,
   });
   for (const method of methods) {
-    if (!isSome(method.blanketBoundWitnesses)) continue;
-    for (const bound of method.blanketBoundWitnesses.value) {
-      reserveWitnessRef(ctx, bound);
+    if (isSome(method.blanketBoundWitnesses)) {
+      for (const bound of method.blanketBoundWitnesses.value) {
+        reserveWitnessRef(ctx, bound);
+      }
+    }
+    if (isSome(method.concreteBoundWitnesses)) {
+      for (const bound of method.concreteBoundWitnesses.value) {
+        reserveWitnessRef(ctx, bound);
+      }
     }
   }
   return name;
@@ -1231,7 +1256,7 @@ function witnessRefName(ctx: JsimContext, ref: WitnessRef): string {
     case "Forwarded":
       return resolvedWitnessParamName(
         ctx,
-        witnessParamName(ref.paramName, ref.traitName),
+        witnessParamName(ref.paramName, ref.traitName, ref.typeArguments),
       );
     case "Primitive":
       return resolvedPrimitiveWitnessName(ctx, ref.traitName);
@@ -1358,6 +1383,9 @@ function reserveHoistedWitnessConsts(ctx: JsimContext): void {
   for (const refs of ctx.methodCallWitnesses.values()) {
     for (const ref of refs) reserveWitnessRef(ctx, ref);
   }
+  for (const refs of ctx.dropWitnesses.values()) {
+    for (const ref of refs) reserveWitnessRef(ctx, ref);
+  }
 }
 
 /** A JS expression string constructing the `Ordering` tagged object
@@ -1423,6 +1451,16 @@ function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
         });
       } else if (isSome(method.blanketBoundWitnesses)) {
         const extraArgs = method.blanketBoundWitnesses.value.map((ref) =>
+          witnessRefName(ctx, ref),
+        );
+        closure.push({
+          method: method.name,
+          value,
+          extraArgs,
+          ownWitnessParamCount,
+        });
+      } else if (isSome(method.concreteBoundWitnesses)) {
+        const extraArgs = method.concreteBoundWitnesses.value.map((ref) =>
           witnessRefName(ctx, ref),
         );
         closure.push({
@@ -2144,7 +2182,8 @@ function parseExpressionDispatch(
         return jsimTupleStructConstruction(
           ctx,
           expression.arguments,
-          expression.callee.type,
+          expression.type,
+          expression.tokenId,
         );
       }
       return {
@@ -2725,19 +2764,30 @@ function jsimRangeExpression(
   };
 }
 
-/** The free-function name of a struct type's `Drop::drop` body.
- * Enum `Drop` is not wired yet (a later ticket). */
-function structDropFn(ctx: JsimContext, type: Semantics.Type): Option<string> {
+/** The free function name and resolved bound witness arguments of a struct
+ * type's `Drop::drop` body. Enum `Drop` is not wired yet (a later ticket).
+ * `tokenId` is the constructing expression's own tokenId -
+ * `AnalysisResult.dropWitnesses`' key for a generic impl's own bound(s). */
+function structDropFn(
+  ctx: JsimContext,
+  type: Semantics.Type,
+  tokenId: number,
+): Option<{ name: string; witnessArgs: readonly string[] }> {
   if (type.kind !== "StructType") return none();
-  const target = ctx.dropImpls.get(type.name);
-  return target === undefined
-    ? none()
-    : some(resolvedMethodFreeFnName(ctx, target));
+  if (ctx.dropBoundsUnsatisfied.has(tokenId)) return none();
+  const target = findDropTarget(ctx.dropImpls, type.name, type.typeArguments);
+  if (target === undefined) return none();
+  return some({
+    name: resolvedMethodFreeFnName(ctx, target),
+    witnessArgs: (ctx.dropWitnesses.get(tokenId) ?? []).map((ref) =>
+      witnessRefName(ctx, ref),
+    ),
+  });
 }
 
 function jsimStructExpression(
   ctx: JsimContext,
-  { base, fields, path, type }: Semantics.StructExpression,
+  { base, fields, path, type, tokenId }: Semantics.StructExpression,
 ): JSIM.Expression {
   const spreads = [base]
     .filter(isSome)
@@ -2767,7 +2817,7 @@ function jsimStructExpression(
     kind: "StructExpression",
     fields: ownFields,
     disposableFields,
-    dropFn: structDropFn(ctx, type),
+    dropFn: structDropFn(ctx, type, tokenId),
   };
 }
 
@@ -2818,6 +2868,7 @@ function jsimTupleStructConstruction(
   ctx: JsimContext,
   args: readonly Semantics.Expression[],
   type: Semantics.Type,
+  tokenId: number,
 ): JSIM.Expression {
   return {
     kind: "StructExpression",
@@ -2830,7 +2881,7 @@ function jsimTupleStructConstruction(
       .map((arg, i) => ({ arg, name: String(i) }))
       .filter(({ arg }) => !hasCapability(arg.type, "copy"))
       .map(({ name }) => name),
-    dropFn: structDropFn(ctx, type),
+    dropFn: structDropFn(ctx, type, tokenId),
   };
 }
 

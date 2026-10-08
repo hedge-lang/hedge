@@ -66,10 +66,13 @@ export interface AnalysisResult {
    * `sourceType` on the wrapped node (its own `.type` was rewritten to the
    * `dyn` target here) so struct/enum lowering still sees the concrete type. */
   readonly unsizeCoercions: ReadonlyMap<number, UnsizeCoercion>;
-  /** Struct/enum scope-qualified type ids that have a `Drop` impl, mapped to
-   * the `drop` method's free-function target. Codegen calls it from the
-   * type's `[Symbol.dispose]` before releasing the fields. */
-  readonly dropImpls: ReadonlyMap<string, FreeMethodTarget>;
+  /** Structs with a `Drop` impl, bucketed by their target's bare type name
+   * (so both a generic impl and one or more concrete instantiation impls
+   * for the same struct share a bucket) - see `findDropTarget` for how
+   * codegen picks the entry matching a given constructed value's own type
+   * arguments, called from the type's `[Symbol.dispose]` before releasing
+   * the fields. */
+  readonly dropImpls: ReadonlyMap<string, readonly DropImplEntry[]>;
   /** Witnesses resolved for a concrete-receiver method call's own bounded
    * generic parameters (the method's own `<U: Trait>`), keyed by the
    * method-name token (same convention as `methodTargets`), one entry per
@@ -77,6 +80,21 @@ export interface AnalysisResult {
    * trailing arguments alongside the call, mirroring an ordinary generic
    * function call's `witnesses`. */
   readonly methodCallWitnesses: ReadonlyMap<number, readonly WitnessRef[]>;
+  /** Witnesses resolved for a generic `Drop` impl's own bound(s) (`impl<T:
+   * Marker> Drop for Wrapper<T>`'s `T: Marker`), keyed by the disposed
+   * value's own construction-expression tokenId - `drop` has no explicit
+   * call site in user source for `methodCallWitnesses` to key against, so
+   * this resolves once, at construction time, from the constructed value's
+   * own concrete type arguments. Codegen passes these as trailing arguments
+   * to the matched drop free function, alongside the self-cell. */
+  readonly dropWitnesses: ReadonlyMap<number, readonly WitnessRef[]>;
+  /** Construction-expression tokenIds whose only matching `Drop` impl's own
+   * bound is not satisfied by the constructed value (`Wrapper<Plain>`
+   * against `impl<T: Marker> Drop for Wrapper<T>`) - that impl simply
+   * doesn't apply here, so codegen falls back to the ordinary no-op/
+   * field-only disposer instead of attaching a call missing its required
+   * witness argument. */
+  readonly dropBoundsUnsatisfied: ReadonlySet<number>;
 }
 
 /** One hidden witness parameter of a generic function: `_witness_T_Draw` for
@@ -87,11 +105,51 @@ export interface WitnessParam {
   readonly traitName: string;
 }
 
+/** An identifier-safe, injective encoding of `text` - every character outside
+ * `[A-Za-z0-9_]` (`$` included, so it only ever appears as part of an escape)
+ * becomes `$<code>$`. Unlike a lossy collapse (mapping every such character
+ * to the same `_`), this never conflates two different structural identities
+ * that happen to sanitize to the same text - see `witnessParamName`'s own
+ * doc comment for the case that motivated it. */
+function escapeForIdentifier(text: string): string {
+  return text.replace(/\W/g, (ch) => `$${ch.codePointAt(0)}$`);
+}
+
+/** `escapeForIdentifier(text)`, length-prefixed (`<length>_<text>`) so
+ * concatenating several of these stays injective - a plain `_`-join between
+ * two already-escaped, multi-argument segments is not: `["A_B", "C"]` and
+ * `["A", "B_C"]` both join to `"A_B_C"`, since the separator is just another
+ * `_` indistinguishable from one already inside an escaped segment. The
+ * length prefix fixes exactly where each segment ends, so decoding one
+ * fixed way (read digits, then `_`, then exactly that many characters)
+ * always recovers the original split. */
+function lengthPrefixedIdentifier(text: string): string {
+  const escaped = escapeForIdentifier(text);
+  return `${escaped.length}_${escaped}`;
+}
+
 /** The one place the `_witness_<param>_<trait>` naming scheme is defined -
  * `param` is a type-parameter name or `Self` (a trait default body), `trait`
- * is a bare trait name. */
-export function witnessParamName(param: string, trait: string): string {
-  return `_witness_${param}_${trait}`;
+ * is a bare trait name. `typeArguments`, when non-empty, disambiguates two
+ * bounds on the same parameter naming the same parameterized trait with
+ * different arguments (`T: Convert<i32> + Convert<str>`) - without it both
+ * would produce the identical raw name, and `reserveWitnessParamName`'s
+ * `witnessParamNames` map would silently resolve every forwarding reference
+ * to whichever bound was declared last. Each argument's `monomorphizedTypeIdentity`
+ * (which preserves nesting via literal `<`/`>`/`,`) is escaped and
+ * length-prefixed before concatenating - see `lengthPrefixedIdentifier`'s own
+ * doc comment for why a plain `_`-join between multiple arguments isn't
+ * enough on its own. */
+export function witnessParamName(
+  param: string,
+  trait: string,
+  typeArguments: readonly Semantics.Type[] = [],
+): string {
+  if (typeArguments.length === 0) return `_witness_${param}_${trait}`;
+  const argsSuffix = typeArguments
+    .map((arg) => lengthPrefixedIdentifier(monomorphizedTypeIdentity(arg)))
+    .join("_");
+  return `_witness_${param}_${trait}_${argsSuffix}`;
 }
 
 /** Which free function a `FreeMethodTarget` names: `concrete` -
@@ -137,6 +195,37 @@ export interface FreeMethodTarget {
   readonly emitKind: MethodEmitKind;
 }
 
+/** One `Drop` impl bucketed under its target's bare type name
+ * (`AnalysisResult.dropImpls`) - `targetTypeArguments` is the impl's own
+ * declared target-argument pattern (concrete or an impl-level `Wildcard`,
+ * same shape coherence already uses for overlap checking), so a generic
+ * impl covering every instantiation (`impl<T> Drop for Pair<T>`) and a
+ * concrete one covering a single instantiation (`impl Drop for Pair<i32>`)
+ * can coexist in the same bucket and `findDropTarget` can tell which one a
+ * given constructed value's own type arguments actually match. */
+export interface DropImplEntry {
+  readonly targetTypeArguments: readonly TargetArgSlot[];
+  readonly target: FreeMethodTarget;
+}
+
+/** The `Drop` impl applicable to a constructed value of `typeName<typeArguments>`,
+ * if any - codegen's own read side of `AnalysisResult.dropImpls`, matching
+ * `findRegisteredImpl`'s target-pattern matching so a generic impl's
+ * `Wildcard` target still resolves for every concrete instantiation. */
+export function findDropTarget(
+  dropImpls: ReadonlyMap<string, readonly DropImplEntry[]>,
+  typeName: string,
+  typeArguments: readonly Semantics.Type[],
+): FreeMethodTarget | undefined {
+  return (dropImpls.get(typeName) ?? []).find((entry) =>
+    requestedTraitArgumentsSatisfied(
+      entry.targetTypeArguments,
+      typeArguments,
+      new Map(),
+    ),
+  )?.target;
+}
+
 interface WitnessMethodTarget {
   readonly kind: "witness";
   readonly witnessName: string;
@@ -179,6 +268,35 @@ export interface WitnessMethod {
    * witnesses to thread even when a *sibling* method in the same flattened
    * witness comes from a genuinely blanket impl elsewhere in the chain. */
   readonly blanketBoundWitnesses: Option<readonly WitnessRef[]>;
+  /** `some(...)` under the exact same condition as `blanketBoundWitnesses`
+   * - the providing blanket impl's own trait arguments folded into
+   * `definingTraitId`, so two legal blanket impls of different
+   * instantiations of the same trait (`impl<T> Tag<i32> for T` /
+   * `impl<T> Tag<str> for T`) get distinct free-function identities instead
+   * of colliding on the bare trait name. Kept separate from
+   * `definingTraitId` itself rather than widening that field in place,
+   * since a default-method body's own free-function identity is the
+   * trait's alone and has no per-impl instantiation to fold in. */
+  readonly blanketImplScopeId: Option<string>;
+  /** `some(...)` only when `source === "impl"` and the impl providing this
+   * specific method is a *concrete* (non-blanket) one - that impl's own
+   * `typeId#traitId` scope, matching `recordImplMethodTarget`'s emission-side
+   * key for it. A flattened supertrait method's providing impl need not be
+   * the same impl - or even the same declared target pattern - as whatever
+   * impl satisfies the enclosing witness's own top-level trait, so codegen
+   * can't derive this from the enclosing witness alone. */
+  readonly concreteImplScopeId: Option<string>;
+  /** The concrete receiver's own witness for each of a *concrete, generic*
+   * impl's own bounds (`impl<T: Marker> Show for Wrapper<T>`'s `T: Marker`),
+   * mirroring `blanketBoundWitnesses` for the non-blanket case - the free
+   * function this method resolves to still gets the same trailing
+   * `_witness_<param>_<bound>` parameters `recordWitnessParams` gives any
+   * other impl-level bound, so a witness-object slot dispatching to it needs
+   * these threaded through as extra closure arguments too, not just a
+   * concrete blanket-provided one. `none()` for an impl with no generic
+   * parameters of its own, so an ordinary non-generic impl's method keeps
+   * its simpler direct slot. */
+  readonly concreteBoundWitnesses: Option<readonly WitnessRef[]>;
   /** How many trailing witness arguments a call to this method passes for
    * its *own* declared generic bounds (one per `(param, bound trait)` pair,
    * matching `recordWitnessParams`'s own count for the identical merged
@@ -240,6 +358,7 @@ export type WitnessRef =
       readonly kind: "Forwarded";
       readonly traitName: string;
       readonly paramName: string;
+      readonly typeArguments: readonly Semantics.Type[];
     }
   | {
       readonly kind: "Primitive";
@@ -302,7 +421,10 @@ interface AnalysisContext {
    * generic body can check a still-abstract argument's bound against the
    * enclosing declaration's own bound list instead of searching
    * `implRegistry` for a concrete impl that doesn't exist yet. */
-  readonly genericParamBoundStack: ReadonlyMap<string, readonly string[]>[];
+  readonly genericParamBoundStack: ReadonlyMap<
+    string,
+    readonly ParsedBoundTraitRef[]
+  >[];
   /**
    * Every trait impl registered anywhere in the program, flat and
    * program-wide rather than scoped to a frame - an impl's existence is a
@@ -338,9 +460,13 @@ interface AnalysisContext {
   /** Mutable build-up of `AnalysisResult.unsizeCoercions`. */
   readonly unsizeCoercionTable: Map<number, UnsizeCoercion>;
   /** Mutable build-up of `AnalysisResult.dropImpls`. */
-  readonly dropImplTable: Map<string, FreeMethodTarget>;
+  readonly dropImplTable: Map<string, DropImplEntry[]>;
   /** Mutable build-up of `AnalysisResult.methodCallWitnesses`. */
   readonly methodCallWitnessTable: Map<number, readonly WitnessRef[]>;
+  /** Mutable build-up of `AnalysisResult.dropWitnesses`. */
+  readonly dropWitnessTable: Map<number, readonly WitnessRef[]>;
+  /** Mutable build-up of `AnalysisResult.dropBoundsUnsatisfied`. */
+  readonly dropBoundsUnsatisfiedTable: Set<number>;
   /**
    * What `Self` means at the innermost currently-open trait or impl body -
    * only the top is ever consulted, same lifecycle as `genericParamStack`. A
@@ -388,24 +514,89 @@ interface SelfArgMethod {
  * associated-type names for projection resolution. */
 interface RegisteredTrait {
   readonly supertraits: readonly string[];
+  /** Each supertrait's own declared type arguments (`trait Ord<T>: Eq<T>`'s
+   * `Eq<T>` - `T` here is this trait's *own* generic parameter, resolved
+   * under its scope but not yet substituted against any particular impl's
+   * instantiation), keyed by the same resolved id `supertraits` carries -
+   * `checkSupertraitCompleteness` substitutes these against a specific
+   * impl's own `traitTypeArguments` before checking the supertrait bound,
+   * so `Ord<i32>` requires `Eq<i32>` specifically, not a bare `Eq`. */
+  readonly supertraitArgs: ReadonlyMap<string, readonly Semantics.Type[]>;
   readonly methods: readonly Semantics.TraitMethod[];
   readonly associatedTypes: readonly string[];
   /** This trait's own declared type-parameter names - a call-site argument
    * against one of them can't be type-checked (no trait-argument
    * substitution yet), only arity-checked. */
   readonly genericParams: readonly string[];
+  /** Each `genericParams` name's own default type, if declared
+   * (`trait Shl<Rhs = Self>`'s `Rhs`) - `checkTraitArgCount` needs this to
+   * know a trailing parameter can be omitted, not just how many are
+   * declared in total. */
+  readonly genericParamDefaults: ReadonlyMap<string, Semantics.Type>;
   /** `none()` when the trait is object-safe, accounting for its supertraits
    * (see `propagateSupertraitObjectSafety`). */
   readonly notObjectSafe: Option<SelfArgMethod>;
 }
 
+/** One position in an impl target's own type-argument list, for overlap
+ * checking - `Wildcard` when the position is filled by the impl's own
+ * declared generic parameter (`impl<T> Draw for Pair<T>`, which covers
+ * every instantiation of `Pair` and so conflicts with any other impl of the
+ * same trait for `Pair`, concrete or wildcard alike), `Nominal` when it's a
+ * struct/enum instantiation whose own type arguments recurse into this same
+ * representation (`impl<T> Draw for Pair<Wrapper<T>>` - the `T` nested
+ * inside `Wrapper<T>` is itself a `Wildcard` slot, so it's recognized as
+ * overlapping `Pair<Wrapper<i32>>` structurally, not misclassified as one
+ * opaque concrete type), `Concrete` when it's any other fully resolved type
+ * (`impl Draw for Pair<i32>`, which conflicts only with an identical
+ * concrete type in the same position). */
+type TargetArgSlot =
+  | { readonly kind: "Wildcard"; readonly paramName: string }
+  | { readonly kind: "Concrete"; readonly type: Semantics.Type }
+  | {
+      readonly kind: "Nominal";
+      readonly nominalKind: "StructType" | "EnumType";
+      readonly name: string;
+      readonly typeArguments: readonly TargetArgSlot[];
+    }
+  | {
+      readonly kind: "Array";
+      readonly length: number;
+      readonly elementType: TargetArgSlot;
+    }
+  | {
+      readonly kind: "Reference";
+      readonly mutable: boolean;
+      readonly referent: TargetArgSlot;
+    };
+
 /** One registered trait impl, extracted just far enough for coherence and
  * bound checking. */
 interface RegisteredImpl {
   readonly traitName: string;
+  readonly traitTypeArguments: readonly TargetArgSlot[];
   readonly targetTypeName: string;
+  readonly targetTypeArguments: readonly TargetArgSlot[];
+  /** The impl's own concrete `Self` type (mirrors `resolveImplSelfTargetType`
+   * - see that function's own doc comment) - `checkSupertraitCompleteness`
+   * needs the receiver's real type arguments, not just `targetTypeName`'s
+   * bare identity, so a supertrait impl for one instantiation of a generic
+   * struct doesn't get credited toward a different instantiation. */
+  readonly resolvedTargetType: Semantics.Type;
   readonly isBlanket: boolean;
-  readonly blanketBounds: readonly string[];
+  readonly blanketBounds: readonly Semantics.BoundTraitRef[];
+  /** A non-blanket impl's own declared bound(s) (`impl<T: A> Tag<i32> for
+   * Wrapper<T>`'s `T: A`) and the position each bound parameter occupies
+   * within the target's own type-argument tree - `applicableImplsForReceiver`
+   * needs these to tell whether this impl genuinely applies to a given
+   * receiver, the same way `methodCandidatesForNominalType` already checks
+   * `IndexedMethod.implOnlyGenericParamBounds`. Always empty for a blanket
+   * impl, which uses `blanketBounds` instead. */
+  readonly genericParamBounds: ReadonlyMap<
+    string,
+    readonly Semantics.BoundTraitRef[]
+  >;
+  readonly implGenericParamPositions: ImplGenericParamPositions;
   readonly providedMethods: readonly string[];
   /** Every `type Name = Value;` this impl defines, resolved eagerly during
    * registration (not left for `analyzeImplDecl`'s own real pass) so a
@@ -462,11 +653,11 @@ function genericParamNames(
 function genericParamBoundNames(
   generics: readonly Parser.GenericParam[],
   whereClause: Option<Parser.WhereClause> = none(),
-): ReadonlyMap<string, readonly string[]> {
-  const bounds = new Map<string, readonly string[]>();
+): ReadonlyMap<string, readonly ParsedBoundTraitRef[]> {
+  const bounds = new Map<string, readonly ParsedBoundTraitRef[]>();
   for (const param of generics) {
     if (param.kind !== "TypeParam") continue;
-    bounds.set(param.name.text, traitBoundNames(param.bounds));
+    bounds.set(param.name.text, traitBoundRefs(param.bounds));
   }
   for (const predicate of isSome(whereClause)
     ? whereClause.value.predicates
@@ -480,24 +671,82 @@ function genericParamBoundNames(
     const name = predicate.type.path.segments[0];
     const existing = name === undefined ? undefined : bounds.get(name);
     if (name === undefined || existing === undefined) continue;
-    bounds.set(name, [...existing, ...traitBoundNames(predicate.bounds)]);
+    bounds.set(name, [...existing, ...traitBoundRefs(predicate.bounds)]);
   }
   return bounds;
 }
 
+/** `materializeTrailingGenericDefaults`, keyed by a trait's resolved
+ * `traitRegistry` id instead of a `StructDecl`/`EnumDecl` - every reader of
+ * a declared bound's own type arguments (the persisted `genericParamBounds`
+ * built below, `declaredGenericParamBoundRefs`, `declaredBoundMatchesRequestedArguments`,
+ * and `recordWitnessParams`' own witness naming) needs the same omitted
+ * defaults filled in, or a bare `T: Thing` against `trait Thing<U = i32>`
+ * persists as an unparameterized request that wrongly matches any
+ * `Thing<...>` impl and leaves `Thing`'s own `U` unsubstituted in every
+ * method resolved through the bound. `undefined`/not-yet-registered trait
+ * is left alone - callers already treat an unresolvable trait name as a
+ * separate problem. A default resolving to `Self` (`trait Add<Rhs = Self>`)
+ * is excluded from the materialized set - unlike an impl's own trait-ref
+ * default (a concrete receiver to resolve `Self` against always exists
+ * there), a declared bound like `T: Add` has no receiver at all, so `Self`
+ * would persist as a dangling, forever-unresolvable placeholder instead of
+ * the pre-existing (and correct) "stays unparameterized" behavior. */
+function materializeTraitTypeArguments(
+  ctx: AnalysisContext,
+  traitId: string,
+  suppliedTypeArguments: readonly Semantics.Type[],
+  tokenId: number,
+): readonly Semantics.Type[] {
+  const trait = ctx.traitRegistry.get(traitId);
+  if (trait === undefined) return suppliedTypeArguments;
+  const genericParamDefaults = new Map(
+    [...trait.genericParamDefaults].filter(
+      ([, type]) => !isAbstractSelfType(type),
+    ),
+  );
+  return materializeTrailingGenericDefaults(
+    { generics: trait.genericParams, genericParamDefaults },
+    suppliedTypeArguments,
+    tokenId,
+  );
+}
+
 /** Resolves every bound name in a `param -> bound names` map to its
- * scope-qualified `traitRegistry` key, against the scope in effect now -
- * used when building a signature's persisted `genericParamBounds`, so a
- * later call site checks the trait visible where the callee was declared,
- * not where it's called. */
+ * scope-qualified `traitRegistry` key (and each bound's own type arguments
+ * to real resolved types, with any trailing default materialized - see
+ * `materializeTraitTypeArguments`), against the scope in effect now - used
+ * when building a signature's persisted `genericParamBounds`, so a later
+ * call site checks the trait visible where the callee was declared, not
+ * where it's called. `resolveTraitName` defaults to live-frame
+ * `lookupTrait`; `registerTraits`'s own prepass passes a
+ * `StructuralScope`-based resolver instead, since live frames don't yet
+ * reflect a nested trait's own scope that early (see that resolver's own
+ * doc comment). */
 function resolveBoundNames(
   ctx: AnalysisContext,
-  bounds: ReadonlyMap<string, readonly string[]>,
-): ReadonlyMap<string, readonly string[]> {
+  bounds: ReadonlyMap<string, readonly ParsedBoundTraitRef[]>,
+  resolveTraitName: (name: string) => string = (name) =>
+    lookupTrait(ctx, name) ?? name,
+): ReadonlyMap<string, readonly Semantics.BoundTraitRef[]> {
   return new Map(
-    [...bounds].map(([param, names]) => [
+    [...bounds].map(([param, refs]) => [
       param,
-      names.map((name) => lookupTrait(ctx, name) ?? name),
+      refs.map((ref) => {
+        const name = resolveTraitName(ref.name);
+        const typeArguments = ref.typeArguments.map((arg) =>
+          resolveSlice1Type(ctx, arg, arg.tokenId),
+        );
+        return {
+          name,
+          typeArguments: materializeTraitTypeArguments(
+            ctx,
+            name,
+            typeArguments,
+            0,
+          ),
+        };
+      }),
     ]),
   );
 }
@@ -527,42 +776,96 @@ function resolveGenericParamDefaults(
  * `LifetimeTraitBound` (`T: 'a`) contributes nothing, since it names no
  * trait. Shared by inline (`T: Draw`) and `where`-clause (`where T: Draw`)
  * bound lists alike. */
-function traitBoundNames(
+interface ParsedBoundTraitRef {
+  readonly name: string;
+  readonly typeArguments: readonly Parser.Type[];
+}
+
+function traitBoundRefs(
   bounds: readonly Parser.TraitBound[],
-): readonly string[] {
+): readonly ParsedBoundTraitRef[] {
   return bounds
     .filter(
       (bound): bound is Parser.PathTraitBound =>
         bound.kind === "PathTraitBound",
     )
-    .map((bound) => bound.path.segments.at(-1) ?? "");
+    .map((bound) => ({
+      name: bound.path.segments.at(-1) ?? "",
+      typeArguments: bound.typeArguments,
+    }));
 }
 
-/** Whether any registered trait carries this bare name, regardless of the
- * scope it was declared in - an existence check, not identity resolution
- * (which happens at the reference's own use site). */
-function traitNameIsRegistered(ctx: AnalysisContext, name: string): boolean {
-  const suffix = `::${name}`;
-  for (const key of ctx.traitRegistry.keys()) {
-    if (key === name || key.endsWith(suffix)) return true;
+/** Rejects a trait reference (a generic bound, an impl's own trait-ref)
+ * whose own type-argument count doesn't fit the trait's declared
+ * parameters, accounting for any trailing ones with a default
+ * (`trait Shl<Rhs = Self>` accepts 0 or 1 arguments, not just 1) -
+ * `resolveBoundNames`'s own per-argument resolution validates each
+ * argument's own type but never checks the count against what the trait
+ * actually declares, so `Convert<i32, str>` against `trait Convert<U>`
+ * would otherwise persist silently. */
+function checkTraitArgCount(
+  ctx: AnalysisContext,
+  traitId: string,
+  bareName: string,
+  supplied: number,
+  tokenId: number,
+): void {
+  const trait = ctx.traitRegistry.get(traitId);
+  if (trait === undefined) return;
+  const declared = trait.genericParams.length;
+  const required = trait.genericParams.filter(
+    (name) => !trait.genericParamDefaults.has(name),
+  ).length;
+  if (supplied > declared || supplied < required) {
+    emitError(
+      ctx,
+      { kind: "SemTraitArgCountMismatch", name: bareName, declared, supplied },
+      tokenId,
+    );
   }
-  return false;
 }
 
-/** Rejects any trait bound naming a trait that isn't declared - a sibling
- * of `traitBoundNames`, which only extracts names and never checks them.
- * Callers run this once `ctx.traitRegistry` is known to be fully populated
- * for whatever it's checking against (immediately for a bound list that
- * can't forward-reference anything still being registered, or after a
- * dedicated first pass when it can, as trait supertraits do). */
+/** Rejects any trait bound naming a trait that isn't declared, or whose own
+ * type-argument count doesn't fit the trait's declared parameters (see
+ * `checkTraitArgCount`) - a sibling of `traitBoundRefs`, which only
+ * extracts names and never checks them. Callers run this once
+ * `ctx.traitRegistry` is known to be fully populated for whatever it's
+ * checking against (immediately for a bound list that can't forward-
+ * reference anything still being registered, or after a dedicated first
+ * pass when it can, as trait supertraits do) - exactly once per
+ * declaration, so this is the only place a bound's own existence/arity
+ * gets checked, not every place a bound gets resolved
+ * (`resolveBoundNames` runs repeatedly, for different purposes, and must
+ * never also emit here). `resolveTraitName` defaults to live-frame
+ * `lookupTrait`; a prepass caller with no live scope yet
+ * (`registerTraits`'s own supertrait pass, `registerOneImpl`'s own bound
+ * validation) passes a `StructuralScope`-based resolver instead.
+ * Deliberately *not* a bare scan of every registered trait's own key
+ * regardless of nesting - that would wrongly accept a name only an
+ * unrelated, inaccessible nested trait happens to share, passing
+ * validation for a reference that would then fail to resolve for real. */
 function validateTraitBoundNames(
   ctx: AnalysisContext,
   bounds: readonly Parser.TraitBound[],
+  resolveTraitName: (name: string) => string = (n) => lookupTrait(ctx, n) ?? n,
 ): void {
   for (const bound of bounds) {
     if (bound.kind !== "PathTraitBound") continue;
     const name = bound.path.segments.at(-1) ?? "";
-    if (traitNameIsRegistered(ctx, name)) continue;
+    const resolvedName = resolveTraitName(name);
+    if (ctx.traitRegistry.has(resolvedName)) {
+      checkTraitArgCount(
+        ctx,
+        resolvedName,
+        name,
+        bound.typeArguments.length,
+        bound.tokenId,
+      );
+      for (const arg of bound.typeArguments) {
+        validateSlice1Type(ctx, arg, arg.tokenId);
+      }
+      continue;
+    }
     emitError(ctx, { kind: "SemCannotFindTrait", name }, bound.tokenId);
   }
 }
@@ -576,15 +879,16 @@ function validateGenericParamBounds(
   ctx: AnalysisContext,
   generics: readonly Parser.GenericParam[],
   whereClause: Option<Parser.WhereClause>,
+  resolveTraitName?: (name: string) => string,
 ): void {
   for (const param of generics) {
     if (param.kind !== "TypeParam") continue;
-    validateTraitBoundNames(ctx, param.bounds);
+    validateTraitBoundNames(ctx, param.bounds, resolveTraitName);
   }
   for (const predicate of isSome(whereClause)
     ? whereClause.value.predicates
     : []) {
-    validateTraitBoundNames(ctx, predicate.bounds);
+    validateTraitBoundNames(ctx, predicate.bounds, resolveTraitName);
   }
 }
 
@@ -626,6 +930,26 @@ function isDeclaredGenericParam(ctx: AnalysisContext, name: string): boolean {
   return innermost?.has(name) ?? false;
 }
 
+/** `receiverType`'s own declared generic-parameter name, when it's a bare
+ * reference to one - shared by `methodCandidates` and
+ * `applicableInstantiationCount`, which both need to tell an abstract
+ * bounded receiver apart from a concrete one the same way. */
+function abstractGenericParamName(
+  ctx: AnalysisContext,
+  receiverType: Semantics.Type,
+): string | undefined {
+  if (
+    receiverType.kind !== "NamedType" ||
+    receiverType.path.segments.length !== 1
+  ) {
+    return undefined;
+  }
+  const name = receiverType.path.segments[0];
+  return name !== undefined && isDeclaredGenericParam(ctx, name)
+    ? name
+    : undefined;
+}
+
 /** The innermost open item's own declared bounds for one of its type
  * parameters, each resolved to its scope-qualified `traitRegistry` key -
  * empty for a parameter with no bounds, or one not declared by the innermost
@@ -636,8 +960,73 @@ function declaredGenericParamBounds(
 ): readonly string[] {
   const innermost = ctx.genericParamBoundStack.at(-1);
   return (innermost?.get(name) ?? []).map(
-    (bound) => lookupTrait(ctx, bound) ?? bound,
+    (ref) => lookupTrait(ctx, ref.name) ?? ref.name,
   );
+}
+
+/** Same as `declaredGenericParamBounds`, but keeps each bound's own resolved
+ * type arguments - `abstractWitnessParamName` needs them to reproduce
+ * `recordWitnessParams`'s parameterized witness name exactly, not just the
+ * bare trait name `declaredGenericParamBounds` reduces to. */
+function declaredGenericParamBoundRefs(
+  ctx: AnalysisContext,
+  name: string,
+): readonly {
+  readonly traitName: string;
+  readonly typeArguments: readonly Semantics.Type[];
+}[] {
+  const innermost = ctx.genericParamBoundStack.at(-1);
+  return (innermost?.get(name) ?? []).map((ref) => {
+    const traitName = lookupTrait(ctx, ref.name) ?? ref.name;
+    const typeArguments = ref.typeArguments.map((arg) =>
+      resolveSlice1Type(ctx, arg, arg.tokenId),
+    );
+    return {
+      traitName,
+      typeArguments: materializeTraitTypeArguments(
+        ctx,
+        traitName,
+        typeArguments,
+        0,
+      ),
+    };
+  });
+}
+
+/** Whether `paramName`'s own declared bounds include `traitName` with type
+ * arguments matching `requestedTypeArguments` exactly - `resolveTraitBound`'s
+ * Forwarded-path counterpart to `requestedTraitArgumentsSatisfied`'s impl-side
+ * check, since a still-abstract parameter has no impl to look arguments up
+ * on, only its own declared bound list. Must be called with the
+ * declaration's own generic-param scope still pushed, same as
+ * `declaredGenericParamBounds`, since a bound's own type arguments resolve
+ * against that scope (e.g. a declared `T: Convert<U>` naming a sibling
+ * parameter). */
+function declaredBoundMatchesRequestedArguments(
+  ctx: AnalysisContext,
+  paramName: string,
+  traitName: string,
+  requestedTypeArguments: readonly Semantics.Type[],
+): boolean {
+  const innermost = ctx.genericParamBoundStack.at(-1);
+  const refs = innermost?.get(paramName) ?? [];
+  return refs.some((ref) => {
+    const resolvedTraitName = lookupTrait(ctx, ref.name) ?? ref.name;
+    if (resolvedTraitName !== traitName) return false;
+    const declaredTypeArguments = materializeTraitTypeArguments(
+      ctx,
+      resolvedTraitName,
+      ref.typeArguments.map((arg) => resolveSlice1Type(ctx, arg, arg.tokenId)),
+      0,
+    );
+    if (declaredTypeArguments.length !== requestedTypeArguments.length) {
+      return false;
+    }
+    return declaredTypeArguments.every((arg, i) => {
+      const requested = requestedTypeArguments[i];
+      return requested !== undefined && typesEqual(arg, requested);
+    });
+  });
 }
 
 function pushSelfContext(ctx: AnalysisContext, self: SelfContext): void {
@@ -1503,19 +1892,91 @@ function validateProjectionType(
   });
 }
 
-/** Validates each of a struct/enum reference's own type arguments, purely
- * for their diagnostics - `Semantics.StructType`/`EnumType` carry no
- * argument list of their own yet, so nothing here can substitute a struct's
- * declared generic fields against the concrete arguments; this only makes a
- * projection (or any other malformed type) nested inside one, e.g.
- * `Option<Self::Item>`, actually get visited instead of silently skipped. */
+/** Resolves each of a struct/enum reference's own type arguments, emitting
+ * their diagnostics and returning the resolved list so the caller can
+ * attach it to the returned `StructType`/`EnumType`'s own `typeArguments`. */
 function validateTypeArguments(
   ctx: AnalysisContext,
   typeArguments: readonly Parser.Type[],
+): readonly Semantics.Type[] {
+  return typeArguments.map((arg) => validateSlice1Type(ctx, arg, arg.tokenId));
+}
+
+/** Attaches a resolved type-argument list to a struct/enum's own type,
+ * leaving any other `Semantics.Type` kind untouched. */
+function withTypeArguments(
+  type: Semantics.Type,
+  typeArguments: readonly Semantics.Type[],
+): Semantics.Type {
+  return type.kind === "StructType" || type.kind === "EnumType"
+    ? { ...type, typeArguments }
+    : type;
+}
+
+/** Rejects a nominal type reference (`Wrapper<i32, str>`) whose own
+ * type-argument count doesn't fit the struct/enum's declared parameters,
+ * accounting for any trailing ones with a default - mirrors
+ * `checkTraitArgCount`'s identical need for a trait reference. */
+function checkNominalArgCount(
+  ctx: AnalysisContext,
+  name: string,
+  supplied: number,
+  tokenId: number,
 ): void {
-  for (const arg of typeArguments) {
-    validateSlice1Type(ctx, arg, arg.tokenId);
+  const decl = lookupStruct(ctx, name) ?? lookupEnum(ctx, name);
+  if (decl === undefined) return;
+  const declared = decl.generics.length;
+  const required = decl.generics.filter(
+    (paramName) => !decl.genericParamDefaults.has(paramName),
+  ).length;
+  if (supplied > declared || supplied < required) {
+    emitError(
+      ctx,
+      { kind: "SemTypeArgCountMismatch", name, declared, supplied },
+      tokenId,
+    );
   }
+}
+
+/** Fills in any trailing generic parameter(s) a reference to `decl` omits
+ * (`Marker` against `struct Marker<T = i32>`, or a declared bound `T: Thing`
+ * against `trait Thing<U = i32>`) with their own declared default,
+ * substituted against whatever earlier parameters the same reference did
+ * supply (`bindingOrDefault`'s own forward-substitution rule) - so an
+ * omitted-default reference and its fully explicit spelling resolve to the
+ * identical `typeArguments` list, instead of comparing unequal via
+ * `typesEqual`'s structural check (a nominal type reference) or being
+ * treated as an unparameterized request that matches any instantiation (a
+ * trait bound, via `materializeTraitTypeArguments` below). A no-op once
+ * every declared parameter is already supplied. */
+function materializeTrailingGenericDefaults(
+  decl: {
+    readonly generics: readonly string[];
+    readonly genericParamDefaults: ReadonlyMap<string, Semantics.Type>;
+  },
+  typeArguments: readonly Semantics.Type[],
+  tokenId: number,
+): readonly Semantics.Type[] {
+  if (typeArguments.length >= decl.generics.length) return typeArguments;
+  const bindings: GenericBindings = new Map();
+  for (const [i, name] of decl.generics
+    .slice(0, typeArguments.length)
+    .entries()) {
+    const type = typeArguments[i];
+    if (type !== undefined) bindings.set(name, { type, tokenId });
+  }
+  const result: Semantics.Type[] = [...typeArguments];
+  for (const name of decl.generics.slice(typeArguments.length)) {
+    const binding = bindingOrDefault(
+      name,
+      decl.genericParamDefaults,
+      bindings,
+      tokenId,
+    );
+    if (binding === undefined) break;
+    result.push(binding.type);
+  }
+  return result;
 }
 
 function validateNamedType(
@@ -1559,8 +2020,21 @@ function validateNamedType(
   }
   const resolved = lookupStructOrEnumType(ctx, name);
   if (resolved !== undefined) {
-    validateTypeArguments(ctx, type.typeArguments);
-    return resolved;
+    checkNominalArgCount(ctx, name, type.typeArguments.length, tokenId);
+    const suppliedTypeArguments = validateTypeArguments(
+      ctx,
+      type.typeArguments,
+    );
+    const decl = lookupStruct(ctx, name) ?? lookupEnum(ctx, name);
+    const typeArguments =
+      decl === undefined
+        ? suppliedTypeArguments
+        : materializeTrailingGenericDefaults(
+            decl,
+            suppliedTypeArguments,
+            tokenId,
+          );
+    return withTypeArguments(resolved, typeArguments);
   }
   emitError(ctx, { kind: "SemCannotFindType", name }, tokenId);
   return { kind: "UnitType", tokenId };
@@ -2204,6 +2678,7 @@ function declareStructName(
   const type: Semantics.Type = {
     kind: "StructType",
     name: scopedTypeName(item.name.tokenId, item.name.text),
+    typeArguments: [],
   };
   warnIfShadowsOuterDeclaration(
     ctx,
@@ -2245,6 +2720,7 @@ function declareEnumName(
   const type: Semantics.Type = {
     kind: "EnumType",
     name: scopedTypeName(item.name.tokenId, item.name.text),
+    typeArguments: [],
   };
   warnIfShadowsOuterDeclaration(
     ctx,
@@ -2350,9 +2826,9 @@ function buildImplDecl(item: Parser.ImplDecl): Semantics.ImplDecl {
       isSome(targetTypeName) &&
       genericParamNames(item.generics).includes(targetTypeName.value),
     blanketBounds: isSome(targetTypeName)
-      ? (genericParamBoundNames(item.generics, item.whereClause).get(
-          targetTypeName.value,
-        ) ?? [])
+      ? (genericParamBoundNames(item.generics, item.whereClause)
+          .get(targetTypeName.value)
+          ?.map((ref) => ref.name) ?? [])
       : [],
     providedMethods: item.items
       .filter((decl): decl is Parser.FunctionDef => decl.kind === "Function")
@@ -2466,7 +2942,12 @@ function resolveMethodSignatureTypes(
     type: Parser.Type,
     fallbackTokenId: number,
   ) => Semantics.Type = validateSlice1Type,
-): { params: readonly Semantics.Type[]; returnType: Semantics.Type } {
+  resolveTraitName?: (name: string) => string,
+): {
+  params: readonly Semantics.Type[];
+  returnType: Semantics.Type;
+  genericParamBounds: ReadonlyMap<string, readonly Semantics.BoundTraitRef[]>;
+} {
   const merged = mergedGenericScope(
     outerGenerics,
     outerWhereClause,
@@ -2477,6 +2958,7 @@ function resolveMethodSignatureTypes(
   const result: {
     params: readonly Semantics.Type[];
     returnType: Semantics.Type;
+    genericParamBounds: ReadonlyMap<string, readonly Semantics.BoundTraitRef[]>;
   } = {
     params: signature.params.map((p) =>
       resolveType(ctx, p.type, p.type.tokenId),
@@ -2488,6 +2970,15 @@ function resolveMethodSignatureTypes(
           signature.returnType.value.tokenId,
         )
       : { kind: "UnitType", tokenId: signature.tokenId },
+    // Resolved here, while `merged`'s own scope is still pushed - a bound
+    // naming a sibling generic parameter (`V: Convert<U>`) only resolves
+    // correctly with that scope active, and every caller of this function
+    // needs the identical merged scope this function already computes.
+    genericParamBounds: resolveBoundNames(
+      ctx,
+      genericParamBoundNames(merged.generics, merged.whereClause),
+      resolveTraitName,
+    ),
   };
   popGenericParams(ctx);
   return result;
@@ -2510,28 +3001,24 @@ function resolveTraitMethodSignature(
     type: Parser.Type,
     fallbackTokenId: number,
   ) => Semantics.Type,
+  resolveTraitName?: (name: string) => string,
 ): Semantics.TraitMethod {
-  const merged = mergedGenericScope(
-    outerGenerics,
-    outerWhereClause,
-    signature.generics,
-    signature.whereClause,
-  );
   return {
     name: signature.name.text,
     isDefault,
     receiver: toMethodReceiver(signature.receiver),
     genericParams: genericParamNames(signature.generics),
-    genericParamBounds: resolveBoundNames(
-      ctx,
-      genericParamBoundNames(merged.generics, merged.whereClause),
-    ),
+    // genericParamBounds comes from the spread below, resolved under
+    // resolveMethodSignatureTypes's own pushed scope - resolving it here
+    // instead, before that scope exists, left a bound naming a sibling
+    // generic parameter (or an outer trait/impl parameter) unresolved.
     ...resolveMethodSignatureTypes(
       ctx,
       outerGenerics,
       outerWhereClause,
       signature,
       resolveType,
+      resolveTraitName,
     ),
   };
 }
@@ -2575,6 +3062,16 @@ interface AnalyzedMethod {
    * parameter, for the ownership passes to walk; `none()` for a bodiless
    * trait method. */
   readonly ownershipView: Option<Semantics.FunctionDef>;
+  /** Resolved under this method's own merged (outer-plus-method) generic
+   * scope, before that scope is popped - a trait method's own bound naming
+   * a sibling or outer generic parameter only resolves correctly while it's
+   * still active. Only `analyzeTraitDecl` (a trait method's own bounds
+   * carry real meaning) reads this; `analyzeImplDecl`'s `Semantics.ImplMethod`
+   * has no such field to fill. */
+  readonly genericParamBounds: ReadonlyMap<
+    string,
+    readonly Semantics.BoundTraitRef[]
+  >;
 }
 
 function syntheticSelfParam(
@@ -2676,12 +3173,17 @@ function analyzeMethodItem(
       body,
     });
   }
+  const genericParamBounds = resolveBoundNames(
+    ctx,
+    genericParamBoundNames(merged.generics, merged.whereClause),
+  );
   popGenericParams(ctx);
   popFrame(ctx);
   return {
     params: signature.params.map((p) => p.type),
     returnType: expectedReturnType,
     ownershipView,
+    genericParamBounds,
   };
 }
 
@@ -2765,12 +3267,6 @@ function analyzeTraitDecl(
         methodBodies.push(analyzed.ownershipView.value);
         recordDefaultMethodTarget(ctx, decl, shallow.traitId);
       }
-      const merged = mergedGenericScope(
-        item.generics,
-        item.whereClause,
-        sig.generics,
-        sig.whereClause,
-      );
       return [
         {
           name: sig.name.text,
@@ -2779,10 +3275,7 @@ function analyzeTraitDecl(
           params: analyzed.params,
           returnType: analyzed.returnType,
           genericParams: genericParamNames(sig.generics),
-          genericParamBounds: resolveBoundNames(
-            ctx,
-            genericParamBoundNames(merged.generics, merged.whereClause),
-          ),
+          genericParamBounds: analyzed.genericParamBounds,
         },
       ];
     },
@@ -2791,32 +3284,26 @@ function analyzeTraitDecl(
   return { ...shallow, methods, methodBodies };
 }
 
-/** The impl's own concrete `Self` type - a blanket impl's target is its own
- * type parameter, represented the same abstract way a declared generic
- * parameter is (see `ProjectionType`'s own doc comment); a concrete impl's
- * target resolves through ordinary struct/enum lookup, the same path
- * `validateNamedType` itself would take for the same bare name. */
+/** The impl's own concrete `Self` type, resolved from the impl's own
+ * declared target (`item.type`) under its own pushed generic-param scope -
+ * a blanket impl's bare `T` resolves to the same abstract `NamedType` a
+ * declared generic parameter always does (see `ProjectionType`'s own doc
+ * comment), and a concrete impl's target resolves through the same
+ * `resolveSlice1Type` a field/param/return type reference would, so its own
+ * type arguments (`Pair<i32>`) carry through to `Self` instead of collapsing
+ * to the struct's bare declaration identity - needed for `recordImplMethodTarget`/
+ * `recordDropImpl`'s own per-instantiation codegen identity, not just method
+ * body type-checking. Must be called with the impl's own generic scope
+ * already pushed. */
 function resolveImplSelfTargetType(
   ctx: AnalysisContext,
+  item: Parser.ImplDecl,
   shallow: Semantics.ImplDecl,
 ): Semantics.Type {
-  const bareTargetTypeName = shallow.targetTypeName;
-  if (!isSome(bareTargetTypeName)) {
+  if (!isSome(shallow.targetTypeName)) {
     return { kind: "UnitType", tokenId: shallow.tokenId };
   }
-  if (shallow.isBlanket) {
-    return {
-      kind: "NamedType",
-      tokenId: shallow.tokenId,
-      path: { absolute: false, segments: [bareTargetTypeName.value] },
-    };
-  }
-  return (
-    lookupStructOrEnumType(ctx, bareTargetTypeName.value) ?? {
-      kind: "UnitType",
-      tokenId: shallow.tokenId,
-    }
-  );
+  return resolveSlice1Type(ctx, item.type, item.type.tokenId);
 }
 
 /** The ten binary arithmetic/bitwise/shift traits, each declared
@@ -2970,7 +3457,16 @@ function analyzeImplDecl(
   item: Parser.ImplDecl,
 ): Semantics.ImplDecl {
   const shallow = buildImplDecl(item);
-  const targetType = resolveImplSelfTargetType(ctx, shallow);
+  pushGenericParams(ctx, item.generics, item.whereClause);
+  const targetType = resolveImplSelfTargetType(ctx, item, shallow);
+  popGenericParams(ctx);
+  // Reuses the coherence prepass's own already-resolved trait-argument
+  // slots (`registerOneImpl`, which ran before this whole pass) instead of
+  // re-resolving them here - `item`'s own generic-param scope is no longer
+  // pushed at the point this impl's methods are recorded below.
+  const registeredImpl = ctx.implRegistry.find(
+    (impl) => impl.tokenId === item.tokenId,
+  );
   const traitName = mapSome(
     shallow.traitRef,
     (t) => lookupTrait(ctx, t.name) ?? t.name,
@@ -3039,9 +3535,17 @@ function analyzeImplDecl(
           decl,
           targetType,
           traitName,
+          registeredImpl?.traitTypeArguments ?? [],
           shallow.isBlanket,
         );
-        recordDropImpl(ctx, decl, targetType, traitName);
+        recordDropImpl(
+          ctx,
+          decl,
+          targetType,
+          traitName,
+          registeredImpl?.traitTypeArguments ?? [],
+          registeredImpl?.targetTypeArguments ?? [],
+        );
       }
       return [
         {
@@ -3090,15 +3594,280 @@ function checkAssociatedConst(
   }
 }
 
+/** `TargetArgSlot` with every `Wildcard.paramName` made globally unique
+ * across the two impl patterns being compared, via a `side#name` key -
+ * needed because the two patterns' own wildcards are independent variables
+ * even when they share a literal name (`impl<T> ...` vs `impl<U> ...`, or
+ * even `impl<T> ...` vs `impl<T> ...` from two unrelated impls), so a single
+ * shared binding map can only track them correctly once the key itself
+ * carries which side a wildcard came from - see `slotsOverlap`'s own doc
+ * comment for why a single shared map (rather than one map per side) is
+ * required in the first place. */
+interface NominalTaggedSlot {
+  readonly kind: "Nominal";
+  readonly nominalKind: "StructType" | "EnumType";
+  readonly name: string;
+  readonly typeArguments: readonly TaggedTargetArgSlot[];
+}
+
+interface ArrayTaggedSlot {
+  readonly kind: "Array";
+  readonly length: number;
+  readonly elementType: TaggedTargetArgSlot;
+}
+
+interface ReferenceTaggedSlot {
+  readonly kind: "Reference";
+  readonly mutable: boolean;
+  readonly referent: TaggedTargetArgSlot;
+}
+
+type TaggedTargetArgSlot =
+  | { readonly kind: "Wildcard"; readonly key: string }
+  | { readonly kind: "Concrete"; readonly type: Semantics.Type }
+  | NominalTaggedSlot
+  | ArrayTaggedSlot
+  | ReferenceTaggedSlot;
+
+function tagTargetArgSlot(
+  slot: TargetArgSlot,
+  side: "a" | "b",
+): TaggedTargetArgSlot {
+  if (slot.kind === "Wildcard") {
+    return { kind: "Wildcard", key: `${side}#${slot.paramName}` };
+  }
+  if (slot.kind === "Nominal") {
+    return {
+      kind: "Nominal",
+      nominalKind: slot.nominalKind,
+      name: slot.name,
+      typeArguments: slot.typeArguments.map((arg) =>
+        tagTargetArgSlot(arg, side),
+      ),
+    };
+  }
+  if (slot.kind === "Array") {
+    return {
+      kind: "Array",
+      length: slot.length,
+      elementType: tagTargetArgSlot(slot.elementType, side),
+    };
+  }
+  if (slot.kind === "Reference") {
+    return {
+      kind: "Reference",
+      mutable: slot.mutable,
+      referent: tagTargetArgSlot(slot.referent, side),
+    };
+  }
+  return slot;
+}
+
+/** Whether every position of two impl targets' own type-argument lists
+ * overlaps - a mismatched length can't happen for two impls of the same
+ * declared struct/enum (both instantiate the same fixed generic arity), but
+ * is treated as overlapping rather than silently missing a real conflict if
+ * it somehow did. `bindings` is caller-supplied (not created fresh here) so
+ * `implsOverlap` can reuse one shared map across its own trait-argument and
+ * target-argument checks - see that function's own doc comment for why. */
+function tagAndOverlap(
+  a: readonly TargetArgSlot[],
+  b: readonly TargetArgSlot[],
+  bindings: Map<string, TaggedTargetArgSlot>,
+): boolean {
+  return taggedSlotListsOverlap(
+    a.map((slot) => tagTargetArgSlot(slot, "a")),
+    b.map((slot) => tagTargetArgSlot(slot, "b")),
+    bindings,
+  );
+}
+
+function taggedSlotListsOverlap(
+  a: readonly TaggedTargetArgSlot[],
+  b: readonly TaggedTargetArgSlot[],
+  bindings: Map<string, TaggedTargetArgSlot>,
+): boolean {
+  if (a.length !== b.length) return true;
+  return a.every((slot, i) => {
+    const other = b[i];
+    return other === undefined || slotsOverlap(slot, other, bindings);
+  });
+}
+
+/** Chases a wildcard's binding chain to its current end - `bindings` only
+ * ever records one hop per `slotsOverlap` call, so a wildcard bound earlier
+ * in the same comparison (`a#T -> b#U`) needs a fresh walk here to reach
+ * `b#U`'s own binding, if any, rather than the caller re-deriving it via
+ * recursion (see `slotsOverlap`'s own doc comment for why that recursion
+ * used to be able to loop forever). */
+function resolveTaggedSlot(
+  slot: TaggedTargetArgSlot,
+  bindings: ReadonlyMap<string, TaggedTargetArgSlot>,
+): TaggedTargetArgSlot {
+  let current = slot;
+  while (current.kind === "Wildcard") {
+    const next = bindings.get(current.key);
+    if (next === undefined) return current;
+    current = next;
+  }
+  return current;
+}
+
+function nominalSlotsOverlap(
+  ra: NominalTaggedSlot,
+  rb: NominalTaggedSlot,
+  bindings: Map<string, TaggedTargetArgSlot>,
+): boolean {
+  return (
+    ra.nominalKind === rb.nominalKind &&
+    ra.name === rb.name &&
+    taggedSlotListsOverlap(ra.typeArguments, rb.typeArguments, bindings)
+  );
+}
+
+function arraySlotsOverlap(
+  ra: ArrayTaggedSlot,
+  rb: ArrayTaggedSlot,
+  bindings: Map<string, TaggedTargetArgSlot>,
+): boolean {
+  return (
+    ra.length === rb.length &&
+    slotsOverlap(ra.elementType, rb.elementType, bindings)
+  );
+}
+
+function referenceSlotsOverlap(
+  ra: ReferenceTaggedSlot,
+  rb: ReferenceTaggedSlot,
+  bindings: Map<string, TaggedTargetArgSlot>,
+): boolean {
+  return (
+    ra.mutable === rb.mutable &&
+    slotsOverlap(ra.referent, rb.referent, bindings)
+  );
+}
+
+/** `slotsOverlap`'s own comparison once neither side is an unresolved
+ * `Wildcard` - split out, and each compound case split out again into its
+ * own named function, to keep every function under the complexity cap now
+ * that `Array`/`Reference` joined `Nominal`/`Concrete`. */
+function nonWildcardSlotsOverlap(
+  ra: TaggedTargetArgSlot,
+  rb: TaggedTargetArgSlot,
+  bindings: Map<string, TaggedTargetArgSlot>,
+): boolean {
+  if (ra.kind === "Nominal" && rb.kind === "Nominal") {
+    return nominalSlotsOverlap(ra, rb, bindings);
+  }
+  if (ra.kind === "Array" && rb.kind === "Array") {
+    return arraySlotsOverlap(ra, rb, bindings);
+  }
+  if (ra.kind === "Reference" && rb.kind === "Reference") {
+    return referenceSlotsOverlap(ra, rb, bindings);
+  }
+  if (ra.kind === "Concrete" && rb.kind === "Concrete") {
+    return typesEqual(ra.type, rb.type);
+  }
+  return false;
+}
+
+/** Whether two impl targets' own argument slots could describe the same
+ * concrete instantiation - real unification against one shared `bindings`
+ * map, keyed by each wildcard's already side-tagged identity (see
+ * `TaggedTargetArgSlot`). A single shared map is required, not one per
+ * side: once a wildcard from one side binds to a wildcard from the other
+ * (`T` vs `U`), a later occurrence of *either* one must resolve through the
+ * same substitution, or two patterns that both contain variables can
+ * silently interpret a slot captured from the opposite side against the
+ * wrong side's own bindings - unsound for a case like `Triple<T, T, i32>`
+ * vs `Triple<U, str, U>`, whose equations (`T = U`, `T = str`, `i32 = U`)
+ * only satisfy if `i32 == str`, which they don't.
+ *
+ * Both sides are resolved to their current binding-chain end *before*
+ * comparing or binding anything - binding a not-yet-resolved slot directly
+ * (the earlier shape of this function) could set a wildcard's own entry to
+ * something that itself resolves back to that same wildcard (`Triple<T, T,
+ * T>` vs `Triple<U, U, U>`: comparing the second `T`/`U` pair looks up `T`'s
+ * existing binding to `U`, then binds `U` to itself), and every later
+ * lookup of that key would recurse into the same self-reference forever. */
+function slotsOverlap(
+  a: TaggedTargetArgSlot,
+  b: TaggedTargetArgSlot,
+  bindings: Map<string, TaggedTargetArgSlot>,
+): boolean {
+  const ra = resolveTaggedSlot(a, bindings);
+  const rb = resolveTaggedSlot(b, bindings);
+  if (ra.kind === "Wildcard") {
+    if (rb.kind === "Wildcard" && rb.key === ra.key) return true;
+    bindings.set(ra.key, rb);
+    return true;
+  }
+  if (rb.kind === "Wildcard") {
+    bindings.set(rb.key, ra);
+    return true;
+  }
+  return nonWildcardSlotsOverlap(ra, rb, bindings);
+}
+
+/** An impl's own target, as a single `TargetArgSlot` unifiable against the
+ * trait-argument check's own bindings - a blanket impl's target *is* its
+ * own bare generic parameter (`impl<T> Convert<T> for T`'s target is `T`
+ * itself), so it's a `Wildcard` under that same parameter name; a concrete
+ * impl's target is its declared struct/enum, reusing the already-classified
+ * `targetTypeArguments` for its own nested slots. */
+function implTargetSlot(impl: RegisteredImpl): TargetArgSlot {
+  if (impl.isBlanket) {
+    return { kind: "Wildcard", paramName: impl.targetTypeName };
+  }
+  const nominalKind = impl.resolvedTargetType.kind;
+  if (nominalKind !== "StructType" && nominalKind !== "EnumType") {
+    return { kind: "Concrete", type: impl.resolvedTargetType };
+  }
+  return {
+    kind: "Nominal",
+    nominalKind,
+    name: impl.targetTypeName,
+    typeArguments: impl.targetTypeArguments,
+  };
+}
+
 /**
- * Two impls of the same trait overlap when either is blanket (a blanket
- * impl claims the trait for every type, regardless of its own bound - the
- * bound is a well-formedness constraint on the impl body, not something
- * overlap-checking consults) or when they target the exact same concrete
- * type.
+ * Two impls of the same trait overlap when their own trait-argument
+ * patterns overlap, and (either is blanket, or they target the same base
+ * type with overlapping target-argument patterns too). The trait-argument
+ * check runs unconditionally, before the blanket bypass - a blanket impl's
+ * own trait argument can still rule out overlap with a differently-
+ * parameterized trait (`impl<T> Convert<str> for T` never conflicts with
+ * `impl Convert<i32> for P`), so a blanket impl isn't a free pass past it.
+ * One shared `bindings` map carries a matched generic parameter's binding
+ * from the trait-argument check into the target-argument check, since both
+ * patterns come from the same single impl's own generic scope
+ * (`impl<T> Convert<T> for Box<T>`'s `T` means the same thing in both
+ * positions) - two independently-fresh maps would let `T` resolve to a
+ * different concrete type on each side without the two ever being compared.
+ *
+ * The blanket branch unifies each side's own target (`implTargetSlot`) into
+ * that same shared map rather than returning `true` outright - a blanket
+ * impl's target parameter can itself be constrained by the trait-argument
+ * check just resolved (`impl<T> Convert<T> for T`'s `T` is both its trait
+ * argument and its target), so `impl Convert<i32> for P` only actually
+ * overlaps it when `P` is also consistent with that same binding, not
+ * merely because the trait arguments matched.
  */
 function implsOverlap(a: RegisteredImpl, b: RegisteredImpl): boolean {
-  return a.isBlanket || b.isBlanket || a.targetTypeName === b.targetTypeName;
+  const bindings = new Map<string, TaggedTargetArgSlot>();
+  if (!tagAndOverlap(a.traitTypeArguments, b.traitTypeArguments, bindings)) {
+    return false;
+  }
+  if (a.isBlanket || b.isBlanket) {
+    return slotsOverlap(
+      tagTargetArgSlot(implTargetSlot(a), "a"),
+      tagTargetArgSlot(implTargetSlot(b), "b"),
+      bindings,
+    );
+  }
+  if (a.targetTypeName !== b.targetTypeName) return false;
+  return tagAndOverlap(a.targetTypeArguments, b.targetTypeArguments, bindings);
 }
 
 function implOverlapKind(
@@ -3131,32 +3900,56 @@ function implOverlapKind(
  * generic parameter) resolves against that declaration's own bound list,
  * since no concrete impl can exist for a type that isn't concrete yet -
  * codegen forwards the enclosing function's own received witness for it
- * instead of looking one up here.
+ * instead of looking one up here. A parameterized request
+ * (`requestedTypeArguments` non-empty) must match one declared bound's own
+ * type arguments exactly (`declaredBoundMatchesRequestedArguments`) -
+ * supertrait implication is skipped in that case, since this codebase's
+ * trait model never carries type arguments through a supertrait chain
+ * (`RegisteredTrait.supertraits` is bare names), so there is nothing to
+ * check a parameterized request against past the directly declared bound.
  */
 function resolveTraitBound(
   ctx: AnalysisContext,
   type: Semantics.Type,
   traitName: string,
+  requestedTypeArguments: readonly Semantics.Type[] = [],
 ): Option<WitnessRef> {
   if (type.kind === "NamedType" && type.path.segments.length === 1) {
     const paramName = type.path.segments[0];
     if (paramName !== undefined && isDeclaredGenericParam(ctx, paramName)) {
-      return boundsImplyTrait(
-        ctx,
-        declaredGenericParamBounds(ctx, paramName),
-        traitName,
-      )
+      const satisfied =
+        requestedTypeArguments.length === 0
+          ? boundsImplyTrait(
+              ctx,
+              declaredGenericParamBounds(ctx, paramName),
+              traitName,
+            )
+          : declaredBoundMatchesRequestedArguments(
+              ctx,
+              paramName,
+              traitName,
+              requestedTypeArguments,
+            );
+      return satisfied
         ? some({
             kind: "Forwarded",
             traitName: bareTypeName(traitName),
             paramName,
+            typeArguments: requestedTypeArguments,
           })
         : none();
     }
   }
-  const primitiveWitness = resolvePrimitiveTraitBound(ctx, type, traitName);
-  if (isSome(primitiveWitness)) return primitiveWitness;
-  return resolveTraitBoundForTypeName(ctx, typeIdentity(type), traitName);
+  if (requestedTypeArguments.length === 0) {
+    const primitiveWitness = resolvePrimitiveTraitBound(ctx, type, traitName);
+    if (isSome(primitiveWitness)) return primitiveWitness;
+  }
+  return resolveTraitBoundForTypeName(
+    ctx,
+    type,
+    traitName,
+    requestedTypeArguments,
+  );
 }
 
 /** A primitive argument satisfies the prelude `PartialEq`/`Eq` (any type
@@ -3230,33 +4023,332 @@ function typeIdentity(type: Semantics.Type): string {
   return isNominalType(type) ? type.name : describeType(type);
 }
 
+/** A nominal type's own resolved type arguments, or none for anything else -
+ * the shape `findRegisteredImpl`'s new instantiation filter and
+ * `methodCandidates`' own filter both need from an already-resolved
+ * receiver/operand. */
+function nominalTypeArguments(type: Semantics.Type): readonly Semantics.Type[] {
+  return isNominalType(type) ? type.typeArguments : [];
+}
+
 /**
- * Finds the registered impl satisfying `typeName: traitName` - a concrete
- * registered impl, or a blanket impl whose own bound is satisfied (checked
- * recursively, since a blanket impl's own `A` in `impl<T: A> B for T` may
- * itself be satisfied only through another blanket impl). `typeName` is
- * always concrete here, so this never revisits `resolveTraitBound`'s
- * abstract-parameter case. Shared by `resolveTraitBoundForTypeName` (builds
- * a witness from the result) and `resolveAssociatedTypeViaSupertrait`
- * (reads the impl's own associated-type definitions instead).
+ * `typeIdentity` widened to fold in a nominal type's own type arguments
+ * (`Pair<i32>` vs `Pair<str>`) - used only where the type is already fully
+ * concrete (a call site's own resolved receiver/operand, or a non-blanket
+ * impl's own resolved target), never for `methodIndex`/`findRegisteredImpl`'s
+ * own grouping lookups, which must stay bare so a fully generic impl
+ * (`impl<T> Draw for Pair<T>`) is still found for every instantiation - see
+ * `TargetArgSlot`'s own `Wildcard` matching for that filter instead. Two
+ * distinct instantiations sharing one bare identity is exactly what let
+ * `impl Draw for Pair<i32>` and `impl Draw for Pair<str>` silently collapse
+ * onto the same emitted free function / hoisted witness const.
  */
+function monomorphizedTypeIdentity(type: Semantics.Type): string {
+  return isNominalType(type)
+    ? monomorphizeIdentity(type.name, type.typeArguments)
+    : typeIdentity(type);
+}
+
+/** Same as `monomorphizedTypeIdentity`, from an already-bare identity string
+ * plus a separately-carried type-argument list - the shape a `typeName`
+ * threaded through `findRegisteredImpl`'s own call chain comes in as. */
+function monomorphizeIdentity(
+  name: string,
+  typeArguments: readonly Semantics.Type[],
+): string {
+  if (typeArguments.length === 0) return name;
+  return `${name}<${typeArguments.map(monomorphizedTypeIdentity).join(",")}>`;
+}
+
+/** A `TargetArgSlot`'s own stable identity string, for keying an impl's own
+ * declared (not caller-requested) trait/target argument list - `Wildcard`
+ * stringifies to its bare `paramName` rather than a bound concrete type,
+ * which is fine for this purpose: coherence already treats any `Wildcard`
+ * slot as conflicting with every other impl of the same trait for the same
+ * target, so a `Wildcard`-bearing impl is always alone there and never needs
+ * to be told apart from a sibling. */
+function targetArgSlotIdentity(slot: TargetArgSlot): string {
+  switch (slot.kind) {
+    case "Wildcard":
+      return slot.paramName;
+    case "Concrete":
+      return monomorphizedTypeIdentity(slot.type);
+    case "Nominal":
+      return targetArgSlotsIdentity(slot.name, slot.typeArguments);
+    case "Array":
+      return `[${targetArgSlotIdentity(slot.elementType)};${slot.length}]`;
+    case "Reference":
+      return `${slot.mutable ? "&mut " : "&"}${targetArgSlotIdentity(slot.referent)}`;
+    default:
+      return assertNever(slot, `target arg slot: ${JSON.stringify(slot)}`);
+  }
+}
+
+/** `monomorphizeIdentity`'s own counterpart for a `TargetArgSlot` list - see
+ * `targetArgSlotIdentity`. */
+function targetArgSlotsIdentity(
+  name: string,
+  slots: readonly TargetArgSlot[],
+): string {
+  if (slots.length === 0) return name;
+  return `${name}<${slots.map(targetArgSlotIdentity).join(",")}>`;
+}
+
+/** Whether an impl's own resolved trait type arguments satisfy a bound's
+ * requested ones. An unparameterized request (`requested` empty - every
+ * existing caller except a real `T: Trait<Args>` bound, including every
+ * operator-trait dispatch built on the prelude's own `Rhs = Self`-defaulted
+ * traits) matches any impl regardless of its own declared arguments -
+ * operator dispatch always looks up its trait bare and separately validates
+ * the found impl's own `Rhs`/`Output`, so a real (non-default) `Rhs` impl
+ * must stay findable this way. Only a genuinely parameterized request does
+ * per-position matching, where a mismatch is a real non-match, not (unlike
+ * `implsOverlap`'s coherence use) something to conservatively treat as a
+ * conflict. `bindings` is caller-supplied so `findRegisteredImpl` can reuse
+ * one shared map across its own trait-argument and target-argument checks -
+ * both patterns come from the same single impl's own generic scope, so a
+ * shared parameter (`impl<T> Convert<T> for Box<T>`'s `T`) must resolve
+ * consistently across both checks, not independently per check. */
+function requestedTraitArgumentsSatisfied(
+  implSlots: readonly TargetArgSlot[],
+  requested: readonly Semantics.Type[],
+  bindings: Map<string, Semantics.Type>,
+): boolean {
+  if (requested.length === 0) return true;
+  if (implSlots.length !== requested.length) return false;
+  return implSlots.every((slot, i) => {
+    const type = requested[i];
+    return type !== undefined && slotSatisfiesType(slot, type, bindings);
+  });
+}
+
+/** `slotSatisfiesType`'s own comparison once `slot` isn't a `Wildcard` -
+ * split out for the same reason as `nonWildcardSlotsOverlap`. */
+function nonWildcardSlotSatisfiesType(
+  slot: TargetArgSlot,
+  type: Semantics.Type,
+  bindings: Map<string, Semantics.Type>,
+): boolean {
+  if (slot.kind === "Nominal") {
+    return (
+      type.kind === slot.nominalKind &&
+      type.name === slot.name &&
+      type.typeArguments.length === slot.typeArguments.length &&
+      slot.typeArguments.every((s, i) => {
+        const t = type.typeArguments[i];
+        return t !== undefined && slotSatisfiesType(s, t, bindings);
+      })
+    );
+  }
+  if (slot.kind === "Array") {
+    return (
+      type.kind === "ArrayType" &&
+      type.length === slot.length &&
+      slotSatisfiesType(slot.elementType, type.elementType, bindings)
+    );
+  }
+  if (slot.kind === "Reference") {
+    return (
+      type.kind === "ReferenceType" &&
+      type.mutable === slot.mutable &&
+      slotSatisfiesType(slot.referent, type.referent, bindings)
+    );
+  }
+  return slot.kind === "Concrete" && typesEqual(slot.type, type);
+}
+
+/** Whether `type` matches `slot`'s pattern - a repeated wildcard (the same
+ * impl-level generic parameter at more than one position, e.g. `Pair<T, T>`)
+ * must bind to the same concrete type at every occurrence, tracked in
+ * `bindings` across the whole call (threaded through nested `Nominal`
+ * recursion, and across sibling calls when a caller shares one map - see
+ * `requestedTraitArgumentsSatisfied`'s own doc comment). `type` is always
+ * fully concrete here (a real receiver/operand), unlike `slotsOverlap`'s
+ * two-pattern coherence comparison. */
+function slotSatisfiesType(
+  slot: TargetArgSlot,
+  type: Semantics.Type,
+  bindings: Map<string, Semantics.Type>,
+): boolean {
+  if (slot.kind === "Wildcard") {
+    const existing = bindings.get(slot.paramName);
+    if (existing === undefined) {
+      bindings.set(slot.paramName, type);
+      return true;
+    }
+    return typesEqual(existing, type);
+  }
+  return nonWildcardSlotSatisfiesType(slot, type, bindings);
+}
+
+/** The cycle-guard key for a `typeName<receiverTypeArguments>:
+ * traitName<requestedTypeArguments>` bound resolution, shared by
+ * `findRegisteredImpl` and `resolveTraitBoundForTypeName`'s own separate
+ * `visiting` sets. Folds in both instantiations, not just the bare names -
+ * a bare-name key would conflate a blanket impl's own chain from
+ * `Convert<i32>` to a required `Convert<str>` bound as "already visiting
+ * P::Convert" and reject it as cyclic, even though the two are unrelated
+ * instantiations and the chain is perfectly acyclic. */
+function boundVisitingKey(
+  receiverType: Semantics.Type,
+  traitName: string,
+  requestedTypeArguments: readonly Semantics.Type[],
+): string {
+  return `${monomorphizedTypeIdentity(receiverType)}::${monomorphizeIdentity(traitName, requestedTypeArguments)}`;
+}
+
+/** A blanket impl's own bound arguments (`impl<T: Convert<T>> Show for T`'s
+ * `Convert<T>`) are declared against the impl's own abstract parameters, not
+ * the concrete type being tested - substituting `receiverType` in for the
+ * target parameter (`impl.targetTypeName`, a blanket impl's own bare
+ * parameter name) is what makes a self-referential bound like this resolve
+ * against `impl Convert<P> for P` instead of futilely requesting the
+ * never-registered `Convert<T>`. `knownBindings` folds in whatever the
+ * caller's own trait-argument unification already bound - `impl<T:
+ * Convert<U>, U> Show<U> for T` resolving `P: Show<i32>` already binds `U`
+ * to `i32` from `Show`'s own argument; without carrying that binding here
+ * too, the recursive bound check would request the never-registered
+ * `Convert<U>` instead of `Convert<i32>`. */
+function substituteBlanketBoundArguments(
+  impl: RegisteredImpl,
+  receiverType: Semantics.Type,
+  typeArguments: readonly Semantics.Type[],
+  knownBindings: ReadonlyMap<string, Semantics.Type> = new Map(),
+): readonly Semantics.Type[] {
+  const bindings: GenericBindings = new Map(
+    [...knownBindings].map(([name, type]) => [name, { type, tokenId: 0 }]),
+  );
+  bindings.set(impl.targetTypeName, { type: receiverType, tokenId: 0 });
+  return typeArguments.map((arg) => substituteGenericType(arg, bindings));
+}
+
+/**
+ * Finds the registered impl satisfying `receiverType: traitName<requestedTypeArguments>`
+ * - a concrete registered impl, or a blanket impl whose own bound is
+ * satisfied (checked recursively, since a blanket impl's own `A` in
+ * `impl<T: A> B for T` may itself be satisfied only through another blanket
+ * impl). `receiverType` is always concrete here, so this never revisits
+ * `resolveTraitBound`'s abstract-parameter case. Shared by
+ * `resolveTraitBoundForTypeName` (builds a witness from the result) and
+ * `resolveAssociatedTypeViaSupertrait` (reads the impl's own
+ * associated-type definitions instead, always for an unparameterized
+ * trait). `outBindings`, when given, is filled with the winning candidate's
+ * own generic-parameter bindings (target plus any bound from its trait
+ * arguments) - a caller composing or substituting that impl's own further
+ * bounds needs these, not just the impl itself.
+ */
+/** `findRegisteredImpl`'s own non-blanket branch, split out to keep that
+ * function under the complexity cap - a concrete target match alone isn't
+ * enough, since the impl's own bound (`impl<T: Marker> Trait for
+ * Wrapper<T>`'s `T: Marker`) can still be false for the receiver's matched
+ * target argument. */
+function nonBlanketImplMatches(
+  ctx: AnalysisContext,
+  impl: RegisteredImpl,
+  typeName: string,
+  receiverTypeArguments: readonly Semantics.Type[],
+  bindings: Map<string, Semantics.Type>,
+): boolean {
+  return (
+    impl.targetTypeName === typeName &&
+    requestedTraitArgumentsSatisfied(
+      impl.targetTypeArguments,
+      receiverTypeArguments,
+      bindings,
+    ) &&
+    isSome(
+      resolveImplBoundWitnesses(
+        ctx,
+        bindings,
+        impl.genericParamBounds,
+        impl.implGenericParamPositions,
+      ),
+    )
+  );
+}
+
 function findRegisteredImpl(
   ctx: AnalysisContext,
-  typeName: string,
+  receiverType: Semantics.Type,
   traitName: string,
+  requestedTypeArguments: readonly Semantics.Type[] = [],
   visiting: ReadonlySet<string> = new Set(),
+  outBindings?: Map<string, Semantics.Type>,
 ): RegisteredImpl | undefined {
-  const key = `${typeName}::${traitName}`;
+  const typeName = typeIdentity(receiverType);
+  const receiverTypeArguments = nominalTypeArguments(receiverType);
+  const key = boundVisitingKey(receiverType, traitName, requestedTypeArguments);
   if (visiting.has(key)) return undefined;
   const nextVisiting = new Set(visiting).add(key);
-  return ctx.implRegistry.find((impl) => {
-    if (impl.traitName !== traitName) return false;
-    if (!impl.isBlanket) return impl.targetTypeName === typeName;
-    return impl.blanketBounds.every(
-      (bound) =>
-        findRegisteredImpl(ctx, typeName, bound, nextVisiting) !== undefined,
-    );
-  });
+  for (const impl of ctx.implRegistry) {
+    if (impl.traitName !== traitName) continue;
+    const bindings = new Map<string, Semantics.Type>();
+    if (
+      !requestedTraitArgumentsSatisfied(
+        impl.traitTypeArguments,
+        requestedTypeArguments,
+        bindings,
+      )
+    ) {
+      continue;
+    }
+    const matched = !impl.isBlanket
+      ? nonBlanketImplMatches(
+          ctx,
+          impl,
+          typeName,
+          receiverTypeArguments,
+          bindings,
+        )
+      : blanketImplMatches(ctx, impl, receiverType, bindings, nextVisiting);
+    if (!matched) continue;
+    for (const [name, type] of bindings) outBindings?.set(name, type);
+    return impl;
+  }
+  return undefined;
+}
+
+/** `findRegisteredImpl`'s own blanket-impl branch, split out to keep that
+ * function under the complexity cap. A blanket impl's own target is its own
+ * bare parameter (`T` in `impl<T> Convert<T> for T`) - it must unify with
+ * `receiverType` through the same `bindings` the trait-argument check
+ * already populated, or a trait argument bound to something other than the
+ * receiver (`impl<T> Convert<T> for T` against `P: Convert<i32>`, `P !=
+ * i32`) is wrongly accepted since an unbound target was never checked
+ * against anything. `bindings` is also carried into each recursively
+ * checked bound (`substituteBlanketBoundArguments`'s own `knownBindings`) -
+ * see that function's doc comment for why. */
+function blanketImplMatches(
+  ctx: AnalysisContext,
+  impl: RegisteredImpl,
+  receiverType: Semantics.Type,
+  bindings: Map<string, Semantics.Type>,
+  visiting: ReadonlySet<string>,
+): boolean {
+  if (
+    !slotSatisfiesType(
+      { kind: "Wildcard", paramName: impl.targetTypeName },
+      receiverType,
+      bindings,
+    )
+  ) {
+    return false;
+  }
+  return impl.blanketBounds.every(
+    (bound) =>
+      findRegisteredImpl(
+        ctx,
+        receiverType,
+        bound.name,
+        substituteBlanketBoundArguments(
+          impl,
+          receiverType,
+          bound.typeArguments,
+          bindings,
+        ),
+        visiting,
+      ) !== undefined,
+  );
 }
 
 /** The concrete type's own witness for each of a blanket impl's own bounds
@@ -3264,20 +4356,28 @@ function findRegisteredImpl(
  * mirrors `findRegisteredImpl`'s cycle guard, since a bound may itself be
  * satisfied only through another blanket impl. `undefined` only on a
  * genuine cycle; by the time this runs, `findRegisteredImpl` has already
- * confirmed every bound is satisfied, so an ordinary (non-cyclic) blanket
- * chain always composes successfully here. */
+ * confirmed every bound is satisfied (via the identical substitution this
+ * applies), so an ordinary (non-cyclic) blanket chain always composes
+ * successfully here. */
 function composeBlanketBoundWitnesses(
   ctx: AnalysisContext,
-  typeName: string,
-  blanketBounds: readonly string[],
+  receiverType: Semantics.Type,
+  impl: RegisteredImpl,
+  bindings: ReadonlyMap<string, Semantics.Type>,
   visiting: ReadonlySet<string>,
 ): readonly WitnessRef[] | undefined {
   const witnesses: WitnessRef[] = [];
-  for (const bound of blanketBounds) {
+  for (const bound of impl.blanketBounds) {
     const witness = resolveTraitBoundForTypeName(
       ctx,
-      typeName,
-      bound,
+      receiverType,
+      bound.name,
+      substituteBlanketBoundArguments(
+        impl,
+        receiverType,
+        bound.typeArguments,
+        bindings,
+      ),
       visiting,
     );
     if (!isSome(witness)) return undefined;
@@ -3296,42 +4396,84 @@ function composeBlanketBoundWitnesses(
  * satisfiability. */
 function resolveTraitBoundForTypeName(
   ctx: AnalysisContext,
-  typeName: string,
+  receiverType: Semantics.Type,
   traitName: string,
+  requestedTypeArguments: readonly Semantics.Type[] = [],
   visiting: ReadonlySet<string> = new Set(),
 ): Option<WitnessRef> {
-  const key = `${typeName}::${traitName}`;
+  const typeName = typeIdentity(receiverType);
+  const key = boundVisitingKey(receiverType, traitName, requestedTypeArguments);
   if (visiting.has(key)) return none();
   const nextVisiting = new Set(visiting).add(key);
-  const impl = findRegisteredImpl(ctx, typeName, traitName);
+  const outBindings = new Map<string, Semantics.Type>();
+  const impl = findRegisteredImpl(
+    ctx,
+    receiverType,
+    traitName,
+    requestedTypeArguments,
+    new Set(),
+    outBindings,
+  );
   if (impl === undefined) return none();
+  const monomorphizedTypeId = monomorphizedTypeIdentity(receiverType);
+  // Keyed off the matched impl's own declared trait arguments, not the
+  // caller's (possibly empty/unspecified) request - `Tag<i32>` and
+  // `Tag<str>` need to be two distinct hoisted-witness identities for the
+  // same target, since coherence allows a concrete type to implement the
+  // same parameterized trait more than once, and a plain concrete-receiver
+  // call site (`p.tag()`) never has a specific request to fall back on.
+  const traitInstanceId = targetArgSlotsIdentity(
+    traitName,
+    impl.traitTypeArguments,
+  );
   if (impl.isBlanket) {
     const boundWitnesses = composeBlanketBoundWitnesses(
       ctx,
-      typeName,
-      impl.blanketBounds,
+      receiverType,
+      impl,
+      outBindings,
       nextVisiting,
     );
     if (boundWitnesses === undefined) return none();
     return some({
       kind: "Composed",
       traitName: bareTypeName(traitName),
-      traitId: traitName,
+      traitId: traitInstanceId,
       typeName: bareTypeName(typeName),
-      typeId: typeName,
+      typeId: monomorphizedTypeId,
       implTokenId: impl.tokenId,
-      methods: witnessMethods(ctx, traitName, typeName),
+      methods: witnessMethods(
+        ctx,
+        traitName,
+        receiverType,
+        requestedTypeArguments,
+      ),
       boundWitnesses,
     });
   }
+  // A non-blanket impl's free function is emitted once under its own
+  // declared target pattern (`Wrapper<T>` for `impl<T> Clone for
+  // Wrapper<T>`), shared across every instantiation - keying `typeId` by
+  // the receiver's own concrete args instead (`Wrapper<Num>`) would mismatch
+  // that reservation for any impl whose target isn't fully concrete, the
+  // same collision class the trait-argument fold above already closed.
+  const implTargetInstanceId = targetArgSlotsIdentity(
+    typeName,
+    impl.targetTypeArguments,
+  );
   return some({
     kind: "Impl",
     traitName: bareTypeName(traitName),
-    traitId: traitName,
+    traitId: traitInstanceId,
     typeName: bareTypeName(typeName),
-    typeId: typeName,
+    typeId: implTargetInstanceId,
     implTokenId: impl.tokenId,
-    methods: witnessMethods(ctx, traitName, typeName),
+    methods: witnessMethods(
+      ctx,
+      traitName,
+      receiverType,
+      requestedTypeArguments,
+    ),
   });
 }
 
@@ -3353,25 +4495,32 @@ function resolveAssociatedTypeViaSupertrait(
 ): Semantics.Type | undefined {
   const result = resolveAssociatedTypeTrait(ctx, [traitName], assocName);
   if (result.kind !== "Found") return undefined;
-  const impl = findRegisteredImpl(
-    ctx,
-    typeIdentity(targetType),
-    result.traitName,
-  );
+  const impl = findRegisteredImpl(ctx, targetType, result.traitName, []);
   return impl?.associatedTypeDefs.get(assocName);
 }
 
-/** Every method a `typeName: traitId` witness carries, flattened across
- * `traitId`'s supertrait chain (cycle-guarded, deduplicated by method name -
- * the nearest trait in the chain wins). A supertrait method's `source`
- * consults *that* supertrait's own impl for `typeName`. */
+/** Every method a `receiverType: traitId<requestedTypeArguments>` witness
+ * carries, flattened across `traitId`'s supertrait chain (cycle-guarded,
+ * deduplicated by method name - the nearest trait in the chain wins). A
+ * supertrait method's `source` consults *that* supertrait's own impl for
+ * `receiverType` - always requested unparameterized, since this codebase's
+ * trait model doesn't carry type arguments through a supertrait chain (see
+ * `boundsImplyTrait`'s own doc comment). */
 function witnessMethods(
   ctx: AnalysisContext,
   traitId: string,
-  typeName: string,
+  receiverType: Semantics.Type,
+  requestedTypeArguments: readonly Semantics.Type[] = [],
 ): readonly WitnessMethod[] {
   const byName = new Map<string, WitnessMethod>();
-  collectWitnessMethods(ctx, traitId, typeName, new Set(), byName);
+  collectWitnessMethods(
+    ctx,
+    traitId,
+    receiverType,
+    requestedTypeArguments,
+    new Set(),
+    byName,
+  );
   return [...byName.values()];
 }
 
@@ -3384,15 +4533,17 @@ function witnessMethods(
  * case to recover from. */
 function blanketMethodBoundWitnesses(
   ctx: AnalysisContext,
-  typeName: string,
+  receiverType: Semantics.Type,
   isImplProvided: boolean,
   impl: RegisteredImpl | undefined,
+  bindings: ReadonlyMap<string, Semantics.Type>,
 ): Option<readonly WitnessRef[]> {
   if (!isImplProvided || !impl?.isBlanket) return none();
   const boundWitnesses = composeBlanketBoundWitnesses(
     ctx,
-    typeName,
-    impl.blanketBounds,
+    receiverType,
+    impl,
+    bindings,
     new Set(),
   );
   assert(
@@ -3402,13 +4553,80 @@ function blanketMethodBoundWitnesses(
   return some(boundWitnesses);
 }
 
+/** `WitnessMethod.blanketImplScopeId` - `some(...)` under the same condition
+ * as `blanketMethodBoundWitnesses`, so the two always agree on whether a
+ * method is blanket-provided. */
+function resolveBlanketImplScopeId(
+  traitId: string,
+  isImplProvided: boolean,
+  impl: RegisteredImpl | undefined,
+): Option<string> {
+  if (!isImplProvided || !impl?.isBlanket) return none();
+  return some(targetArgSlotsIdentity(traitId, impl.traitTypeArguments));
+}
+
+/** `WitnessMethod.concreteBoundWitnesses` - the mirror case to
+ * `blanketMethodBoundWitnesses` for a *concrete, generic* impl's own bound
+ * (`impl<T: Marker> Show for Wrapper<T>`'s `T: Marker`). Gated on
+ * `implGenericParamPositions` being non-empty, not just `isImplProvided`,
+ * so an ordinary non-generic impl (no bounds to ever thread) keeps its
+ * simpler direct slot rather than an always-empty closure wrapper. */
+function concreteMethodBoundWitnesses(
+  ctx: AnalysisContext,
+  isImplProvided: boolean,
+  impl: RegisteredImpl | undefined,
+  bindings: ReadonlyMap<string, Semantics.Type>,
+): Option<readonly WitnessRef[]> {
+  if (
+    !isImplProvided ||
+    impl === undefined ||
+    impl.isBlanket ||
+    impl.implGenericParamPositions.size === 0
+  ) {
+    return none();
+  }
+  const boundWitnesses = resolveImplBoundWitnesses(
+    ctx,
+    bindings,
+    impl.genericParamBounds,
+    impl.implGenericParamPositions,
+  );
+  assert(
+    isSome(boundWitnesses),
+    "ICE: a concrete impl's own bounds failed to resolve after findRegisteredImpl already matched it against this receiver",
+  );
+  return boundWitnesses;
+}
+
+/** `WitnessMethod.concreteImplScopeId` - `some(...)` for a method a
+ * *concrete* impl provides, the mirror case to `resolveBlanketImplScopeId`. */
+function resolveConcreteImplScopeId(
+  receiverType: Semantics.Type,
+  traitId: string,
+  isImplProvided: boolean,
+  impl: RegisteredImpl | undefined,
+): Option<string> {
+  if (!isImplProvided || impl === undefined || impl.isBlanket) return none();
+  return some(
+    `${targetArgSlotsIdentity(typeIdentity(receiverType), impl.targetTypeArguments)}#${targetArgSlotsIdentity(traitId, impl.traitTypeArguments)}`,
+  );
+}
+
 /** Walks one supertrait DAG, filling `byName`. `seen` and `byName` are shared
  * across the whole walk - not copied per branch - so a diamond's shared
- * ancestor is visited (and its methods recorded) exactly once. */
+ * ancestor is visited (and its methods recorded) exactly once.
+ * `requestedTypeArguments` is only ever passed for `traitId` itself, the
+ * witness's own directly-requested trait - re-deriving it with an empty
+ * request here (instead of the specific instantiation already matched
+ * upstream, e.g. `Tag<str>`) could silently pick an earlier, different
+ * impl of the same bare trait (`Tag<i32>`) and record the wrong method
+ * source/scope. Never threaded into the supertrait recursion below, since a
+ * supertrait's own bound is unparameterized here regardless. */
 function collectWitnessMethods(
   ctx: AnalysisContext,
   traitId: string,
-  typeName: string,
+  receiverType: Semantics.Type,
+  requestedTypeArguments: readonly Semantics.Type[],
   seen: Set<string>,
   byName: Map<string, WitnessMethod>,
 ): void {
@@ -3416,7 +4634,15 @@ function collectWitnessMethods(
   seen.add(traitId);
   const trait = ctx.traitRegistry.get(traitId);
   if (trait === undefined) return;
-  const impl = findRegisteredImpl(ctx, typeName, traitId);
+  const bindings = new Map<string, Semantics.Type>();
+  const impl = findRegisteredImpl(
+    ctx,
+    receiverType,
+    traitId,
+    requestedTypeArguments,
+    new Set(),
+    bindings,
+  );
   const bareTrait = bareTypeName(traitId);
   for (const method of trait.methods) {
     if (byName.has(method.name)) continue;
@@ -3434,15 +4660,33 @@ function collectWitnessMethods(
       definingTraitId: traitId,
       blanketBoundWitnesses: blanketMethodBoundWitnesses(
         ctx,
-        typeName,
+        receiverType,
         isImplProvided,
         impl,
+        bindings,
+      ),
+      blanketImplScopeId: resolveBlanketImplScopeId(
+        traitId,
+        isImplProvided,
+        impl,
+      ),
+      concreteImplScopeId: resolveConcreteImplScopeId(
+        receiverType,
+        traitId,
+        isImplProvided,
+        impl,
+      ),
+      concreteBoundWitnesses: concreteMethodBoundWitnesses(
+        ctx,
+        isImplProvided,
+        impl,
+        bindings,
       ),
       ownWitnessParamCount,
     });
   }
   for (const supertrait of trait.supertraits) {
-    collectWitnessMethods(ctx, supertrait, typeName, seen, byName);
+    collectWitnessMethods(ctx, supertrait, receiverType, [], seen, byName);
   }
 }
 
@@ -3678,6 +4922,31 @@ function firstNonObjectSafeSupertrait(
   return none();
 }
 
+/** `RegisteredTrait.supertraitArgs` - each supertrait bound's own written
+ * type arguments (`trait Ord<T>: Eq<T>`'s `[T]`), resolved under the
+ * caller's already-pushed generic scope so a reference to this trait's own
+ * parameter resolves to that parameter's `NamedType`, left for
+ * `checkSupertraitCompleteness` to substitute per impl. Keyed by the same
+ * resolved supertrait id `RegisteredTrait.supertraits` carries. */
+function resolveSupertraitArgs(
+  ctx: AnalysisContext,
+  item: Parser.TraitDecl,
+  scope: StructuralScope,
+): ReadonlyMap<string, readonly Semantics.Type[]> {
+  const result = new Map<string, readonly Semantics.Type[]>();
+  for (const bound of item.supertraits) {
+    if (bound.kind !== "PathTraitBound") continue;
+    const bareName = bound.path.segments.at(-1) ?? "";
+    result.set(
+      resolveTraitIdentity(bareName, scope),
+      bound.typeArguments.map((arg) =>
+        resolveSlice1Type(ctx, arg, arg.tokenId),
+      ),
+    );
+  }
+  return result;
+}
+
 /**
  * Registers every `trait`'s own name and supertraits into `ctx.traitRegistry`
  * first, then validates every supertrait reference in a second pass over
@@ -3691,45 +4960,77 @@ function registerTraits(
   ctx: AnalysisContext,
   allItems: readonly DepthedItem[],
 ): void {
-  const traitItems: Parser.TraitDecl[] = [];
+  const traitItems: { item: Parser.TraitDecl; scope: StructuralScope }[] = [];
   for (const { item, scope } of allItems) {
     if (item.kind !== "Trait") continue;
     const decl = buildTraitDecl(item);
+    pushGenericParams(ctx, item.generics, item.whereClause);
+    // A default naming `Self` (`trait Add<Rhs = Self>`) needs this trait's
+    // own abstract Self pushed to resolve to the symbolic `NamedType{Self}`
+    // placeholder `resolveTraitMethodsQuiet` already produces for method
+    // signatures - without it, `resolveSelfNamedType` sees no SelfContext at
+    // all and silently degrades to the `UnitType` error-recovery placeholder.
+    pushSelfContext(ctx, {
+      kind: "Trait",
+      traitName: decl.traitId,
+      associatedTypes: decl.associatedTypes,
+    });
+    const genericParamDefaults = resolveGenericParamDefaults(
+      ctx,
+      item.generics,
+    );
+    popSelfContext(ctx);
+    const supertraitArgs = resolveSupertraitArgs(ctx, item, scope);
+    popGenericParams(ctx);
     ctx.traitRegistry.set(decl.traitId, {
       supertraits: decl.supertraits.map((name) =>
         resolveTraitIdentity(name, scope),
       ),
+      supertraitArgs,
       methods: decl.methods,
       associatedTypes: decl.associatedTypes,
       genericParams: genericParamNames(item.generics),
+      genericParamDefaults,
       notObjectSafe: ownSelfArgMethod(item),
     });
-    traitItems.push(item);
+    traitItems.push({ item, scope });
   }
-  for (const item of traitItems) {
-    validateTraitBoundNames(ctx, item.supertraits);
+  for (const { item, scope } of traitItems) {
+    validateTraitBoundNames(ctx, item.supertraits, (name) =>
+      resolveTraitIdentity(name, scope),
+    );
   }
   // A third pass, once every trait name is registered, resolves each method's
   // real signature (quietly - `analyzeTraitDecl` re-resolves and owns the
   // diagnostics) so a call site or `dyn Trait` can read a trait method's
   // actual return type instead of `buildTraitDecl`'s unit placeholder.
-  for (const item of traitItems) {
+  for (const { item, scope } of traitItems) {
     const traitId = scopedTypeName(item.name.tokenId, item.name.text);
     const existing = ctx.traitRegistry.get(traitId);
     if (existing === undefined) continue;
     ctx.traitRegistry.set(traitId, {
       ...existing,
-      methods: resolveTraitMethodsQuiet(ctx, item, traitId),
+      methods: resolveTraitMethodsQuiet(ctx, item, traitId, scope),
     });
   }
   propagateSupertraitObjectSafety(ctx);
 }
 
+/** `scope` is the `StructuralScope` at this trait's own declaration point -
+ * live `ctx.frames` don't yet reflect a nested trait's own block scope this
+ * early in `analyze()` (no block has actually been walked yet), so a bound
+ * naming a trait declared in that same nested scope (`fn f<T: Local>(...)`
+ * inside a nested `trait Container` sharing a block with a nested `trait
+ * Local`) must resolve against `scope` instead of `lookupTrait`, or it
+ * silently resolves to an unrelated outer same-named trait (or nothing). */
 function resolveTraitMethodsQuiet(
   ctx: AnalysisContext,
   item: Parser.TraitDecl,
   traitId: string,
+  scope: StructuralScope,
 ): readonly Semantics.TraitMethod[] {
+  const resolveTraitName = (name: string): string =>
+    resolveTraitIdentity(name, scope);
   pushSelfContext(ctx, {
     kind: "Trait",
     traitName: traitId,
@@ -3746,6 +5047,7 @@ function resolveTraitMethodsQuiet(
             decl,
             false,
             resolveSlice1Type,
+            resolveTraitName,
           ),
         ];
       }
@@ -3758,6 +5060,7 @@ function resolveTraitMethodsQuiet(
             decl.signature,
             true,
             resolveSlice1Type,
+            resolveTraitName,
           ),
         ];
       }
@@ -3856,11 +5159,19 @@ function structuralStructOrEnumType(
 ): Semantics.Type | undefined {
   const structTokenId = scope.structs.get(name);
   if (structTokenId !== undefined) {
-    return { kind: "StructType", name: scopedTypeName(structTokenId, name) };
+    return {
+      kind: "StructType",
+      name: scopedTypeName(structTokenId, name),
+      typeArguments: [],
+    };
   }
   const enumTokenId = scope.enums.get(name);
   if (enumTokenId !== undefined) {
-    return { kind: "EnumType", name: scopedTypeName(enumTokenId, name) };
+    return {
+      kind: "EnumType",
+      name: scopedTypeName(enumTokenId, name),
+      typeArguments: [],
+    };
   }
   return undefined;
 }
@@ -3971,6 +5282,200 @@ function reportExtraAssociatedTypes(
   }
 }
 
+/** `resolveSlice1Type` resolves an unbound impl-level generic parameter to
+ * its own abstract `NamedType`, wherever it appears - including nested
+ * inside a further struct/enum instantiation - so recognizing that shape is
+ * enough to recurse correctly without a separate parser-level walk. */
+function classifyTargetArgSlot(
+  resolvedType: Semantics.Type,
+  implGenericNames: ReadonlySet<string>,
+): TargetArgSlot {
+  if (
+    resolvedType.kind === "NamedType" &&
+    resolvedType.path.segments.length === 1
+  ) {
+    const name = resolvedType.path.segments[0];
+    if (name !== undefined && implGenericNames.has(name)) {
+      return { kind: "Wildcard", paramName: name };
+    }
+  }
+  if (resolvedType.kind === "StructType" || resolvedType.kind === "EnumType") {
+    return {
+      kind: "Nominal",
+      nominalKind: resolvedType.kind,
+      name: resolvedType.name,
+      typeArguments: resolvedType.typeArguments.map((arg) =>
+        classifyTargetArgSlot(arg, implGenericNames),
+      ),
+    };
+  }
+  if (resolvedType.kind === "ArrayType") {
+    return {
+      kind: "Array",
+      length: resolvedType.length,
+      elementType: classifyTargetArgSlot(
+        resolvedType.elementType,
+        implGenericNames,
+      ),
+    };
+  }
+  if (resolvedType.kind === "ReferenceType") {
+    return {
+      kind: "Reference",
+      mutable: resolvedType.mutable,
+      referent: classifyTargetArgSlot(resolvedType.referent, implGenericNames),
+    };
+  }
+  return { kind: "Concrete", type: resolvedType };
+}
+
+/** The shared resolver behind both `resolveTargetTypeArguments` (an impl's
+ * own `Pair<...>` target) and an impl's `TraitRef<...>` - either one's raw
+ * argument list, resolved into `TargetArgSlot`s under the impl's own
+ * generic-param scope (must be called with that scope already pushed). */
+function resolveTypeArgumentSlots(
+  ctx: AnalysisContext,
+  typeArguments: readonly Parser.Type[],
+  implGenericNames: ReadonlySet<string>,
+): readonly TargetArgSlot[] {
+  return typeArguments.map((arg) =>
+    classifyTargetArgSlot(
+      resolveSlice1Type(ctx, arg, arg.tokenId),
+      implGenericNames,
+    ),
+  );
+}
+
+function resolveTargetTypeArguments(
+  ctx: AnalysisContext,
+  targetType: Parser.Type,
+  implGenericNames: ReadonlySet<string>,
+): readonly TargetArgSlot[] {
+  if (targetType.kind !== "NamedType") return [];
+  return resolveTypeArgumentSlots(
+    ctx,
+    targetType.typeArguments,
+    implGenericNames,
+  );
+}
+
+/** Fills in any trailing trait generic parameter(s) an impl's own trait
+ * reference omits (`impl Thing for P` against `trait Thing<T = i32>`) with
+ * the trait's own declared default, classified back into a `TargetArgSlot`
+ * under this impl's own generic names - the `TargetArgSlot` analog of
+ * `materializeTrailingGenericDefaults`, needed so `requestedTraitArgumentsSatisfied`
+ * sees the same argument-count identity for `impl Thing for P` as it would
+ * for an explicit `impl Thing<i32> for P`, instead of rejecting a real
+ * `Thing<i32>` bound against this impl (or, symmetrically, letting an
+ * unparameterized `Thing` request wrongly match a *different* impl's
+ * explicit `Thing<str>`) on an argument-count mismatch that the default
+ * alone resolves. */
+function materializeTraitTypeArgumentSlots(
+  ctx: AnalysisContext,
+  traitId: string,
+  suppliedSlots: readonly TargetArgSlot[],
+  implGenericNames: ReadonlySet<string>,
+  tokenId: number,
+): readonly TargetArgSlot[] {
+  const trait = ctx.traitRegistry.get(traitId);
+  if (
+    trait === undefined ||
+    suppliedSlots.length >= trait.genericParams.length
+  ) {
+    return suppliedSlots;
+  }
+  const bindings: GenericBindings = new Map();
+  for (const [i, name] of trait.genericParams
+    .slice(0, suppliedSlots.length)
+    .entries()) {
+    const slot = suppliedSlots[i];
+    if (slot !== undefined) {
+      bindings.set(name, {
+        type: resolveTargetArgSlotType(slot, new Map(), tokenId),
+        tokenId,
+      });
+    }
+  }
+  const result: TargetArgSlot[] = [...suppliedSlots];
+  for (const name of trait.genericParams.slice(suppliedSlots.length)) {
+    const binding = bindingOrDefault(
+      name,
+      trait.genericParamDefaults,
+      bindings,
+      tokenId,
+    );
+    if (binding === undefined) break;
+    result.push(classifyTargetArgSlot(binding.type, implGenericNames));
+  }
+  return result;
+}
+
+/** The facts `registerOneImpl` needs resolved under the impl's own pushed
+ * generic-param scope: each associated-type definition, and the target's
+ * and trait ref's own type-argument slots. */
+function resolveImplRegistrationFacts(
+  ctx: AnalysisContext,
+  item: Parser.ImplDecl,
+  traitId: string,
+  declaredAssocNames: readonly string[],
+): {
+  readonly associatedTypeDefs: Map<string, Semantics.Type>;
+  readonly targetTypeArguments: readonly TargetArgSlot[];
+  readonly traitTypeArguments: readonly TargetArgSlot[];
+  readonly blanketBounds: readonly Semantics.BoundTraitRef[];
+  readonly resolvedTargetType: Semantics.Type;
+} {
+  const associatedTypeDefs = new Map<string, Semantics.Type>();
+  for (const alias of item.items) {
+    if (alias.kind !== "TypeAlias" || !isSome(alias.value)) continue;
+    if (!declaredAssocNames.includes(alias.name.text)) continue;
+    associatedTypeDefs.set(
+      alias.name.text,
+      resolveSlice1Type(ctx, alias.value.value, alias.value.value.tokenId),
+    );
+  }
+  const implGenericNames = new Set(genericParamNames(item.generics));
+  const targetTypeArguments = resolveTargetTypeArguments(
+    ctx,
+    item.type,
+    implGenericNames,
+  );
+  const traitTypeArguments = isSome(item.traitRef)
+    ? materializeTraitTypeArgumentSlots(
+        ctx,
+        traitId,
+        resolveTypeArgumentSlots(
+          ctx,
+          item.traitRef.value.typeArguments,
+          implGenericNames,
+        ),
+        implGenericNames,
+        item.traitRef.value.tokenId,
+      )
+    : [];
+  // A blanket impl's own bound (`impl<T: Convert<i32>> Show for T`) can be
+  // parameterized too - resolved the same way an ordinary generic-param
+  // bound is, under this impl's own generic scope, so its type arguments
+  // (not just its bare trait name) carry through to satisfiability
+  // checking and witness composition.
+  const bareTargetName =
+    item.type.kind === "NamedType" ? item.type.path.segments.at(-1) : undefined;
+  const blanketBounds =
+    bareTargetName !== undefined
+      ? (resolveBoundNames(
+          ctx,
+          genericParamBoundNames(item.generics, item.whereClause),
+        ).get(bareTargetName) ?? [])
+      : [];
+  return {
+    associatedTypeDefs,
+    targetTypeArguments,
+    traitTypeArguments,
+    blanketBounds,
+    resolvedTargetType: resolveSlice1Type(ctx, item.type, item.type.tokenId),
+  };
+}
+
 /** Registers one `impl`'s coherence/completeness/visibility facts, or
  * `undefined` for a not-yet-handled shape (no trait, or a target that
  * doesn't resolve to any struct/enum in scope). Split out of `registerImpls`
@@ -3987,8 +5492,12 @@ function registerOneImpl(
   topLevelStructEnumNames: ReadonlySet<string>,
 ): RegisteredImpl | undefined {
   const decl = buildImplDecl(item);
-  validateGenericParamBounds(ctx, item.generics, item.whereClause);
+  pushGenericParams(ctx, item.generics, item.whereClause);
+  validateGenericParamBounds(ctx, item.generics, item.whereClause, (name) =>
+    resolveTraitIdentity(name, scope),
+  );
   validateGenericParamDefaults(ctx, item.generics);
+  popGenericParams(ctx);
   const traitRef = decl.traitRef;
   const bareTargetTypeName = decl.targetTypeName;
   if (!isSome(traitRef) || !isSome(bareTargetTypeName)) return undefined;
@@ -4006,25 +5515,48 @@ function registerOneImpl(
     );
     return undefined;
   }
-  const declaredNames = declaredAssociatedTypeNames(ctx, traitName);
-  pushGenericParams(ctx, item.generics, item.whereClause);
-  const associatedTypeDefs = new Map<string, Semantics.Type>();
-  for (const alias of item.items) {
-    if (alias.kind !== "TypeAlias" || !isSome(alias.value)) continue;
-    if (!declaredNames.includes(alias.name.text)) continue;
-    associatedTypeDefs.set(
-      alias.name.text,
-      resolveSlice1Type(ctx, alias.value.value, alias.value.value.tokenId),
+  if (isSome(item.traitRef)) {
+    checkTraitArgCount(
+      ctx,
+      traitName,
+      bareTraitName,
+      item.traitRef.value.typeArguments.length,
+      traitRef.value.tokenId,
     );
   }
+  const declaredNames = declaredAssociatedTypeNames(ctx, traitName);
+  pushGenericParams(ctx, item.generics, item.whereClause);
+  const {
+    associatedTypeDefs,
+    targetTypeArguments,
+    traitTypeArguments,
+    blanketBounds,
+    resolvedTargetType,
+  } = resolveImplRegistrationFacts(ctx, item, traitName, declaredNames);
+  const genericParamBounds = decl.isBlanket
+    ? new Map<string, readonly Semantics.BoundTraitRef[]>()
+    : resolveBoundNames(
+        ctx,
+        genericParamBoundNames(item.generics, item.whereClause),
+        (name) => resolveTraitIdentity(name, scope),
+      );
   popGenericParams(ctx);
+  const implGenericParamPositions = decl.isBlanket
+    ? new Map<string, readonly ImplParamPathStep[]>()
+    : implGenericParamTargetPositions(
+        new Set(genericParamNames(item.generics)),
+        item.type,
+      );
   const incoming: RegisteredImpl = {
     traitName,
+    traitTypeArguments,
     targetTypeName: targetTypeName.value,
+    targetTypeArguments,
+    resolvedTargetType,
     isBlanket: decl.isBlanket,
-    blanketBounds: decl.blanketBounds.map((bound) =>
-      resolveTraitIdentity(bound, scope),
-    ),
+    blanketBounds,
+    genericParamBounds,
+    implGenericParamPositions,
     providedMethods: decl.providedMethods,
     associatedTypeDefs,
     tokenId: item.tokenId,
@@ -4071,6 +5603,33 @@ function registerOneImpl(
   return incoming;
 }
 
+/** The concrete type arguments a supertrait bound actually requires for one
+ * specific impl of the child trait (`impl Ord<i32> for P` requiring
+ * `Eq<i32>`, not a bare `Eq`) - substitutes the child trait's own declared
+ * generic parameters, positionally bound to `impl`'s own resolved trait
+ * arguments, into the supertrait bound's declared (still-abstract)
+ * arguments. Empty when the supertrait bound itself takes none. */
+function substitutedSupertraitRequest(
+  trait: RegisteredTrait,
+  supertrait: string,
+  impl: RegisteredImpl,
+  tokenId: number,
+): readonly Semantics.Type[] {
+  const args = trait.supertraitArgs.get(supertrait);
+  if (args === undefined || args.length === 0) return [];
+  const bindings: GenericBindings = new Map();
+  for (const [i, name] of trait.genericParams.entries()) {
+    const slot = impl.traitTypeArguments[i];
+    if (slot !== undefined) {
+      bindings.set(name, {
+        type: resolveTargetArgSlotType(slot, new Map(), tokenId),
+        tokenId,
+      });
+    }
+  }
+  return args.map((arg) => substituteGenericType(arg, bindings));
+}
+
 /** A concrete impl missing one of its trait's own supertrait
  * implementations - deferred until every impl is registered, so
  * declaration order within the program doesn't matter. */
@@ -4079,11 +5638,23 @@ function checkSupertraitCompleteness(
   concreteImpls: readonly RegisteredImpl[],
 ): void {
   for (const impl of concreteImpls) {
-    for (const supertrait of ctx.traitRegistry.get(impl.traitName)
-      ?.supertraits ?? []) {
+    const trait = ctx.traitRegistry.get(impl.traitName);
+    if (trait === undefined) continue;
+    for (const supertrait of trait.supertraits) {
+      const requestedTypeArguments = substitutedSupertraitRequest(
+        trait,
+        supertrait,
+        impl,
+        impl.tokenId,
+      );
       if (
         isSome(
-          resolveTraitBoundForTypeName(ctx, impl.targetTypeName, supertrait),
+          resolveTraitBoundForTypeName(
+            ctx,
+            impl.resolvedTargetType,
+            supertrait,
+            requestedTypeArguments,
+          ),
         )
       ) {
         continue;
@@ -4329,7 +5900,11 @@ function analyzeEnum(
   item: Parser.EnumDecl,
 ): Semantics.EnumDecl {
   const scopedName = scopedTypeName(item.name.tokenId, item.name.text);
-  const enumType: Semantics.Type = { kind: "EnumType", name: scopedName };
+  const enumType: Semantics.Type = {
+    kind: "EnumType",
+    name: scopedName,
+    typeArguments: [],
+  };
   const seenVariantNames = new Set<string>();
   for (const variant of item.variants) {
     if (seenVariantNames.has(variant.name.text)) {
@@ -4722,10 +6297,37 @@ const NAMED_PATTERN_SPEC: PatternFieldSpec<Semantics.StructField> = {
 
 type PathRootedPattern = Parser.TupleStructPattern | Parser.StructPattern;
 
+/** Substitutes a struct/enum declaration's own generic parameters (in
+ * declaration order) for the scrutinee's real, concrete type arguments -
+ * `Wrapper { value }` against a `Wrapper<i32>` scrutinee binds `value` to
+ * `i32`, not the declaration's bare `T`. A non-generic declaration's
+ * scrutinee carries no type arguments, leaving every field untouched. */
+function substitutePatternFieldTypes<
+  F extends { readonly type: Semantics.Type },
+>(
+  fields: readonly F[],
+  declGenerics: readonly string[],
+  typeArguments: readonly Semantics.Type[],
+  tokenId: number,
+): readonly F[] {
+  if (typeArguments.length === 0) return fields;
+  const bindings: GenericBindings = new Map();
+  declGenerics.forEach((name, i) => {
+    const type = typeArguments[i];
+    if (type !== undefined) bindings.set(name, { type, tokenId });
+  });
+  return fields.map((field) => ({
+    ...field,
+    type: substituteGenericType(field.type, bindings),
+  }));
+}
+
 // A qualified path in enum-scrutinee position is genuinely supported syntax
 // now, so a wrong variant name/shape here gets its own real diagnostic
 // rather than falling back to `analyzePatternGuardrail`'s generic one.
-function resolveEnumVariantForPattern<F>(
+function resolveEnumVariantForPattern<
+  F extends { readonly type: Semantics.Type },
+>(
   ctx: AnalysisContext,
   pattern: PathRootedPattern,
   scrutineeType: Semantics.Type,
@@ -4756,7 +6358,16 @@ function resolveEnumVariantForPattern<F>(
     emitError(ctx, spec.notVariant(variantName), pattern.tokenId);
     return none();
   }
-  return fields;
+  const typeArguments =
+    scrutineeType.kind === "EnumType" ? scrutineeType.typeArguments : [];
+  return some(
+    substitutePatternFieldTypes(
+      fields.value,
+      enumDecl.value.generics,
+      typeArguments,
+      pattern.tokenId,
+    ),
+  );
 }
 
 interface ResolvedPatternFields<F> {
@@ -4784,7 +6395,9 @@ interface ResolvedPatternFields<F> {
  * path as a lookup key - otherwise a pattern naming an unrelated,
  * differently-typed struct that merely shares a field shape would silently
  * "resolve". */
-function resolvePlainStructForPattern<F>(
+function resolvePlainStructForPattern<
+  F extends { readonly type: Semantics.Type },
+>(
   ctx: AnalysisContext,
   pattern: PathRootedPattern,
   scrutineeType: Semantics.Type,
@@ -4811,13 +6424,21 @@ function resolvePlainStructForPattern<F>(
     emitError(ctx, spec.notPlainStruct(patternName), pattern.tokenId);
     return some({ fields: [], label, alreadyErrored: true });
   }
-  return some({ fields: fields.value, label, alreadyErrored: false });
+  const typeArguments =
+    scrutineeType.kind === "StructType" ? scrutineeType.typeArguments : [];
+  const substituted = substitutePatternFieldTypes(
+    fields.value,
+    structDecl.value.generics,
+    typeArguments,
+    pattern.tokenId,
+  );
+  return some({ fields: substituted, label, alreadyErrored: false });
 }
 
 /** Tries enum-variant resolution first, then plain-struct resolution -
  * mutually exclusive since a scrutinee type is never both `EnumType` and
  * `StructType`, so trying both never risks a duplicate diagnostic. */
-function resolvePatternFields<F>(
+function resolvePatternFields<F extends { readonly type: Semantics.Type }>(
   ctx: AnalysisContext,
   pattern: PathRootedPattern,
   scrutineeType: Semantics.Type,
@@ -5969,7 +7590,10 @@ function analyzeStruct(
   popGenericParams(ctx);
   return {
     ...item,
-    name: { ...item.name, type: { kind: "StructType", name: scopedName } },
+    name: {
+      ...item.name,
+      type: { kind: "StructType", name: scopedName, typeArguments: [] },
+    },
     generics: genericParamNames(item.generics),
     genericParamDefaults,
     attributes: item.attributes.map((attr) => analyzeAttribute(ctx, attr)),
@@ -5977,6 +7601,7 @@ function analyzeStruct(
     type: {
       kind: "StructType",
       name: scopedName,
+      typeArguments: [],
     },
   };
 }
@@ -6178,7 +7803,21 @@ function resolveNamedType(
     const prim = namedTypeToPrimitive(name);
     if (isSome(prim)) return prim.value;
     const resolved = lookupStructOrEnumType(ctx, name);
-    if (resolved !== undefined) return resolved;
+    if (resolved !== undefined) {
+      const suppliedTypeArguments = type.typeArguments.map((arg) =>
+        resolveSlice1Type(ctx, arg, arg.tokenId),
+      );
+      const decl = lookupStruct(ctx, name) ?? lookupEnum(ctx, name);
+      const typeArguments =
+        decl === undefined
+          ? suppliedTypeArguments
+          : materializeTrailingGenericDefaults(
+              decl,
+              suppliedTypeArguments,
+              fallbackTokenId,
+            );
+      return withTypeArguments(resolved, typeArguments);
+    }
   }
   if (type.path.segments.length === 2) {
     const projection = resolveProjectionType(ctx, type, fallbackTokenId);
@@ -6569,15 +8208,25 @@ function recordWitnessParams(
   whereClause: Option<Parser.WhereClause>,
 ): void {
   const params: WitnessParam[] = [];
-  for (const [paramName, traitNames] of genericParamBoundNames(
+  for (const [paramName, traitRefs] of genericParamBoundNames(
     generics,
     whereClause,
   )) {
-    for (const traitName of traitNames) {
+    for (const traitRef of traitRefs) {
+      const resolvedTraitName =
+        lookupTrait(ctx, traitRef.name) ?? traitRef.name;
+      const typeArguments = materializeTraitTypeArguments(
+        ctx,
+        resolvedTraitName,
+        traitRef.typeArguments.map((arg) =>
+          resolveSlice1Type(ctx, arg, arg.tokenId),
+        ),
+        0,
+      );
       params.push({
-        name: witnessParamName(paramName, traitName),
+        name: witnessParamName(paramName, traitRef.name, typeArguments),
         paramName,
-        traitName,
+        traitName: traitRef.name,
       });
     }
   }
@@ -6857,8 +8506,12 @@ function describeType(type: Semantics.Type): string {
     case "PrimitiveCharType":
       return "char";
     case "StructType":
-    case "EnumType":
-      return type.name.split("::").pop() ?? type.name;
+    case "EnumType": {
+      const bareName = type.name.split("::").pop() ?? type.name;
+      return type.typeArguments.length === 0
+        ? bareName
+        : `${bareName}<${type.typeArguments.map(describeType).join(", ")}>`;
+    }
     case "UnitType":
       return "()";
     case "ReferenceType":
@@ -6889,6 +8542,16 @@ function describeType(type: Semantics.Type): string {
     default:
       return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
+}
+
+/** A bound trait ref's diagnostic-facing name, including its own type
+ * arguments when parameterized (`Convert<i32>`), matching `describeType`'s
+ * `StructType`/`EnumType` rendering. */
+function describeTraitRef(ref: Semantics.BoundTraitRef): string {
+  const bareName = bareTypeName(ref.name);
+  return ref.typeArguments.length === 0
+    ? bareName
+    : `${bareName}<${ref.typeArguments.map(describeType).join(", ")}>`;
 }
 
 function checkNegLiteralRange(
@@ -7046,14 +8709,33 @@ function checkCoercedLiteralRange(
  * whole comparison, and the exhaustive switch forces a new payload-bearing
  * `Type` variant to be classified here rather than silently landing in it.
  */
+function typeArgumentsEqual(
+  a: readonly Semantics.Type[],
+  b: readonly Semantics.Type[],
+): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((arg, i) => {
+    const other = b[i];
+    return other !== undefined && typesEqual(arg, other);
+  });
+}
+
 // eslint-disable-next-line complexity -- Routing function over the full Type union
 function typesEqual(a: Semantics.Type, b: Semantics.Type): boolean {
   if (a.kind !== b.kind) return false;
   switch (a.kind) {
     case "StructType":
-      return b.kind === "StructType" && a.name === b.name;
+      return (
+        b.kind === "StructType" &&
+        a.name === b.name &&
+        typeArgumentsEqual(a.typeArguments, b.typeArguments)
+      );
     case "EnumType":
-      return b.kind === "EnumType" && a.name === b.name;
+      return (
+        b.kind === "EnumType" &&
+        a.name === b.name &&
+        typeArgumentsEqual(a.typeArguments, b.typeArguments)
+      );
     case "NamedType":
       return (
         b.kind === "NamedType" &&
@@ -7223,6 +8905,8 @@ function checkExpression(
       return analyzeMatchExpression(ctx, expr, type);
     case "Block":
       return analyzeBlock(ctx, expr, type);
+    case "StructExpression":
+      return analyzeStructExpression(ctx, expr, type);
     default:
       return analyzeExpression(ctx, expr);
   }
@@ -7526,6 +9210,7 @@ function recordBlanketDispatchTarget(
   ctx: AnalysisContext,
   tokenId: number,
   traitId: string,
+  traitScopeId: string,
   methodName: string,
   boundWitnesses: readonly WitnessRef[],
 ): void {
@@ -7534,7 +9219,7 @@ function recordBlanketDispatchTarget(
   ctx.methodTargetTable.set(tokenId, {
     kind: "free",
     typeId: trait,
-    scopeId: traitId,
+    scopeId: traitScopeId,
     typeName: trait,
     traitName: some(trait),
     methodName,
@@ -7561,27 +9246,51 @@ function recordOperatorDispatchTarget(
   tokenId: number,
 ): void {
   if (isNominalType(operandType)) {
-    const witness = resolveTraitBoundForTypeName(ctx, operandType.name, trait);
+    const witness = resolveTraitBoundForTypeName(ctx, operandType, trait, []);
     if (!isSome(witness)) return;
     if (witness.value.kind === "Composed") {
       recordBlanketDispatchTarget(
         ctx,
         tokenId,
         trait,
+        witness.value.traitId,
         methodName,
         witness.value.boundWitnesses,
       );
       return;
     }
+    // Only `Impl` is reachable here - `resolveTraitBoundForTypeName` never
+    // returns `Forwarded`/`Primitive` (a concrete nominal operand, already
+    // confirmed above, is neither an abstract bound nor a primitive), and
+    // `Composed` already returned - but the type is the general `WitnessRef`
+    // union, so narrow explicitly before reading `Impl`-only fields.
+    if (witness.value.kind !== "Impl") return;
+    const monomorphizedTypeId = monomorphizedTypeIdentity(operandType);
     ctx.methodTargetTable.set(tokenId, {
       kind: "free",
-      typeId: operandType.name,
-      scopeId: operandType.name,
+      typeId: monomorphizedTypeId,
+      scopeId: `${witness.value.typeId}#${witness.value.traitId}`,
       typeName: bareTypeName(operandType.name),
       traitName: some(bareTypeName(trait)),
       methodName,
       emitKind: "concrete",
     });
+    // The dispatched impl may itself be generic (`impl<T: Bound> Trait for
+    // Wrapper<T>`) - its own bound is only ever reachable through the
+    // operand, never a positional argument, so this resolves the same way
+    // a method call's own impl-level bound does. Filtered by trait origin,
+    // not just name - an inherent method or another trait's own same-named
+    // method would otherwise shadow the operator trait's own indexed
+    // method, silently dropping its bound witness.
+    const indexedMethod = methodCandidatesForNominalType(ctx, operandType).find(
+      (m) =>
+        m.name === methodName &&
+        m.origin.kind === "trait" &&
+        m.origin.traitId === trait,
+    );
+    if (indexedMethod !== undefined) {
+      recordMethodCallWitnesses(ctx, tokenId, indexedMethod, [], operandType);
+    }
     return;
   }
   const witnessName = abstractWitnessParamName(ctx, operandType, trait);
@@ -7662,12 +9371,16 @@ function abstractWitnessParamName(
     return witnessParamName("Self", bareTypeName(selfContext.traitName));
   }
   if (!isDeclaredGenericParam(ctx, name)) return undefined;
-  for (const bound of declaredGenericParamBounds(ctx, name)) {
+  for (const bound of declaredGenericParamBoundRefs(ctx, name)) {
     if (
-      bound === requiredTrait ||
-      boundsImplyTrait(ctx, [bound], requiredTrait)
+      bound.traitName === requiredTrait ||
+      boundsImplyTrait(ctx, [bound.traitName], requiredTrait)
     ) {
-      return witnessParamName(name, bareTypeName(bound));
+      return witnessParamName(
+        name,
+        bareTypeName(bound.traitName),
+        bound.typeArguments,
+      );
     }
   }
   return undefined;
@@ -8268,10 +9981,53 @@ interface IndexedMethod {
    * against one of them is arity-checked but not type-checked - unification
    * for method calls isn't implemented. */
   readonly genericParams: readonly string[];
-  /** Each `genericParams` name's own declared bound trait names (resolved
-   * `traitRegistry` keys) - `recordMethodCallWitnesses` uses this to resolve
-   * a witness per bound from the call site's own argument types. */
-  readonly genericParamBounds: ReadonlyMap<string, readonly string[]>;
+  /** Each `genericParams` name's own declared bounds -
+   * `recordMethodCallWitnesses` uses this to resolve a witness per bound
+   * from the call site's own argument types. Method-only - see
+   * `implOnlyGenericParamBounds` for why an impl-level bound can't share
+   * this map, even under a shadowed name. */
+  readonly genericParamBounds: ReadonlyMap<
+    string,
+    readonly Semantics.BoundTraitRef[]
+  >;
+  /** The enclosing impl's own declared bounds, excluding any name the
+   * method itself redeclares. Kept out of `genericParamBounds` rather than
+   * merged into it: a shadowed name (`impl<T: Marker> Trait for
+   * Wrapper<T> { fn f<T: Printable>(&self, x: T) }`'s two `T`s) would
+   * otherwise collide under one key, so an impl-level bound (receiver-
+   * position-only) got checked against whatever the shadowing method
+   * parameter bound instead. Empty for an inherent impl's own method (a
+   * separate, unfixed gap in `indexInherentMethods`'s pre-merged scope)
+   * and for a bare trait method with no enclosing impl. */
+  readonly implOnlyGenericParamBounds: ReadonlyMap<
+    string,
+    readonly Semantics.BoundTraitRef[]
+  >;
+  /** Each of the enclosing impl's own declared generic parameter names,
+   * mapped to its position within the impl's own *target* type-argument
+   * list (`impl<A, B> Pair<B, A>` maps `A -> 1`, `B -> 0`) - not
+   * necessarily the parameter's own declaration order. A bound on one of
+   * these is only ever reachable through `self`, never a directly-typed
+   * method argument, so `recordMethodCallWitnesses` resolves it from the
+   * receiver's own type arguments (in *this* position order) instead. */
+  readonly implGenericParamPositions: ImplGenericParamPositions;
+  /** The enclosing impl's own resolved target-argument slots (mirrors
+   * `RegisteredImpl.targetTypeArguments`) - `methodCandidatesForNominalType`
+   * filters `ctx.methodIndex`'s per-base-name bucket by this against the
+   * receiver's own actual type arguments, so `impl Draw for Pair<i32>` and
+   * `impl Draw for Pair<str>` (both indexed under bare `Pair`) resolve to
+   * the impl matching the receiver's own instantiation, not whichever
+   * entry happens to come first in registration order. */
+  readonly targetTypeArguments: readonly TargetArgSlot[];
+  /** The method's *own* declared generic parameter names only - never the
+   * enclosing impl/trait's, even though both share `genericParams`. A
+   * method can redeclare (shadow) an enclosing name (`impl<T> Pair<T> { fn
+   * get<T>(&self, x: T) -> T { x } }`'s two `T`s are unrelated), so
+   * `substituteIndexedMethodBindings` needs this to know which occurrences
+   * of a bound name inside `params`/`returnType` are actually the impl's
+   * own (safe to substitute) versus the method's own shadowing one (must
+   * stay abstract). */
+  readonly ownGenericParams: ReadonlySet<string>;
   readonly origin:
     | { readonly kind: "inherent" }
     | { readonly kind: "trait"; readonly traitId: string };
@@ -8308,6 +10064,24 @@ function substituteSelfType(
       referent: substituteSelfType(type.referent, target, associatedTypes),
     };
   }
+  if (type.kind === "StructType" || type.kind === "EnumType") {
+    return {
+      ...type,
+      typeArguments: type.typeArguments.map((arg) =>
+        substituteSelfType(arg, target, associatedTypes),
+      ),
+    };
+  }
+  if (type.kind === "ArrayType") {
+    return {
+      ...type,
+      elementType: substituteSelfType(
+        type.elementType,
+        target,
+        associatedTypes,
+      ),
+    };
+  }
   return type;
 }
 
@@ -8328,12 +10102,170 @@ function traitMethodSet(
     returnType: m.returnType,
     genericParams: [...trait.genericParams, ...m.genericParams],
     genericParamBounds: m.genericParamBounds,
+    implOnlyGenericParamBounds: new Map(),
+    implGenericParamPositions: new Map(),
+    targetTypeArguments: [],
+    ownGenericParams: new Set(m.genericParams),
     origin: { kind: "trait", traitId },
   }));
   const inherited = trait.supertraits.flatMap((s) =>
     traitMethodSet(ctx, s, nextVisiting),
   );
   return [...own, ...inherited];
+}
+
+/** `traitMethodSet(ctx, traitId)`, with `traitId`'s own declared generic
+ * parameters substituted by `traitTypeArguments` (an abstract receiver's
+ * own `T: Convert<i32>` bound, mirroring what `indexTraitImplMethods` does
+ * for a concrete impl's `impl Convert<i32> for P`) - never a supertrait's
+ * method, since this codebase's trait model doesn't carry type arguments
+ * through a supertrait chain (see `boundsImplyTrait`'s own doc comment);
+ * `m.origin.traitId === traitId` is what tells a directly-declared method
+ * apart from a flattened-in inherited one sharing the same array. */
+function instantiatedTraitMethodSet(
+  ctx: AnalysisContext,
+  traitId: string,
+  traitTypeArguments: readonly Semantics.Type[],
+): readonly IndexedMethod[] {
+  const methods = traitMethodSet(ctx, traitId);
+  if (traitTypeArguments.length === 0) return methods;
+  const traitGenericParams =
+    ctx.traitRegistry.get(traitId)?.genericParams ?? [];
+  return methods.map((m) =>
+    m.origin.kind === "trait" && m.origin.traitId === traitId
+      ? {
+          ...m,
+          params: m.params.map((p) =>
+            substituteTraitGenericParams(
+              p,
+              traitGenericParams,
+              traitTypeArguments,
+              m.ownGenericParams,
+            ),
+          ),
+          returnType: substituteTraitGenericParams(
+            m.returnType,
+            traitGenericParams,
+            traitTypeArguments,
+            m.ownGenericParams,
+          ),
+          genericParamBounds: new Map(
+            [...m.genericParamBounds].map(([paramName, refs]) => [
+              paramName,
+              refs.map((ref) => ({
+                ...ref,
+                typeArguments: ref.typeArguments.map((arg) =>
+                  substituteTraitGenericParams(
+                    arg,
+                    traitGenericParams,
+                    traitTypeArguments,
+                    m.ownGenericParams,
+                  ),
+                ),
+              })),
+            ]),
+          ),
+        }
+      : m,
+  );
+}
+
+/** One step deeper into the impl's own target shape, on the way to an
+ * impl-level generic parameter's own position - `Arg` indexes a
+ * `NamedType`'s own nested type-argument list (a struct/enum's own type
+ * arguments), `ArrayElement` steps into a fixed-size array's element type,
+ * `Reference` into a reference's referent - the same three shapes
+ * `substituteSelfType`'s own `StructType`/`EnumType`, `ArrayType`, and
+ * `ReferenceType` cases already walk. */
+type ImplParamPathStep =
+  | { readonly kind: "Arg"; readonly index: number }
+  | { readonly kind: "ArrayElement" }
+  | { readonly kind: "Reference" };
+
+type ImplGenericParamPositions = ReadonlyMap<
+  string,
+  readonly ImplParamPathStep[]
+>;
+
+/** Maps each of the impl's own declared generic parameter names to its
+ * access path within the impl's own *target* type (`impl<A, B> Pair<B, A>`
+ * maps `A -> [Arg 1]`, `B -> [Arg 0]`; `impl<T> Outer<Wrapper<T>>` maps
+ * `T -> [Arg 0, Arg 0]`; `impl<T> Outer<[T; 1]>` maps `T -> [Arg 0,
+ * ArrayElement]`) - the path a receiver's own concrete type-argument tree
+ * carries that parameter's binding at, which is not necessarily the
+ * parameter's own declaration order or nesting depth. Mirrors the
+ * wildcard-position detection `resolveTypeArgumentSlots` already does for
+ * coherence, reading positions instead of building `TargetArgSlot`s. */
+function implGenericParamTargetPositions(
+  implGenericNames: ReadonlySet<string>,
+  targetType: Parser.Type,
+): ImplGenericParamPositions {
+  const positions = new Map<string, readonly ImplParamPathStep[]>();
+  if (targetType.kind !== "NamedType") return positions;
+  collectImplGenericParamPositions(
+    implGenericNames,
+    targetType.typeArguments,
+    [],
+    positions,
+  );
+  return positions;
+}
+
+function collectImplGenericParamPositions(
+  implGenericNames: ReadonlySet<string>,
+  typeArguments: readonly Parser.Type[],
+  prefix: readonly ImplParamPathStep[],
+  positions: Map<string, readonly ImplParamPathStep[]>,
+): void {
+  typeArguments.forEach((arg, index) => {
+    recordImplGenericParamPosition(
+      implGenericNames,
+      arg,
+      [...prefix, { kind: "Arg", index }],
+      positions,
+    );
+  });
+}
+
+function recordImplGenericParamPosition(
+  implGenericNames: ReadonlySet<string>,
+  arg: Parser.Type,
+  path: readonly ImplParamPathStep[],
+  positions: Map<string, readonly ImplParamPathStep[]>,
+): void {
+  if (arg.kind === "NamedType") {
+    if (arg.path.segments.length === 1 && arg.typeArguments.length === 0) {
+      const name = arg.path.segments[0];
+      if (name !== undefined && implGenericNames.has(name)) {
+        positions.set(name, path);
+      }
+      return;
+    }
+    collectImplGenericParamPositions(
+      implGenericNames,
+      arg.typeArguments,
+      path,
+      positions,
+    );
+    return;
+  }
+  if (arg.kind === "ArrayType") {
+    recordImplGenericParamPosition(
+      implGenericNames,
+      arg.elementType,
+      [...path, { kind: "ArrayElement" }],
+      positions,
+    );
+    return;
+  }
+  if (arg.kind === "ReferenceType") {
+    recordImplGenericParamPosition(
+      implGenericNames,
+      arg.referent,
+      [...path, { kind: "Reference" }],
+      positions,
+    );
+  }
 }
 
 function buildMethodIndex(
@@ -8351,43 +10283,169 @@ function buildMethodIndex(
     if (targetType === undefined) continue;
     const targetId = typeIdentity(targetType);
     const entries = [...(ctx.methodIndex.get(targetId) ?? [])];
+    const implGenericNames = new Set(genericParamNames(item.generics));
+    const implGenericParamPositions = implGenericParamTargetPositions(
+      implGenericNames,
+      item.type,
+    );
+    pushGenericParams(ctx, item.generics, item.whereClause);
+    const targetTypeArguments = resolveTargetTypeArguments(
+      ctx,
+      item.type,
+      implGenericNames,
+    );
+    const resolvedTargetType = resolveConcreteImplTargetType(
+      ctx,
+      targetType,
+      item.type,
+    );
+    const implGenericParamBounds = resolveBoundNames(
+      ctx,
+      genericParamBoundNames(item.generics, item.whereClause),
+    );
+    const traitRefTypeArguments = isSome(item.traitRef)
+      ? item.traitRef.value.typeArguments.map((arg) =>
+          resolveSlice1Type(ctx, arg, arg.tokenId),
+        )
+      : [];
+    popGenericParams(ctx);
     if (isSome(shallow.traitRef)) {
       const traitId = resolveTraitIdentity(shallow.traitRef.value.name, scope);
       entries.push(
-        ...indexTraitImplMethods(ctx, traitId, targetId, targetType),
+        ...indexTraitImplMethods(
+          ctx,
+          traitId,
+          resolvedTargetType,
+          implGenericParamPositions,
+          targetTypeArguments,
+          implGenericParamBounds,
+          traitRefTypeArguments,
+        ),
       );
     } else {
-      entries.push(...indexInherentMethods(ctx, item, targetType));
+      entries.push(
+        ...indexInherentMethods(
+          ctx,
+          item,
+          resolvedTargetType,
+          implGenericParamPositions,
+          targetTypeArguments,
+        ),
+      );
     }
     ctx.methodIndex.set(targetId, entries);
-    indexAssociatedConsts(ctx, item, targetType, targetId);
+    indexAssociatedConsts(ctx, item, resolvedTargetType, targetId);
   }
 }
 
+/** `structuralStructOrEnumType`'s bare `{name, typeArguments: []}` widened
+ * with the impl's own actually-declared target arguments, resolved under
+ * the impl's own pushed generic scope - what `Self` substitutes to inside
+ * a method's own signature. Without this, `-> Self` on `impl Pair<i32>` and
+ * `impl Pair<str>` both resolve to the struct's bare declaration identity,
+ * so a chained call off either one's result (`p.make().tag()`) can't tell
+ * which instantiation it's actually looking at and falls back to whichever
+ * impl's method happens to be indexed first. */
+function resolveConcreteImplTargetType(
+  ctx: AnalysisContext,
+  structuralTargetType: Semantics.Type,
+  itemType: Parser.Type,
+): Semantics.Type {
+  if (!isNominalType(structuralTargetType) || itemType.kind !== "NamedType") {
+    return structuralTargetType;
+  }
+  return {
+    ...structuralTargetType,
+    typeArguments: itemType.typeArguments.map((arg) =>
+      resolveSlice1Type(ctx, arg, arg.tokenId),
+    ),
+  };
+}
+
 /** A trait impl's methods, with the trait's abstract `Self` / `Self::Assoc`
- * rewritten against this impl's concrete target and its own associated-type
- * definitions. A target the structural scope can't resolve to a struct/enum
- * leaves the signatures abstract. */
+ * and the trait's own declared generic parameters (via `traitRefTypeArguments`)
+ * rewritten against this impl's concrete target, its own associated-type
+ * definitions, and its requested instantiation. A target the structural
+ * scope can't resolve to a struct/enum leaves the signatures abstract.
+ * `implGenericParamBounds` is the impl's own declared bounds
+ * (`impl<T: Bound> Trait for X`) - unlike `indexInherentMethods`, a trait
+ * method's shallow signature never went through the impl's own generic
+ * scope, so this merges them in here instead of relying on
+ * `traitMethodSet`'s already-built `genericParamBounds` to carry them. */
 function indexTraitImplMethods(
   ctx: AnalysisContext,
   traitId: string,
-  targetId: string,
   targetType: Semantics.Type,
+  implGenericParamPositions: ImplGenericParamPositions,
+  targetTypeArguments: readonly TargetArgSlot[],
+  implGenericParamBounds: ReadonlyMap<
+    string,
+    readonly Semantics.BoundTraitRef[]
+  >,
+  traitRefTypeArguments: readonly Semantics.Type[] = [],
 ): readonly IndexedMethod[] {
   const traitMethods = traitMethodSet(ctx, traitId);
   if (!isNominalType(targetType)) {
     return traitMethods;
   }
   const associatedTypes =
-    findRegisteredImpl(ctx, targetId, traitId)?.associatedTypeDefs ??
+    findRegisteredImpl(ctx, targetType, traitId, [])?.associatedTypeDefs ??
     new Map<string, Semantics.Type>();
+  const traitGenericParams = ctx.traitRegistry.get(traitId)?.genericParams;
+  const substituteTraitMethodType = (
+    type: Semantics.Type,
+    ownGenericParams: ReadonlySet<string>,
+  ): Semantics.Type =>
+    substituteSelfType(
+      traitGenericParams === undefined
+        ? type
+        : substituteTraitGenericParams(
+            type,
+            traitGenericParams,
+            traitRefTypeArguments,
+            ownGenericParams,
+          ),
+      targetType,
+      associatedTypes,
+    );
   return traitMethods.map((m): IndexedMethod => ({
     ...m,
     params: m.params.map((p) =>
-      substituteSelfType(p, targetType, associatedTypes),
+      substituteTraitMethodType(p, m.ownGenericParams),
     ),
-    returnType: substituteSelfType(m.returnType, targetType, associatedTypes),
+    returnType: substituteTraitMethodType(m.returnType, m.ownGenericParams),
+    implGenericParamPositions,
+    targetTypeArguments,
+    implOnlyGenericParamBounds: new Map(
+      [...implGenericParamBounds].filter(
+        ([name]) => !m.ownGenericParams.has(name),
+      ),
+    ),
   }));
+}
+
+/** `params`/`returnType` reference a trait's own declared generic parameter
+ * names directly (`trait Convert<T> { fn convert(&self) -> T; }`'s `T`) -
+ * distinct from `Self`, which `substituteSelfType` already handles.
+ * `traitRefTypeArguments` is the impl's own requested instantiation
+ * (`impl Convert<i32> for P`'s `[i32]`), positionally zipped against the
+ * trait's declared names. `ownGenericParams` excludes any trait-level name
+ * the method itself redeclares (`trait Convert<T> { fn id<T>(&self, x: T)
+ * -> T; }`'s two `T`s are unrelated) from binding at all - see
+ * `IndexedMethod.ownGenericParams`'s own doc comment. */
+function substituteTraitGenericParams(
+  type: Semantics.Type,
+  traitGenericParams: readonly string[],
+  traitRefTypeArguments: readonly Semantics.Type[],
+  ownGenericParams: ReadonlySet<string>,
+): Semantics.Type {
+  const bindings: GenericBindings = new Map();
+  for (const [i, name] of traitGenericParams.entries()) {
+    if (ownGenericParams.has(name)) continue;
+    const arg = traitRefTypeArguments[i];
+    if (arg !== undefined) bindings.set(name, { type: arg, tokenId: 0 });
+  }
+  return substituteGenericType(type, bindings);
 }
 
 function indexAssociatedConsts(
@@ -8417,24 +10475,21 @@ function indexInherentMethods(
   ctx: AnalysisContext,
   item: Parser.ImplDecl,
   targetType: Semantics.Type,
+  implGenericParamPositions: ImplGenericParamPositions,
+  targetTypeArguments: readonly TargetArgSlot[],
 ): readonly IndexedMethod[] {
   pushSelfContext(ctx, inherentSelfContext(targetType));
   const implGenerics = genericParamNames(item.generics);
   const methods = item.items.flatMap((decl): readonly IndexedMethod[] => {
     if (decl.kind !== "Function") return [];
-    const { params, returnType } = resolveMethodSignatureTypes(
-      ctx,
-      item.generics,
-      item.whereClause,
-      decl.signature,
-      resolveSlice1Type,
-    );
-    const merged = mergedGenericScope(
-      item.generics,
-      item.whereClause,
-      decl.signature.generics,
-      decl.signature.whereClause,
-    );
+    const { params, returnType, genericParamBounds } =
+      resolveMethodSignatureTypes(
+        ctx,
+        item.generics,
+        item.whereClause,
+        decl.signature,
+        resolveSlice1Type,
+      );
     return [
       {
         name: decl.signature.name.text,
@@ -8445,10 +10500,11 @@ function indexInherentMethods(
           ...implGenerics,
           ...genericParamNames(decl.signature.generics),
         ],
-        genericParamBounds: resolveBoundNames(
-          ctx,
-          genericParamBoundNames(merged.generics, merged.whereClause),
-        ),
+        genericParamBounds,
+        implOnlyGenericParamBounds: new Map(),
+        implGenericParamPositions,
+        targetTypeArguments,
+        ownGenericParams: new Set(genericParamNames(decl.signature.generics)),
         origin: { kind: "inherent" },
       },
     ];
@@ -8477,15 +10533,183 @@ function methodCandidates(
       return traitMethodSet(ctx, selfContext.traitName);
     }
     if (isDeclaredGenericParam(ctx, name)) {
-      return declaredGenericParamBounds(ctx, name).flatMap((traitId) =>
-        traitMethodSet(ctx, traitId),
+      return declaredGenericParamBoundRefs(ctx, name).flatMap((ref) =>
+        instantiatedTraitMethodSet(ctx, ref.traitName, ref.typeArguments),
       );
     }
   }
+  if (isNominalType(receiverType)) {
+    return methodCandidatesForNominalType(ctx, receiverType);
+  }
+  return ctx.methodIndex.get(typeIdentity(receiverType)) ?? [];
+}
+
+/** The bounds a method's own enclosing impl declares, for checks that must
+ * only ever see the impl's side - never a method-level bound, even one
+ * sharing a shadowed name. A trait-impl method keeps the two separate
+ * (`implOnlyGenericParamBounds`); an inherent method's own
+ * `genericParamBounds` is still the pre-merged impl+method scope
+ * (`indexInherentMethods`'s own gap, not fixed here) and is always empty
+ * in the other field, so this picks whichever one actually holds it. */
+function implLevelGenericParamBounds(
+  method: IndexedMethod,
+): ReadonlyMap<string, readonly Semantics.BoundTraitRef[]> {
+  return method.origin.kind === "trait"
+    ? method.implOnlyGenericParamBounds
+    : method.genericParamBounds;
+}
+
+/** `methodCandidates`' concrete-receiver path: `methodIndex`'s per-base-name
+ * bucket (which holds every impl of every instantiation of that base type,
+ * since it's keyed by bare name) plus any applicable blanket-impl methods,
+ * filtered down to the entries whose own impl's target-argument slots are
+ * actually satisfied by the receiver's own concrete type arguments - what
+ * keeps a `Pair<i32>` receiver from picking up `impl Draw for Pair<str>`'s
+ * methods, or vice versa. The match against a *generic* impl's own slots
+ * (`impl<A: Convert<B>, B> Pair<A, B>`) binds the impl's own parameters to
+ * the receiver's own concrete arguments (`A -> P`, `B -> i32`) - substituted
+ * into the returned method via `substituteIndexedMethodBindings`, or a
+ * generic impl's indexed signature (and its own `genericParamBounds`, e.g.
+ * `A: Convert<B>`) would stay abstract at this concrete call site. */
+function methodCandidatesForNominalType(
+  ctx: AnalysisContext,
+  receiverType: Semantics.StructType | Semantics.EnumType,
+): readonly IndexedMethod[] {
   const indexed = ctx.methodIndex.get(typeIdentity(receiverType)) ?? [];
-  return isNominalType(receiverType)
-    ? [...indexed, ...blanketMethodCandidates(ctx, receiverType)]
-    : indexed;
+  const candidates = [
+    ...indexed,
+    ...blanketMethodCandidates(ctx, receiverType),
+  ];
+  return candidates.flatMap((m) => {
+    const bindings = new Map<string, Semantics.Type>();
+    if (
+      !requestedTraitArgumentsSatisfied(
+        m.targetTypeArguments,
+        receiverType.typeArguments,
+        bindings,
+      )
+    ) {
+      return [];
+    }
+    if (
+      !isSome(
+        resolveImplBoundWitnesses(
+          ctx,
+          bindings,
+          implLevelGenericParamBounds(m),
+          m.implGenericParamPositions,
+        ),
+      )
+    ) {
+      return [];
+    }
+    return [substituteIndexedMethodBindings(m, bindings)];
+  });
+}
+
+/** Folds `bindings` (an impl's own generic parameters, bound to the
+ * receiver's own concrete type arguments by `methodCandidatesForNominalType`'s
+ * own match) into one indexed method's `params`, `returnType`, and each of
+ * its own `genericParamBounds`' `typeArguments` - the method-level bound's
+ * own trait arguments (`A: Convert<B>`'s `B`) need this exactly as much as
+ * the signature itself does, or `recordMethodCallWitnesses` resolves the
+ * witness for the impl's still-abstract parameter instead of the receiver's
+ * concrete one. A no-op passthrough when nothing was bound (the common,
+ * non-generic-impl case). */
+function substituteIndexedMethodBindings(
+  method: IndexedMethod,
+  bindings: ReadonlyMap<string, Semantics.Type>,
+): IndexedMethod {
+  if (bindings.size === 0) return method;
+  // A binding whose name the method itself redeclares (`impl<T> Pair<T> {
+  // fn get<T>(&self, x: T) -> T { x } }`'s two `T`s are unrelated) must not
+  // substitute - every occurrence of that bare name inside this method's own
+  // signature is the method's own shadowing parameter, never the impl's.
+  const generic: GenericBindings = new Map(
+    [...bindings]
+      .filter(([name]) => !method.ownGenericParams.has(name))
+      .map(([name, type]) => [name, { type, tokenId: 0 }]),
+  );
+  const substituteBoundsTypeArguments = (
+    bounds: ReadonlyMap<string, readonly Semantics.BoundTraitRef[]>,
+  ): ReadonlyMap<string, readonly Semantics.BoundTraitRef[]> =>
+    new Map(
+      [...bounds].map(([paramName, refs]) => [
+        paramName,
+        refs.map((ref) => ({
+          ...ref,
+          typeArguments: ref.typeArguments.map((arg) =>
+            substituteGenericType(arg, generic),
+          ),
+        })),
+      ]),
+    );
+  return {
+    ...method,
+    params: method.params.map((p) => substituteGenericType(p, generic)),
+    returnType: substituteGenericType(method.returnType, generic),
+    genericParamBounds: substituteBoundsTypeArguments(
+      method.genericParamBounds,
+    ),
+    implOnlyGenericParamBounds: substituteBoundsTypeArguments(
+      method.implOnlyGenericParamBounds,
+    ),
+  };
+}
+
+/** Resolves a classified `TargetArgSlot` back into a real `Semantics.Type` -
+ * the inverse of `classifyTargetArgSlot`. `bindings` (typically
+ * `findRegisteredImpl`'s own `outBindings`) supplies the concrete type a
+ * `Wildcard` slot's impl-level parameter was bound to while matching the
+ * impl against a receiver. An unbound `Wildcard` (the parameter appears
+ * only in a trait-argument position no binding pass ever populated -
+ * e.g. an impl matched with no requested trait arguments at all) falls
+ * back to a bare `NamedType` naming the parameter, same abstract shape a
+ * caller would have seen before this resolver existed. */
+function resolveTargetArgSlotType(
+  slot: TargetArgSlot,
+  bindings: ReadonlyMap<string, Semantics.Type>,
+  tokenId: number,
+): Semantics.Type {
+  switch (slot.kind) {
+    case "Wildcard":
+      return (
+        bindings.get(slot.paramName) ?? {
+          kind: "NamedType",
+          tokenId,
+          path: { absolute: false, segments: [slot.paramName] },
+        }
+      );
+    case "Concrete":
+      return slot.type;
+    case "Nominal":
+      return {
+        kind: slot.nominalKind,
+        name: slot.name,
+        typeArguments: slot.typeArguments.map((s) =>
+          resolveTargetArgSlotType(s, bindings, tokenId),
+        ),
+      };
+    case "Array":
+      return {
+        kind: "ArrayType",
+        length: slot.length,
+        elementType: resolveTargetArgSlotType(
+          slot.elementType,
+          bindings,
+          tokenId,
+        ),
+      };
+    case "Reference":
+      return {
+        kind: "ReferenceType",
+        tokenId,
+        mutable: slot.mutable,
+        referent: resolveTargetArgSlotType(slot.referent, bindings, tokenId),
+      };
+    default:
+      return assertNever(slot, `target arg slot: ${JSON.stringify(slot)}`);
+  }
 }
 
 /** Every method a blanket impl (`impl<T: Bound> Trait for T`) provides for
@@ -8494,25 +10718,139 @@ function methodCandidates(
  * itself, since whether a blanket impl applies depends on the receiver's own
  * bound, not on anything knowable at index-build time. Bound satisfaction is
  * `findRegisteredImpl`'s own job (already recursive/blanket-aware); this
- * only asks it per blanket impl in the registry. */
+ * only asks it per blanket impl in the registry. `targetTypeArguments` on
+ * the returned entries is classified purely-concrete (`receiverType` is
+ * already a real instantiation here, never the blanket impl's own bare `T`),
+ * so `methodCandidatesForNominalType`'s own filter is a trivial match.
+ * The matched impl's own declared trait arguments (`impl<T> Convert<i32> for
+ * T`'s `[i32]`), resolved back from `TargetArgSlot` via
+ * `resolveTargetArgSlotType` using the target-match's own bindings, are
+ * threaded into `indexTraitImplMethods` as `traitRefTypeArguments` so a
+ * method whose signature references the trait's own generic parameter
+ * (`fn convert(&self) -> T` where `T` is `Convert`'s declared parameter, not
+ * the impl's) resolves to the requested instantiation instead of staying
+ * abstract. */
 function blanketMethodCandidates(
   ctx: AnalysisContext,
   receiverType: Semantics.StructType | Semantics.EnumType,
 ): readonly IndexedMethod[] {
-  const typeId = receiverType.name;
+  const targetTypeArguments = receiverType.typeArguments.map((arg) =>
+    classifyTargetArgSlot(arg, new Set()),
+  );
   const seenTraits = new Set<string>();
   const result: IndexedMethod[] = [];
   for (const impl of ctx.implRegistry) {
     if (!impl.isBlanket || seenTraits.has(impl.traitName)) continue;
     seenTraits.add(impl.traitName);
-    if (findRegisteredImpl(ctx, typeId, impl.traitName) === undefined) {
+    const outBindings = new Map<string, Semantics.Type>();
+    if (
+      findRegisteredImpl(
+        ctx,
+        receiverType,
+        impl.traitName,
+        [],
+        new Set(),
+        outBindings,
+      ) === undefined
+    ) {
       continue;
     }
+    const traitRefTypeArguments = impl.traitTypeArguments.map((slot) =>
+      resolveTargetArgSlotType(slot, outBindings, impl.tokenId),
+    );
     result.push(
-      ...indexTraitImplMethods(ctx, impl.traitName, typeId, receiverType),
+      ...indexTraitImplMethods(
+        ctx,
+        impl.traitName,
+        receiverType,
+        new Map(),
+        targetTypeArguments,
+        new Map(),
+        traitRefTypeArguments,
+      ),
     );
   }
   return result;
+}
+
+/** Every registered impl of `traitName` (bare) applicable to a receiver of
+ * `typeName<receiverTypeArguments>` - concrete (target matches exactly) or
+ * blanket (own bound satisfiable for this receiver, mirroring
+ * `findRegisteredImpl`'s own recursive blanket check) - the per-instantiation
+ * impl count `resolveMethodCall` needs to detect an ambiguity `methodIndex`/
+ * `traitMethodSet` can't see on their own, since both resolve a trait's
+ * methods once per trait declaration, not once per impl. Two impls of the
+ * same parameterized trait applicable to the same receiver (`impl Tag<i32>
+ * for P` + `impl Tag<str> for P`, or two unconstrained blanket impls
+ * `impl<T> Tag<i32> for T` + `impl<T> Tag<str> for T` - coherence allows
+ * both, since their own trait arguments differ) look identical to a
+ * single-impl case there. */
+function applicableImplsForReceiver(
+  ctx: AnalysisContext,
+  receiverType: Semantics.Type,
+  traitName: string,
+): readonly RegisteredImpl[] {
+  const typeName = typeIdentity(receiverType);
+  const receiverTypeArguments = nominalTypeArguments(receiverType);
+  return ctx.implRegistry.filter((impl) => {
+    if (impl.traitName !== traitName) return false;
+    if (!impl.isBlanket) {
+      if (impl.targetTypeName !== typeName) return false;
+      const bindings = new Map<string, Semantics.Type>();
+      if (
+        !requestedTraitArgumentsSatisfied(
+          impl.targetTypeArguments,
+          receiverTypeArguments,
+          bindings,
+        )
+      ) {
+        return false;
+      }
+      return isSome(
+        resolveImplBoundWitnesses(
+          ctx,
+          bindings,
+          impl.genericParamBounds,
+          impl.implGenericParamPositions,
+        ),
+      );
+    }
+    return impl.blanketBounds.every(
+      (bound) =>
+        findRegisteredImpl(
+          ctx,
+          receiverType,
+          bound.name,
+          substituteBlanketBoundArguments(
+            impl,
+            receiverType,
+            bound.typeArguments,
+          ),
+        ) !== undefined,
+    );
+  });
+}
+
+/** How many of `receiverType`'s own applicable instantiations of `traitId`
+ * provide the method being resolved - `resolveMethodCall`'s own ambiguity
+ * check needs this for both a concrete receiver (counting registered impls,
+ * via `applicableImplsForReceiver`) and an abstract bounded one (counting
+ * the declared bound list's own entries naming `traitId`, e.g. `U: Tag<i32>
+ * + Tag<str>`) - a receiver that's neither never has more than one
+ * instantiation to begin with. */
+function applicableInstantiationCount(
+  ctx: AnalysisContext,
+  receiverType: Semantics.Type,
+  traitId: string,
+): number {
+  if (isNominalType(receiverType)) {
+    return applicableImplsForReceiver(ctx, receiverType, traitId).length;
+  }
+  const paramName = abstractGenericParamName(ctx, receiverType);
+  if (paramName === undefined) return 1;
+  return declaredGenericParamBoundRefs(ctx, paramName).filter(
+    (ref) => ref.traitName === traitId,
+  ).length;
 }
 
 /** Rust's method-resolution precedence: an inherent method shadows a
@@ -8537,8 +10875,24 @@ function resolveMethodCall(
       ),
     ),
   ];
-  if (traitIds.length === 1) return traitMatches[0];
   const typeName = bareTypeName(typeIdentity(receiverType));
+  const [onlyTraitId] = traitIds;
+  if (traitIds.length === 1 && onlyTraitId !== undefined) {
+    if (applicableInstantiationCount(ctx, receiverType, onlyTraitId) > 1) {
+      emitError(
+        ctx,
+        {
+          kind: "SemAmbiguousTraitInstantiation",
+          method: methodName,
+          typeName,
+          trait: bareTypeName(onlyTraitId),
+        },
+        tokenId,
+      );
+      return undefined;
+    }
+    return traitMatches[0];
+  }
   if (traitIds.length === 0) {
     emitError(
       ctx,
@@ -8677,6 +11031,27 @@ function checkAssociatedCallArgs(
       );
 }
 
+/** The `scopeId` a `concrete`-emitKind `FreeMethodTarget` reserves its free
+ * function's name under, for a trait-provided method - folds the impl's own
+ * declared trait arguments in, not just the target's, so a plain type-only
+ * key doesn't collapse two impls of the same parameterized trait for the
+ * same target (`impl Tag<i32> for P` / `impl Tag<str> for P`) onto one
+ * reservation. Shared by `recordImplMethodTarget`'s own emission and
+ * `recordDropImpl`'s - `recordMethodTarget`'s own call-site counterpart
+ * builds the identical string a different way (from a witness's own
+ * already-instance-aware `typeId`/`traitId`, since it never has a raw
+ * `TargetArgSlot` list to hand this function), so a write side and a read
+ * side can't silently drift onto two different algorithms. */
+function concreteMethodTargetScopeId(
+  monomorphizedTypeId: string,
+  traitName: Option<string>,
+  traitTypeArguments: readonly TargetArgSlot[],
+): string {
+  return isSome(traitName)
+    ? `${monomorphizedTypeId}#${targetArgSlotsIdentity(traitName.value, traitTypeArguments)}`
+    : monomorphizedTypeId;
+}
+
 /** Records the free-function `MethodTarget` for an impl-provided method
  * codegen should emit (`AnalysisResult.implMethodTargets`), keyed by the
  * method body's own tokenId. A receiver-less associated function emits
@@ -8689,14 +11064,20 @@ function recordImplMethodTarget(
   decl: Parser.FunctionDef,
   targetType: Semantics.Type,
   traitName: Option<string>,
+  traitTypeArguments: readonly TargetArgSlot[],
   isBlanket: boolean,
 ): void {
   if (!isSome(decl.signature.receiver)) return;
   if (isNominalType(targetType)) {
+    const monomorphizedTypeId = monomorphizedTypeIdentity(targetType);
     ctx.implMethodTargetTable.set(decl.tokenId, {
       kind: "free",
-      typeId: targetType.name,
-      scopeId: targetType.name,
+      typeId: monomorphizedTypeId,
+      scopeId: concreteMethodTargetScopeId(
+        monomorphizedTypeId,
+        traitName,
+        traitTypeArguments,
+      ),
       typeName: bareTypeName(targetType.name),
       traitName: mapSome(traitName, bareTypeName),
       methodName: decl.signature.name.text,
@@ -8709,7 +11090,7 @@ function recordImplMethodTarget(
   ctx.implMethodTargetTable.set(decl.tokenId, {
     kind: "free",
     typeId: traitName.value,
-    scopeId: traitName.value,
+    scopeId: targetArgSlotsIdentity(traitName.value, traitTypeArguments),
     typeName: trait,
     traitName: some(trait),
     methodName: decl.signature.name.text,
@@ -8726,6 +11107,8 @@ function recordDropImpl(
   decl: Parser.FunctionDef,
   targetType: Semantics.Type,
   traitName: Option<string>,
+  traitTypeArguments: readonly TargetArgSlot[],
+  targetTypeArguments: readonly TargetArgSlot[],
 ): void {
   if (
     decl.signature.name.text !== "drop" ||
@@ -8744,15 +11127,142 @@ function recordDropImpl(
     );
     return;
   }
-  ctx.dropImplTable.set(targetType.name, {
+  const monomorphizedTypeId = monomorphizedTypeIdentity(targetType);
+  const target: FreeMethodTarget = {
     kind: "free",
-    typeId: targetType.name,
-    scopeId: targetType.name,
+    typeId: monomorphizedTypeId,
+    scopeId: concreteMethodTargetScopeId(
+      monomorphizedTypeId,
+      traitName,
+      traitTypeArguments,
+    ),
     typeName: bareTypeName(targetType.name),
     traitName: some(bareTypeName(traitName.value)),
     methodName: "drop",
     emitKind: "concrete",
-  });
+  };
+  const existing = ctx.dropImplTable.get(targetType.name) ?? [];
+  ctx.dropImplTable.set(targetType.name, [
+    ...existing,
+    { targetTypeArguments, target },
+  ]);
+}
+
+/** Every impl-level generic parameter's own concrete binding, read from the
+ * constructed/receiving value's own type arguments - a bound's own type
+ * arguments (`A: Convert<B>`'s `B`) can themselves name another of the
+ * impl's own parameters, so every one needs resolving up front rather than
+ * just the single parameter a given bound is declared on. */
+function implGenericParamBindings(
+  constructedType: Semantics.Type,
+  implGenericParamPositions: ImplGenericParamPositions,
+): ReadonlyMap<string, Semantics.Type> {
+  const bindings = new Map<string, Semantics.Type>();
+  for (const paramName of implGenericParamPositions.keys()) {
+    const argType = implGenericParamType(
+      constructedType,
+      implGenericParamPositions,
+      paramName,
+    );
+    if (argType !== undefined) bindings.set(paramName, argType);
+  }
+  return bindings;
+}
+
+/** Whether every one of an impl's own declared bound(s) - identified by
+ * `implGenericParamPositions`'s own keys, never a method's separately-bound
+ * `<U>` sharing the same `genericParamBounds` map - is satisfied by
+ * `bindings`' already-matched concrete type, returning the resolved
+ * witness(es) when it is. A bound unresolvable only because its own
+ * position can't be walked (nested behind an array/reference - a known,
+ * separate gap) is skipped rather than treated as unsatisfied, since there
+ * is nothing to check it against. `none()` on the first bound that *can* be
+ * checked and fails - the whole impl doesn't apply, so a partially-resolved
+ * witness list would be misleading. */
+function resolveImplBoundWitnesses(
+  ctx: AnalysisContext,
+  bindings: ReadonlyMap<string, Semantics.Type>,
+  genericParamBounds: ReadonlyMap<string, readonly Semantics.BoundTraitRef[]>,
+  implGenericParamPositions: ImplGenericParamPositions,
+): Option<readonly WitnessRef[]> {
+  const generic: GenericBindings = new Map(
+    [...bindings].map(([name, type]) => [name, { type, tokenId: 0 }]),
+  );
+  const witnesses: WitnessRef[] = [];
+  for (const paramName of implGenericParamPositions.keys()) {
+    const boundType = bindings.get(paramName);
+    if (boundType === undefined) continue;
+    for (const traitRef of genericParamBounds.get(paramName) ?? []) {
+      const witness = resolveTraitBound(
+        ctx,
+        boundType,
+        traitRef.name,
+        traitRef.typeArguments.map((arg) =>
+          substituteGenericType(arg, generic),
+        ),
+      );
+      if (!isSome(witness)) return none();
+      witnesses.push(witness.value);
+    }
+  }
+  return some(witnesses);
+}
+
+/** Resolves the witness(es) a constructed value's own applicable `Drop`
+ * impl needs for its impl-level bound(s) (`impl<T: Marker> Drop for
+ * Wrapper<T>`'s `T: Marker`) - there is no explicit call site in user
+ * source for `recordMethodCallWitnesses` to key against (disposal is
+ * implicit), so this runs once, right where the construction's own final
+ * concrete type is known, reusing `methodIndex`'s already-resolved
+ * `genericParamBounds`/`implGenericParamPositions` for the matched `drop`
+ * method - the same data `recordMethodCallWitnesses` reads for an ordinary
+ * impl-level bound on a real method call. When the bound isn't satisfied
+ * (`Wrapper<Plain>` against `impl<T: Marker> Drop for Wrapper<T>`), this
+ * impl simply doesn't apply - `tokenId` is recorded in
+ * `AnalysisResult.dropBoundsUnsatisfied` so codegen falls back to the
+ * ordinary no-op/field-only disposer instead of attaching a call that's
+ * missing its required witness argument. */
+function recordDropWitnesses(
+  ctx: AnalysisContext,
+  tokenId: number,
+  constructedType: Semantics.Type,
+): void {
+  if (constructedType.kind !== "StructType") return;
+  const dropTraitId = lookupPreludeTrait(ctx, "Drop");
+  if (dropTraitId === undefined) return;
+  const method = (
+    ctx.methodIndex.get(typeIdentity(constructedType)) ?? []
+  ).find(
+    (m) =>
+      m.name === "drop" &&
+      m.origin.kind === "trait" &&
+      m.origin.traitId === dropTraitId &&
+      requestedTraitArgumentsSatisfied(
+        m.targetTypeArguments,
+        constructedType.typeArguments,
+        new Map(),
+      ),
+  );
+  if (method === undefined) return;
+  const implBounds = implLevelGenericParamBounds(method);
+  if (implBounds.size === 0) return;
+  const bindings = implGenericParamBindings(
+    constructedType,
+    method.implGenericParamPositions,
+  );
+  const resolved = resolveImplBoundWitnesses(
+    ctx,
+    bindings,
+    implBounds,
+    method.implGenericParamPositions,
+  );
+  if (!isSome(resolved)) {
+    ctx.dropBoundsUnsatisfiedTable.add(tokenId);
+    return;
+  }
+  if (resolved.value.length > 0) {
+    ctx.dropWitnessTable.set(tokenId, resolved.value);
+  }
 }
 
 /** Records how a resolved call on a concrete receiver dispatches, for
@@ -8777,11 +11287,15 @@ function recordMethodTarget(
   method: IndexedMethod,
   methodName: string,
 ): void {
+  const monomorphizedTypeId = monomorphizedTypeIdentity(receiverType);
   if (method.origin.kind !== "trait") {
     ctx.methodTargetTable.set(methodTokenId, {
       kind: "free",
-      typeId: receiverType.name,
-      scopeId: receiverType.name,
+      typeId: monomorphizedTypeId,
+      scopeId: targetArgSlotsIdentity(
+        receiverType.name,
+        method.targetTypeArguments,
+      ),
       typeName: bareTypeName(receiverType.name),
       traitName: none(),
       methodName,
@@ -8791,8 +11305,9 @@ function recordMethodTarget(
   }
   const witness = resolveTraitBoundForTypeName(
     ctx,
-    receiverType.name,
+    receiverType,
     method.origin.traitId,
+    [],
   );
   if (
     !isSome(witness) ||
@@ -8809,7 +11324,7 @@ function recordMethodTarget(
     ctx.extraWitnessRefs.push(witness.value);
     ctx.methodTargetTable.set(methodTokenId, {
       kind: "free",
-      typeId: receiverType.name,
+      typeId: monomorphizedTypeId,
       scopeId: method.origin.traitId,
       typeName: bareTypeName(receiverType.name),
       traitName: some(trait),
@@ -8823,6 +11338,7 @@ function recordMethodTarget(
       ctx,
       methodTokenId,
       method.origin.traitId,
+      witness.value.traitId,
       methodName,
       witness.value.boundWitnesses,
     );
@@ -8830,8 +11346,8 @@ function recordMethodTarget(
   }
   ctx.methodTargetTable.set(methodTokenId, {
     kind: "free",
-    typeId: receiverType.name,
-    scopeId: receiverType.name,
+    typeId: monomorphizedTypeId,
+    scopeId: `${witness.value.typeId}#${witness.value.traitId}`,
     typeName: bareTypeName(receiverType.name),
     traitName: some(trait),
     methodName,
@@ -8898,50 +11414,227 @@ function namesGenericParam(type: Semantics.Type, paramName: string): boolean {
   );
 }
 
+/** `implGenericParamType`'s own single-step walk, one `ImplParamPathStep`
+ * at a time - `undefined` when `current`'s own shape doesn't match what
+ * the step expects (a `Reference` step over a non-reference type, etc). */
+function stepIntoImplGenericParamType(
+  current: Semantics.Type,
+  step: ImplParamPathStep,
+): Semantics.Type | undefined {
+  switch (step.kind) {
+    case "Arg":
+      return isNominalType(current)
+        ? current.typeArguments[step.index]
+        : undefined;
+    case "ArrayElement":
+      return current.kind === "ArrayType" ? current.elementType : undefined;
+    case "Reference":
+      return current.kind === "ReferenceType" ? current.referent : undefined;
+    default:
+      return assertNever(
+        step,
+        `impl generic param path step: ${JSON.stringify(step)}`,
+      );
+  }
+}
+
+/** The concrete type bound to an impl-level generic parameter, read from
+ * the receiver's own resolved type arguments (post Layer A) by walking the
+ * parameter's declared access path in the impl - `undefined` when
+ * `paramName` isn't one of the impl's own, or the receiver's own type
+ * argument tree doesn't match the path's own shape at every step. */
+function implGenericParamType(
+  receiverType: Semantics.Type,
+  implGenericParamPositions: ImplGenericParamPositions,
+  paramName: string,
+): Semantics.Type | undefined {
+  const path = implGenericParamPositions.get(paramName);
+  if (path === undefined) return undefined;
+  let current = receiverType;
+  for (const step of path) {
+    const next = stepIntoImplGenericParamType(current, step);
+    if (next === undefined) return undefined;
+    current = next;
+  }
+  return current;
+}
+
 /**
  * Resolves a witness for each of a concrete-receiver method call's own
- * bounded generic parameters (the method's own `<U: Trait>`, or its
- * enclosing impl's), from the positionally-matching argument's own already-
- * analyzed type - there is no unification for method calls
- * (`IndexedMethod.genericParams`'s own doc comment), so this is a direct
- * read, not real inference. An unsatisfied bound resolves nothing for that
- * slot rather than emitting a diagnostic, matching the surrounding
- * arity-checked-not-type-checked state; the resulting argument-count
- * mismatch surfaces as a runtime error in the callee, not a compile
- * diagnostic, same as any other not-yet-type-checked method generic.
- * Appends to (never overwrites) any witnesses `recordMethodDispatch` already
- * recorded for this same token - a blanket-dispatched call
- * (`recordBlanketDispatchTarget`) populates the same table with the blanket
- * impl's own bound witnesses first, and those must stay ahead of a method's
- * own bound witnesses in the trailing-argument list, matching the callee's
- * own parameter order (`recordWitnessParams`'s outer-then-inner merge).
+ * bounded generic parameters - the method's own `<U: Trait>`, from the
+ * positionally-matching argument's own already-analyzed type (there is no
+ * unification for method calls, `IndexedMethod.genericParams`'s own doc
+ * comment, so this is a direct read, not real inference), or its enclosing
+ * impl's, from the receiver's own resolved type arguments (post Layer A -
+ * an impl-level bound is only ever reachable through `self`, never a
+ * directly-typed argument, so there is nothing to read positionally for
+ * it). An unsatisfied bound resolves nothing for that slot rather than
+ * emitting a diagnostic, matching the surrounding arity-checked-not-
+ * type-checked state; the resulting argument-count mismatch surfaces as a
+ * runtime error in the callee, not a compile diagnostic, same as any other
+ * not-yet-type-checked method generic. Appends to (never overwrites) any
+ * witnesses `recordMethodDispatch` already recorded for this same token - a
+ * blanket-dispatched call (`recordBlanketDispatchTarget`) populates the
+ * same table with the blanket impl's own bound witnesses first, and those
+ * must stay ahead of a method's own bound witnesses in the trailing-
+ * argument list, matching the callee's own parameter order
+ * (`recordWitnessParams`'s outer-then-inner merge).
  */
+/** A method-call generic bound's resolvable type: the positionally-matching
+ * argument's own (unwrapped-through-one-borrow) analyzed type, or, when the
+ * bound belongs to the enclosing impl rather than the method itself, the
+ * receiver's own type argument at that impl parameter's position. */
+function methodCallGenericArgType(
+  args: readonly Semantics.Expression[],
+  argIndex: number,
+  receiverType: Semantics.Type,
+  implGenericParamPositions: ImplGenericParamPositions,
+  paramName: string,
+): Semantics.Type | undefined {
+  const arg = argIndex === -1 ? undefined : args[argIndex];
+  if (arg === undefined) {
+    return implGenericParamType(
+      receiverType,
+      implGenericParamPositions,
+      paramName,
+    );
+  }
+  return arg.type.kind === "ReferenceType" ? arg.type.referent : arg.type;
+}
+
+/** Resolves and appends a witness for each `bounds` entry whose own
+ * `argTypeFor` lookup succeeds - shared between `recordMethodCallWitnesses`'
+ * two passes (impl-level bounds, resolved purely by receiver position, and
+ * the method's own, resolved from the call's own arguments), which differ
+ * only in how they look up each bound's concrete type. */
+function appendBoundWitnesses(
+  ctx: AnalysisContext,
+  witnesses: WitnessRef[],
+  bounds: ReadonlyMap<string, readonly Semantics.BoundTraitRef[]>,
+  argTypeFor: (paramName: string) => Semantics.Type | undefined,
+  substitution: GenericBindings,
+): void {
+  for (const [paramName, traitRefs] of bounds) {
+    const argType = argTypeFor(paramName);
+    if (argType === undefined) continue;
+    for (const traitRef of traitRefs) {
+      const witness = resolveTraitBound(
+        ctx,
+        argType,
+        traitRef.name,
+        traitRef.typeArguments.map((arg) =>
+          substituteGenericType(arg, substitution),
+        ),
+      );
+      if (isSome(witness)) witnesses.push(witness.value);
+    }
+  }
+}
+
+/** Every bound parameter's own resolved concrete type, from either
+ * `appendBoundWitnesses` pass - a bound's own type arguments (`U: Convert<V>`'s
+ * `V`) can themselves name another of the call's own bound parameters, so
+ * every one needs resolving up front rather than just the single parameter
+ * a given bound is declared on (mirrors `implGenericParamBindings`'s
+ * identical need for a constructed value's own impl-level parameters). */
+function methodCallBoundParamBindings(
+  method: IndexedMethod,
+  args: readonly Semantics.Expression[],
+  receiverType: Semantics.Type,
+): GenericBindings {
+  const bindings: GenericBindings = new Map();
+  for (const paramName of method.implOnlyGenericParamBounds.keys()) {
+    const argType = implGenericParamType(
+      receiverType,
+      method.implGenericParamPositions,
+      paramName,
+    );
+    if (argType !== undefined) {
+      bindings.set(paramName, { type: argType, tokenId: 0 });
+    }
+  }
+  for (const paramName of method.genericParamBounds.keys()) {
+    const argType = methodCallGenericArgType(
+      args,
+      method.params.findIndex((p) => namesGenericParam(p, paramName)),
+      receiverType,
+      method.implGenericParamPositions,
+      paramName,
+    );
+    if (argType !== undefined) {
+      bindings.set(paramName, { type: argType, tokenId: 0 });
+    }
+  }
+  return bindings;
+}
+
 function recordMethodCallWitnesses(
   ctx: AnalysisContext,
   methodTokenId: number,
   method: IndexedMethod,
   args: readonly Semantics.Expression[],
+  receiverType: Semantics.Type,
 ): void {
-  if (method.genericParamBounds.size === 0) return;
+  if (
+    method.genericParamBounds.size === 0 &&
+    method.implOnlyGenericParamBounds.size === 0
+  ) {
+    return;
+  }
   const witnesses: WitnessRef[] = [
     ...(ctx.methodCallWitnessTable.get(methodTokenId) ?? []),
   ];
-  for (const [paramName, traitNames] of method.genericParamBounds) {
-    const argIndex = method.params.findIndex((p) =>
-      namesGenericParam(p, paramName),
-    );
-    const arg = argIndex === -1 ? undefined : args[argIndex];
-    if (arg === undefined) continue;
-    const argType =
-      arg.type.kind === "ReferenceType" ? arg.type.referent : arg.type;
-    for (const traitName of traitNames) {
-      const witness = resolveTraitBound(ctx, argType, traitName);
-      if (isSome(witness)) witnesses.push(witness.value);
-    }
-  }
+  const substitution = methodCallBoundParamBindings(method, args, receiverType);
+  // A trait-impl method's own impl-level bound (kept separate from
+  // `genericParamBounds` - see `IndexedMethod.implOnlyGenericParamBounds`'s
+  // own doc comment) is only ever reachable through the receiver's own
+  // position, never a method argument, so it resolves before - and
+  // differently from - the method's own bounds below.
+  appendBoundWitnesses(
+    ctx,
+    witnesses,
+    method.implOnlyGenericParamBounds,
+    (paramName) =>
+      implGenericParamType(
+        receiverType,
+        method.implGenericParamPositions,
+        paramName,
+      ),
+    substitution,
+  );
+  appendBoundWitnesses(
+    ctx,
+    witnesses,
+    method.genericParamBounds,
+    (paramName) =>
+      methodCallGenericArgType(
+        args,
+        method.params.findIndex((p) => namesGenericParam(p, paramName)),
+        receiverType,
+        method.implGenericParamPositions,
+        paramName,
+      ),
+    substitution,
+  );
   if (witnesses.length > 0) {
     ctx.methodCallWitnessTable.set(methodTokenId, witnesses);
   }
+}
+
+/** `-> Self` on a `dyn` receiver, or on a bound generic parameter dispatched
+ * through its witness, yields another value of that same receiver type -
+ * re-wrapped with the receiver's witness in codegen. A concrete nominal
+ * receiver's method return type is already substituted at impl-analysis
+ * time and never carries a literal `Self` here. */
+function methodCallResultType(
+  receiverType: Semantics.Type,
+  methodReturnType: Semantics.Type,
+): Semantics.Type {
+  const selfRooted =
+    receiverType.kind === "DynType" || receiverType.kind === "NamedType";
+  return selfRooted && isAbstractSelfType(methodReturnType)
+    ? receiverType
+    : methodReturnType;
 }
 
 function analyzeMethodCallExpression(
@@ -9009,13 +11702,14 @@ function analyzeMethodCallExpression(
   // A no-op for anything but a nominal receiver's own bounded generic
   // params - `method.genericParamBounds` is only ever populated for those
   // (see `IndexedMethod`'s own doc comment).
-  recordMethodCallWitnesses(ctx, expression.method.tokenId, method, args);
-  // `-> Self` on a `dyn` receiver yields another value of that same trait
-  // object - re-wrapped with the receiver's witness in codegen.
-  const resultType =
-    lookupType.kind === "DynType" && isAbstractSelfType(method.returnType)
-      ? lookupType
-      : method.returnType;
+  recordMethodCallWitnesses(
+    ctx,
+    expression.method.tokenId,
+    method,
+    args,
+    lookupType,
+  );
+  const resultType = methodCallResultType(lookupType, method.returnType);
   return {
     ...base,
     arguments: [
@@ -9100,11 +11794,7 @@ function checkUfcsReceiverImplementsTrait(
       ? receiverArg.type.referent
       : receiverArg.type;
   if (!isNominalType(receiverType)) return;
-  if (
-    !isSome(
-      resolveTraitBoundForTypeName(ctx, typeIdentity(receiverType), traitId),
-    )
-  ) {
+  if (!isSome(resolveTraitBoundForTypeName(ctx, receiverType, traitId, []))) {
     emitError(
       ctx,
       {
@@ -9635,6 +12325,27 @@ function analyzeIndexExpression(
   return { ...expression, object, index, type: arrayType.elementType };
 }
 
+/** A struct field's declared type substituted against the concrete
+ * instantiation it was actually accessed through (`Pair<i32>`'s field
+ * `a: T` resolves to `i32`, not the struct's own bare declaration-identity
+ * `T`) - `structDecl.generics`' positional order matches `structType`'s own
+ * `typeArguments`, the same convention construction/coherence already
+ * assume. */
+function substituteStructFieldType(
+  fieldType: Semantics.Type,
+  structDecl: Semantics.StructDecl,
+  structType: Semantics.StructType,
+  tokenId: number,
+): Semantics.Type {
+  if (structDecl.generics.length === 0) return fieldType;
+  const bindings: GenericBindings = new Map();
+  structDecl.generics.forEach((name, index) => {
+    const arg = structType.typeArguments[index];
+    if (arg !== undefined) bindings.set(name, { type: arg, tokenId });
+  });
+  return substituteGenericType(fieldType, bindings);
+}
+
 function analyzeFieldAccessExpression(
   ctx: AnalysisContext,
   expression: Parser.FieldAccessExpression,
@@ -9692,11 +12403,17 @@ function analyzeFieldAccessExpression(
     return unresolved();
   }
 
+  const fieldType = substituteStructFieldType(
+    matchedField.type,
+    structDecl,
+    structType,
+    expression.field.tokenId,
+  );
   return {
     ...expression,
     object,
-    field: { ...expression.field, type: matchedField.type },
-    type: matchedField.type,
+    field: { ...expression.field, type: fieldType },
+    type: fieldType,
   };
 }
 
@@ -10256,6 +12973,22 @@ function analyzeCompoundAssignmentExpression(
   };
 }
 
+/** Each named field's own raw (unanalyzed) value expression, keyed by field
+ * name - a shorthand field (`Foo { x }`, `field.value` is `none()`) has no
+ * raw value expression of its own to re-check, so it's simply absent. Used
+ * to re-analyze a field's value against its real substituted type once
+ * that's known, rather than reconciling whatever it independently
+ * defaulted to on its own first pass. */
+function rawNamedFieldValues(
+  fields: readonly Parser.FieldInit[],
+): ReadonlyMap<string, Parser.Expression> {
+  const values = new Map<string, Parser.Expression>();
+  for (const field of fields) {
+    if (isSome(field.value)) values.set(field.name.text, field.value.value);
+  }
+  return values;
+}
+
 /**
  * `Message::Write { text: "hi" }`-shaped construction struct-literals.
  * `none()` unless the path is a known enum + variant, falling back to
@@ -10269,6 +13002,8 @@ function analyzeEnumVariantStructConstruction(
   structExpression: Parser.StructExpression,
   fields: readonly Semantics.FieldInit[],
   hasBase: boolean,
+  rawFieldValues: ReadonlyMap<string, Parser.Expression>,
+  expected: Semantics.Type | undefined,
 ): Option<{
   readonly type: Semantics.Type;
   readonly fields: Semantics.FieldInit[];
@@ -10307,7 +13042,11 @@ function analyzeEnumVariantStructConstruction(
     );
     return some({ type: enumDecl.type, fields: [...fields] });
   }
-  const checkedFields = analyzeStructNamedFields(
+  const {
+    fields: checkedFields,
+    typeArguments,
+    expectedTypeConflicted,
+  } = analyzeStructNamedFields(
     ctx,
     variantName,
     fields,
@@ -10315,16 +13054,28 @@ function analyzeEnumVariantStructConstruction(
     {
       tokenId: structExpression.tokenId,
       typeArguments: structExpression.typeArguments,
+      rawFieldValues,
+      declaredType: enumDecl.type,
+      expectedType: expected,
     },
     variant.body.value,
     { params: enumDecl.generics, defaults: enumDecl.genericParamDefaults },
   );
-  return some({ type: enumDecl.type, fields: checkedFields });
+  return some({
+    type: constructionResultType(
+      expectedTypeConflicted,
+      expected,
+      enumDecl.type,
+      typeArguments,
+    ),
+    fields: checkedFields,
+  });
 }
 
 function analyzeStructExpression(
   ctx: AnalysisContext,
   structExpression: Parser.StructExpression,
+  expected?: Semantics.Type,
 ): Semantics.StructExpression {
   const analyzedFields = structExpression.fields.map(
     (field: Parser.FieldInit): Semantics.FieldInit => {
@@ -10343,6 +13094,7 @@ function analyzeStructExpression(
       };
     },
   );
+  const rawFieldValues = rawNamedFieldValues(structExpression.fields);
 
   const analyzedBase = mapSome(structExpression.base, (base) =>
     analyzeExpression(ctx, base),
@@ -10354,6 +13106,8 @@ function analyzeStructExpression(
       structExpression,
       analyzedFields,
       isSome(analyzedBase),
+      rawFieldValues,
+      expected,
     );
     if (isSome(construction)) {
       return {
@@ -10400,8 +13154,9 @@ function analyzeStructExpression(
   }
 
   let checkedFields = analyzedFields;
+  let resolvedType = structDecl.type;
   if (structDecl.body.kind === "NamedFields") {
-    checkedFields = analyzeStructNamedFields(
+    const result = analyzeStructNamedFields(
       ctx,
       structName,
       analyzedFields,
@@ -10409,6 +13164,9 @@ function analyzeStructExpression(
       {
         tokenId: structExpression.tokenId,
         typeArguments: structExpression.typeArguments,
+        rawFieldValues,
+        declaredType: structDecl.type,
+        expectedType: expected,
       },
       structDecl.body,
       {
@@ -10416,10 +13174,14 @@ function analyzeStructExpression(
         defaults: structDecl.genericParamDefaults,
       },
     );
-  } else if (
-    structDecl.body.kind === "Unit" &&
-    structExpression.fields.length > 0
-  ) {
+    checkedFields = result.fields;
+    resolvedType = constructionResultType(
+      result.expectedTypeConflicted,
+      expected,
+      structDecl.type,
+      result.typeArguments,
+    );
+  } else if (structDecl.body.kind === "Unit") {
     for (const field of structExpression.fields) {
       emitError(
         ctx,
@@ -10431,13 +13193,27 @@ function analyzeStructExpression(
         field.name.tokenId,
       );
     }
+    resolvedType = withTypeArguments(
+      structDecl.type,
+      checkGenericUnitStructConstruction(
+        ctx,
+        structExpression.tokenId,
+        structExpression.typeArguments,
+        structName,
+        {
+          params: structDecl.generics,
+          defaults: structDecl.genericParamDefaults,
+        },
+      ),
+    );
   }
 
+  recordDropWitnesses(ctx, structExpression.tokenId, resolvedType);
   return {
     ...structExpression,
     fields: checkedFields,
     base: analyzedBase,
-    type: structDecl.type,
+    type: resolvedType,
   };
 }
 
@@ -10457,6 +13233,53 @@ interface DeclGenerics {
 interface NamedFieldConstructionSite {
   readonly tokenId: number;
   readonly typeArguments: readonly Parser.Type[];
+  readonly rawFieldValues: ReadonlyMap<string, Parser.Expression>;
+  /** The struct/enum's own bare declared type (e.g. `Wrapper<T>`'s `T`
+   * un-substituted) - needed to seed `expectedType` against, the same way
+   * `checkGenericPositionalConstruction` builds an abstract return type to
+   * unify a call's own expected type against. */
+  readonly declaredType: Semantics.Type;
+  /** An outer expected type this construction should unify its own
+   * generics against before field inference (a `let` annotation or
+   * function return type), mirroring the tuple-construction/enum-call
+   * paths - `undefined` when there is no such context (an isolated
+   * expression). */
+  readonly expectedType: Semantics.Type | undefined;
+}
+
+/** The non-generic path for a named field's own value: reconcile against the
+ * declared type (coercing an unsuffixed-integer literal, range-checking it),
+ * and report a mismatch if it still disagrees. */
+function reconcileOrdinaryNamedField(
+  ctx: AnalysisContext,
+  field: Semantics.FieldInit,
+  declaredType: Semantics.Type,
+  value: Semantics.Expression,
+): Semantics.FieldInit {
+  const { expr, mismatch } = reconcileExpressionType(
+    ctx,
+    value,
+    declaredType,
+    value.tokenId,
+  );
+  if (expr.kind === "IntLiteral") {
+    checkPosLiteralRange(ctx, expr, declaredType);
+  }
+  if (mismatch) {
+    emitError(
+      ctx,
+      {
+        kind: "SemStructFieldTypeMismatch",
+        field: field.name.text,
+        expected: describeType(declaredType),
+        found: describeType(getType(expr)),
+      },
+      value.tokenId,
+    );
+  }
+  return expr === value
+    ? field
+    : { ...field, value: expr, type: getType(expr) };
 }
 
 /**
@@ -10479,7 +13302,17 @@ function analyzeStructNamedFields(
   site: NamedFieldConstructionSite,
   namedFieldsBody: Semantics.NamedFieldsBody,
   generics: DeclGenerics,
-): Semantics.FieldInit[] {
+): {
+  readonly fields: Semantics.FieldInit[];
+  readonly typeArguments: readonly Semantics.Type[];
+  /** `true` when `seedExpectedReturnType` already reported a conflict
+   * between the constructed type and an outer expected type - mirrors
+   * `checkGenericPositionalConstruction`'s own field of the same name and
+   * purpose (see its doc comment); the caller feeds this into
+   * `constructionResultType` instead of double-reporting the same conflict
+   * via the enclosing `let`/return reconciliation. */
+  readonly expectedTypeConflicted: boolean;
+} {
   const declaredFields = new Map(
     namedFieldsBody.fields.map((f): [string, Semantics.StructField] => [
       f.name.text,
@@ -10496,6 +13329,24 @@ function analyzeStructNamedFields(
     generics,
     bindings,
   );
+  const expectedTypeConflicted =
+    site.expectedType !== undefined &&
+    seedExpectedReturnType(
+      ctx,
+      site.tokenId,
+      structName,
+      withTypeArguments(
+        site.declaredType,
+        generics.params.map((name): Semantics.Type => ({
+          kind: "NamedType",
+          tokenId: site.tokenId,
+          path: { absolute: false, segments: [name] },
+        })),
+      ),
+      site.expectedType,
+      genericNames,
+      bindings,
+    );
 
   const seenFields = new Set<string>();
   const checkedFields = fields.map((field): Semantics.FieldInit => {
@@ -10551,31 +13402,34 @@ function analyzeStructNamedFields(
         ? field
         : { ...field, value: expr, type: getType(expr) };
     }
-
-    const { expr, mismatch } = reconcileExpressionType(
-      ctx,
-      value,
-      declaredField.type,
-      value.tokenId,
-    );
-    if (expr.kind === "IntLiteral") {
-      checkPosLiteralRange(ctx, expr, declaredField.type);
-    }
-    if (mismatch) {
-      emitError(
+    if (genericNames.size > 0) {
+      const substituted = substituteGenericType(declaredField.type, bindings);
+      if (mentionsGenericParamAnywhere(substituted, genericNames)) {
+        return field;
+      }
+      // Re-analyze the raw field value against the now-concrete substituted
+      // type, rather than reconciling the already-analyzed `value` - see
+      // the identical note on the positional-argument path. Never for an
+      // already-error-recovery value (e.g. an unresolved name) - it fell
+      // through the placeholder-binding branch above precisely because
+      // nothing more can be learned from it, so re-analyzing it here would
+      // just re-run the same failed lookup and double-report it.
+      const rawValue = site.rawFieldValues.get(field.name.text);
+      const recheckedValue =
+        rawValue !== undefined && !isErrorRecoveryUnitValue(ctx, value)
+          ? checkExpression(ctx, rawValue, {
+              kind: "HasType",
+              type: substituted,
+            })
+          : value;
+      return reconcileOrdinaryNamedField(
         ctx,
-        {
-          kind: "SemStructFieldTypeMismatch",
-          field: field.name.text,
-          expected: describeType(declaredField.type),
-          found: describeType(getType(expr)),
-        },
-        value.tokenId,
+        field,
+        substituted,
+        recheckedValue,
       );
     }
-    return expr === value
-      ? field
-      : { ...field, value: expr, type: getType(expr) };
+    return reconcileOrdinaryNamedField(ctx, field, declaredField.type, value);
   });
 
   if (!hasBase) {
@@ -10601,21 +13455,66 @@ function analyzeStructNamedFields(
     }
   }
 
-  for (const paramName of generics.params) {
-    if (
-      bindingOrDefault(paramName, generics.defaults, bindings, site.tokenId) !==
-      undefined
-    ) {
-      continue;
-    }
+  const typeArguments = generics.params.map((paramName): Semantics.Type => {
+    const binding = bindingOrDefault(
+      paramName,
+      generics.defaults,
+      bindings,
+      site.tokenId,
+    );
+    if (binding !== undefined) return binding.type;
     emitError(
       ctx,
       { kind: "SemCannotInferGenericParam", paramName },
       site.tokenId,
     );
-  }
+    return { kind: "UnitType", tokenId: site.tokenId };
+  });
 
-  return checkedFields;
+  return { fields: checkedFields, typeArguments, expectedTypeConflicted };
+}
+
+/** `analyzeStructNamedFields`'s own turbofish/default-then-unsolved-check
+ * tail (its final `typeArguments` computation), extracted for a unit-bodied
+ * struct - there are no fields to iterate for per-field inference, so
+ * turbofish and declared defaults are the only two sources a unit
+ * construction's own type arguments can come from.
+ *
+ * Currently unreachable from any valid program: a unit struct has zero
+ * fields, so `checkUnusedGenericParams` (which does not count a
+ * bound-only or default-only mention as "used" - see the "Generic
+ * parameters, bounds, and where clauses" note in this package's CLAUDE.md)
+ * always rejects a unit struct's own declared generic parameter as unused
+ * before construction is ever analyzed. Kept in step with
+ * `analyzeStructNamedFields`'s identical field-less tail anyway, so the
+ * two don't silently diverge if that rejection is ever loosened. */
+function checkGenericUnitStructConstruction(
+  ctx: AnalysisContext,
+  tokenId: number,
+  typeArgs: readonly Parser.Type[],
+  structName: string,
+  generics: DeclGenerics,
+): readonly Semantics.Type[] {
+  const bindings: GenericBindings = new Map();
+  seedStructTurbofishBindings(
+    ctx,
+    tokenId,
+    typeArgs,
+    structName,
+    generics,
+    bindings,
+  );
+  return generics.params.map((paramName): Semantics.Type => {
+    const binding = bindingOrDefault(
+      paramName,
+      generics.defaults,
+      bindings,
+      tokenId,
+    );
+    if (binding !== undefined) return binding.type;
+    emitError(ctx, { kind: "SemCannotInferGenericParam", paramName }, tokenId);
+    return { kind: "UnitType", tokenId };
+  });
 }
 
 /**
@@ -10934,9 +13833,23 @@ function checkCallGenericBounds(
       continue;
     }
     if (binding.isErrorPlaceholder) continue;
-    for (const traitName of calleeType.genericParamBounds.get(paramName) ??
-      []) {
-      const witness = resolveTraitBound(ctx, binding.type, traitName);
+    for (const traitRef of calleeType.genericParamBounds.get(paramName) ?? []) {
+      // A bound's own type arguments (`T: Convert<U>`'s `U`) can themselves
+      // name another of this call's generic parameters - resolve against
+      // the completed bindings (`U -> i32`), not the literal declared
+      // argument, or a valid `impl Convert<i32> for P` is never found.
+      const resolvedTraitRef: Semantics.BoundTraitRef = {
+        ...traitRef,
+        typeArguments: traitRef.typeArguments.map((arg) =>
+          substituteGenericType(arg, bindings),
+        ),
+      };
+      const witness = resolveTraitBound(
+        ctx,
+        binding.type,
+        resolvedTraitRef.name,
+        resolvedTraitRef.typeArguments,
+      );
       if (isSome(witness)) {
         witnesses.push(witness.value);
         continue;
@@ -10947,7 +13860,7 @@ function checkCallGenericBounds(
         {
           kind: "SemTraitBoundNotSatisfied",
           typeName: describeType(binding.type),
-          trait: bareTypeName(traitName),
+          trait: describeTraitRef(resolvedTraitRef),
         },
         call.tokenId,
       );
@@ -10970,6 +13883,7 @@ function analyzeCall(
     ctx,
     call,
     args,
+    expectedType,
   );
   if (isSome(structConstruction)) {
     return {
@@ -10995,7 +13909,12 @@ function analyzeCall(
     };
   }
   const callee = analyzeExpression(ctx, call.callee);
-  const enumConstruction = analyzeEnumVariantCallConstruction(ctx, call, args);
+  const enumConstruction = analyzeEnumVariantCallConstruction(
+    ctx,
+    call,
+    args,
+    expectedType,
+  );
   if (isSome(enumConstruction)) {
     return {
       ...call,
@@ -11033,7 +13952,8 @@ function analyzeCall(
     expectedType !== undefined &&
     seedExpectedReturnType(
       ctx,
-      call,
+      call.tokenId,
+      calleeName(call),
       calleeType.returnType,
       expectedType,
       new Set(calleeType.genericParams),
@@ -11082,6 +14002,23 @@ function calleeName(call: Parser.CallExpression): string {
   return "this call";
 }
 
+/** A positional construction's own result type - `expectedType` itself when
+ * `checkGenericPositionalConstruction` already reported a conflict against
+ * it (matching `analyzeCall`'s identical handling, see
+ * `expectedTypeConflicted`'s own doc comment), otherwise the declared type
+ * substituted with the resolved type arguments. */
+function constructionResultType(
+  expectedTypeConflicted: boolean,
+  expectedType: Semantics.Type | undefined,
+  declaredType: Semantics.Type,
+  typeArguments: readonly Semantics.Type[],
+): Semantics.Type {
+  if (expectedTypeConflicted && expectedType !== undefined) {
+    return expectedType;
+  }
+  return withTypeArguments(declaredType, typeArguments);
+}
+
 /**
  * `Message::Move(1, 2)`-shaped construction calls. `none()` when
  * `call.callee` isn't a two-segment path naming a known enum + variant,
@@ -11094,6 +14031,7 @@ function analyzeEnumVariantCallConstruction(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
   args: readonly Semantics.Expression[],
+  expectedType: Semantics.Type | undefined,
 ): Option<{
   readonly type: Semantics.Type;
   readonly args: Semantics.Expression[];
@@ -11121,8 +14059,27 @@ function analyzeEnumVariantCallConstruction(
         },
         call.tokenId,
       );
+      return some({ type: enumDecl.type, args: [...args] });
     }
-    return some({ type: enumDecl.type, args: [...args] });
+    const { typeArguments, expectedTypeConflicted } =
+      checkGenericPositionalConstruction(
+        ctx,
+        call,
+        { kindLabel: "variant", name: variantName },
+        [],
+        [],
+        { params: enumDecl.generics, defaults: enumDecl.genericParamDefaults },
+        { declaredType: enumDecl.type, expectedType },
+      );
+    return some({
+      type: constructionResultType(
+        expectedTypeConflicted,
+        expectedType,
+        enumDecl.type,
+        typeArguments,
+      ),
+      args: [...args],
+    });
   }
   if (variant.body.value.kind !== "TupleFields") {
     emitError(
@@ -11132,16 +14089,28 @@ function analyzeEnumVariantCallConstruction(
     );
     return some({ type: enumDecl.type, args: [...args] });
   }
-  const checkedArgs = checkGenericPositionalConstruction(
+  const {
+    args: checkedArgs,
+    typeArguments,
+    expectedTypeConflicted,
+  } = checkGenericPositionalConstruction(
     ctx,
     call,
     { kindLabel: "variant", name: variantName },
     variant.body.value.fields,
     args,
-    enumDecl.generics,
-    enumDecl.genericParamDefaults,
+    { params: enumDecl.generics, defaults: enumDecl.genericParamDefaults },
+    { declaredType: enumDecl.type, expectedType },
   );
-  return some({ type: enumDecl.type, args: checkedArgs });
+  return some({
+    type: constructionResultType(
+      expectedTypeConflicted,
+      expectedType,
+      enumDecl.type,
+      typeArguments,
+    ),
+    args: checkedArgs,
+  });
 }
 
 /** A generic-parameter name's inferred concrete type, alongside the token
@@ -11249,11 +14218,74 @@ function involvesGenericParam(
   return genericParamNameAt(declaredType, genericNames) !== undefined;
 }
 
+/** Whether `declaredType` mentions one of `genericNames` anywhere at all,
+ * including nested inside a `StructType`/`EnumType`'s own `typeArguments`
+ * (`Box<T>`) - a strictly wider check than `involvesGenericParam`, which
+ * only recognizes the shapes unification can actually bind `T` from. A
+ * position this finds but `involvesGenericParam` doesn't carries no
+ * inferable information (there is no unification through a struct/enum's
+ * own type-argument list yet), so a caller finding this true where
+ * `involvesGenericParam` is false should skip strict comparison rather than
+ * either binding `T` or reporting a false mismatch against the still-open
+ * parameter. */
+// eslint-disable-next-line complexity -- Routing function over the full Type union
+function mentionsGenericParamAnywhere(
+  declaredType: Semantics.Type,
+  genericNames: ReadonlySet<string>,
+): boolean {
+  switch (declaredType.kind) {
+    case "NamedType":
+      return (
+        declaredType.path.segments.length === 1 &&
+        genericNames.has(declaredType.path.segments[0] ?? "")
+      );
+    case "ReferenceType":
+      return mentionsGenericParamAnywhere(declaredType.referent, genericNames);
+    case "ArrayType":
+      return mentionsGenericParamAnywhere(
+        declaredType.elementType,
+        genericNames,
+      );
+    case "StructType":
+    case "EnumType":
+      return declaredType.typeArguments.some((arg) =>
+        mentionsGenericParamAnywhere(arg, genericNames),
+      );
+    case "FunctionType":
+    case "UnitType":
+    case "Projection":
+    case "DynType":
+    case "PrimitiveI8Type":
+    case "PrimitiveI16Type":
+    case "PrimitiveI32Type":
+    case "PrimitiveI64Type":
+    case "PrimitiveIsizeType":
+    case "PrimitiveU8Type":
+    case "PrimitiveU16Type":
+    case "PrimitiveU32Type":
+    case "PrimitiveU64Type":
+    case "PrimitiveUsizeType":
+    case "PrimitiveF32Type":
+    case "PrimitiveF64Type":
+    case "PrimitiveBooleanType":
+    case "PrimitiveCharType":
+    case "PrimitiveStringType":
+      return false;
+    default:
+      return assertNever(
+        declaredType,
+        `Unexpected type: ${JSON.stringify(declaredType)}`,
+      );
+  }
+}
+
 /** Substitutes every generic-parameter-named `NamedType` position in `type`
  * for its bound concrete type, recursing through a single reference or
- * array-element hop - the shapes generic-parameter resolution currently
- * supports. A `NamedType` with no binding yet (or not a generic parameter at
- * all) passes through unchanged. */
+ * array-element hop, or through a `StructType`/`EnumType`'s own nominal
+ * type arguments (`Wrapper<T>` -> `Wrapper<i32>` once `T` is bound) - the
+ * shapes generic-parameter resolution currently supports. A `NamedType`
+ * with no binding yet (or not a generic parameter at all) passes through
+ * unchanged. */
 function substituteGenericType(
   type: Semantics.Type,
   bindings: GenericBindings,
@@ -11273,6 +14305,14 @@ function substituteGenericType(
     return {
       ...type,
       elementType: substituteGenericType(type.elementType, bindings),
+    };
+  }
+  if (type.kind === "StructType" || type.kind === "EnumType") {
+    return {
+      ...type,
+      typeArguments: type.typeArguments.map((arg) =>
+        substituteGenericType(arg, bindings),
+      ),
     };
   }
   return type;
@@ -11306,6 +14346,35 @@ function relatedSpanAt(
  * against its existing binding. Only called once `involvesGenericParam` has
  * already confirmed `declaredType` is a real generic-parameter position, so
  * a `NamedType` reached here is always in `genericNames`. */
+/** `unifyGenericParam`'s own base case: `declaredPath` is a bare generic
+ * parameter name itself, so `actualType` either establishes its first
+ * binding or must agree with an existing one. */
+function unifyBareGenericParam(
+  declaredPath: Semantics.Path,
+  actualType: Semantics.Type,
+  tokenId: number,
+  genericNames: ReadonlySet<string>,
+  bindings: GenericBindings,
+): UnifyOutcome {
+  const name = declaredPath.segments[0];
+  assert(
+    name !== undefined && genericNames.has(name),
+    "unifyGenericParam called on a non-generic NamedType",
+  );
+  const existing = bindings.get(name);
+  if (existing === undefined || existing.isErrorPlaceholder) {
+    bindings.set(name, { type: actualType, tokenId });
+    return { kind: "Bound" };
+  }
+  return typesEqual(existing.type, actualType)
+    ? { kind: "Bound" }
+    : {
+        kind: "Conflict",
+        previous: existing.type,
+        previousTokenId: existing.tokenId,
+      };
+}
+
 function unifyGenericParam(
   declaredType: Semantics.Type,
   actualType: Semantics.Type,
@@ -11314,23 +14383,13 @@ function unifyGenericParam(
   bindings: GenericBindings,
 ): UnifyOutcome {
   if (declaredType.kind === "NamedType") {
-    const name = declaredType.path.segments[0];
-    assert(
-      name !== undefined && genericNames.has(name),
-      "unifyGenericParam called on a non-generic NamedType",
+    return unifyBareGenericParam(
+      declaredType.path,
+      actualType,
+      tokenId,
+      genericNames,
+      bindings,
     );
-    const existing = bindings.get(name);
-    if (existing === undefined || existing.isErrorPlaceholder) {
-      bindings.set(name, { type: actualType, tokenId });
-      return { kind: "Bound" };
-    }
-    return typesEqual(existing.type, actualType)
-      ? { kind: "Bound" }
-      : {
-          kind: "Conflict",
-          previous: existing.type,
-          previousTokenId: existing.tokenId,
-        };
   }
   if (
     declaredType.kind === "ReferenceType" &&
@@ -11358,6 +14417,19 @@ function unifyGenericParam(
       bindings,
     );
   }
+  if (
+    isNominalType(declaredType) &&
+    isNominalType(actualType) &&
+    sameNominalIdentity(declaredType, actualType)
+  ) {
+    return unifyNominalTypeArguments(
+      declaredType.typeArguments,
+      actualType.typeArguments,
+      tokenId,
+      genericNames,
+      bindings,
+    );
+  }
   bindMismatchedReferentPlaceholder(
     declaredType,
     tokenId,
@@ -11365,6 +14437,54 @@ function unifyGenericParam(
     bindings,
   );
   return { kind: "Mismatch" };
+}
+
+/** Whether two nominal types are the same declaration with the same
+ * arity of type arguments - the shape `unifyGenericParam` needs before it
+ * can unify their argument lists position by position. */
+function sameNominalIdentity(
+  a: Semantics.StructType | Semantics.EnumType,
+  b: Semantics.StructType | Semantics.EnumType,
+): boolean {
+  return (
+    a.kind === b.kind &&
+    a.name === b.name &&
+    a.typeArguments.length === b.typeArguments.length
+  );
+}
+
+/** Unifies a nominal type's own type-argument list position by position -
+ * a position that itself mentions a generic parameter recurses through
+ * `unifyGenericParam` (binding it); a fully concrete position only needs a
+ * plain equality check, never a binding attempt (`unifyGenericParam`
+ * asserts its `NamedType` case is always a real generic parameter, which a
+ * concrete position never is). Stops at the first non-`Bound` position,
+ * matching `unifyGenericParam`'s own short-circuit shape. */
+function unifyNominalTypeArguments(
+  declaredArgs: readonly Semantics.Type[],
+  actualArgs: readonly Semantics.Type[],
+  tokenId: number,
+  genericNames: ReadonlySet<string>,
+  bindings: GenericBindings,
+): UnifyOutcome {
+  for (let i = 0; i < declaredArgs.length; i++) {
+    const declaredArg = declaredArgs[i];
+    const actualArg = actualArgs[i];
+    if (declaredArg === undefined || actualArg === undefined) continue;
+    if (!involvesGenericParam(declaredArg, genericNames)) {
+      if (!typesEqual(declaredArg, actualArg)) return { kind: "Mismatch" };
+      continue;
+    }
+    const outcome = unifyGenericParam(
+      declaredArg,
+      actualArg,
+      tokenId,
+      genericNames,
+      bindings,
+    );
+    if (outcome.kind !== "Bound") return outcome;
+  }
+  return { kind: "Bound" };
 }
 
 /** The declared shape itself doesn't match (wrong mutability, a mismatched
@@ -11528,58 +14648,121 @@ function seedStructTurbofishBindings(
   });
 }
 
-/** Seeds turbofish, then argument-driven unification, then checks every
- * declared generic parameter got resolved - the same sequence `analyzeCall`
- * runs for an ordinary function call, minus the expected-return-type seed
- * (a constructed value's own type never reifies which concrete types its
- * generics resolved to - `EnumType`/`StructType` compare by name alone, see
- * `typesEqual` - so there's no return type for an outer expected type to
- * seed against the way an ordinary function call has one). Shared by
- * `analyzeEnumVariantCallConstruction` and `analyzeTupleStructCallConstruction`. */
+/** `declaredType` (the struct/enum's own bare declaration type,
+ * `typeArguments: []`) and the caller's own already-known `expectedType` (a
+ * `let` annotation or enclosing return type, when known) - bundled to keep
+ * `checkGenericPositionalConstruction` under the params-count cap. */
+interface GenericConstructionContext {
+  readonly declaredType: Semantics.Type;
+  readonly expectedType: Semantics.Type | undefined;
+}
+
+/** Substitutes `declaredType`'s own generic parameters with abstract
+ * per-param `NamedType`s, then seeds `bindings` by unifying that against
+ * `expectedType` - `checkGenericPositionalConstruction`'s own
+ * turbofish-then-expected-type step, factored out to keep that function's
+ * branch count under the complexity cap. Returns whether a conflict was
+ * already reported, the same signal `seedExpectedReturnType` itself
+ * returns. */
+function seedConstructionExpectedType(
+  ctx: AnalysisContext,
+  call: Parser.CallExpression,
+  declaredType: Semantics.Type,
+  expectedType: Semantics.Type,
+  genericParams: readonly string[],
+  bindings: GenericBindings,
+): boolean {
+  const abstractDeclaredType = withTypeArguments(
+    declaredType,
+    genericParams.map((name): Semantics.Type => ({
+      kind: "NamedType",
+      tokenId: call.tokenId,
+      path: { absolute: false, segments: [name] },
+    })),
+  );
+  return seedExpectedReturnType(
+    ctx,
+    call.tokenId,
+    calleeName(call),
+    abstractDeclaredType,
+    expectedType,
+    new Set(genericParams),
+    bindings,
+  );
+}
+
+/** Seeds turbofish, then an outer expected type (post Layer A, a
+ * constructed value's own type carries real type arguments, so this can
+ * unify the same way `analyzeCall` seeds an ordinary function's own
+ * declared return type), then argument-driven unification, then checks
+ * every declared generic parameter got resolved. `context.declaredType`'s
+ * abstract per-param `NamedType`s are substituted in here so it can be
+ * unified against `context.expectedType` - the same "declared shape, still
+ * abstract" role an ordinary function's own return type already plays.
+ * Shared by `analyzeEnumVariantCallConstruction` and
+ * `analyzeTupleStructCallConstruction`. */
 function checkGenericPositionalConstruction(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
   site: CallSiteDescription,
   params: readonly { readonly type: Semantics.Type }[],
   args: readonly Semantics.Expression[],
-  genericParams: readonly string[],
-  genericParamDefaults: ReadonlyMap<string, Semantics.Type>,
-): Semantics.Expression[] {
+  generics: DeclGenerics,
+  context: GenericConstructionContext,
+): {
+  readonly args: Semantics.Expression[];
+  readonly typeArguments: readonly Semantics.Type[];
+  /** `true` when `seedExpectedReturnType` already reported a conflict
+   * between the constructed type and an outer expected type - the caller
+   * reports the construction's own type as `expectedType` itself in that
+   * case (matching `analyzeCall`'s identical handling), so the enclosing
+   * `let`/return reconciliation doesn't double-report the same conflict. */
+  readonly expectedTypeConflicted: boolean;
+} {
+  const { declaredType, expectedType } = context;
   const turbofishBindings: GenericBindings = new Map();
   seedTurbofishBindings(
     ctx,
     call,
-    genericParams,
-    genericParamDefaults,
+    generics.params,
+    generics.defaults,
     turbofishBindings,
   );
+  const expectedTypeConflicted =
+    expectedType !== undefined &&
+    seedConstructionExpectedType(
+      ctx,
+      call,
+      declaredType,
+      expectedType,
+      generics.params,
+      turbofishBindings,
+    );
   const { args: checkedArgs, bindings } = checkPositionalCallArgs(
     ctx,
     call,
     site,
     params,
     args,
-    genericParams,
+    generics.params,
     turbofishBindings,
   );
-  for (const paramName of genericParams) {
-    if (
-      bindingOrDefault(
-        paramName,
-        genericParamDefaults,
-        bindings,
-        call.tokenId,
-      ) !== undefined
-    ) {
-      continue;
-    }
+  const typeArguments = generics.params.map((paramName): Semantics.Type => {
+    const binding = bindingOrDefault(
+      paramName,
+      generics.defaults,
+      bindings,
+      call.tokenId,
+    );
+    if (binding !== undefined) return binding.type;
     emitError(
       ctx,
       { kind: "SemCannotInferGenericParam", paramName },
       call.tokenId,
     );
-  }
-  return checkedArgs;
+    return { kind: "UnitType", tokenId: call.tokenId };
+  });
+  return { args: checkedArgs, typeArguments, expectedTypeConflicted };
 }
 
 /** Seeds `bindings` from a calling context's already-known expected type - a
@@ -11599,17 +14782,18 @@ function checkGenericPositionalConstruction(
  * the same problem under a different, more confusing message. */
 function seedExpectedReturnType(
   ctx: AnalysisContext,
-  call: Parser.CallExpression,
+  tokenId: number,
+  calleeNameText: string,
   returnType: Semantics.Type,
   expectedType: Semantics.Type,
   genericNames: ReadonlySet<string>,
   bindings: GenericBindings,
 ): boolean {
-  if (!involvesGenericParam(returnType, genericNames)) return false;
+  if (!mentionsGenericParamAnywhere(returnType, genericNames)) return false;
   const outcome = unifyGenericParam(
     returnType,
     expectedType,
-    call.tokenId,
+    tokenId,
     genericNames,
     bindings,
   );
@@ -11621,11 +14805,11 @@ function seedExpectedReturnType(
         ctx,
         {
           kind: "SemCallReturnTypeMismatch",
-          calleeName: calleeName(call),
+          calleeName: calleeNameText,
           expected: describeType(substituteGenericType(returnType, bindings)),
           found: describeType(expectedType),
         },
-        call.tokenId,
+        tokenId,
         relatedSpanAt(ctx, outcome.previousTokenId, {
           kind: "LabelInferredAsHere",
           typeName: describeType(outcome.previous),
@@ -11723,32 +14907,82 @@ function checkPositionalCallArgs(
         bindings,
       );
     }
-    const { expr, mismatch } = reconcileExpressionType(
+    return reconcileOrdinaryPositionalArg(
       ctx,
-      arg,
-      field.type,
-      arg.tokenId,
+      site,
+      { index: i, declaredType: field.type, arg, rawArg: call.arguments[i] },
+      genericNames,
+      bindings,
     );
-    if (expr.kind === "IntLiteral") {
-      checkPosLiteralRange(ctx, expr, field.type);
-    }
-    if (mismatch) {
-      emitError(
-        ctx,
-        {
-          kind: "SemArgumentTypeMismatch",
-          argIndex: i + 1,
-          calleeKind: site.kindLabel,
-          calleeName: site.name,
-          expected: describeType(field.type),
-          found: describeType(getType(expr)),
-        },
-        arg.tokenId,
-      );
-    }
-    return expr;
   });
   return { args: checkedArgs, bindings };
+}
+
+/** A positional argument's own site data - bundled to keep
+ * `reconcileOrdinaryPositionalArg` under the params-count cap. `rawArg` is
+ * the unanalyzed `Parser.Expression` at this position (for re-analysis under
+ * a substituted expected type), separate from `arg`, its already-analyzed
+ * `Semantics.Expression` form. */
+interface PositionalArgSite {
+  readonly index: number;
+  readonly declaredType: Semantics.Type;
+  readonly arg: Semantics.Expression;
+  readonly rawArg: Parser.Expression | undefined;
+}
+
+/** The non-generic-unification path for a positional argument: substitute
+ * any already-known bindings into the declared type, skip (contribute no
+ * binding) if it's still genuinely abstract, else reconcile against it -
+ * re-analyzing the raw argument first when doing so could change the
+ * result (see the identical note on the named-field path). */
+function reconcileOrdinaryPositionalArg(
+  ctx: AnalysisContext,
+  site: CallSiteDescription,
+  argSite: PositionalArgSite,
+  genericNames: ReadonlySet<string>,
+  bindings: GenericBindings,
+): Semantics.Expression {
+  const { index, declaredType, arg, rawArg } = argSite;
+  const substitutedType =
+    genericNames.size > 0
+      ? substituteGenericType(declaredType, bindings)
+      : declaredType;
+  if (
+    genericNames.size > 0 &&
+    mentionsGenericParamAnywhere(substitutedType, genericNames)
+  ) {
+    return arg;
+  }
+  const isErrorRecoveryArg =
+    getType(arg).kind === "UnitType" && isAmbiguousUnitExpr(arg);
+  const recheckedArg =
+    genericNames.size > 0 && rawArg !== undefined && !isErrorRecoveryArg
+      ? checkExpression(ctx, rawArg, { kind: "HasType", type: substitutedType })
+      : arg;
+  const { expr, mismatch } = reconcileExpressionType(
+    ctx,
+    recheckedArg,
+    substitutedType,
+    arg.tokenId,
+  );
+  if (expr.kind === "IntLiteral") {
+    checkPosLiteralRange(ctx, expr, substitutedType);
+  }
+  if (mismatch) {
+    emitError(
+      ctx,
+      {
+        kind: "SemArgumentTypeMismatch",
+        argIndex: index + 1,
+        calleeKind: site.kindLabel,
+        calleeName: site.name,
+        expected: describeType(substitutedType),
+        found: describeType(getType(expr)),
+      },
+      arg.tokenId,
+    );
+  }
+  return expr;
 }
 
 /** An empty array literal (`[]`) against a `[T; 0]` position carries no
@@ -12141,6 +15375,7 @@ function analyzeTupleStructCallConstruction(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
   args: readonly Semantics.Expression[],
+  expectedType: Semantics.Type | undefined,
 ): Option<{
   readonly callee: Semantics.PathExpression;
   readonly type: Semantics.Type;
@@ -12179,16 +15414,30 @@ function analyzeTupleStructCallConstruction(
     );
     return some({ callee, type: structDecl.type, args: [...args] });
   }
-  const checkedArgs = checkGenericPositionalConstruction(
+  const {
+    args: checkedArgs,
+    typeArguments,
+    expectedTypeConflicted,
+  } = checkGenericPositionalConstruction(
     ctx,
     call,
     { kindLabel: "struct", name: structName },
     structDecl.body.fields,
     args,
-    structDecl.generics,
-    structDecl.genericParamDefaults,
+    {
+      params: structDecl.generics,
+      defaults: structDecl.genericParamDefaults,
+    },
+    { declaredType: structDecl.type, expectedType },
   );
-  return some({ callee, type: structDecl.type, args: checkedArgs });
+  const type = constructionResultType(
+    expectedTypeConflicted,
+    expectedType,
+    structDecl.type,
+    typeArguments,
+  );
+  recordDropWitnesses(ctx, call.tokenId, type);
+  return some({ callee, type, args: checkedArgs });
 }
 
 /**
@@ -12303,6 +15552,8 @@ export function analyze(
     unsizeCoercionTable: new Map(),
     dropImplTable: new Map(),
     methodCallWitnessTable: new Map(),
+    dropWitnessTable: new Map(),
+    dropBoundsUnsatisfiedTable: new Set(),
     selfContextStack: [],
   };
   // Before functions, so a signature can name any declared type.
@@ -12368,5 +15619,7 @@ export function analyze(
     unsizeCoercions: ctx.unsizeCoercionTable,
     dropImpls: ctx.dropImplTable,
     methodCallWitnesses: ctx.methodCallWitnessTable,
+    dropWitnesses: ctx.dropWitnessTable,
+    dropBoundsUnsatisfied: ctx.dropBoundsUnsatisfiedTable,
   };
 }

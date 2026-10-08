@@ -836,6 +836,30 @@ describe("semantic analysis", (): void => {
       );
     });
 
+    it("propagates an expected type's own type argument to a called unit variant of a generic enum", () => {
+      const result = diagnose(`
+        enum Maybe<T> { None, Some(T) }
+        fn main() { let m: Maybe<i32> = Maybe::None(); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "m")).toMatchObject({
+        kind: "EnumType",
+        typeArguments: [{ kind: "PrimitiveI32Type" }],
+      });
+    });
+
+    it("propagates a turbofish's own type argument to a called unit variant of a generic enum", () => {
+      const result = diagnose(`
+        enum Maybe<T> { None, Some(T) }
+        fn main() { let m = Maybe::None::<i32>(); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      expect(mainLetType(result, "m")).toMatchObject({
+        kind: "EnumType",
+        typeArguments: [{ kind: "PrimitiveI32Type" }],
+      });
+    });
+
     it("accepts a tuple variant called with the correct arity and types", () => {
       const result = diagnose(`
         enum Message { Move(i32, i32) }
@@ -4036,6 +4060,26 @@ describe("associated types and trait projections", (): void => {
       `);
       expect(result.diagnostics).toEqual([]);
     });
+
+    it("resolves a trait method's own bound referencing a sibling generic parameter, not persisting it as an unresolved unit type", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        trait Foo { fn use_it<V: Convert<W>, W>(&self, x: V) -> W; }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const trait = result.program.items.find(
+        (item) => item.kind === "Trait" && item.name === "Foo",
+      );
+      assert(trait?.kind === "Trait", "expected a top-level trait named Foo");
+      const method = trait.methods.find((m) => m.name === "use_it");
+      assert(method !== undefined, "expected a use_it method");
+      const bounds = method.genericParamBounds.get("V") ?? [];
+      expect(bounds).toHaveLength(1);
+      expect(bounds[0]?.name).toBe(traitIdOf(result, "Convert"));
+      const arg = bounds[0]?.typeArguments[0];
+      assert(arg?.kind === "NamedType", "expected W to resolve as a NamedType");
+      expect(arg.path.segments).toEqual(["W"]);
+    });
   });
 
   describe("an impl missing a required associated type", (): void => {
@@ -4650,6 +4694,175 @@ describe("associated types and trait projections", (): void => {
       expect(messageOf(result.diagnostics[0])).toBe(
         "method `m` on `P` is ambiguous between traits `A` and `C`",
       );
+    });
+
+    it("rejects a method call ambiguous between two instantiations of the same parameterized trait", (): void => {
+      const result = diagnose(`
+        trait Tag<T> { fn tag(&self) -> str; }
+        struct P { v: i32 }
+        impl Tag<i32> for P { fn tag(&self) -> str { "int" } }
+        impl Tag<str> for P { fn tag(&self) -> str { "string" } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.tag();
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "method `tag` on `P` is ambiguous between multiple instantiations of trait `Tag`",
+      );
+    });
+
+    it("resolves a method call unambiguously when only one instantiation of a parameterized trait targets the receiver", (): void => {
+      const result = diagnose(`
+        trait Tag<T> { fn tag(&self) -> str; }
+        struct P { v: i32 }
+        impl Tag<i32> for P { fn tag(&self) -> str { "int" } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.tag();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a method call unambiguously when only one of two generic-target instantiations has its own bound satisfied", (): void => {
+      const result = diagnose(`
+        trait A { fn a(&self) -> i32; }
+        trait B { fn b(&self) -> i32; }
+        trait Tag<T> { fn tag(&self) -> T; }
+        struct Wrapper<T> { value: T }
+        impl<T: A> Tag<i32> for Wrapper<T> { fn tag(&self) -> i32 { 1 } }
+        impl<T: B> Tag<str> for Wrapper<T> { fn tag(&self) -> str { "s" } }
+        struct X { v: i32 }
+        impl A for X { fn a(&self) -> i32 { self.v } }
+        fn main() {
+          let w = Wrapper { value: X { v: 1 } };
+          w.tag();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("substitutes the trait's own generic parameter with the impl's requested instantiation in an indexed method's return type", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct P { v: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.v } }
+        fn main() {
+          let r: i32 = P { v: 1 }.convert();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("substitutes Self nested inside a struct type argument in an indexed trait method's return type", (): void => {
+      const result = diagnose(`
+        struct Box<T> { value: T }
+        trait Wrap { fn wrap(&self) -> Box<Self>; }
+        struct P { v: i32 }
+        impl Wrap for P { fn wrap(&self) -> Box<P> { Box { value: P { v: self.v } } } }
+        fn main() {
+          let p = P { v: 1 };
+          let b: Box<P> = p.wrap();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("substitutes Self nested inside a fixed-size array nested inside a struct type argument", (): void => {
+      const result = diagnose(`
+        struct Box<T> { value: T }
+        trait Wrap { fn wrap(&self) -> Box<[Self; 1]>; }
+        struct P { v: i32 }
+        impl Wrap for P { fn wrap(&self) -> Box<[P; 1]> { Box { value: [P { v: self.v }] } } }
+        fn main() {
+          let p = P { v: 1 };
+          let b: Box<[P; 1]> = p.wrap();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("substitutes a parameterized trait bound's own type arguments into an abstract receiver's method return type", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct P { v: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.v } }
+        fn f<U: Convert<i32>>(u: &U) -> i32 { u.convert() }
+        fn main() {
+          let p = P { v: 1 };
+          f(&p);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a method call ambiguous between two instantiations of a parameterized trait both bounding an abstract receiver", (): void => {
+      const result = diagnose(`
+        trait Tag<T> { fn tag(&self) -> str; }
+        struct P { v: i32 }
+        impl Tag<i32> for P { fn tag(&self) -> str { "int" } }
+        impl Tag<str> for P { fn tag(&self) -> str { "string" } }
+        fn f<U: Tag<i32> + Tag<str>>(u: &U) -> str { u.tag() }
+        fn main() {
+          let p = P { v: 1 };
+          f(&p);
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "method `tag` on `U` is ambiguous between multiple instantiations of trait `Tag`",
+      );
+    });
+
+    it("does not flag two instantiations of a parameterized trait targeting different structs as ambiguous", (): void => {
+      const result = diagnose(`
+        trait Tag<T> { fn tag(&self) -> str; }
+        struct P { v: i32 }
+        struct Q { v: i32 }
+        impl Tag<i32> for P { fn tag(&self) -> str { "int" } }
+        impl Tag<str> for Q { fn tag(&self) -> str { "string" } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.tag();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a method call ambiguous between two unconstrained blanket impls of different instantiations of the same parameterized trait", (): void => {
+      const result = diagnose(`
+        trait Tag<T> { fn tag(&self) -> str; }
+        struct P { v: i32 }
+        impl<T> Tag<i32> for T { fn tag(&self) -> str { "int" } }
+        impl<T> Tag<str> for T { fn tag(&self) -> str { "string" } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.tag();
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "method `tag` on `P` is ambiguous between multiple instantiations of trait `Tag`",
+      );
+    });
+
+    it("does not flag two blanket impls of different instantiations of the same trait as ambiguous when their bounds are mutually exclusive for the receiver", (): void => {
+      const result = diagnose(`
+        trait Marker {}
+        trait OtherMarker {}
+        trait Tag<T> { fn tag(&self) -> str; }
+        struct P { v: i32 }
+        impl Marker for P {}
+        impl<T: Marker> Tag<i32> for T { fn tag(&self) -> str { "int" } }
+        impl<T: OtherMarker> Tag<str> for T { fn tag(&self) -> str { "string" } }
+        fn main() {
+          let p = P { v: 1 };
+          let r = p.tag();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
     });
 
     it("auto-borrows a by-value receiver for a `&self` method", (): void => {
@@ -6048,6 +6261,357 @@ describe("generic parameter shadowing an outer type of the same name", (): void 
   });
 });
 
+describe("generic struct/enum instantiation identity", (): void => {
+  it("reports a conflict when a generic parameter is bound to two differently-instantiated arguments of the same generic struct", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn same<T>(a: T, b: T) {}
+      fn main() {
+        same(Wrapper { value: 1 }, Wrapper { value: "s" });
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "argument 2 to function `same` type mismatch: expected `Wrapper<i32>`, found `Wrapper<str>`",
+    );
+  });
+
+  it("does not report a conflict when a generic parameter is bound to the same instantiation from two separate construction sites", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn same<T>(a: T, b: T) {}
+      fn main() {
+        same(Wrapper { value: 1 }, Wrapper { value: 2 });
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a nominal type reference supplying more type arguments than the struct declares", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn f(x: Wrapper<i32, str>) {}
+      fn main() { print(0); }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "type `Wrapper` declares 1 generic parameter(s), but 2 were supplied",
+    );
+  });
+
+  it("accepts a nominal type reference omitting a trailing generic parameter that has a default", (): void => {
+    const result = diagnose(`
+      struct Marker<T = i32> { value: T }
+      fn f(x: Marker) {}
+      fn main() { print(0); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("materializes a nominal type reference's omitted default so it matches an explicit spelling of the same instantiation", (): void => {
+    const result = diagnose(`
+      struct Marker<T = i32> { value: T }
+      fn want_i32(m: Marker<i32>) {}
+      fn main() { let m: Marker = Marker { value: 1 }; want_i32(m); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("compares nested generic instantiations structurally", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn same<T>(a: T, b: T) {}
+      fn main() {
+        same(
+          Wrapper { value: Wrapper { value: 1 } },
+          Wrapper { value: Wrapper { value: "s" } },
+        );
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "argument 2 to function `same` type mismatch: expected `Wrapper<Wrapper<i32>>`, found `Wrapper<Wrapper<str>>`",
+    );
+  });
+
+  it("distinguishes two differently-instantiated enum values the same way it does for structs", (): void => {
+    const result = diagnose(`
+      enum GenericBox<T> { Has(T) }
+      fn same<T>(a: T, b: T) {}
+      fn main() {
+        same(GenericBox::Has(1), GenericBox::Has("s"));
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "argument 2 to function `same` type mismatch: expected `GenericBox<i32>`, found `GenericBox<str>`",
+    );
+  });
+
+  it("enforces a concrete generic instantiation declared on a function parameter", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn take(w: Wrapper<i32>) {}
+      fn main() {
+        take(Wrapper { value: "s" });
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "argument 1 to function `take` type mismatch: expected `Wrapper<i32>`, found `Wrapper<str>`",
+    );
+  });
+
+  it("constructs a named-field struct against an outer expected instantiation instead of defaulting the field independently", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn main() {
+        let w: Wrapper<i64> = Wrapper { value: 1 };
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    const type = mainLetType(result, "w");
+    assert(type.kind === "StructType", "expected a StructType");
+    expect(type.typeArguments).toEqual([{ kind: "PrimitiveI64Type" }]);
+  });
+
+  it("constructs a named-field enum variant against an outer expected instantiation instead of defaulting the field independently", (): void => {
+    const result = diagnose(`
+      enum Wrapper<T> { Has { value: T } }
+      fn main() {
+        let w: Wrapper<i64> = Wrapper::Has { value: 1 };
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    const type = mainLetType(result, "w");
+    assert(type.kind === "EnumType", "expected an EnumType");
+    expect(type.typeArguments).toEqual([{ kind: "PrimitiveI64Type" }]);
+  });
+
+  it("reports exactly one diagnostic when a named-field struct construction's own turbofish conflicts with an outer expected type", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn main() {
+        let w: Wrapper<str> = Wrapper::<i32> { value: 1 };
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "call to `Wrapper` type mismatch: expected `Wrapper<i32>`, found `Wrapper<str>`",
+    );
+  });
+
+  it("reports exactly one diagnostic when a named-field enum-variant construction's own turbofish conflicts with an outer expected type", (): void => {
+    const result = diagnose(`
+      enum Wrapper<T> { Has { value: T } }
+      fn main() {
+        let w: Wrapper<str> = Wrapper::Has::<i32> { value: 1 };
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "call to `Has` type mismatch: expected `Wrapper<i32>`, found `Wrapper<str>`",
+    );
+  });
+
+  it("reports exactly one diagnostic when a tuple-struct construction's own turbofish conflicts with an outer expected type", (): void => {
+    const result = diagnose(`
+      struct Pair<T>(T);
+      fn main() {
+        let p: Pair<str> = Pair::<i32>(5);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "call to `Pair` type mismatch: expected `Pair<i32>`, found `Pair<str>`",
+    );
+  });
+
+  it("reports exactly one diagnostic when an enum-variant construction's own turbofish conflicts with an outer expected type", (): void => {
+    const result = diagnose(`
+      enum Pair<T> { Has(T) }
+      fn main() {
+        let p: Pair<str> = Pair::Has::<i32>(5);
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "call to `Pair::Has` type mismatch: expected `Pair<i32>`, found `Pair<str>`",
+    );
+  });
+
+  it("reports exactly one diagnostic when a unit-variant construction's own turbofish conflicts with an outer expected type", (): void => {
+    const result = diagnose(`
+      enum Pair<T> { Has, Other(T) }
+      fn main() {
+        let p: Pair<str> = Pair::Has::<i32>();
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "call to `Pair::Has` type mismatch: expected `Pair<i32>`, found `Pair<str>`",
+    );
+  });
+});
+
+describe("generic substitution through a nominal type's own type arguments", (): void => {
+  it("substitutes a generic function's return type when it names a generic struct instantiated by the call's own binding", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn wrap<T>(x: T) -> Wrapper<T> { Wrapper { value: x } }
+      fn main() {
+        let a: Wrapper<i32> = wrap(1);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("substitutes a struct field's declared generic type against the object's own resolved instantiation", (): void => {
+    const result = diagnose(`
+      struct Pair<T> { a: T }
+      fn get_a(p: Pair<i32>) -> i32 { p.a }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("still rejects a field access whose substituted type disagrees with the declared return type", (): void => {
+    const result = diagnose(`
+      struct Pair<T> { a: T }
+      fn get_a(p: Pair<i32>) -> str { p.a }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "return type mismatch: expected `str`, found `i32`",
+    );
+  });
+
+  it("substitutes a field's declared type against the receiver's own instantiation inside a method body", (): void => {
+    const result = diagnose(`
+      struct Pair<T> { a: T }
+      impl Pair<i32> {
+        fn get_a(&self) -> i32 { self.a }
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+});
+
+describe("nested generic field validation at construction, when a turbofish already fixes it", (): void => {
+  it("reconciles a named field's nested generic type once a turbofish already resolves it", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      struct Outer<T> { inner: Wrapper<T> }
+      fn main() {
+        let o = Outer::<i32> { inner: Wrapper { value: "s" } };
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    // The nested `Wrapper { value: "s" }` now checks against the outer
+    // turbofish's own expected instantiation (`Wrapper<i32>`), so the
+    // mismatch is reported at its own innermost offending field, not
+    // re-derived one level up as a whole-type mismatch on `inner`.
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "field `value` type mismatch: expected `i32`, found `str`",
+    );
+  });
+
+  it("reconciles a positional field's nested generic type once a turbofish already resolves it", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T>(T);
+      struct Outer<T>(Wrapper<T>);
+      fn main() {
+        let o = Outer::<i32>(Wrapper("s"));
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "argument 1 to struct `Wrapper` type mismatch: expected `i32`, found `str`",
+    );
+  });
+});
+
+describe("match-pattern generic field-type substitution", (): void => {
+  it("binds a destructured named field to its real concrete type, not the bare declared parameter", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn main() {
+        let w = Wrapper { value: 5 };
+        match w {
+          Wrapper { value } => { print(value + 1); }
+        }
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("binds a destructured tuple-variant field to its real concrete type", (): void => {
+    const result = diagnose(`
+      enum Box<T> { Has(T) }
+      fn main() {
+        let b = Box::Has(5);
+        match b {
+          Box::Has(x) => { print(x + 1); }
+        }
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("substitutes a nested generic field's own type parameter, not just the outer one", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn main() {
+        let w = Wrapper { value: Wrapper { value: 5 } };
+        match w {
+          Wrapper { value } => {
+            match value {
+              Wrapper { value: inner } => { print(inner + 1); }
+            }
+          }
+        }
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("substitutes a field declared as a different generic struct's own instantiation, not just a bare type parameter", (): void => {
+    const result = diagnose(`
+      struct Inner<T> { value: T }
+      struct Outer<T> { inner: Inner<T> }
+      fn main() {
+        let o = Outer::<i32> { inner: Inner { value: 5 } };
+        match o {
+          Outer { inner } => {
+            match inner {
+              Inner { value } => { print(value + 1); }
+            }
+          }
+        }
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("still rejects a genuine type mismatch on a substituted field", (): void => {
+    const result = diagnose(`
+      struct Wrapper<T> { value: T }
+      fn main() {
+        let w = Wrapper { value: 5 };
+        match w {
+          Wrapper { value } => { print(value + "x"); }
+        }
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(2);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "the trait bound `str: Add` is not satisfied",
+    );
+    expect(messageOf(result.diagnostics[1])).toBe(
+      "arithmetic operands must have the same type",
+    );
+  });
+});
+
 describe("generic parameter used as a fixed-size array's element type", (): void => {
   it.each([
     [
@@ -6363,6 +6927,552 @@ describe("trait and impl declarations", (): void => {
       impl Draw for Point { fn draw(&self) -> str { "a" } }
     `);
     expect(result.diagnostics).toEqual([]);
+  });
+
+  describe("generic impl-target instantiation coherence", (): void => {
+    it("accepts two impls of the same trait for different concrete instantiations of a generic struct", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Pair<T> { a: T, b: T }
+        impl Draw for Pair<i32> { fn draw(&self) -> str { "a" } }
+        impl Draw for Pair<str> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still rejects two impls of the same trait for the identical concrete instantiation", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Pair<T> { a: T, b: T }
+        impl Draw for Pair<i32> { fn draw(&self) -> str { "a" } }
+        impl Draw for Pair<i32> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Draw` is already implemented for type `Pair`",
+      );
+    });
+
+    it("rejects a fully generic impl target alongside a concrete instantiation of the same struct", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Pair<T> { a: T, b: T }
+        impl<T> Draw for Pair<T> { fn draw(&self) -> str { "a" } }
+        impl Draw for Pair<i32> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Draw` is already implemented for type `Pair`",
+      );
+    });
+
+    it("rejects two fully generic impl targets of the same struct", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Pair<T> { a: T, b: T }
+        impl<T> Draw for Pair<T> { fn draw(&self) -> str { "a" } }
+        impl<T> Draw for Pair<T> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Draw` is already implemented for type `Pair`",
+      );
+    });
+
+    it("leaves a fully blanket impl's own overlap behavior unaffected", (): void => {
+      const result = diagnose(`
+        trait A {}
+        trait B { fn f(&self) -> str; }
+        impl<T: A> B for T { fn f(&self) -> str { "a" } }
+        impl<T: A> B for T { fn f(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "conflicting implementations of trait `B`",
+      );
+    });
+
+    it("rejects a nested generic impl target that structurally overlaps a concrete instantiation nested the same way", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Wrapper<T> { value: T }
+        struct Pair<T> { a: T, b: T }
+        impl<T> Draw for Pair<Wrapper<T>> { fn draw(&self) -> str { "a" } }
+        impl Draw for Pair<Wrapper<i32>> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Draw` is already implemented for type `Pair`",
+      );
+    });
+
+    it("rejects a generic impl target nested inside a fixed-size array that structurally overlaps a concrete instantiation nested the same way", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Box<T> { value: T }
+        impl<T> Draw for Box<[T; 1]> { fn draw(&self) -> str { "a" } }
+        impl Draw for Box<[i32; 1]> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Draw` is already implemented for type `Box`",
+      );
+    });
+
+    it("resolves a method call against a generic impl target nested inside a fixed-size array", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> i32; }
+        struct Box<T> { v: T }
+        impl<T> Draw for Box<[T; 1]> { fn draw(&self) -> i32 { 42 } }
+        fn main() {
+          let b = Box { v: [1] };
+          b.draw();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("substitutes a generic inherent impl's own matched target-argument bindings into an indexed method's return type", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct Pair<A, B> { a: A, b: B }
+        struct P { n: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.n } }
+        impl<A: Convert<B>, B> Pair<A, B> { fn first(&self) -> B { self.a.convert() } }
+        fn main() {
+          let pair = Pair { a: P { n: 1 }, b: 0 };
+          let x: i32 = pair.first();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("does not substitute a generic impl's own matched binding into a method's own generic parameter of the same name", (): void => {
+      const result = diagnose(`
+        struct Pair<T> { v: T }
+        impl<T> Pair<T> { fn get<T>(&self, x: T) -> T { x } }
+        fn main() {
+          let p = Pair { v: "hello" };
+          p.get(5);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a method call on a generic impl whose own bound the receiver's concrete type argument does not satisfy", (): void => {
+      const result = diagnose(`
+        trait Marker { fn mark(&self) -> i32; }
+        struct Plain { v: i32 }
+        struct Wrapper<T> { value: T }
+        impl<T: Marker> Wrapper<T> {
+          fn touch(&self) -> i32 { self.value.mark() }
+        }
+        fn main() {
+          let w = Wrapper { value: Plain { v: 1 } };
+          w.touch();
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "no method `touch` found for type `Wrapper`",
+      );
+    });
+
+    it("rejects a generic call's trait bound satisfied only by a target impl whose own bound the receiver's concrete argument does not satisfy", (): void => {
+      const result = diagnose(`
+        trait Marker { fn mark(&self) -> i32; }
+        trait Show { fn show(&self) -> i32; }
+        struct Plain { v: i32 }
+        struct Wrapper<T> { value: T }
+        impl<T: Marker> Show for Wrapper<T> { fn show(&self) -> i32 { self.value.mark() } }
+        fn needs<U: Show>(u: U) -> i32 { u.show() }
+        fn main() {
+          let w = Wrapper { value: Plain { v: 1 } };
+          needs(w);
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `Wrapper<Plain>: Show` is not satisfied",
+      );
+    });
+
+    it("does not substitute a trait bound's own type argument into a bounded receiver's method's own generic parameter of the same name", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn get<T>(&self, x: T) -> T; }
+        fn use_it<R: Convert<str>>(r: &R, x: i32) {
+          r.get(x);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("does not substitute a trait impl's own trait-argument binding into a concrete receiver's method's own generic parameter of the same name", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn get<T>(&self, x: T) -> T; }
+        struct P { n: i32 }
+        impl Convert<str> for P { fn get<T>(&self, x: T) -> T { x } }
+        fn main() {
+          let p = P { n: 1 };
+          p.get(5);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still accepts two nested generic impl targets whose nested nominal shapes differ", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Wrapper<T> { value: T }
+        struct Other<T> { value: T }
+        struct Pair<T> { a: T, b: T }
+        impl Draw for Pair<Wrapper<i32>> { fn draw(&self) -> str { "a" } }
+        impl Draw for Pair<Other<i32>> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("accepts impl<T> Draw for Pair<T, T> alongside impl Draw for Pair<i32, str>, since no single T satisfies both positions", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Pair<T, U> { a: T, b: U }
+        impl<T> Draw for Pair<T, T> { fn draw(&self) -> str { "a" } }
+        impl Draw for Pair<i32, str> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still rejects impl<T> Draw for Pair<T, T> alongside impl Draw for Pair<i32, i32>, a real overlap", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Pair<T, U> { a: T, b: U }
+        impl<T> Draw for Pair<T, T> { fn draw(&self) -> str { "a" } }
+        impl Draw for Pair<i32, i32> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Draw` is already implemented for type `Pair`",
+      );
+    });
+
+    it("does not let impl<T> Draw for Pair<T, T>'s method match a Pair<i32, str> receiver whose positions disagree", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Pair<T, U> { a: T, b: U }
+        impl<T> Draw for Pair<T, T> { fn draw(&self) -> str { "a" } }
+        fn main() {
+          let p = Pair { a: 1, b: "s" };
+          p.draw();
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "no method `draw` found for type `Pair`",
+      );
+    });
+
+    it("still lets impl<T> Draw for Pair<T, T>'s method match a Pair<i32, i32> receiver whose positions agree", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Pair<T, U> { a: T, b: U }
+        impl<T> Draw for Pair<T, T> { fn draw(&self) -> str { "a" } }
+        fn main() {
+          let p = Pair { a: 1, b: 2 };
+          p.draw();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("does not falsely report overlap when both impl patterns have their own repeated wildcards whose equations disagree", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Triple<A, B, C> { a: A, b: B, c: C }
+        impl<T> Draw for Triple<T, T, i32> { fn draw(&self) -> str { "a" } }
+        impl<U> Draw for Triple<U, str, U> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still rejects two impl patterns whose repeated wildcards jointly overlap across both sides", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Triple<A, B, C> { a: A, b: B, c: C }
+        impl<T> Draw for Triple<T, T, i32> { fn draw(&self) -> str { "a" } }
+        impl<U> Draw for Triple<U, i32, U> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Draw` is already implemented for type `Triple`",
+      );
+    });
+
+    it("rejects two impl patterns whose own wildcard is repeated at every position on both sides, without recursing forever", (): void => {
+      const result = diagnose(`
+        trait Draw { fn draw(&self) -> str; }
+        struct Triple<A, B, C> { a: A, b: B, c: C }
+        impl<T> Draw for Triple<T, T, T> { fn draw(&self) -> str { "a" } }
+        impl<U> Draw for Triple<U, U, U> { fn draw(&self) -> str { "b" } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Draw` is already implemented for type `Triple`",
+      );
+    });
+
+    it("does not falsely conflict when a shared impl-level parameter's trait argument and target argument disagree", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct Box<T> { value: T }
+        impl<T> Convert<T> for Box<T> { fn convert(&self) -> T { self.value } }
+        impl Convert<i32> for Box<str> { fn convert(&self) -> i32 { 0 } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("checks a blanket impl's own trait argument before assuming it conflicts with everything", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct P { x: i32 }
+        impl<T> Convert<str> for T { fn convert(&self) -> str { "s" } }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.x } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("does not falsely conflict when the blanket's own target parameter, bound by its trait argument, disagrees with the other impl's concrete target", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> bool; }
+        struct P { x: i32 }
+        impl<T> Convert<T> for T { fn convert(&self) -> bool { true } }
+        impl Convert<i32> for P { fn convert(&self) -> bool { true } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still rejects a blanket impl whose own target parameter, bound by its trait argument, agrees with the other impl's concrete target", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> bool; }
+        struct P { x: i32 }
+        impl<T> Convert<T> for T { fn convert(&self) -> bool { true } }
+        impl Convert<P> for P { fn convert(&self) -> bool { true } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "conflicting implementations of trait `Convert` for type `P`",
+      );
+    });
+
+    it("resolves a blanket impl's own self-referential bound by substituting the concrete receiver, not the impl's own abstract parameter", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        trait Show { fn show(&self) -> bool; }
+        struct P { v: i32 }
+        impl Convert<P> for P { fn convert(&self) -> P { P { v: self.v } } }
+        impl<T: Convert<T>> Show for T { fn show(&self) -> bool { true } }
+        fn main() {
+          let p = P { v: 1 };
+          p.show();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a blanket impl's reflexive bound at a call site whose requested instantiation disagrees with the receiver", (): void => {
+      const result = diagnose(`
+        trait Convert<T> {}
+        impl<T> Convert<T> for T {}
+        struct P { v: i32 }
+        fn needs<X: Convert<i32>>(x: &X) {}
+        fn main() {
+          let p = P { v: 1 };
+          needs(&p);
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `P: Convert<i32>` is not satisfied",
+      );
+    });
+
+    it("carries a blanket bound's own trait-argument binding into its recursively-checked bound", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        trait Show<T> {}
+        struct P { v: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.v } }
+        impl<T: Convert<U>, U> Show<U> for T {}
+        fn needs<X: Show<i32>>(x: &X) {}
+        fn main() {
+          let p = P { v: 1 };
+          needs(&p);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
+  describe("parameterized trait-bound instantiation coherence and selection", (): void => {
+    it("accepts two impls of a parameterized trait for different type arguments", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct P { x: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.x } }
+        impl Convert<str> for P { fn convert(&self) -> str { "s" } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("still rejects two impls of a parameterized trait for the identical type argument", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct P { x: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.x } }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.x } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Convert` is already implemented for type `P`",
+      );
+    });
+
+    it("selects the impl matching a bound's own requested type argument, not any impl of the trait", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct P { x: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.x } }
+        impl Convert<str> for P { fn convert(&self) -> str { "s" } }
+        fn use_it<T: Convert<i32>>(x: T) {}
+        fn main() { use_it(P { x: 1 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a bound against an impl whose own trait argument and target argument, matched to the same shared parameter, disagree", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct Box<T> { value: T }
+        impl<T> Convert<T> for Box<T> { fn convert(&self) -> T { self.value } }
+        fn use_it<U: Convert<i32>>(x: U) {}
+        fn main() { use_it(Box { value: "s" }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `Box<str>: Convert<i32>` is not satisfied",
+      );
+    });
+
+    it("still accepts a bound when the shared parameter's trait argument and target argument agree", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct Box<T> { value: T }
+        impl<T> Convert<T> for Box<T> { fn convert(&self) -> T { self.value } }
+        fn use_it<U: Convert<i32>>(x: U) {}
+        fn main() { use_it(Box { value: 5 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a bound whose specific requested instantiation has no matching impl, even though the trait itself is implemented", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct P { x: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.x } }
+        fn use_it<T: Convert<bool>>(x: T) {}
+        fn main() { use_it(P { x: 1 }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `P: Convert<bool>` is not satisfied",
+      );
+    });
+
+    it("does not falsely conflict two shadowed same-named traits, each impl'd for the same concrete type", (): void => {
+      const result = diagnose(`
+        trait Convert { fn convert(&self) -> i32; }
+        struct P { x: i32 }
+        impl Convert for P { fn convert(&self) -> i32 { self.x } }
+        fn scoped() {
+          trait Convert { fn convert(&self) -> str; }
+          impl Convert for P { fn convert(&self) -> str { "s" } }
+        }
+      `);
+      const errors = result.diagnostics.filter((d) => d.severity === "error");
+      expect(errors).toEqual([]);
+    });
+
+    it("does not let a shadowed trait's own required methods corrupt an outer same-named trait's completeness checking", (): void => {
+      const result = diagnose(`
+        trait Convert { fn convert(&self) -> i32; }
+        struct P { x: i32 }
+        fn scoped() {
+          trait Convert { fn convert(&self) -> i32; fn other(&self); }
+        }
+        impl Convert for P { fn convert(&self) -> i32 { self.x } }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("substitutes the call's own completed bindings into a bound's own requested type argument before resolving it", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct P { n: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.n } }
+        fn f<T: Convert<U>, U>(x: T, y: U) {}
+        fn main() {
+          let p = P { n: 1 };
+          f(p, 1);
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+  });
+
+  describe("parameterized blanket-impl bounds", (): void => {
+    it("rejects a receiver satisfying only a different instantiation of a blanket impl's own parameterized bound", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        trait Show { fn show(&self) -> str; }
+        struct P { x: i32 }
+        impl Convert<str> for P { fn convert(&self) -> str { "s" } }
+        impl<T: Convert<i32>> Show for T { fn show(&self) -> str { "shown" } }
+        fn main() {
+          let p = P { x: 1 };
+          p.show();
+        }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "no method `show` found for type `P`",
+      );
+    });
+
+    it("accepts a receiver satisfying a blanket impl's own parameterized bound", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        trait Show { fn show(&self) -> str; }
+        struct P { x: i32 }
+        impl Convert<i32> for P { fn convert(&self) -> i32 { self.x } }
+        impl<T: Convert<i32>> Show for T { fn show(&self) -> str { "shown" } }
+        fn main() {
+          let p = P { x: 1 };
+          p.show();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("resolves a blanket impl's own bound through a different instantiation of the same trait, not a false cycle", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct P { x: i32 }
+        impl Convert<str> for P { fn convert(&self) -> str { "s" } }
+        impl<T: Convert<str>> Convert<i32> for T { fn convert(&self) -> i32 { 0 } }
+        fn use_it<U: Convert<i32>>(x: U) {}
+        fn main() { use_it(P { x: 1 }); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
   });
 
   describe("orphan rule", (): void => {
@@ -6689,6 +7799,56 @@ describe("trait and impl declarations", (): void => {
       );
     });
 
+    it("rejects a supertrait impl satisfied only for a different instantiation of the same generic struct", (): void => {
+      const result = diagnose(`
+        trait Eq {}
+        trait Ord: Eq {}
+        struct Pair<T> { a: T }
+        impl Eq for Pair<str> {}
+        impl Ord for Pair<i32> {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `Pair: Eq` is not satisfied",
+      );
+    });
+
+    it("accepts a supertrait impl satisfied for the matching instantiation of a generic struct", (): void => {
+      const result = diagnose(`
+        trait Eq {}
+        trait Ord: Eq {}
+        struct Pair<T> { a: T }
+        impl Eq for Pair<i32> {}
+        impl Ord for Pair<i32> {}
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a parameterized supertrait bound satisfied only by an impl of a different instantiation of that supertrait", (): void => {
+      const result = diagnose(`
+        trait Measure<T> {}
+        trait Rank: Measure<i32> {}
+        struct Pair { a: i32 }
+        impl Measure<str> for Pair {}
+        impl Rank for Pair {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `Pair: Measure` is not satisfied",
+      );
+    });
+
+    it("accepts a parameterized supertrait bound satisfied by an impl of the matching instantiation of that supertrait", (): void => {
+      const result = diagnose(`
+        trait Measure<T> {}
+        trait Rank: Measure<i32> {}
+        struct Pair { a: i32 }
+        impl Measure<i32> for Pair {}
+        impl Rank for Pair {}
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
     it("resolves a two-level supertrait chain, each impl already requiring the level below it", (): void => {
       const result = diagnose(`
         trait A {}
@@ -6835,6 +7995,9 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "Shape",
           definingTraitId: shapeId,
           blanketBoundWitnesses: none(),
+          blanketImplScopeId: none(),
+          concreteImplScopeId: some(`${witness.typeId}#${witness.traitId}`),
+          concreteBoundWitnesses: none(),
           ownWitnessParamCount: 0,
         },
         {
@@ -6843,6 +8006,9 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "Shape",
           definingTraitId: shapeId,
           blanketBoundWitnesses: none(),
+          blanketImplScopeId: none(),
+          concreteImplScopeId: none(),
+          concreteBoundWitnesses: none(),
           ownWitnessParamCount: 0,
         },
       ]);
@@ -6869,6 +8035,9 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "Ext",
           definingTraitId: traitIdOf(result, "Ext"),
           blanketBoundWitnesses: none(),
+          blanketImplScopeId: none(),
+          concreteImplScopeId: some(`${witness.typeId}#${witness.traitId}`),
+          concreteBoundWitnesses: none(),
           ownWitnessParamCount: 0,
         },
         {
@@ -6877,6 +8046,11 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "Base",
           definingTraitId: traitIdOf(result, "Base"),
           blanketBoundWitnesses: none(),
+          blanketImplScopeId: none(),
+          concreteImplScopeId: some(
+            `${witness.typeId}#${traitIdOf(result, "Base")}`,
+          ),
+          concreteBoundWitnesses: none(),
           ownWitnessParamCount: 0,
         },
       ]);
@@ -6907,6 +8081,11 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "A",
           definingTraitId: traitIdOf(result, "A"),
           blanketBoundWitnesses: none(),
+          blanketImplScopeId: none(),
+          concreteImplScopeId: some(
+            `${witness.typeId}#${traitIdOf(result, "A")}`,
+          ),
+          concreteBoundWitnesses: none(),
           ownWitnessParamCount: 0,
         },
       ]);
@@ -6935,6 +8114,9 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "Shape",
           definingTraitId: shapeId,
           blanketBoundWitnesses: none(),
+          blanketImplScopeId: none(),
+          concreteImplScopeId: none(),
+          concreteBoundWitnesses: none(),
           ownWitnessParamCount: 0,
         },
         {
@@ -6943,6 +8125,9 @@ describe("trait and impl declarations", (): void => {
           definingTrait: "Shape",
           definingTraitId: shapeId,
           blanketBoundWitnesses: none(),
+          blanketImplScopeId: none(),
+          concreteImplScopeId: some(`${witness.typeId}#${witness.traitId}`),
+          concreteBoundWitnesses: none(),
           ownWitnessParamCount: 0,
         },
       ]);
@@ -6973,7 +8158,42 @@ describe("trait and impl declarations", (): void => {
       expect(result.diagnostics).toEqual([]);
       const [witnesses] = [...result.witnesses.values()];
       expect(witnesses).toEqual([
-        { kind: "Forwarded", traitName: "Draw", paramName: "T" },
+        {
+          kind: "Forwarded",
+          traitName: "Draw",
+          paramName: "T",
+          typeArguments: [],
+        },
+      ]);
+    });
+
+    it("rejects forwarding a parameterized bound whose declared type argument doesn't match the request", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        fn inner<U: Convert<i32>>(x: U) {}
+        fn outer<T: Convert<str>>(x: T) { inner(x); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `T: Convert<i32>` is not satisfied",
+      );
+    });
+
+    it("records a forwarded witness when a parameterized bound's declared type argument matches the request", (): void => {
+      const { result } = analyzeWithTokens(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        fn inner<U: Convert<i32>>(x: U) {}
+        fn outer<T: Convert<i32>>(x: T) { inner(x); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.witnesses.values()];
+      expect(witnesses).toEqual([
+        {
+          kind: "Forwarded",
+          traitName: "Convert",
+          paramName: "T",
+          typeArguments: [{ kind: "PrimitiveI32Type" }],
+        },
       ]);
     });
   });
@@ -7295,6 +8515,119 @@ describe("trait and impl declarations", (): void => {
       expect(result.diagnostics).toEqual([]);
       expect(result.methodTargets.size).toBe(0);
     });
+
+    it("records an impl-level bound's witness when the bound parameter is nested inside the impl target's own type argument", (): void => {
+      const result = diagnoseWithPrelude(`
+        trait Marker { fn mark(&self) -> i32; }
+        struct Num { v: i32 }
+        impl Marker for Num { fn mark(&self) -> i32 { self.v } }
+        struct Wrapper<T> { value: T }
+        struct Outer<T> { inner: T }
+        impl<T: Marker> Outer<Wrapper<T>> {
+          fn touch(&self) -> i32 { 0 }
+        }
+        fn main() {
+          let o = Outer { inner: Wrapper { value: Num { v: 1 } } };
+          let x = o.touch();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.methodCallWitnesses.values()];
+      assert(
+        witnesses !== undefined,
+        "expected a recorded method-call witness",
+      );
+      expect(witnesses).toHaveLength(1);
+      const witness = witnesses[0];
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(witness.traitName).toBe("Marker");
+      expect(witness.typeName).toBe("Num");
+    });
+
+    it("records an impl-level bound's witness when the bound parameter is nested inside the impl target's own fixed-size array argument", (): void => {
+      const result = diagnoseWithPrelude(`
+        trait Marker { fn mark(&self) -> i32; }
+        struct Num { v: i32 }
+        impl Marker for Num { fn mark(&self) -> i32 { self.v } }
+        struct Outer<U> { inner: U }
+        impl<T: Marker> Outer<[T; 1]> {
+          fn touch(&self) -> i32 { 0 }
+        }
+        fn main() {
+          let o = Outer { inner: [Num { v: 1 }] };
+          let x = o.touch();
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.methodCallWitnesses.values()];
+      assert(
+        witnesses !== undefined,
+        "expected a recorded method-call witness",
+      );
+      expect(witnesses).toHaveLength(1);
+      const witness = witnesses[0];
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(witness.traitName).toBe("Marker");
+      expect(witness.typeName).toBe("Num");
+    });
+
+    it("does not conflate a trait impl's own bound with a shadowing method-level bound of the same parameter name", (): void => {
+      const result = diagnoseWithPrelude(`
+        trait Marker { fn mark(&self) -> i32; }
+        struct X { v: i32 }
+        impl Marker for X { fn mark(&self) -> i32 { self.v } }
+        trait Printable { fn label(&self) -> i32; }
+        struct Y { v: i32 }
+        impl Printable for Y { fn label(&self) -> i32 { self.v } }
+
+        trait Greet { fn f<T: Printable>(&self, x: T) -> i32; }
+        struct Wrapper<T> { value: T }
+        impl<T: Marker> Greet for Wrapper<T> {
+          fn f<T: Printable>(&self, x: T) -> i32 { x.label() }
+        }
+        fn main() {
+          let w = Wrapper { value: X { v: 1 } };
+          w.f(Y { v: 2 });
+        }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.methodCallWitnesses.values()];
+      assert(
+        witnesses !== undefined,
+        "expected a recorded method-call witness",
+      );
+      expect(witnesses).toHaveLength(1);
+      const witness = witnesses[0];
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(witness.traitName).toBe("Printable");
+      expect(witness.typeName).toBe("Y");
+    });
+
+    it("instantiates a method-level bound's own trait argument from the abstract receiver's own bound type argument", (): void => {
+      const result = diagnoseWithPrelude(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        struct X { v: i32 }
+        impl Convert<i32> for X { fn convert(&self) -> i32 { self.v } }
+        trait Factory<T> {
+          fn make<U: Convert<T>>(&self, u: U) -> T;
+        }
+        fn use_factory<R: Factory<i32>>(r: &R, x: X) -> i32 {
+          r.make(x)
+        }
+        fn main() { print(0); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+      const [witnesses] = [...result.methodCallWitnesses.values()];
+      assert(
+        witnesses !== undefined,
+        "expected a recorded method-call witness",
+      );
+      expect(witnesses).toHaveLength(1);
+      const witness = witnesses[0];
+      assert(witness?.kind === "Impl", "expected an Impl witness");
+      expect(witness.traitName).toBe("Convert");
+      expect(witness.typeName).toBe("X");
+    });
   });
 
   describe("nested impl registration and visibility", (): void => {
@@ -7533,6 +8866,102 @@ describe("trait and impl declarations", (): void => {
       );
     });
 
+    it("rejects a generic function's bound naming a trait declared in an unrelated, inaccessible nested scope", (): void => {
+      const result = diagnose(`
+        fn outer() {
+          trait Local { fn mark(&self) -> i32; }
+        }
+        fn f<T: Local>(t: &T) -> i32 { 0 }
+        fn main() { print(0); }
+      `);
+      expect(result.diagnostics.map((d) => messageOf(d))).toContain(
+        "cannot find trait `Local` in this scope",
+      );
+    });
+
+    it("rejects a generic bound supplying more type arguments than the trait declares", (): void => {
+      const result = diagnose(`
+        trait Convert<U> { fn convert(&self) -> U; }
+        fn f<T: Convert<i32, str>>(t: T) {}
+        fn main() { print(0); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Convert` declares 1 generic parameter(s), but 2 were supplied",
+      );
+    });
+
+    it("rejects an impl's own trait reference supplying more type arguments than the trait declares", (): void => {
+      const result = diagnose(`
+        trait Convert<U> { fn convert(&self) -> U; }
+        struct P { x: i32 }
+        impl Convert<i32, str> for P { fn convert(&self) -> i32 { self.x } }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Convert` declares 1 generic parameter(s), but 2 were supplied",
+      );
+    });
+
+    it("accepts a trait reference omitting a trailing generic parameter that has a default", (): void => {
+      const result = diagnose(`
+        trait Thing<T = i32> { fn get(&self) -> T; }
+        struct P { x: i32 }
+        impl Thing for P { fn get(&self) -> i32 { self.x } }
+        fn main() { print(0); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("satisfies a bound requesting a trait's default instantiation against an impl that omitted the trait argument", (): void => {
+      const result = diagnose(`
+        trait Thing<T = i32> { fn get(&self) -> T; }
+        struct P { x: i32 }
+        impl Thing for P { fn get(&self) -> i32 { self.x } }
+        fn use_thing<U: Thing<i32>>(u: U) -> i32 { u.get() }
+        fn main() { print(use_thing(P { x: 7 })); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("substitutes a declared bound's own defaulted trait argument into a method called through it", (): void => {
+      const result = diagnose(`
+        trait Thing<T = i32> { fn get(&self) -> T; }
+        struct Q { v: i32 }
+        impl Thing<i32> for Q { fn get(&self) -> i32 { self.v } }
+        fn f<U: Thing>(u: U) -> i32 { u.get() }
+        fn main() { print(f(Q { v: 7 })); }
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects a declared bound's own defaulted trait argument when the receiver only implements a different instantiation", (): void => {
+      const result = diagnose(`
+        trait Thing<T = i32> { fn get(&self) -> T; }
+        struct Q { v: str }
+        impl Thing<str> for Q { fn get(&self) -> str { self.v } }
+        fn f<U: Thing>(u: U) {}
+        fn main() { f(Q { v: "x" }); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "the trait bound `Q: Thing<i32>` is not satisfied",
+      );
+    });
+
+    it("reports an impl's own generic bound arity mismatch exactly once, not once per pass that resolves it", (): void => {
+      const result = diagnose(`
+        trait Convert<U> { fn convert(&self) -> U; }
+        struct Wrapper<T> { value: T }
+        impl<T: Convert<i32, str>> Wrapper<T> { fn touch(&self) {} }
+        fn main() { print(0); }
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "trait `Convert` declares 1 generic parameter(s), but 2 were supplied",
+      );
+    });
+
     it("rejects an ordinary generic function's where-clause bound naming an undeclared trait", (): void => {
       const result = diagnose(`
         fn f<T>(x: T) where T: Missing {}
@@ -7541,6 +8970,46 @@ describe("trait and impl declarations", (): void => {
       expect(messageOf(result.diagnostics[0])).toBe(
         "cannot find trait `Missing` in this scope",
       );
+    });
+
+    it("rejects a bound's own type argument naming an unknown type", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        fn f<T: Convert<Missing>>(x: T) {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "cannot find type `Missing` in this scope",
+      );
+    });
+
+    it("resolves a bound's own type argument naming a sibling generic parameter", (): void => {
+      const result = diagnose(`
+        trait Convert<T> { fn convert(&self) -> T; }
+        fn f<T: Convert<U>, U>(x: T) {}
+      `);
+      expect(result.diagnostics).toEqual([]);
+    });
+
+    it("rejects an impl bound's own type argument naming an unknown type", (): void => {
+      const result = diagnose(`
+        trait Marker {}
+        trait Convert<T> { fn convert(&self) -> T; }
+        impl<T: Convert<Missing>> Marker for T {}
+      `);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(messageOf(result.diagnostics[0])).toBe(
+        "cannot find type `Missing` in this scope",
+      );
+    });
+
+    it("resolves an impl bound's own type argument naming a sibling generic parameter", (): void => {
+      const result = diagnose(`
+        trait Marker {}
+        trait Convert<T> { fn convert(&self) -> T; }
+        impl<T: Convert<U>, U> Marker for T {}
+      `);
+      expect(result.diagnostics).toEqual([]);
     });
   });
 
@@ -9187,6 +10656,35 @@ describe("arithmetic/bitwise/shift operators resolving through an operator-trait
       witnessName: "_witness_T_Add",
       methodName: "add",
     });
+  });
+
+  it("records the generic Add impl's own bound witness for `+`, not an unrelated same-named inherent method's", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Marker { fn mark(&self) -> i32; }
+      struct Num { v: i32 }
+      impl Marker for Num { fn mark(&self) -> i32 { self.v } }
+      struct Wrapper<T> { value: T }
+      impl<T> Wrapper<T> {
+        fn add(&self) -> i32 { 0 }
+      }
+      impl<T: Marker> Add for Wrapper<T> {
+        type Output = Self;
+        fn add(self, rhs: Self) -> Self { self }
+      }
+      fn main() {
+        let a = Wrapper { value: Num { v: 1 } };
+        let b = Wrapper { value: Num { v: 2 } };
+        let c = a + b;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+    const [witnesses] = [...result.methodCallWitnesses.values()];
+    assert(witnesses !== undefined, "expected a recorded method-call witness");
+    expect(witnesses).toHaveLength(1);
+    const witness = witnesses[0];
+    assert(witness?.kind === "Impl", "expected an Impl witness");
+    expect(witness.traitName).toBe("Marker");
+    expect(witness.typeName).toBe("Num");
   });
 
   it("does not validate the shift amount's type at all once the shifted value resolves through a `Shl` impl", (): void => {
