@@ -6454,6 +6454,18 @@ describe("generic struct/enum instantiation identity", (): void => {
   });
 });
 
+describe("bare unit-variant path construction (no call syntax) for a generic enum", (): void => {
+  it("resolves a generic enum's unit variant referenced bare against a let annotation", (): void => {
+    const result = diagnose(`
+      enum Option<T> { Some(T), None }
+      fn main() {
+        let a: Option<i32> = Option::None;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+});
+
 describe("generic substitution through a nominal type's own type arguments", (): void => {
   it("substitutes a generic function's return type when it names a generic struct instantiated by the call's own binding", (): void => {
     const result = diagnose(`
