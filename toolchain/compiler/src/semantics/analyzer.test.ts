@@ -6566,6 +6566,29 @@ describe("bare unit-variant path construction (no call syntax) for a generic enu
     `);
     expect(result.diagnostics).toEqual([]);
   });
+
+  it("resolves a generic enum's unit variant from its own explicit turbofish, with no other context", (): void => {
+    const result = diagnose(`
+      enum Option<T> { Some(T), None }
+      fn main() {
+        let a = Option::None::<i32>;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("reports a conflict when a unit variant's own explicit turbofish disagrees with an outer expected type", (): void => {
+    const result = diagnose(`
+      enum Option<T> { Some(T), None }
+      fn main() {
+        let a: Option<i32> = Option::None::<str>;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "call to `Option::None` type mismatch: expected `Option<str>`, found `Option<i32>`",
+    );
+  });
 });
 
 describe("generic substitution through a nominal type's own type arguments", (): void => {

@@ -13324,7 +13324,7 @@ function analyzeStructNamedFields(
   );
   const genericNames = new Set(generics.params);
   const bindings: GenericBindings = new Map();
-  seedStructTurbofishBindings(
+  seedTurbofishBindingsFromArgs(
     ctx,
     site.tokenId,
     site.typeArguments,
@@ -13499,7 +13499,7 @@ function checkGenericUnitStructConstruction(
   generics: DeclGenerics,
 ): readonly Semantics.Type[] {
   const bindings: GenericBindings = new Map();
-  seedStructTurbofishBindings(
+  seedTurbofishBindingsFromArgs(
     ctx,
     tokenId,
     typeArgs,
@@ -14614,13 +14614,14 @@ function seedTurbofishBindings(
   });
 }
 
-/** `seedTurbofishBindings`'s named-field-construction twin - the same
- * priority-over-field-inference seeding, `::<>`-as-full-inference, and
- * partial-turbofish-with-defaults handling, for a `Foo::<T> { .. }` /
- * `Enum::Variant::<T> { .. }` literal's own turbofish (parsed onto
- * `Parser.StructExpression.typeArguments`) instead of a call's
- * `f::<T>(..)`. */
-function seedStructTurbofishBindings(
+/** `seedTurbofishBindings`'s twin for a construction with no `Parser.
+ * CallExpression` to read `.callee.typeArguments` off of - the same
+ * priority-over-field/expected-type-inference seeding, `::<>`-as-full-
+ * inference, and partial-turbofish-with-defaults handling, for any other
+ * node carrying its own bare `typeArguments` list: a `Foo::<T> { .. }` /
+ * `Enum::Variant::<T> { .. }` struct literal, or a bare unit-variant path
+ * (`Option::None::<T>`, parsed onto `Parser.PathExpression.typeArguments`). */
+function seedTurbofishBindingsFromArgs(
   ctx: AnalysisContext,
   tokenId: number,
   typeArgs: readonly Parser.Type[],
@@ -15481,13 +15482,14 @@ function analyzeTupleStructCallConstruction(
 /** A generic enum's unit-variant type for a bare path reference
  * (`Option::None`, no call syntax) - the path-expression counterpart to
  * `checkGenericPositionalConstruction`'s own unit-variant handling, minus
- * turbofish/positional-argument seeding (a bare variant path has neither).
- * Seeds from `expectedType` when given, so a let annotation, a function's
- * declared return type, or a checked match-arm/if-branch expectation can
- * resolve the enum's type arguments; falls back to
+ * positional-argument seeding (a bare variant path has none). An explicit
+ * turbofish (`Option::None::<i32>`) takes priority over `expectedType`,
+ * matching call-syntax construction's own precedence - a disagreement
+ * between the two is then reported against the turbofish, not silently
+ * resolved by whichever ran last. Falls back to
  * `resolveOrReportGenericTypeArguments`'s own "cannot infer" diagnostic
- * when nothing resolves them. A non-generic enum returns its declared type
- * unchanged, skipping all of this. */
+ * when neither resolves a parameter. A non-generic enum returns its
+ * declared type unchanged, skipping all of this. */
 function resolveUnitVariantPathType(
   ctx: AnalysisContext,
   path: Parser.PathExpression,
@@ -15495,13 +15497,26 @@ function resolveUnitVariantPathType(
   expectedType: Semantics.Type | undefined,
 ): Semantics.Type {
   if (enumDecl.generics.length === 0) return enumDecl.type;
+  const calleeNameText = path.path.segments.join("::");
+  const generics: DeclGenerics = {
+    params: enumDecl.generics,
+    defaults: enumDecl.genericParamDefaults,
+  };
   const bindings: GenericBindings = new Map();
+  seedTurbofishBindingsFromArgs(
+    ctx,
+    path.tokenId,
+    path.typeArguments,
+    calleeNameText,
+    generics,
+    bindings,
+  );
   const expectedTypeConflicted =
     expectedType !== undefined &&
     seedConstructionExpectedType(
       ctx,
       path.tokenId,
-      path.path.segments.join("::"),
+      calleeNameText,
       enumDecl.type,
       expectedType,
       enumDecl.generics,
@@ -15510,7 +15525,7 @@ function resolveUnitVariantPathType(
   const typeArguments = resolveOrReportGenericTypeArguments(
     ctx,
     path.tokenId,
-    { params: enumDecl.generics, defaults: enumDecl.genericParamDefaults },
+    generics,
     bindings,
   );
   return constructionResultType(
