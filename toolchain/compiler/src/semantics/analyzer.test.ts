@@ -6464,6 +6464,108 @@ describe("bare unit-variant path construction (no call syntax) for a generic enu
     `);
     expect(result.diagnostics).toEqual([]);
   });
+
+  it("resolves a generic enum's unit variant referenced bare against an enclosing function's declared return type", (): void => {
+    const result = diagnose(`
+      enum Option<T> { Some(T), None }
+      fn make_none() -> Option<i32> {
+        Option::None
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("resolves a generic enum's unit variant produced by a match arm, checked against an enclosing let annotation", (): void => {
+    const result = diagnose(`
+      enum Option<T> { Some(T), None }
+      fn main() {
+        let flag = true;
+        let a: Option<i32> = match flag {
+          true => Option::Some(5),
+          false => Option::None,
+        };
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("resolves a generic enum's unit variant produced by a match arm, checked against an enclosing function's return type", (): void => {
+    const result = diagnose(`
+      enum Option<T> { Some(T), None }
+      fn pick(flag: bool) -> Option<i32> {
+        match flag {
+          true => Option::Some(5),
+          false => Option::None,
+        }
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("resolves a generic enum's unit variant produced by an if/else branch, checked against an enclosing let annotation", (): void => {
+    const result = diagnose(`
+      enum Option<T> { Some(T), None }
+      fn main() {
+        let flag = true;
+        let a: Option<i32> = if flag { Option::Some(5) } else { Option::None };
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("reports exactly one cannot-infer diagnostic for a generic enum's unit variant referenced with no resolvable context anywhere", (): void => {
+    const result = diagnose(`
+      enum Option<T> { Some(T), None }
+      fn main() {
+        let a = Option::None;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "cannot infer type of generic parameter `T` without an explicit type annotation or turbofish",
+    );
+  });
+
+  it("reports one cannot-infer diagnostic per unresolved parameter for a two-parameter unit variant with no resolvable context", (): void => {
+    const result = diagnose(`
+      enum Pair<A, B> { First(A), Second(B), Empty }
+      fn main() {
+        let a = Pair::Empty;
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(2);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "cannot infer type of generic parameter `A` without an explicit type annotation or turbofish",
+    );
+    expect(messageOf(result.diagnostics[1])).toBe(
+      "cannot infer type of generic parameter `B` without an explicit type annotation or turbofish",
+    );
+  });
+
+  it("leaves a non-generic enum's unit variant unaffected", (): void => {
+    const result = diagnose(`
+      enum Maybe { Some(i32), None }
+      fn main() {
+        let a = Maybe::None;
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("resolves Self's own abstract type parameter for a unit variant constructed inside a generic impl's method body", (): void => {
+    const result = diagnoseWithPrelude(`
+      enum Option<T> { Some(T), None }
+      impl<T: Clone> Clone for Option<T> {
+        fn clone(&self) -> Self {
+          match self {
+            Option::Some(x) => Option::Some(x.clone()),
+            Option::None => Option::None,
+          }
+        }
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
 });
 
 describe("generic substitution through a nominal type's own type arguments", (): void => {

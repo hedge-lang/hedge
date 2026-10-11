@@ -2145,6 +2145,52 @@ describe("generic witness codegen", (): void => {
     expect(runEmittedJs(js)).toEqual(["cloning", "done"]);
   });
 
+  it("round-trips a generic enum's unit variant through construction, a match, and print", (): void => {
+    const js = emittedJs(`
+      enum Option<T> { Some(T), None }
+      fn unwrap_or(m: Option<i32>, fallback: i32) -> i32 {
+        match m {
+          Option::Some(x) => x,
+          Option::None => fallback,
+        }
+      }
+      fn main() {
+        let a: Option<i32> = Option::None;
+        print(unwrap_or(a, -1));
+        print(",");
+        print(unwrap_or(Option::Some(7), 0));
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["-1", ",", "7"]);
+  });
+
+  it("runs a generic impl's Clone that reconstructs Self via a unit variant, not just a tuple variant", (): void => {
+    const js = emittedJs(`
+      enum Option<T> { Some(T), None }
+      struct Num { n: i32 }
+      impl Clone for Num {
+        fn clone(&self) -> Self {
+          print("cloning");
+          Num { n: self.n }
+        }
+      }
+      impl<T: Clone> Clone for Option<T> {
+        fn clone(&self) -> Self {
+          match self {
+            Option::Some(x) => Option::Some(x.clone()),
+            Option::None => Option::None,
+          }
+        }
+      }
+      fn main() {
+        let a = Option::Some(Num { n: 5 });
+        let b = a.clone();
+        print("done");
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["cloning", "done"]);
+  });
+
   it("resolves an impl-level generic bound by its target-argument position, not its declaration order, when an impl reorders them", (): void => {
     const js = emittedJs(`
       struct Num { n: i32 }
