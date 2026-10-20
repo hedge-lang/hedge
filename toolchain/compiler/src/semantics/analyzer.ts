@@ -13898,12 +13898,7 @@ function analyzeCall(
   }
   const associated = analyzeAssociatedCall(ctx, call, args);
   if (isSome(associated) && call.callee.kind === "PathExpression") {
-    const associatedCallee: Semantics.PathExpression = {
-      kind: "PathExpression",
-      tokenId: call.callee.tokenId,
-      path: call.callee.path,
-      type: { kind: "UnitType", tokenId: call.callee.tokenId },
-    };
+    const associatedCallee = placeholderPathCallee(call.callee);
     return {
       ...call,
       callee: associatedCallee,
@@ -13922,16 +13917,10 @@ function analyzeCall(
     args,
     expectedType,
   );
-  if (isSome(enumConstruction) && call.callee.kind === "PathExpression") {
-    const enumCallee: Semantics.PathExpression = {
-      kind: "PathExpression",
-      tokenId: call.callee.tokenId,
-      path: call.callee.path,
-      type: { kind: "UnitType", tokenId: call.callee.tokenId },
-    };
+  if (isSome(enumConstruction)) {
     return {
       ...call,
-      callee: enumCallee,
+      callee: enumConstruction.value.callee,
       arguments: enumConstruction.value.args,
       type: enumConstruction.value.type,
     };
@@ -14033,6 +14022,20 @@ function constructionResultType(
   return withTypeArguments(declaredType, typeArguments);
 }
 
+/** The callee of a call that analysis resolved as a construction or
+ * associated call rather than a function value: its path is kept for
+ * lowering, and `UnitType` stands in for the type no function value has. */
+function placeholderPathCallee(
+  callee: Parser.PathExpression,
+): Semantics.PathExpression {
+  return {
+    kind: "PathExpression",
+    tokenId: callee.tokenId,
+    path: callee.path,
+    type: { kind: "UnitType", tokenId: callee.tokenId },
+  };
+}
+
 /**
  * `Message::Move(1, 2)`-shaped construction calls. `none()` when
  * `call.callee` isn't a two-segment path naming a known enum + variant,
@@ -14047,10 +14050,12 @@ function analyzeEnumVariantCallConstruction(
   args: readonly Semantics.Expression[],
   expectedType: Semantics.Type | undefined,
 ): Option<{
+  readonly callee: Semantics.PathExpression;
   readonly type: Semantics.Type;
   readonly args: Semantics.Expression[];
 }> {
   if (call.callee.kind !== "PathExpression") return none();
+  const callee = placeholderPathCallee(call.callee);
   const { segments } = call.callee.path;
   if (segments.length !== 2) return none();
   const [enumName, variantName] = segments;
@@ -14073,7 +14078,7 @@ function analyzeEnumVariantCallConstruction(
         },
         call.tokenId,
       );
-      return some({ type: enumDecl.type, args: [...args] });
+      return some({ callee, type: enumDecl.type, args: [...args] });
     }
     const { typeArguments, expectedTypeConflicted } =
       checkGenericPositionalConstruction(
@@ -14086,6 +14091,7 @@ function analyzeEnumVariantCallConstruction(
         { declaredType: enumDecl.type, expectedType },
       );
     return some({
+      callee,
       type: constructionResultType(
         expectedTypeConflicted,
         expectedType,
@@ -14101,7 +14107,7 @@ function analyzeEnumVariantCallConstruction(
       { kind: "SemVariantHasNamedFields", variant: variantName },
       call.tokenId,
     );
-    return some({ type: enumDecl.type, args: [...args] });
+    return some({ callee, type: enumDecl.type, args: [...args] });
   }
   const {
     args: checkedArgs,
@@ -14117,6 +14123,7 @@ function analyzeEnumVariantCallConstruction(
     { declaredType: enumDecl.type, expectedType },
   );
   return some({
+    callee,
     type: constructionResultType(
       expectedTypeConflicted,
       expectedType,
@@ -14614,8 +14621,8 @@ function seedTurbofishBindings(
   });
 }
 
-/** `seedTurbofishBindings`'s twin for a construction with no `Parser.
- * CallExpression` to read `.callee.typeArguments` off of - the same
+/** `seedTurbofishBindings`'s twin for a construction with no
+ * `Parser.CallExpression` to read `.callee.typeArguments` off of - the same
  * priority-over-field/expected-type-inference seeding, `::<>`-as-full-
  * inference, and partial-turbofish-with-defaults handling, for any other
  * node carrying its own bare `typeArguments` list: a `Foo::<T> { .. }` /
