@@ -8907,6 +8907,8 @@ function checkExpression(
       return analyzeBlock(ctx, expr, type);
     case "StructExpression":
       return analyzeStructExpression(ctx, expr, type);
+    case "PathExpression":
+      return analyzePathExpression(ctx, expr, type);
     default:
       return analyzeExpression(ctx, expr);
   }
@@ -9913,12 +9915,13 @@ function unaryNotResultType(
 function analyzePathExpression(
   ctx: AnalysisContext,
   expression: Parser.PathExpression,
+  expectedType?: Semantics.Type,
 ): Semantics.Expression {
   const constRef = analyzeConstReference(ctx, expression);
   if (isSome(constRef)) return constRef.value;
   const staticRef = analyzeStaticReference(ctx, expression);
   if (isSome(staticRef)) return staticRef.value;
-  return analyzePath(ctx, expression);
+  return analyzePath(ctx, expression, expectedType);
 }
 
 function analyzeBinaryExpression(
@@ -13321,7 +13324,7 @@ function analyzeStructNamedFields(
   );
   const genericNames = new Set(generics.params);
   const bindings: GenericBindings = new Map();
-  seedStructTurbofishBindings(
+  seedTurbofishBindingsFromArgs(
     ctx,
     site.tokenId,
     site.typeArguments,
@@ -13496,7 +13499,7 @@ function checkGenericUnitStructConstruction(
   generics: DeclGenerics,
 ): readonly Semantics.Type[] {
   const bindings: GenericBindings = new Map();
-  seedStructTurbofishBindings(
+  seedTurbofishBindingsFromArgs(
     ctx,
     tokenId,
     typeArgs,
@@ -13895,12 +13898,7 @@ function analyzeCall(
   }
   const associated = analyzeAssociatedCall(ctx, call, args);
   if (isSome(associated) && call.callee.kind === "PathExpression") {
-    const associatedCallee: Semantics.PathExpression = {
-      kind: "PathExpression",
-      tokenId: call.callee.tokenId,
-      path: call.callee.path,
-      type: { kind: "UnitType", tokenId: call.callee.tokenId },
-    };
+    const associatedCallee = placeholderPathCallee(call.callee);
     return {
       ...call,
       callee: associatedCallee,
@@ -13908,7 +13906,11 @@ function analyzeCall(
       type: associated.value.type,
     };
   }
-  const callee = analyzeExpression(ctx, call.callee);
+  // Must also run before ordinary path analysis on `call.callee`: for a
+  // generic enum's unit variant, that analysis would otherwise report its
+  // own "cannot infer" diagnostic (it has no turbofish/argument info to
+  // seed from) before this construction's own turbofish-and-argument-aware
+  // resolution gets a chance to run, double-reporting the same construction.
   const enumConstruction = analyzeEnumVariantCallConstruction(
     ctx,
     call,
@@ -13918,11 +13920,12 @@ function analyzeCall(
   if (isSome(enumConstruction)) {
     return {
       ...call,
-      callee,
+      callee: enumConstruction.value.callee,
       arguments: enumConstruction.value.args,
       type: enumConstruction.value.type,
     };
   }
+  const callee = analyzeExpression(ctx, call.callee);
   const calleeType = getType(callee);
   if (calleeType.kind !== "FunctionType") {
     return {
@@ -14019,6 +14022,20 @@ function constructionResultType(
   return withTypeArguments(declaredType, typeArguments);
 }
 
+/** The callee of a call that analysis resolved as a construction or
+ * associated call rather than a function value: its path is kept for
+ * lowering, and `UnitType` stands in for the type no function value has. */
+function placeholderPathCallee(
+  callee: Parser.PathExpression,
+): Semantics.PathExpression {
+  return {
+    kind: "PathExpression",
+    tokenId: callee.tokenId,
+    path: callee.path,
+    type: { kind: "UnitType", tokenId: callee.tokenId },
+  };
+}
+
 /**
  * `Message::Move(1, 2)`-shaped construction calls. `none()` when
  * `call.callee` isn't a two-segment path naming a known enum + variant,
@@ -14033,10 +14050,12 @@ function analyzeEnumVariantCallConstruction(
   args: readonly Semantics.Expression[],
   expectedType: Semantics.Type | undefined,
 ): Option<{
+  readonly callee: Semantics.PathExpression;
   readonly type: Semantics.Type;
   readonly args: Semantics.Expression[];
 }> {
   if (call.callee.kind !== "PathExpression") return none();
+  const callee = placeholderPathCallee(call.callee);
   const { segments } = call.callee.path;
   if (segments.length !== 2) return none();
   const [enumName, variantName] = segments;
@@ -14059,7 +14078,7 @@ function analyzeEnumVariantCallConstruction(
         },
         call.tokenId,
       );
-      return some({ type: enumDecl.type, args: [...args] });
+      return some({ callee, type: enumDecl.type, args: [...args] });
     }
     const { typeArguments, expectedTypeConflicted } =
       checkGenericPositionalConstruction(
@@ -14072,6 +14091,7 @@ function analyzeEnumVariantCallConstruction(
         { declaredType: enumDecl.type, expectedType },
       );
     return some({
+      callee,
       type: constructionResultType(
         expectedTypeConflicted,
         expectedType,
@@ -14087,7 +14107,7 @@ function analyzeEnumVariantCallConstruction(
       { kind: "SemVariantHasNamedFields", variant: variantName },
       call.tokenId,
     );
-    return some({ type: enumDecl.type, args: [...args] });
+    return some({ callee, type: enumDecl.type, args: [...args] });
   }
   const {
     args: checkedArgs,
@@ -14103,6 +14123,7 @@ function analyzeEnumVariantCallConstruction(
     { declaredType: enumDecl.type, expectedType },
   );
   return some({
+    callee,
     type: constructionResultType(
       expectedTypeConflicted,
       expectedType,
@@ -14600,13 +14621,14 @@ function seedTurbofishBindings(
   });
 }
 
-/** `seedTurbofishBindings`'s named-field-construction twin - the same
- * priority-over-field-inference seeding, `::<>`-as-full-inference, and
- * partial-turbofish-with-defaults handling, for a `Foo::<T> { .. }` /
- * `Enum::Variant::<T> { .. }` literal's own turbofish (parsed onto
- * `Parser.StructExpression.typeArguments`) instead of a call's
- * `f::<T>(..)`. */
-function seedStructTurbofishBindings(
+/** `seedTurbofishBindings`'s twin for a construction with no
+ * `Parser.CallExpression` to read `.callee.typeArguments` off of - the same
+ * priority-over-field/expected-type-inference seeding, `::<>`-as-full-
+ * inference, and partial-turbofish-with-defaults handling, for any other
+ * node carrying its own bare `typeArguments` list: a `Foo::<T> { .. }` /
+ * `Enum::Variant::<T> { .. }` struct literal, or a bare unit-variant path
+ * (`Option::None::<T>`, parsed onto `Parser.PathExpression.typeArguments`). */
+function seedTurbofishBindingsFromArgs(
   ctx: AnalysisContext,
   tokenId: number,
   typeArgs: readonly Parser.Type[],
@@ -14661,12 +14683,15 @@ interface GenericConstructionContext {
  * per-param `NamedType`s, then seeds `bindings` by unifying that against
  * `expectedType` - `checkGenericPositionalConstruction`'s own
  * turbofish-then-expected-type step, factored out to keep that function's
- * branch count under the complexity cap. Returns whether a conflict was
- * already reported, the same signal `seedExpectedReturnType` itself
- * returns. */
+ * branch count under the complexity cap. Takes a bare `tokenId`/
+ * `calleeNameText` rather than a `Parser.CallExpression` so a construction
+ * with no real call node (a bare unit-variant path, `Option::None`) can
+ * reuse it too. Returns whether a conflict was already reported, the same
+ * signal `seedExpectedReturnType` itself returns. */
 function seedConstructionExpectedType(
   ctx: AnalysisContext,
-  call: Parser.CallExpression,
+  tokenId: number,
+  calleeNameText: string,
   declaredType: Semantics.Type,
   expectedType: Semantics.Type,
   genericParams: readonly string[],
@@ -14676,14 +14701,14 @@ function seedConstructionExpectedType(
     declaredType,
     genericParams.map((name): Semantics.Type => ({
       kind: "NamedType",
-      tokenId: call.tokenId,
+      tokenId,
       path: { absolute: false, segments: [name] },
     })),
   );
   return seedExpectedReturnType(
     ctx,
-    call.tokenId,
-    calleeName(call),
+    tokenId,
+    calleeNameText,
     abstractDeclaredType,
     expectedType,
     new Set(genericParams),
@@ -14732,7 +14757,8 @@ function checkGenericPositionalConstruction(
     expectedType !== undefined &&
     seedConstructionExpectedType(
       ctx,
-      call,
+      call.tokenId,
+      calleeName(call),
       declaredType,
       expectedType,
       generics.params,
@@ -14747,22 +14773,42 @@ function checkGenericPositionalConstruction(
     generics.params,
     turbofishBindings,
   );
-  const typeArguments = generics.params.map((paramName): Semantics.Type => {
+  const typeArguments = resolveOrReportGenericTypeArguments(
+    ctx,
+    call.tokenId,
+    generics,
+    bindings,
+  );
+  return { args: checkedArgs, typeArguments, expectedTypeConflicted };
+}
+
+/** Resolves each declared generic parameter's final type argument from
+ * `bindings`, falling back to its own default, or emits
+ * `SemCannotInferGenericParam` and substitutes the error-recovery
+ * `UnitType` placeholder for a parameter neither bound nor defaulted - so a
+ * construction with no binding source at all for some parameter (no
+ * argument, no turbofish, no outer expected type) is a real diagnostic
+ * rather than a silently under-specified type. Shared by
+ * `checkGenericPositionalConstruction` and `resolveUnitVariantPathType`
+ * (the bare-path construction case, which has neither arguments nor
+ * turbofish to seed from). */
+function resolveOrReportGenericTypeArguments(
+  ctx: AnalysisContext,
+  tokenId: number,
+  generics: DeclGenerics,
+  bindings: GenericBindings,
+): readonly Semantics.Type[] {
+  return generics.params.map((paramName): Semantics.Type => {
     const binding = bindingOrDefault(
       paramName,
       generics.defaults,
       bindings,
-      call.tokenId,
+      tokenId,
     );
     if (binding !== undefined) return binding.type;
-    emitError(
-      ctx,
-      { kind: "SemCannotInferGenericParam", paramName },
-      call.tokenId,
-    );
-    return { kind: "UnitType", tokenId: call.tokenId };
+    emitError(ctx, { kind: "SemCannotInferGenericParam", paramName }, tokenId);
+    return { kind: "UnitType", tokenId };
   });
-  return { args: checkedArgs, typeArguments, expectedTypeConflicted };
 }
 
 /** Seeds `bindings` from a calling context's already-known expected type - a
@@ -15440,6 +15486,63 @@ function analyzeTupleStructCallConstruction(
   return some({ callee, type, args: checkedArgs });
 }
 
+/** A generic enum's unit-variant type for a bare path reference
+ * (`Option::None`, no call syntax) - the path-expression counterpart to
+ * `checkGenericPositionalConstruction`'s own unit-variant handling, minus
+ * positional-argument seeding (a bare variant path has none). An explicit
+ * turbofish (`Option::None::<i32>`) takes priority over `expectedType`,
+ * matching call-syntax construction's own precedence - a disagreement
+ * between the two is then reported against the turbofish, not silently
+ * resolved by whichever ran last. Falls back to
+ * `resolveOrReportGenericTypeArguments`'s own "cannot infer" diagnostic
+ * when neither resolves a parameter. A non-generic enum returns its
+ * declared type unchanged, skipping all of this. */
+function resolveUnitVariantPathType(
+  ctx: AnalysisContext,
+  path: Parser.PathExpression,
+  enumDecl: Semantics.EnumDecl,
+  expectedType: Semantics.Type | undefined,
+): Semantics.Type {
+  if (enumDecl.generics.length === 0) return enumDecl.type;
+  const calleeNameText = path.path.segments.join("::");
+  const generics: DeclGenerics = {
+    params: enumDecl.generics,
+    defaults: enumDecl.genericParamDefaults,
+  };
+  const bindings: GenericBindings = new Map();
+  seedTurbofishBindingsFromArgs(
+    ctx,
+    path.tokenId,
+    path.typeArguments,
+    calleeNameText,
+    generics,
+    bindings,
+  );
+  const expectedTypeConflicted =
+    expectedType !== undefined &&
+    seedConstructionExpectedType(
+      ctx,
+      path.tokenId,
+      calleeNameText,
+      enumDecl.type,
+      expectedType,
+      enumDecl.generics,
+      bindings,
+    );
+  const typeArguments = resolveOrReportGenericTypeArguments(
+    ctx,
+    path.tokenId,
+    generics,
+    bindings,
+  );
+  return constructionResultType(
+    expectedTypeConflicted,
+    expectedType,
+    enumDecl.type,
+    typeArguments,
+  );
+}
+
 /**
  * `Enum::Variant`-shaped construction paths - the construction-side
  * counterpart to the pattern-position resolvers above, name-driven off the
@@ -15452,11 +15555,14 @@ function analyzeTupleStructCallConstruction(
  * forms themselves, since only they know the syntactic context. A bare
  * tuple/struct variant reference (`let x = Message::Move;`) still falls to
  * `none()` - real constructor-function-value semantics are out of scope.
+ * `expectedType` seeds a generic enum's otherwise-unresolvable type
+ * arguments - see `resolveUnitVariantPathType`.
  */
 function analyzeEnumVariantPathConstruction(
   ctx: AnalysisContext,
   path: Parser.PathExpression,
   segments: readonly string[],
+  expectedType: Semantics.Type | undefined,
 ): Option<Semantics.PathExpression> {
   const [enumName, variantName] = segments;
   if (enumName === undefined || variantName === undefined) return none();
@@ -15479,12 +15585,16 @@ function analyzeEnumVariantPathConstruction(
     return some({ ...path, type: enumDecl.type });
   }
   if (isSome(variant.body)) return none();
-  return some({ ...path, type: enumDecl.type });
+  return some({
+    ...path,
+    type: resolveUnitVariantPathType(ctx, path, enumDecl, expectedType),
+  });
 }
 
 function analyzePath(
   ctx: AnalysisContext,
   path: Parser.PathExpression,
+  expectedType?: Semantics.Type,
 ): Semantics.PathExpression {
   const { segments } = path.path;
   if (segments.length === 2) {
@@ -15494,6 +15604,7 @@ function analyzePath(
       ctx,
       path,
       segments,
+      expectedType,
     );
     if (isSome(construction)) return construction.value;
   }
