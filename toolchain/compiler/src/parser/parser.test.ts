@@ -5585,9 +5585,7 @@ describe("generic parameters: declaration position", (): void => {
     assert(diagnostics[0] !== undefined, "Expected a diagnostic to come back");
   });
 
-  // biome-ignore lint/security/noSecrets: false positive - generic syntax test string, not a secret
   it("parses a compound bound argument, splitting the doubly-nested closing >>> across all three levels (fn foo<T: Foo<Bar<Baz>>>() {})", (): void => {
-    // biome-ignore lint/security/noSecrets: false positive - generic syntax test string, not a secret
     const { tokens } = tokenize("fn foo<T: Foo<Bar<Baz>>>() {}");
     const { program, diagnostics } = parse(tokens);
     expect(diagnostics).toHaveLength(0);

@@ -937,7 +937,6 @@ describe("using / scope-end drop codegen", (): void => {
     // not external or user-supplied input, so this is the same
     // test-only pattern already used by the field/index-detach tests
     // in this file, not a real code-injection surface.
-    // biome-ignore lint/security/noGlobalEval: test-only eval of compiler-generated fixture output, see comment above
     eval(script); // nosemgrep: javascript.browser.security.eval-detected.eval-detected,javascript_eval_rule-eval-with-expression
     expect(printed).toEqual([1]);
   });
@@ -965,7 +964,6 @@ describe("using / scope-end drop codegen", (): void => {
     // `script` is compiler-generated JS from the hardcoded fixture above,
     // not external or user-supplied input; same test-only pattern as the
     // other eval-based codegen tests in this file, not a code-injection surface.
-    // biome-ignore lint/security/noGlobalEval: test-only eval of compiler-generated fixture output, see comment above
     eval(script); // nosemgrep: javascript.browser.security.eval-detected.eval-detected,javascript_eval_rule-eval-with-expression
   });
 });
@@ -1230,7 +1228,6 @@ describe("array literal codegen", (): void => {
     // `script` interpolates only compiler-generated helper text plus a
     // hand-written fixture below it, not external or user-supplied input;
     // same test-only pattern as the other eval-based codegen tests in this file.
-    // biome-ignore lint/security/noGlobalEval: test-only eval of compiler-generated helper text, see comment above
     expect(eval(script)).toEqual([1, 2]); // nosemgrep: javascript.browser.security.eval-detected.eval-detected,javascript_eval_rule-eval-with-expression
   });
 });
