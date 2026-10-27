@@ -1,0 +1,23 @@
+enum Shape {
+  Circle(i32),
+  Square(i32),
+  Empty,
+}
+
+impl Shape {
+  fn area(&self) -> i32 {
+    match self {
+      Shape::Circle(r) => *r * 3,
+      Shape::Square(s) => *s * *s,
+      Shape::Empty => 0,
+    }
+  }
+}
+
+fn main() {
+  print(Shape::Circle(2).area());
+  print(",");
+  print(Shape::Square(4).area());
+  print(",");
+  print(Shape::Empty.area());
+}
