@@ -6253,6 +6253,104 @@ describe("prelude Option and Result trait impls", (): void => {
   });
 });
 
+describe("prelude Option and Result methods", (): void => {
+  it("analyzes an Option<Num> against a T: Eq bound when Num implements Eq", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Num { n: i32 }
+      impl PartialEq for Num { fn eq(&self, other: &Num) -> bool { self.n == other.n } }
+      impl Eq for Num {}
+      fn needs_eq<T: Eq>(x: T) {}
+      fn main() { needs_eq(Option::Some(Num { n: 1 })); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("analyzes is_some and is_none on an Option as bool", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn main() {
+        let a: Option<i32> = Option::Some(1);
+        let some: bool = a.is_some();
+        let none: bool = a.is_none();
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("analyzes unwrap_or on an Option as its payload type", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn main() {
+        let a: Option<i32> = Option::Some(1);
+        let v: i32 = a.unwrap_or(0);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("analyzes is_ok, is_err and unwrap_or on a Result", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn main() {
+        let a: Result<i32, str> = Result::Ok(1);
+        let ok: bool = a.is_ok();
+        let err: bool = a.is_err();
+        let v: i32 = a.unwrap_or(0);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects unwrap_or with a default of the wrong type", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn main() {
+        let a: Option<i32> = Option::Some(1);
+        let v = a.unwrap_or("x");
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+});
+
+describe("supertrait completeness for generic impls", (): void => {
+  it("accepts a generic impl of Eq whose PartialEq impl carries the same bound", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Wrap<T> { value: T }
+      impl<T: PartialEq> PartialEq for Wrap<T> {
+        fn eq(&self, other: &Wrap<T>) -> bool { self.value == other.value }
+      }
+      impl<T: PartialEq + Eq> Eq for Wrap<T> {}
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a generic impl of Eq with no PartialEq impl for the type", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Wrap<T> { value: T }
+      impl<T: PartialEq + Eq> Eq for Wrap<T> {}
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "the trait bound `Wrap: PartialEq` is not satisfied",
+    );
+  });
+
+  it("rejects a generic impl of Eq whose PartialEq impl demands a bound the Eq impl lacks", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Marker {}
+      struct Wrap<T> { value: T }
+      impl<T: Marker> PartialEq for Wrap<T> {
+        fn eq(&self, other: &Wrap<T>) -> bool { true }
+      }
+      impl<T> Eq for Wrap<T> {}
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "the trait bound `Wrap: PartialEq` is not satisfied",
+    );
+  });
+});
+
 describe("bound-aware blanket impl overlap", (): void => {
   it("accepts a bounded blanket PartialEq impl next to the prelude's Option impl when Option never satisfies the bound", (): void => {
     const result = diagnoseWithPrelude(`
