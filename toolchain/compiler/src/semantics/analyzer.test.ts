@@ -6253,6 +6253,62 @@ describe("prelude Option and Result trait impls", (): void => {
   });
 });
 
+describe("bound-aware blanket impl overlap", (): void => {
+  it("accepts a bounded blanket PartialEq impl next to the prelude's Option impl when Option never satisfies the bound", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Marker {}
+      struct W { n: i32 }
+      impl Marker for W {}
+      impl<T: Marker> PartialEq for T { fn eq(&self, other: &Self) -> bool { true } }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a bounded blanket impl overlapping a concrete impl whose target satisfies the bound", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Marker {}
+      struct W { n: i32 }
+      impl Marker for W {}
+      impl PartialEq for W { fn eq(&self, other: &W) -> bool { true } }
+      impl<T: Marker> PartialEq for T { fn eq(&self, other: &Self) -> bool { true } }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "conflicting implementations of trait `PartialEq` for type `W`",
+    );
+  });
+
+  it("rejects the same overlap when the blanket impl is declared before the concrete one", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Marker {}
+      struct W { n: i32 }
+      impl<T: Marker> PartialEq for T { fn eq(&self, other: &Self) -> bool { true } }
+      impl PartialEq for W { fn eq(&self, other: &W) -> bool { true } }
+      impl Marker for W {}
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "conflicting implementations of trait `PartialEq` for type `W`",
+    );
+  });
+
+  it("accepts the overlapping pair when the bound is only satisfied by an unrelated type", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Marker {}
+      struct W { n: i32 }
+      struct V { n: i32 }
+      impl Marker for V {}
+      impl PartialEq for W { fn eq(&self, other: &W) -> bool { true } }
+      impl<T: Marker> PartialEq for T { fn eq(&self, other: &Self) -> bool { true } }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+});
+
 describe("Drop impl indexing", (): void => {
   it("keys `dropImpls` by the struct's scope-qualified type id", (): void => {
     const result = diagnoseWithPrelude(`
@@ -7106,6 +7162,7 @@ describe("trait and impl declarations", (): void => {
       trait A {}
       trait B { fn f(&self) -> str; }
       struct Point { x: i32, y: i32 }
+      impl A for Point {}
       impl<T: A> B for T { fn f(&self) -> str { "a" } }
       impl B for Point { fn f(&self) -> str { "a" } }
     `);
