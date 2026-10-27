@@ -6172,6 +6172,28 @@ describe("dyn Trait unsize coercion", (): void => {
   });
 });
 
+describe("prelude Option and Result names", (): void => {
+  it("rejects a user enum named Option as defined more than once", (): void => {
+    const result = diagnoseWithPrelude(`
+      enum Option { A, B }
+      fn main() {}
+    `);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "enum `Option` is defined more than once",
+    );
+  });
+
+  it("rejects a user enum named Result as defined more than once", (): void => {
+    const result = diagnoseWithPrelude(`
+      enum Result { A, B }
+      fn main() {}
+    `);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "enum `Result` is defined more than once",
+    );
+  });
+});
+
 describe("Drop impl indexing", (): void => {
   it("keys `dropImpls` by the struct's scope-qualified type id", (): void => {
     const result = diagnoseWithPrelude(`
