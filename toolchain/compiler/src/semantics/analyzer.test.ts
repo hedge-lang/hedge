@@ -1485,10 +1485,10 @@ describe("semantic analysis", (): void => {
   describe("if let (semantically analyzed)", () => {
     it("analyzes an if-let with a valid enum scrutinee and pattern cleanly", () => {
       const result = diagnose(`
-        enum Option { Some(i32), None }
+        enum Maybe { Some(i32), None }
         fn main() {
-          let opt = Option::Some(1);
-          if let Option::Some(x) = opt {
+          let opt = Maybe::Some(1);
+          if let Maybe::Some(x) = opt {
             print(x);
           }
         }
@@ -1511,10 +1511,10 @@ describe("semantic analysis", (): void => {
 
     it("rejects a reference to the if-let pattern's bound name from the else branch", () => {
       const result = diagnose(`
-        enum Option { Some(i32), None }
+        enum Maybe { Some(i32), None }
         fn main() {
-          let opt = Option::Some(1);
-          if let Option::Some(x) = opt {
+          let opt = Maybe::Some(1);
+          if let Maybe::Some(x) = opt {
           } else {
             print(x);
           }
@@ -1528,10 +1528,10 @@ describe("semantic analysis", (): void => {
 
     it("rejects a reference to the if-let pattern's bound name after the whole if", () => {
       const result = diagnose(`
-        enum Option { Some(i32), None }
+        enum Maybe { Some(i32), None }
         fn main() {
-          let opt = Option::Some(1);
-          if let Option::Some(x) = opt {
+          let opt = Maybe::Some(1);
+          if let Maybe::Some(x) = opt {
           }
           print(x);
         }
@@ -3978,10 +3978,10 @@ describe("associated types and trait projections", (): void => {
   describe("a trait's own declaration", (): void => {
     it("type-checks a required associated type used as Self::Item in a method's return type", (): void => {
       const result = diagnose(`
-        enum Option<T> { Some(T), None }
+        enum Maybe<T> { Some(T), None }
         trait Iterator {
           type Item;
-          fn next(&mut self) -> Option<Self::Item>;
+          fn next(&mut self) -> Maybe<Self::Item>;
         }
       `);
       expect(result.diagnostics).toEqual([]);
@@ -4009,10 +4009,10 @@ describe("associated types and trait projections", (): void => {
 
     it("rejects Self::Bogus when the trait declares no associated type named Bogus", (): void => {
       const result = diagnose(`
-        enum Option<T> { Some(T), None }
+        enum Maybe<T> { Some(T), None }
         trait Iterator {
           type Item;
-          fn next(&mut self) -> Option<Self::Bogus>;
+          fn next(&mut self) -> Maybe<Self::Bogus>;
         }
       `);
       expect(result.diagnostics).toHaveLength(1);
@@ -6194,6 +6194,65 @@ describe("prelude Option and Result names", (): void => {
   });
 });
 
+describe("prelude Option and Result trait impls", (): void => {
+  const num = `
+    struct Num { n: i32 }
+    impl Clone for Num {
+      fn clone(&self) -> Num { Num { n: self.n } }
+    }
+    impl PartialEq for Num {
+      fn eq(&self, other: &Num) -> bool { self.n == other.n }
+    }
+    impl Eq for Num {}
+  `;
+
+  it("analyzes Option<Num>.clone() cleanly when Num implements Clone", (): void => {
+    const result = diagnoseWithPrelude(`
+      ${num}
+      fn main() {
+        let a = Option::Some(Num { n: 1 });
+        let b = a.clone();
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("analyzes == on Option<Num> cleanly when Num implements PartialEq", (): void => {
+    const result = diagnoseWithPrelude(`
+      ${num}
+      fn main() {
+        let a = Option::Some(Num { n: 1 });
+        let b = Option::Some(Num { n: 1 });
+        print(a == b);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("analyzes Result<Num, Num>.clone() and == cleanly when Num implements Clone and PartialEq", (): void => {
+    const result = diagnoseWithPrelude(`
+      ${num}
+      fn main() {
+        let a: Result<Num, Num> = Result::Ok(Num { n: 1 });
+        let b = a.clone();
+        print(a == b);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("analyzes Option<Num>.clone() cleanly on a None binding", (): void => {
+    const result = diagnoseWithPrelude(`
+      ${num}
+      fn main() {
+        let a: Option<Num> = Option::None;
+        let b = a.clone();
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+});
+
 describe("Drop impl indexing", (): void => {
   it("keys `dropImpls` by the struct's scope-qualified type id", (): void => {
     const result = diagnoseWithPrelude(`
@@ -6479,9 +6538,9 @@ describe("generic struct/enum instantiation identity", (): void => {
 describe("bare unit-variant path construction (no call syntax) for a generic enum", (): void => {
   it("resolves a generic enum's unit variant referenced bare against a let annotation", (): void => {
     const result = diagnose(`
-      enum Option<T> { Some(T), None }
+      enum Maybe<T> { Some(T), None }
       fn main() {
-        let a: Option<i32> = Option::None;
+        let a: Maybe<i32> = Maybe::None;
       }
     `);
     expect(result.diagnostics).toEqual([]);
@@ -6489,9 +6548,9 @@ describe("bare unit-variant path construction (no call syntax) for a generic enu
 
   it("resolves a generic enum's unit variant referenced bare against an enclosing function's declared return type", (): void => {
     const result = diagnose(`
-      enum Option<T> { Some(T), None }
-      fn make_none() -> Option<i32> {
-        Option::None
+      enum Maybe<T> { Some(T), None }
+      fn make_none() -> Maybe<i32> {
+        Maybe::None
       }
     `);
     expect(result.diagnostics).toEqual([]);
@@ -6499,12 +6558,12 @@ describe("bare unit-variant path construction (no call syntax) for a generic enu
 
   it("resolves a generic enum's unit variant produced by a match arm, checked against an enclosing let annotation", (): void => {
     const result = diagnose(`
-      enum Option<T> { Some(T), None }
+      enum Maybe<T> { Some(T), None }
       fn main() {
         let flag = true;
-        let a: Option<i32> = match flag {
-          true => Option::Some(5),
-          false => Option::None,
+        let a: Maybe<i32> = match flag {
+          true => Maybe::Some(5),
+          false => Maybe::None,
         };
       }
     `);
@@ -6513,11 +6572,11 @@ describe("bare unit-variant path construction (no call syntax) for a generic enu
 
   it("resolves a generic enum's unit variant produced by a match arm, checked against an enclosing function's return type", (): void => {
     const result = diagnose(`
-      enum Option<T> { Some(T), None }
-      fn pick(flag: bool) -> Option<i32> {
+      enum Maybe<T> { Some(T), None }
+      fn pick(flag: bool) -> Maybe<i32> {
         match flag {
-          true => Option::Some(5),
-          false => Option::None,
+          true => Maybe::Some(5),
+          false => Maybe::None,
         }
       }
     `);
@@ -6526,10 +6585,10 @@ describe("bare unit-variant path construction (no call syntax) for a generic enu
 
   it("resolves a generic enum's unit variant produced by an if/else branch, checked against an enclosing let annotation", (): void => {
     const result = diagnose(`
-      enum Option<T> { Some(T), None }
+      enum Maybe<T> { Some(T), None }
       fn main() {
         let flag = true;
-        let a: Option<i32> = if flag { Option::Some(5) } else { Option::None };
+        let a: Maybe<i32> = if flag { Maybe::Some(5) } else { Maybe::None };
       }
     `);
     expect(result.diagnostics).toEqual([]);
@@ -6537,9 +6596,9 @@ describe("bare unit-variant path construction (no call syntax) for a generic enu
 
   it("reports exactly one cannot-infer diagnostic for a generic enum's unit variant referenced with no resolvable context anywhere", (): void => {
     const result = diagnose(`
-      enum Option<T> { Some(T), None }
+      enum Maybe<T> { Some(T), None }
       fn main() {
-        let a = Option::None;
+        let a = Maybe::None;
       }
     `);
     expect(result.diagnostics).toHaveLength(1);
@@ -6576,12 +6635,12 @@ describe("bare unit-variant path construction (no call syntax) for a generic enu
 
   it("resolves Self's own abstract type parameter for a unit variant constructed inside a generic impl's method body", (): void => {
     const result = diagnoseWithPrelude(`
-      enum Option<T> { Some(T), None }
-      impl<T: Clone> Clone for Option<T> {
+      enum Maybe<T> { Some(T), None }
+      impl<T: Clone> Clone for Maybe<T> {
         fn clone(&self) -> Self {
           match self {
-            Option::Some(x) => Option::Some(x.clone()),
-            Option::None => Option::None,
+            Maybe::Some(x) => Maybe::Some(x.clone()),
+            Maybe::None => Maybe::None,
           }
         }
       }
@@ -6591,9 +6650,9 @@ describe("bare unit-variant path construction (no call syntax) for a generic enu
 
   it("resolves a generic enum's unit variant from its own explicit turbofish, with no other context", (): void => {
     const result = diagnose(`
-      enum Option<T> { Some(T), None }
+      enum Maybe<T> { Some(T), None }
       fn main() {
-        let a = Option::None::<i32>;
+        let a = Maybe::None::<i32>;
       }
     `);
     expect(result.diagnostics).toEqual([]);
@@ -6601,14 +6660,14 @@ describe("bare unit-variant path construction (no call syntax) for a generic enu
 
   it("reports a conflict when a unit variant's own explicit turbofish disagrees with an outer expected type", (): void => {
     const result = diagnose(`
-      enum Option<T> { Some(T), None }
+      enum Maybe<T> { Some(T), None }
       fn main() {
-        let a: Option<i32> = Option::None::<str>;
+        let a: Maybe<i32> = Maybe::None::<str>;
       }
     `);
     expect(result.diagnostics).toHaveLength(1);
     expect(messageOf(result.diagnostics[0])).toBe(
-      "call to `Option::None` type mismatch: expected `Option<str>`, found `Option<i32>`",
+      "call to `Maybe::None` type mismatch: expected `Maybe<str>`, found `Maybe<i32>`",
     );
   });
 });
