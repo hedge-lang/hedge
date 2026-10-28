@@ -1,0 +1,35 @@
+trait Draw {
+  fn draw(&self) -> i32;
+}
+
+struct Circle {
+  r: i32,
+}
+
+struct Square {
+  s: i32,
+}
+
+impl Draw for Circle {
+  fn draw(&self) -> i32 {
+    self.r * 2
+  }
+}
+
+impl Draw for Square {
+  fn draw(&self) -> i32 {
+    self.s * self.s
+  }
+}
+
+fn show(d: &dyn Draw) -> i32 {
+  d.draw()
+}
+
+fn main() {
+  let c = Circle { r: 3 };
+  let q = Square { s: 4 };
+  print(show(&c));
+  print(",");
+  print(show(&q));
+}

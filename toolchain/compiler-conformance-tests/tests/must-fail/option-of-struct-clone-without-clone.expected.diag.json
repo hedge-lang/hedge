@@ -1,0 +1,11 @@
+[
+  {
+    "code": "HEDGE-TYPE-012",
+    "kind": {
+      "kind": "SemNoMethodOnType",
+      "method": "clone",
+      "typeName": "Option"
+    },
+    "relatedSpans": []
+  }
+]

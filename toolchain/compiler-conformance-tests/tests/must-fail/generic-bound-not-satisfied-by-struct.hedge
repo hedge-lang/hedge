@@ -1,0 +1,16 @@
+trait Draw {
+  fn draw(&self) -> i32;
+}
+
+struct Blob {
+  n: i32,
+}
+
+fn draw_all<T: Draw>(item: &T) -> i32 {
+  item.draw()
+}
+
+fn main() {
+  let b = Blob { n: 1 };
+  print(draw_all(&b));
+}

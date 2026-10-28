@@ -1,0 +1,8 @@
+fn main() {
+  let o: Option<i32> = Option::Some(2147483647);
+  let v = o.unwrap_or(0);
+  print(v + 1);
+  print(",");
+  let none: Option<i32> = Option::None;
+  print(none.unwrap_or(2147483647) + 1);
+}

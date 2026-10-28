@@ -5,7 +5,7 @@ import { assert } from "../assert.js";
 import { tokenize } from "../lexer/lexer.js";
 import { isSome, none, some } from "../option.js";
 import { parse } from "../parser/parser.js";
-import { assembleProgram } from "../prelude.js";
+import { assembleProgram, isPreludeToken } from "../prelude.js";
 import type { AnalysisResult } from "./analyzer.js";
 import { analyze } from "./analyzer.js";
 import type {
@@ -6306,6 +6306,146 @@ describe("prelude Option and Result methods", (): void => {
       }
     `);
     expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "argument 1 to method `unwrap_or` type mismatch: expected `i32`, found `str`",
+    );
+  });
+});
+
+describe("prelude primitive Clone and Default", (): void => {
+  it("analyzes .clone() on Option<i32> cleanly", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn main() {
+        let a: Option<i32> = Option::Some(1);
+        let b = a.clone();
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("analyzes .clone() on a bare i32 cleanly", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn main() {
+        let a: i32 = 1;
+        let b: i32 = a.clone();
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it.each([
+    "i8",
+    "i16",
+    "i32",
+    "i64",
+    "isize",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "usize",
+    "f32",
+    "f64",
+    "bool",
+    "char",
+  ])(
+    "satisfies a T: Clone and T: Default bound with %s",
+    (name: string): void => {
+      const result = diagnoseWithPrelude(`
+        fn needs<T: Clone + Default>(x: T) {}
+        fn make(x: ${name}) { needs(x); }
+        fn main() {}
+      `);
+      expect(result.diagnostics).toEqual([]);
+    },
+  );
+
+  it("satisfies a T: Default bound with Option<i32>", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn needs<T: Default>(x: T) {}
+      fn main() { needs(Option::Some(1)); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a T: Clone bound for a struct with no Clone impl", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct P { x: i32 }
+      fn needs<T: Clone>(x: T) {}
+      fn main() { needs(P { x: 1 }); }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "the trait bound `P: Clone` is not satisfied",
+    );
+  });
+
+  it("rejects a user impl Clone for i32 as a duplicate of the prelude's", (): void => {
+    const result = diagnoseWithPrelude(`
+      impl Clone for i32 {
+        fn clone(&self) -> i32 { *self }
+      }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "trait `Clone` is already implemented for type `i32`",
+    );
+  });
+
+  it("rejects an inherent impl on a primitive type in user code", (): void => {
+    const result = diagnoseWithPrelude(`
+      impl i32 {
+        fn triple(&self) -> i32 { *self * 3 }
+      }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "cannot define inherent methods on primitive type `i32`",
+    );
+  });
+
+  it("accepts an inherent impl on a primitive type declared by the prelude", (): void => {
+    const { tokens } = tokenize(`
+      impl i32 {
+        fn triple(&self) -> i32 { *self * 3 }
+      }
+      fn main() {}
+    `);
+    const { program } = parse(tokens);
+    assert(isSome(program), "Parse failed");
+    const preludeSpanBase = 1_000_000_000;
+    const asPrelude = tokens.map((token) => ({
+      ...token,
+      span: {
+        start: token.span.start + preludeSpanBase,
+        end: token.span.end + preludeSpanBase,
+      },
+    }));
+    expect(analyze(program.value, asPrelude).diagnostics).toEqual([]);
+  });
+
+  it("still accepts a user trait implemented for a primitive type", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Double { fn double(&self) -> i32; }
+      impl Double for i32 {
+        fn double(&self) -> i32 { *self * 2 }
+      }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("attaches no related note when the first impl is the prelude's own", (): void => {
+    const result = diagnoseWithPrelude(`
+      impl Clone for i32 {
+        fn clone(&self) -> i32 { *self }
+      }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.relatedSpans).toEqual([]);
   });
 });
 
@@ -8854,7 +8994,9 @@ describe("trait and impl declarations", (): void => {
       assert(isSome(program), "Parse failed");
       const result = analyze(program.value, tokens);
       expect(result.diagnostics).toEqual([]);
-      const entry = [...result.methodTargets.entries()][0];
+      const entry = [...result.methodTargets.entries()].find(
+        ([tokenId]) => !isPreludeToken(tokens, tokenId),
+      );
       assert(entry !== undefined, "expected one method target");
       const [tokenId, target] = entry;
       expect(tokens[tokenId]?.kind).toBe("eq_eq");
@@ -10200,7 +10342,9 @@ describe("ordering operators resolving through a PartialOrd/Ord impl", (): void 
     assert(isSome(program), "Parse failed");
     const result = analyze(program.value, tokens);
     expect(result.diagnostics).toEqual([]);
-    const entry = [...result.methodTargets.entries()][0];
+    const entry = [...result.methodTargets.entries()].find(
+      ([tokenId]) => !isPreludeToken(tokens, tokenId),
+    );
     assert(entry !== undefined, "expected one method target");
     const [tokenId, target] = entry;
     expect(tokens[tokenId]?.kind).toBe("lt");
@@ -10219,7 +10363,9 @@ describe("ordering operators resolving through a PartialOrd/Ord impl", (): void 
     assert(isSome(program), "Parse failed");
     const result = analyze(program.value, tokens);
     expect(result.diagnostics).toEqual([]);
-    const [target] = [...result.methodTargets.values()];
+    const [target] = [...result.methodTargets.entries()]
+      .filter(([tokenId]) => !isPreludeToken(tokens, tokenId))
+      .map(([, found]) => found);
     expect(target).toEqual({
       kind: "witness",
       witnessName: "_witness_T_PartialOrd",
@@ -10243,9 +10389,11 @@ describe("ordering operators resolving through a PartialOrd/Ord impl", (): void 
       }
     `);
     expect(result.diagnostics).toEqual([]);
-    expect([...result.methodTargets.values()]).toEqual([
-      expect.objectContaining({ kind: "free", emitKind: "blanket" }),
-    ]);
+    expect(
+      [...result.methodTargets.values()].filter(
+        (target) => target.kind === "free" && target.emitKind === "blanket",
+      ),
+    ).toEqual([expect.objectContaining({ kind: "free", emitKind: "blanket" })]);
   });
 });
 
@@ -10892,9 +11040,11 @@ describe("arithmetic/bitwise/shift operators resolving through an operator-trait
       }
     `);
     expect(result.diagnostics).toEqual([]);
-    expect([...result.methodTargets.values()]).toEqual([
-      expect.objectContaining({ kind: "free", emitKind: "blanket" }),
-    ]);
+    expect(
+      [...result.methodTargets.values()].filter(
+        (target) => target.kind === "free" && target.emitKind === "blanket",
+      ),
+    ).toEqual([expect.objectContaining({ kind: "free", emitKind: "blanket" })]);
   });
 
   it("rejects `a + b` on a struct whose only `Add` impl is against a shadowing block-local trait", (): void => {
@@ -11004,7 +11154,9 @@ describe("arithmetic/bitwise/shift operators resolving through an operator-trait
     assert(isSome(program), "Parse failed");
     const result = analyze(program.value, tokens);
     expect(result.diagnostics).toEqual([]);
-    const entry = [...result.methodTargets.entries()][0];
+    const entry = [...result.methodTargets.entries()].find(
+      ([tokenId]) => !isPreludeToken(tokens, tokenId),
+    );
     assert(entry !== undefined, "expected one method target");
     const [tokenId, target] = entry;
     expect(tokens[tokenId]?.kind).toBe("plus");
@@ -11023,7 +11175,9 @@ describe("arithmetic/bitwise/shift operators resolving through an operator-trait
     assert(isSome(program), "Parse failed");
     const result = analyze(program.value, tokens);
     expect(result.diagnostics).toEqual([]);
-    const [target] = [...result.methodTargets.values()];
+    const [target] = [...result.methodTargets.entries()]
+      .filter(([tokenId]) => !isPreludeToken(tokens, tokenId))
+      .map(([, found]) => found);
     expect(target).toEqual({
       kind: "witness",
       witnessName: "_witness_T_Add",

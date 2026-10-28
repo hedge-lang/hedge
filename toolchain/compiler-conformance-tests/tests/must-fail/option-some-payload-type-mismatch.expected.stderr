@@ -1,0 +1,2 @@
+error[HEDGE-TYPE-010]: argument 1 to variant `Some` type mismatch: expected `i32`, found `str`
+  = note: inferred as `i32` here at offset 35

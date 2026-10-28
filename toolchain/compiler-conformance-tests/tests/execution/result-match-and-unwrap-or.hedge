@@ -1,0 +1,20 @@
+fn code(r: Result<i32, i32>) -> i32 {
+  match r {
+    Result::Ok(v) => v,
+    Result::Err(e) => 0 - e,
+  }
+}
+
+fn main() {
+  let ok: Result<i32, i32> = Result::Ok(5);
+  let err: Result<i32, i32> = Result::Err(7);
+  print(code(ok));
+  print(",");
+  print(code(err));
+  print(",");
+  let ok2: Result<i32, i32> = Result::Ok(8);
+  let err2: Result<i32, i32> = Result::Err(1);
+  print(ok2.unwrap_or(0));
+  print(",");
+  print(err2.unwrap_or(9));
+}

@@ -156,6 +156,7 @@ const SAMPLE_KINDS: readonly DiagnosticKind[] = [
   { kind: "SemOperatorRhsMustBeSelf", trait: "Add" },
   { kind: "SemQualifiedTypePathsUnsupported" },
   { kind: "SemDropImplForEnumUnsupported" },
+  { kind: "SemInherentImplOnPrimitive", typeName: "i32" },
   { kind: "SemGenericTypeParamNoArguments", name: "T" },
   { kind: "SemGenericArrayElementBehindReference", name: "T" },
   { kind: "SemPatternKindNotYetSupported" },
@@ -414,6 +415,7 @@ const KNOWN_CODES = new Set<DiagnosticCode>([
   "HEDGE-TRAIT-008",
   "HEDGE-TRAIT-009",
   "HEDGE-TRAIT-010",
+  "HEDGE-TRAIT-011",
   "HEDGE-ITEM-001",
   "HEDGE-UNSUPPORTED-001",
 ]);

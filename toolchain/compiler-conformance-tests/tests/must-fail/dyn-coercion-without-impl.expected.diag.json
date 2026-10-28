@@ -1,0 +1,14 @@
+[
+  {
+    "code": "HEDGE-TYPE-001",
+    "kind": {
+      "kind": "SemArgumentTypeMismatch",
+      "argIndex": 1,
+      "calleeKind": "function",
+      "calleeName": "show",
+      "expected": "&dyn Draw",
+      "found": "&Blob"
+    },
+    "relatedSpans": []
+  }
+]

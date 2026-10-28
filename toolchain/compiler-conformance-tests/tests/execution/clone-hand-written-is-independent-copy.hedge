@@ -1,0 +1,40 @@
+struct Point {
+  x: i32,
+  y: i32,
+}
+
+impl Clone for Point {
+  fn clone(&self) -> Point {
+    Point { x: self.x, y: self.y }
+  }
+}
+
+fn bump(o: &mut Option<Point>) {
+  match o {
+    Option::Some(p) => {
+      p.x = p.x + 100;
+    }
+    Option::None => {}
+  }
+}
+
+fn read(o: Option<Point>) -> i32 {
+  match o {
+    Option::Some(p) => p.x,
+    Option::None => 0 - 1,
+  }
+}
+
+fn main() {
+  let mut a = Point { x: 1, y: 2 };
+  let b = a.clone();
+  a.x = 10;
+  print(b.x);
+  print(",");
+  let mut original = Option::Some(Point { x: 5, y: 6 });
+  let copy = original.clone();
+  bump(&mut original);
+  print(read(copy));
+  print(",");
+  print(read(original));
+}

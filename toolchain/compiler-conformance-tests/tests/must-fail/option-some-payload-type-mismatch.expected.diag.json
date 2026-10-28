@@ -1,0 +1,19 @@
+[
+  {
+    "code": "HEDGE-TYPE-010",
+    "kind": {
+      "kind": "SemArgumentTypeMismatchConflict",
+      "argIndex": 1,
+      "calleeKind": "variant",
+      "calleeName": "Some",
+      "expected": "i32",
+      "found": "str"
+    },
+    "relatedSpans": [
+      {
+        "labelKind": "LabelInferredAsHere",
+        "spanStart": 35
+      }
+    ]
+  }
+]

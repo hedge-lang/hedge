@@ -1,0 +1,29 @@
+enum Shape {
+  Circle(i32),
+  Square(i32),
+  Empty,
+}
+
+fn bump(s: &mut Shape) -> i32 {
+  match s {
+    Shape::Circle(r) => {
+      *r = *r + 1;
+      *r
+    }
+    Shape::Square(x) => *x,
+    Shape::Empty => 0,
+  }
+}
+
+fn main() {
+  let mut c = Shape::Circle(2);
+  print(bump(&mut c));
+  print(",");
+  print(bump(&mut c));
+  print(",");
+  let mut q = Shape::Square(5);
+  print(bump(&mut q));
+  print(",");
+  let mut e = Shape::Empty;
+  print(bump(&mut e));
+}

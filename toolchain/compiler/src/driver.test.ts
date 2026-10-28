@@ -2147,18 +2147,18 @@ describe("generic witness codegen", (): void => {
 
   it("round-trips a generic enum's unit variant through construction, a match, and print", (): void => {
     const js = emittedJs(`
-      enum Option<T> { Some(T), None }
-      fn unwrap_or(m: Option<i32>, fallback: i32) -> i32 {
+      enum Maybe<T> { Some(T), None }
+      fn unwrap_or(m: Maybe<i32>, fallback: i32) -> i32 {
         match m {
-          Option::Some(x) => x,
-          Option::None => fallback,
+          Maybe::Some(x) => x,
+          Maybe::None => fallback,
         }
       }
       fn main() {
-        let a: Option<i32> = Option::None;
+        let a: Maybe<i32> = Maybe::None;
         print(unwrap_or(a, -1));
         print(",");
-        print(unwrap_or(Option::Some(7), 0));
+        print(unwrap_or(Maybe::Some(7), 0));
       }
     `);
     expect(runEmittedJs(js)).toEqual(["-1", ",", "7"]);
@@ -2166,7 +2166,7 @@ describe("generic witness codegen", (): void => {
 
   it("runs a generic impl's Clone that reconstructs Self via a unit variant, not just a tuple variant", (): void => {
     const js = emittedJs(`
-      enum Option<T> { Some(T), None }
+      enum Maybe<T> { Some(T), None }
       struct Num { n: i32 }
       impl Clone for Num {
         fn clone(&self) -> Self {
@@ -2174,16 +2174,16 @@ describe("generic witness codegen", (): void => {
           Num { n: self.n }
         }
       }
-      impl<T: Clone> Clone for Option<T> {
+      impl<T: Clone> Clone for Maybe<T> {
         fn clone(&self) -> Self {
           match self {
-            Option::Some(x) => Option::Some(x.clone()),
-            Option::None => Option::None,
+            Maybe::Some(x) => Maybe::Some(x.clone()),
+            Maybe::None => Maybe::None,
           }
         }
       }
       fn main() {
-        let a = Option::Some(Num { n: 5 });
+        let a = Maybe::Some(Num { n: 5 });
         let b = a.clone();
         print("done");
       }
@@ -3047,6 +3047,112 @@ describe("std prelude", (): void => {
         "",
       ].join("\n"),
     );
+  });
+
+  it("omits Option and Result impl functions from a program that never uses them", (): void => {
+    const js = emittedJs(`
+      fn main() {}
+    `);
+    expect(js).not.toContain("Option$");
+    expect(js).not.toContain("Result$");
+  });
+
+  it("emits Option's clone function when the program clones an Option", (): void => {
+    const js = emittedJs(`
+      struct Num { n: i32 }
+      impl Clone for Num {
+        fn clone(&self) -> Num { Num { n: self.n } }
+      }
+      fn main() {
+        let a = Option::Some(Num { n: 1 });
+        let b = a.clone();
+      }
+    `);
+    expect(js).toContain("function Option$Clone$clone(");
+    expect(js).not.toContain("Result$");
+  });
+
+  it("keeps Option's eq function when it is reached only through a generic bound's witness", (): void => {
+    const js = emittedJs(`
+      struct Num { n: i32 }
+      impl PartialEq for Num {
+        fn eq(&self, other: &Num) -> bool { self.n == other.n }
+      }
+      fn same<T: PartialEq>(a: T, b: T) -> bool { a == b }
+      fn main() {
+        print(same(Option::Some(Num { n: 1 }), Option::Some(Num { n: 1 })));
+      }
+    `);
+    expect(js).toContain("function Option$PartialEq$eq(");
+  });
+
+  it("runs .clone() on an i32 through the prelude's primitive Clone impl", (): void => {
+    const js = emittedJs(`
+      fn main() {
+        let a: i32 = 5;
+        let b: i32 = a.clone();
+        print(b);
+      }
+    `);
+    expect(js).toContain("i32$Clone$clone(a)");
+    expect(runEmittedJs(js)).toEqual(["5"]);
+  });
+
+  it("keeps every digit when cloning an i64 beyond the safe integer range", (): void => {
+    const js = emittedJs(`
+      fn main() {
+        let a: i64 = 9007199254740993;
+        print(a.clone());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["9007199254740993"]);
+  });
+
+  it("passes the primitive Clone witness to a generic function bounded by Clone", (): void => {
+    const js = emittedJs(`
+      fn dup<T: Clone>(x: &T) -> T { x.clone() }
+      fn main() {
+        let a: i32 = 5;
+        print(dup(&a));
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["5"]);
+  });
+
+  it("clones an Option<i32> into a value that compares equal to the original", (): void => {
+    const js = emittedJs(`
+      fn main() {
+        let o: Option<i32> = Option::Some(7);
+        let p: Option<i32> = o.clone();
+        print(p == o);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["true"]);
+  });
+
+  it("runs a user trait method implemented for i32, directly and through a generic bound", (): void => {
+    const js = emittedJs(`
+      trait Double { fn double(&self) -> i32; }
+      impl Double for i32 {
+        fn double(&self) -> i32 { *self * 2 }
+      }
+      fn twice<T: Double>(x: &T) -> i32 { x.double() }
+      fn main() {
+        let a: i32 = 4;
+        print(a.double());
+        print(",");
+        print(twice(&a));
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["8", ",", "8"]);
+  });
+
+  it("omits primitive Clone and Default functions from a program that never uses them", (): void => {
+    const js = emittedJs(`
+      fn main() {}
+    `);
+    expect(js).not.toContain("i32$");
+    expect(js).not.toContain("f64$");
   });
 });
 

@@ -1,0 +1,21 @@
+fn flatten_code(o: Option<Option<i32>>) -> i32 {
+  match o {
+    Option::Some(inner) => match inner {
+      Option::Some(v) => v,
+      Option::None => 0 - 1,
+    },
+    Option::None => 0 - 2,
+  }
+}
+
+fn main() {
+  let a: Option<Option<i32>> = Option::Some(Option::Some(3));
+  let empty: Option<i32> = Option::None;
+  let b: Option<Option<i32>> = Option::Some(empty);
+  let c: Option<Option<i32>> = Option::None;
+  print(flatten_code(a));
+  print(",");
+  print(flatten_code(b));
+  print(",");
+  print(flatten_code(c));
+}

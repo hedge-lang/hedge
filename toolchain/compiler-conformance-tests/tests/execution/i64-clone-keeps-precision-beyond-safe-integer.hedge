@@ -1,0 +1,7 @@
+fn main() {
+  let big: i64 = 9007199254740993;
+  let copy = big.clone();
+  print(copy);
+  print(",");
+  print(copy == big);
+}
