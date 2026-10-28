@@ -5,6 +5,34 @@ import { isSome, type Option } from "./option.js";
 import type { Program } from "./parser/ast.js";
 import { parse } from "./parser/parser.js";
 
+const PRIMITIVE_ZEROS: readonly (readonly [string, string])[] = [
+  ["i8", "0"],
+  ["i16", "0"],
+  ["i32", "0"],
+  ["i64", "0"],
+  ["isize", "0"],
+  ["u8", "0"],
+  ["u16", "0"],
+  ["u32", "0"],
+  ["u64", "0"],
+  ["usize", "0"],
+  ["f32", "0.0f32"],
+  ["f64", "0.0"],
+  ["bool", "false"],
+  ["char", "'\\0'"],
+];
+
+const PRIMITIVE_IMPLS = PRIMITIVE_ZEROS.map(
+  ([name, zero]) => `impl Clone for ${name} {
+  fn clone(&self) -> ${name} { *self }
+}
+
+impl Default for ${name} {
+  fn default() -> ${name} { ${zero} }
+}
+`,
+).join("\n");
+
 /**
  * The always-in-scope standard-library declarations, compiled in front of
  * every program. Pre-modules (ROADMAP Slice 7), this is the only prelude
@@ -24,6 +52,108 @@ trait PartialEq {
 trait Eq: PartialEq {}
 
 enum Ordering { Less, Equal, Greater }
+
+enum Option<T> { Some(T), None }
+
+enum Result<T, E> { Ok(T), Err(E) }
+
+impl<T> Option<T> {
+  fn is_some(&self) -> bool {
+    match self {
+      Option::Some(x) => true,
+      Option::None => false,
+    }
+  }
+
+  fn is_none(&self) -> bool {
+    match self {
+      Option::Some(x) => false,
+      Option::None => true,
+    }
+  }
+
+  fn unwrap_or(self, default: T) -> T {
+    match self {
+      Option::Some(x) => x,
+      Option::None => default,
+    }
+  }
+}
+
+impl<T, E> Result<T, E> {
+  fn is_ok(&self) -> bool {
+    match self {
+      Result::Ok(x) => true,
+      Result::Err(e) => false,
+    }
+  }
+
+  fn is_err(&self) -> bool {
+    match self {
+      Result::Ok(x) => false,
+      Result::Err(e) => true,
+    }
+  }
+
+  fn unwrap_or(self, default: T) -> T {
+    match self {
+      Result::Ok(x) => x,
+      Result::Err(e) => default,
+    }
+  }
+}
+
+impl<T: Clone> Clone for Option<T> {
+  fn clone(&self) -> Option<T> {
+    match self {
+      Option::Some(x) => Option::Some(x.clone()),
+      Option::None => Option::None,
+    }
+  }
+}
+
+impl<T: PartialEq> PartialEq for Option<T> {
+  fn eq(&self, other: &Option<T>) -> bool {
+    match self {
+      Option::Some(a) => match other {
+        Option::Some(b) => a == b,
+        Option::None => false,
+      },
+      Option::None => match other {
+        Option::Some(b) => false,
+        Option::None => true,
+      },
+    }
+  }
+}
+
+impl<T: PartialEq + Eq> Eq for Option<T> {}
+
+impl<T, E> Clone for Result<T, E> where T: Clone, E: Clone {
+  fn clone(&self) -> Result<T, E> {
+    match self {
+      Result::Ok(x) => Result::Ok(x.clone()),
+      Result::Err(e) => Result::Err(e.clone()),
+    }
+  }
+}
+
+impl<T, E> PartialEq for Result<T, E> where T: PartialEq, E: PartialEq {
+  fn eq(&self, other: &Result<T, E>) -> bool {
+    match self {
+      Result::Ok(a) => match other {
+        Result::Ok(b) => a == b,
+        Result::Err(b) => false,
+      },
+      Result::Err(a) => match other {
+        Result::Ok(b) => false,
+        Result::Err(b) => a == b,
+      },
+    }
+  }
+}
+
+impl<T, E> Eq for Result<T, E> where T: PartialEq + Eq, E: PartialEq + Eq {}
 
 trait PartialOrd: PartialEq {
   fn partial_cmp(&self, other: &Self) -> Ordering;
@@ -140,6 +270,11 @@ trait Shr<Rhs = Self> {
   type Output;
   fn shr(self, rhs: Rhs) -> Self::Output;
 }
+
+${PRIMITIVE_IMPLS}
+impl<T> Default for Option<T> {
+  fn default() -> Option<T> { Option::None }
+}
 `;
 
 export interface AssembledProgram {
@@ -157,6 +292,14 @@ export interface AssembledProgram {
  * otherwise misdirect it.
  */
 const SYNTHETIC_SPAN_BASE = 1_000_000_000;
+
+export function isPreludeToken(
+  tokens: readonly Token[],
+  tokenId: number,
+): boolean {
+  const token = tokens[tokenId];
+  return token !== undefined && token.span.start >= SYNTHETIC_SPAN_BASE;
+}
 
 const PRELUDE_TOKENS: readonly Token[] = tokenize(PRELUDE_SOURCE)
   .tokens.filter((token): boolean => token.kind !== "eof")

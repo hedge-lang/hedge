@@ -324,6 +324,7 @@ export type DiagnosticKind =
     }
   | { readonly kind: "SemQualifiedTypePathsUnsupported" }
   | { readonly kind: "SemDropImplForEnumUnsupported" }
+  | { readonly kind: "SemInherentImplOnPrimitive"; readonly typeName: string }
   | { readonly kind: "SemGenericTypeParamNoArguments"; readonly name: string }
   | {
       readonly kind: "SemGenericArrayElementBehindReference";
@@ -772,6 +773,7 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemOperatorRhsMustBeSelf", "HEDGE-TRAIT-010"],
   ["SemQualifiedTypePathsUnsupported", "HEDGE-UNSUPPORTED-001"],
   ["SemDropImplForEnumUnsupported", "HEDGE-UNSUPPORTED-001"],
+  ["SemInherentImplOnPrimitive", "HEDGE-TRAIT-011"],
   ["SemGenericTypeParamNoArguments", "HEDGE-UNSUPPORTED-001"],
   ["SemGenericArrayElementBehindReference", "HEDGE-UNSUPPORTED-001"],
   ["SemPatternKindNotYetSupported", "HEDGE-UNSUPPORTED-001"],

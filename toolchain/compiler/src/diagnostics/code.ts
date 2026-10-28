@@ -95,6 +95,7 @@ export type DiagnosticCode =
   | "HEDGE-TRAIT-008" // trait is not object-safe, so `dyn Trait` is rejected
   | "HEDGE-TRAIT-009" // operator trait impl's Output associated type is not Self
   | "HEDGE-TRAIT-010" // operator trait impl declares a non-Self Rhs type argument
+  | "HEDGE-TRAIT-011" // inherent impl on a primitive type outside the prelude
   // Items and slice gating.
   | "HEDGE-ITEM-001" // item not permitted in this position
   | "HEDGE-UNSUPPORTED-001"; // construct not yet supported by the analyzer
