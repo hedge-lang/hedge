@@ -53,6 +53,7 @@ export default defineConfig([
       /* ===== additional safety (from compiler-grade layer) ===== */
       "@typescript-eslint/no-non-null-assertion": "error",
       "no-param-reassign": "error",
+      "max-params": ["error", 7],
     },
   },
 
