@@ -2,30 +2,42 @@ import { describe, expect, it } from "vitest";
 
 import { goneBranches } from "./post-merge-cleanup.js";
 
+const row = (name: string, track: string, worktree = ""): string =>
+  `${name}\t${track}\t${worktree}`;
+
 describe("goneBranches", (): void => {
   it("lists a branch whose upstream is gone", (): void => {
     const output = [
-      "* main      442083f [origin/main] Squash",
-      "  hedge-59  952a0eb [origin/hedge-59: gone] Add Option",
-      "  hedge-60  1111111 [origin/hedge-60] Work",
+      row("main", "", "/repo"),
+      row("hedge-59", "[gone]"),
+      row("hedge-60", ""),
     ].join("\n");
 
     expect(goneBranches(output)).toEqual(["hedge-59"]);
   });
 
-  it("keeps the checked-out branch even when its upstream is gone", (): void => {
-    const output = "* hedge-59  952a0eb [origin/hedge-59: gone] Add Option";
+  it("keeps a branch checked out in any worktree even when its upstream is gone", (): void => {
+    const output = [
+      row("hedge-59", "[gone]", "/repo"),
+      row("hedge-61", "[gone]", "/other-worktree"),
+    ].join("\n");
 
     expect(goneBranches(output)).toEqual([]);
   });
 
   it("keeps main even when its upstream is gone", (): void => {
-    const output = "  main  442083f [origin/main: gone] Squash";
-
-    expect(goneBranches(output)).toEqual([]);
+    expect(goneBranches(row("main", "[gone]"))).toEqual([]);
   });
 
   it("returns nothing for a branch with no upstream", (): void => {
-    expect(goneBranches("  scratch  2222222 Local only")).toEqual([]);
+    expect(goneBranches(row("scratch", ""))).toEqual([]);
+  });
+
+  it("returns nothing for a branch that is ahead or behind a live upstream", (): void => {
+    expect(goneBranches(row("hedge-62", "[ahead 1, behind 2]"))).toEqual([]);
+  });
+
+  it("returns nothing for an empty listing", (): void => {
+    expect(goneBranches("")).toEqual([]);
   });
 });

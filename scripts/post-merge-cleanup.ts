@@ -7,17 +7,24 @@
 
 import { execFileSync } from "node:child_process";
 
-const KEPT_BRANCHES: readonly string[] = ["main"];
+const KEPT_BRANCHES: ReadonlySet<string> = new Set(["main"]);
 
-export function goneBranches(branchVerbose: string): readonly string[] {
-  return branchVerbose
+export const BRANCH_LIST_FORMAT =
+  "%(refname:short)%09%(upstream:track)%09%(worktreepath)";
+
+export function goneBranches(branchList: string): readonly string[] {
+  return branchList
     .split("\n")
-    .filter((line) => !line.startsWith("*") && /: gone\]/.test(line))
-    .map((line) => line.trim().split(/\s+/)[0])
+    .map((line) => line.split("\t"))
     .filter(
-      (name): name is string =>
-        name !== undefined && !KEPT_BRANCHES.includes(name),
-    );
+      ([name, track, worktree]) =>
+        name !== undefined &&
+        track === "[gone]" &&
+        worktree === "" &&
+        !KEPT_BRANCHES.has(name),
+    )
+    .map(([name]) => name)
+    .filter((name): name is string => name !== undefined);
 }
 
 function git(args: readonly string[]): string {
@@ -33,7 +40,9 @@ function main(): void {
   git(["checkout", "main"]);
   git(["pull", "--ff-only"]);
   git(["fetch", "--prune"]);
-  const gone = goneBranches(git(["branch", "-vv"]));
+  const gone = goneBranches(
+    git(["for-each-ref", `--format=${BRANCH_LIST_FORMAT}`, "refs/heads"]),
+  );
   for (const name of gone) {
     git(["branch", "-D", name]);
     console.log(`post-merge-cleanup: deleted ${name}`);
