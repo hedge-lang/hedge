@@ -11,6 +11,7 @@
 import { spawnSync } from "node:child_process";
 
 const REPO: readonly string[] = ["gh", "hedge-lang", "hedge"];
+const CODACY_CHECK = "Codacy Static Code Analysis";
 const POLL_MS = 15_000;
 const POLL_LIMIT = 40;
 
@@ -64,13 +65,42 @@ export function formatIssue(issue: CodacyIssue): string {
 
 export type CheckState = "pending" | "pass" | "fail" | "missing";
 
-export function codacyCheckState(checksOutput: string): CheckState {
-  const row = checksOutput
-    .split("\n")
-    .find((line) => line.startsWith("Codacy Static Code Analysis"));
-  if (row === undefined) return "missing";
-  const state = row.split("\t")[1];
-  return state === "pass" || state === "fail" ? state : "pending";
+export interface CodacyCheck {
+  readonly state: CheckState;
+  readonly completedAt: string | undefined;
+}
+
+const NO_CHECK: CodacyCheck = { state: "missing", completedAt: undefined };
+
+function parseChecks(json: string): readonly unknown[] {
+  try {
+    const parsed: unknown = JSON.parse(json);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function codacyCheck(
+  checksJson: string,
+  staleCompletedAt: string | undefined,
+): CodacyCheck {
+  const entry = parseChecks(checksJson).find(
+    (item) => isRecord(item) && item["name"] === CODACY_CHECK,
+  );
+  if (!isRecord(entry)) return NO_CHECK;
+  const completedAt =
+    typeof entry["completedAt"] === "string" && entry["completedAt"] !== ""
+      ? entry["completedAt"]
+      : undefined;
+  const terminal = entry["bucket"] === "pass" || entry["bucket"] === "fail";
+  if (!terminal || completedAt === staleCompletedAt) {
+    return { state: "pending", completedAt };
+  }
+  return {
+    state: entry["bucket"] === "pass" ? "pass" : "fail",
+    completedAt,
+  };
 }
 
 function runOut(command: string, args: readonly string[]): string {
@@ -80,28 +110,49 @@ function runOut(command: string, args: readonly string[]): string {
   }).stdout;
 }
 
-function run(command: string, args: readonly string[]): string {
+interface RunResult {
+  readonly ok: boolean;
+  readonly output: string;
+}
+
+function run(command: string, args: readonly string[]): RunResult {
   const result = spawnSync(command, [...args], {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
-  return `${result.stdout}${result.stderr}`;
+  return {
+    ok: result.status === 0,
+    output: `${result.stdout}${result.stderr}`,
+  };
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((done) => setTimeout(done, ms));
+function sleep(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-async function reanalyze(pr: string): Promise<void> {
-  run("codacy", ["pull-request", ...REPO, pr, "--reanalyze"]);
+function currentCheck(pr: string, stale: string | undefined): CodacyCheck {
+  return codacyCheck(
+    runOut("gh", ["pr", "checks", pr, "--json", "name,bucket,completedAt"]),
+    stale,
+  );
+}
+
+function reanalyze(pr: string): void {
+  const stale = currentCheck(pr, undefined).completedAt;
+  const request = run("codacy", ["pull-request", ...REPO, pr, "--reanalyze"]);
+  if (!request.ok) {
+    console.error(request.output.trim());
+    process.exitCode = 1;
+    return;
+  }
   for (let attempt = 0; attempt < POLL_LIMIT; attempt += 1) {
-    const state = codacyCheckState(run("gh", ["pr", "checks", pr]));
+    const { state } = currentCheck(pr, stale);
     if (state === "pass" || state === "fail") {
       console.log(`codacy-pr: check ${state}`);
       process.exitCode = state === "pass" ? 0 : 1;
       return;
     }
-    await sleep(POLL_MS);
+    sleep(POLL_MS);
   }
   console.log("codacy-pr: check still pending after waiting");
   process.exitCode = 1;
@@ -117,37 +168,40 @@ function listIssues(pr: string): void {
 
 function dismiss(pr: string, ids: readonly string[]): void {
   for (const id of ids) {
-    console.log(
-      run("codacy", [
-        "pull-request",
-        ...REPO,
-        pr,
-        "--ignore-issue",
-        id,
-        "--ignore-reason",
-        "FalsePositive",
-      ]).trim(),
-    );
+    const result = run("codacy", [
+      "pull-request",
+      ...REPO,
+      pr,
+      "--ignore-issue",
+      id,
+      "--ignore-reason",
+      "FalsePositive",
+    ]);
+    if (!result.ok) {
+      console.error(result.output.trim());
+      process.exitCode = 1;
+      return;
+    }
+    console.log(result.output.trim());
   }
 }
 
-async function main(): Promise<void> {
+function main(): void {
   const [command, pr, ...rest] = process.argv.slice(2);
-  if (pr === undefined) {
+  const known =
+    command === "issues" ||
+    command === "reanalyze" ||
+    (command === "dismiss" && rest.length > 0);
+  if (pr === undefined || !known) {
     console.error("usage: codacy-pr.ts <issues|dismiss|reanalyze> <pr> [ids]");
     process.exitCode = 2;
-  } else if (command === "issues") {
-    listIssues(pr);
-  } else if (command === "dismiss" && rest.length > 0) {
-    dismiss(pr, rest);
-  } else if (command === "reanalyze") {
-    await reanalyze(pr);
-  } else {
-    console.error("usage: codacy-pr.ts <issues|dismiss|reanalyze> <pr> [ids]");
-    process.exitCode = 2;
+    return;
   }
+  if (command === "issues") listIssues(pr);
+  else if (command === "dismiss") dismiss(pr, rest);
+  else reanalyze(pr);
 }
 
 if (process.argv[1] === import.meta.filename) {
-  await main();
+  main();
 }

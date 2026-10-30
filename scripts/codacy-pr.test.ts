@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { codacyCheckState, formatIssue, parseNewIssues } from "./codacy-pr.js";
+import { codacyCheck, formatIssue, parseNewIssues } from "./codacy-pr.js";
 
 const PAYLOAD = `- Fetching pull request details...
 {
@@ -48,26 +48,58 @@ describe("formatIssue", (): void => {
   });
 });
 
-describe("codacyCheckState", (): void => {
-  it("reports pass for a passing Codacy row", (): void => {
-    expect(
-      codacyCheckState("Codacy Static Code Analysis\tpass\t0\thttps://x"),
-    ).toBe("pass");
+const row = (bucket: string, completedAt: string): object => ({
+  name: "Codacy Static Code Analysis",
+  bucket,
+  completedAt,
+});
+
+const checks = (...rows: readonly object[]): string => JSON.stringify(rows);
+
+describe("codacyCheck", (): void => {
+  it("reports a passing Codacy row with its completion time", (): void => {
+    expect(codacyCheck(checks(row("pass", "T1")), undefined)).toEqual({
+      state: "pass",
+      completedAt: "T1",
+    });
   });
 
-  it("reports fail for a failing Codacy row", (): void => {
-    expect(
-      codacyCheckState("Check\tpass\t3s\nCodacy Static Code Analysis\tfail\t0"),
-    ).toBe("fail");
+  it("reports a failing Codacy row among other checks", (): void => {
+    const output = checks(
+      { name: "Check", bucket: "pass", completedAt: "T0" },
+      row("fail", "T1"),
+    );
+
+    expect(codacyCheck(output, undefined).state).toBe("fail");
   });
 
-  it("reports pending for any other Codacy state", (): void => {
-    expect(codacyCheckState("Codacy Static Code Analysis\tpending\t0")).toBe(
+  it("reports pending for any other Codacy bucket", (): void => {
+    expect(codacyCheck(checks(row("pending", "")), undefined).state).toBe(
       "pending",
     );
   });
 
   it("reports missing when no Codacy row exists", (): void => {
-    expect(codacyCheckState("Check\tpass\t3s")).toBe("missing");
+    expect(
+      codacyCheck(
+        checks({ name: "Check", bucket: "pass", completedAt: "T0" }),
+        undefined,
+      ).state,
+    ).toBe("missing");
+  });
+
+  it("reports missing for output that is not a JSON array", (): void => {
+    expect(codacyCheck("no checks reported", undefined).state).toBe("missing");
+  });
+
+  it("treats a terminal result with the stale completion time as pending", (): void => {
+    expect(codacyCheck(checks(row("pass", "T1")), "T1").state).toBe("pending");
+  });
+
+  it("accepts a terminal result whose completion time differs from the stale one", (): void => {
+    expect(codacyCheck(checks(row("fail", "T2")), "T1")).toEqual({
+      state: "fail",
+      completedAt: "T2",
+    });
   });
 });
