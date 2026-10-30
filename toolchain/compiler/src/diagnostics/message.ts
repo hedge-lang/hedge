@@ -286,6 +286,8 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return "qualified type paths are not supported yet";
     case "SemDropImplForEnumUnsupported":
       return "`Drop` for an enum is not yet supported";
+    case "SemInherentImplOnPrimitive":
+      return `cannot define inherent methods on primitive type \`${kind.typeName}\``;
     case "SemGenericTypeParamNoArguments":
       return `generic type parameter \`${kind.name}\` does not accept type arguments`;
     case "SemGenericArrayElementBehindReference":

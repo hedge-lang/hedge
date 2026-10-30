@@ -1,0 +1,4 @@
+fn main() {
+  let o: Option<i32> = Option::Some("a");
+  print(o.is_some());
+}

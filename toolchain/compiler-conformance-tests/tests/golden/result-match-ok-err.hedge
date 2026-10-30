@@ -1,0 +1,13 @@
+fn describe(r: Result<i32, str>) -> i32 {
+  match r {
+    Result::Ok(v) => v,
+    Result::Err(e) => 0,
+  }
+}
+
+fn main() {
+  let ok: Result<i32, str> = Result::Ok(5);
+  let err: Result<i32, str> = Result::Err("bad");
+  print(describe(ok));
+  print(describe(err));
+}

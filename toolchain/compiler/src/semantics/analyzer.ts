@@ -1,3 +1,4 @@
+import { isPreludeToken } from "../prelude.js";
 import { assert, assertNever } from "../assert.js";
 import {
   errorDiagnostic,
@@ -433,6 +434,9 @@ interface AnalysisContext {
    * would make coherence checking depend on textual position.
    */
   readonly implRegistry: RegisteredImpl[];
+  /** Structural overlaps between a bounded blanket impl and a concrete one,
+   * decided only after every impl is registered. */
+  readonly pendingBlanketOverlaps: PendingBlanketOverlap[];
   /** Every trait's own supertraits and required methods, keyed by trait
    * name - flat and program-wide for the same reason `implRegistry` is:
    * these are facts about the trait itself, not about where it happens to
@@ -569,6 +573,13 @@ type TargetArgSlot =
       readonly mutable: boolean;
       readonly referent: TargetArgSlot;
     };
+
+/** Two structurally overlapping impls of one trait, one blanket and one
+ * concrete, whose conflict depends on the blanket's bounds. */
+interface PendingBlanketOverlap {
+  readonly incoming: RegisteredImpl;
+  readonly existing: RegisteredImpl;
+}
 
 /** One registered trait impl, extracted just far enough for coherence and
  * bound checking. */
@@ -3444,6 +3455,30 @@ function checkOperatorOutputIsSelf(
   );
 }
 
+/** Only the prelude may add inherent methods to a primitive: user code
+ * extending `i32` would be a program-wide change to a std type, which the
+ * orphan rule forbids once modules exist. A trait impl on a primitive stays
+ * legal (the trait is the user's own). */
+function checkNoInherentImplOnPrimitive(
+  ctx: AnalysisContext,
+  item: Parser.ImplDecl,
+  shallow: Semantics.ImplDecl,
+  targetType: Semantics.Type,
+): void {
+  if (
+    isSome(shallow.traitRef) ||
+    !isPrimitiveType(targetType) ||
+    isPreludeToken(ctx.tokens, item.tokenId)
+  ) {
+    return;
+  }
+  emitError(
+    ctx,
+    { kind: "SemInherentImplOnPrimitive", typeName: describeType(targetType) },
+    item.type.tokenId,
+  );
+}
+
 /** The real, diagnostic-emitting counterpart to `buildImplDecl` - resolves
  * each `type Name = Value;` definition first (against a concrete `Self` but
  * no associated types yet, since one definition referencing a sibling isn't
@@ -3460,6 +3495,7 @@ function analyzeImplDecl(
   pushGenericParams(ctx, item.generics, item.whereClause);
   const targetType = resolveImplSelfTargetType(ctx, item, shallow);
   popGenericParams(ctx);
+  checkNoInherentImplOnPrimitive(ctx, item, shallow, targetType);
   // Reuses the coherence prepass's own already-resolved trait-argument
   // slots (`registerOneImpl`, which ran before this whole pass) instead of
   // re-resolving them here - `item`'s own generic-param scope is no longer
@@ -5148,6 +5184,52 @@ function resolveStructOrEnumIdentity(
   return none();
 }
 
+/** The name a method-dispatch target is keyed and emitted under: the scoped
+ * declaration name for a struct/enum, the primitive's own spelling otherwise. */
+function implTargetKeyName(type: Semantics.Type): string {
+  return isNominalType(type) ? type.name : describeType(type);
+}
+
+const PRIMITIVE_TYPE_KINDS: ReadonlySet<string> = new Set([
+  "PrimitiveBooleanType",
+  "PrimitiveStringType",
+  "PrimitiveCharType",
+  "PrimitiveI8Type",
+  "PrimitiveI16Type",
+  "PrimitiveI32Type",
+  "PrimitiveI64Type",
+  "PrimitiveU8Type",
+  "PrimitiveU16Type",
+  "PrimitiveU32Type",
+  "PrimitiveU64Type",
+  "PrimitiveUsizeType",
+  "PrimitiveIsizeType",
+  "PrimitiveF32Type",
+  "PrimitiveF64Type",
+]);
+
+function isPrimitiveType(type: Semantics.Type): boolean {
+  return PRIMITIVE_TYPE_KINDS.has(type.kind);
+}
+
+function primitiveTargetType(name: string): Semantics.Type | undefined {
+  const primitive = namedTypeToPrimitive(name);
+  return isSome(primitive) ? primitive.value : undefined;
+}
+
+/** `resolveStructOrEnumIdentity` widened to a primitive target
+ * (`impl Clone for i32`): a primitive has no declaration to shadow, so its
+ * identity is its own name, matching `typeIdentity`'s fallback for a
+ * non-nominal type. A user struct/enum of the same name still wins. */
+function resolveImplTargetIdentity(
+  name: string,
+  scope: StructuralScope,
+): Option<string> {
+  const nominal = resolveStructOrEnumIdentity(name, scope);
+  if (isSome(nominal)) return nominal;
+  return mapSome(namedTypeToPrimitive(name), describeType);
+}
+
 /** The concrete `StructType`/`EnumType` for a name resolved through the
  * structural scope rather than live frames - the prepass resolution, since a
  * block-local target isn't in scope yet. `typeIdentity` of the result equals
@@ -5476,6 +5558,37 @@ function resolveImplRegistrationFacts(
   };
 }
 
+/** An overlap that holds regardless of blanket bounds is a definite conflict
+ * reported now; one that exists only if a blanket impl's bounds hold for the
+ * concrete target is deferred until every impl is registered. */
+function reportImplOverlap(
+  ctx: AnalysisContext,
+  incoming: RegisteredImpl,
+): void {
+  const overlapping = ctx.implRegistry.filter(
+    (registered) =>
+      registered.traitName === incoming.traitName &&
+      implsOverlap(registered, incoming),
+  );
+  const existing = overlapping.find(
+    (registered) => !overlapDependsOnBlanketBounds(registered, incoming),
+  );
+  for (const registered of overlapping) {
+    if (overlapDependsOnBlanketBounds(registered, incoming)) {
+      ctx.pendingBlanketOverlaps.push({ incoming, existing: registered });
+    }
+  }
+  if (existing === undefined) return;
+  emitError(
+    ctx,
+    implOverlapKind(incoming.traitName, incoming, existing),
+    incoming.tokenId,
+    relatedSpanAt(ctx, existing.tokenId, {
+      kind: "LabelFirstImplementedHere",
+    }),
+  );
+}
+
 /** Registers one `impl`'s coherence/completeness/visibility facts, or
  * `undefined` for a not-yet-handled shape (no trait, or a target that
  * doesn't resolve to any struct/enum in scope). Split out of `registerImpls`
@@ -5503,7 +5616,7 @@ function registerOneImpl(
   if (!isSome(traitRef) || !isSome(bareTargetTypeName)) return undefined;
   const targetTypeName = decl.isBlanket
     ? some(bareTargetTypeName.value)
-    : resolveStructOrEnumIdentity(bareTargetTypeName.value, scope);
+    : resolveImplTargetIdentity(bareTargetTypeName.value, scope);
   if (!isSome(targetTypeName)) return undefined;
   const bareTraitName = traitRef.value.name;
   const traitName = resolveTraitIdentity(bareTraitName, scope);
@@ -5561,20 +5674,7 @@ function registerOneImpl(
     associatedTypeDefs,
     tokenId: item.tokenId,
   };
-  const existing = ctx.implRegistry.find(
-    (registered) =>
-      registered.traitName === traitName && implsOverlap(registered, incoming),
-  );
-  if (existing !== undefined) {
-    emitError(
-      ctx,
-      implOverlapKind(traitName, incoming, existing),
-      item.tokenId,
-      relatedSpanAt(ctx, existing.tokenId, {
-        kind: "LabelFirstImplementedHere",
-      }),
-    );
-  }
+  reportImplOverlap(ctx, incoming);
   ctx.implRegistry.push(incoming);
   if (depth > 0) {
     warnIfSurprisinglyVisible(ctx, item, incoming, topLevelStructEnumNames);
@@ -5630,14 +5730,21 @@ function substitutedSupertraitRequest(
   return args.map((arg) => substituteGenericType(arg, bindings));
 }
 
+/** A registered impl paired with its parsed declaration, for checks that
+ * need the declaration's own generic parameters back in scope. */
+interface DeclaredImpl {
+  readonly impl: RegisteredImpl;
+  readonly decl: Parser.ImplDecl;
+}
+
 /** A concrete impl missing one of its trait's own supertrait
  * implementations - deferred until every impl is registered, so
  * declaration order within the program doesn't matter. */
 function checkSupertraitCompleteness(
   ctx: AnalysisContext,
-  concreteImpls: readonly RegisteredImpl[],
+  concreteImpls: readonly DeclaredImpl[],
 ): void {
-  for (const impl of concreteImpls) {
+  for (const { impl, decl } of concreteImpls) {
     const trait = ctx.traitRegistry.get(impl.traitName);
     if (trait === undefined) continue;
     for (const supertrait of trait.supertraits) {
@@ -5647,18 +5754,20 @@ function checkSupertraitCompleteness(
         impl,
         impl.tokenId,
       );
-      if (
-        isSome(
-          resolveTraitBoundForTypeName(
-            ctx,
-            impl.resolvedTargetType,
-            supertrait,
-            requestedTypeArguments,
-          ),
-        )
-      ) {
-        continue;
-      }
+      // The impl's own generic parameters are in scope here so a bound it
+      // declares (`impl<T: PartialEq + Eq> Eq for W<T>`) can satisfy the
+      // supertrait impl's own bound on the same abstract parameter.
+      pushGenericParams(ctx, decl.generics, decl.whereClause);
+      const satisfied = isSome(
+        resolveTraitBoundForTypeName(
+          ctx,
+          impl.resolvedTargetType,
+          supertrait,
+          requestedTypeArguments,
+        ),
+      );
+      popGenericParams(ctx);
+      if (satisfied) continue;
       emitError(
         ctx,
         {
@@ -5669,6 +5778,46 @@ function checkSupertraitCompleteness(
         impl.tokenId,
       );
     }
+  }
+}
+
+/** A bounded blanket impl against a concrete one: structurally they overlap,
+ * but they only truly conflict when the concrete target satisfies the
+ * blanket's bounds, which depends on impls not necessarily registered yet. */
+function overlapDependsOnBlanketBounds(
+  a: RegisteredImpl,
+  b: RegisteredImpl,
+): boolean {
+  const blanket = a.isBlanket ? a : b;
+  return a.isBlanket !== b.isBlanket && blanket.blanketBounds.length > 0;
+}
+
+/** Reports each deferred bounded-blanket overlap whose concrete side
+ * satisfies the blanket's bounds, once every impl is registered. */
+function reportPendingBlanketOverlaps(ctx: AnalysisContext): void {
+  for (const { incoming, existing } of ctx.pendingBlanketOverlaps) {
+    const blanket = incoming.isBlanket ? incoming : existing;
+    const concrete = incoming.isBlanket ? existing : incoming;
+    const bindings = new Map<string, Semantics.Type>();
+    if (
+      !blanketImplMatches(
+        ctx,
+        blanket,
+        concrete.resolvedTargetType,
+        bindings,
+        new Set(),
+      )
+    ) {
+      continue;
+    }
+    emitError(
+      ctx,
+      implOverlapKind(incoming.traitName, incoming, existing),
+      incoming.tokenId,
+      relatedSpanAt(ctx, existing.tokenId, {
+        kind: "LabelFirstImplementedHere",
+      }),
+    );
   }
 }
 
@@ -5686,7 +5835,7 @@ function registerImpls(
   allItems: readonly DepthedItem[],
 ): void {
   const topLevelStructEnumNames = collectTopLevelStructEnumNames(allItems);
-  const concreteImpls: RegisteredImpl[] = [];
+  const concreteImpls: DeclaredImpl[] = [];
   for (const { item, depth, scope } of allItems) {
     if (item.kind !== "Impl") continue;
     const incoming = registerOneImpl(
@@ -5697,9 +5846,10 @@ function registerImpls(
       topLevelStructEnumNames,
     );
     if (incoming !== undefined && !incoming.isBlanket) {
-      concreteImpls.push(incoming);
+      concreteImpls.push({ impl: incoming, decl: item });
     }
   }
+  reportPendingBlanketOverlaps(ctx);
   checkSupertraitCompleteness(ctx, concreteImpls);
 }
 
@@ -10279,10 +10429,9 @@ function buildMethodIndex(
     if (item.kind !== "Impl") continue;
     const shallow = buildImplDecl(item);
     if (!isSome(shallow.targetTypeName) || shallow.isBlanket) continue;
-    const targetType = structuralStructOrEnumType(
-      shallow.targetTypeName.value,
-      scope,
-    );
+    const targetType =
+      structuralStructOrEnumType(shallow.targetTypeName.value, scope) ??
+      primitiveTargetType(shallow.targetTypeName.value);
     if (targetType === undefined) continue;
     const targetId = typeIdentity(targetType);
     const entries = [...(ctx.methodIndex.get(targetId) ?? [])];
@@ -10388,7 +10537,7 @@ function indexTraitImplMethods(
   traitRefTypeArguments: readonly Semantics.Type[] = [],
 ): readonly IndexedMethod[] {
   const traitMethods = traitMethodSet(ctx, traitId);
-  if (!isNominalType(targetType)) {
+  if (!isNominalType(targetType) && !isPrimitiveType(targetType)) {
     return traitMethods;
   }
   const associatedTypes =
@@ -11071,7 +11220,7 @@ function recordImplMethodTarget(
   isBlanket: boolean,
 ): void {
   if (!isSome(decl.signature.receiver)) return;
-  if (isNominalType(targetType)) {
+  if (isNominalType(targetType) || isPrimitiveType(targetType)) {
     const monomorphizedTypeId = monomorphizedTypeIdentity(targetType);
     ctx.implMethodTargetTable.set(decl.tokenId, {
       kind: "free",
@@ -11081,7 +11230,7 @@ function recordImplMethodTarget(
         traitName,
         traitTypeArguments,
       ),
-      typeName: bareTypeName(targetType.name),
+      typeName: bareTypeName(implTargetKeyName(targetType)),
       traitName: mapSome(traitName, bareTypeName),
       methodName: decl.signature.name.text,
       emitKind: "concrete",
@@ -11286,7 +11435,7 @@ function recordDropWitnesses(
 function recordMethodTarget(
   ctx: AnalysisContext,
   methodTokenId: number,
-  receiverType: Semantics.StructType | Semantics.EnumType,
+  receiverType: Semantics.Type,
   method: IndexedMethod,
   methodName: string,
 ): void {
@@ -11296,10 +11445,10 @@ function recordMethodTarget(
       kind: "free",
       typeId: monomorphizedTypeId,
       scopeId: targetArgSlotsIdentity(
-        receiverType.name,
+        implTargetKeyName(receiverType),
         method.targetTypeArguments,
       ),
-      typeName: bareTypeName(receiverType.name),
+      typeName: bareTypeName(implTargetKeyName(receiverType)),
       traitName: none(),
       methodName,
       emitKind: "concrete",
@@ -11329,7 +11478,7 @@ function recordMethodTarget(
       kind: "free",
       typeId: monomorphizedTypeId,
       scopeId: method.origin.traitId,
-      typeName: bareTypeName(receiverType.name),
+      typeName: bareTypeName(implTargetKeyName(receiverType)),
       traitName: some(trait),
       methodName,
       emitKind: "default",
@@ -11351,7 +11500,7 @@ function recordMethodTarget(
     kind: "free",
     typeId: monomorphizedTypeId,
     scopeId: `${witness.value.typeId}#${witness.value.traitId}`,
-    typeName: bareTypeName(receiverType.name),
+    typeName: bareTypeName(implTargetKeyName(receiverType)),
     traitName: some(trait),
     methodName,
     emitKind: "concrete",
@@ -11379,7 +11528,7 @@ function recordMethodDispatch(
   method: IndexedMethod,
   methodName: string,
 ): void {
-  if (isNominalType(receiverType)) {
+  if (isNominalType(receiverType) || isPrimitiveType(receiverType)) {
     recordMethodTarget(ctx, methodTokenId, receiverType, method, methodName);
     return;
   }
@@ -14349,7 +14498,8 @@ type UnifyOutcome =
   | { readonly kind: "Mismatch" };
 
 /** A single `relatedSpans` entry pointing at `tokenId`, or none if the
- * token can't be resolved - the shared shape a conflict diagnostic's
+ * token can't be resolved or belongs to the prelude, whose synthetic offsets
+ * mean nothing in the user's source - the shared shape a conflict diagnostic's
  * "inferred here" note takes at every `unifyGenericParam` call site. */
 function relatedSpanAt(
   ctx: AnalysisContext,
@@ -14357,7 +14507,8 @@ function relatedSpanAt(
   label: RelatedLabelKind,
 ): readonly RelatedSpan[] {
   const token = ctx.tokens[tokenId];
-  return token === undefined ? [] : [{ span: token.span, label }];
+  if (token === undefined || isPreludeToken(ctx.tokens, tokenId)) return [];
+  return [{ span: token.span, label }];
 }
 
 /** Online Robinson-style unification of one declared type against one
@@ -15652,6 +15803,7 @@ export function analyze(
     genericParamStack: [],
     genericParamBoundStack: [],
     implRegistry: [],
+    pendingBlanketOverlaps: [],
     traitRegistry: new Map(),
     methodIndex: new Map(),
     assocConstIndex: new Map(),

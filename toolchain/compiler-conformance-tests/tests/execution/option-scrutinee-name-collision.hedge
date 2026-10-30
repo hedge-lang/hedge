@@ -1,0 +1,16 @@
+fn main() {
+  let matchScrutinee: Option<i32> = Option::Some(4);
+  let x = 10;
+  let data = 1;
+  let tag = 2;
+  match matchScrutinee {
+    Option::Some(x) => {
+      print(x + data + tag);
+    }
+    Option::None => {
+      print(0);
+    }
+  }
+  print(",");
+  print(x);
+}

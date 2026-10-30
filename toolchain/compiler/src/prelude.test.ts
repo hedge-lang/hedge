@@ -127,4 +127,30 @@ describe("std prelude", (): void => {
       true,
     );
   });
+
+  it("declares Option<T> and Result<T, E> as generic enums with Some/None and Ok/Err variants", (): void => {
+    const { tokens } = tokenize(PRELUDE_SOURCE);
+    const { program } = parse(tokens);
+    assert(isSome(program), "prelude failed to parse");
+    const shapeOf = (name: string): unknown => {
+      const decl = program.value.items.find(
+        (item) => item.kind === "Enum" && item.name.text === name,
+      );
+      assert(decl?.kind === "Enum", `${name} must be declared as an enum`);
+      return {
+        generics: decl.generics.map((param) =>
+          param.kind === "TypeParam" ? param.name.text : param.kind,
+        ),
+        variants: decl.variants.map((variant) => variant.name.text),
+      };
+    };
+    expect(shapeOf("Option")).toEqual({
+      generics: ["T"],
+      variants: ["Some", "None"],
+    });
+    expect(shapeOf("Result")).toEqual({
+      generics: ["T", "E"],
+      variants: ["Ok", "Err"],
+    });
+  });
 });

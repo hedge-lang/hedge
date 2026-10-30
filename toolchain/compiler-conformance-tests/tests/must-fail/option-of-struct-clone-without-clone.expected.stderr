@@ -1,0 +1,1 @@
+error[HEDGE-TYPE-012]: no method `clone` found for type `Option`

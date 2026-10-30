@@ -1,0 +1,5 @@
+fn main() {
+  let a: Option<i32> = Option::Some(7);
+  let b = a.clone();
+  print(b == a);
+}

@@ -1,0 +1,6 @@
+fn main() {
+  let some: Option<i32> = Option::Some(7);
+  let none: Option<i32> = Option::None;
+  print(some.unwrap_or(0));
+  print(none.unwrap_or(9));
+}

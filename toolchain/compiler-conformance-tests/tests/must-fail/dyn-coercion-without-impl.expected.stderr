@@ -1,0 +1,1 @@
+error[HEDGE-TYPE-001]: argument 1 to function `show` type mismatch: expected `&dyn Draw`, found `&Blob`

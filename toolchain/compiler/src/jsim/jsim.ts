@@ -27,7 +27,9 @@ import {
 import type * as Semantics from "../semantics/ast.js";
 import { hasCapability } from "../semantics/type-capabilities.js";
 import type * as JSIM from "./ast.js";
+import { isPreludeToken } from "../prelude.js";
 import { toDocComment } from "./parts/doc-comment.js";
+import { pruneUnreferencedFunctions } from "./parts/prune.js";
 import {
   findExpressionEndTokenId,
   findStatementEndTokenId,
@@ -44,6 +46,12 @@ interface JsimContext {
   readonly tokens: readonly Token[];
   readonly ownership: ReadonlyMap<string, FunctionOwnership>;
   readonly rename: RenameCtx[];
+  /**
+   * True only while a `match` arm's pattern over a `&mut` scrutinee is being
+   * compiled: every binding without its own sigil then borrows its place
+   * through an accessor cell instead of copying the value out.
+   */
+  readonly patternBindings: { mutRef: boolean };
   /**
    * Per-function stack of that function's own scope-end drop map,
    * keyed by block tokenId.
@@ -187,6 +195,7 @@ function createJsimContext(
     tokens,
     ownership,
     rename: [],
+    patternBindings: { mutRef: false },
     drops: [],
     conditionalDrops: [],
     dropFlagNames: [],
@@ -934,14 +943,26 @@ export function toJsim(
   const methodOwners = collectMethodOwners(program);
   reserveMethodFreeFnNames(ctx, methodOwners);
   reserveHoistedWitnessConsts(ctx);
+  const preludeFns = new Set<string>();
   const bodyItems = [
-    ...methodOwners.flatMap((owner) => parseMethodBodies(ctx, owner)),
+    ...methodOwners.flatMap((owner) => {
+      const fns = parseMethodBodies(ctx, owner);
+      if (isPreludeToken(tokens, owner.tokenId)) {
+        for (const fn of fns) {
+          if (fn.kind === "Function") preludeFns.add(fn.name);
+        }
+      }
+      return fns;
+    }),
     ...program.items.flatMap((i) => parseItem(ctx, i)),
   ];
   return {
     kind: "Program",
     docComment: toDocComment(program.attributes),
-    items: [...hoistedWitnessDecls(ctx), ...bodyItems],
+    items: pruneUnreferencedFunctions(
+      [...hoistedWitnessDecls(ctx), ...bodyItems],
+      preludeFns,
+    ),
   };
 }
 
@@ -2938,6 +2959,17 @@ function jsimMatchExpression(
   };
 }
 
+interface MatchScrutinee {
+  readonly expr: JSIM.Expression;
+  readonly bindsMutRef: boolean;
+}
+
+/** A match over `&Enum` dispatches on the same tagged object as one over
+ * `Enum`. */
+function peelReferences(type: Semantics.Type): Semantics.Type {
+  return type.kind === "ReferenceType" ? peelReferences(type.referent) : type;
+}
+
 /** Evaluates the scrutinee once into a synthesized local, then lowers to a
  * `switch` on its `.tag` for an enum scrutinee, or an `if` chain
  * (`buildNonEnumMatchChain`) for anything else. */
@@ -2964,10 +2996,17 @@ function jsimMatchBody(
       value: scrutineeName,
       type: none(),
     };
+    const scrutineeType = matchExpr.scrutinee.type;
+    const bindsMutRef =
+      scrutineeType.kind === "ReferenceType" && scrutineeType.mutable;
+    const scrutinee: MatchScrutinee = {
+      expr: bindsMutRef ? jsimFieldAccess(scrutineeIdent, "v") : scrutineeIdent,
+      bindsMutRef,
+    };
     const dispatch: JSIM.Statement[] =
-      matchExpr.scrutinee.type.kind === "EnumType"
-        ? [buildEnumMatchSwitch(ctx, matchExpr, scrutineeIdent)]
-        : buildNonEnumMatchChain(ctx, matchExpr, scrutineeIdent);
+      peelReferences(scrutineeType).kind === "EnumType"
+        ? [buildEnumMatchSwitch(ctx, matchExpr, scrutinee)]
+        : buildNonEnumMatchChain(ctx, matchExpr, scrutinee);
     return [scrutineeDecl, ...dispatch];
   } finally {
     popRenameFrame(ctx);
@@ -3090,7 +3129,7 @@ function isPatternUnconditional(
 function buildEnumMatchSwitch(
   ctx: JsimContext,
   matchExpr: Semantics.MatchExpression,
-  scrutineeExpr: JSIM.Expression,
+  scrutinee: MatchScrutinee,
 ): JSIM.SwitchStatement {
   const dispatched = matchExpr.arms.map((arm) => ({
     arm,
@@ -3129,7 +3168,7 @@ function buildEnumMatchSwitch(
     kind: "SwitchCase",
     tag,
     body: withDefenseInDepthThrow(
-      lowerMatchArmChain(ctx, armsForTag(tag), scrutineeExpr),
+      lowerMatchArmChain(ctx, armsForTag(tag), scrutinee),
     ),
   }));
 
@@ -3146,13 +3185,13 @@ function buildEnumMatchSwitch(
   const defaultBody: JSIM.Statement[] =
     universalArms.length > 0
       ? withDefenseInDepthThrow(
-          lowerMatchArmChain(ctx, universalArms, scrutineeExpr),
+          lowerMatchArmChain(ctx, universalArms, scrutinee),
         )
       : [{ kind: "ThrowStatement", message: "unreachable" }];
 
   return {
     kind: "SwitchStatement",
-    discriminant: jsimFieldAccess(scrutineeExpr, "tag"),
+    discriminant: jsimFieldAccess(scrutinee.expr, "tag"),
     cases,
     defaultBody,
   };
@@ -3164,7 +3203,7 @@ function buildEnumMatchSwitch(
 function buildNonEnumMatchChain(
   ctx: JsimContext,
   matchExpr: Semantics.MatchExpression,
-  scrutineeExpr: JSIM.Expression,
+  scrutinee: MatchScrutinee,
 ): JSIM.Statement[] {
   const arms: DispatchedArm[] = truncateAtFirstUnconditionalArm(
     matchExpr.arms.map((arm) => ({
@@ -3173,7 +3212,7 @@ function buildNonEnumMatchChain(
       body: arm.body,
     })),
   );
-  return withDefenseInDepthThrow(lowerMatchArmChain(ctx, arms, scrutineeExpr));
+  return withDefenseInDepthThrow(lowerMatchArmChain(ctx, arms, scrutinee));
 }
 
 /** Lowers a tag's (or the default's) applicable arms, in order, to a flat
@@ -3186,7 +3225,7 @@ function buildNonEnumMatchChain(
 function lowerMatchArmChain(
   ctx: JsimContext,
   arms: readonly DispatchedArm[],
-  scrutineeExpr: JSIM.Expression,
+  scrutinee: MatchScrutinee,
 ): JSIM.Statement[] {
   const stmts: JSIM.Statement[] = [];
   for (const arm of arms) {
@@ -3195,13 +3234,15 @@ function lowerMatchArmChain(
       // `continuation`'s call registers every name the pattern binds
       // before the guard is parsed, so a guard referencing one resolves
       // normally.
+      ctx.patternBindings.mutRef = scrutinee.bindsMutRef;
       const continuation = compilePatternInto(
         ctx,
         arm.pattern,
-        scrutineeExpr,
+        scrutinee.expr,
         false,
         false,
       );
+      ctx.patternBindings.mutRef = false;
       const returnStmt: JSIM.Statement = {
         kind: "ReturnStatement",
         value: some(parseExpression(ctx, arm.body)),
@@ -3702,8 +3743,9 @@ function bindPatternName(
 ): JSIM.Statement {
   const emittedName = bindLocalName(ctx, name.text);
   recordEmittedName(ctx, name.tokenId, emittedName);
+  const borrowsMut = ctx.patternBindings.mutRef && !byRef;
   const boundValue: JSIM.Expression =
-    byRef && mutable
+    (byRef && mutable) || borrowsMut
       ? { kind: "RefCellExpression", place: valueExpr }
       : valueExpr;
   const span = resolveSpan(ctx.tokens, name.tokenId, name.tokenId);
@@ -3711,7 +3753,7 @@ function bindPatternName(
     return {
       kind: "LetStatement",
       name: emittedName,
-      mutable: !byRef && mutable,
+      mutable: !byRef && !borrowsMut && mutable,
       value: some(boundValue),
       docComment: none(),
       span,

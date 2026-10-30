@@ -5,7 +5,7 @@ import { assert } from "../assert.js";
 import { tokenize } from "../lexer/lexer.js";
 import { isSome, none, some } from "../option.js";
 import { parse } from "../parser/parser.js";
-import { assembleProgram } from "../prelude.js";
+import { assembleProgram, isPreludeToken } from "../prelude.js";
 import type { AnalysisResult } from "./analyzer.js";
 import { analyze } from "./analyzer.js";
 import type {
@@ -1485,10 +1485,10 @@ describe("semantic analysis", (): void => {
   describe("if let (semantically analyzed)", () => {
     it("analyzes an if-let with a valid enum scrutinee and pattern cleanly", () => {
       const result = diagnose(`
-        enum Option { Some(i32), None }
+        enum Maybe { Some(i32), None }
         fn main() {
-          let opt = Option::Some(1);
-          if let Option::Some(x) = opt {
+          let opt = Maybe::Some(1);
+          if let Maybe::Some(x) = opt {
             print(x);
           }
         }
@@ -1511,10 +1511,10 @@ describe("semantic analysis", (): void => {
 
     it("rejects a reference to the if-let pattern's bound name from the else branch", () => {
       const result = diagnose(`
-        enum Option { Some(i32), None }
+        enum Maybe { Some(i32), None }
         fn main() {
-          let opt = Option::Some(1);
-          if let Option::Some(x) = opt {
+          let opt = Maybe::Some(1);
+          if let Maybe::Some(x) = opt {
           } else {
             print(x);
           }
@@ -1528,10 +1528,10 @@ describe("semantic analysis", (): void => {
 
     it("rejects a reference to the if-let pattern's bound name after the whole if", () => {
       const result = diagnose(`
-        enum Option { Some(i32), None }
+        enum Maybe { Some(i32), None }
         fn main() {
-          let opt = Option::Some(1);
-          if let Option::Some(x) = opt {
+          let opt = Maybe::Some(1);
+          if let Maybe::Some(x) = opt {
           }
           print(x);
         }
@@ -3978,10 +3978,10 @@ describe("associated types and trait projections", (): void => {
   describe("a trait's own declaration", (): void => {
     it("type-checks a required associated type used as Self::Item in a method's return type", (): void => {
       const result = diagnose(`
-        enum Option<T> { Some(T), None }
+        enum Maybe<T> { Some(T), None }
         trait Iterator {
           type Item;
-          fn next(&mut self) -> Option<Self::Item>;
+          fn next(&mut self) -> Maybe<Self::Item>;
         }
       `);
       expect(result.diagnostics).toEqual([]);
@@ -4009,10 +4009,10 @@ describe("associated types and trait projections", (): void => {
 
     it("rejects Self::Bogus when the trait declares no associated type named Bogus", (): void => {
       const result = diagnose(`
-        enum Option<T> { Some(T), None }
+        enum Maybe<T> { Some(T), None }
         trait Iterator {
           type Item;
-          fn next(&mut self) -> Option<Self::Bogus>;
+          fn next(&mut self) -> Maybe<Self::Bogus>;
         }
       `);
       expect(result.diagnostics).toHaveLength(1);
@@ -6172,6 +6172,381 @@ describe("dyn Trait unsize coercion", (): void => {
   });
 });
 
+describe("prelude Option and Result names", (): void => {
+  it("rejects a user enum named Option as defined more than once", (): void => {
+    const result = diagnoseWithPrelude(`
+      enum Option { A, B }
+      fn main() {}
+    `);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "enum `Option` is defined more than once",
+    );
+  });
+
+  it("rejects a user enum named Result as defined more than once", (): void => {
+    const result = diagnoseWithPrelude(`
+      enum Result { A, B }
+      fn main() {}
+    `);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "enum `Result` is defined more than once",
+    );
+  });
+});
+
+describe("prelude Option and Result trait impls", (): void => {
+  const num = `
+    struct Num { n: i32 }
+    impl Clone for Num {
+      fn clone(&self) -> Num { Num { n: self.n } }
+    }
+    impl PartialEq for Num {
+      fn eq(&self, other: &Num) -> bool { self.n == other.n }
+    }
+    impl Eq for Num {}
+  `;
+
+  it("analyzes Option<Num>.clone() cleanly when Num implements Clone", (): void => {
+    const result = diagnoseWithPrelude(`
+      ${num}
+      fn main() {
+        let a = Option::Some(Num { n: 1 });
+        let b = a.clone();
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("analyzes == on Option<Num> cleanly when Num implements PartialEq", (): void => {
+    const result = diagnoseWithPrelude(`
+      ${num}
+      fn main() {
+        let a = Option::Some(Num { n: 1 });
+        let b = Option::Some(Num { n: 1 });
+        print(a == b);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("analyzes Result<Num, Num>.clone() and == cleanly when Num implements Clone and PartialEq", (): void => {
+    const result = diagnoseWithPrelude(`
+      ${num}
+      fn main() {
+        let a: Result<Num, Num> = Result::Ok(Num { n: 1 });
+        let b = a.clone();
+        print(a == b);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("analyzes Option<Num>.clone() cleanly on a None binding", (): void => {
+    const result = diagnoseWithPrelude(`
+      ${num}
+      fn main() {
+        let a: Option<Num> = Option::None;
+        let b = a.clone();
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+});
+
+describe("prelude Option and Result methods", (): void => {
+  it("analyzes an Option<Num> against a T: Eq bound when Num implements Eq", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Num { n: i32 }
+      impl PartialEq for Num { fn eq(&self, other: &Num) -> bool { self.n == other.n } }
+      impl Eq for Num {}
+      fn needs_eq<T: Eq>(x: T) {}
+      fn main() { needs_eq(Option::Some(Num { n: 1 })); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("analyzes is_some and is_none on an Option as bool", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn main() {
+        let a: Option<i32> = Option::Some(1);
+        let some: bool = a.is_some();
+        let none: bool = a.is_none();
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("analyzes unwrap_or on an Option as its payload type", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn main() {
+        let a: Option<i32> = Option::Some(1);
+        let v: i32 = a.unwrap_or(0);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("analyzes is_ok, is_err and unwrap_or on a Result", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn main() {
+        let a: Result<i32, str> = Result::Ok(1);
+        let ok: bool = a.is_ok();
+        let err: bool = a.is_err();
+        let v: i32 = a.unwrap_or(0);
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects unwrap_or with a default of the wrong type", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn main() {
+        let a: Option<i32> = Option::Some(1);
+        let v = a.unwrap_or("x");
+      }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "argument 1 to method `unwrap_or` type mismatch: expected `i32`, found `str`",
+    );
+  });
+});
+
+describe("prelude primitive Clone and Default", (): void => {
+  it("analyzes .clone() on Option<i32> cleanly", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn main() {
+        let a: Option<i32> = Option::Some(1);
+        let b = a.clone();
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("analyzes .clone() on a bare i32 cleanly", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn main() {
+        let a: i32 = 1;
+        let b: i32 = a.clone();
+      }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it.each([
+    "i8",
+    "i16",
+    "i32",
+    "i64",
+    "isize",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "usize",
+    "f32",
+    "f64",
+    "bool",
+    "char",
+  ])(
+    "satisfies a T: Clone and T: Default bound with %s",
+    (name: string): void => {
+      const result = diagnoseWithPrelude(`
+        fn needs<T: Clone + Default>(x: T) {}
+        fn make(x: ${name}) { needs(x); }
+        fn main() {}
+      `);
+      expect(result.diagnostics).toEqual([]);
+    },
+  );
+
+  it("satisfies a T: Default bound with Option<i32>", (): void => {
+    const result = diagnoseWithPrelude(`
+      fn needs<T: Default>(x: T) {}
+      fn main() { needs(Option::Some(1)); }
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a T: Clone bound for a struct with no Clone impl", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct P { x: i32 }
+      fn needs<T: Clone>(x: T) {}
+      fn main() { needs(P { x: 1 }); }
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "the trait bound `P: Clone` is not satisfied",
+    );
+  });
+
+  it("rejects a user impl Clone for i32 as a duplicate of the prelude's", (): void => {
+    const result = diagnoseWithPrelude(`
+      impl Clone for i32 {
+        fn clone(&self) -> i32 { *self }
+      }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "trait `Clone` is already implemented for type `i32`",
+    );
+  });
+
+  it("rejects an inherent impl on a primitive type in user code", (): void => {
+    const result = diagnoseWithPrelude(`
+      impl i32 {
+        fn triple(&self) -> i32 { *self * 3 }
+      }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "cannot define inherent methods on primitive type `i32`",
+    );
+  });
+
+  it("accepts an inherent impl on a primitive type declared by the prelude", (): void => {
+    const { tokens } = tokenize(`
+      impl i32 {
+        fn triple(&self) -> i32 { *self * 3 }
+      }
+      fn main() {}
+    `);
+    const { program } = parse(tokens);
+    assert(isSome(program), "Parse failed");
+    const preludeSpanBase = 1_000_000_000;
+    const asPrelude = tokens.map((token) => ({
+      ...token,
+      span: {
+        start: token.span.start + preludeSpanBase,
+        end: token.span.end + preludeSpanBase,
+      },
+    }));
+    expect(analyze(program.value, asPrelude).diagnostics).toEqual([]);
+  });
+
+  it("still accepts a user trait implemented for a primitive type", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Double { fn double(&self) -> i32; }
+      impl Double for i32 {
+        fn double(&self) -> i32 { *self * 2 }
+      }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("attaches no related note when the first impl is the prelude's own", (): void => {
+    const result = diagnoseWithPrelude(`
+      impl Clone for i32 {
+        fn clone(&self) -> i32 { *self }
+      }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.relatedSpans).toEqual([]);
+  });
+});
+
+describe("supertrait completeness for generic impls", (): void => {
+  it("accepts a generic impl of Eq whose PartialEq impl carries the same bound", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Wrap<T> { value: T }
+      impl<T: PartialEq> PartialEq for Wrap<T> {
+        fn eq(&self, other: &Wrap<T>) -> bool { self.value == other.value }
+      }
+      impl<T: PartialEq + Eq> Eq for Wrap<T> {}
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a generic impl of Eq with no PartialEq impl for the type", (): void => {
+    const result = diagnoseWithPrelude(`
+      struct Wrap<T> { value: T }
+      impl<T: PartialEq + Eq> Eq for Wrap<T> {}
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "the trait bound `Wrap: PartialEq` is not satisfied",
+    );
+  });
+
+  it("rejects a generic impl of Eq whose PartialEq impl demands a bound the Eq impl lacks", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Marker {}
+      struct Wrap<T> { value: T }
+      impl<T: Marker> PartialEq for Wrap<T> {
+        fn eq(&self, other: &Wrap<T>) -> bool { true }
+      }
+      impl<T> Eq for Wrap<T> {}
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "the trait bound `Wrap: PartialEq` is not satisfied",
+    );
+  });
+});
+
+describe("bound-aware blanket impl overlap", (): void => {
+  it("accepts a bounded blanket PartialEq impl next to the prelude's Option impl when Option never satisfies the bound", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Marker {}
+      struct W { n: i32 }
+      impl Marker for W {}
+      impl<T: Marker> PartialEq for T { fn eq(&self, other: &Self) -> bool { true } }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects a bounded blanket impl overlapping a concrete impl whose target satisfies the bound", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Marker {}
+      struct W { n: i32 }
+      impl Marker for W {}
+      impl PartialEq for W { fn eq(&self, other: &W) -> bool { true } }
+      impl<T: Marker> PartialEq for T { fn eq(&self, other: &Self) -> bool { true } }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "conflicting implementations of trait `PartialEq` for type `W`",
+    );
+  });
+
+  it("rejects the same overlap when the blanket impl is declared before the concrete one", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Marker {}
+      struct W { n: i32 }
+      impl<T: Marker> PartialEq for T { fn eq(&self, other: &Self) -> bool { true } }
+      impl PartialEq for W { fn eq(&self, other: &W) -> bool { true } }
+      impl Marker for W {}
+      fn main() {}
+    `);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(messageOf(result.diagnostics[0])).toBe(
+      "conflicting implementations of trait `PartialEq` for type `W`",
+    );
+  });
+
+  it("accepts the overlapping pair when the bound is only satisfied by an unrelated type", (): void => {
+    const result = diagnoseWithPrelude(`
+      trait Marker {}
+      struct W { n: i32 }
+      struct V { n: i32 }
+      impl Marker for V {}
+      impl PartialEq for W { fn eq(&self, other: &W) -> bool { true } }
+      impl<T: Marker> PartialEq for T { fn eq(&self, other: &Self) -> bool { true } }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+});
+
 describe("Drop impl indexing", (): void => {
   it("keys `dropImpls` by the struct's scope-qualified type id", (): void => {
     const result = diagnoseWithPrelude(`
@@ -6457,9 +6832,9 @@ describe("generic struct/enum instantiation identity", (): void => {
 describe("bare unit-variant path construction (no call syntax) for a generic enum", (): void => {
   it("resolves a generic enum's unit variant referenced bare against a let annotation", (): void => {
     const result = diagnose(`
-      enum Option<T> { Some(T), None }
+      enum Maybe<T> { Some(T), None }
       fn main() {
-        let a: Option<i32> = Option::None;
+        let a: Maybe<i32> = Maybe::None;
       }
     `);
     expect(result.diagnostics).toEqual([]);
@@ -6467,9 +6842,9 @@ describe("bare unit-variant path construction (no call syntax) for a generic enu
 
   it("resolves a generic enum's unit variant referenced bare against an enclosing function's declared return type", (): void => {
     const result = diagnose(`
-      enum Option<T> { Some(T), None }
-      fn make_none() -> Option<i32> {
-        Option::None
+      enum Maybe<T> { Some(T), None }
+      fn make_none() -> Maybe<i32> {
+        Maybe::None
       }
     `);
     expect(result.diagnostics).toEqual([]);
@@ -6477,12 +6852,12 @@ describe("bare unit-variant path construction (no call syntax) for a generic enu
 
   it("resolves a generic enum's unit variant produced by a match arm, checked against an enclosing let annotation", (): void => {
     const result = diagnose(`
-      enum Option<T> { Some(T), None }
+      enum Maybe<T> { Some(T), None }
       fn main() {
         let flag = true;
-        let a: Option<i32> = match flag {
-          true => Option::Some(5),
-          false => Option::None,
+        let a: Maybe<i32> = match flag {
+          true => Maybe::Some(5),
+          false => Maybe::None,
         };
       }
     `);
@@ -6491,11 +6866,11 @@ describe("bare unit-variant path construction (no call syntax) for a generic enu
 
   it("resolves a generic enum's unit variant produced by a match arm, checked against an enclosing function's return type", (): void => {
     const result = diagnose(`
-      enum Option<T> { Some(T), None }
-      fn pick(flag: bool) -> Option<i32> {
+      enum Maybe<T> { Some(T), None }
+      fn pick(flag: bool) -> Maybe<i32> {
         match flag {
-          true => Option::Some(5),
-          false => Option::None,
+          true => Maybe::Some(5),
+          false => Maybe::None,
         }
       }
     `);
@@ -6504,10 +6879,10 @@ describe("bare unit-variant path construction (no call syntax) for a generic enu
 
   it("resolves a generic enum's unit variant produced by an if/else branch, checked against an enclosing let annotation", (): void => {
     const result = diagnose(`
-      enum Option<T> { Some(T), None }
+      enum Maybe<T> { Some(T), None }
       fn main() {
         let flag = true;
-        let a: Option<i32> = if flag { Option::Some(5) } else { Option::None };
+        let a: Maybe<i32> = if flag { Maybe::Some(5) } else { Maybe::None };
       }
     `);
     expect(result.diagnostics).toEqual([]);
@@ -6515,9 +6890,9 @@ describe("bare unit-variant path construction (no call syntax) for a generic enu
 
   it("reports exactly one cannot-infer diagnostic for a generic enum's unit variant referenced with no resolvable context anywhere", (): void => {
     const result = diagnose(`
-      enum Option<T> { Some(T), None }
+      enum Maybe<T> { Some(T), None }
       fn main() {
-        let a = Option::None;
+        let a = Maybe::None;
       }
     `);
     expect(result.diagnostics).toHaveLength(1);
@@ -6554,12 +6929,12 @@ describe("bare unit-variant path construction (no call syntax) for a generic enu
 
   it("resolves Self's own abstract type parameter for a unit variant constructed inside a generic impl's method body", (): void => {
     const result = diagnoseWithPrelude(`
-      enum Option<T> { Some(T), None }
-      impl<T: Clone> Clone for Option<T> {
+      enum Maybe<T> { Some(T), None }
+      impl<T: Clone> Clone for Maybe<T> {
         fn clone(&self) -> Self {
           match self {
-            Option::Some(x) => Option::Some(x.clone()),
-            Option::None => Option::None,
+            Maybe::Some(x) => Maybe::Some(x.clone()),
+            Maybe::None => Maybe::None,
           }
         }
       }
@@ -6569,9 +6944,9 @@ describe("bare unit-variant path construction (no call syntax) for a generic enu
 
   it("resolves a generic enum's unit variant from its own explicit turbofish, with no other context", (): void => {
     const result = diagnose(`
-      enum Option<T> { Some(T), None }
+      enum Maybe<T> { Some(T), None }
       fn main() {
-        let a = Option::None::<i32>;
+        let a = Maybe::None::<i32>;
       }
     `);
     expect(result.diagnostics).toEqual([]);
@@ -6579,14 +6954,14 @@ describe("bare unit-variant path construction (no call syntax) for a generic enu
 
   it("reports a conflict when a unit variant's own explicit turbofish disagrees with an outer expected type", (): void => {
     const result = diagnose(`
-      enum Option<T> { Some(T), None }
+      enum Maybe<T> { Some(T), None }
       fn main() {
-        let a: Option<i32> = Option::None::<str>;
+        let a: Maybe<i32> = Maybe::None::<str>;
       }
     `);
     expect(result.diagnostics).toHaveLength(1);
     expect(messageOf(result.diagnostics[0])).toBe(
-      "call to `Option::None` type mismatch: expected `Option<str>`, found `Option<i32>`",
+      "call to `Maybe::None` type mismatch: expected `Maybe<str>`, found `Maybe<i32>`",
     );
   });
 });
@@ -7025,6 +7400,7 @@ describe("trait and impl declarations", (): void => {
       trait A {}
       trait B { fn f(&self) -> str; }
       struct Point { x: i32, y: i32 }
+      impl A for Point {}
       impl<T: A> B for T { fn f(&self) -> str { "a" } }
       impl B for Point { fn f(&self) -> str { "a" } }
     `);
@@ -8618,7 +8994,9 @@ describe("trait and impl declarations", (): void => {
       assert(isSome(program), "Parse failed");
       const result = analyze(program.value, tokens);
       expect(result.diagnostics).toEqual([]);
-      const entry = [...result.methodTargets.entries()][0];
+      const entry = [...result.methodTargets.entries()].find(
+        ([tokenId]) => !isPreludeToken(tokens, tokenId),
+      );
       assert(entry !== undefined, "expected one method target");
       const [tokenId, target] = entry;
       expect(tokens[tokenId]?.kind).toBe("eq_eq");
@@ -9964,7 +10342,9 @@ describe("ordering operators resolving through a PartialOrd/Ord impl", (): void 
     assert(isSome(program), "Parse failed");
     const result = analyze(program.value, tokens);
     expect(result.diagnostics).toEqual([]);
-    const entry = [...result.methodTargets.entries()][0];
+    const entry = [...result.methodTargets.entries()].find(
+      ([tokenId]) => !isPreludeToken(tokens, tokenId),
+    );
     assert(entry !== undefined, "expected one method target");
     const [tokenId, target] = entry;
     expect(tokens[tokenId]?.kind).toBe("lt");
@@ -9983,7 +10363,9 @@ describe("ordering operators resolving through a PartialOrd/Ord impl", (): void 
     assert(isSome(program), "Parse failed");
     const result = analyze(program.value, tokens);
     expect(result.diagnostics).toEqual([]);
-    const [target] = [...result.methodTargets.values()];
+    const [target] = [...result.methodTargets.entries()]
+      .filter(([tokenId]) => !isPreludeToken(tokens, tokenId))
+      .map(([, found]) => found);
     expect(target).toEqual({
       kind: "witness",
       witnessName: "_witness_T_PartialOrd",
@@ -10007,9 +10389,11 @@ describe("ordering operators resolving through a PartialOrd/Ord impl", (): void 
       }
     `);
     expect(result.diagnostics).toEqual([]);
-    expect([...result.methodTargets.values()]).toEqual([
-      expect.objectContaining({ kind: "free", emitKind: "blanket" }),
-    ]);
+    expect(
+      [...result.methodTargets.values()].filter(
+        (target) => target.kind === "free" && target.emitKind === "blanket",
+      ),
+    ).toEqual([expect.objectContaining({ kind: "free", emitKind: "blanket" })]);
   });
 });
 
@@ -10656,9 +11040,11 @@ describe("arithmetic/bitwise/shift operators resolving through an operator-trait
       }
     `);
     expect(result.diagnostics).toEqual([]);
-    expect([...result.methodTargets.values()]).toEqual([
-      expect.objectContaining({ kind: "free", emitKind: "blanket" }),
-    ]);
+    expect(
+      [...result.methodTargets.values()].filter(
+        (target) => target.kind === "free" && target.emitKind === "blanket",
+      ),
+    ).toEqual([expect.objectContaining({ kind: "free", emitKind: "blanket" })]);
   });
 
   it("rejects `a + b` on a struct whose only `Add` impl is against a shadowing block-local trait", (): void => {
@@ -10768,7 +11154,9 @@ describe("arithmetic/bitwise/shift operators resolving through an operator-trait
     assert(isSome(program), "Parse failed");
     const result = analyze(program.value, tokens);
     expect(result.diagnostics).toEqual([]);
-    const entry = [...result.methodTargets.entries()][0];
+    const entry = [...result.methodTargets.entries()].find(
+      ([tokenId]) => !isPreludeToken(tokens, tokenId),
+    );
     assert(entry !== undefined, "expected one method target");
     const [tokenId, target] = entry;
     expect(tokens[tokenId]?.kind).toBe("plus");
@@ -10787,7 +11175,9 @@ describe("arithmetic/bitwise/shift operators resolving through an operator-trait
     assert(isSome(program), "Parse failed");
     const result = analyze(program.value, tokens);
     expect(result.diagnostics).toEqual([]);
-    const [target] = [...result.methodTargets.values()];
+    const [target] = [...result.methodTargets.entries()]
+      .filter(([tokenId]) => !isPreludeToken(tokens, tokenId))
+      .map(([, found]) => found);
     expect(target).toEqual({
       kind: "witness",
       witnessName: "_witness_T_Add",

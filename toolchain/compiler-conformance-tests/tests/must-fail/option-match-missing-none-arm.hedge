@@ -1,0 +1,7 @@
+fn main() {
+  let o: Option<i32> = Option::Some(1);
+  let v = match o {
+    Option::Some(x) => x,
+  };
+  print(v);
+}
