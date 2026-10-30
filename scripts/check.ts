@@ -23,19 +23,21 @@ export function findings(
   isExcluded: (file: string) => boolean,
 ): readonly string[] {
   const kept: string[] = [];
-  let pendingHeader: string | undefined;
+  const pendingHeaders = new Map<string | undefined, string>();
   for (const raw of log.split("\n")) {
+    const label = STEP_LABEL.exec(raw)?.[0];
     const line = raw.replace(STEP_LABEL, "").trimEnd();
     if (FILE_HEADER.test(line)) {
-      pendingHeader = line;
+      pendingHeaders.set(label, line);
       continue;
     }
     if (!FINDING.test(line) || line.startsWith(FORMAT_SUMMARY_PREFIX)) continue;
     const file = /^\[warn\]\s+(\S+)/.exec(line)?.[1];
     if (file !== undefined && isExcluded(file)) continue;
-    if (pendingHeader !== undefined) {
-      kept.push(pendingHeader);
-      pendingHeader = undefined;
+    const header = pendingHeaders.get(label);
+    if (header !== undefined) {
+      kept.push(header);
+      pendingHeaders.delete(label);
     }
     kept.push(line);
   }

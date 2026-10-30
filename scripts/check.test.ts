@@ -75,4 +75,18 @@ describe("findings", (): void => {
 
     expect(findings(log, (file) => file === "CLAUDE.md")).toEqual([]);
   });
+
+  it("keeps an ESLint file header with its own step when another step interleaves", (): void => {
+    const log = [
+      "[check:lint      ] /repo/src/a.ts",
+      "[check:types     ] src/b.ts(1,1): error TS2322: bad",
+      "[check:lint      ]   3:1  error  Unexpected thing  no-thing",
+    ].join("\n");
+
+    expect(findings(log, excludesNothing)).toEqual([
+      "src/b.ts(1,1): error TS2322: bad",
+      "/repo/src/a.ts",
+      "  3:1  error  Unexpected thing  no-thing",
+    ]);
+  });
 });

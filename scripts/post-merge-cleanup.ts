@@ -13,18 +13,15 @@ export const BRANCH_LIST_FORMAT =
   "%(refname:short)%09%(upstream:track)%09%(worktreepath)";
 
 export function goneBranches(branchList: string): readonly string[] {
-  return branchList
-    .split("\n")
-    .map((line) => line.split("\t"))
-    .filter(
-      ([name, track, worktree]) =>
-        name !== undefined &&
-        track === "[gone]" &&
-        worktree === "" &&
-        !KEPT_BRANCHES.has(name),
-    )
-    .map(([name]) => name)
-    .filter((name): name is string => name !== undefined);
+  return branchList.split("\n").flatMap((line) => {
+    const [name, track, worktree] = line.split("\t");
+    return name !== undefined &&
+      track === "[gone]" &&
+      worktree === "" &&
+      !KEPT_BRANCHES.has(name)
+      ? [name]
+      : [];
+  });
 }
 
 function git(args: readonly string[]): string {
