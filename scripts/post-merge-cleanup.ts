@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process";
 
 const KEPT_BRANCHES: ReadonlySet<string> = new Set(["main"]);
 
-export const BRANCH_LIST_FORMAT =
+const BRANCH_LIST_FORMAT =
   "%(refname:short)%09%(upstream:track)%09%(worktreepath)";
 
 export function goneBranches(branchList: string): readonly string[] {

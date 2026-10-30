@@ -63,7 +63,7 @@ export function formatIssue(issue: CodacyIssue): string {
   return `${String(issue.resultDataId)}  ${issue.file}:${String(issue.line)}  ${issue.pattern}  ${issue.message}`;
 }
 
-export type CheckState = "pending" | "pass" | "fail" | "missing";
+type CheckState = "pending" | "pass" | "fail" | "missing";
 
 export interface CodacyCheck {
   readonly state: CheckState;
