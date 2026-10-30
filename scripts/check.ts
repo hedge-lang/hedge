@@ -12,22 +12,34 @@ import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const FORMAT_SUMMARY = /^\[warn\] Code style issues found/;
-const FINDING = /\berror\b|✖|\bFAIL\b|^\S*\s?\[warn\]|\bwarning\b/i;
+const FORMAT_SUMMARY_PREFIX = "[warn] Code style issues found";
+const FINDING =
+  /\berror\b|✖|\bFAIL\b|^\[warn\]|\bwarning\b|check-proof-refs: (?:MISSING|\d+ unresolved)/i;
+const STEP_LABEL = /^\[[^\]]*\]\s?/;
+const FILE_HEADER = /^(?:\/|[A-Za-z]:[\\/])\S*$/;
 
 export function findings(
   log: string,
   isExcluded: (file: string) => boolean,
 ): readonly string[] {
-  return log
-    .split("\n")
-    .map((line) => line.replace(/^\S+\s*\|\s*/, "").trimEnd())
-    .filter((line) => FINDING.test(line))
-    .filter((line) => !FORMAT_SUMMARY.test(line))
-    .filter((line) => {
-      const file = /^\[warn\]\s+(\S+)/.exec(line)?.[1];
-      return file === undefined || !isExcluded(file);
-    });
+  const kept: string[] = [];
+  let pendingHeader: string | undefined;
+  for (const raw of log.split("\n")) {
+    const line = raw.replace(STEP_LABEL, "").trimEnd();
+    if (FILE_HEADER.test(line)) {
+      pendingHeader = line;
+      continue;
+    }
+    if (!FINDING.test(line) || line.startsWith(FORMAT_SUMMARY_PREFIX)) continue;
+    const file = /^\[warn\]\s+(\S+)/.exec(line)?.[1];
+    if (file !== undefined && isExcluded(file)) continue;
+    if (pendingHeader !== undefined) {
+      kept.push(pendingHeader);
+      pendingHeader = undefined;
+    }
+    kept.push(line);
+  }
+  return kept;
 }
 
 function isGitExcluded(file: string): boolean {
