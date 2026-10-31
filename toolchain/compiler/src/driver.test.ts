@@ -2787,6 +2787,55 @@ describe("dyn Trait runtime", (): void => {
 });
 
 describe("Drop::drop dispose body", (): void => {
+  it("runs each element's `drop` body exactly once at scope end for an array of a `Drop` struct", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      fn main() {
+        let arr: [Loud; 2] = [Loud { id: 1 }, Loud { id: 2 }];
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "1", "2"]);
+  });
+
+  it("drops a moved array's elements once, in the callee, not again in the caller", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      fn eat(a: [Loud; 2]) { print(0); }
+      fn main() {
+        let arr: [Loud; 2] = [Loud { id: 1 }, Loud { id: 2 }];
+        eat(arr);
+        print(9);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "1", "2", "9"]);
+  });
+
+  it("drops the elements of a nested array of a `Drop` struct exactly once each", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      fn main() {
+        let arr: [[Loud; 1]; 2] = [[Loud { id: 1 }], [Loud { id: 2 }]];
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "1", "2"]);
+  });
+
+  it("compiles and runs an array of a non-`Copy` struct with no `Drop` impl", (): void => {
+    const js = emittedJs(`
+      struct Boxed { v: i32 }
+      fn main() {
+        let arr: [Boxed; 2] = [Boxed { v: 1 }, Boxed { v: 2 }];
+        print(arr[1].v);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["2"]);
+  });
+
   it("runs the resolved `drop` body at scope end", (): void => {
     const js = emittedJs(`
       struct Loud { id: i32 }
