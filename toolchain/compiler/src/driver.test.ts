@@ -2892,6 +2892,69 @@ describe("partial moves out of a type with a Drop impl", (): void => {
       "cannot move `g.a` out of `Guard` because it implements `Drop`",
     ]);
   });
+
+  it("names the inner struct when only a nested owner on the path implements Drop", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Inner { x: Loud, y: Loud }
+      impl Drop for Inner { fn drop(&mut self) { print(9); } }
+      struct Outer { i: Inner, z: Loud }
+      fn main() {
+        let o = Outer { i: Inner { x: Loud { id: 1 }, y: Loud { id: 2 } }, z: Loud { id: 3 } };
+        let f = o.i.x;
+      }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `o.i.x` out of `Inner` because it implements `Drop`",
+    ]);
+  });
+
+  it("still allows moving the whole Drop value and reading its Copy fields", (): void => {
+    const js = emittedJs(`
+      struct Guard { n: i32 }
+      impl Drop for Guard { fn drop(&mut self) { print(self.n); } }
+      fn eat(g: Guard) { print(0); }
+      fn main() {
+        let g = Guard { n: 7 };
+        let n = g.n;
+        eat(g);
+        print(n);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "7", "7"]);
+  });
+
+  it("rejects a field move out of a generic struct whose Drop impl covers the instantiation", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Holder<T> { v: T }
+      impl<T> Drop for Holder<T> { fn drop(&mut self) { print(9); } }
+      fn main() {
+        let h = Holder { v: Loud { id: 1 } };
+        let f = h.v;
+      }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `h.v` out of `Holder` because it implements `Drop`",
+    ]);
+  });
+
+  it("allows a field move out of an instantiation the generic struct's Drop impls do not cover", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Holder<T> { v: T, w: Loud }
+      impl Drop for Holder<str> { fn drop(&mut self) { print(9); } }
+      fn main() {
+        let h = Holder { v: Loud { id: 1 }, w: Loud { id: 2 } };
+        let f = h.v;
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "1", "2"]);
+  });
 });
 
 describe("Drop::drop dispose body", (): void => {

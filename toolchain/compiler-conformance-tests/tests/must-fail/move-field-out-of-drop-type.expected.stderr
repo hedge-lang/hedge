@@ -1,0 +1,1 @@
+error[HEDGE-MOVE-002]: cannot move `g.a` out of `Guard` because it implements `Drop`

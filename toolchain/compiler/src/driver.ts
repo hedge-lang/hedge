@@ -7,7 +7,7 @@ import { none, some, type Option, isSome } from "./option.js";
 import { checkBorrows } from "./ownership/borrowck.js";
 import { analyzeOwnership } from "./ownership/move-check.js";
 import { assembleProgram } from "./prelude.js";
-import { analyze } from "./semantics/analyzer.js";
+import { analyze, findDropTarget } from "./semantics/analyzer.js";
 
 export interface CompileResult {
   readonly diagnostics: readonly Diagnostic[];
@@ -60,7 +60,12 @@ export function compile(
   const borrowChecked = checkBorrows(analysis.program, tokens);
   const ownership = hasError(analysis.diagnostics)
     ? { diagnostics: [], functions: new Map() }
-    : analyzeOwnership(analysis.program, tokens, options);
+    : analyzeOwnership(analysis.program, tokens, {
+        ...options,
+        hasDropImpl: (type) =>
+          findDropTarget(analysis.dropImpls, type.name, type.typeArguments) !==
+          undefined,
+      });
   const diagnostics = [
     ...lexDiagnostics,
     ...parseDiagnostics,

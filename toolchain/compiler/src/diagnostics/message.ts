@@ -481,6 +481,8 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return `use of possibly-uninitialized binding \`${kind.name}\`: initialized on some paths but not others`;
     case "OwnCannotMoveOutBorrowInstead":
       return `cannot move out of \`${kind.place}\`; borrow it with \`&${kind.place}\` instead`;
+    case "OwnCannotMoveOutOfDropType":
+      return `cannot move \`${kind.place}\` out of \`${kind.typeName}\` because it implements \`Drop\``;
     case "OwnCannotMoveOutOfMutBinding":
       return `cannot move \`${kind.place}\` out of \`mut\` binding \`${kind.name}\`; moving a field out of a \`mut\` binding is not supported yet`;
     case "OwnCannotMoveOutOfReference":

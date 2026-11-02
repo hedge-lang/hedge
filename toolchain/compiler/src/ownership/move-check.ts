@@ -190,6 +190,7 @@ interface Ctx {
   readonly declarationsById: Map<BindingId, Declaration>;
   /** See `CompileOptions.warnDropFlags` in driver.ts. */
   readonly warnDropFlags: boolean;
+  readonly hasDropImpl: (type: Semantics.StructType) => boolean;
   /**
    * The tokenId of the statement currently being walked, updated at the top
    * of `walkStatement`. Read by `useOrMove` to stamp a move's
@@ -772,6 +773,61 @@ function useFieldPlace(
   );
 }
 
+/** The outermost struct along `chain` that has a `Drop` impl, if any. */
+function dropImplOwnerOf(
+  ctx: Ctx,
+  chain: FieldChain,
+): Semantics.StructType | undefined {
+  for (const field of chain.fields) {
+    const owner = field.object.type;
+    if (owner.kind === "StructType" && ctx.hasDropImpl(owner)) return owner;
+  }
+  return undefined;
+}
+
+/** Why `chain` cannot move out of its root, if it cannot. */
+function fieldMoveRejection(
+  ctx: Ctx,
+  chain: FieldChain,
+  resolved: ResolvedBinding,
+): DiagnosticKind | undefined {
+  const place = placeDescription(resolved.name, chainPath(chain));
+  const dropOwner = dropImplOwnerOf(ctx, chain);
+  if (dropOwner !== undefined) {
+    return {
+      kind: "OwnCannotMoveOutOfDropType",
+      place,
+      typeName: dropOwner.name.split("::").pop() ?? dropOwner.name,
+    };
+  }
+  if (ctx.declarationsById.get(resolved.id)?.mutable === true) {
+    return {
+      kind: "OwnCannotMoveOutOfMutBinding",
+      place,
+      name: resolved.name,
+    };
+  }
+  return undefined;
+}
+
+/** Record `moved` against the binding, unless it already overlaps a moved place. */
+function recordMovedPlace(
+  state: StateMap,
+  id: BindingId,
+  moved: MovedPlace,
+): void {
+  const current = state.get(id);
+  if (current?.kind === "PartiallyMoved") {
+    if (current.moved.some((m) => pathsOverlap(m.path, moved.path))) return;
+    state.set(id, {
+      kind: "PartiallyMoved",
+      moved: [...current.moved, moved],
+    });
+  } else if (current?.kind === "Owned") {
+    state.set(id, { kind: "PartiallyMoved", moved: [moved] });
+  }
+}
+
 /** Move a non-`Copy` field path out of a tracked local, leaving its siblings owned. */
 function moveFieldPlace(
   ctx: Ctx,
@@ -780,42 +836,20 @@ function moveFieldPlace(
   scopeStack: ScopeStack,
 ): void {
   const resolved = resolveBinding(chain.root, scopeStack);
-  if (resolved === undefined) return;
-  if (ctx.declarationsById.get(resolved.id)?.mutable === true) {
-    emitDiagnostic(
-      ctx,
-      {
-        kind: "OwnCannotMoveOutOfMutBinding",
-        place: placeDescription(resolved.name, chainPath(chain)),
-        name: resolved.name,
-      },
-      chain.fields.at(-1)?.tokenId ?? chain.root.tokenId,
-    );
+  const last = chain.fields.at(-1);
+  if (resolved === undefined || last === undefined) return;
+  const rejection = fieldMoveRejection(ctx, chain, resolved);
+  if (rejection !== undefined) {
+    emitDiagnostic(ctx, rejection, last.tokenId);
     return;
   }
   useFieldPlace(ctx, chain, state, scopeStack);
-  const current = state.get(resolved.id);
-  const last = chain.fields.at(-1);
-  if (last === undefined || current === undefined) return;
-  const path = chainPath(chain);
-  const alreadyMoved =
-    current.kind === "PartiallyMoved" &&
-    current.moved.some((m) => pathsOverlap(m.path, path));
-  if (alreadyMoved) return;
-  const moved: MovedPlace = {
-    path,
+  recordMovedPlace(state, resolved.id, {
+    path: chainPath(chain),
     siblings: chain.fields.map((f) => f.ownerFields),
     moveSite: tokenSpan(ctx.tokens, last.tokenId),
     moveStatementTokenId: ctx.currentStatementTokenId,
-  };
-  if (current.kind === "PartiallyMoved") {
-    state.set(resolved.id, {
-      kind: "PartiallyMoved",
-      moved: [...current.moved, moved],
-    });
-  } else if (current.kind === "Owned") {
-    state.set(resolved.id, { kind: "PartiallyMoved", moved: [moved] });
-  }
+  });
 }
 
 /**
@@ -1768,10 +1802,16 @@ function walkFunction(ctx: Ctx, fn: Semantics.FunctionDef): void {
  * the type-annotated `Semantics.Program`, one function at a time - move
  * state never crosses a function boundary.
  */
+export interface OwnershipOptions {
+  readonly warnDropFlags?: boolean;
+  /** Whether a struct type has a `Drop` impl; a field cannot move out of one. */
+  readonly hasDropImpl?: (type: Semantics.StructType) => boolean;
+}
+
 export function analyzeOwnership(
   program: Semantics.Program,
   tokens: readonly Token[],
-  options: { readonly warnDropFlags?: boolean } = {},
+  options: OwnershipOptions = {},
 ): OwnershipCheckResult {
   const diagnostics: Diagnostic[] = [];
   const functions = new Map<string, FunctionOwnership>();
@@ -1791,6 +1831,7 @@ export function analyzeOwnership(
       branchDrops,
       declarationsById,
       warnDropFlags: options.warnDropFlags ?? false,
+      hasDropImpl: options.hasDropImpl ?? ((): boolean => false),
       currentStatementTokenId: fn.tokenId,
     };
     walkFunction(ctx, fn);
