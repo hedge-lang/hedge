@@ -2801,6 +2801,79 @@ describe("partial moves out of a struct", (): void => {
     // Disposal is LIFO: f (1) first, then only o's remaining field b (2).
     expect(runEmittedJs(js)).toEqual(["0", "1", "2"]);
   });
+
+  it("disposes only the siblings of a nested moved path, at every level", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Inner { x: Loud, y: Loud }
+      struct Outer { i: Inner, z: Loud }
+      fn main() {
+        let o = Outer { i: Inner { x: Loud { id: 1 }, y: Loud { id: 2 } }, z: Loud { id: 3 } };
+        let f = o.i.x;
+        print(0);
+      }
+    `);
+    // f (1), then the leftovers in the reverse field order a whole Outer
+    // would release them: z (3) before i's remaining y (2).
+    expect(runEmittedJs(js)).toEqual(["0", "1", "3", "2"]);
+  });
+
+  it("disposes the remaining fields once when two disjoint fields are both moved out", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Trio { a: Loud, b: Loud, c: Loud }
+      fn main() {
+        let t = Trio { a: Loud { id: 1 }, b: Loud { id: 2 }, c: Loud { id: 3 } };
+        let x = t.a;
+        let y = t.c;
+        print(0);
+      }
+    `);
+    // LIFO: y (3), x (1), then t's remaining b (2).
+    expect(runEmittedJs(js)).toEqual(["0", "3", "1", "2"]);
+  });
+
+  it("moves a field out of an owned parameter and disposes the rest in the callee", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair { a: Loud, b: Loud }
+      fn split(p: Pair) { let f = p.a; print(0); }
+      fn main() { split(Pair { a: Loud { id: 1 }, b: Loud { id: 2 } }); print(9); }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "1", "2", "9"]);
+  });
+
+  it("moves a field to a callee and disposes the rest at scope end, not the moved one twice", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair { a: Loud, b: Loud }
+      fn eat(l: Loud) { print(0); }
+      fn main() {
+        let o = Pair { a: Loud { id: 1 }, b: Loud { id: 2 } };
+        eat(o.a);
+        print(5);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "1", "5", "2"]);
+  });
+
+  it("leaves a Copy field readable and a user name containing $ intact across a partial move", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Mix { a: Loud, n: i32 }
+      fn main() {
+        let o$1 = Mix { a: Loud { id: 1 }, n: 7 };
+        let f = o$1.a;
+        print(o$1.n);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["7", "1"]);
+  });
 });
 
 describe("Drop::drop dispose body", (): void => {

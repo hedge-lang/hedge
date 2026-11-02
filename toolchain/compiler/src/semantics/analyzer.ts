@@ -12508,6 +12508,7 @@ function analyzeFieldAccessExpression(
     ...expression,
     object,
     field: { ...expression.field, type: UNIT },
+    ownerFields: [],
     type: UNIT,
   });
 
@@ -12565,6 +12566,15 @@ function analyzeFieldAccessExpression(
     ...expression,
     object,
     field: { ...expression.field, type: fieldType },
+    ownerFields: structDecl.body.fields.map((f) => ({
+      name: f.name.text,
+      type: substituteStructFieldType(
+        f.type,
+        structDecl,
+        structType,
+        expression.field.tokenId,
+      ),
+    })),
     type: fieldType,
   };
 }

@@ -983,7 +983,7 @@ describe("move-check", (): void => {
       expect(messageOf(diagnostics[0])).toContain("cannot move");
     });
 
-    it("rejects binding a non-Copy struct field to a new variable by value", (): void => {
+    it("allows binding a non-Copy struct field to a new variable by value", (): void => {
       const { diagnostics } = check(`
           struct Inner { value: i32 }
           struct Outer { inner: Inner }
@@ -993,11 +993,145 @@ describe("move-check", (): void => {
             print(x.value);
           }
         `);
-      expect(diagnostics).toHaveLength(1);
-      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(messageOf(diagnostics[0])).toContain(
-        "cannot move out of `o.inner`",
-      );
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("rejects using the whole struct after one of its fields moved out", (): void => {
+      const { diagnostics } = check(`
+          struct Inner { value: i32 }
+          struct Outer { a: Inner, b: Inner }
+          fn take(o: Outer) {}
+          fn main() {
+            let o = Outer { a: Inner { value: 1 }, b: Inner { value: 2 } };
+            let x = o.a;
+            take(o);
+          }
+        `);
+      expect(diagnostics.map((d) => messageOf(d))).toEqual([
+        "use of partially moved value `o`: `o.a` was moved out",
+      ]);
+    });
+
+    it("rejects moving the same field out twice", (): void => {
+      const { diagnostics } = check(`
+          struct Inner { value: i32 }
+          struct Outer { a: Inner, b: Inner }
+          fn main() {
+            let o = Outer { a: Inner { value: 1 }, b: Inner { value: 2 } };
+            let x = o.a;
+            let y = o.a;
+          }
+        `);
+      expect(diagnostics.map((d) => messageOf(d))).toEqual([
+        "use of moved value `o.a`",
+      ]);
+    });
+
+    it("allows reading a sibling field after another field moved out", (): void => {
+      const { diagnostics } = check(`
+          struct Inner { value: i32 }
+          struct Outer { a: Inner, b: Inner }
+          fn main() {
+            let o = Outer { a: Inner { value: 1 }, b: Inner { value: 2 } };
+            let x = o.a;
+            print(o.b.value);
+          }
+        `);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("rejects borrowing a field after it moved out", (): void => {
+      const { diagnostics } = check(`
+          struct Inner { value: i32 }
+          struct Outer { a: Inner, b: Inner }
+          fn peek(i: &Inner) {}
+          fn main() {
+            let o = Outer { a: Inner { value: 1 }, b: Inner { value: 2 } };
+            let x = o.a;
+            peek(&o.a);
+          }
+        `);
+      expect(diagnostics.map((d) => messageOf(d))).toEqual([
+        "use of moved value `o.a`",
+      ]);
+    });
+
+    it("rejects using an ancestor of a nested moved path as partially moved", (): void => {
+      const { diagnostics } = check(`
+          struct Leaf { value: i32 }
+          struct Mid { x: Leaf, y: Leaf }
+          struct Top { m: Mid }
+          fn peek(m: &Mid) {}
+          fn main() {
+            let t = Top { m: Mid { x: Leaf { value: 1 }, y: Leaf { value: 2 } } };
+            let l = t.m.x;
+            peek(&t.m);
+          }
+        `);
+      expect(diagnostics.map((d) => messageOf(d))).toEqual([
+        "use of partially moved value `t.m`: `t.m.x` was moved out",
+      ]);
+    });
+
+    it("still rejects moving a non-Copy field out through a reference", (): void => {
+      const { diagnostics } = check(`
+          struct Inner { value: i32 }
+          struct Outer { a: Inner }
+          fn grab(o: &Outer) { let x = o.a; }
+          fn main() {}
+        `);
+      expect(diagnostics.map((d) => messageOf(d))).toEqual([
+        "cannot move out of `o.a`; borrow it with `&o.a` instead",
+      ]);
+    });
+
+    it("allows copying a Copy field out any number of times", (): void => {
+      const { diagnostics } = check(`
+          struct Mix { n: i32 }
+          fn main() {
+            let o = Mix { n: 1 };
+            let a = o.n;
+            let b = o.n;
+          }
+        `);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("rejects moving a non-Copy field out of a `mut` binding", (): void => {
+      const { diagnostics } = check(`
+          struct Inner { value: i32 }
+          struct Outer { a: Inner, b: Inner }
+          fn main() {
+            let mut o = Outer { a: Inner { value: 1 }, b: Inner { value: 2 } };
+            let x = o.a;
+          }
+        `);
+      expect(diagnostics.map((d) => messageOf(d))).toEqual([
+        "cannot move `o.a` out of `mut` binding `o`; moving a field out of a `mut` binding is not supported yet",
+      ]);
+    });
+
+    it("rejects moving a non-Copy field out of a `mut` parameter", (): void => {
+      const { diagnostics } = check(`
+          struct Inner { value: i32 }
+          struct Outer { a: Inner, b: Inner }
+          fn f(mut o: Outer) { let x = o.a; }
+          fn main() {}
+        `);
+      expect(diagnostics.map((d) => messageOf(d))).toEqual([
+        "cannot move `o.a` out of `mut` binding `o`; moving a field out of a `mut` binding is not supported yet",
+      ]);
+    });
+
+    it("still allows copying a Copy field out of a `mut` binding", (): void => {
+      const { diagnostics } = check(`
+          struct Mix { n: i32 }
+          fn main() {
+            let mut o = Mix { n: 1 };
+            let a = o.n;
+          }
+        `);
+      expect(diagnostics).toEqual([]);
     });
 
     it("still allows borrowing a non-Copy field rather than moving it", (): void => {
@@ -1205,9 +1339,7 @@ describe("move-check", (): void => {
       );
     });
 
-    it("treats a by-value `self` receiver like any owned parameter for field moves", (): void => {
-      // A partial move out of an owned parameter is not yet supported (same as
-      // `fn f(p: P) { take(p.inner); }`); `self` gets exactly that treatment.
+    it("allows moving a field out of a by-value `self` receiver like any owned parameter", (): void => {
       const { diagnostics } = check(`
         struct Inner { v: i32 }
         struct P { inner: Inner }
@@ -1218,11 +1350,7 @@ describe("move-check", (): void => {
           }
         }
       `);
-      expect(diagnostics).toHaveLength(1);
-      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(messageOf(diagnostics[0])).toBe(
-        "cannot move out of `self.inner`; borrow it with `&self.inner` instead",
-      );
+      expect(diagnostics).toEqual([]);
     });
 
     it("does not flag a `&self` method that only reads `self`", (): void => {

@@ -475,10 +475,14 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return `use of moved value \`${kind.name}\``;
     case "OwnUseOfPossiblyMovedValue":
       return `use of possibly-moved value \`${kind.name}\`: moved on some paths but not others`;
+    case "OwnUseOfPartiallyMovedValue":
+      return `use of partially moved value \`${kind.name}\`: \`${kind.moved}\` was moved out`;
     case "OwnUseOfPossiblyUninitializedBinding":
       return `use of possibly-uninitialized binding \`${kind.name}\`: initialized on some paths but not others`;
     case "OwnCannotMoveOutBorrowInstead":
       return `cannot move out of \`${kind.place}\`; borrow it with \`&${kind.place}\` instead`;
+    case "OwnCannotMoveOutOfMutBinding":
+      return `cannot move \`${kind.place}\` out of \`mut\` binding \`${kind.name}\`; moving a field out of a \`mut\` binding is not supported yet`;
     case "OwnCannotMoveOutOfReference":
       return `cannot move ${kind.place} out of a reference`;
     case "OwnConditionalDropFlag":

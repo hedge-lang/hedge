@@ -83,7 +83,21 @@ type MoveState =
       readonly moveSite: Span;
       readonly moveStatementTokenId: number;
     }
-  | { readonly kind: "PossiblyUninitialized" };
+  | { readonly kind: "PossiblyUninitialized" }
+  | { readonly kind: "PartiallyMoved"; readonly moved: readonly MovedPlace[] };
+
+/**
+ * A field path moved out of a binding, e.g. `["i", "x"]` for `o.i.x`.
+ * `siblings[k]` is every declared field of the struct that owns `path[k]`,
+ * so the fields a partial move leaves behind can be computed without a
+ * second struct lookup.
+ */
+interface MovedPlace {
+  readonly path: readonly string[];
+  readonly siblings: readonly (readonly Semantics.OwnerField[])[];
+  readonly moveSite: Span;
+  readonly moveStatementTokenId: number;
+}
 
 type StateMap = Map<BindingId, MoveState>;
 type ScopeStack = Map<string, BindingId>[];
@@ -119,6 +133,17 @@ export interface BranchDrop {
   readonly branch: "then" | "else";
 }
 
+/**
+ * A binding with some fields moved out: it is not disposed whole, only the
+ * fields still owned at scope end are, each at `declaration`'s own position
+ * in the drop order. `remaining` is in field declaration order, one entry
+ * per owned field path that has something to release.
+ */
+export interface PartialDrop {
+  readonly declaration: Declaration;
+  readonly remaining: readonly (readonly string[])[];
+}
+
 export interface FunctionOwnership {
   readonly graph: ControlFlowGraph;
   /**
@@ -132,6 +157,8 @@ export interface FunctionOwnership {
    * Currently always empty without loops -- see `ConditionalDrop`.
    */
   readonly conditionalDrops: ReadonlyMap<number, readonly ConditionalDrop[]>;
+  /** Partially-moved declarations, keyed the same way as `drops`. */
+  readonly partialDrops: ReadonlyMap<number, readonly PartialDrop[]>;
   /** Conditional moves resolved via static duplication. See `BranchDrop`. */
   readonly branchDrops: readonly BranchDrop[];
 }
@@ -146,6 +173,7 @@ interface Ctx {
   readonly diagnostics: Diagnostic[];
   readonly drops: Map<number, Declaration[]>;
   readonly conditionalDrops: Map<number, ConditionalDrop[]>;
+  readonly partialDrops: Map<number, PartialDrop[]>;
   readonly branchDrops: BranchDrop[];
   /**
    * Every declaration in the function currently being walked, keyed by its
@@ -342,6 +370,22 @@ function useOrMove(
       );
       state.set(id, { kind: "Owned" });
       return;
+    case "PartiallyMoved": {
+      const [first] = current.moved;
+      assert(first !== undefined, "PartiallyMoved carries a moved place");
+      emitDiagnostic(
+        ctx,
+        {
+          kind: "OwnUseOfPartiallyMovedValue",
+          name,
+          moved: placeDescription(name, first.path),
+        },
+        pathExpr.tokenId,
+        [{ span: first.moveSite, label: { kind: "LabelMovedHere" } }],
+      );
+      state.set(id, { kind: "Owned" });
+      return;
+    }
     case "Owned":
       if (asMove && !hasCapability(pathExpr.type, "copy")) {
         state.set(id, {
@@ -392,6 +436,9 @@ function cloneState(state: StateMap): StateMap {
  */
 // eslint-disable-next-line complexity -- exhaustive over a 5x5 state pairing, not incidental branching
 function combineStates(av: MoveState, bv: MoveState): MoveState {
+  if (av.kind === "PartiallyMoved" || bv.kind === "PartiallyMoved") {
+    return combinePartiallyMoved(av, bv);
+  }
   switch (av.kind) {
     case "Owned":
       switch (bv.kind) {
@@ -502,6 +549,40 @@ function combineStates(av: MoveState, bv: MoveState): MoveState {
   }
 }
 
+/**
+ * The merge rule for a side that has had a field moved out. Two partial
+ * sides keep every place either side moved; against `Owned` the partial
+ * side stands unchanged; against any other state the weaker guarantee wins,
+ * since the binding is no longer provably holding all its fields.
+ */
+function combinePartiallyMoved(av: MoveState, bv: MoveState): MoveState {
+  if (av.kind === "PartiallyMoved" && bv.kind === "PartiallyMoved") {
+    const extra = bv.moved.filter(
+      (m) => !av.moved.some((a) => pathsOverlap(a.path, m.path)),
+    );
+    return { kind: "PartiallyMoved", moved: [...av.moved, ...extra] };
+  }
+  const partial = av.kind === "PartiallyMoved" ? av : bv;
+  const other = av.kind === "PartiallyMoved" ? bv : av;
+  switch (other.kind) {
+    case "Owned":
+    case "PartiallyMoved":
+      return partial;
+    case "Unbound":
+    case "ConditionallyMoved":
+      return {
+        kind: "ConditionallyMoved",
+        moveSite: other.moveSite,
+        moveStatementTokenId: other.moveStatementTokenId,
+      };
+    case "Uninitialized":
+    case "PossiblyUninitialized":
+      return { kind: "PossiblyUninitialized" };
+    default:
+      return assertNever(other);
+  }
+}
+
 /** Branch-merge (meet) rule, applied per binding via `combineStates`. */
 function mergeStates(a: StateMap, b: StateMap): StateMap {
   const merged: StateMap = new Map();
@@ -608,13 +689,142 @@ function projectionDescription(expression: Semantics.Expression): string {
   }
 }
 
+function placeDescription(name: string, path: readonly string[]): string {
+  return [name, ...path].join(".");
+}
+
+function pathStartsWith(
+  path: readonly string[],
+  prefix: readonly string[],
+): boolean {
+  return prefix.every((segment, i) => path[i] === segment);
+}
+
+/** One path names the other or an ancestor of it: moving or using either one touches the other. */
+function pathsOverlap(a: readonly string[], b: readonly string[]): boolean {
+  return pathStartsWith(a, b) || pathStartsWith(b, a);
+}
+
+interface FieldChain {
+  readonly root: Semantics.PathExpression;
+  readonly fields: readonly Semantics.FieldAccessExpression[];
+}
+
+/**
+ * `o.a.b` rooted in a bare local, reached only through owned struct fields.
+ * A hop through a reference is not a chain: moving out of one stays rejected
+ * regardless of what the reference points to.
+ */
+function fieldChainOf(
+  expression: Semantics.Expression,
+  scopeStack: ScopeStack,
+): FieldChain | undefined {
+  const fields: Semantics.FieldAccessExpression[] = [];
+  let current = expression;
+  while (current.kind === "FieldAccessExpression") {
+    if (current.object.type.kind === "ReferenceType") return undefined;
+    fields.unshift(current);
+    current = current.object;
+  }
+  if (current.kind !== "PathExpression" || fields.length === 0) {
+    return undefined;
+  }
+  if (resolveBinding(current, scopeStack) === undefined) return undefined;
+  return { root: current, fields };
+}
+
+function chainPath(chain: FieldChain): readonly string[] {
+  return chain.fields.map((f) => f.field.text);
+}
+
+/**
+ * Use of a field path rooted in a tracked local: fine unless it overlaps a
+ * place already moved out of that binding. Anything else about the root's
+ * state (moved whole, uninitialized, ...) reports through `useOrMove`.
+ */
+function useFieldPlace(
+  ctx: Ctx,
+  chain: FieldChain,
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  const resolved = resolveBinding(chain.root, scopeStack);
+  const current = resolved === undefined ? undefined : state.get(resolved.id);
+  if (resolved === undefined || current?.kind !== "PartiallyMoved") {
+    useOrMove(ctx, chain.root, state, scopeStack, false);
+    return;
+  }
+  const path = chainPath(chain);
+  const clash = current.moved.find((m) => pathsOverlap(m.path, path));
+  if (clash === undefined) return;
+  const place = placeDescription(resolved.name, path);
+  emitDiagnostic(
+    ctx,
+    clash.path.length > path.length
+      ? {
+          kind: "OwnUseOfPartiallyMovedValue",
+          name: place,
+          moved: placeDescription(resolved.name, clash.path),
+        }
+      : { kind: "OwnUseOfMovedValue", name: place },
+    chain.fields.at(-1)?.tokenId ?? chain.root.tokenId,
+    [{ span: clash.moveSite, label: { kind: "LabelMovedHere" } }],
+  );
+}
+
+/** Move a non-`Copy` field path out of a tracked local, leaving its siblings owned. */
+function moveFieldPlace(
+  ctx: Ctx,
+  chain: FieldChain,
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  const resolved = resolveBinding(chain.root, scopeStack);
+  if (resolved === undefined) return;
+  if (ctx.declarationsById.get(resolved.id)?.mutable === true) {
+    emitDiagnostic(
+      ctx,
+      {
+        kind: "OwnCannotMoveOutOfMutBinding",
+        place: placeDescription(resolved.name, chainPath(chain)),
+        name: resolved.name,
+      },
+      chain.fields.at(-1)?.tokenId ?? chain.root.tokenId,
+    );
+    return;
+  }
+  useFieldPlace(ctx, chain, state, scopeStack);
+  const current = state.get(resolved.id);
+  const last = chain.fields.at(-1);
+  if (last === undefined || current === undefined) return;
+  const path = chainPath(chain);
+  const alreadyMoved =
+    current.kind === "PartiallyMoved" &&
+    current.moved.some((m) => pathsOverlap(m.path, path));
+  if (alreadyMoved) return;
+  const moved: MovedPlace = {
+    path,
+    siblings: chain.fields.map((f) => f.ownerFields),
+    moveSite: tokenSpan(ctx.tokens, last.tokenId),
+    moveStatementTokenId: ctx.currentStatementTokenId,
+  };
+  if (current.kind === "PartiallyMoved") {
+    state.set(resolved.id, {
+      kind: "PartiallyMoved",
+      moved: [...current.moved, moved],
+    });
+  } else if (current.kind === "Owned") {
+    state.set(resolved.id, { kind: "PartiallyMoved", moved: [moved] });
+  }
+}
+
 /**
  * Moving a non-`Copy` value out of a field or element is not tracked: the
  * owner keeps its own drop obligation, so both it and the new binding would
  * dispose the same value. The borrow is named as the alternative since that
- * is what most callers want.
- *
- * TODO(Hedge-240): lift this once move state is keyed by place.
+ * is what most callers want. A field path rooted in a local is tracked per
+ * place instead (see `moveFieldPlace`); this remains for an element, or a
+ * field reached through a reference.
  */
 function checkProjectionMove(
   ctx: Ctx,
@@ -627,6 +837,25 @@ function checkProjectionMove(
     { kind: "OwnCannotMoveOutBorrowInstead", place },
     expression.tokenId,
   );
+}
+
+function walkFieldAccessMove(
+  ctx: Ctx,
+  expression: Semantics.FieldAccessExpression,
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  const chain = fieldChainOf(expression, scopeStack);
+  if (chain === undefined) {
+    checkProjectionMove(ctx, expression);
+    walkNonMovingPlace(ctx, expression.object, state, scopeStack);
+    return;
+  }
+  if (hasCapability(expression.type, "copy")) {
+    useFieldPlace(ctx, chain, state, scopeStack);
+    return;
+  }
+  moveFieldPlace(ctx, chain, state, scopeStack);
 }
 
 /**
@@ -658,6 +887,11 @@ function walkNonMovingPlace(
   // it keeps recursing non-movingly rather than tripping the move-out check
   // `walkExpression` applies to the same node.
   if (expression.kind === "FieldAccessExpression") {
+    const chain = fieldChainOf(expression, scopeStack);
+    if (chain !== undefined) {
+      useFieldPlace(ctx, chain, state, scopeStack);
+      return;
+    }
     walkNonMovingPlace(ctx, expression.object, state, scopeStack);
     return;
   }
@@ -711,8 +945,7 @@ function walkExpression(
       useOrMove(ctx, expression, state, scopeStack, true);
       return;
     case "FieldAccessExpression":
-      checkProjectionMove(ctx, expression);
-      walkNonMovingPlace(ctx, expression.object, state, scopeStack);
+      walkFieldAccessMove(ctx, expression, state, scopeStack);
       return;
     case "CallExpression":
       walkExpression(ctx, expression.callee, state, scopeStack);
@@ -794,11 +1027,7 @@ function walkExpression(
       // own treatment above: `arr[i]` reads through the array, it doesn't
       // move `arr` out.
       checkProjectionMove(ctx, expression);
-      if (expression.object.kind === "PathExpression") {
-        useOrMove(ctx, expression.object, state, scopeStack, false);
-      } else {
-        walkExpression(ctx, expression.object, state, scopeStack);
-      }
+      walkNonMovingPlace(ctx, expression.object, state, scopeStack);
       walkExpression(ctx, expression.index, state, scopeStack);
       return;
     case "TupleExpression":
@@ -1276,7 +1505,8 @@ function walkStatement(
   }
 }
 
-type DropDecision = "Drop" | "NoDrop" | "ConditionalDrop" | "Ambiguous";
+type DropDecision =
+  "Drop" | "NoDrop" | "ConditionalDrop" | "PartialDrop" | "Ambiguous";
 
 /**
  * Exhaustive over `MoveState["kind"]` so a still-`ConditionallyMoved`
@@ -1304,6 +1534,8 @@ function dropDecision(state: MoveState | undefined): DropDecision {
       return "NoDrop";
     case "ConditionallyMoved":
       return "ConditionalDrop";
+    case "PartiallyMoved":
+      return "PartialDrop";
     case "PossiblyUninitialized":
       return "Ambiguous";
     default:
@@ -1323,6 +1555,7 @@ function ambiguousDropKind(name: string, state: MoveState): DiagnosticKind {
     case "Uninitialized":
     case "Unbound":
     case "ConditionallyMoved":
+    case "PartiallyMoved":
       throw new Error(
         `ICE: ambiguousDropKind called with non-ambiguous state ${state.kind}`,
       );
@@ -1365,6 +1598,7 @@ function recordDrops(
 ): void {
   const drops: Declaration[] = [];
   const conditionalDrops: ConditionalDrop[] = [];
+  const partialDrops: PartialDrop[] = [];
   for (let i = declarations.length - 1; i >= 0; i -= 1) {
     const declaration = declarations[i];
     if (
@@ -1400,6 +1634,9 @@ function recordDrops(
         }
         break;
       }
+      case "PartialDrop":
+        partialDrops.push(partialDropOf(declaration, declState));
+        break;
       case "Ambiguous": {
         assert(declState !== undefined, "Ambiguous implies a known state");
         emitDiagnostic(
@@ -1415,6 +1652,46 @@ function recordDrops(
   }
   ctx.drops.set(scopeTokenId, drops);
   ctx.conditionalDrops.set(scopeTokenId, conditionalDrops);
+  ctx.partialDrops.set(scopeTokenId, partialDrops);
+}
+
+function partialDropOf(
+  declaration: Declaration,
+  state: MoveState | undefined,
+): PartialDrop {
+  assert(
+    state?.kind === "PartiallyMoved",
+    "PartialDrop implies a PartiallyMoved state",
+  );
+  return { declaration, remaining: remainingFieldPaths(state.moved, []) };
+}
+
+/**
+ * The owned, releasable field paths under `prefix` once every place in
+ * `moved` is gone, in declaration order. A field that is itself the parent
+ * of a moved place is expanded to its own remaining children instead of
+ * being released whole.
+ */
+function remainingFieldPaths(
+  moved: readonly MovedPlace[],
+  prefix: readonly string[],
+): readonly (readonly string[])[] {
+  const beneath = moved.filter((m) => pathStartsWith(m.path, prefix));
+  const fields = beneath[0]?.siblings[prefix.length] ?? [];
+  return fields.flatMap((field): readonly (readonly string[])[] => {
+    const path = [...prefix, field.name];
+    if (
+      beneath.some(
+        (m) => m.path.length === path.length && pathStartsWith(m.path, path),
+      )
+    ) {
+      return [];
+    }
+    if (beneath.some((m) => pathStartsWith(m.path, path))) {
+      return remainingFieldPaths(moved, path);
+    }
+    return hasCapability(field.type, "copy") ? [] : [path];
+  });
 }
 
 /**
@@ -1502,6 +1779,7 @@ export function analyzeOwnership(
     const graph = buildControlFlowGraph(fn);
     const drops = new Map<number, Declaration[]>();
     const conditionalDrops = new Map<number, ConditionalDrop[]>();
+    const partialDrops = new Map<number, PartialDrop[]>();
     const branchDrops: BranchDrop[] = [];
     const declarationsById = new Map<BindingId, Declaration>();
     const ctx: Ctx = {
@@ -1509,13 +1787,14 @@ export function analyzeOwnership(
       diagnostics,
       drops,
       conditionalDrops,
+      partialDrops,
       branchDrops,
       declarationsById,
       warnDropFlags: options.warnDropFlags ?? false,
       currentStatementTokenId: fn.tokenId,
     };
     walkFunction(ctx, fn);
-    return { graph, drops, conditionalDrops, branchDrops };
+    return { graph, drops, conditionalDrops, partialDrops, branchDrops };
   };
   // A top-level function is keyed by name (codegen looks it up that way);
   // anything else `collectOwnedFunctions` returns - a method body, a nested

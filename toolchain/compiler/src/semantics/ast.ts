@@ -850,6 +850,15 @@ export interface FieldAccessExpression extends DecoratedAstNode {
   readonly kind: "FieldAccessExpression";
   readonly object: Expression;
   readonly field: Identifier;
+  /** Every declared field of the accessed struct, in declaration order, so
+   * the ownership passes can tell which siblings a partial move leaves
+   * behind. Empty when the access did not resolve. */
+  readonly ownerFields: readonly OwnerField[];
+}
+
+export interface OwnerField {
+  readonly name: string;
+  readonly type: Type;
 }
 
 export interface MethodCallExpression extends DecoratedAstNode {
