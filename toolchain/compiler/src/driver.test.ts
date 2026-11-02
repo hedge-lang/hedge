@@ -2786,6 +2786,23 @@ describe("dyn Trait runtime", (): void => {
   });
 });
 
+describe("partial moves out of a struct", (): void => {
+  it("compiles a move of a non-Copy field and disposes the moved value and the remaining fields once each", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair { a: Loud, b: Loud }
+      fn main() {
+        let o = Pair { a: Loud { id: 1 }, b: Loud { id: 2 } };
+        let f = o.a;
+        print(0);
+      }
+    `);
+    // Disposal is LIFO: f (1) first, then only o's remaining field b (2).
+    expect(runEmittedJs(js)).toEqual(["0", "1", "2"]);
+  });
+});
+
 describe("Drop::drop dispose body", (): void => {
   it("runs each element's `drop` body exactly once at scope end for an array of a `Drop` struct", (): void => {
     const js = emittedJs(`
