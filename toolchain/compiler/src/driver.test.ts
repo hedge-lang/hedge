@@ -2876,6 +2876,24 @@ describe("partial moves out of a struct", (): void => {
   });
 });
 
+describe("partial moves out of a type with a Drop impl", (): void => {
+  it("rejects moving a field out of a struct that implements Drop", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Guard { a: Loud, b: Loud }
+      impl Drop for Guard { fn drop(&mut self) { print(9); } }
+      fn main() {
+        let g = Guard { a: Loud { id: 1 }, b: Loud { id: 2 } };
+        let f = g.a;
+      }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `g.a` out of `Guard` because it implements `Drop`",
+    ]);
+  });
+});
+
 describe("Drop::drop dispose body", (): void => {
   it("runs each element's `drop` body exactly once at scope end for an array of a `Drop` struct", (): void => {
     const js = emittedJs(`
