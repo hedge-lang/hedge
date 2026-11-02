@@ -1151,6 +1151,81 @@ describe("move-check", (): void => {
       ]);
     });
 
+    it("rejects an if and else that move different fields, reporting once", (): void => {
+      const { diagnostics } = check(`
+          struct Inner { value: i32 }
+          struct Outer { a: Inner, b: Inner }
+          fn f(c: bool) {
+            let o = Outer { a: Inner { value: 1 }, b: Inner { value: 2 } };
+            if c { let x = o.a; } else { let y = o.b; }
+          }
+          fn main() {}
+        `);
+      expect(diagnostics.map((d) => messageOf(d))).toEqual([
+        "`o.a` is moved on some paths but not others, and conditional partial moves are not supported yet",
+      ]);
+    });
+
+    it("allows both branches of an if to move the same field", (): void => {
+      const { diagnostics } = check(`
+          struct Inner { value: i32 }
+          struct Outer { a: Inner, b: Inner }
+          fn f(c: bool) {
+            let o = Outer { a: Inner { value: 1 }, b: Inner { value: 2 } };
+            if c { let x = o.a; } else { let y = o.a; }
+          }
+          fn main() {}
+        `);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("allows a field moved before the branch and untouched inside it", (): void => {
+      const { diagnostics } = check(`
+          struct Inner { value: i32 }
+          struct Outer { a: Inner, b: Inner }
+          fn f(c: bool) {
+            let o = Outer { a: Inner { value: 1 }, b: Inner { value: 2 } };
+            let x = o.a;
+            if c { print(o.b.value); }
+          }
+          fn main() {}
+        `);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("rejects a field moved in only one arm of a match, reporting once", (): void => {
+      const { diagnostics } = check(`
+          struct Inner { value: i32 }
+          struct Outer { a: Inner, b: Inner }
+          fn f(c: bool) {
+            let o = Outer { a: Inner { value: 1 }, b: Inner { value: 2 } };
+            match c {
+              true => { let x = o.a; }
+              false => {}
+            }
+          }
+          fn main() {}
+        `);
+      expect(diagnostics.map((d) => messageOf(d))).toEqual([
+        "`o.a` is moved on some paths but not others, and conditional partial moves are not supported yet",
+      ]);
+    });
+
+    it("reports a nested conditional field move once, not at every enclosing merge", (): void => {
+      const { diagnostics } = check(`
+          struct Inner { value: i32 }
+          struct Outer { a: Inner, b: Inner }
+          fn f(c: bool, d: bool) {
+            let o = Outer { a: Inner { value: 1 }, b: Inner { value: 2 } };
+            if c { if d { let x = o.a; } }
+          }
+          fn main() {}
+        `);
+      expect(diagnostics.map((d) => messageOf(d))).toEqual([
+        "`o.a` is moved on some paths but not others, and conditional partial moves are not supported yet",
+      ]);
+    });
+
     it("still allows borrowing a non-Copy field rather than moving it", (): void => {
       const { diagnostics } = check(`
           struct Inner { value: i32 }

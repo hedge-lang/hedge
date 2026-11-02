@@ -623,6 +623,7 @@ export type DiagnosticKind =
     }
   | { readonly kind: "OwnCannotMoveOutBorrowInstead"; readonly place: string }
   | { readonly kind: "OwnCannotMoveOutOfReference"; readonly place: string }
+  | { readonly kind: "OwnConditionalPartialMove"; readonly place: string }
   | {
       readonly kind: "OwnCannotMoveOutOfDropType";
       readonly place: string;
@@ -888,6 +889,7 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["OwnCannotMoveOutOfDropType", "HEDGE-MOVE-002"],
   ["OwnCannotMoveOutOfMutBinding", "HEDGE-UNSUPPORTED-001"],
   ["OwnAmbiguousDrop", "HEDGE-MOVE-003"],
+  ["OwnConditionalPartialMove", "HEDGE-MOVE-003"],
   ["OwnConditionalDropFlag", "HEDGE-MOVE-004"],
 ]);
 

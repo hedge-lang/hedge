@@ -2876,6 +2876,34 @@ describe("partial moves out of a struct", (): void => {
   });
 });
 
+describe("partial moves on every branch", (): void => {
+  it("disposes the unmoved field once when both branches move the same field", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair { a: Loud, b: Loud }
+      fn run(c: bool) {
+        let o = Pair { a: Loud { id: 1 }, b: Loud { id: 2 } };
+        if c { let x = o.a; print(10); } else { let y = o.a; print(20); }
+        print(0);
+      }
+      fn main() { run(true); run(false); }
+    `);
+    // Each branch's moved value is released at the end of that branch's own
+    // block; the leftover b (2) goes at the end of run.
+    expect(runEmittedJs(js)).toEqual([
+      "10",
+      "1",
+      "0",
+      "2",
+      "20",
+      "1",
+      "0",
+      "2",
+    ]);
+  });
+});
+
 describe("partial moves out of a type with a Drop impl", (): void => {
   it("rejects moving a field out of a struct that implements Drop", (): void => {
     const result = compile(`

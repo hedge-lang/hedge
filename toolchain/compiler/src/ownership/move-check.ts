@@ -97,6 +97,8 @@ interface MovedPlace {
   readonly siblings: readonly (readonly Semantics.OwnerField[])[];
   readonly moveSite: Span;
   readonly moveStatementTokenId: number;
+  /** Set once a branch merge has reported this place as moved on only some paths, so an enclosing merge does not report it again. */
+  readonly conditional?: true;
 }
 
 type StateMap = Map<BindingId, MoveState>;
@@ -584,8 +586,62 @@ function combinePartiallyMoved(av: MoveState, bv: MoveState): MoveState {
   }
 }
 
+function pathsEqual(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && pathStartsWith(a, b);
+}
+
+/** A moved place present on one side of a merge but not the other. */
+function divergingMove(av: MoveState, bv: MoveState): MovedPlace | undefined {
+  const movedOf = (state: MoveState): readonly MovedPlace[] | undefined => {
+    if (state.kind === "PartiallyMoved") return state.moved;
+    return state.kind === "Owned" ? [] : undefined;
+  };
+  const aMoved = movedOf(av);
+  const bMoved = movedOf(bv);
+  if (aMoved === undefined || bMoved === undefined) return undefined;
+  const unmatched = (
+    xs: readonly MovedPlace[],
+    ys: readonly MovedPlace[],
+  ): MovedPlace | undefined =>
+    xs.find(
+      (x) =>
+        x.conditional !== true && !ys.some((y) => pathsEqual(x.path, y.path)),
+    );
+  return unmatched(aMoved, bMoved) ?? unmatched(bMoved, aMoved);
+}
+
+/**
+ * Reports a field moved on only some of the paths merging into `id`, then
+ * marks every moved place so an enclosing merge does not report it again.
+ */
+function resolveDivergingMove(
+  ctx: Ctx,
+  id: BindingId,
+  av: MoveState,
+  bv: MoveState,
+  combined: MoveState,
+): MoveState {
+  const diverging = divergingMove(av, bv);
+  if (diverging === undefined || combined.kind !== "PartiallyMoved") {
+    return combined;
+  }
+  const name = ctx.declarationsById.get(id)?.name ?? "_";
+  emitDiagnostic(
+    ctx,
+    {
+      kind: "OwnConditionalPartialMove",
+      place: placeDescription(name, diverging.path),
+    },
+    diverging.moveStatementTokenId,
+  );
+  return {
+    kind: "PartiallyMoved",
+    moved: combined.moved.map((m) => ({ ...m, conditional: true })),
+  };
+}
+
 /** Branch-merge (meet) rule, applied per binding via `combineStates`. */
-function mergeStates(a: StateMap, b: StateMap): StateMap {
+function mergeStates(ctx: Ctx, a: StateMap, b: StateMap): StateMap {
   const merged: StateMap = new Map();
   const ids = new Set<BindingId>([...a.keys(), ...b.keys()]);
   for (const id of ids) {
@@ -600,7 +656,10 @@ function mergeStates(a: StateMap, b: StateMap): StateMap {
       merged.set(id, only);
       continue;
     }
-    merged.set(id, combineStates(av, bv));
+    merged.set(
+      id,
+      resolveDivergingMove(ctx, id, av, bv, combineStates(av, bv)),
+    );
   }
   return merged;
 }
@@ -1275,7 +1334,8 @@ function walkMatchExpression(
     walkExpression(ctx, arm.body, armState, scopeStack);
     recordDrops(ctx, arm.tokenId, declarations, armState);
     scopeStack.pop();
-    merged = merged === undefined ? armState : mergeStates(merged, armState);
+    merged =
+      merged === undefined ? armState : mergeStates(ctx, merged, armState);
   }
 
   if (merged !== undefined) {
@@ -1424,7 +1484,7 @@ function walkIf(
 
   attributeConditionalMoves(ctx, expression, thenState, elseState);
 
-  const merged = mergeStates(thenState, elseState);
+  const merged = mergeStates(ctx, thenState, elseState);
   state.clear();
   for (const [id, moveState] of merged) {
     state.set(id, moveState);
