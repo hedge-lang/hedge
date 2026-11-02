@@ -1134,6 +1134,23 @@ describe("move-check", (): void => {
       expect(diagnostics).toEqual([]);
     });
 
+    it("rejects moving a field out in only one branch of an if", (): void => {
+      const { diagnostics } = check(`
+          struct Inner { value: i32 }
+          struct Outer { a: Inner, b: Inner }
+          fn f(c: bool) {
+            let o = Outer { a: Inner { value: 1 }, b: Inner { value: 2 } };
+            if c {
+              let x = o.a;
+            }
+          }
+          fn main() {}
+        `);
+      expect(diagnostics.map((d) => messageOf(d))).toEqual([
+        "`o.a` is moved on some paths but not others, and conditional partial moves are not supported yet",
+      ]);
+    });
+
     it("still allows borrowing a non-Copy field rather than moving it", (): void => {
       const { diagnostics } = check(`
           struct Inner { value: i32 }
