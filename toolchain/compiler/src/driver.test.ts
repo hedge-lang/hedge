@@ -2876,6 +2876,23 @@ describe("partial moves out of a struct", (): void => {
   });
 });
 
+describe("partial moves by destructuring a struct", (): void => {
+  it("disposes the fields a struct pattern does not bind, once, along with the bound ones", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair { a: Loud, b: Loud }
+      fn main() {
+        let p = Pair { a: Loud { id: 1 }, b: Loud { id: 2 } };
+        let Pair { a, .. } = p;
+        print(0);
+      }
+    `);
+    // LIFO: a (1) first, then p's unbound field b (2).
+    expect(runEmittedJs(js)).toEqual(["0", "1", "2"]);
+  });
+});
+
 describe("partial moves on every branch", (): void => {
   it("disposes the unmoved field once when both branches move the same field", (): void => {
     const js = emittedJs(`
