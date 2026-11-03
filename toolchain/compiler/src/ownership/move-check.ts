@@ -808,50 +808,72 @@ function useFieldPlace(
   state: StateMap,
   scopeStack: ScopeStack,
 ): void {
-  const resolved = resolveBinding(chain.root, scopeStack);
+  usePlacePath(
+    ctx,
+    {
+      root: chain.root,
+      path: chainPath(chain),
+      tokenId: chain.fields.at(-1)?.tokenId ?? chain.root.tokenId,
+    },
+    state,
+    scopeStack,
+  );
+}
+
+interface PlaceUse {
+  readonly root: Semantics.PathExpression;
+  readonly path: readonly string[];
+  readonly tokenId: number;
+}
+
+function usePlacePath(
+  ctx: Ctx,
+  use: PlaceUse,
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  const resolved = resolveBinding(use.root, scopeStack);
   const current = resolved === undefined ? undefined : state.get(resolved.id);
   if (resolved === undefined || current?.kind !== "PartiallyMoved") {
-    useOrMove(ctx, chain.root, state, scopeStack, false);
+    useOrMove(ctx, use.root, state, scopeStack, false);
     return;
   }
-  const path = chainPath(chain);
-  const clash = current.moved.find((m) => pathsOverlap(m.path, path));
+  const clash = current.moved.find((m) => pathsOverlap(m.path, use.path));
   if (clash === undefined) return;
-  const place = placeDescription(resolved.name, path);
+  const place = placeDescription(resolved.name, use.path);
   emitDiagnostic(
     ctx,
-    clash.path.length > path.length
+    clash.path.length > use.path.length
       ? {
           kind: "OwnUseOfPartiallyMovedValue",
           name: place,
           moved: placeDescription(resolved.name, clash.path),
         }
       : { kind: "OwnUseOfMovedValue", name: place },
-    chain.fields.at(-1)?.tokenId ?? chain.root.tokenId,
+    use.tokenId,
     [{ span: clash.moveSite, label: { kind: "LabelMovedHere" } }],
   );
 }
 
-/** The outermost struct along `chain` that has a `Drop` impl, if any. */
+/** The outermost struct among `owners` that has a `Drop` impl, if any. */
 function dropImplOwnerOf(
   ctx: Ctx,
-  chain: FieldChain,
+  owners: readonly Semantics.Type[],
 ): Semantics.StructType | undefined {
-  for (const field of chain.fields) {
-    const owner = field.object.type;
+  for (const owner of owners) {
     if (owner.kind === "StructType" && ctx.hasDropImpl(owner)) return owner;
   }
   return undefined;
 }
 
-/** Why `chain` cannot move out of its root, if it cannot. */
+/** Why `place` cannot move out of `resolved`, given the structs along its path. */
 function fieldMoveRejection(
   ctx: Ctx,
-  chain: FieldChain,
   resolved: ResolvedBinding,
+  place: string,
+  owners: readonly Semantics.Type[],
 ): DiagnosticKind | undefined {
-  const place = placeDescription(resolved.name, chainPath(chain));
-  const dropOwner = dropImplOwnerOf(ctx, chain);
+  const dropOwner = dropImplOwnerOf(ctx, owners);
   if (dropOwner !== undefined) {
     return {
       kind: "OwnCannotMoveOutOfDropType",
@@ -897,7 +919,12 @@ function moveFieldPlace(
   const resolved = resolveBinding(chain.root, scopeStack);
   const last = chain.fields.at(-1);
   if (resolved === undefined || last === undefined) return;
-  const rejection = fieldMoveRejection(ctx, chain, resolved);
+  const rejection = fieldMoveRejection(
+    ctx,
+    resolved,
+    placeDescription(resolved.name, chainPath(chain)),
+    chain.fields.map((f) => f.object.type),
+  );
   if (rejection !== undefined) {
     emitDiagnostic(ctx, rejection, last.tokenId);
     return;
@@ -1491,6 +1518,135 @@ function walkIf(
   }
 }
 
+interface PatternMove {
+  readonly path: readonly string[];
+  readonly siblings: readonly (readonly Semantics.OwnerField[])[];
+  readonly owners: readonly Semantics.Type[];
+}
+
+interface PatternEntry {
+  readonly name: string;
+  /** `undefined` for a shorthand field, which binds the field's own name. */
+  readonly pattern: Semantics.Pattern | undefined;
+  readonly shorthandType: Semantics.Type;
+}
+
+function patternEntries(pattern: Semantics.Pattern):
+  | {
+      entries: PatternEntry[];
+      owner: Semantics.Type;
+      fields: readonly Semantics.OwnerField[];
+    }
+  | undefined {
+  if (pattern.type.kind !== "StructType") return undefined;
+  if (pattern.kind === "StructPattern") {
+    const entries = pattern.fields.map((field): PatternEntry => ({
+      name: field.name.text,
+      pattern: isSome(field.pattern) ? field.pattern.value : undefined,
+      shorthandType: field.name.type,
+    }));
+    return { entries, owner: pattern.type, fields: pattern.ownerFields };
+  }
+  if (pattern.kind === "TupleStructPattern") {
+    const entries = pattern.elements.map((element, i): PatternEntry => ({
+      name: String(i),
+      pattern: element,
+      shorthandType: element.type,
+    }));
+    return { entries, owner: pattern.type, fields: pattern.ownerFields };
+  }
+  return undefined;
+}
+
+/**
+ * The non-`Copy` field places a by-value struct or tuple-struct pattern moves
+ * out of its scrutinee. `undefined` for any pattern shape this does not
+ * account for field by field, which then moves the scrutinee whole as before.
+ */
+function structPatternMoves(
+  pattern: Semantics.Pattern,
+  prefix: readonly string[],
+  siblings: readonly (readonly Semantics.OwnerField[])[],
+  owners: readonly Semantics.Type[],
+): PatternMove[] | undefined {
+  const level = patternEntries(pattern);
+  if (level === undefined) return undefined;
+  const levelSiblings = [...siblings, level.fields];
+  const levelOwners = [...owners, level.owner];
+  const moves: PatternMove[] = [];
+  for (const entry of level.entries) {
+    const path = [...prefix, entry.name];
+    const here = { path, siblings: levelSiblings, owners: levelOwners };
+    const nested = entry.pattern;
+    if (nested === undefined) {
+      if (!hasCapability(entry.shorthandType, "copy")) moves.push(here);
+      continue;
+    }
+    if (nested.kind === "WildcardPattern") continue;
+    if (nested.kind === "BindingPattern") {
+      if (isSome(nested.subpattern)) return undefined;
+      if (
+        nested.name.text !== "_" &&
+        !hasCapability(nested.name.type, "copy")
+      ) {
+        moves.push(here);
+      }
+      continue;
+    }
+    const inner = structPatternMoves(nested, path, levelSiblings, levelOwners);
+    if (inner === undefined) return undefined;
+    moves.push(...inner);
+  }
+  return moves;
+}
+
+interface StructPatternBinding {
+  readonly root: Semantics.PathExpression;
+  readonly pattern: Semantics.Pattern;
+  readonly moves: readonly PatternMove[];
+}
+
+/** `let Pair { a, .. } = p;` moves only the fields it binds out of `p`. */
+function moveStructPatternPlaces(
+  ctx: Ctx,
+  binding: StructPatternBinding,
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  const { root, pattern, moves } = binding;
+  const resolved = resolveBinding(root, scopeStack);
+  if (resolved === undefined) return;
+  const [first] = moves;
+  if (first === undefined) {
+    useOrMove(ctx, root, state, scopeStack, false);
+    return;
+  }
+  const rejection = fieldMoveRejection(
+    ctx,
+    resolved,
+    placeDescription(resolved.name, first.path),
+    first.owners,
+  );
+  if (rejection !== undefined) {
+    emitDiagnostic(ctx, rejection, pattern.tokenId);
+    return;
+  }
+  for (const move of moves) {
+    usePlacePath(
+      ctx,
+      { root, path: move.path, tokenId: pattern.tokenId },
+      state,
+      scopeStack,
+    );
+    recordMovedPlace(state, resolved.id, {
+      path: move.path,
+      siblings: move.siblings,
+      moveSite: tokenSpan(ctx.tokens, pattern.tokenId),
+      moveStatementTokenId: ctx.currentStatementTokenId,
+    });
+  }
+}
+
 function walkLetInitializer(
   ctx: Ctx,
   statement: Semantics.LetStatement,
@@ -1498,6 +1654,19 @@ function walkLetInitializer(
   scopeStack: ScopeStack,
 ): void {
   if (!isSome(statement.initializer)) return;
+  const initializer = statement.initializer.value;
+  if (initializer.kind === "PathExpression") {
+    const moves = structPatternMoves(statement.pattern, [], [], []);
+    if (moves !== undefined && initializer.type.kind === "StructType") {
+      moveStructPatternPlaces(
+        ctx,
+        { root: initializer, pattern: statement.pattern, moves },
+        state,
+        scopeStack,
+      );
+      return;
+    }
+  }
   walkScrutinee(
     ctx,
     statement.initializer.value,

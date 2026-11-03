@@ -501,6 +501,10 @@ export interface StructPattern extends DecoratedAstNode {
   readonly mutable: boolean;
   readonly fields: readonly FieldPattern[];
   readonly hasRest: boolean;
+  /** Every declared field of the matched struct or variant, in declaration
+   * order, so a pattern that names only some of them can account for the
+   * rest. */
+  readonly ownerFields: readonly OwnerField[];
 }
 
 export interface TupleStructPattern extends DecoratedAstNode {
@@ -509,6 +513,10 @@ export interface TupleStructPattern extends DecoratedAstNode {
   /** See `Parser.StructPattern.mutable`'s doc comment. */
   readonly mutable: boolean;
   readonly elements: readonly Pattern[];
+  /** Every declared element of the matched tuple struct or variant, named by
+   * position (`"0"`, `"1"`, ...), so a pattern that wildcards some of them
+   * can account for the rest. */
+  readonly ownerFields: readonly OwnerField[];
 }
 
 export interface PathPattern extends DecoratedAstNode {

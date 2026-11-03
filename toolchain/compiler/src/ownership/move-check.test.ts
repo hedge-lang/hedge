@@ -1268,7 +1268,7 @@ describe("move-check", (): void => {
       expect(diagnostics).toEqual([]);
     });
 
-    it("still moves the scrutinee when a let-destructured sub-binding owns a non-Copy field", (): void => {
+    it("allows reading a Copy field of the scrutinee after a let-destructure moved its non-Copy field", (): void => {
       const { diagnostics } = check(`
         struct Boxed { value: i32 }
         struct Pair { a: Boxed, b: i32 }
@@ -1280,9 +1280,23 @@ describe("move-check", (): void => {
           print(b);
         }
       `);
-      expect(diagnostics).toHaveLength(1);
-      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(messageOf(diagnostics[0])).toBe("use of moved value `p`");
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("rejects using the whole scrutinee after a let-destructure moved a non-Copy field", (): void => {
+      const { diagnostics } = check(`
+        struct Boxed { value: i32 }
+        struct Pair { a: Boxed, b: i32 }
+        fn take(p: Pair) {}
+        fn main() {
+          let p = Pair { a: Boxed { value: 1 }, b: 2 };
+          let Pair { a, b } = p;
+          take(p);
+        }
+      `);
+      expect(diagnostics.map((d) => messageOf(d))).toEqual([
+        "use of partially moved value `p`: `p.a` was moved out",
+      ]);
     });
 
     it("does not move the scrutinee when every match-arm sub-binding is byRef", (): void => {

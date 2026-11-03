@@ -6936,6 +6936,7 @@ function analyzeTupleStructPattern(
   return {
     ...pattern,
     elements,
+    ownerFields: fields.map((f, i) => ({ name: String(i), type: f.type })),
     type: scrutineeType,
   };
 }
@@ -6999,6 +7000,10 @@ function analyzeStructPattern(
   return {
     ...pattern,
     fields,
+    ownerFields: declaredFields.map((f) => ({
+      name: f.name.text,
+      type: f.type,
+    })),
     type: scrutineeType,
   };
 }

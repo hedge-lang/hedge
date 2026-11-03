@@ -304,6 +304,20 @@ function simpleBindingMutable(pattern: Semantics.Pattern): boolean {
   return pattern.kind === "BindingPattern" && !pattern.byRef && pattern.mutable;
 }
 
+/** Tuple-struct elements are named by position and lowered as index access. */
+function partialDropFieldAccess(
+  object: JSIM.Expression,
+  field: string,
+): JSIM.Expression {
+  if (!/^[0-9]+$/.test(field)) return jsimFieldAccess(object, field);
+  return {
+    kind: "IndexExpression",
+    object,
+    index: { kind: "NumberLiteral", value: field },
+    isArrayIndex: false,
+  };
+}
+
 /**
  * `using dropShadow_<name>_<field> = <name>.<field>;` for each field a
  * partially-moved binding still owns, in declaration order so `using`
@@ -326,7 +340,7 @@ function partialDropShadows(
     mutable: false,
     value: some(
       path.reduce<JSIM.Expression>(
-        (object, field) => ({ kind: "FieldAccessExpression", object, field }),
+        (object, field) => partialDropFieldAccess(object, field),
         { kind: "Identifier", value: emittedName, type: none() },
       ),
     ),
