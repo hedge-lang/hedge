@@ -2876,6 +2876,22 @@ describe("partial moves out of a struct", (): void => {
   });
 });
 
+describe("partial moves by destructuring an array", (): void => {
+  it("disposes the elements an array pattern does not bind, once, along with the bound one", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      fn main() {
+        let a = [Loud { id: 1 }, Loud { id: 2 }, Loud { id: 3 }];
+        let [x, ..] = a;
+        print(0);
+      }
+    `);
+    // x (1) first, then a's unbound elements in reverse order: 3, 2.
+    expect(runEmittedJs(js)).toEqual(["0", "1", "3", "2"]);
+  });
+});
+
 describe("partial moves by destructuring a struct", (): void => {
   it("disposes the fields a struct pattern does not bind, once, along with the bound ones", (): void => {
     const js = emittedJs(`
