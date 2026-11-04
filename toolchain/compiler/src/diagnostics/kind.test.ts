@@ -335,6 +335,7 @@ const SAMPLE_KINDS: readonly DiagnosticKind[] = [
   { kind: "OwnConditionalPartialMove", place: "o.a" },
   { kind: "OwnUseOfPossiblyUninitializedBinding", name: "x" },
   { kind: "OwnCannotMoveOutBorrowInstead", place: "x" },
+  { kind: "OwnCannotMoveOutOfElement", place: "a[_]" },
   { kind: "OwnCannotMoveOutOfReference", place: "*r" },
   { kind: "OwnConditionalDropFlag", name: "x" },
   { kind: "OwnAmbiguousDrop", name: "x" },

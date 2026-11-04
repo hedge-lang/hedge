@@ -481,6 +481,8 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return `use of possibly-uninitialized binding \`${kind.name}\`: initialized on some paths but not others`;
     case "OwnCannotMoveOutBorrowInstead":
       return `cannot move out of \`${kind.place}\`; borrow it with \`&${kind.place}\` instead`;
+    case "OwnCannotMoveOutOfElement":
+      return `cannot move out of \`${kind.place}\`; borrow the element with \`&\` or destructure the array with a pattern`;
     case "OwnConditionalPartialMove":
       return `\`${kind.place}\` is moved on some paths but not others, and conditional partial moves are not supported yet`;
     case "OwnCannotMoveOutOfDropType":

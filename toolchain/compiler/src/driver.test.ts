@@ -2890,6 +2890,45 @@ describe("partial moves by destructuring an array", (): void => {
     // x (1) first, then a's unbound elements in reverse order: 3, 2.
     expect(runEmittedJs(js)).toEqual(["0", "1", "3", "2"]);
   });
+
+  it("disposes the elements before and after a middle element the pattern binds", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      fn main() {
+        let a = [Loud { id: 1 }, Loud { id: 2 }, Loud { id: 3 }];
+        let [_, x, _] = a;
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "2", "3", "1"]);
+  });
+
+  it("disposes the elements a trailing-element pattern does not bind", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      fn main() {
+        let a = [Loud { id: 1 }, Loud { id: 2 }, Loud { id: 3 }];
+        let [.., z] = a;
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "3", "2", "1"]);
+  });
+
+  it("leaves nothing behind when the pattern binds every element", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      fn main() {
+        let a = [Loud { id: 1 }, Loud { id: 2 }];
+        let [x, y] = a;
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "2", "1"]);
+  });
 });
 
 describe("partial moves by destructuring a struct", (): void => {

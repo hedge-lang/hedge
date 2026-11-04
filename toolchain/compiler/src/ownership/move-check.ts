@@ -954,7 +954,9 @@ function checkProjectionMove(
   const place = projectionDescription(expression);
   emitDiagnostic(
     ctx,
-    { kind: "OwnCannotMoveOutBorrowInstead", place },
+    expression.kind === "IndexExpression"
+      ? { kind: "OwnCannotMoveOutOfElement", place }
+      : { kind: "OwnCannotMoveOutBorrowInstead", place },
     expression.tokenId,
   );
 }
@@ -1531,13 +1533,50 @@ interface PatternEntry {
   readonly shorthandType: Semantics.Type;
 }
 
-function patternEntries(pattern: Semantics.Pattern):
-  | {
-      entries: PatternEntry[];
-      owner: Semantics.Type;
-      fields: readonly Semantics.OwnerField[];
+interface PatternLevel {
+  readonly entries: PatternEntry[];
+  readonly owner: Semantics.Type;
+  readonly fields: readonly Semantics.OwnerField[];
+}
+
+/**
+ * An array pattern names its elements by index. A named rest (`..tail`)
+ * binds a view of several elements at once, which is not a single place, so
+ * it is left to move the array whole.
+ */
+function slicePatternLevel(
+  pattern: Semantics.SlicePattern,
+): PatternLevel | undefined {
+  const { type } = pattern;
+  if (type.kind !== "ArrayType") return undefined;
+  const restIndex = pattern.elements.findIndex(
+    (el) => el.kind === "RestPattern",
+  );
+  const entries: PatternEntry[] = [];
+  for (const [i, element] of pattern.elements.entries()) {
+    if (element.kind === "RestPattern") {
+      if (isSome(element.name)) return undefined;
+      continue;
     }
-  | undefined {
+    const index =
+      restIndex === -1 || i < restIndex
+        ? i
+        : type.length - (pattern.elements.length - i);
+    entries.push({
+      name: String(index),
+      pattern: element,
+      shorthandType: element.type,
+    });
+  }
+  const fields = Array.from({ length: type.length }, (_, i) => ({
+    name: String(i),
+    type: type.elementType,
+  }));
+  return { entries, owner: type, fields };
+}
+
+function patternLevel(pattern: Semantics.Pattern): PatternLevel | undefined {
+  if (pattern.kind === "SlicePattern") return slicePatternLevel(pattern);
   if (pattern.type.kind !== "StructType") return undefined;
   if (pattern.kind === "StructPattern") {
     const entries = pattern.fields.map((field): PatternEntry => ({
@@ -1569,7 +1608,7 @@ function structPatternMoves(
   siblings: readonly (readonly Semantics.OwnerField[])[],
   owners: readonly Semantics.Type[],
 ): PatternMove[] | undefined {
-  const level = patternEntries(pattern);
+  const level = patternLevel(pattern);
   if (level === undefined) return undefined;
   const levelSiblings = [...siblings, level.fields];
   const levelOwners = [...owners, level.owner];
@@ -1647,6 +1686,10 @@ function moveStructPatternPlaces(
   }
 }
 
+function isPatternOwner(type: Semantics.Type): boolean {
+  return type.kind === "StructType" || type.kind === "ArrayType";
+}
+
 function walkLetInitializer(
   ctx: Ctx,
   statement: Semantics.LetStatement,
@@ -1657,7 +1700,7 @@ function walkLetInitializer(
   const initializer = statement.initializer.value;
   if (initializer.kind === "PathExpression") {
     const moves = structPatternMoves(statement.pattern, [], [], []);
-    if (moves !== undefined && initializer.type.kind === "StructType") {
+    if (moves !== undefined && isPatternOwner(initializer.type)) {
       moveStructPatternPlaces(
         ctx,
         { root: initializer, pattern: statement.pattern, moves },

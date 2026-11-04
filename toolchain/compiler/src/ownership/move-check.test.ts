@@ -978,9 +978,9 @@ describe("move-check", (): void => {
             print(x.value);
           }
         `);
-      expect(diagnostics).toHaveLength(1);
-      assert(diagnostics[0] !== undefined, "Expected a diagnostic");
-      expect(messageOf(diagnostics[0])).toContain("cannot move");
+      expect(diagnostics.map((d) => messageOf(d))).toEqual([
+        "cannot move out of `arr[_]`; borrow the element with `&` or destructure the array with a pattern",
+      ]);
     });
 
     it("allows binding a non-Copy struct field to a new variable by value", (): void => {
