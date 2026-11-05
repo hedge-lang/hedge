@@ -1,0 +1,11 @@
+struct Boxed { value: i32 }
+
+struct Pair { a: Boxed, b: Boxed }
+
+fn consume(p: Pair) {}
+
+fn main() {
+  let p = Pair { a: Boxed { value: 1 }, b: Boxed { value: 2 } };
+  let f = p.a;
+  consume(p);
+}
