@@ -309,7 +309,7 @@ function partialDropFieldAccess(
   object: JSIM.Expression,
   field: string,
 ): JSIM.Expression {
-  if (!/^[0-9]+$/.test(field)) return jsimFieldAccess(object, field);
+  if (!/^\d+$/.test(field)) return jsimFieldAccess(object, field);
   return {
     kind: "IndexExpression",
     object,
