@@ -2917,6 +2917,20 @@ describe("partial moves by destructuring an array", (): void => {
     expect(runEmittedJs(js)).toEqual(["0", "3", "2", "1"]);
   });
 
+  it("disposes every element once when a named rest binds the remaining elements", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      fn main() {
+        let a = [Loud { id: 1 }, Loud { id: 2 }, Loud { id: 3 }];
+        let [x, ..tail] = a;
+        print(0);
+      }
+    `);
+    // LIFO: tail (2, 3) first, then x (1).
+    expect(runEmittedJs(js)).toEqual(["0", "2", "3", "1"]);
+  });
+
   it("leaves nothing behind when the pattern binds every element", (): void => {
     const js = emittedJs(`
       struct Loud { id: i32 }
