@@ -1598,6 +1598,30 @@ function patternLevel(pattern: Semantics.Pattern): PatternLevel | undefined {
 }
 
 /**
+ * The places one pattern entry moves out of its owner: itself for a bare or
+ * renamed non-`Copy` binding, its descendants for a nested pattern, nothing
+ * for a wildcard or `Copy` binding. `undefined` when the entry cannot be
+ * accounted for field by field.
+ */
+function entryPatternMoves(
+  entry: PatternEntry,
+  here: PatternMove,
+): PatternMove[] | undefined {
+  const nested = entry.pattern;
+  if (nested === undefined) {
+    return hasCapability(entry.shorthandType, "copy") ? [] : [here];
+  }
+  if (nested.kind === "WildcardPattern") return [];
+  if (nested.kind === "BindingPattern") {
+    if (isSome(nested.subpattern)) return undefined;
+    const binds =
+      nested.name.text !== "_" && !hasCapability(nested.name.type, "copy");
+    return binds ? [here] : [];
+  }
+  return structPatternMoves(nested, here.path, here.siblings, here.owners);
+}
+
+/**
  * The non-`Copy` field places a by-value struct or tuple-struct pattern moves
  * out of its scrutinee. `undefined` for any pattern shape this does not
  * account for field by field, which then moves the scrutinee whole as before.
@@ -1616,25 +1640,9 @@ function structPatternMoves(
   for (const entry of level.entries) {
     const path = [...prefix, entry.name];
     const here = { path, siblings: levelSiblings, owners: levelOwners };
-    const nested = entry.pattern;
-    if (nested === undefined) {
-      if (!hasCapability(entry.shorthandType, "copy")) moves.push(here);
-      continue;
-    }
-    if (nested.kind === "WildcardPattern") continue;
-    if (nested.kind === "BindingPattern") {
-      if (isSome(nested.subpattern)) return undefined;
-      if (
-        nested.name.text !== "_" &&
-        !hasCapability(nested.name.type, "copy")
-      ) {
-        moves.push(here);
-      }
-      continue;
-    }
-    const inner = structPatternMoves(nested, path, levelSiblings, levelOwners);
-    if (inner === undefined) return undefined;
-    moves.push(...inner);
+    const entryMoves = entryPatternMoves(entry, here);
+    if (entryMoves === undefined) return undefined;
+    moves.push(...entryMoves);
   }
   return moves;
 }
