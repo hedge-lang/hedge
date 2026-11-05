@@ -25,6 +25,19 @@ drop the value explicitly:
 drop(a);   // runs cleanup now and marks a unbound
 ```
 
+## Partial moves
+
+A field of a struct, an element of a tuple struct, or an element of an array may be moved out of a binding on its own, by naming the place (`let f = o.a;`) or by destructuring (`let Outer { a, .. } = o;`, `let [x, ..] = arr;`). The binding is then partially moved: the moved places are no longer owned by it, and the rest remain usable. The binding keeps its position in the scope's drop order, and at that position it drops only the places that were not moved out, in the order a whole value would drop them:
+
+```hedge
+{
+  let o = Outer { a: A::new(), b: B::new() };
+  let f = o.a;   // o.b stays with o
+}                // f dropped first, then o's remaining field b
+```
+
+A partially moved binding cannot be used as a whole, only through its remaining places. A type that implements `Drop` cannot be partially moved, because its `drop` would run against a value that is missing fields. A partial move that happens on only some control-flow paths is not supported yet.
+
 ## Generated code
 
 A scoped value lowers to `using` and a `[Symbol.dispose]` method, which runs the

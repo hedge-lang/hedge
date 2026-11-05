@@ -6936,6 +6936,7 @@ function analyzeTupleStructPattern(
   return {
     ...pattern,
     elements,
+    ownerFields: fields.map((f, i) => ({ name: String(i), type: f.type })),
     type: scrutineeType,
   };
 }
@@ -6999,6 +7000,10 @@ function analyzeStructPattern(
   return {
     ...pattern,
     fields,
+    ownerFields: declaredFields.map((f) => ({
+      name: f.name.text,
+      type: f.type,
+    })),
     type: scrutineeType,
   };
 }
@@ -12508,6 +12513,7 @@ function analyzeFieldAccessExpression(
     ...expression,
     object,
     field: { ...expression.field, type: UNIT },
+    ownerFields: [],
     type: UNIT,
   });
 
@@ -12565,6 +12571,15 @@ function analyzeFieldAccessExpression(
     ...expression,
     object,
     field: { ...expression.field, type: fieldType },
+    ownerFields: structDecl.body.fields.map((f) => ({
+      name: f.name.text,
+      type: substituteStructFieldType(
+        f.type,
+        structDecl,
+        structType,
+        expression.field.tokenId,
+      ),
+    })),
     type: fieldType,
   };
 }

@@ -1,0 +1,11 @@
+[
+  {
+    "code": "HEDGE-MOVE-002",
+    "kind": {
+      "kind": "OwnCannotMoveOutOfDropType",
+      "place": "g.a",
+      "typeName": "Guard"
+    },
+    "relatedSpans": []
+  }
+]

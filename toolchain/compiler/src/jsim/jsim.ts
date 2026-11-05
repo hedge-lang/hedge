@@ -10,6 +10,7 @@ import {
   type BranchDrop,
   type ConditionalDrop,
   type FunctionOwnership,
+  type PartialDrop,
 } from "../ownership/move-check.js";
 import { collectMethodOwners } from "../ownership/owned-functions.js";
 import {
@@ -71,6 +72,11 @@ interface JsimContext {
    * lowered first) and reused at every later reference.
    */
   readonly dropFlagNames: Map<BindingId, string>[];
+  /**
+   * Per-function map from a partially-moved binding's own `BindingId` to
+   * its remaining-field drop, flattened across every block of the function.
+   */
+  readonly partialDrops: ReadonlyMap<BindingId, PartialDrop>[];
   /**
    * Per-function stack of that function's own statically-resolved
    * conditional moves (see `move-check.ts`'s `attributeConditionalMoves`).
@@ -199,6 +205,7 @@ function createJsimContext(
     drops: [],
     conditionalDrops: [],
     dropFlagNames: [],
+    partialDrops: [],
     branchDrops: [],
     allConditionalDrops: [],
     emittedNameByBindingId: [],
@@ -295,6 +302,52 @@ function simpleBindingIdentity(pattern: Semantics.Pattern): {
  * plain `mut name` (no `byRef`) actually makes the local slot mutable. */
 function simpleBindingMutable(pattern: Semantics.Pattern): boolean {
   return pattern.kind === "BindingPattern" && !pattern.byRef && pattern.mutable;
+}
+
+/** Tuple-struct elements are named by position and lowered as index access. */
+function partialDropFieldAccess(
+  object: JSIM.Expression,
+  field: string,
+): JSIM.Expression {
+  if (!/^\d+$/.test(field)) return jsimFieldAccess(object, field);
+  return {
+    kind: "IndexExpression",
+    object,
+    index: { kind: "NumberLiteral", value: field },
+    isArrayIndex: false,
+  };
+}
+
+/**
+ * `using dropShadow_<name>_<field> = <name>.<field>;` for each field a
+ * partially-moved binding still owns, in declaration order so `using`
+ * releases them in the same reverse order a whole-struct disposer would.
+ * The binding itself is declared plain `const`: disposing it whole would
+ * release the fields that moved out.
+ */
+function partialDropShadows(
+  ctx: JsimContext,
+  identity: { readonly text: string; readonly tokenId: number },
+  emittedName: string,
+): JSIM.LetStatement[] {
+  const drop = ctx.partialDrops.at(-1)?.get(identity.tokenId);
+  return (drop?.remaining ?? []).map((path): JSIM.LetStatement => ({
+    kind: "LetStatement",
+    name: reserveLocalName(
+      ctx,
+      `dropShadow_${identity.text}_${path.join("_")}`,
+    ),
+    mutable: false,
+    value: some(
+      path.reduce<JSIM.Expression>(
+        (object, field) => partialDropFieldAccess(object, field),
+        { kind: "Identifier", value: emittedName, type: none() },
+      ),
+    ),
+    docComment: none(),
+    span: resolveSpan(ctx.tokens, identity.tokenId, identity.tokenId),
+    dispose: true,
+  }));
 }
 
 /**
@@ -645,6 +698,13 @@ function withFunctionCtx<T>(
   ctx.conditionalDrops.push(conditionalDrops);
   ctx.allConditionalDrops.push([...conditionalDrops.values()].flat());
   ctx.dropFlagNames.push(new Map());
+  ctx.partialDrops.push(
+    new Map(
+      [...(ctx.ownership.get(functionName)?.partialDrops.values() ?? [])]
+        .flat()
+        .map((drop) => [drop.declaration.id, drop]),
+    ),
+  );
   ctx.branchDrops.push(ctx.ownership.get(functionName)?.branchDrops ?? []);
   ctx.emittedNameByBindingId.push(new Map());
   ctx.witnessParamNames.push(new Map());
@@ -656,6 +716,7 @@ function withFunctionCtx<T>(
     ctx.conditionalDrops.pop();
     ctx.allConditionalDrops.pop();
     ctx.dropFlagNames.pop();
+    ctx.partialDrops.pop();
     ctx.branchDrops.pop();
     ctx.emittedNameByBindingId.pop();
     ctx.witnessParamNames.pop();
@@ -1746,6 +1807,7 @@ function dropParamShadows(
     }
     if (simpleBindingMutable(param.pattern)) continue;
     const identity = simpleBindingIdentity(param.pattern);
+    shadows.push(...partialDropShadows(ctx, identity, emittedName));
     const needsDrop = rootDrops.some((d) => d.id === identity.tokenId);
     if (!needsDrop) continue;
     const shadowName = bindLocalName(ctx, identity.text);
@@ -1980,6 +2042,7 @@ function parseStatement(
           ),
           dispose,
         },
+        ...partialDropShadows(ctx, identity, name),
       ];
     }
     case "ExpressionStatement":

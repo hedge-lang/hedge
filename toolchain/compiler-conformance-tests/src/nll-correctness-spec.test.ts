@@ -299,7 +299,7 @@ describe("NLL and lifetime correctness spec", (): void => {
   it("rejects moving an element out of a fixed-size-array parameter typed with a declared generic parameter, since it is not provably Copy", (): void => {
     assertRejectsWithMessage(
       `fn f<T>(x: [T; 2]) -> T { x[0] }`,
-      "cannot move out of `x[_]`; borrow it with `&x[_]` instead",
+      "cannot move out of `x[_]`; borrow the element with `&` or destructure the array with a pattern",
     );
   });
 
