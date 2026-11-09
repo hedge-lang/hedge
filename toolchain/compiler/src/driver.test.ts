@@ -3065,6 +3065,23 @@ describe("partial moves by destructuring a struct", (): void => {
     ]);
   });
 
+  it("rejects a pattern that moves out of a nested Drop type even when an earlier field moves from a plain owner", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Inner { x: Loud, y: Loud }
+      impl Drop for Inner { fn drop(&mut self) { print(9); } }
+      struct Outer { a: Loud, i: Inner }
+      fn main() {
+        let o = Outer { a: Loud { id: 1 }, i: Inner { x: Loud { id: 2 }, y: Loud { id: 3 } } };
+        let Outer { a, i: Inner { x, .. } } = o;
+      }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `o.i.x` out of `Inner` because it implements `Drop`",
+    ]);
+  });
+
   it("rejects destructuring a non-Copy field out of a `mut` binding", (): void => {
     const result = compile(`
       struct Loud { id: i32 }
