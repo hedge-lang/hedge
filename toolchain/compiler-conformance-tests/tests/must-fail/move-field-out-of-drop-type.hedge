@@ -1,0 +1,16 @@
+struct Loud { id: i32 }
+
+impl Drop for Loud {
+  fn drop(&mut self) { print(self.id); }
+}
+
+struct Guard { a: Loud, b: Loud }
+
+impl Drop for Guard {
+  fn drop(&mut self) { print(9); }
+}
+
+fn main() {
+  let g = Guard { a: Loud { id: 1 }, b: Loud { id: 2 } };
+  let f = g.a;
+}

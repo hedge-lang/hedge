@@ -613,11 +613,28 @@ export type DiagnosticKind =
   | { readonly kind: "OwnUseOfMovedValue"; readonly name: string }
   | { readonly kind: "OwnUseOfPossiblyMovedValue"; readonly name: string }
   | {
+      readonly kind: "OwnUseOfPartiallyMovedValue";
+      readonly name: string;
+      readonly moved: string;
+    }
+  | {
       readonly kind: "OwnUseOfPossiblyUninitializedBinding";
       readonly name: string;
     }
   | { readonly kind: "OwnCannotMoveOutBorrowInstead"; readonly place: string }
+  | { readonly kind: "OwnCannotMoveOutOfElement"; readonly place: string }
   | { readonly kind: "OwnCannotMoveOutOfReference"; readonly place: string }
+  | { readonly kind: "OwnConditionalPartialMove"; readonly place: string }
+  | {
+      readonly kind: "OwnCannotMoveOutOfDropType";
+      readonly place: string;
+      readonly typeName: string;
+    }
+  | {
+      readonly kind: "OwnCannotMoveOutOfMutBinding";
+      readonly place: string;
+      readonly name: string;
+    }
   | { readonly kind: "OwnConditionalDropFlag"; readonly name: string }
   | { readonly kind: "OwnAmbiguousDrop"; readonly name: string };
 
@@ -865,11 +882,16 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["OwnBorrowMutNotDeclaredMut", "HEDGE-BORROW-CHECK-002"],
   ["OwnUseOfMovedValue", "HEDGE-BORROW-CHECK-003"],
   ["OwnUseOfPossiblyMovedValue", "HEDGE-BORROW-CHECK-003"],
+  ["OwnUseOfPartiallyMovedValue", "HEDGE-BORROW-CHECK-003"],
   ["OwnUseOfUninitializedBinding", "HEDGE-MOVE-001"],
   ["OwnUseOfPossiblyUninitializedBinding", "HEDGE-MOVE-001"],
   ["OwnCannotMoveOutBorrowInstead", "HEDGE-MOVE-002"],
+  ["OwnCannotMoveOutOfElement", "HEDGE-MOVE-002"],
   ["OwnCannotMoveOutOfReference", "HEDGE-MOVE-002"],
+  ["OwnCannotMoveOutOfDropType", "HEDGE-MOVE-002"],
+  ["OwnCannotMoveOutOfMutBinding", "HEDGE-UNSUPPORTED-001"],
   ["OwnAmbiguousDrop", "HEDGE-MOVE-003"],
+  ["OwnConditionalPartialMove", "HEDGE-MOVE-003"],
   ["OwnConditionalDropFlag", "HEDGE-MOVE-004"],
 ]);
 

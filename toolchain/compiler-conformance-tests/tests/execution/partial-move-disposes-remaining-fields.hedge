@@ -1,0 +1,13 @@
+struct Loud { id: i32 }
+
+impl Drop for Loud {
+  fn drop(&mut self) { print(self.id); }
+}
+
+struct Pair { a: Loud, b: Loud }
+
+fn main() {
+  let p = Pair { a: Loud { id: 1 }, b: Loud { id: 2 } };
+  let f = p.a;
+  print(0);
+}

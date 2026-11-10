@@ -1232,6 +1232,7 @@ describe("conditional-drop-flag codegen (synthetic ownership)", () => {
           graph: buildControlFlowGraph(mainFn),
           drops: new Map(),
           conditionalDrops: new Map([[mainFn.body.tokenId, [conditionalDrop]]]),
+          partialDrops: new Map(),
           branchDrops: [],
         },
       ],
