@@ -3141,6 +3141,23 @@ describe("partial moves on every branch", (): void => {
       "2",
     ]);
   });
+
+  it("rejects a field moved on one branch while the other branch moves the whole value", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair { a: Loud, b: Loud }
+      fn eat(p: Pair) { print(0); }
+      fn run(c: bool) {
+        let o = Pair { a: Loud { id: 1 }, b: Loud { id: 2 } };
+        if c { let x = o.a; } else { eat(o); }
+      }
+      fn main() { run(true); }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "`o.a` is moved on some paths but not others, and conditional partial moves are not supported yet",
+    ]);
+  });
 });
 
 describe("partial moves out of a type with a Drop impl", (): void => {
