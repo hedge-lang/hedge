@@ -1653,6 +1653,24 @@ interface StructPatternBinding {
   readonly moves: readonly PatternMove[];
 }
 
+/** The first reason any place a pattern moves cannot leave its owner. */
+function firstPatternRejection(
+  ctx: Ctx,
+  resolved: ResolvedBinding,
+  moves: readonly PatternMove[],
+): DiagnosticKind | undefined {
+  for (const move of moves) {
+    const rejection = fieldMoveRejection(
+      ctx,
+      resolved,
+      placeDescription(resolved.name, move.path),
+      move.owners,
+    );
+    if (rejection !== undefined) return rejection;
+  }
+  return undefined;
+}
+
 /** `let Pair { a, .. } = p;` moves only the fields it binds out of `p`. */
 function moveStructPatternPlaces(
   ctx: Ctx,
@@ -1663,17 +1681,11 @@ function moveStructPatternPlaces(
   const { root, pattern, moves } = binding;
   const resolved = resolveBinding(root, scopeStack);
   if (resolved === undefined) return;
-  const [first] = moves;
-  if (first === undefined) {
+  if (moves.length === 0) {
     useOrMove(ctx, root, state, scopeStack, false);
     return;
   }
-  const rejection = fieldMoveRejection(
-    ctx,
-    resolved,
-    placeDescription(resolved.name, first.path),
-    first.owners,
-  );
+  const rejection = firstPatternRejection(ctx, resolved, moves);
   if (rejection !== undefined) {
     emitDiagnostic(ctx, rejection, pattern.tokenId);
     return;
