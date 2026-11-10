@@ -362,22 +362,32 @@ function destructuredPatternDropShadows(
   scopeDropsForBlock: readonly Declaration[],
 ): JSIM.LetStatement[] {
   return declarationsOf(pattern)
-    .filter(
-      (d) => !d.mutable && scopeDropsForBlock.some((sd) => sd.id === d.id),
-    )
-    .map((d): JSIM.LetStatement => ({
-      kind: "LetStatement",
-      name: reserveLocalName(ctx, `dropShadow_${d.name}`),
-      mutable: false,
-      value: some({
-        kind: "Identifier",
-        value: emittedNameForBinding(ctx, d),
-        type: none(),
-      }),
-      docComment: none(),
-      span: resolveSpan(ctx.tokens, d.tokenId, d.tokenId),
-      dispose: true,
-    }));
+    .filter((d) => !d.mutable)
+    .flatMap((d): JSIM.LetStatement[] => {
+      if (ctx.partialDrops.at(-1)?.has(d.id) === true) {
+        return partialDropShadows(
+          ctx,
+          { text: d.name, tokenId: d.tokenId },
+          emittedNameForBinding(ctx, d),
+        );
+      }
+      if (!scopeDropsForBlock.some((sd) => sd.id === d.id)) return [];
+      return [
+        {
+          kind: "LetStatement",
+          name: reserveLocalName(ctx, `dropShadow_${d.name}`),
+          mutable: false,
+          value: some({
+            kind: "Identifier",
+            value: emittedNameForBinding(ctx, d),
+            type: none(),
+          }),
+          docComment: none(),
+          span: resolveSpan(ctx.tokens, d.tokenId, d.tokenId),
+          dispose: true,
+        },
+      ];
+    });
 }
 
 /**
