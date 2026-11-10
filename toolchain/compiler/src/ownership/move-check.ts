@@ -611,6 +611,25 @@ function divergingMove(av: MoveState, bv: MoveState): MovedPlace | undefined {
 }
 
 /**
+ * A field moved on one side while the other side moved or may have moved the
+ * whole binding: the field's owner is gone on one path only, so it cannot be
+ * released statically on both.
+ */
+function partialAgainstWholeMove(
+  av: MoveState,
+  bv: MoveState,
+): MovedPlace | undefined {
+  const wholeMove = (state: MoveState): boolean =>
+    state.kind === "Unbound" || state.kind === "ConditionallyMoved";
+  const unconditional = (state: MoveState): MovedPlace | undefined =>
+    state.kind === "PartiallyMoved"
+      ? state.moved.find((m) => m.conditional !== true)
+      : undefined;
+  if (wholeMove(bv)) return unconditional(av);
+  return wholeMove(av) ? unconditional(bv) : undefined;
+}
+
+/**
  * Reports a field moved on only some of the paths merging into `id`, then
  * marks every moved place so an enclosing merge does not report it again.
  */
@@ -621,11 +640,23 @@ function resolveDivergingMove(
   bv: MoveState,
   combined: MoveState,
 ): MoveState {
+  const name = ctx.declarationsById.get(id)?.name ?? "_";
+  const againstWholeMove = partialAgainstWholeMove(av, bv);
+  if (againstWholeMove !== undefined) {
+    emitDiagnostic(
+      ctx,
+      {
+        kind: "OwnConditionalPartialMove",
+        place: placeDescription(name, againstWholeMove.path),
+      },
+      againstWholeMove.moveStatementTokenId,
+    );
+    return combined;
+  }
   const diverging = divergingMove(av, bv);
   if (diverging === undefined || combined.kind !== "PartiallyMoved") {
     return combined;
   }
-  const name = ctx.declarationsById.get(id)?.name ?? "_";
   emitDiagnostic(
     ctx,
     {
