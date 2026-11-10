@@ -3082,6 +3082,23 @@ describe("partial moves by destructuring a struct", (): void => {
     ]);
   });
 
+  it("disposes the remaining fields of a destructured binding that is itself partially moved", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Inner { a: Loud, b: Loud }
+      struct Outer { i: Inner, c: Loud }
+      fn main() {
+        let o = Outer { i: Inner { a: Loud { id: 1 }, b: Loud { id: 2 } }, c: Loud { id: 3 } };
+        let Outer { i, .. } = o;
+        let x = i.a;
+        print(0);
+      }
+    `);
+    // LIFO: x (1), then i's remaining field b (2), then o's unbound c (3).
+    expect(runEmittedJs(js)).toEqual(["0", "1", "2", "3"]);
+  });
+
   it("rejects destructuring a non-Copy field out of a `mut` binding", (): void => {
     const result = compile(`
       struct Loud { id: i32 }
