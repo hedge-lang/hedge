@@ -2877,6 +2877,25 @@ describe("partial moves out of a struct", (): void => {
 });
 
 describe("partial moves by destructuring an array", (): void => {
+  it("disposes the elements an array pattern does not bind in the order the whole array would, nested arrays included", (): void => {
+    const run = (body: string): string[] =>
+      runEmittedJs(
+        emittedJs(`
+          struct Loud { id: i32 }
+          impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+          fn main() {
+            ${body}
+            print(0);
+          }
+        `),
+      );
+    const flat = "let a = [Loud { id: 1 }, Loud { id: 2 }, Loud { id: 3 }];";
+    const nested =
+      "let a = [[Loud { id: 1 }, Loud { id: 2 }], [Loud { id: 3 }, Loud { id: 4 }]];";
+    expect(run(`${flat} let [x, ..] = a;`)).toEqual(run(flat));
+    expect(run(`${nested} let [[x, ..], ..] = a;`)).toEqual(run(nested));
+  });
+
   it("disposes the elements an array pattern does not bind, once, along with the bound one", (): void => {
     const js = emittedJs(`
       struct Loud { id: i32 }
