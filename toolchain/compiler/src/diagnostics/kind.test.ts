@@ -330,6 +330,7 @@ const SAMPLE_KINDS: readonly DiagnosticKind[] = [
   { kind: "OwnUseOfMovedValue", name: "x" },
   { kind: "OwnUseOfPossiblyMovedValue", name: "x" },
   { kind: "OwnUseOfPartiallyMovedValue", name: "o", moved: "o.a" },
+  { kind: "OwnUseThroughMovedPlace", place: "o.a.x", moved: "o.a" },
   { kind: "OwnCannotMoveOutOfMutBinding", place: "o.a", name: "o" },
   { kind: "OwnCannotMoveOutOfDropType", place: "o.a", typeName: "Guard" },
   { kind: "OwnConditionalPartialMove", place: "o.a" },

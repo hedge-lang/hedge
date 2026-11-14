@@ -618,6 +618,11 @@ export type DiagnosticKind =
       readonly moved: string;
     }
   | {
+      readonly kind: "OwnUseThroughMovedPlace";
+      readonly place: string;
+      readonly moved: string;
+    }
+  | {
       readonly kind: "OwnUseOfPossiblyUninitializedBinding";
       readonly name: string;
     }
@@ -883,6 +888,7 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["OwnUseOfMovedValue", "HEDGE-BORROW-CHECK-003"],
   ["OwnUseOfPossiblyMovedValue", "HEDGE-BORROW-CHECK-003"],
   ["OwnUseOfPartiallyMovedValue", "HEDGE-BORROW-CHECK-003"],
+  ["OwnUseThroughMovedPlace", "HEDGE-BORROW-CHECK-003"],
   ["OwnUseOfUninitializedBinding", "HEDGE-MOVE-001"],
   ["OwnUseOfPossiblyUninitializedBinding", "HEDGE-MOVE-001"],
   ["OwnCannotMoveOutBorrowInstead", "HEDGE-MOVE-002"],

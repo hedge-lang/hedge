@@ -871,19 +871,32 @@ function usePlacePath(
   }
   const clash = current.moved.find((m) => pathsOverlap(m.path, use.path));
   if (clash === undefined) return;
-  const place = placeDescription(resolved.name, use.path);
   emitDiagnostic(
     ctx,
-    clash.path.length > use.path.length
-      ? {
-          kind: "OwnUseOfPartiallyMovedValue",
-          name: place,
-          moved: placeDescription(resolved.name, clash.path),
-        }
-      : { kind: "OwnUseOfMovedValue", name: place },
+    movedPlaceClash(resolved.name, use.path, clash.path),
     use.tokenId,
     [{ span: clash.moveSite, label: { kind: "LabelMovedHere" } }],
   );
+}
+
+/**
+ * A moved place that is longer than the used one leaves only part of it
+ * moved; a shorter one means the used place sits inside what was moved out.
+ */
+function movedPlaceClash(
+  name: string,
+  usePath: readonly string[],
+  movedPath: readonly string[],
+): DiagnosticKind {
+  const place = placeDescription(name, usePath);
+  const moved = placeDescription(name, movedPath);
+  if (movedPath.length > usePath.length) {
+    return { kind: "OwnUseOfPartiallyMovedValue", name: place, moved };
+  }
+  if (movedPath.length < usePath.length) {
+    return { kind: "OwnUseThroughMovedPlace", place, moved };
+  }
+  return { kind: "OwnUseOfMovedValue", name: place };
 }
 
 /** The outermost struct among `owners` that has a `Drop` impl, if any. */
@@ -1678,6 +1691,33 @@ function structPatternMoves(
   return moves;
 }
 
+/**
+ * The places a pattern reads without moving: `Copy` bindings, which still
+ * need their owner to be intact. Only meaningful once `structPatternMoves`
+ * has accepted the pattern.
+ */
+function patternReadPaths(
+  pattern: Semantics.Pattern,
+  prefix: readonly string[],
+): (readonly string[])[] {
+  const level = patternLevel(pattern);
+  if (level === undefined) return [];
+  return level.entries.flatMap((entry): (readonly string[])[] => {
+    const path = [...prefix, entry.name];
+    const nested = entry.pattern;
+    if (nested === undefined) {
+      return hasCapability(entry.shorthandType, "copy") ? [path] : [];
+    }
+    if (nested.kind === "WildcardPattern") return [];
+    if (nested.kind === "BindingPattern") {
+      const reads =
+        nested.name.text !== "_" && hasCapability(nested.name.type, "copy");
+      return reads ? [path] : [];
+    }
+    return patternReadPaths(nested, path);
+  });
+}
+
 interface StructPatternBinding {
   readonly root: Semantics.PathExpression;
   readonly pattern: Semantics.Pattern;
@@ -1712,7 +1752,8 @@ function moveStructPatternPlaces(
   const { root, pattern, moves } = binding;
   const resolved = resolveBinding(root, scopeStack);
   if (resolved === undefined) return;
-  if (moves.length === 0) {
+  const reads = patternReadPaths(pattern, []);
+  if (moves.length === 0 && reads.length === 0) {
     useOrMove(ctx, root, state, scopeStack, false);
     return;
   }
@@ -1720,6 +1761,14 @@ function moveStructPatternPlaces(
   if (rejection !== undefined) {
     emitDiagnostic(ctx, rejection, pattern.tokenId);
     return;
+  }
+  for (const path of reads) {
+    usePlacePath(
+      ctx,
+      { root, path, tokenId: pattern.tokenId },
+      state,
+      scopeStack,
+    );
   }
   for (const move of moves) {
     usePlacePath(

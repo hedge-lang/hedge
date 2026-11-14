@@ -477,6 +477,8 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return `use of possibly-moved value \`${kind.name}\`: moved on some paths but not others`;
     case "OwnUseOfPartiallyMovedValue":
       return `use of partially moved value \`${kind.name}\`: \`${kind.moved}\` was moved out`;
+    case "OwnUseThroughMovedPlace":
+      return `cannot use \`${kind.place}\`: \`${kind.moved}\` was moved out`;
     case "OwnUseOfPossiblyUninitializedBinding":
       return `use of possibly-uninitialized binding \`${kind.name}\`: initialized on some paths but not others`;
     case "OwnCannotMoveOutBorrowInstead":
