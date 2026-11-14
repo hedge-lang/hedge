@@ -3099,6 +3099,22 @@ describe("partial moves by destructuring a struct", (): void => {
     expect(runEmittedJs(js)).toEqual(["0", "1", "2", "3"]);
   });
 
+  it("disposes the unbound fields of a pattern destructuring a field of a binding", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Inner { x: Loud, y: Loud }
+      struct Outer { i: Inner, c: Loud }
+      fn main() {
+        let o = Outer { i: Inner { x: Loud { id: 1 }, y: Loud { id: 2 } }, c: Loud { id: 3 } };
+        let Inner { x, .. } = o.i;
+        print(0);
+      }
+    `);
+    // LIFO: x (1), then the unbound y (2), then o's remaining c (3).
+    expect(runEmittedJs(js)).toEqual(["0", "1", "2", "3"]);
+  });
+
   it("rejects a pattern that reads a Copy field through a place already moved out", (): void => {
     const result = compile(`
       struct Loud { id: i32 }
