@@ -3099,6 +3099,23 @@ describe("partial moves by destructuring a struct", (): void => {
     expect(runEmittedJs(js)).toEqual(["0", "1", "2", "3"]);
   });
 
+  it("rejects a pattern that reads a Copy field through a place already moved out", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Inner { value: i32 }
+      struct Pair { a: Inner, b: Loud }
+      fn main() {
+        let p = Pair { a: Inner { value: 5 }, b: Loud { id: 1 } };
+        let taken = p.a;
+        let Pair { a: Inner { value }, b } = p;
+      }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot use `p.a.value`: `p.a` was moved out",
+    ]);
+  });
+
   it("rejects destructuring a non-Copy field out of a `mut` binding", (): void => {
     const result = compile(`
       struct Loud { id: i32 }
