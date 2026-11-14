@@ -138,8 +138,10 @@ export interface BranchDrop {
 /**
  * A binding with some fields moved out: it is not disposed whole, only the
  * fields still owned at scope end are, each at `declaration`'s own position
- * in the drop order. `remaining` is in field declaration order, one entry
- * per owned field path that has something to release.
+ * in the drop order. `remaining` is in the order its entries are declared as
+ * `using` bindings, so the last one releases first: field declaration order
+ * for a struct, descending index order for an array. One entry per owned
+ * field path that has something to release.
  */
 export interface PartialDrop {
   readonly declaration: Declaration;
@@ -1612,8 +1614,10 @@ function slicePatternLevel(
       shorthandType: element.type,
     });
   }
+  // Descending: `using` releases the last declaration first, and a whole
+  // array releases its elements in ascending order.
   const fields = Array.from({ length: type.length }, (_, i) => ({
-    name: String(i),
+    name: String(type.length - 1 - i),
     type: type.elementType,
   }));
   return { entries, owner: type, fields };
@@ -2074,7 +2078,7 @@ function partialDropOf(
 
 /**
  * The owned, releasable field paths under `prefix` once every place in
- * `moved` is gone, in declaration order. A field that is itself the parent
+ * `moved` is gone, in `PartialDrop.remaining` order. A field that is itself the parent
  * of a moved place is expanded to its own remaining children instead of
  * being released whole.
  */

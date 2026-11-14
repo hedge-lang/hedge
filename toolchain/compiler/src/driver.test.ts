@@ -2906,8 +2906,8 @@ describe("partial moves by destructuring an array", (): void => {
         print(0);
       }
     `);
-    // x (1) first, then a's unbound elements in reverse order: 3, 2.
-    expect(runEmittedJs(js)).toEqual(["0", "1", "3", "2"]);
+    // x (1) first, then a's unbound elements in ascending order: 2, 3.
+    expect(runEmittedJs(js)).toEqual(["0", "1", "2", "3"]);
   });
 
   it("disposes the elements before and after a middle element the pattern binds", (): void => {
@@ -2920,7 +2920,7 @@ describe("partial moves by destructuring an array", (): void => {
         print(0);
       }
     `);
-    expect(runEmittedJs(js)).toEqual(["0", "2", "3", "1"]);
+    expect(runEmittedJs(js)).toEqual(["0", "2", "1", "3"]);
   });
 
   it("disposes the elements a trailing-element pattern does not bind", (): void => {
@@ -2933,7 +2933,7 @@ describe("partial moves by destructuring an array", (): void => {
         print(0);
       }
     `);
-    expect(runEmittedJs(js)).toEqual(["0", "3", "2", "1"]);
+    expect(runEmittedJs(js)).toEqual(["0", "3", "1", "2"]);
   });
 
   it("disposes every element once when a named rest binds the remaining elements", (): void => {
