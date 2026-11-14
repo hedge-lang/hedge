@@ -1724,6 +1724,8 @@ function patternReadPaths(
 
 interface StructPatternBinding {
   readonly root: Semantics.PathExpression;
+  /** The field path from `root` to the destructured value; empty for `root` itself. */
+  readonly prefix: readonly string[];
   readonly pattern: Semantics.Pattern;
   readonly moves: readonly PatternMove[];
 }
@@ -1753,12 +1755,17 @@ function moveStructPatternPlaces(
   state: StateMap,
   scopeStack: ScopeStack,
 ): void {
-  const { root, pattern, moves } = binding;
+  const { root, prefix, pattern, moves } = binding;
   const resolved = resolveBinding(root, scopeStack);
   if (resolved === undefined) return;
-  const reads = patternReadPaths(pattern, []);
+  const reads = patternReadPaths(pattern, prefix);
   if (moves.length === 0 && reads.length === 0) {
-    useOrMove(ctx, root, state, scopeStack, false);
+    usePlacePath(
+      ctx,
+      { root, path: prefix, tokenId: root.tokenId },
+      state,
+      scopeStack,
+    );
     return;
   }
   const rejection = firstPatternRejection(ctx, resolved, moves);
@@ -1790,6 +1797,40 @@ function moveStructPatternPlaces(
   }
 }
 
+interface PatternSource {
+  readonly root: Semantics.PathExpression;
+  readonly prefix: readonly string[];
+  readonly siblings: readonly (readonly Semantics.OwnerField[])[];
+  readonly owners: readonly Semantics.Type[];
+}
+
+/**
+ * Where a by-value pattern reads from: a bare local, or a field chain
+ * rooted in one, whose owners and siblings the pattern's own levels extend.
+ */
+function patternSourceOf(
+  initializer: Semantics.Expression,
+  scopeStack: ScopeStack,
+): PatternSource | undefined {
+  if (initializer.kind === "PathExpression") {
+    return {
+      root: initializer,
+      prefix: [],
+      siblings: [],
+      owners: [],
+    };
+  }
+  const chain = fieldChainOf(initializer, scopeStack);
+  if (chain === undefined) return undefined;
+  const prefix = chainPath(chain);
+  return {
+    root: chain.root,
+    prefix,
+    siblings: chain.fields.map((f) => f.ownerFields),
+    owners: chain.fields.map((f) => f.object.type),
+  };
+}
+
 function isPatternOwner(type: Semantics.Type): boolean {
   return type.kind === "StructType" || type.kind === "ArrayType";
 }
@@ -1802,12 +1843,23 @@ function walkLetInitializer(
 ): void {
   if (!isSome(statement.initializer)) return;
   const initializer = statement.initializer.value;
-  if (initializer.kind === "PathExpression") {
-    const moves = structPatternMoves(statement.pattern, [], [], []);
-    if (moves !== undefined && isPatternOwner(initializer.type)) {
+  const source = patternSourceOf(initializer, scopeStack);
+  if (source !== undefined && isPatternOwner(initializer.type)) {
+    const moves = structPatternMoves(
+      statement.pattern,
+      source.prefix,
+      source.siblings,
+      source.owners,
+    );
+    if (moves !== undefined) {
       moveStructPatternPlaces(
         ctx,
-        { root: initializer, pattern: statement.pattern, moves },
+        {
+          root: source.root,
+          prefix: source.prefix,
+          pattern: statement.pattern,
+          moves,
+        },
         state,
         scopeStack,
       );

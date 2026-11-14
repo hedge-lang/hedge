@@ -3130,8 +3130,9 @@ describe("partial moves by destructuring a struct", (): void => {
         print(0);
       }
     `);
-    // LIFO: x (1), then the unbound y (2), then o's remaining c (3).
-    expect(runEmittedJs(js)).toEqual(["0", "1", "2", "3"]);
+    // LIFO: x (1), then o's remaining places in whole-value order: c (3)
+    // before i's unbound y (2).
+    expect(runEmittedJs(js)).toEqual(["0", "1", "3", "2"]);
   });
 
   it("rejects a pattern that reads a Copy field through a place already moved out", (): void => {
