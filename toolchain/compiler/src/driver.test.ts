@@ -3135,6 +3135,24 @@ describe("partial moves by destructuring a struct", (): void => {
     expect(runEmittedJs(js)).toEqual(["0", "1", "3", "2"]);
   });
 
+  it("disposes the remaining generic field of a partially moved struct without throwing for a number", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair<T> { a: Loud, b: T }
+      fn split<T>(p: Pair<T>) {
+        let x = p.a;
+        print(0);
+      }
+      fn main() {
+        split::<i32>(Pair { a: Loud { id: 1 }, b: 2 });
+        split::<Loud>(Pair { a: Loud { id: 3 }, b: Loud { id: 4 } });
+      }
+    `);
+    // The number is skipped; the disposable instantiation is still released.
+    expect(runEmittedJs(js)).toEqual(["0", "1", "0", "3", "4"]);
+  });
+
   it("rejects a pattern that reads a Copy field through a place already moved out", (): void => {
     const result = compile(`
       struct Loud { id: i32 }
