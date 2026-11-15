@@ -3558,6 +3558,38 @@ describe("Drop::drop dispose body", (): void => {
   });
 });
 
+describe("partial moves out of a bounded Drop impl's type", (): void => {
+  const program = (instantiation: string): string => `
+    trait Marker { fn mark(&self) -> i32; }
+    struct Num { v: i32 }
+    impl Marker for Num { fn mark(&self) -> i32 { self.v } }
+    struct Plain { v: i32 }
+    struct Loud { id: i32 }
+    impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+    struct Wrapper<T> { a: Loud, b: T }
+    impl<T: Marker> Drop for Wrapper<T> {
+      fn drop(&mut self) { print(self.b.mark()); }
+    }
+    fn main() {
+      let w = Wrapper { a: Loud { id: 1 }, b: ${instantiation} };
+      let x = w.a;
+      print(0);
+    }
+  `;
+
+  it("moves a field out of an instantiation whose bound is not satisfied, so the impl does not apply", (): void => {
+    const js = emittedJs(program("Plain { v: 2 }"));
+    expect(runEmittedJs(js)).toEqual(["0", "1"]);
+  });
+
+  it("rejects moving a field out of an instantiation whose bound is satisfied", (): void => {
+    const result = compile(program("Num { v: 2 }"));
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `w.a` out of `Wrapper` because it implements `Drop`",
+    ]);
+  });
+});
+
 describe("std prelude", (): void => {
   it("resolves a user `impl Drop for X` against the prelude without a local trait declaration", (): void => {
     const result = compile(`
