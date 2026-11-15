@@ -96,6 +96,8 @@ export interface AnalysisResult {
    * field-only disposer instead of attaching a call missing its required
    * witness argument. */
   readonly dropBoundsUnsatisfied: ReadonlySet<number>;
+  /** Whether a `Drop` impl applies to a struct type, bounds included. */
+  readonly dropImplApplies: (type: Semantics.StructType) => boolean;
 }
 
 /** One hidden witness parameter of a generic function: `_witness_T_Draw` for
@@ -11385,8 +11387,37 @@ function recordDropWitnesses(
   constructedType: Semantics.Type,
 ): void {
   if (constructedType.kind !== "StructType") return;
+  const resolution = resolveDropImpl(ctx, constructedType);
+  switch (resolution.kind) {
+    case "none":
+      return;
+    case "unsatisfied":
+      ctx.dropBoundsUnsatisfiedTable.add(tokenId);
+      return;
+    case "applies":
+      if (resolution.witnesses.length > 0) {
+        ctx.dropWitnessTable.set(tokenId, resolution.witnesses);
+      }
+      return;
+    default:
+      assertNever(resolution);
+  }
+}
+
+type DropImplResolution =
+  | { readonly kind: "none" }
+  | { readonly kind: "unsatisfied" }
+  | { readonly kind: "applies"; readonly witnesses: readonly WitnessRef[] };
+
+/** Whether `Drop` applies to `constructedType`, and with which witnesses for
+ * the impl's own bounds. `none` means no `Drop` impl targets the type at all;
+ * `unsatisfied` means one does but its bounds fail for these type arguments. */
+function resolveDropImpl(
+  ctx: AnalysisContext,
+  constructedType: Semantics.StructType,
+): DropImplResolution {
   const dropTraitId = lookupPreludeTrait(ctx, "Drop");
-  if (dropTraitId === undefined) return;
+  if (dropTraitId === undefined) return { kind: "none" };
   const method = (
     ctx.methodIndex.get(typeIdentity(constructedType)) ?? []
   ).find(
@@ -11400,9 +11431,9 @@ function recordDropWitnesses(
         new Map(),
       ),
   );
-  if (method === undefined) return;
+  if (method === undefined) return { kind: "none" };
   const implBounds = implLevelGenericParamBounds(method);
-  if (implBounds.size === 0) return;
+  if (implBounds.size === 0) return { kind: "applies", witnesses: [] };
   const bindings = implGenericParamBindings(
     constructedType,
     method.implGenericParamPositions,
@@ -11413,13 +11444,40 @@ function recordDropWitnesses(
     implBounds,
     method.implGenericParamPositions,
   );
-  if (!isSome(resolved)) {
-    ctx.dropBoundsUnsatisfiedTable.add(tokenId);
-    return;
+  return isSome(resolved)
+    ? { kind: "applies", witnesses: resolved.value }
+    : { kind: "unsatisfied" };
+}
+
+/** Whether `type` still mentions an abstract generic parameter, so which
+ * instantiation it stands for is not known here. */
+function typeIsAbstract(type: Semantics.Type): boolean {
+  switch (type.kind) {
+    case "NamedType":
+    case "Projection":
+      return true;
+    case "ReferenceType":
+      return typeIsAbstract(type.referent);
+    case "ArrayType":
+      return typeIsAbstract(type.elementType);
+    case "StructType":
+    case "EnumType":
+      return type.typeArguments.some(typeIsAbstract);
+    default:
+      return false;
   }
-  if (resolved.value.length > 0) {
-    ctx.dropWitnessTable.set(tokenId, resolved.value);
-  }
+}
+
+/** Whether a `Drop` impl applies to `type`: a matching impl whose bounds
+ * hold, or whose bounds cannot be decided because `type` is still abstract
+ * (a different instantiation may satisfy them, so it is treated as applying). */
+function dropImplApplies(
+  ctx: AnalysisContext,
+  type: Semantics.StructType,
+): boolean {
+  const resolution = resolveDropImpl(ctx, type);
+  if (resolution.kind === "unsatisfied") return typeIsAbstract(type);
+  return resolution.kind === "applies";
 }
 
 /** Records how a resolved call on a concrete receiver dispatches, for
@@ -15899,5 +15957,6 @@ export function analyze(
     methodCallWitnesses: ctx.methodCallWitnessTable,
     dropWitnesses: ctx.dropWitnessTable,
     dropBoundsUnsatisfied: ctx.dropBoundsUnsatisfiedTable,
+    dropImplApplies: (type) => dropImplApplies(ctx, type),
   };
 }
