@@ -331,23 +331,26 @@ function partialDropShadows(
   emittedName: string,
 ): JSIM.LetStatement[] {
   const drop = ctx.partialDrops.at(-1)?.get(identity.tokenId);
-  return (drop?.remaining ?? []).map((path): JSIM.LetStatement => ({
-    kind: "LetStatement",
-    name: reserveLocalName(
-      ctx,
-      `dropShadow_${identity.text}_${path.join("_")}`,
-    ),
-    mutable: false,
-    value: some(
-      path.reduce<JSIM.Expression>(
-        (object, field) => partialDropFieldAccess(object, field),
-        { kind: "Identifier", value: emittedName, type: none() },
+  return (drop?.remaining ?? []).map(({ path, guarded }): JSIM.LetStatement => {
+    const place = path.reduce<JSIM.Expression>(
+      (object, field) => partialDropFieldAccess(object, field),
+      { kind: "Identifier", value: emittedName, type: none() },
+    );
+    return {
+      kind: "LetStatement",
+      name: reserveLocalName(
+        ctx,
+        `dropShadow_${identity.text}_${path.join("_")}`,
       ),
-    ),
-    docComment: none(),
-    span: resolveSpan(ctx.tokens, identity.tokenId, identity.tokenId),
-    dispose: true,
-  }));
+      mutable: false,
+      value: some(
+        guarded ? { kind: "DisposableOrNullExpression", value: place } : place,
+      ),
+      docComment: none(),
+      span: resolveSpan(ctx.tokens, identity.tokenId, identity.tokenId),
+      dispose: true,
+    };
+  });
 }
 
 /**

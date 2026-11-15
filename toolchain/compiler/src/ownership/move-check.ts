@@ -145,7 +145,17 @@ export interface BranchDrop {
  */
 export interface PartialDrop {
   readonly declaration: Declaration;
-  readonly remaining: readonly (readonly string[])[];
+  readonly remaining: readonly RemainingPlace[];
+}
+
+/**
+ * `guarded` marks a place whose type is an abstract generic parameter: at
+ * runtime it may hold a value with nothing to release, so its release must
+ * tolerate that instead of assuming a disposable object.
+ */
+interface RemainingPlace {
+  readonly path: readonly string[];
+  readonly guarded: boolean;
 }
 
 export interface FunctionOwnership {
@@ -2137,10 +2147,10 @@ function partialDropOf(
 function remainingFieldPaths(
   moved: readonly MovedPlace[],
   prefix: readonly string[],
-): readonly (readonly string[])[] {
+): readonly RemainingPlace[] {
   const beneath = moved.filter((m) => pathStartsWith(m.path, prefix));
   const fields = beneath[0]?.siblings[prefix.length] ?? [];
-  return fields.flatMap((field): readonly (readonly string[])[] => {
+  return fields.flatMap((field): readonly RemainingPlace[] => {
     const path = [...prefix, field.name];
     if (
       beneath.some(
@@ -2152,8 +2162,13 @@ function remainingFieldPaths(
     if (beneath.some((m) => pathStartsWith(m.path, path))) {
       return remainingFieldPaths(moved, path);
     }
-    return hasCapability(field.type, "copy") ? [] : [path];
+    if (hasCapability(field.type, "copy")) return [];
+    return [{ path, guarded: isAbstractType(field.type) }];
   });
+}
+
+function isAbstractType(type: Semantics.Type): boolean {
+  return type.kind === "NamedType" || type.kind === "Projection";
 }
 
 /**

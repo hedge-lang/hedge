@@ -261,6 +261,7 @@ export type Expression =
   | ArrayExpression
   | ArrayRepeatExpression
   | ArraySliceViewExpression
+  | DisposableOrNullExpression
   | RangeExpression
   | StructExpression
   | RefCellExpression
@@ -476,6 +477,17 @@ export interface ArraySliceViewExpression {
   readonly source: Expression;
   readonly start: number;
   readonly length: number;
+}
+
+/**
+ * `value` if it is an object with a `[Symbol.dispose]` method, `null`
+ * otherwise. A place whose type is an abstract generic parameter holds a
+ * number, a string, or a disposable object depending on the instantiation,
+ * and `using` rejects anything that is neither an object nor `null`.
+ */
+interface DisposableOrNullExpression {
+  readonly kind: "DisposableOrNullExpression";
+  readonly value: Expression;
 }
 
 export interface RangeExpression {
