@@ -97,7 +97,10 @@ interface MovedPlace {
   readonly siblings: readonly (readonly Semantics.OwnerField[])[];
   readonly moveSite: Span;
   readonly moveStatementTokenId: number;
-  /** Set once a branch merge has reported this place as moved on only some paths, so an enclosing merge does not report it again. */
+  /**
+   * Set once a branch merge has reported this place as moved on only some
+   * paths, so an enclosing merge does not report it again.
+   */
   readonly conditional?: true;
 }
 
@@ -803,7 +806,10 @@ function pathStartsWith(
   return prefix.every((segment, i) => path[i] === segment);
 }
 
-/** One path names the other or an ancestor of it: moving or using either one touches the other. */
+/**
+ * One path names the other or an ancestor of it: moving or using either one
+ * touches the other.
+ */
 function pathsOverlap(a: readonly string[], b: readonly string[]): boolean {
   return pathStartsWith(a, b) || pathStartsWith(b, a);
 }
@@ -922,7 +928,10 @@ function dropImplOwnerOf(
   return undefined;
 }
 
-/** Why `place` cannot move out of `resolved`, given the structs along its path. */
+/**
+ * Why `place` cannot move out of `resolved`, given the structs along its
+ * path.
+ */
 function fieldMoveRejection(
   ctx: Ctx,
   resolved: ResolvedBinding,
@@ -947,7 +956,10 @@ function fieldMoveRejection(
   return undefined;
 }
 
-/** Record `moved` against the binding, unless it already overlaps a moved place. */
+/**
+ * Record `moved` against the binding, unless it already overlaps a moved
+ * place.
+ */
 function recordMovedPlace(
   state: StateMap,
   id: BindingId,
@@ -965,7 +977,10 @@ function recordMovedPlace(
   }
 }
 
-/** Move a non-`Copy` field path out of a tracked local, leaving its siblings owned. */
+/**
+ * Move a non-`Copy` field path out of a tracked local, leaving its siblings
+ * owned.
+ */
 function moveFieldPlace(
   ctx: Ctx,
   chain: FieldChain,
@@ -1734,7 +1749,10 @@ function patternReadPaths(
 
 interface StructPatternBinding {
   readonly root: Semantics.PathExpression;
-  /** The field path from `root` to the destructured value; empty for `root` itself. */
+  /**
+   * The field path from `root` to the destructured value; empty for `root`
+   * itself.
+   */
   readonly prefix: readonly string[];
   readonly pattern: Semantics.Pattern;
   readonly moves: readonly PatternMove[];

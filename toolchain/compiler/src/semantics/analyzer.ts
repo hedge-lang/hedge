@@ -11409,9 +11409,11 @@ type DropImplResolution =
   | { readonly kind: "unsatisfied" }
   | { readonly kind: "applies"; readonly witnesses: readonly WitnessRef[] };
 
-/** Whether `Drop` applies to `constructedType`, and with which witnesses for
+/**
+ * Whether `Drop` applies to `constructedType`, and with which witnesses for
  * the impl's own bounds. `none` means no `Drop` impl targets the type at all;
- * `unsatisfied` means one does but its bounds fail for these type arguments. */
+ * `unsatisfied` means one does but its bounds fail for these type arguments.
+ */
 function resolveDropImpl(
   ctx: AnalysisContext,
   constructedType: Semantics.StructType,
@@ -11449,8 +11451,10 @@ function resolveDropImpl(
     : { kind: "unsatisfied" };
 }
 
-/** Whether `type` still mentions an abstract generic parameter, so which
- * instantiation it stands for is not known here. */
+/**
+ * Whether `type` still mentions an abstract generic parameter, so which
+ * instantiation it stands for is not known here.
+ */
 // eslint-disable-next-line complexity -- Routing function over the full Type union
 function typeIsAbstract(type: Semantics.Type): boolean {
   switch (type.kind) {
@@ -11488,9 +11492,11 @@ function typeIsAbstract(type: Semantics.Type): boolean {
   }
 }
 
-/** Whether a `Drop` impl applies to `type`: a matching impl whose bounds
- * hold, or whose bounds cannot be decided because `type` is still abstract
- * (a different instantiation may satisfy them, so it is treated as applying). */
+/**
+ * Whether a `Drop` impl applies to `type`: a matching impl whose bounds hold,
+ * or whose bounds cannot be decided because `type` is still abstract (a
+ * different instantiation may satisfy them, so it is treated as applying).
+ */
 function dropImplApplies(
   ctx: AnalysisContext,
   type: Semantics.StructType,
