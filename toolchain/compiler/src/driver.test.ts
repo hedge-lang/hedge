@@ -3153,6 +3153,77 @@ describe("partial moves by destructuring a struct", (): void => {
     expect(runEmittedJs(js)).toEqual(["0", "1", "0", "3", "4"]);
   });
 
+  const chainProgram = (
+    outerImpl: string,
+    binding: string,
+    body: string,
+  ): string => `
+    struct Loud { id: i32 }
+    impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+    struct Inner { x: Loud, y: Loud }
+    struct Outer { i: Inner, c: Loud }
+    ${outerImpl}
+    fn main() {
+      ${binding} o = Outer { i: Inner { x: Loud { id: 1 }, y: Loud { id: 2 } }, c: Loud { id: 3 } };
+      ${body}
+    }
+  `;
+
+  it("rejects destructuring a field out of a struct that implements Drop", (): void => {
+    const result = compile(
+      chainProgram(
+        "impl Drop for Outer { fn drop(&mut self) { print(9); } }",
+        "let",
+        "let Inner { x, .. } = o.i;",
+      ),
+    );
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `o.i.x` out of `Outer` because it implements `Drop`",
+    ]);
+  });
+
+  it("rejects destructuring a field out of a `mut` binding", (): void => {
+    const result = compile(
+      chainProgram("", "let mut", "let Inner { x, .. } = o.i;"),
+    );
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `o.i.x` out of `mut` binding `o`; moving a field out of a `mut` binding is not supported yet",
+    ]);
+  });
+
+  it("leaves the owner whole when a field pattern binds nothing", (): void => {
+    const js = emittedJs(
+      chainProgram("", "let", "let Inner { .. } = o.i; let t = o.c; print(0);"),
+    );
+    expect(runEmittedJs(js)).toEqual(["0", "3", "2", "1"]);
+  });
+
+  it("rejects a pattern that binds nothing from a field already moved out", (): void => {
+    const result = compile(
+      chainProgram("", "let", "let t = o.i; let Inner { .. } = o.i;"),
+    );
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "use of moved value `o.i`",
+    ]);
+  });
+
+  it("rejects a plain read of a Copy field through a place already moved out", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Inner { value: i32 }
+      struct Pair { a: Inner, b: Loud }
+      fn main() {
+        let p = Pair { a: Inner { value: 5 }, b: Loud { id: 1 } };
+        let taken = p.a;
+        print(p.a.value);
+      }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot use `p.a.value`: `p.a` was moved out",
+    ]);
+  });
+
   it("rejects a pattern that reads a Copy field through a place already moved out", (): void => {
     const result = compile(`
       struct Loud { id: i32 }
@@ -3577,13 +3648,34 @@ describe("partial moves out of a bounded Drop impl's type", (): void => {
     }
   `;
 
-  it("moves a field out of an instantiation whose bound is not satisfied, so the impl does not apply", (): void => {
+  it("compiles a field move out of an instantiation whose Drop bound is unsatisfied, and runs no drop body", (): void => {
     const js = emittedJs(program("Plain { v: 2 }"));
     expect(runEmittedJs(js)).toEqual(["0", "1"]);
   });
 
   it("rejects moving a field out of an instantiation whose bound is satisfied", (): void => {
     const result = compile(program("Num { v: 2 }"));
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `w.a` out of `Wrapper` because it implements `Drop`",
+    ]);
+  });
+});
+
+describe("partial moves out of a type whose Drop bound depends on an abstract parameter", (): void => {
+  it("rejects a field move out of a bounded Drop type whose type argument is still abstract", (): void => {
+    const result = compile(`
+      trait Marker { fn mark(&self) -> i32; }
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Wrapper<T> { a: Loud, b: T }
+      impl<T: Marker> Drop for Wrapper<T> {
+        fn drop(&mut self) { print(self.b.mark()); }
+      }
+      fn split<T>(w: Wrapper<T>) {
+        let x = w.a;
+      }
+      fn main() {}
+    `);
     expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
       "cannot move `w.a` out of `Wrapper` because it implements `Drop`",
     ]);
