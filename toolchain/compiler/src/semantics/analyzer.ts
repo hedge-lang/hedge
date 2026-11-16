@@ -11451,6 +11451,7 @@ function resolveDropImpl(
 
 /** Whether `type` still mentions an abstract generic parameter, so which
  * instantiation it stands for is not known here. */
+// eslint-disable-next-line complexity -- Routing function over the full Type union
 function typeIsAbstract(type: Semantics.Type): boolean {
   switch (type.kind) {
     case "NamedType":
@@ -11463,8 +11464,27 @@ function typeIsAbstract(type: Semantics.Type): boolean {
     case "StructType":
     case "EnumType":
       return type.typeArguments.some(typeIsAbstract);
-    default:
+    case "FunctionType":
+    case "UnitType":
+    case "DynType":
+    case "PrimitiveI8Type":
+    case "PrimitiveI16Type":
+    case "PrimitiveI32Type":
+    case "PrimitiveI64Type":
+    case "PrimitiveIsizeType":
+    case "PrimitiveU8Type":
+    case "PrimitiveU16Type":
+    case "PrimitiveU32Type":
+    case "PrimitiveU64Type":
+    case "PrimitiveUsizeType":
+    case "PrimitiveF32Type":
+    case "PrimitiveF64Type":
+    case "PrimitiveBooleanType":
+    case "PrimitiveCharType":
+    case "PrimitiveStringType":
       return false;
+    default:
+      return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
 }
 

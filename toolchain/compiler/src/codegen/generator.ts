@@ -329,16 +329,17 @@ const ARRAY_DISPOSE_HELPER = `function ${ARRAY_DISPOSE_HELPER_NAME}(arr) {
   return arr;
 }`;
 
+const DISPOSABLE_OR_NULL_HELPER_NAME = "__hedgeDisposableOrNull";
+const DISPOSABLE_OR_NULL_HELPER = `function ${DISPOSABLE_OR_NULL_HELPER_NAME}(value) {
+  return value != null && typeof value[Symbol.dispose] === "function" ? value : null;
+}`;
+
 /**
  * `Proxy`-based rest-pattern view (`..tail`) for a non-numeric array, which
  * has no `subarray` zero-copy option. Indices below `len` write through to
  * `target`; everything else (length, iteration, dispose) lives on `extras`,
  * never `target` - otherwise disposing the view would clobber the original.
  */
-const DISPOSABLE_OR_NULL_HELPER_NAME = "__hedgeDisposableOrNull";
-const DISPOSABLE_OR_NULL_HELPER = `function ${DISPOSABLE_OR_NULL_HELPER_NAME}(value) {
-  return value != null && typeof value[Symbol.dispose] === "function" ? value : null;
-}`;
 const ARRAY_SLICE_VIEW_HELPER_NAME = "__hedgeArraySliceView";
 const ARRAY_SLICE_VIEW_HELPER = String.raw`function ${ARRAY_SLICE_VIEW_HELPER_NAME}(target, start, len) {
   const extras = {};

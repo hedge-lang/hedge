@@ -2140,9 +2140,9 @@ function partialDropOf(
 
 /**
  * The owned, releasable field paths under `prefix` once every place in
- * `moved` is gone, in `PartialDrop.remaining` order. A field that is itself the parent
- * of a moved place is expanded to its own remaining children instead of
- * being released whole.
+ * `moved` is gone, in `PartialDrop.remaining` order. A field that is itself
+ * the parent of a moved place is expanded to its own remaining children
+ * instead of being released whole.
  */
 function remainingFieldPaths(
   moved: readonly MovedPlace[],
