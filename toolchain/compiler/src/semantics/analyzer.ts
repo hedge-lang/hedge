@@ -11494,16 +11494,52 @@ function typeIsAbstract(type: Semantics.Type): boolean {
 
 /**
  * Whether a `Drop` impl applies to `type`: a matching impl whose bounds hold,
- * or whose bounds cannot be decided because `type` is still abstract (a
- * different instantiation may satisfy them, so it is treated as applying).
+ * or one that a different instantiation of a still-abstract `type` may match
+ * or satisfy (so it is treated as applying).
  */
 function dropImplApplies(
   ctx: AnalysisContext,
   type: Semantics.StructType,
 ): boolean {
   const resolution = resolveDropImpl(ctx, type);
-  if (resolution.kind === "unsatisfied") return typeIsAbstract(type);
-  return resolution.kind === "applies";
+  switch (resolution.kind) {
+    case "applies":
+      return true;
+    case "unsatisfied":
+      return typeIsAbstract(type);
+    case "none":
+      return typeIsAbstract(type) && dropImplMayMatch(ctx, type);
+    default:
+      return assertNever(resolution);
+  }
+}
+
+/**
+ * Whether some `Drop` impl for `type`'s struct has a target that every
+ * instantiation of `type`'s abstract arguments could still match: a position
+ * only rules an impl out when its argument is concrete and its slot differs.
+ */
+function dropImplMayMatch(
+  ctx: AnalysisContext,
+  type: Semantics.StructType,
+): boolean {
+  const dropTraitId = lookupPreludeTrait(ctx, "Drop");
+  if (dropTraitId === undefined) return false;
+  return (ctx.methodIndex.get(typeIdentity(type)) ?? []).some(
+    (m) =>
+      m.name === "drop" &&
+      m.origin.kind === "trait" &&
+      m.origin.traitId === dropTraitId &&
+      m.targetTypeArguments.length === type.typeArguments.length &&
+      m.targetTypeArguments.every((slot, i) => {
+        const argument = type.typeArguments[i];
+        return (
+          argument !== undefined &&
+          (typeIsAbstract(argument) ||
+            slotSatisfiesType(slot, argument, new Map()))
+        );
+      }),
+  );
 }
 
 /** Records how a resolved call on a concrete receiver dispatches, for

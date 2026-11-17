@@ -3682,6 +3682,46 @@ describe("partial moves out of a type whose Drop bound depends on an abstract pa
   });
 });
 
+describe("partial moves out of a type whose specialized Drop impl may match an abstract parameter", (): void => {
+  const program = (instantiation: string): string => `
+    struct Loud { id: i32 }
+    impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+    struct Holder<T> { a: Loud, b: T }
+    impl Drop for Holder<Loud> {
+      fn drop(&mut self) { print(9); }
+    }
+    fn split<T>(h: Holder<T>) {
+      let x = h.a;
+    }
+    fn main() {
+      ${instantiation}
+    }
+  `;
+
+  it("rejects a field move out of a generic parameter's type that a specialized Drop impl could match", (): void => {
+    const result = compile(program(""));
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `h.a` out of `Holder` because it implements `Drop`",
+    ]);
+  });
+
+  it("still compiles a field move out of a type whose only Drop impl cannot match its other argument", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair<T, U> { a: Loud, b: T, c: U }
+      impl<T> Drop for Pair<T, bool> {
+        fn drop(&mut self) { print(9); }
+      }
+      fn split<T>(p: Pair<T, i32>) {
+        let x = p.a;
+      }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+});
+
 describe("std prelude", (): void => {
   it("resolves a user `impl Drop for X` against the prelude without a local trait declaration", (): void => {
     const result = compile(`
