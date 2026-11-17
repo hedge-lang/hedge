@@ -1380,6 +1380,30 @@ function collectPatternDeclarations(
 }
 
 /**
+ * Special-cased like LetStatement (see walkLetInitializer) - moves only if
+ * some arm binds a non-Copy name, checked across all arms up front since
+ * this runs once before the fork.
+ */
+function walkMatchScrutinee(
+  ctx: Ctx,
+  expression: Semantics.MatchExpression,
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  if (expression.scrutinee.kind === "PathExpression") {
+    useOrMove(
+      ctx,
+      expression.scrutinee,
+      state,
+      scopeStack,
+      expression.arms.some((arm) => patternRequiresScrutineeMove(arm.pattern)),
+    );
+  } else {
+    walkExpression(ctx, expression.scrutinee, state, scopeStack);
+  }
+}
+
+/**
  * Every binding a match arm's pattern introduces is seeded `Owned` (never
  * `Uninitialized`), mirroring `walkFunction`'s own parameter seeding - a
  * pattern only ever binds a name once its scrutinee has already been
@@ -1393,19 +1417,10 @@ function walkMatchExpression(
   state: StateMap,
   scopeStack: ScopeStack,
 ): void {
-  // Special-cased like LetStatement (see walkLetInitializer) - moves only
-  // if some arm binds a non-Copy name, checked across all arms up front
-  // since this runs once before the fork.
-  if (expression.scrutinee.kind === "PathExpression") {
-    useOrMove(
-      ctx,
-      expression.scrutinee,
-      state,
-      scopeStack,
-      expression.arms.some((arm) => patternRequiresScrutineeMove(arm.pattern)),
-    );
-  } else {
-    walkExpression(ctx, expression.scrutinee, state, scopeStack);
+  const source = fieldScrutineeSource(expression.scrutinee, scopeStack);
+  const armMoves = armPatternMoves(source, expression.arms);
+  if (armMoves === undefined) {
+    walkMatchScrutinee(ctx, expression, state, scopeStack);
   }
 
   // Arms are mutually exclusive alternatives, not a sequence -- mirroring
@@ -1416,8 +1431,17 @@ function walkMatchExpression(
   // and into the post-match state, when at runtime at most one arm ever
   // actually executes.
   let merged: StateMap | undefined;
-  for (const arm of expression.arms) {
+  for (const [index, arm] of expression.arms.entries()) {
     const armState = cloneState(state);
+    const moves = armMoves?.[index];
+    if (source !== undefined && moves !== undefined) {
+      moveScrutineePlaces(
+        ctx,
+        { source, pattern: arm.pattern, moves },
+        armState,
+        scopeStack,
+      );
+    }
     scopeStack.push(new Map());
     const declarations: Declaration[] = [];
     for (const { identifier, mutable } of collectPatternDeclarations(
@@ -1896,6 +1920,70 @@ function movesAbstractField(
   );
 }
 
+/**
+ * Where a `match` or `if let` reads a struct or array field in place, so a
+ * pattern can move only the places it binds and leave the ignored siblings
+ * with their owner.
+ */
+function fieldScrutineeSource(
+  scrutinee: Semantics.Expression,
+  scopeStack: ScopeStack,
+): PatternSource | undefined {
+  if (scrutinee.kind !== "FieldAccessExpression") return undefined;
+  if (!isPatternOwner(scrutinee.type)) return undefined;
+  return patternSourceOf(scrutinee, scopeStack);
+}
+
+function patternMovesFrom(
+  source: PatternSource,
+  pattern: Semantics.Pattern,
+): PatternMove[] | undefined {
+  return structPatternMoves(
+    pattern,
+    source.prefix,
+    source.siblings,
+    source.owners,
+  );
+}
+
+function moveScrutineePlaces(
+  ctx: Ctx,
+  scrutinee: {
+    readonly source: PatternSource;
+    readonly pattern: Semantics.Pattern;
+    readonly moves: readonly PatternMove[];
+  },
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  const { source, pattern, moves } = scrutinee;
+  moveStructPatternPlaces(
+    ctx,
+    { root: source.root, prefix: source.prefix, pattern, moves },
+    state,
+    scopeStack,
+  );
+}
+
+/**
+ * The places each arm moves out of a field scrutinee, or `undefined` when
+ * any arm is not accounted for field by field and the scrutinee has to move
+ * whole before the arms fork.
+ */
+function armPatternMoves(
+  source: PatternSource | undefined,
+  arms: readonly Semantics.MatchArm[],
+): PatternMove[][] | undefined {
+  if (source === undefined) return undefined;
+  const all: PatternMove[][] = [];
+  for (const arm of arms) {
+    const moves = patternMovesFrom(source, arm.pattern);
+    if (moves === undefined) return undefined;
+    all.push(moves);
+  }
+  return all;
+}
+
 function isPatternOwner(type: Semantics.Type): boolean {
   return type.kind === "StructType" || type.kind === "ArrayType";
 }
@@ -1953,6 +2041,13 @@ function walkScrutinee(
   state: StateMap,
   scopeStack: ScopeStack,
 ): void {
+  const source = fieldScrutineeSource(scrutinee, scopeStack);
+  const moves =
+    source === undefined ? undefined : patternMovesFrom(source, pattern);
+  if (source !== undefined && moves !== undefined) {
+    moveScrutineePlaces(ctx, { source, pattern, moves }, state, scopeStack);
+    return;
+  }
   if (scrutinee.kind !== "PathExpression") {
     walkExpression(ctx, scrutinee, state, scopeStack);
     return;

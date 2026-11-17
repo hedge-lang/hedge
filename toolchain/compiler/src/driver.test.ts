@@ -3756,6 +3756,45 @@ describe("partial moves out of a type whose specialized Drop impl may match an a
   });
 });
 
+describe("partial moves out of a match or if-let scrutinee", (): void => {
+  const prelude = `
+    struct Loud { id: i32 }
+    impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+    struct Inner { x: Loud, y: Loud }
+    struct Outer { i: Inner, z: Loud }
+    fn eat(l: Loud) {}
+  `;
+
+  it("disposes the ignored sibling of a field a match arm destructures", (): void => {
+    const js = emittedJs(`
+      ${prelude}
+      fn main() {
+        let o = Outer { i: Inner { x: Loud { id: 1 }, y: Loud { id: 2 } }, z: Loud { id: 3 } };
+        match o.i {
+          Inner { x, .. } => { eat(x); }
+        }
+        print(0);
+      }
+    `);
+    // eat drops x (1), then o's leftovers: z (3) before i's y (2).
+    expect(runEmittedJs(js)).toEqual(["1", "0", "3", "2"]);
+  });
+
+  it("disposes the ignored sibling of a field an if-let destructures", (): void => {
+    const js = emittedJs(`
+      ${prelude}
+      fn main() {
+        let o = Outer { i: Inner { x: Loud { id: 1 }, y: Loud { id: 2 } }, z: Loud { id: 3 } };
+        if let Inner { x, .. } = o.i {
+          eat(x);
+        }
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["1", "0", "3", "2"]);
+  });
+});
+
 describe("std prelude", (): void => {
   it("resolves a user `impl Drop for X` against the prelude without a local trait declaration", (): void => {
     const result = compile(`
