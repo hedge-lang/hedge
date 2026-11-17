@@ -3101,6 +3101,22 @@ describe("partial moves by destructuring a struct", (): void => {
     ]);
   });
 
+  it("rejects a pattern with a literal leaf that moves a field out of a Drop type", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Guard { a: Loud, n: i32 }
+      impl Drop for Guard { fn drop(&mut self) { print(9); } }
+      fn main() {
+        let g = Guard { a: Loud { id: 1 }, n: 0 };
+        let Guard { a, n: 0 } = g;
+      }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `g.a` out of `Guard` because it implements `Drop`",
+    ]);
+  });
+
   it("disposes the remaining fields of a destructured binding that is itself partially moved", (): void => {
     const js = emittedJs(`
       struct Loud { id: i32 }

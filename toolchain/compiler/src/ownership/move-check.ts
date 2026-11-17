@@ -1671,6 +1671,14 @@ function patternLevel(pattern: Semantics.Pattern): PatternLevel | undefined {
 }
 
 /**
+ * A literal or range leaf compares the field it names without binding it, so
+ * it reads the place and never moves it.
+ */
+function isLiteralLeafPattern(pattern: Semantics.Pattern): boolean {
+  return pattern.kind === "LiteralPattern" || pattern.kind === "RangePattern";
+}
+
+/**
  * The places one pattern entry moves out of its owner: itself for a bare or
  * renamed non-`Copy` binding, its descendants for a nested pattern, nothing
  * for a wildcard or `Copy` binding. `undefined` when the entry cannot be
@@ -1685,6 +1693,7 @@ function entryPatternMoves(
     return hasCapability(entry.shorthandType, "copy") ? [] : [here];
   }
   if (nested.kind === "WildcardPattern") return [];
+  if (isLiteralLeafPattern(nested)) return [];
   if (nested.kind === "BindingPattern") {
     if (isSome(nested.subpattern)) return undefined;
     const binds =
@@ -1738,6 +1747,7 @@ function patternReadPaths(
       return hasCapability(entry.shorthandType, "copy") ? [path] : [];
     }
     if (nested.kind === "WildcardPattern") return [];
+    if (isLiteralLeafPattern(nested)) return [path];
     if (nested.kind === "BindingPattern") {
       const reads =
         nested.name.text !== "_" && hasCapability(nested.name.type, "copy");
