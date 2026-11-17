@@ -3795,6 +3795,32 @@ describe("partial moves out of a match or if-let scrutinee", (): void => {
   });
 });
 
+describe("a match that moves a field out of its scrutinee", (): void => {
+  const prelude = `
+    struct Loud { id: i32 }
+    impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+    struct Tagged { n: i32, v: Loud, w: Loud }
+    struct Holder { t: Tagged }
+    fn eat(l: Loud) {}
+  `;
+
+  it("rejects using a field a match arm moved out of its scrutinee", (): void => {
+    const result = compile(`
+      ${prelude}
+      fn main() {
+        let h = Holder { t: Tagged { n: 1, v: Loud { id: 1 }, w: Loud { id: 2 } } };
+        match h.t {
+          Tagged { v, .. } => { eat(v); }
+        }
+        eat(h.t.v);
+      }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "use of moved value `h.t.v`",
+    ]);
+  });
+});
+
 describe("std prelude", (): void => {
   it("resolves a user `impl Drop for X` against the prelude without a local trait declaration", (): void => {
     const result = compile(`
