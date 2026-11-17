@@ -3795,6 +3795,19 @@ describe("partial moves out of a match or if-let scrutinee", (): void => {
   });
 });
 
+describe("destructuring a large array of a Copy element type", (): void => {
+  it("compiles without building per-element move metadata", (): void => {
+    const result = compile(`
+      fn head(a: [i32; 1000000000]) -> i32 {
+        let [x, ..] = a;
+        x
+      }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+});
+
 describe("a match that moves a field out of its scrutinee", (): void => {
   const prelude = `
     struct Loud { id: i32 }

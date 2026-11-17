@@ -1669,13 +1669,21 @@ function slicePatternLevel(
       shorthandType: element.type,
     });
   }
-  // Descending: `using` releases the last declaration first, and a whole
-  // array releases its elements in ascending order.
-  const fields = Array.from({ length: type.length }, (_, i) => ({
+  return { entries, owner: type, fields: arrayElementFields(type) };
+}
+
+/**
+ * The array's elements as owner fields, last first: `using` releases the last
+ * declaration first, and a whole array releases its elements in ascending
+ * order. A `Copy` element leaves nothing to release, so no list is built for
+ * it, which keeps a huge numeric array proportional to its pattern.
+ */
+function arrayElementFields(type: Semantics.ArrayType): Semantics.OwnerField[] {
+  if (hasCapability(type.elementType, "copy")) return [];
+  return Array.from({ length: type.length }, (_, i) => ({
     name: String(type.length - 1 - i),
     type: type.elementType,
   }));
-  return { entries, owner: type, fields };
 }
 
 function patternLevel(pattern: Semantics.Pattern): PatternLevel | undefined {
