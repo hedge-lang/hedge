@@ -340,7 +340,7 @@ function partialDropShadows(
       kind: "LetStatement",
       name: reserveLocalName(
         ctx,
-        `dropShadow_${identity.text}_${path.join("_")}`,
+        ["dropShadow", identity.text, ...path].join("_"),
       ),
       mutable: false,
       value: some(

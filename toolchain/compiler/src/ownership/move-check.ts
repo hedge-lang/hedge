@@ -205,6 +205,12 @@ interface Ctx {
    * so building the map here has no equivalent gap.
    */
   readonly declarationsById: Map<BindingId, Declaration>;
+  /**
+   * Bindings of an abstract type that took a non-`Copy` field out of its
+   * owner. The owner stops releasing that field, so the binding takes over,
+   * through a release that tolerates a value with nothing to release.
+   */
+  readonly guardedDestinations: Set<BindingId>;
   /** See `CompileOptions.warnDropFlags` in driver.ts. */
   readonly warnDropFlags: boolean;
   readonly hasDropImpl: (type: Semantics.StructType) => boolean;
@@ -1869,6 +1875,27 @@ function patternSourceOf(
   };
 }
 
+/**
+ * `let x = o.f;` where `f` is a non-`Copy` field of an abstract type: the
+ * binding is the only thing left that can release it. Evaluated before the
+ * new binding is registered so a shadowing `let o = o.f;` still resolves the
+ * root against the old one.
+ */
+function movesAbstractField(
+  statement: Semantics.LetStatement,
+  scopeStack: ScopeStack,
+): boolean {
+  if (!isSome(statement.initializer)) return false;
+  const initializer = statement.initializer.value;
+  return (
+    statement.pattern.kind === "BindingPattern" &&
+    initializer.kind === "FieldAccessExpression" &&
+    isAbstractType(initializer.type) &&
+    !hasCapability(initializer.type, "copy") &&
+    fieldChainOf(initializer, scopeStack) !== undefined
+  );
+}
+
 function isPatternOwner(type: Semantics.Type): boolean {
   return type.kind === "StructType" || type.kind === "ArrayType";
 }
@@ -1955,6 +1982,7 @@ function walkStatement(
       // binding, if any) rather than the new one being declared - the new
       // binding doesn't exist yet as far as `resolve` is concerned.
       walkLetInitializer(ctx, statement, state, scopeStack);
+      const takesAbstractField = movesAbstractField(statement, scopeStack);
       for (const { identifier, mutable } of collectPatternDeclarations(
         statement.pattern,
       )) {
@@ -1973,6 +2001,7 @@ function walkStatement(
         };
         declarations.push(declaration);
         ctx.declarationsById.set(declaration.id, declaration);
+        if (takesAbstractField) ctx.guardedDestinations.add(declaration.id);
       }
       return;
     }
@@ -2101,18 +2130,18 @@ function recordDrops(
   const partialDrops: PartialDrop[] = [];
   for (let i = declarations.length - 1; i >= 0; i -= 1) {
     const declaration = declarations[i];
-    if (
-      declaration === undefined ||
-      hasCapability(declaration.type, "copy") ||
-      hasNoScopeEndDrop(declaration.type)
-    ) {
+    if (declaration === undefined || !isDropTracked(ctx, declaration)) {
       continue;
     }
     const declState = state.get(declaration.id);
-    const decision = dropDecision(declState);
+    const decision = scopeEndDecision(declaration, dropDecision(declState));
     switch (decision) {
       case "Drop":
-        drops.push(declaration);
+        if (ctx.guardedDestinations.has(declaration.id)) {
+          partialDrops.push(guardedWholeDrop(declaration));
+        } else {
+          drops.push(declaration);
+        }
         break;
       case "NoDrop":
         break;
@@ -2153,6 +2182,40 @@ function recordDrops(
   ctx.drops.set(scopeTokenId, drops);
   ctx.conditionalDrops.set(scopeTokenId, conditionalDrops);
   ctx.partialDrops.set(scopeTokenId, partialDrops);
+}
+
+/**
+ * A `Copy` binding never drops; an abstract one only when it took over a
+ * moved field.
+ */
+function isDropTracked(ctx: Ctx, declaration: Declaration): boolean {
+  if (hasCapability(declaration.type, "copy")) return false;
+  return (
+    !hasNoScopeEndDrop(declaration.type) ||
+    ctx.guardedDestinations.has(declaration.id)
+  );
+}
+
+/**
+ * An abstract binding has no flag-guarded or ambiguous-state release to
+ * emit, so only an unconditional drop survives for it.
+ */
+function scopeEndDecision(
+  declaration: Declaration,
+  decision: DropDecision,
+): DropDecision {
+  if (hasNoScopeEndDrop(declaration.type) && decision !== "Drop") {
+    return "NoDrop";
+  }
+  return decision;
+}
+
+/**
+ * The binding itself, released through the guard rather than assumed
+ * disposable.
+ */
+function guardedWholeDrop(declaration: Declaration): PartialDrop {
+  return { declaration, remaining: [{ path: [], guarded: true }] };
 }
 
 function partialDropOf(
@@ -2301,6 +2364,7 @@ export function analyzeOwnership(
       partialDrops,
       branchDrops,
       declarationsById,
+      guardedDestinations: new Set(),
       warnDropFlags: options.warnDropFlags ?? false,
       hasDropImpl: options.hasDropImpl ?? ((): boolean => false),
       currentStatementTokenId: fn.tokenId,

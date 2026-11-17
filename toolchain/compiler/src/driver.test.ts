@@ -3169,6 +3169,24 @@ describe("partial moves by destructuring a struct", (): void => {
     expect(runEmittedJs(js)).toEqual(["0", "1", "0", "3", "4"]);
   });
 
+  it("disposes a moved generic field through its destination without throwing for a number", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair<T> { a: T, b: Loud }
+      fn split<T>(p: Pair<T>) {
+        let x = p.a;
+        print(0);
+      }
+      fn main() {
+        split::<i32>(Pair { a: 5, b: Loud { id: 2 } });
+        split::<Loud>(Pair { a: Loud { id: 3 }, b: Loud { id: 4 } });
+      }
+    `);
+    // LIFO: x (the moved field) releases before p's remaining b.
+    expect(runEmittedJs(js)).toEqual(["0", "2", "0", "3", "4"]);
+  });
+
   const chainProgram = (
     outerImpl: string,
     binding: string,
