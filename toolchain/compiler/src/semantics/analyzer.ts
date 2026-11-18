@@ -96,6 +96,8 @@ export interface AnalysisResult {
    * field-only disposer instead of attaching a call missing its required
    * witness argument. */
   readonly dropBoundsUnsatisfied: ReadonlySet<number>;
+  /** Whether a `Drop` impl applies to a struct type, bounds included. */
+  readonly dropImplApplies: (type: Semantics.StructType) => boolean;
 }
 
 /** One hidden witness parameter of a generic function: `_witness_T_Draw` for
@@ -6936,6 +6938,7 @@ function analyzeTupleStructPattern(
   return {
     ...pattern,
     elements,
+    ownerFields: fields.map((f, i) => ({ name: String(i), type: f.type })),
     type: scrutineeType,
   };
 }
@@ -6999,6 +7002,10 @@ function analyzeStructPattern(
   return {
     ...pattern,
     fields,
+    ownerFields: declaredFields.map((f) => ({
+      name: f.name.text,
+      type: f.type,
+    })),
     type: scrutineeType,
   };
 }
@@ -11380,8 +11387,39 @@ function recordDropWitnesses(
   constructedType: Semantics.Type,
 ): void {
   if (constructedType.kind !== "StructType") return;
+  const resolution = resolveDropImpl(ctx, constructedType);
+  switch (resolution.kind) {
+    case "none":
+      return;
+    case "unsatisfied":
+      ctx.dropBoundsUnsatisfiedTable.add(tokenId);
+      return;
+    case "applies":
+      if (resolution.witnesses.length > 0) {
+        ctx.dropWitnessTable.set(tokenId, resolution.witnesses);
+      }
+      return;
+    default:
+      assertNever(resolution);
+  }
+}
+
+type DropImplResolution =
+  | { readonly kind: "none" }
+  | { readonly kind: "unsatisfied" }
+  | { readonly kind: "applies"; readonly witnesses: readonly WitnessRef[] };
+
+/**
+ * Whether `Drop` applies to `constructedType`, and with which witnesses for
+ * the impl's own bounds. `none` means no `Drop` impl targets the type at all;
+ * `unsatisfied` means one does but its bounds fail for these type arguments.
+ */
+function resolveDropImpl(
+  ctx: AnalysisContext,
+  constructedType: Semantics.StructType,
+): DropImplResolution {
   const dropTraitId = lookupPreludeTrait(ctx, "Drop");
-  if (dropTraitId === undefined) return;
+  if (dropTraitId === undefined) return { kind: "none" };
   const method = (
     ctx.methodIndex.get(typeIdentity(constructedType)) ?? []
   ).find(
@@ -11395,9 +11433,9 @@ function recordDropWitnesses(
         new Map(),
       ),
   );
-  if (method === undefined) return;
+  if (method === undefined) return { kind: "none" };
   const implBounds = implLevelGenericParamBounds(method);
-  if (implBounds.size === 0) return;
+  if (implBounds.size === 0) return { kind: "applies", witnesses: [] };
   const bindings = implGenericParamBindings(
     constructedType,
     method.implGenericParamPositions,
@@ -11408,13 +11446,100 @@ function recordDropWitnesses(
     implBounds,
     method.implGenericParamPositions,
   );
-  if (!isSome(resolved)) {
-    ctx.dropBoundsUnsatisfiedTable.add(tokenId);
-    return;
+  return isSome(resolved)
+    ? { kind: "applies", witnesses: resolved.value }
+    : { kind: "unsatisfied" };
+}
+
+/**
+ * Whether `type` still mentions an abstract generic parameter, so which
+ * instantiation it stands for is not known here.
+ */
+// eslint-disable-next-line complexity -- Routing function over the full Type union
+function typeIsAbstract(type: Semantics.Type): boolean {
+  switch (type.kind) {
+    case "NamedType":
+    case "Projection":
+      return true;
+    case "ReferenceType":
+      return typeIsAbstract(type.referent);
+    case "ArrayType":
+      return typeIsAbstract(type.elementType);
+    case "StructType":
+    case "EnumType":
+      return type.typeArguments.some(typeIsAbstract);
+    case "FunctionType":
+    case "UnitType":
+    case "DynType":
+    case "PrimitiveI8Type":
+    case "PrimitiveI16Type":
+    case "PrimitiveI32Type":
+    case "PrimitiveI64Type":
+    case "PrimitiveIsizeType":
+    case "PrimitiveU8Type":
+    case "PrimitiveU16Type":
+    case "PrimitiveU32Type":
+    case "PrimitiveU64Type":
+    case "PrimitiveUsizeType":
+    case "PrimitiveF32Type":
+    case "PrimitiveF64Type":
+    case "PrimitiveBooleanType":
+    case "PrimitiveCharType":
+    case "PrimitiveStringType":
+      return false;
+    default:
+      return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
   }
-  if (resolved.value.length > 0) {
-    ctx.dropWitnessTable.set(tokenId, resolved.value);
+}
+
+/**
+ * Whether a `Drop` impl applies to `type`: a matching impl whose bounds hold,
+ * or one that a different instantiation of a still-abstract `type` may match
+ * or satisfy (so it is treated as applying).
+ */
+function dropImplApplies(
+  ctx: AnalysisContext,
+  type: Semantics.StructType,
+): boolean {
+  const resolution = resolveDropImpl(ctx, type);
+  switch (resolution.kind) {
+    case "applies":
+      return true;
+    case "unsatisfied":
+      return typeIsAbstract(type);
+    case "none":
+      return typeIsAbstract(type) && dropImplMayMatch(ctx, type);
+    default:
+      return assertNever(resolution);
   }
+}
+
+/**
+ * Whether some `Drop` impl for `type`'s struct has a target that every
+ * instantiation of `type`'s abstract arguments could still match: a position
+ * only rules an impl out when its argument is concrete and its slot differs.
+ */
+function dropImplMayMatch(
+  ctx: AnalysisContext,
+  type: Semantics.StructType,
+): boolean {
+  const dropTraitId = lookupPreludeTrait(ctx, "Drop");
+  if (dropTraitId === undefined) return false;
+  return (ctx.methodIndex.get(typeIdentity(type)) ?? []).some(
+    (m) =>
+      m.name === "drop" &&
+      m.origin.kind === "trait" &&
+      m.origin.traitId === dropTraitId &&
+      m.targetTypeArguments.length === type.typeArguments.length &&
+      m.targetTypeArguments.every((slot, i) => {
+        const argument = type.typeArguments[i];
+        return (
+          argument !== undefined &&
+          (typeIsAbstract(argument) ||
+            slotSatisfiesType(slot, argument, new Map()))
+        );
+      }),
+  );
 }
 
 /** Records how a resolved call on a concrete receiver dispatches, for
@@ -12508,6 +12633,7 @@ function analyzeFieldAccessExpression(
     ...expression,
     object,
     field: { ...expression.field, type: UNIT },
+    ownerFields: [],
     type: UNIT,
   });
 
@@ -12565,6 +12691,15 @@ function analyzeFieldAccessExpression(
     ...expression,
     object,
     field: { ...expression.field, type: fieldType },
+    ownerFields: structDecl.body.fields.map((f) => ({
+      name: f.name.text,
+      type: substituteStructFieldType(
+        f.type,
+        structDecl,
+        structType,
+        expression.field.tokenId,
+      ),
+    })),
     type: fieldType,
   };
 }
@@ -15884,5 +16019,6 @@ export function analyze(
     methodCallWitnesses: ctx.methodCallWitnessTable,
     dropWitnesses: ctx.dropWitnessTable,
     dropBoundsUnsatisfied: ctx.dropBoundsUnsatisfiedTable,
+    dropImplApplies: (type) => dropImplApplies(ctx, type),
   };
 }

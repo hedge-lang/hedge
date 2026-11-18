@@ -133,6 +133,7 @@ type PrecKey =
   | "ArrayExpression"
   | "ArrayRepeatExpression"
   | "ArraySliceViewExpression"
+  | "DisposableOrNullExpression"
   | "RangeExpression"
   | "StructExpression"
   | "RefCellExpression"
@@ -326,6 +327,11 @@ const ARRAY_DISPOSE_HELPER = `function ${ARRAY_DISPOSE_HELPER_NAME}(arr) {
     }
   };
   return arr;
+}`;
+
+const DISPOSABLE_OR_NULL_HELPER_NAME = "__hedgeDisposableOrNull";
+const DISPOSABLE_OR_NULL_HELPER = `function ${DISPOSABLE_OR_NULL_HELPER_NAME}(value) {
+  return value != null && typeof value[Symbol.dispose] === "function" ? value : null;
 }`;
 
 /**
@@ -708,6 +714,8 @@ function emitExpression(expression: Expression): string {
       return emitArrayRepeatExpression(expression);
     case "ArraySliceViewExpression":
       return emitArraySliceViewExpression(expression);
+    case "DisposableOrNullExpression":
+      return `${DISPOSABLE_OR_NULL_HELPER_NAME}(${emitExpression(expression.value)})`;
     case "StructExpression":
       return emitStructExpression(expression);
     case "RefCellExpression":
@@ -844,6 +852,7 @@ function emitStatement(statement: Statement): string {
     case "ArrayExpression":
     case "ArrayRepeatExpression":
     case "ArraySliceViewExpression":
+    case "DisposableOrNullExpression":
     case "RangeExpression":
     case "StructExpression":
     case "RefCellExpression":
@@ -1058,6 +1067,7 @@ function emitItem(item: Item): string {
     case "ArrayExpression":
     case "ArrayRepeatExpression":
     case "ArraySliceViewExpression":
+    case "DisposableOrNullExpression":
     case "RangeExpression":
     case "StructExpression":
     case "RefCellExpression":
@@ -1239,6 +1249,14 @@ export function generate(program: Program): Code {
     parts.some((part) => part.text.includes(`${ARRAY_SLICE_VIEW_HELPER_NAME}(`))
   ) {
     parts.unshift({ text: ARRAY_SLICE_VIEW_HELPER, mappings: [] });
+  }
+
+  if (
+    parts.some((part) =>
+      part.text.includes(`${DISPOSABLE_OR_NULL_HELPER_NAME}(`),
+    )
+  ) {
+    parts.unshift({ text: DISPOSABLE_OR_NULL_HELPER, mappings: [] });
   }
 
   if (hasMain(program)) {

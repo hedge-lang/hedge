@@ -60,7 +60,10 @@ export function compile(
   const borrowChecked = checkBorrows(analysis.program, tokens);
   const ownership = hasError(analysis.diagnostics)
     ? { diagnostics: [], functions: new Map() }
-    : analyzeOwnership(analysis.program, tokens, options);
+    : analyzeOwnership(analysis.program, tokens, {
+        ...options,
+        hasDropImpl: analysis.dropImplApplies,
+      });
   const diagnostics = [
     ...lexDiagnostics,
     ...parseDiagnostics,

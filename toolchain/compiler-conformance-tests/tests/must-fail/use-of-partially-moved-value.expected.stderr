@@ -1,0 +1,2 @@
+error[HEDGE-BORROW-CHECK-003]: use of partially moved value `p`: `p.a` was moved out
+  = note: moved here at offset 176

@@ -2786,6 +2786,637 @@ describe("dyn Trait runtime", (): void => {
   });
 });
 
+describe("partial moves out of a struct", (): void => {
+  it("compiles a move of a non-Copy field and disposes the moved value and the remaining fields once each", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair { a: Loud, b: Loud }
+      fn main() {
+        let o = Pair { a: Loud { id: 1 }, b: Loud { id: 2 } };
+        let f = o.a;
+        print(0);
+      }
+    `);
+    // Disposal is LIFO: f (1) first, then only o's remaining field b (2).
+    expect(runEmittedJs(js)).toEqual(["0", "1", "2"]);
+  });
+
+  it("disposes only the siblings of a nested moved path, at every level", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Inner { x: Loud, y: Loud }
+      struct Outer { i: Inner, z: Loud }
+      fn main() {
+        let o = Outer { i: Inner { x: Loud { id: 1 }, y: Loud { id: 2 } }, z: Loud { id: 3 } };
+        let f = o.i.x;
+        print(0);
+      }
+    `);
+    // f (1), then the leftovers in the reverse field order a whole Outer
+    // would release them: z (3) before i's remaining y (2).
+    expect(runEmittedJs(js)).toEqual(["0", "1", "3", "2"]);
+  });
+
+  it("disposes the remaining fields once when two disjoint fields are both moved out", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Trio { a: Loud, b: Loud, c: Loud }
+      fn main() {
+        let t = Trio { a: Loud { id: 1 }, b: Loud { id: 2 }, c: Loud { id: 3 } };
+        let x = t.a;
+        let y = t.c;
+        print(0);
+      }
+    `);
+    // LIFO: y (3), x (1), then t's remaining b (2).
+    expect(runEmittedJs(js)).toEqual(["0", "3", "1", "2"]);
+  });
+
+  it("moves a field out of an owned parameter and disposes the rest in the callee", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair { a: Loud, b: Loud }
+      fn split(p: Pair) { let f = p.a; print(0); }
+      fn main() { split(Pair { a: Loud { id: 1 }, b: Loud { id: 2 } }); print(9); }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "1", "2", "9"]);
+  });
+
+  it("moves a field to a callee and disposes the rest at scope end, not the moved one twice", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair { a: Loud, b: Loud }
+      fn eat(l: Loud) { print(0); }
+      fn main() {
+        let o = Pair { a: Loud { id: 1 }, b: Loud { id: 2 } };
+        eat(o.a);
+        print(5);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "1", "5", "2"]);
+  });
+
+  it("leaves a Copy field readable and a user name containing $ intact across a partial move", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Mix { a: Loud, n: i32 }
+      fn main() {
+        let o$1 = Mix { a: Loud { id: 1 }, n: 7 };
+        let f = o$1.a;
+        print(o$1.n);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["7", "1"]);
+  });
+});
+
+describe("partial moves by destructuring an array", (): void => {
+  it("disposes the elements an array pattern does not bind in the order the whole array would, nested arrays included", (): void => {
+    const run = (body: string): string[] =>
+      runEmittedJs(
+        emittedJs(`
+          struct Loud { id: i32 }
+          impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+          fn main() {
+            ${body}
+            print(0);
+          }
+        `),
+      );
+    const flat = "let a = [Loud { id: 1 }, Loud { id: 2 }, Loud { id: 3 }];";
+    const nested =
+      "let a = [[Loud { id: 1 }, Loud { id: 2 }], [Loud { id: 3 }, Loud { id: 4 }]];";
+    expect(run(`${flat} let [x, ..] = a;`)).toEqual(run(flat));
+    expect(run(`${nested} let [[x, ..], ..] = a;`)).toEqual(run(nested));
+  });
+
+  it("disposes the elements an array pattern does not bind, once, along with the bound one", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      fn main() {
+        let a = [Loud { id: 1 }, Loud { id: 2 }, Loud { id: 3 }];
+        let [x, ..] = a;
+        print(0);
+      }
+    `);
+    // x (1) first, then a's unbound elements in ascending order: 2, 3.
+    expect(runEmittedJs(js)).toEqual(["0", "1", "2", "3"]);
+  });
+
+  it("disposes the elements before and after a middle element the pattern binds", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      fn main() {
+        let a = [Loud { id: 1 }, Loud { id: 2 }, Loud { id: 3 }];
+        let [_, x, _] = a;
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "2", "1", "3"]);
+  });
+
+  it("disposes the elements a trailing-element pattern does not bind", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      fn main() {
+        let a = [Loud { id: 1 }, Loud { id: 2 }, Loud { id: 3 }];
+        let [.., z] = a;
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "3", "1", "2"]);
+  });
+
+  it("disposes every element once when a named rest binds the remaining elements", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      fn main() {
+        let a = [Loud { id: 1 }, Loud { id: 2 }, Loud { id: 3 }];
+        let [x, ..tail] = a;
+        print(0);
+      }
+    `);
+    // LIFO: tail (2, 3) first, then x (1).
+    expect(runEmittedJs(js)).toEqual(["0", "2", "3", "1"]);
+  });
+
+  it("leaves nothing behind when the pattern binds every element", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      fn main() {
+        let a = [Loud { id: 1 }, Loud { id: 2 }];
+        let [x, y] = a;
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "2", "1"]);
+  });
+});
+
+describe("partial moves by destructuring a struct", (): void => {
+  it("disposes the fields a struct pattern does not bind, once, along with the bound ones", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair { a: Loud, b: Loud }
+      fn main() {
+        let p = Pair { a: Loud { id: 1 }, b: Loud { id: 2 } };
+        let Pair { a, .. } = p;
+        print(0);
+      }
+    `);
+    // LIFO: a (1) first, then p's unbound field b (2).
+    expect(runEmittedJs(js)).toEqual(["0", "1", "2"]);
+  });
+
+  it("leaves nothing behind when the pattern binds every field", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair { a: Loud, b: Loud }
+      fn main() {
+        let p = Pair { a: Loud { id: 1 }, b: Loud { id: 2 } };
+        let Pair { a, b } = p;
+        print(0);
+      }
+    `);
+    // LIFO over the bindings: b (2), then a (1); p has nothing left.
+    expect(runEmittedJs(js)).toEqual(["0", "2", "1"]);
+  });
+
+  it("disposes a renamed binding's source field once and the unbound field once", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair { a: Loud, b: Loud }
+      fn main() {
+        let p = Pair { a: Loud { id: 1 }, b: Loud { id: 2 } };
+        let Pair { b: second, .. } = p;
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "2", "1"]);
+  });
+
+  it("disposes the elements a tuple-struct pattern does not bind, once, along with the bound ones", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Duo(Loud, Loud);
+      fn main() {
+        let d = Duo(Loud { id: 1 }, Loud { id: 2 });
+        let Duo(x, _) = d;
+        print(0);
+      }
+    `);
+    // LIFO: x (1) first, then d's unbound element (2).
+    expect(runEmittedJs(js)).toEqual(["0", "1", "2"]);
+  });
+
+  it("leaves nothing behind when a tuple-struct pattern binds every element", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Duo(Loud, Loud);
+      fn main() {
+        let d = Duo(Loud { id: 1 }, Loud { id: 2 });
+        let Duo(x, y) = d;
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "2", "1"]);
+  });
+
+  it("disposes the unbound siblings at every level of a nested struct pattern", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Inner { x: Loud, y: Loud }
+      struct Outer { i: Inner, z: Loud }
+      fn main() {
+        let o = Outer { i: Inner { x: Loud { id: 1 }, y: Loud { id: 2 } }, z: Loud { id: 3 } };
+        let Outer { i: Inner { x, .. }, .. } = o;
+        print(0);
+      }
+    `);
+    // x (1) first, then o's leftovers: z (3) before i's y (2).
+    expect(runEmittedJs(js)).toEqual(["0", "1", "3", "2"]);
+  });
+
+  it("moves nothing when the pattern binds only Copy fields", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Mix { a: Loud, n: i32 }
+      fn main() {
+        let m = Mix { a: Loud { id: 1 }, n: 7 };
+        let Mix { n, .. } = m;
+        print(n);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["7", "1"]);
+  });
+
+  it("rejects destructuring a struct that implements Drop", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Guard { a: Loud, b: Loud }
+      impl Drop for Guard { fn drop(&mut self) { print(9); } }
+      fn main() {
+        let g = Guard { a: Loud { id: 1 }, b: Loud { id: 2 } };
+        let Guard { a, .. } = g;
+      }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `g.a` out of `Guard` because it implements `Drop`",
+    ]);
+  });
+
+  it("rejects a pattern that moves out of a nested Drop type even when an earlier field moves from a plain owner", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Inner { x: Loud, y: Loud }
+      impl Drop for Inner { fn drop(&mut self) { print(9); } }
+      struct Outer { a: Loud, i: Inner }
+      fn main() {
+        let o = Outer { a: Loud { id: 1 }, i: Inner { x: Loud { id: 2 }, y: Loud { id: 3 } } };
+        let Outer { a, i: Inner { x, .. } } = o;
+      }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `o.i.x` out of `Inner` because it implements `Drop`",
+    ]);
+  });
+
+  it("rejects a pattern with a literal leaf that moves a field out of a Drop type", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Guard { a: Loud, n: i32 }
+      impl Drop for Guard { fn drop(&mut self) { print(9); } }
+      fn main() {
+        let g = Guard { a: Loud { id: 1 }, n: 0 };
+        let Guard { a, n: 0 } = g;
+      }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `g.a` out of `Guard` because it implements `Drop`",
+    ]);
+  });
+
+  it("disposes the remaining fields of a destructured binding that is itself partially moved", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Inner { a: Loud, b: Loud }
+      struct Outer { i: Inner, c: Loud }
+      fn main() {
+        let o = Outer { i: Inner { a: Loud { id: 1 }, b: Loud { id: 2 } }, c: Loud { id: 3 } };
+        let Outer { i, .. } = o;
+        let x = i.a;
+        print(0);
+      }
+    `);
+    // LIFO: x (1), then i's remaining field b (2), then o's unbound c (3).
+    expect(runEmittedJs(js)).toEqual(["0", "1", "2", "3"]);
+  });
+
+  it("disposes the unbound fields of a pattern destructuring a field of a binding", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Inner { x: Loud, y: Loud }
+      struct Outer { i: Inner, c: Loud }
+      fn main() {
+        let o = Outer { i: Inner { x: Loud { id: 1 }, y: Loud { id: 2 } }, c: Loud { id: 3 } };
+        let Inner { x, .. } = o.i;
+        print(0);
+      }
+    `);
+    // LIFO: x (1), then o's remaining places in whole-value order: c (3)
+    // before i's unbound y (2).
+    expect(runEmittedJs(js)).toEqual(["0", "1", "3", "2"]);
+  });
+
+  it("disposes the remaining generic field of a partially moved struct without throwing for a number", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair<T> { a: Loud, b: T }
+      fn split<T>(p: Pair<T>) {
+        let x = p.a;
+        print(0);
+      }
+      fn main() {
+        split::<i32>(Pair { a: Loud { id: 1 }, b: 2 });
+        split::<Loud>(Pair { a: Loud { id: 3 }, b: Loud { id: 4 } });
+      }
+    `);
+    // The number is skipped; the disposable instantiation is still released.
+    expect(runEmittedJs(js)).toEqual(["0", "1", "0", "3", "4"]);
+  });
+
+  it("disposes a moved generic field through its destination without throwing for a number", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair<T> { a: T, b: Loud }
+      fn split<T>(p: Pair<T>) {
+        let x = p.a;
+        print(0);
+      }
+      fn main() {
+        split::<i32>(Pair { a: 5, b: Loud { id: 2 } });
+        split::<Loud>(Pair { a: Loud { id: 3 }, b: Loud { id: 4 } });
+      }
+    `);
+    // LIFO: x (the moved field) releases before p's remaining b.
+    expect(runEmittedJs(js)).toEqual(["0", "2", "0", "3", "4"]);
+  });
+
+  const chainProgram = (
+    outerImpl: string,
+    binding: string,
+    body: string,
+  ): string => `
+    struct Loud { id: i32 }
+    impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+    struct Inner { x: Loud, y: Loud }
+    struct Outer { i: Inner, c: Loud }
+    ${outerImpl}
+    fn main() {
+      ${binding} o = Outer { i: Inner { x: Loud { id: 1 }, y: Loud { id: 2 } }, c: Loud { id: 3 } };
+      ${body}
+    }
+  `;
+
+  it("rejects destructuring a field out of a struct that implements Drop", (): void => {
+    const result = compile(
+      chainProgram(
+        "impl Drop for Outer { fn drop(&mut self) { print(9); } }",
+        "let",
+        "let Inner { x, .. } = o.i;",
+      ),
+    );
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `o.i.x` out of `Outer` because it implements `Drop`",
+    ]);
+  });
+
+  it("rejects destructuring a field out of a `mut` binding", (): void => {
+    const result = compile(
+      chainProgram("", "let mut", "let Inner { x, .. } = o.i;"),
+    );
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `o.i.x` out of `mut` binding `o`; moving a field out of a `mut` binding is not supported yet",
+    ]);
+  });
+
+  it("leaves the owner whole when a field pattern binds nothing", (): void => {
+    const js = emittedJs(
+      chainProgram("", "let", "let Inner { .. } = o.i; let t = o.c; print(0);"),
+    );
+    expect(runEmittedJs(js)).toEqual(["0", "3", "2", "1"]);
+  });
+
+  it("rejects a pattern that binds nothing from a field already moved out", (): void => {
+    const result = compile(
+      chainProgram("", "let", "let t = o.i; let Inner { .. } = o.i;"),
+    );
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "use of moved value `o.i`",
+    ]);
+  });
+
+  it("rejects a plain read of a Copy field through a place already moved out", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Inner { value: i32 }
+      struct Pair { a: Inner, b: Loud }
+      fn main() {
+        let p = Pair { a: Inner { value: 5 }, b: Loud { id: 1 } };
+        let taken = p.a;
+        print(p.a.value);
+      }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot use `p.a.value`: `p.a` was moved out",
+    ]);
+  });
+
+  it("rejects a pattern that reads a Copy field through a place already moved out", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Inner { value: i32 }
+      struct Pair { a: Inner, b: Loud }
+      fn main() {
+        let p = Pair { a: Inner { value: 5 }, b: Loud { id: 1 } };
+        let taken = p.a;
+        let Pair { a: Inner { value }, b } = p;
+      }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot use `p.a.value`: `p.a` was moved out",
+    ]);
+  });
+
+  it("rejects destructuring a non-Copy field out of a `mut` binding", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair { a: Loud, b: Loud }
+      fn main() {
+        let mut p = Pair { a: Loud { id: 1 }, b: Loud { id: 2 } };
+        let Pair { a, .. } = p;
+      }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `p.a` out of `mut` binding `p`; moving a field out of a `mut` binding is not supported yet",
+    ]);
+  });
+});
+
+describe("partial moves on every branch", (): void => {
+  it("disposes the unmoved field once when both branches move the same field", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair { a: Loud, b: Loud }
+      fn run(c: bool) {
+        let o = Pair { a: Loud { id: 1 }, b: Loud { id: 2 } };
+        if c { let x = o.a; print(10); } else { let y = o.a; print(20); }
+        print(0);
+      }
+      fn main() { run(true); run(false); }
+    `);
+    // Each branch's moved value is released at the end of that branch's own
+    // block; the leftover b (2) goes at the end of run.
+    expect(runEmittedJs(js)).toEqual([
+      "10",
+      "1",
+      "0",
+      "2",
+      "20",
+      "1",
+      "0",
+      "2",
+    ]);
+  });
+
+  it("rejects a field moved on one branch while the other branch moves the whole value", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair { a: Loud, b: Loud }
+      fn eat(p: Pair) { print(0); }
+      fn run(c: bool) {
+        let o = Pair { a: Loud { id: 1 }, b: Loud { id: 2 } };
+        if c { let x = o.a; } else { eat(o); }
+      }
+      fn main() { run(true); }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "`o.a` is moved on some paths but not others, and conditional partial moves are not supported yet",
+    ]);
+  });
+});
+
+describe("partial moves out of a type with a Drop impl", (): void => {
+  it("rejects moving a field out of a struct that implements Drop", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Guard { a: Loud, b: Loud }
+      impl Drop for Guard { fn drop(&mut self) { print(9); } }
+      fn main() {
+        let g = Guard { a: Loud { id: 1 }, b: Loud { id: 2 } };
+        let f = g.a;
+      }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `g.a` out of `Guard` because it implements `Drop`",
+    ]);
+  });
+
+  it("names the inner struct when only a nested owner on the path implements Drop", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Inner { x: Loud, y: Loud }
+      impl Drop for Inner { fn drop(&mut self) { print(9); } }
+      struct Outer { i: Inner, z: Loud }
+      fn main() {
+        let o = Outer { i: Inner { x: Loud { id: 1 }, y: Loud { id: 2 } }, z: Loud { id: 3 } };
+        let f = o.i.x;
+      }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `o.i.x` out of `Inner` because it implements `Drop`",
+    ]);
+  });
+
+  it("still allows moving the whole Drop value and reading its Copy fields", (): void => {
+    const js = emittedJs(`
+      struct Guard { n: i32 }
+      impl Drop for Guard { fn drop(&mut self) { print(self.n); } }
+      fn eat(g: Guard) { print(0); }
+      fn main() {
+        let g = Guard { n: 7 };
+        let n = g.n;
+        eat(g);
+        print(n);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "7", "7"]);
+  });
+
+  it("rejects a field move out of a generic struct whose Drop impl covers the instantiation", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Holder<T> { v: T }
+      impl<T> Drop for Holder<T> { fn drop(&mut self) { print(9); } }
+      fn main() {
+        let h = Holder { v: Loud { id: 1 } };
+        let f = h.v;
+      }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `h.v` out of `Holder` because it implements `Drop`",
+    ]);
+  });
+
+  it("allows a field move out of an instantiation the generic struct's Drop impls do not cover", (): void => {
+    const js = emittedJs(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Holder<T> { v: T, w: Loud }
+      impl Drop for Holder<str> { fn drop(&mut self) { print(9); } }
+      fn main() {
+        let h = Holder { v: Loud { id: 1 }, w: Loud { id: 2 } };
+        let f = h.v;
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["0", "1", "2"]);
+  });
+});
+
 describe("Drop::drop dispose body", (): void => {
   it("runs each element's `drop` body exactly once at scope end for an array of a `Drop` struct", (): void => {
     const js = emittedJs(`
@@ -3029,6 +3660,177 @@ describe("Drop::drop dispose body", (): void => {
       }
     `);
     expect(runEmittedJs(js)).toEqual(["0"]);
+  });
+});
+
+describe("partial moves out of a bounded Drop impl's type", (): void => {
+  const program = (instantiation: string): string => `
+    trait Marker { fn mark(&self) -> i32; }
+    struct Num { v: i32 }
+    impl Marker for Num { fn mark(&self) -> i32 { self.v } }
+    struct Plain { v: i32 }
+    struct Loud { id: i32 }
+    impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+    struct Wrapper<T> { a: Loud, b: T }
+    impl<T: Marker> Drop for Wrapper<T> {
+      fn drop(&mut self) { print(self.b.mark()); }
+    }
+    fn main() {
+      let w = Wrapper { a: Loud { id: 1 }, b: ${instantiation} };
+      let x = w.a;
+      print(0);
+    }
+  `;
+
+  it("compiles a field move out of an instantiation whose Drop bound is unsatisfied, and runs no drop body", (): void => {
+    const js = emittedJs(program("Plain { v: 2 }"));
+    expect(runEmittedJs(js)).toEqual(["0", "1"]);
+  });
+
+  it("rejects moving a field out of an instantiation whose bound is satisfied", (): void => {
+    const result = compile(program("Num { v: 2 }"));
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `w.a` out of `Wrapper` because it implements `Drop`",
+    ]);
+  });
+});
+
+describe("partial moves out of a type whose Drop bound depends on an abstract parameter", (): void => {
+  it("rejects a field move out of a bounded Drop type whose type argument is still abstract", (): void => {
+    const result = compile(`
+      trait Marker { fn mark(&self) -> i32; }
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Wrapper<T> { a: Loud, b: T }
+      impl<T: Marker> Drop for Wrapper<T> {
+        fn drop(&mut self) { print(self.b.mark()); }
+      }
+      fn split<T>(w: Wrapper<T>) {
+        let x = w.a;
+      }
+      fn main() {}
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `w.a` out of `Wrapper` because it implements `Drop`",
+    ]);
+  });
+});
+
+describe("partial moves out of a type whose specialized Drop impl may match an abstract parameter", (): void => {
+  const program = (instantiation: string): string => `
+    struct Loud { id: i32 }
+    impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+    struct Holder<T> { a: Loud, b: T }
+    impl Drop for Holder<Loud> {
+      fn drop(&mut self) { print(9); }
+    }
+    fn split<T>(h: Holder<T>) {
+      let x = h.a;
+    }
+    fn main() {
+      ${instantiation}
+    }
+  `;
+
+  it("rejects a field move out of a generic parameter's type that a specialized Drop impl could match", (): void => {
+    const result = compile(program(""));
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "cannot move `h.a` out of `Holder` because it implements `Drop`",
+    ]);
+  });
+
+  it("still compiles a field move out of a type whose only Drop impl cannot match its other argument", (): void => {
+    const result = compile(`
+      struct Loud { id: i32 }
+      impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+      struct Pair<T, U> { a: Loud, b: T, c: U }
+      impl<T> Drop for Pair<T, bool> {
+        fn drop(&mut self) { print(9); }
+      }
+      fn split<T>(p: Pair<T, i32>) {
+        let x = p.a;
+      }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+});
+
+describe("partial moves out of a match or if-let scrutinee", (): void => {
+  const prelude = `
+    struct Loud { id: i32 }
+    impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+    struct Inner { x: Loud, y: Loud }
+    struct Outer { i: Inner, z: Loud }
+    fn eat(l: Loud) {}
+  `;
+
+  it("disposes the ignored sibling of a field a match arm destructures", (): void => {
+    const js = emittedJs(`
+      ${prelude}
+      fn main() {
+        let o = Outer { i: Inner { x: Loud { id: 1 }, y: Loud { id: 2 } }, z: Loud { id: 3 } };
+        match o.i {
+          Inner { x, .. } => { eat(x); }
+        }
+        print(0);
+      }
+    `);
+    // eat drops x (1), then o's leftovers: z (3) before i's y (2).
+    expect(runEmittedJs(js)).toEqual(["1", "0", "3", "2"]);
+  });
+
+  it("disposes the ignored sibling of a field an if-let destructures", (): void => {
+    const js = emittedJs(`
+      ${prelude}
+      fn main() {
+        let o = Outer { i: Inner { x: Loud { id: 1 }, y: Loud { id: 2 } }, z: Loud { id: 3 } };
+        if let Inner { x, .. } = o.i {
+          eat(x);
+        }
+        print(0);
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["1", "0", "3", "2"]);
+  });
+});
+
+describe("destructuring a large array of a Copy element type", (): void => {
+  it("compiles without building per-element move metadata", (): void => {
+    const result = compile(`
+      fn head(a: [i32; 1000000000]) -> i32 {
+        let [x, ..] = a;
+        x
+      }
+      fn main() {}
+    `);
+    expect(result.diagnostics).toEqual([]);
+  });
+});
+
+describe("a match that moves a field out of its scrutinee", (): void => {
+  const prelude = `
+    struct Loud { id: i32 }
+    impl Drop for Loud { fn drop(&mut self) { print(self.id); } }
+    struct Tagged { n: i32, v: Loud, w: Loud }
+    struct Holder { t: Tagged }
+    fn eat(l: Loud) {}
+  `;
+
+  it("rejects using a field a match arm moved out of its scrutinee", (): void => {
+    const result = compile(`
+      ${prelude}
+      fn main() {
+        let h = Holder { t: Tagged { n: 1, v: Loud { id: 1 }, w: Loud { id: 2 } } };
+        match h.t {
+          Tagged { v, .. } => { eat(v); }
+        }
+        eat(h.t.v);
+      }
+    `);
+    expect(result.diagnostics.map((d) => messageOf(d))).toEqual([
+      "use of moved value `h.t.v`",
+    ]);
   });
 });
 

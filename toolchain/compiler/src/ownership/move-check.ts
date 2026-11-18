@@ -83,7 +83,26 @@ type MoveState =
       readonly moveSite: Span;
       readonly moveStatementTokenId: number;
     }
-  | { readonly kind: "PossiblyUninitialized" };
+  | { readonly kind: "PossiblyUninitialized" }
+  | { readonly kind: "PartiallyMoved"; readonly moved: readonly MovedPlace[] };
+
+/**
+ * A field path moved out of a binding, e.g. `["i", "x"]` for `o.i.x`.
+ * `siblings[k]` is every declared field of the struct that owns `path[k]`,
+ * so the fields a partial move leaves behind can be computed without a
+ * second struct lookup.
+ */
+interface MovedPlace {
+  readonly path: readonly string[];
+  readonly siblings: readonly (readonly Semantics.OwnerField[])[];
+  readonly moveSite: Span;
+  readonly moveStatementTokenId: number;
+  /**
+   * Set once a branch merge has reported this place as moved on only some
+   * paths, so an enclosing merge does not report it again.
+   */
+  readonly conditional?: true;
+}
 
 type StateMap = Map<BindingId, MoveState>;
 type ScopeStack = Map<string, BindingId>[];
@@ -119,6 +138,29 @@ export interface BranchDrop {
   readonly branch: "then" | "else";
 }
 
+/**
+ * A binding with some fields moved out: it is not disposed whole, only the
+ * fields still owned at scope end are, each at `declaration`'s own position
+ * in the drop order. `remaining` is in the order its entries are declared as
+ * `using` bindings, so the last one releases first: field declaration order
+ * for a struct, descending index order for an array. One entry per owned
+ * field path that has something to release.
+ */
+export interface PartialDrop {
+  readonly declaration: Declaration;
+  readonly remaining: readonly RemainingPlace[];
+}
+
+/**
+ * `guarded` marks a place whose type is an abstract generic parameter: at
+ * runtime it may hold a value with nothing to release, so its release must
+ * tolerate that instead of assuming a disposable object.
+ */
+interface RemainingPlace {
+  readonly path: readonly string[];
+  readonly guarded: boolean;
+}
+
 export interface FunctionOwnership {
   readonly graph: ControlFlowGraph;
   /**
@@ -132,6 +174,8 @@ export interface FunctionOwnership {
    * Currently always empty without loops -- see `ConditionalDrop`.
    */
   readonly conditionalDrops: ReadonlyMap<number, readonly ConditionalDrop[]>;
+  /** Partially-moved declarations, keyed the same way as `drops`. */
+  readonly partialDrops: ReadonlyMap<number, readonly PartialDrop[]>;
   /** Conditional moves resolved via static duplication. See `BranchDrop`. */
   readonly branchDrops: readonly BranchDrop[];
 }
@@ -146,6 +190,7 @@ interface Ctx {
   readonly diagnostics: Diagnostic[];
   readonly drops: Map<number, Declaration[]>;
   readonly conditionalDrops: Map<number, ConditionalDrop[]>;
+  readonly partialDrops: Map<number, PartialDrop[]>;
   readonly branchDrops: BranchDrop[];
   /**
    * Every declaration in the function currently being walked, keyed by its
@@ -160,8 +205,15 @@ interface Ctx {
    * so building the map here has no equivalent gap.
    */
   readonly declarationsById: Map<BindingId, Declaration>;
+  /**
+   * Bindings of an abstract type that took a non-`Copy` field out of its
+   * owner. The owner stops releasing that field, so the binding takes over,
+   * through a release that tolerates a value with nothing to release.
+   */
+  readonly guardedDestinations: Set<BindingId>;
   /** See `CompileOptions.warnDropFlags` in driver.ts. */
   readonly warnDropFlags: boolean;
+  readonly hasDropImpl: (type: Semantics.StructType) => boolean;
   /**
    * The tokenId of the statement currently being walked, updated at the top
    * of `walkStatement`. Read by `useOrMove` to stamp a move's
@@ -342,6 +394,22 @@ function useOrMove(
       );
       state.set(id, { kind: "Owned" });
       return;
+    case "PartiallyMoved": {
+      const [first] = current.moved;
+      assert(first !== undefined, "PartiallyMoved carries a moved place");
+      emitDiagnostic(
+        ctx,
+        {
+          kind: "OwnUseOfPartiallyMovedValue",
+          name,
+          moved: placeDescription(name, first.path),
+        },
+        pathExpr.tokenId,
+        [{ span: first.moveSite, label: { kind: "LabelMovedHere" } }],
+      );
+      state.set(id, { kind: "Owned" });
+      return;
+    }
     case "Owned":
       if (asMove && !hasCapability(pathExpr.type, "copy")) {
         state.set(id, {
@@ -392,6 +460,9 @@ function cloneState(state: StateMap): StateMap {
  */
 // eslint-disable-next-line complexity -- exhaustive over a 5x5 state pairing, not incidental branching
 function combineStates(av: MoveState, bv: MoveState): MoveState {
+  if (av.kind === "PartiallyMoved" || bv.kind === "PartiallyMoved") {
+    return combinePartiallyMoved(av, bv);
+  }
   switch (av.kind) {
     case "Owned":
       switch (bv.kind) {
@@ -502,8 +573,127 @@ function combineStates(av: MoveState, bv: MoveState): MoveState {
   }
 }
 
+/**
+ * The merge rule for a side that has had a field moved out. Two partial
+ * sides keep every place either side moved; against `Owned` the partial
+ * side stands unchanged; against any other state the weaker guarantee wins,
+ * since the binding is no longer provably holding all its fields.
+ */
+function combinePartiallyMoved(av: MoveState, bv: MoveState): MoveState {
+  if (av.kind === "PartiallyMoved" && bv.kind === "PartiallyMoved") {
+    const extra = bv.moved.filter(
+      (m) => !av.moved.some((a) => pathsOverlap(a.path, m.path)),
+    );
+    return { kind: "PartiallyMoved", moved: [...av.moved, ...extra] };
+  }
+  const partial = av.kind === "PartiallyMoved" ? av : bv;
+  const other = av.kind === "PartiallyMoved" ? bv : av;
+  switch (other.kind) {
+    case "Owned":
+    case "PartiallyMoved":
+      return partial;
+    case "Unbound":
+    case "ConditionallyMoved":
+      return {
+        kind: "ConditionallyMoved",
+        moveSite: other.moveSite,
+        moveStatementTokenId: other.moveStatementTokenId,
+      };
+    case "Uninitialized":
+    case "PossiblyUninitialized":
+      return { kind: "PossiblyUninitialized" };
+    default:
+      return assertNever(other);
+  }
+}
+
+function pathsEqual(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && pathStartsWith(a, b);
+}
+
+/** A moved place present on one side of a merge but not the other. */
+function divergingMove(av: MoveState, bv: MoveState): MovedPlace | undefined {
+  const movedOf = (state: MoveState): readonly MovedPlace[] | undefined => {
+    if (state.kind === "PartiallyMoved") return state.moved;
+    return state.kind === "Owned" ? [] : undefined;
+  };
+  const aMoved = movedOf(av);
+  const bMoved = movedOf(bv);
+  if (aMoved === undefined || bMoved === undefined) return undefined;
+  const unmatched = (
+    xs: readonly MovedPlace[],
+    ys: readonly MovedPlace[],
+  ): MovedPlace | undefined =>
+    xs.find(
+      (x) =>
+        x.conditional !== true && !ys.some((y) => pathsEqual(x.path, y.path)),
+    );
+  return unmatched(aMoved, bMoved) ?? unmatched(bMoved, aMoved);
+}
+
+/**
+ * A field moved on one side while the other side moved or may have moved the
+ * whole binding: the field's owner is gone on one path only, so it cannot be
+ * released statically on both.
+ */
+function partialAgainstWholeMove(
+  av: MoveState,
+  bv: MoveState,
+): MovedPlace | undefined {
+  const wholeMove = (state: MoveState): boolean =>
+    state.kind === "Unbound" || state.kind === "ConditionallyMoved";
+  const unconditional = (state: MoveState): MovedPlace | undefined =>
+    state.kind === "PartiallyMoved"
+      ? state.moved.find((m) => m.conditional !== true)
+      : undefined;
+  if (wholeMove(bv)) return unconditional(av);
+  return wholeMove(av) ? unconditional(bv) : undefined;
+}
+
+/**
+ * Reports a field moved on only some of the paths merging into `id`, then
+ * marks every moved place so an enclosing merge does not report it again.
+ */
+function resolveDivergingMove(
+  ctx: Ctx,
+  id: BindingId,
+  av: MoveState,
+  bv: MoveState,
+  combined: MoveState,
+): MoveState {
+  const name = ctx.declarationsById.get(id)?.name ?? "_";
+  const againstWholeMove = partialAgainstWholeMove(av, bv);
+  if (againstWholeMove !== undefined) {
+    emitDiagnostic(
+      ctx,
+      {
+        kind: "OwnConditionalPartialMove",
+        place: placeDescription(name, againstWholeMove.path),
+      },
+      againstWholeMove.moveStatementTokenId,
+    );
+    return combined;
+  }
+  const diverging = divergingMove(av, bv);
+  if (diverging === undefined || combined.kind !== "PartiallyMoved") {
+    return combined;
+  }
+  emitDiagnostic(
+    ctx,
+    {
+      kind: "OwnConditionalPartialMove",
+      place: placeDescription(name, diverging.path),
+    },
+    diverging.moveStatementTokenId,
+  );
+  return {
+    kind: "PartiallyMoved",
+    moved: combined.moved.map((m) => ({ ...m, conditional: true })),
+  };
+}
+
 /** Branch-merge (meet) rule, applied per binding via `combineStates`. */
-function mergeStates(a: StateMap, b: StateMap): StateMap {
+function mergeStates(ctx: Ctx, a: StateMap, b: StateMap): StateMap {
   const merged: StateMap = new Map();
   const ids = new Set<BindingId>([...a.keys(), ...b.keys()]);
   for (const id of ids) {
@@ -518,7 +708,10 @@ function mergeStates(a: StateMap, b: StateMap): StateMap {
       merged.set(id, only);
       continue;
     }
-    merged.set(id, combineStates(av, bv));
+    merged.set(
+      id,
+      resolveDivergingMove(ctx, id, av, bv, combineStates(av, bv)),
+    );
   }
   return merged;
 }
@@ -608,13 +801,227 @@ function projectionDescription(expression: Semantics.Expression): string {
   }
 }
 
+function placeDescription(name: string, path: readonly string[]): string {
+  return [name, ...path].join(".");
+}
+
+function pathStartsWith(
+  path: readonly string[],
+  prefix: readonly string[],
+): boolean {
+  return prefix.every((segment, i) => path[i] === segment);
+}
+
+/**
+ * One path names the other or an ancestor of it: moving or using either one
+ * touches the other.
+ */
+function pathsOverlap(a: readonly string[], b: readonly string[]): boolean {
+  return pathStartsWith(a, b) || pathStartsWith(b, a);
+}
+
+interface FieldChain {
+  readonly root: Semantics.PathExpression;
+  readonly fields: readonly Semantics.FieldAccessExpression[];
+}
+
+/**
+ * `o.a.b` rooted in a bare local, reached only through owned struct fields.
+ * A hop through a reference is not a chain: moving out of one stays rejected
+ * regardless of what the reference points to.
+ */
+function fieldChainOf(
+  expression: Semantics.Expression,
+  scopeStack: ScopeStack,
+): FieldChain | undefined {
+  const fields: Semantics.FieldAccessExpression[] = [];
+  let current = expression;
+  while (current.kind === "FieldAccessExpression") {
+    if (current.object.type.kind === "ReferenceType") return undefined;
+    fields.unshift(current);
+    current = current.object;
+  }
+  if (current.kind !== "PathExpression" || fields.length === 0) {
+    return undefined;
+  }
+  if (resolveBinding(current, scopeStack) === undefined) return undefined;
+  return { root: current, fields };
+}
+
+function chainPath(chain: FieldChain): readonly string[] {
+  return chain.fields.map((f) => f.field.text);
+}
+
+/**
+ * Use of a field path rooted in a tracked local: fine unless it overlaps a
+ * place already moved out of that binding. Anything else about the root's
+ * state (moved whole, uninitialized, ...) reports through `useOrMove`.
+ */
+function useFieldPlace(
+  ctx: Ctx,
+  chain: FieldChain,
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  usePlacePath(
+    ctx,
+    {
+      root: chain.root,
+      path: chainPath(chain),
+      tokenId: chain.fields.at(-1)?.tokenId ?? chain.root.tokenId,
+    },
+    state,
+    scopeStack,
+  );
+}
+
+interface PlaceUse {
+  readonly root: Semantics.PathExpression;
+  readonly path: readonly string[];
+  readonly tokenId: number;
+}
+
+function usePlacePath(
+  ctx: Ctx,
+  use: PlaceUse,
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  const resolved = resolveBinding(use.root, scopeStack);
+  const current = resolved === undefined ? undefined : state.get(resolved.id);
+  if (resolved === undefined || current?.kind !== "PartiallyMoved") {
+    useOrMove(ctx, use.root, state, scopeStack, false);
+    return;
+  }
+  const clash = current.moved.find((m) => pathsOverlap(m.path, use.path));
+  if (clash === undefined) return;
+  emitDiagnostic(
+    ctx,
+    movedPlaceClash(resolved.name, use.path, clash.path),
+    use.tokenId,
+    [{ span: clash.moveSite, label: { kind: "LabelMovedHere" } }],
+  );
+}
+
+/**
+ * A moved place that is longer than the used one leaves only part of it
+ * moved; a shorter one means the used place sits inside what was moved out.
+ */
+function movedPlaceClash(
+  name: string,
+  usePath: readonly string[],
+  movedPath: readonly string[],
+): DiagnosticKind {
+  const place = placeDescription(name, usePath);
+  const moved = placeDescription(name, movedPath);
+  if (movedPath.length > usePath.length) {
+    return { kind: "OwnUseOfPartiallyMovedValue", name: place, moved };
+  }
+  if (movedPath.length < usePath.length) {
+    return { kind: "OwnUseThroughMovedPlace", place, moved };
+  }
+  return { kind: "OwnUseOfMovedValue", name: place };
+}
+
+/** The outermost struct among `owners` that has a `Drop` impl, if any. */
+function dropImplOwnerOf(
+  ctx: Ctx,
+  owners: readonly Semantics.Type[],
+): Semantics.StructType | undefined {
+  for (const owner of owners) {
+    if (owner.kind === "StructType" && ctx.hasDropImpl(owner)) return owner;
+  }
+  return undefined;
+}
+
+/**
+ * Why `place` cannot move out of `resolved`, given the structs along its
+ * path.
+ */
+function fieldMoveRejection(
+  ctx: Ctx,
+  resolved: ResolvedBinding,
+  place: string,
+  owners: readonly Semantics.Type[],
+): DiagnosticKind | undefined {
+  const dropOwner = dropImplOwnerOf(ctx, owners);
+  if (dropOwner !== undefined) {
+    return {
+      kind: "OwnCannotMoveOutOfDropType",
+      place,
+      typeName: dropOwner.name.split("::").pop() ?? dropOwner.name,
+    };
+  }
+  if (ctx.declarationsById.get(resolved.id)?.mutable === true) {
+    return {
+      kind: "OwnCannotMoveOutOfMutBinding",
+      place,
+      name: resolved.name,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Record `moved` against the binding, unless it already overlaps a moved
+ * place.
+ */
+function recordMovedPlace(
+  state: StateMap,
+  id: BindingId,
+  moved: MovedPlace,
+): void {
+  const current = state.get(id);
+  if (current?.kind === "PartiallyMoved") {
+    if (current.moved.some((m) => pathsOverlap(m.path, moved.path))) return;
+    state.set(id, {
+      kind: "PartiallyMoved",
+      moved: [...current.moved, moved],
+    });
+  } else if (current?.kind === "Owned") {
+    state.set(id, { kind: "PartiallyMoved", moved: [moved] });
+  }
+}
+
+/**
+ * Move a non-`Copy` field path out of a tracked local, leaving its siblings
+ * owned.
+ */
+function moveFieldPlace(
+  ctx: Ctx,
+  chain: FieldChain,
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  const resolved = resolveBinding(chain.root, scopeStack);
+  const last = chain.fields.at(-1);
+  if (resolved === undefined || last === undefined) return;
+  const rejection = fieldMoveRejection(
+    ctx,
+    resolved,
+    placeDescription(resolved.name, chainPath(chain)),
+    chain.fields.map((f) => f.object.type),
+  );
+  if (rejection !== undefined) {
+    emitDiagnostic(ctx, rejection, last.tokenId);
+    return;
+  }
+  useFieldPlace(ctx, chain, state, scopeStack);
+  recordMovedPlace(state, resolved.id, {
+    path: chainPath(chain),
+    siblings: chain.fields.map((f) => f.ownerFields),
+    moveSite: tokenSpan(ctx.tokens, last.tokenId),
+    moveStatementTokenId: ctx.currentStatementTokenId,
+  });
+}
+
 /**
  * Moving a non-`Copy` value out of a field or element is not tracked: the
  * owner keeps its own drop obligation, so both it and the new binding would
  * dispose the same value. The borrow is named as the alternative since that
- * is what most callers want.
- *
- * TODO(Hedge-240): lift this once move state is keyed by place.
+ * is what most callers want. A field path rooted in a local is tracked per
+ * place instead (see `moveFieldPlace`); this remains for an element, or a
+ * field reached through a reference.
  */
 function checkProjectionMove(
   ctx: Ctx,
@@ -624,9 +1031,30 @@ function checkProjectionMove(
   const place = projectionDescription(expression);
   emitDiagnostic(
     ctx,
-    { kind: "OwnCannotMoveOutBorrowInstead", place },
+    expression.kind === "IndexExpression"
+      ? { kind: "OwnCannotMoveOutOfElement", place }
+      : { kind: "OwnCannotMoveOutBorrowInstead", place },
     expression.tokenId,
   );
+}
+
+function walkFieldAccessMove(
+  ctx: Ctx,
+  expression: Semantics.FieldAccessExpression,
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  const chain = fieldChainOf(expression, scopeStack);
+  if (chain === undefined) {
+    checkProjectionMove(ctx, expression);
+    walkNonMovingPlace(ctx, expression.object, state, scopeStack);
+    return;
+  }
+  if (hasCapability(expression.type, "copy")) {
+    useFieldPlace(ctx, chain, state, scopeStack);
+    return;
+  }
+  moveFieldPlace(ctx, chain, state, scopeStack);
 }
 
 /**
@@ -658,6 +1086,11 @@ function walkNonMovingPlace(
   // it keeps recursing non-movingly rather than tripping the move-out check
   // `walkExpression` applies to the same node.
   if (expression.kind === "FieldAccessExpression") {
+    const chain = fieldChainOf(expression, scopeStack);
+    if (chain !== undefined) {
+      useFieldPlace(ctx, chain, state, scopeStack);
+      return;
+    }
     walkNonMovingPlace(ctx, expression.object, state, scopeStack);
     return;
   }
@@ -711,8 +1144,7 @@ function walkExpression(
       useOrMove(ctx, expression, state, scopeStack, true);
       return;
     case "FieldAccessExpression":
-      checkProjectionMove(ctx, expression);
-      walkNonMovingPlace(ctx, expression.object, state, scopeStack);
+      walkFieldAccessMove(ctx, expression, state, scopeStack);
       return;
     case "CallExpression":
       walkExpression(ctx, expression.callee, state, scopeStack);
@@ -794,11 +1226,7 @@ function walkExpression(
       // own treatment above: `arr[i]` reads through the array, it doesn't
       // move `arr` out.
       checkProjectionMove(ctx, expression);
-      if (expression.object.kind === "PathExpression") {
-        useOrMove(ctx, expression.object, state, scopeStack, false);
-      } else {
-        walkExpression(ctx, expression.object, state, scopeStack);
-      }
+      walkNonMovingPlace(ctx, expression.object, state, scopeStack);
       walkExpression(ctx, expression.index, state, scopeStack);
       return;
     case "TupleExpression":
@@ -952,6 +1380,30 @@ function collectPatternDeclarations(
 }
 
 /**
+ * Special-cased like LetStatement (see walkLetInitializer) - moves only if
+ * some arm binds a non-Copy name, checked across all arms up front since
+ * this runs once before the fork.
+ */
+function walkMatchScrutinee(
+  ctx: Ctx,
+  expression: Semantics.MatchExpression,
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  if (expression.scrutinee.kind === "PathExpression") {
+    useOrMove(
+      ctx,
+      expression.scrutinee,
+      state,
+      scopeStack,
+      expression.arms.some((arm) => patternRequiresScrutineeMove(arm.pattern)),
+    );
+  } else {
+    walkExpression(ctx, expression.scrutinee, state, scopeStack);
+  }
+}
+
+/**
  * Every binding a match arm's pattern introduces is seeded `Owned` (never
  * `Uninitialized`), mirroring `walkFunction`'s own parameter seeding - a
  * pattern only ever binds a name once its scrutinee has already been
@@ -965,19 +1417,10 @@ function walkMatchExpression(
   state: StateMap,
   scopeStack: ScopeStack,
 ): void {
-  // Special-cased like LetStatement (see walkLetInitializer) - moves only
-  // if some arm binds a non-Copy name, checked across all arms up front
-  // since this runs once before the fork.
-  if (expression.scrutinee.kind === "PathExpression") {
-    useOrMove(
-      ctx,
-      expression.scrutinee,
-      state,
-      scopeStack,
-      expression.arms.some((arm) => patternRequiresScrutineeMove(arm.pattern)),
-    );
-  } else {
-    walkExpression(ctx, expression.scrutinee, state, scopeStack);
+  const source = fieldScrutineeSource(expression.scrutinee, scopeStack);
+  const armMoves = armPatternMoves(source, expression.arms);
+  if (armMoves === undefined) {
+    walkMatchScrutinee(ctx, expression, state, scopeStack);
   }
 
   // Arms are mutually exclusive alternatives, not a sequence -- mirroring
@@ -988,8 +1431,17 @@ function walkMatchExpression(
   // and into the post-match state, when at runtime at most one arm ever
   // actually executes.
   let merged: StateMap | undefined;
-  for (const arm of expression.arms) {
+  for (const [index, arm] of expression.arms.entries()) {
     const armState = cloneState(state);
+    const moves = armMoves?.[index];
+    if (source !== undefined && moves !== undefined) {
+      moveScrutineePlaces(
+        ctx,
+        { source, pattern: arm.pattern, moves },
+        armState,
+        scopeStack,
+      );
+    }
     scopeStack.push(new Map());
     const declarations: Declaration[] = [];
     for (const { identifier, mutable } of collectPatternDeclarations(
@@ -1012,7 +1464,8 @@ function walkMatchExpression(
     walkExpression(ctx, arm.body, armState, scopeStack);
     recordDrops(ctx, arm.tokenId, declarations, armState);
     scopeStack.pop();
-    merged = merged === undefined ? armState : mergeStates(merged, armState);
+    merged =
+      merged === undefined ? armState : mergeStates(ctx, merged, armState);
   }
 
   if (merged !== undefined) {
@@ -1161,11 +1614,386 @@ function walkIf(
 
   attributeConditionalMoves(ctx, expression, thenState, elseState);
 
-  const merged = mergeStates(thenState, elseState);
+  const merged = mergeStates(ctx, thenState, elseState);
   state.clear();
   for (const [id, moveState] of merged) {
     state.set(id, moveState);
   }
+}
+
+interface PatternMove {
+  readonly path: readonly string[];
+  readonly siblings: readonly (readonly Semantics.OwnerField[])[];
+  readonly owners: readonly Semantics.Type[];
+}
+
+interface PatternEntry {
+  readonly name: string;
+  /** `undefined` for a shorthand field, which binds the field's own name. */
+  readonly pattern: Semantics.Pattern | undefined;
+  readonly shorthandType: Semantics.Type;
+}
+
+interface PatternLevel {
+  readonly entries: PatternEntry[];
+  readonly owner: Semantics.Type;
+  readonly fields: readonly Semantics.OwnerField[];
+}
+
+/**
+ * An array pattern names its elements by index. A named rest (`..tail`)
+ * binds a view of several elements at once, which is not a single place, so
+ * it is left to move the array whole.
+ */
+function slicePatternLevel(
+  pattern: Semantics.SlicePattern,
+): PatternLevel | undefined {
+  const { type } = pattern;
+  if (type.kind !== "ArrayType") return undefined;
+  const restIndex = pattern.elements.findIndex(
+    (el) => el.kind === "RestPattern",
+  );
+  const entries: PatternEntry[] = [];
+  for (const [i, element] of pattern.elements.entries()) {
+    if (element.kind === "RestPattern") {
+      if (isSome(element.name)) return undefined;
+      continue;
+    }
+    const index =
+      restIndex === -1 || i < restIndex
+        ? i
+        : type.length - (pattern.elements.length - i);
+    entries.push({
+      name: String(index),
+      pattern: element,
+      shorthandType: element.type,
+    });
+  }
+  return { entries, owner: type, fields: arrayElementFields(type) };
+}
+
+/**
+ * The array's elements as owner fields, last first: `using` releases the last
+ * declaration first, and a whole array releases its elements in ascending
+ * order. A `Copy` element leaves nothing to release, so no list is built for
+ * it, which keeps a huge numeric array proportional to its pattern.
+ */
+function arrayElementFields(type: Semantics.ArrayType): Semantics.OwnerField[] {
+  if (hasCapability(type.elementType, "copy")) return [];
+  return Array.from({ length: type.length }, (_, i) => ({
+    name: String(type.length - 1 - i),
+    type: type.elementType,
+  }));
+}
+
+function patternLevel(pattern: Semantics.Pattern): PatternLevel | undefined {
+  if (pattern.kind === "SlicePattern") return slicePatternLevel(pattern);
+  if (pattern.type.kind !== "StructType") return undefined;
+  if (pattern.kind === "StructPattern") {
+    const entries = pattern.fields.map((field): PatternEntry => ({
+      name: field.name.text,
+      pattern: isSome(field.pattern) ? field.pattern.value : undefined,
+      shorthandType: field.name.type,
+    }));
+    return { entries, owner: pattern.type, fields: pattern.ownerFields };
+  }
+  if (pattern.kind === "TupleStructPattern") {
+    const entries = pattern.elements.map((element, i): PatternEntry => ({
+      name: String(i),
+      pattern: element,
+      shorthandType: element.type,
+    }));
+    return { entries, owner: pattern.type, fields: pattern.ownerFields };
+  }
+  return undefined;
+}
+
+/**
+ * A literal or range leaf compares the field it names without binding it, so
+ * it reads the place and never moves it.
+ */
+function isLiteralLeafPattern(pattern: Semantics.Pattern): boolean {
+  return pattern.kind === "LiteralPattern" || pattern.kind === "RangePattern";
+}
+
+/**
+ * The places one pattern entry moves out of its owner: itself for a bare or
+ * renamed non-`Copy` binding, its descendants for a nested pattern, nothing
+ * for a wildcard or `Copy` binding. `undefined` when the entry cannot be
+ * accounted for field by field.
+ */
+function entryPatternMoves(
+  entry: PatternEntry,
+  here: PatternMove,
+): PatternMove[] | undefined {
+  const nested = entry.pattern;
+  if (nested === undefined) {
+    return hasCapability(entry.shorthandType, "copy") ? [] : [here];
+  }
+  if (nested.kind === "WildcardPattern") return [];
+  if (isLiteralLeafPattern(nested)) return [];
+  if (nested.kind === "BindingPattern") {
+    if (isSome(nested.subpattern)) return undefined;
+    const binds =
+      nested.name.text !== "_" && !hasCapability(nested.name.type, "copy");
+    return binds ? [here] : [];
+  }
+  return structPatternMoves(nested, here.path, here.siblings, here.owners);
+}
+
+/**
+ * The non-`Copy` field places a by-value struct or tuple-struct pattern moves
+ * out of its scrutinee. `undefined` for any pattern shape this does not
+ * account for field by field, which then moves the scrutinee whole as before.
+ */
+function structPatternMoves(
+  pattern: Semantics.Pattern,
+  prefix: readonly string[],
+  siblings: readonly (readonly Semantics.OwnerField[])[],
+  owners: readonly Semantics.Type[],
+): PatternMove[] | undefined {
+  const level = patternLevel(pattern);
+  if (level === undefined) return undefined;
+  const levelSiblings = [...siblings, level.fields];
+  const levelOwners = [...owners, level.owner];
+  const moves: PatternMove[] = [];
+  for (const entry of level.entries) {
+    const path = [...prefix, entry.name];
+    const here = { path, siblings: levelSiblings, owners: levelOwners };
+    const entryMoves = entryPatternMoves(entry, here);
+    if (entryMoves === undefined) return undefined;
+    moves.push(...entryMoves);
+  }
+  return moves;
+}
+
+/**
+ * The places a pattern reads without moving: `Copy` bindings, which still
+ * need their owner to be intact. Only meaningful once `structPatternMoves`
+ * has accepted the pattern.
+ */
+function patternReadPaths(
+  pattern: Semantics.Pattern,
+  prefix: readonly string[],
+): (readonly string[])[] {
+  const level = patternLevel(pattern);
+  if (level === undefined) return [];
+  return level.entries.flatMap((entry): (readonly string[])[] => {
+    const path = [...prefix, entry.name];
+    const nested = entry.pattern;
+    if (nested === undefined) {
+      return hasCapability(entry.shorthandType, "copy") ? [path] : [];
+    }
+    if (nested.kind === "WildcardPattern") return [];
+    if (isLiteralLeafPattern(nested)) return [path];
+    if (nested.kind === "BindingPattern") {
+      const reads =
+        nested.name.text !== "_" && hasCapability(nested.name.type, "copy");
+      return reads ? [path] : [];
+    }
+    return patternReadPaths(nested, path);
+  });
+}
+
+interface StructPatternBinding {
+  readonly root: Semantics.PathExpression;
+  /**
+   * The field path from `root` to the destructured value; empty for `root`
+   * itself.
+   */
+  readonly prefix: readonly string[];
+  readonly pattern: Semantics.Pattern;
+  readonly moves: readonly PatternMove[];
+}
+
+/** The first reason any place a pattern moves cannot leave its owner. */
+function firstPatternRejection(
+  ctx: Ctx,
+  resolved: ResolvedBinding,
+  moves: readonly PatternMove[],
+): DiagnosticKind | undefined {
+  for (const move of moves) {
+    const rejection = fieldMoveRejection(
+      ctx,
+      resolved,
+      placeDescription(resolved.name, move.path),
+      move.owners,
+    );
+    if (rejection !== undefined) return rejection;
+  }
+  return undefined;
+}
+
+/** `let Pair { a, .. } = p;` moves only the fields it binds out of `p`. */
+function moveStructPatternPlaces(
+  ctx: Ctx,
+  binding: StructPatternBinding,
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  const { root, prefix, pattern, moves } = binding;
+  const resolved = resolveBinding(root, scopeStack);
+  if (resolved === undefined) return;
+  const reads = patternReadPaths(pattern, prefix);
+  if (moves.length === 0 && reads.length === 0) {
+    usePlacePath(
+      ctx,
+      { root, path: prefix, tokenId: root.tokenId },
+      state,
+      scopeStack,
+    );
+    return;
+  }
+  const rejection = firstPatternRejection(ctx, resolved, moves);
+  if (rejection !== undefined) {
+    emitDiagnostic(ctx, rejection, pattern.tokenId);
+    return;
+  }
+  for (const path of reads) {
+    usePlacePath(
+      ctx,
+      { root, path, tokenId: pattern.tokenId },
+      state,
+      scopeStack,
+    );
+  }
+  for (const move of moves) {
+    usePlacePath(
+      ctx,
+      { root, path: move.path, tokenId: pattern.tokenId },
+      state,
+      scopeStack,
+    );
+    recordMovedPlace(state, resolved.id, {
+      path: move.path,
+      siblings: move.siblings,
+      moveSite: tokenSpan(ctx.tokens, pattern.tokenId),
+      moveStatementTokenId: ctx.currentStatementTokenId,
+    });
+  }
+}
+
+interface PatternSource {
+  readonly root: Semantics.PathExpression;
+  readonly prefix: readonly string[];
+  readonly siblings: readonly (readonly Semantics.OwnerField[])[];
+  readonly owners: readonly Semantics.Type[];
+}
+
+/**
+ * Where a by-value pattern reads from: a bare local, or a field chain
+ * rooted in one, whose owners and siblings the pattern's own levels extend.
+ */
+function patternSourceOf(
+  initializer: Semantics.Expression,
+  scopeStack: ScopeStack,
+): PatternSource | undefined {
+  if (initializer.kind === "PathExpression") {
+    return {
+      root: initializer,
+      prefix: [],
+      siblings: [],
+      owners: [],
+    };
+  }
+  const chain = fieldChainOf(initializer, scopeStack);
+  if (chain === undefined) return undefined;
+  const prefix = chainPath(chain);
+  return {
+    root: chain.root,
+    prefix,
+    siblings: chain.fields.map((f) => f.ownerFields),
+    owners: chain.fields.map((f) => f.object.type),
+  };
+}
+
+/**
+ * `let x = o.f;` where `f` is a non-`Copy` field of an abstract type: the
+ * binding is the only thing left that can release it. Evaluated before the
+ * new binding is registered so a shadowing `let o = o.f;` still resolves the
+ * root against the old one.
+ */
+function movesAbstractField(
+  statement: Semantics.LetStatement,
+  scopeStack: ScopeStack,
+): boolean {
+  if (!isSome(statement.initializer)) return false;
+  const initializer = statement.initializer.value;
+  return (
+    statement.pattern.kind === "BindingPattern" &&
+    initializer.kind === "FieldAccessExpression" &&
+    isAbstractType(initializer.type) &&
+    !hasCapability(initializer.type, "copy") &&
+    fieldChainOf(initializer, scopeStack) !== undefined
+  );
+}
+
+/**
+ * Where a `match` or `if let` reads a struct or array field in place, so a
+ * pattern can move only the places it binds and leave the ignored siblings
+ * with their owner.
+ */
+function fieldScrutineeSource(
+  scrutinee: Semantics.Expression,
+  scopeStack: ScopeStack,
+): PatternSource | undefined {
+  if (scrutinee.kind !== "FieldAccessExpression") return undefined;
+  if (!isPatternOwner(scrutinee.type)) return undefined;
+  return patternSourceOf(scrutinee, scopeStack);
+}
+
+function patternMovesFrom(
+  source: PatternSource,
+  pattern: Semantics.Pattern,
+): PatternMove[] | undefined {
+  return structPatternMoves(
+    pattern,
+    source.prefix,
+    source.siblings,
+    source.owners,
+  );
+}
+
+function moveScrutineePlaces(
+  ctx: Ctx,
+  scrutinee: {
+    readonly source: PatternSource;
+    readonly pattern: Semantics.Pattern;
+    readonly moves: readonly PatternMove[];
+  },
+  state: StateMap,
+  scopeStack: ScopeStack,
+): void {
+  const { source, pattern, moves } = scrutinee;
+  moveStructPatternPlaces(
+    ctx,
+    { root: source.root, prefix: source.prefix, pattern, moves },
+    state,
+    scopeStack,
+  );
+}
+
+/**
+ * The places each arm moves out of a field scrutinee, or `undefined` when
+ * any arm is not accounted for field by field and the scrutinee has to move
+ * whole before the arms fork.
+ */
+function armPatternMoves(
+  source: PatternSource | undefined,
+  arms: readonly Semantics.MatchArm[],
+): PatternMove[][] | undefined {
+  if (source === undefined) return undefined;
+  const all: PatternMove[][] = [];
+  for (const arm of arms) {
+    const moves = patternMovesFrom(source, arm.pattern);
+    if (moves === undefined) return undefined;
+    all.push(moves);
+  }
+  return all;
+}
+
+function isPatternOwner(type: Semantics.Type): boolean {
+  return type.kind === "StructType" || type.kind === "ArrayType";
 }
 
 function walkLetInitializer(
@@ -1175,6 +2003,30 @@ function walkLetInitializer(
   scopeStack: ScopeStack,
 ): void {
   if (!isSome(statement.initializer)) return;
+  const initializer = statement.initializer.value;
+  const source = patternSourceOf(initializer, scopeStack);
+  if (source !== undefined && isPatternOwner(initializer.type)) {
+    const moves = structPatternMoves(
+      statement.pattern,
+      source.prefix,
+      source.siblings,
+      source.owners,
+    );
+    if (moves !== undefined) {
+      moveStructPatternPlaces(
+        ctx,
+        {
+          root: source.root,
+          prefix: source.prefix,
+          pattern: statement.pattern,
+          moves,
+        },
+        state,
+        scopeStack,
+      );
+      return;
+    }
+  }
   walkScrutinee(
     ctx,
     statement.initializer.value,
@@ -1197,6 +2049,13 @@ function walkScrutinee(
   state: StateMap,
   scopeStack: ScopeStack,
 ): void {
+  const source = fieldScrutineeSource(scrutinee, scopeStack);
+  const moves =
+    source === undefined ? undefined : patternMovesFrom(source, pattern);
+  if (source !== undefined && moves !== undefined) {
+    moveScrutineePlaces(ctx, { source, pattern, moves }, state, scopeStack);
+    return;
+  }
   if (scrutinee.kind !== "PathExpression") {
     walkExpression(ctx, scrutinee, state, scopeStack);
     return;
@@ -1226,6 +2085,7 @@ function walkStatement(
       // binding, if any) rather than the new one being declared - the new
       // binding doesn't exist yet as far as `resolve` is concerned.
       walkLetInitializer(ctx, statement, state, scopeStack);
+      const takesAbstractField = movesAbstractField(statement, scopeStack);
       for (const { identifier, mutable } of collectPatternDeclarations(
         statement.pattern,
       )) {
@@ -1244,6 +2104,7 @@ function walkStatement(
         };
         declarations.push(declaration);
         ctx.declarationsById.set(declaration.id, declaration);
+        if (takesAbstractField) ctx.guardedDestinations.add(declaration.id);
       }
       return;
     }
@@ -1276,7 +2137,8 @@ function walkStatement(
   }
 }
 
-type DropDecision = "Drop" | "NoDrop" | "ConditionalDrop" | "Ambiguous";
+type DropDecision =
+  "Drop" | "NoDrop" | "ConditionalDrop" | "PartialDrop" | "Ambiguous";
 
 /**
  * Exhaustive over `MoveState["kind"]` so a still-`ConditionallyMoved`
@@ -1304,6 +2166,8 @@ function dropDecision(state: MoveState | undefined): DropDecision {
       return "NoDrop";
     case "ConditionallyMoved":
       return "ConditionalDrop";
+    case "PartiallyMoved":
+      return "PartialDrop";
     case "PossiblyUninitialized":
       return "Ambiguous";
     default:
@@ -1323,6 +2187,7 @@ function ambiguousDropKind(name: string, state: MoveState): DiagnosticKind {
     case "Uninitialized":
     case "Unbound":
     case "ConditionallyMoved":
+    case "PartiallyMoved":
       throw new Error(
         `ICE: ambiguousDropKind called with non-ambiguous state ${state.kind}`,
       );
@@ -1365,20 +2230,21 @@ function recordDrops(
 ): void {
   const drops: Declaration[] = [];
   const conditionalDrops: ConditionalDrop[] = [];
+  const partialDrops: PartialDrop[] = [];
   for (let i = declarations.length - 1; i >= 0; i -= 1) {
     const declaration = declarations[i];
-    if (
-      declaration === undefined ||
-      hasCapability(declaration.type, "copy") ||
-      hasNoScopeEndDrop(declaration.type)
-    ) {
+    if (declaration === undefined || !isDropTracked(ctx, declaration)) {
       continue;
     }
     const declState = state.get(declaration.id);
-    const decision = dropDecision(declState);
+    const decision = scopeEndDecision(declaration, dropDecision(declState));
     switch (decision) {
       case "Drop":
-        drops.push(declaration);
+        if (ctx.guardedDestinations.has(declaration.id)) {
+          partialDrops.push(guardedWholeDrop(declaration));
+        } else {
+          drops.push(declaration);
+        }
         break;
       case "NoDrop":
         break;
@@ -1400,6 +2266,9 @@ function recordDrops(
         }
         break;
       }
+      case "PartialDrop":
+        partialDrops.push(partialDropOf(declaration, declState));
+        break;
       case "Ambiguous": {
         assert(declState !== undefined, "Ambiguous implies a known state");
         emitDiagnostic(
@@ -1415,6 +2284,85 @@ function recordDrops(
   }
   ctx.drops.set(scopeTokenId, drops);
   ctx.conditionalDrops.set(scopeTokenId, conditionalDrops);
+  ctx.partialDrops.set(scopeTokenId, partialDrops);
+}
+
+/**
+ * A `Copy` binding never drops; an abstract one only when it took over a
+ * moved field.
+ */
+function isDropTracked(ctx: Ctx, declaration: Declaration): boolean {
+  if (hasCapability(declaration.type, "copy")) return false;
+  return (
+    !hasNoScopeEndDrop(declaration.type) ||
+    ctx.guardedDestinations.has(declaration.id)
+  );
+}
+
+/**
+ * An abstract binding has no flag-guarded or ambiguous-state release to
+ * emit, so only an unconditional drop survives for it.
+ */
+function scopeEndDecision(
+  declaration: Declaration,
+  decision: DropDecision,
+): DropDecision {
+  if (hasNoScopeEndDrop(declaration.type) && decision !== "Drop") {
+    return "NoDrop";
+  }
+  return decision;
+}
+
+/**
+ * The binding itself, released through the guard rather than assumed
+ * disposable.
+ */
+function guardedWholeDrop(declaration: Declaration): PartialDrop {
+  return { declaration, remaining: [{ path: [], guarded: true }] };
+}
+
+function partialDropOf(
+  declaration: Declaration,
+  state: MoveState | undefined,
+): PartialDrop {
+  assert(
+    state?.kind === "PartiallyMoved",
+    "PartialDrop implies a PartiallyMoved state",
+  );
+  return { declaration, remaining: remainingFieldPaths(state.moved, []) };
+}
+
+/**
+ * The owned, releasable field paths under `prefix` once every place in
+ * `moved` is gone, in `PartialDrop.remaining` order. A field that is itself
+ * the parent of a moved place is expanded to its own remaining children
+ * instead of being released whole.
+ */
+function remainingFieldPaths(
+  moved: readonly MovedPlace[],
+  prefix: readonly string[],
+): readonly RemainingPlace[] {
+  const beneath = moved.filter((m) => pathStartsWith(m.path, prefix));
+  const fields = beneath[0]?.siblings[prefix.length] ?? [];
+  return fields.flatMap((field): readonly RemainingPlace[] => {
+    const path = [...prefix, field.name];
+    if (
+      beneath.some(
+        (m) => m.path.length === path.length && pathStartsWith(m.path, path),
+      )
+    ) {
+      return [];
+    }
+    if (beneath.some((m) => pathStartsWith(m.path, path))) {
+      return remainingFieldPaths(moved, path);
+    }
+    if (hasCapability(field.type, "copy")) return [];
+    return [{ path, guarded: isAbstractType(field.type) }];
+  });
+}
+
+function isAbstractType(type: Semantics.Type): boolean {
+  return type.kind === "NamedType" || type.kind === "Projection";
 }
 
 /**
@@ -1491,10 +2439,16 @@ function walkFunction(ctx: Ctx, fn: Semantics.FunctionDef): void {
  * the type-annotated `Semantics.Program`, one function at a time - move
  * state never crosses a function boundary.
  */
+export interface OwnershipOptions {
+  readonly warnDropFlags?: boolean;
+  /** Whether a struct type has a `Drop` impl; a field cannot move out of one. */
+  readonly hasDropImpl?: (type: Semantics.StructType) => boolean;
+}
+
 export function analyzeOwnership(
   program: Semantics.Program,
   tokens: readonly Token[],
-  options: { readonly warnDropFlags?: boolean } = {},
+  options: OwnershipOptions = {},
 ): OwnershipCheckResult {
   const diagnostics: Diagnostic[] = [];
   const functions = new Map<string, FunctionOwnership>();
@@ -1502,6 +2456,7 @@ export function analyzeOwnership(
     const graph = buildControlFlowGraph(fn);
     const drops = new Map<number, Declaration[]>();
     const conditionalDrops = new Map<number, ConditionalDrop[]>();
+    const partialDrops = new Map<number, PartialDrop[]>();
     const branchDrops: BranchDrop[] = [];
     const declarationsById = new Map<BindingId, Declaration>();
     const ctx: Ctx = {
@@ -1509,13 +2464,16 @@ export function analyzeOwnership(
       diagnostics,
       drops,
       conditionalDrops,
+      partialDrops,
       branchDrops,
       declarationsById,
+      guardedDestinations: new Set(),
       warnDropFlags: options.warnDropFlags ?? false,
+      hasDropImpl: options.hasDropImpl ?? ((): boolean => false),
       currentStatementTokenId: fn.tokenId,
     };
     walkFunction(ctx, fn);
-    return { graph, drops, conditionalDrops, branchDrops };
+    return { graph, drops, conditionalDrops, partialDrops, branchDrops };
   };
   // A top-level function is keyed by name (codegen looks it up that way);
   // anything else `collectOwnedFunctions` returns - a method body, a nested
