@@ -35,7 +35,7 @@
     "@vitest/coverage-v8": "^5.1.0",
     "eslint": "^10.15.0",
     "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-boundaries": "^7.4.3",
+    "eslint-plugin-boundaries": "^7.4.4",
     "jsonc-eslint-parser": "^3.3.0",
     "knip": "^6.45.1",
     "npm-run-all2": "^9.0.4",
