@@ -4249,4 +4249,16 @@ describe("#[monomorphize] specialization", (): void => {
     `);
     expect(runEmittedJs(js)).toEqual(["3", "9", "5"]);
   });
+
+  it("calls an aliased specialized function through a local binding (let f = identity)", (): void => {
+    const js = emittedJs(`
+      #[monomorphize]
+      fn identity<T>(x: T) -> T { x }
+      fn main() {
+        let f = identity;
+        print(f(3));
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["3"]);
+  });
 });
