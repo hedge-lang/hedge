@@ -1,0 +1,8 @@
+#[monomorphize]
+fn identity<T>(x: T) -> T { x }
+
+fn main() {
+    print(identity(3));
+    print(identity(true));
+    print(identity(3));
+}

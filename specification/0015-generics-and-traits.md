@@ -41,8 +41,10 @@ it matters, the compiler may selectively monomorphize an instantiation whose
 concrete type is statically known and where specialization pays off, in a hot,
 small, or rarely-instantiated body. The specialization preserves behavior and stays
 conservative by default, since code size is a cost paid on every page load. A
-`dyn Trait` always remains witnessed, and an optional hint can force specialization
-of a known-hot generic.
+`dyn Trait` always remains witnessed. The `#[monomorphize]` hint on a generic
+function opts it in: each call whose type arguments are all concrete lowers to a
+specialized copy, one per distinct instantiation, while every other call keeps the
+erased function.
 
 ## Traits
 

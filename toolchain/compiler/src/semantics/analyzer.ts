@@ -33,9 +33,21 @@ import {
   type TypeCapability,
 } from "./type-capabilities.js";
 
+/** A call to a `#[monomorphize]` generic function whose every type argument
+ * is ground: `calleeTokenId` is the callee signature's `tokenId`, and
+ * `typeKey` is an identifier-safe encoding of the instantiation. */
+export interface Specialization {
+  readonly calleeTokenId: number;
+  readonly typeKey: string;
+}
+
 export interface AnalysisResult {
   readonly diagnostics: readonly Diagnostic[];
   readonly program: Semantics.Program;
+  /** Each call that should lower to a specialized copy of its callee, keyed
+   * by the call's own `tokenId`. A call with any non-ground type argument
+   * (an enclosing generic parameter, `dyn Trait`) carries no entry. */
+  readonly specializations: ReadonlyMap<number, Specialization>;
   /** Every resolved trait bound at every generic call site, keyed by the
    * call's own `tokenId` - one entry per declared generic parameter's bound
    * that resolved, in the same order the callee declares them, for codegen
@@ -456,6 +468,8 @@ interface AnalysisContext {
   /** Mutable build-up of `AnalysisResult.witnesses`, keyed by call-site
    * `tokenId`. */
   readonly witnessTable: Map<number, WitnessRef[]>;
+  /** Mutable build-up of `AnalysisResult.specializations`. */
+  readonly specializationTable: Map<number, Specialization>;
   /** Mutable build-up of `AnalysisResult.methodTargets`. */
   readonly methodTargetTable: Map<number, MethodTarget>;
   /** Mutable build-up of `AnalysisResult.implMethodTargets`. */
@@ -1371,6 +1385,7 @@ const BUILTIN_SCOPE: [string, ScopedVariable][] = [
         genericParams: [],
         genericParamBounds: new Map(),
         genericParamDefaults: new Map(),
+        monomorphizeDeclTokenId: none(),
       },
       mutable: false,
     },
@@ -8090,6 +8105,11 @@ function fnSignatureType(
       genericParamBoundNames(signature.generics, signature.whereClause),
     ),
     genericParamDefaults: resolveGenericParamDefaults(ctx, signature.generics),
+    monomorphizeDeclTokenId: signature.attributes.some(
+      (attr) => attr.name.text === "monomorphize",
+    )
+      ? some(signature.tokenId)
+      : none(),
   };
   popGenericParams(ctx);
   return type;
@@ -14158,6 +14178,85 @@ function checkCallGenericBounds(
   }
 }
 
+/** Whether `type` is fully concrete: no generic parameter, projection, or
+ * `dyn Trait` anywhere inside it. A function-typed argument is conservatively
+ * non-ground. */
+// eslint-disable-next-line complexity -- Routing function over the full Type union
+function isGroundType(type: Semantics.Type): boolean {
+  switch (type.kind) {
+    case "NamedType":
+    case "Projection":
+    case "DynType":
+    case "FunctionType":
+      return false;
+    case "ReferenceType":
+      return isGroundType(type.referent);
+    case "ArrayType":
+      return isGroundType(type.elementType);
+    case "StructType":
+    case "EnumType":
+      return type.typeArguments.every(isGroundType);
+    case "UnitType":
+    case "PrimitiveBooleanType":
+    case "PrimitiveStringType":
+    case "PrimitiveCharType":
+    case "PrimitiveI8Type":
+    case "PrimitiveI16Type":
+    case "PrimitiveI32Type":
+    case "PrimitiveI64Type":
+    case "PrimitiveIsizeType":
+    case "PrimitiveU8Type":
+    case "PrimitiveU16Type":
+    case "PrimitiveU32Type":
+    case "PrimitiveU64Type":
+    case "PrimitiveUsizeType":
+    case "PrimitiveF32Type":
+    case "PrimitiveF64Type":
+      return true;
+    default:
+      return assertNever(type, `Unexpected type: ${JSON.stringify(type)}`);
+  }
+}
+
+/** Records a specialization for a call to a `#[monomorphize]` function when
+ * every one of its generic parameters resolved to a ground type. */
+function recordSpecialization(
+  ctx: AnalysisContext,
+  callTokenId: number,
+  calleeType: Semantics.FunctionType,
+  bindings: GenericBindings,
+): void {
+  if (
+    !isSome(calleeType.monomorphizeDeclTokenId) ||
+    calleeType.genericParams.length === 0
+  ) {
+    return;
+  }
+  const typeArgs: Semantics.Type[] = [];
+  for (const paramName of calleeType.genericParams) {
+    const binding = bindingOrDefault(
+      paramName,
+      calleeType.genericParamDefaults,
+      bindings,
+      callTokenId,
+    );
+    if (
+      binding === undefined ||
+      binding.isErrorPlaceholder ||
+      !isGroundType(binding.type)
+    ) {
+      return;
+    }
+    typeArgs.push(binding.type);
+  }
+  ctx.specializationTable.set(callTokenId, {
+    calleeTokenId: calleeType.monomorphizeDeclTokenId.value,
+    typeKey: typeArgs
+      .map((type) => lengthPrefixedIdentifier(describeType(type)))
+      .join("_"),
+  });
+}
+
 function analyzeCall(
   ctx: AnalysisContext,
   call: Parser.CallExpression,
@@ -14256,6 +14355,7 @@ function analyzeCall(
     turbofishBindings,
   );
   checkCallGenericBounds(ctx, call, calleeType, bindings);
+  recordSpecialization(ctx, call.tokenId, calleeType, bindings);
   // A conflict already reported by `seedExpectedReturnType` means the
   // enclosing `let`/return reconciliation would otherwise see a return type
   // that still disagrees with `expectedType` and double-report the same
@@ -15943,6 +16043,7 @@ export function analyze(
     methodIndex: new Map(),
     assocConstIndex: new Map(),
     witnessTable: new Map(),
+    specializationTable: new Map(),
     methodTargetTable: new Map(),
     implMethodTargetTable: new Map(),
     witnessParamTable: new Map(),
@@ -16010,6 +16111,7 @@ export function analyze(
     diagnostics: ctx.diagnostics,
     program: { ...program, attributes, items },
     witnesses: ctx.witnessTable,
+    specializations: ctx.specializationTable,
     methodTargets: ctx.methodTargetTable,
     implMethodTargets: ctx.implMethodTargetTable,
     witnessParams: ctx.witnessParamTable,

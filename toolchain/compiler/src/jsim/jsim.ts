@@ -19,6 +19,7 @@ import {
   findDropTarget,
   type FreeMethodTarget,
   type MethodTarget,
+  type Specialization,
   type UnsizeCoercion,
   witnessParamName,
   type WitnessMethod,
@@ -39,6 +40,11 @@ import {
   resolveSpan,
 } from "./parts/span.js";
 import { assert, assertNever } from "../assert.js";
+
+interface SpecializedCopy {
+  readonly calleeName: string;
+  readonly name: string;
+}
 
 /**
  * The JSIM Creation context object
@@ -133,6 +139,16 @@ interface JsimContext {
   /** `AnalysisResult.witnesses` - the resolved trait bounds a generic call
    * site passes, keyed by the call's tokenId. */
   readonly witnesses: ReadonlyMap<number, readonly WitnessRef[]>;
+  /** `AnalysisResult.specializations` - calls lowered to a specialized copy
+   * of their callee, keyed by the call's tokenId. */
+  readonly specializations: ReadonlyMap<number, Specialization>;
+  /** Specialized copies requested so far, keyed by `<callee signature
+   * tokenId>:<type key>` so a repeated instantiation reuses one copy. Filled
+   * while call sites lower and drained once by `specializedFunctionCopies`. */
+  readonly specializedNames: Map<string, SpecializedCopy>;
+  /** Signature `tokenId`s of top-level functions, the only callees whose
+   * emitted JS function a specialization can be copied from. */
+  readonly topLevelFunctionTokenIds: ReadonlySet<number>;
   /** `AnalysisResult.extraWitnesses` - witness objects to hoist that no
    * generic call site referenced (a concrete trait-default-method call). */
   readonly extraWitnesses: readonly WitnessRef[];
@@ -195,6 +211,7 @@ function createJsimContext(
   tokens: readonly Token[],
   ownership: ReadonlyMap<string, FunctionOwnership>,
   topLevelNames: Set<string>,
+  topLevelFunctionTokenIds: ReadonlySet<number>,
   info: JsimInfo,
 ): JsimContext {
   return {
@@ -215,6 +232,9 @@ function createJsimContext(
     implMethodTargets: info.implMethodTargets ?? new Map(),
     witnessParams: info.witnessParams ?? new Map(),
     witnesses: info.witnesses ?? new Map(),
+    specializations: info.specializations ?? new Map(),
+    specializedNames: new Map(),
+    topLevelFunctionTokenIds,
     extraWitnesses: info.extraWitnesses ?? [],
     unsizeCoercions: info.unsizeCoercions ?? new Map(),
     dropImpls: info.dropImpls ?? new Map(),
@@ -984,6 +1004,7 @@ function resolvedWitnessParamName(ctx: JsimContext, rawName: string): string {
 /** The analyzer-produced tables codegen consults, all optional so a test can
  * lower a program with none of them. */
 export interface JsimInfo {
+  readonly specializations?: ReadonlyMap<number, Specialization>;
   readonly methodTargets?: ReadonlyMap<number, MethodTarget>;
   readonly implMethodTargets?: ReadonlyMap<number, FreeMethodTarget>;
   readonly witnessParams?: ReadonlyMap<number, readonly WitnessParam[]>;
@@ -1003,9 +1024,11 @@ export function toJsim(
   info: JsimInfo = {},
 ): JSIM.Program {
   const topLevelNames = new Set<string>();
+  const topLevelFunctionTokenIds = new Set<number>();
   for (const item of program.items) {
     if (item.kind === "Function") {
       topLevelNames.add(item.signature.name.text);
+      topLevelFunctionTokenIds.add(item.signature.tokenId);
     } else if (item.kind === "Const" && isSome(item.visibility)) {
       // A pub const's own name becomes a real top-level JS binding too
       // (see `emitConstPart`), same as a function's - a static's mangled
@@ -1013,7 +1036,13 @@ export function toJsim(
       topLevelNames.add(item.name.text);
     }
   }
-  const ctx = createJsimContext(tokens, ownership, topLevelNames, info);
+  const ctx = createJsimContext(
+    tokens,
+    ownership,
+    topLevelNames,
+    topLevelFunctionTokenIds,
+    info,
+  );
   const methodOwners = collectMethodOwners(program);
   reserveMethodFreeFnNames(ctx, methodOwners);
   reserveHoistedWitnessConsts(ctx);
@@ -1034,10 +1063,75 @@ export function toJsim(
     kind: "Program",
     docComment: toDocComment(program.attributes),
     items: pruneUnreferencedFunctions(
-      [...hoistedWitnessDecls(ctx), ...bodyItems],
+      [
+        ...hoistedWitnessDecls(ctx),
+        ...bodyItems,
+        ...specializedFunctionCopies(ctx, bodyItems),
+      ],
       preludeFns,
     ),
   };
+}
+
+function parseCallee(
+  ctx: JsimContext,
+  call: Semantics.CallExpression,
+): JSIM.Expression {
+  const [calleeName, ...rest] =
+    call.callee.kind === "PathExpression" ? call.callee.path.segments : [];
+  if (calleeName !== undefined && rest.length === 0) {
+    const specialized = specializedCalleeName(ctx, call.tokenId, calleeName);
+    if (isSome(specialized)) {
+      return { kind: "PathExpression", path: [specialized.value] };
+    }
+  }
+  return parseExpression(ctx, call.callee);
+}
+
+/**
+ * The specialized name a call lowers to, reserving it (and queuing the copy
+ * for `specializedFunctionCopies`) on the instantiation's first use. Absent
+ * when the callee is not a top-level function, since only those have an
+ * emitted JS function to copy.
+ */
+function specializedCalleeName(
+  ctx: JsimContext,
+  callTokenId: number,
+  calleeName: string,
+): Option<string> {
+  const specialization = ctx.specializations.get(callTokenId);
+  if (
+    specialization === undefined ||
+    !ctx.topLevelFunctionTokenIds.has(specialization.calleeTokenId)
+  ) {
+    return none();
+  }
+  const key = `${String(specialization.calleeTokenId)}:${specialization.typeKey}`;
+  const existing = ctx.specializedNames.get(key);
+  if (existing !== undefined) return some(existing.name);
+  const name = reserveTopLevelName(
+    ctx,
+    `${calleeName}$${specialization.typeKey}`,
+  );
+  ctx.specializedNames.set(key, { calleeName, name });
+  return some(name);
+}
+
+/** One module-private copy of each queued callee's already-lowered erased
+ * function under its specialized name, in first-use order. */
+function specializedFunctionCopies(
+  ctx: JsimContext,
+  bodyItems: readonly JSIM.Item[],
+): readonly JSIM.FunctionDef[] {
+  return [...ctx.specializedNames.values()].flatMap((copy) => {
+    const erased = bodyItems.find(
+      (item): item is JSIM.FunctionDef =>
+        item.kind === "Function" && item.name === copy.calleeName,
+    );
+    return erased === undefined
+      ? []
+      : [{ ...erased, name: copy.name, scope: none() }];
+  });
 }
 
 // eslint-disable-next-line complexity -- Routing function
@@ -2285,7 +2379,7 @@ function parseExpressionDispatch(
       }
       return {
         kind: "CallExpression",
-        callee: parseExpression(ctx, expression.callee),
+        callee: parseCallee(ctx, expression),
         arguments: [
           ...expression.arguments.map((arg) => parseExpression(ctx, arg)),
           ...witnessArguments(ctx, expression.tokenId),
