@@ -142,13 +142,14 @@ interface JsimContext {
   /** `AnalysisResult.specializations` - calls lowered to a specialized copy
    * of their callee, keyed by the call's tokenId. */
   readonly specializations: ReadonlyMap<number, Specialization>;
-  /** Specialized copies requested so far, keyed by `<callee signature
-   * tokenId>:<type key>` so a repeated instantiation reuses one copy. Filled
-   * while call sites lower and drained once by `specializedFunctionCopies`. */
+  /** Every specialized copy, keyed by `<callee signature tokenId>:<type
+   * key>` so a repeated instantiation reuses one copy. Filled up front by
+   * `reserveSpecializedNames`, before any body lowers, so a body-local
+   * can't claim a specialized name first. */
   readonly specializedNames: Map<string, SpecializedCopy>;
-  /** Signature `tokenId`s of top-level functions, the only callees whose
+  /** Top-level function name by signature `tokenId`: the only callees whose
    * emitted JS function a specialization can be copied from. */
-  readonly topLevelFunctionTokenIds: ReadonlySet<number>;
+  readonly topLevelFunctionNames: ReadonlyMap<number, string>;
   /** `AnalysisResult.extraWitnesses` - witness objects to hoist that no
    * generic call site referenced (a concrete trait-default-method call). */
   readonly extraWitnesses: readonly WitnessRef[];
@@ -211,7 +212,7 @@ function createJsimContext(
   tokens: readonly Token[],
   ownership: ReadonlyMap<string, FunctionOwnership>,
   topLevelNames: Set<string>,
-  topLevelFunctionTokenIds: ReadonlySet<number>,
+  topLevelFunctionNames: ReadonlyMap<number, string>,
   info: JsimInfo,
 ): JsimContext {
   return {
@@ -234,7 +235,7 @@ function createJsimContext(
     witnesses: info.witnesses ?? new Map(),
     specializations: info.specializations ?? new Map(),
     specializedNames: new Map(),
-    topLevelFunctionTokenIds,
+    topLevelFunctionNames,
     extraWitnesses: info.extraWitnesses ?? [],
     unsizeCoercions: info.unsizeCoercions ?? new Map(),
     dropImpls: info.dropImpls ?? new Map(),
@@ -1024,11 +1025,14 @@ export function toJsim(
   info: JsimInfo = {},
 ): JSIM.Program {
   const topLevelNames = new Set<string>();
-  const topLevelFunctionTokenIds = new Set<number>();
+  const topLevelFunctionNames = new Map<number, string>();
   for (const item of program.items) {
     if (item.kind === "Function") {
       topLevelNames.add(item.signature.name.text);
-      topLevelFunctionTokenIds.add(item.signature.tokenId);
+      topLevelFunctionNames.set(
+        item.signature.tokenId,
+        item.signature.name.text,
+      );
     } else if (item.kind === "Const" && isSome(item.visibility)) {
       // A pub const's own name becomes a real top-level JS binding too
       // (see `emitConstPart`), same as a function's - a static's mangled
@@ -1040,12 +1044,13 @@ export function toJsim(
     tokens,
     ownership,
     topLevelNames,
-    topLevelFunctionTokenIds,
+    topLevelFunctionNames,
     info,
   );
   const methodOwners = collectMethodOwners(program);
   reserveMethodFreeFnNames(ctx, methodOwners);
   reserveHoistedWitnessConsts(ctx);
+  reserveSpecializedNames(ctx);
   const preludeFns = new Set<string>();
   const bodyItems = [
     ...methodOwners.flatMap((owner) => {
@@ -1077,44 +1082,46 @@ function parseCallee(
   ctx: JsimContext,
   call: Semantics.CallExpression,
 ): JSIM.Expression {
-  const [calleeName, ...rest] =
-    call.callee.kind === "PathExpression" ? call.callee.path.segments : [];
-  if (calleeName !== undefined && rest.length === 0) {
-    const specialized = specializedCalleeName(ctx, call.tokenId, calleeName);
-    if (isSome(specialized)) {
-      return { kind: "PathExpression", path: [specialized.value] };
-    }
-  }
-  return parseExpression(ctx, call.callee);
+  const specialized = specializedCalleeName(ctx, call.tokenId);
+  return isSome(specialized)
+    ? { kind: "PathExpression", path: [specialized.value] }
+    : parseExpression(ctx, call.callee);
 }
 
 /**
- * The specialized name a call lowers to, reserving it (and queuing the copy
- * for `specializedFunctionCopies`) on the instantiation's first use. Absent
- * when the callee is not a top-level function, since only those have an
- * emitted JS function to copy.
+ * Reserves every specialized copy's name before any function body lowers, so
+ * a body-local or parameter named like one is alpha-renamed instead of
+ * shadowing the copy at a call site. A callee that is not a top-level
+ * function has no emitted JS function to copy and is left out.
  */
+function reserveSpecializedNames(ctx: JsimContext): void {
+  for (const specialization of ctx.specializations.values()) {
+    const calleeName = ctx.topLevelFunctionNames.get(
+      specialization.calleeTokenId,
+    );
+    const key = specializationKey(specialization);
+    if (calleeName === undefined || ctx.specializedNames.has(key)) continue;
+    ctx.specializedNames.set(key, {
+      calleeName,
+      name: reserveTopLevelName(ctx, `${calleeName}$${specialization.typeKey}`),
+    });
+  }
+}
+
+function specializationKey(specialization: Specialization): string {
+  return `${String(specialization.calleeTokenId)}:${specialization.typeKey}`;
+}
+
 function specializedCalleeName(
   ctx: JsimContext,
   callTokenId: number,
-  calleeName: string,
 ): Option<string> {
   const specialization = ctx.specializations.get(callTokenId);
-  if (
-    specialization === undefined ||
-    !ctx.topLevelFunctionTokenIds.has(specialization.calleeTokenId)
-  ) {
-    return none();
-  }
-  const key = `${String(specialization.calleeTokenId)}:${specialization.typeKey}`;
-  const existing = ctx.specializedNames.get(key);
-  if (existing !== undefined) return some(existing.name);
-  const name = reserveTopLevelName(
-    ctx,
-    `${calleeName}$${specialization.typeKey}`,
-  );
-  ctx.specializedNames.set(key, { calleeName, name });
-  return some(name);
+  const copy =
+    specialization === undefined
+      ? undefined
+      : ctx.specializedNames.get(specializationKey(specialization));
+  return copy === undefined ? none() : some(copy.name);
 }
 
 /** One module-private copy of each queued callee's already-lowered erased

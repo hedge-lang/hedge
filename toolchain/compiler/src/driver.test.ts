@@ -4234,4 +4234,19 @@ describe("#[monomorphize] specialization", (): void => {
     `);
     expect(js).toMatch(/function identity\$\w*i32\w*\(x\)/);
   });
+
+  it("calls the specialized function when an earlier local or parameter is named like it", (): void => {
+    const js = emittedJs(`
+      #[monomorphize]
+      fn identity<T>(x: T) -> T { x }
+      fn shadowed(identity$3_i32: i32) -> i32 { identity(identity$3_i32) }
+      fn main() {
+        let identity$3_i32 = 9;
+        print(identity(3));
+        print(identity$3_i32);
+        print(shadowed(5));
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["3", "9", "5"]);
+  });
 });
