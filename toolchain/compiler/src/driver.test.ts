@@ -4250,7 +4250,7 @@ describe("#[monomorphize] specialization", (): void => {
     expect(runEmittedJs(js)).toEqual(["3", "9", "5"]);
   });
 
-  it("calls an aliased specialized function through a local binding (let f = identity)", (): void => {
+  it("returns the argument when a monomorphized function is called through a local alias (let f = identity)", (): void => {
     const js = emittedJs(`
       #[monomorphize]
       fn identity<T>(x: T) -> T { x }
@@ -4310,5 +4310,30 @@ describe("#[monomorphize] specialization", (): void => {
     `);
     expect(js.match(/^function identity\$/gm)).toHaveLength(2);
     expect(runEmittedJs(js)).toEqual(["1", "true"]);
+  });
+
+  it("calls the reassigned function through a mutable alias of a monomorphized function", (): void => {
+    const js = emittedJs(`
+      #[monomorphize]
+      fn identity<T>(x: T) -> T { x }
+      fn other(x: i32) -> i32 { x + 100 }
+      fn main() {
+        let mut f = identity;
+        f = other;
+        print(f(3));
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["103"]);
+  });
+
+  it("evaluates the side effects of a computed callee of a monomorphized function", (): void => {
+    const js = emittedJs(`
+      #[monomorphize]
+      fn identity<T>(x: T) -> T { x }
+      fn main() {
+        print(({ print(9); identity })(3));
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["9", "3"]);
   });
 });

@@ -14248,17 +14248,38 @@ function specializationTypeKey(
     .join("_");
 }
 
+/** Whether `callee` is a bare name that resolves to a top-level binding
+ * (frame 0). Only then does a call provably reach the declaration itself:
+ * a local alias can be reassigned and a computed callee can have effects,
+ * and rewriting either to the specialized copy would change behavior. */
+function isTopLevelDeclarationCallee(
+  ctx: AnalysisContext,
+  callee: Parser.Expression,
+): boolean {
+  if (callee.kind !== "PathExpression" || callee.path.segments.length !== 1) {
+    return false;
+  }
+  const [name] = callee.path.segments;
+  if (name === undefined) return false;
+  for (let i = ctx.frames.length - 1; i >= 0; i -= 1) {
+    if (ctx.frames[i]?.vars.has(name) === true) return i === 0;
+  }
+  return false;
+}
+
 /** Records a specialization for a call to a `#[monomorphize]` function when
  * every one of its generic parameters resolved to a ground type. */
 function recordSpecialization(
   ctx: AnalysisContext,
-  callTokenId: number,
+  call: Parser.CallExpression,
   calleeType: Semantics.FunctionType,
   bindings: GenericBindings,
 ): void {
+  const callTokenId = call.tokenId;
   if (
     !isSome(calleeType.monomorphizeDeclTokenId) ||
-    calleeType.genericParams.length === 0
+    calleeType.genericParams.length === 0 ||
+    !isTopLevelDeclarationCallee(ctx, call.callee)
   ) {
     return;
   }
@@ -14384,7 +14405,7 @@ function analyzeCall(
     turbofishBindings,
   );
   checkCallGenericBounds(ctx, call, calleeType, bindings);
-  recordSpecialization(ctx, call.tokenId, calleeType, bindings);
+  recordSpecialization(ctx, call, calleeType, bindings);
   // A conflict already reported by `seedExpectedReturnType` means the
   // enclosing `let`/return reconciliation would otherwise see a return type
   // that still disagrees with `expectedType` and double-report the same
