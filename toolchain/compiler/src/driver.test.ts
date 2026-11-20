@@ -4261,4 +4261,29 @@ describe("#[monomorphize] specialization", (): void => {
     `);
     expect(runEmittedJs(js)).toEqual(["3"]);
   });
+
+  it("emits one copy per same-named struct from different scopes, at any nesting depth", (): void => {
+    const js = emittedJs(`
+      #[monomorphize]
+      fn identity<T>(x: T) -> T { x }
+      fn a() -> i32 {
+        struct P { x: i32 }
+        let p = identity(P { x: 1 });
+        let q = identity([P { x: 2 }]);
+        p.x + q[0].x
+      }
+      fn b() -> bool {
+        struct P { x: bool }
+        let p = identity(P { x: true });
+        let q = identity([P { x: false }]);
+        p.x || q[0].x
+      }
+      fn main() {
+        print(a());
+        print(b());
+      }
+    `);
+    expect(js.match(/^function identity\$/gm)).toHaveLength(4);
+    expect(runEmittedJs(js)).toEqual(["3", "true"]);
+  });
 });

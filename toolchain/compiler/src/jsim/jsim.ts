@@ -1103,7 +1103,10 @@ function reserveSpecializedNames(ctx: JsimContext): void {
     if (calleeName === undefined || ctx.specializedNames.has(key)) continue;
     ctx.specializedNames.set(key, {
       calleeName,
-      name: reserveTopLevelName(ctx, `${calleeName}$${specialization.typeKey}`),
+      name: reserveTopLevelName(
+        ctx,
+        `${calleeName}$${specialization.nameSuffix}`,
+      ),
     });
   }
 }

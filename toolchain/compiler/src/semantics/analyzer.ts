@@ -35,10 +35,13 @@ import {
 
 /** A call to a `#[monomorphize]` generic function whose every type argument
  * is ground: `calleeTokenId` is the callee signature's `tokenId`, and
- * `typeKey` is an identifier-safe encoding of the instantiation. */
+ * `typeKey` is an identifier-safe encoding of the instantiation that keeps
+ * each nominal type's declaration identity, so it is the dedupe key;
+ * `nameSuffix` is the readable encoding used only to name the copy. */
 export interface Specialization {
   readonly calleeTokenId: number;
   readonly typeKey: string;
+  readonly nameSuffix: string;
 }
 
 export interface AnalysisResult {
@@ -14218,6 +14221,33 @@ function isGroundType(type: Semantics.Type): boolean {
   }
 }
 
+/** `describeType` drops which declaration a struct/enum name refers to, so
+ * two same-named types from different scopes would share a key; this keeps
+ * each nominal type's scoped name at every nesting depth. */
+function nominalTypeIdentity(type: Semantics.Type): string {
+  if (type.kind === "ReferenceType") {
+    return `${type.mutable ? "&mut " : "&"}${nominalTypeIdentity(type.referent)}`;
+  }
+  if (type.kind === "ArrayType") {
+    return `[${nominalTypeIdentity(type.elementType)};${String(type.length)}]`;
+  }
+  if (isNominalType(type)) {
+    return type.typeArguments.length === 0
+      ? type.name
+      : `${type.name}<${type.typeArguments.map(nominalTypeIdentity).join(",")}>`;
+  }
+  return describeType(type);
+}
+
+function specializationTypeKey(
+  typeArgs: readonly Semantics.Type[],
+  identity: (type: Semantics.Type) => string,
+): string {
+  return typeArgs
+    .map((type) => lengthPrefixedIdentifier(identity(type)))
+    .join("_");
+}
+
 /** Records a specialization for a call to a `#[monomorphize]` function when
  * every one of its generic parameters resolved to a ground type. */
 function recordSpecialization(
@@ -14251,9 +14281,8 @@ function recordSpecialization(
   }
   ctx.specializationTable.set(callTokenId, {
     calleeTokenId: calleeType.monomorphizeDeclTokenId.value,
-    typeKey: typeArgs
-      .map((type) => lengthPrefixedIdentifier(describeType(type)))
-      .join("_"),
+    typeKey: specializationTypeKey(typeArgs, nominalTypeIdentity),
+    nameSuffix: specializationTypeKey(typeArgs, describeType),
   });
 }
 
