@@ -4286,4 +4286,29 @@ describe("#[monomorphize] specialization", (): void => {
     expect(js.match(/^function identity\$/gm)).toHaveLength(4);
     expect(runEmittedJs(js)).toEqual(["3", "true"]);
   });
+
+  it("emits one copy per same-named struct from different scopes behind a reference", (): void => {
+    const js = emittedJs(`
+      #[monomorphize]
+      fn identity<T>(x: T) -> T { x }
+      fn a() -> i32 {
+        struct P { x: i32 }
+        let p = P { x: 1 };
+        let r = identity(&p);
+        r.x
+      }
+      fn b() -> bool {
+        struct P { x: bool }
+        let p = P { x: true };
+        let r = identity(&p);
+        r.x
+      }
+      fn main() {
+        print(a());
+        print(b());
+      }
+    `);
+    expect(js.match(/^function identity\$/gm)).toHaveLength(2);
+    expect(runEmittedJs(js)).toEqual(["1", "true"]);
+  });
 });
