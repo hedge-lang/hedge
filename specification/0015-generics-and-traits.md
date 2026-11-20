@@ -44,7 +44,9 @@ conservative by default, since code size is a cost paid on every page load. A
 `dyn Trait` always remains witnessed. The `#[monomorphize]` hint on a generic
 function opts it in: each call whose type arguments are all concrete lowers to a
 specialized copy, one per distinct instantiation, while every other call keeps the
-erased function.
+erased function. Only a top-level function can be specialized, and only through a
+call that names it directly; a function declared inside a block, a call through a
+local alias, and a call through a computed callee keep the erased function.
 
 ## Traits
 
