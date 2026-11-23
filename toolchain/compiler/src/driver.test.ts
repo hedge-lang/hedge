@@ -4093,3 +4093,247 @@ describe("+ / & / << on a type with an operator-trait impl", (): void => {
     expect(js).not.toContain("a.add(b)");
   });
 });
+
+describe("#[monomorphize] specialization", (): void => {
+  it("emits an extra specialized copy of an opted-in generic function and lowers a ground-type call to it", (): void => {
+    const js = emittedJs(`
+      #[monomorphize]
+      fn identity<T>(x: T) -> T { x }
+      fn main() { print(identity(3)); }
+    `);
+    expect(js).toContain("function identity(x)");
+    expect(js).toMatch(/function identity\$\w*i32\w*\(x\)/);
+    expect(js).not.toMatch(/print\(identity\(/);
+    expect(runEmittedJs(js)).toEqual(["3"]);
+  });
+
+  it("emits one specialized copy per distinct instantiation, however many call sites share it", (): void => {
+    const js = emittedJs(`
+      #[monomorphize]
+      fn identity<T>(x: T) -> T { x }
+      fn main() {
+        print(identity(1));
+        print(identity(2));
+        print(identity(true));
+      }
+    `);
+    expect(js.match(/function identity\$/g)).toHaveLength(2);
+    expect(runEmittedJs(js)).toEqual(["1", "2", "true"]);
+  });
+
+  it("passes the witness to a specialized copy of a bounded generic function", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { n: i32 }
+      impl Draw for P { fn draw(&self) -> i32 { self.n } }
+      #[monomorphize]
+      fn render<T: Draw>(t: &T) -> i32 { t.draw() }
+      fn main() {
+        let p = P { n: 7 };
+        print(render(&p));
+      }
+    `);
+    expect(js).toMatch(/function render\$\w*\(t, _witness_T_Draw\)/);
+    expect(js).toMatch(/render\$\w*\(p, __witness_Draw_P\)/);
+    expect(runEmittedJs(js)).toEqual(["7"]);
+  });
+
+  it("keeps a call inside another generic function on the erased function", (): void => {
+    const js = emittedJs(`
+      #[monomorphize]
+      fn identity<T>(x: T) -> T { x }
+      fn outer<U>(y: U) -> U { identity(y) }
+      fn main() { print(outer(5)); }
+    `);
+    expect(js).not.toMatch(/function identity\$/);
+    expect(js).toContain("return identity(y);");
+    expect(runEmittedJs(js)).toEqual(["5"]);
+  });
+
+  it("never specializes a call without the attribute", (): void => {
+    const js = emittedJs(`
+      fn identity<T>(x: T) -> T { x }
+      fn main() { print(identity(3)); }
+    `);
+    expect(js).not.toMatch(/identity\$/);
+    expect(js).toContain("print(identity(3));");
+  });
+
+  it("ignores the attribute on a non-generic function", (): void => {
+    const js = emittedJs(`
+      #[monomorphize]
+      fn one() -> i32 { 1 }
+      fn main() { print(one()); }
+    `);
+    expect(js).not.toMatch(/one\$/);
+  });
+
+  it("renames a specialized copy whose name collides with a user function", (): void => {
+    const js = emittedJs(`
+      #[monomorphize]
+      fn identity<T>(x: T) -> T { x }
+      fn identity$3_i32() -> i32 { 9 }
+      fn main() { print(identity(3)); print(identity$3_i32()); }
+    `);
+    expect(runEmittedJs(js)).toEqual(["3", "9"]);
+  });
+
+  it("dispatches a dyn Trait method call through the witness, not a specialization", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn draw(&self) -> i32; }
+      struct P { n: i32 }
+      impl Draw for P { fn draw(&self) -> i32 { self.n } }
+      #[monomorphize]
+      fn keep<T>(x: T) -> T { x }
+      fn call(d: &dyn Draw) -> i32 { d.draw() }
+      fn main() {
+        let p = P { n: 4 };
+        print(call(&p));
+        print(keep(1));
+      }
+    `);
+    expect(js).toContain("d.witness.draw(d.value)");
+    expect(runEmittedJs(js)).toEqual(["4", "1"]);
+  });
+
+  it("calls a block-local function shadowing an opted-in one without specializing it", (): void => {
+    const js = emittedJs(`
+      #[monomorphize]
+      fn identity<T>(x: T) -> T { x }
+      fn main() {
+        fn identity<T>(x: T) -> T { x }
+        print(identity(8));
+      }
+    `);
+    expect(js).not.toMatch(/function identity\$/);
+    expect(runEmittedJs(js)).toEqual(["8"]);
+  });
+
+  it("specializes per turbofish-chosen, struct, and array instantiation, each once", (): void => {
+    const js = emittedJs(`
+      struct P { n: i32 }
+      #[monomorphize]
+      fn identity<T>(x: T) -> T { x }
+      fn main() {
+        print(identity::<i64>(2));
+        let a = identity([1, 2]);
+        print(a[0]);
+        let p = identity(P { n: 6 });
+        print(p.n);
+      }
+    `);
+    expect(js.match(/function identity\$/g)).toHaveLength(3);
+  });
+
+  it("still specializes when the opted-in function also carries a doc comment", (): void => {
+    const js = emittedJs(`
+      /// returns its argument
+      #[monomorphize]
+      fn identity<T>(x: T) -> T { x }
+      fn main() { print(identity(3)); }
+    `);
+    expect(js).toMatch(/function identity\$\w*i32\w*\(x\)/);
+  });
+
+  it("calls the specialized function when an earlier local or parameter is named like it", (): void => {
+    const js = emittedJs(`
+      #[monomorphize]
+      fn identity<T>(x: T) -> T { x }
+      fn shadowed(identity$3_i32: i32) -> i32 { identity(identity$3_i32) }
+      fn main() {
+        let identity$3_i32 = 9;
+        print(identity(3));
+        print(identity$3_i32);
+        print(shadowed(5));
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["3", "9", "5"]);
+  });
+
+  it("returns the argument when a monomorphized function is called through a local alias (let f = identity)", (): void => {
+    const js = emittedJs(`
+      #[monomorphize]
+      fn identity<T>(x: T) -> T { x }
+      fn main() {
+        let f = identity;
+        print(f(3));
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["3"]);
+  });
+
+  it("emits one copy per same-named struct from different scopes, at any nesting depth", (): void => {
+    const js = emittedJs(`
+      #[monomorphize]
+      fn identity<T>(x: T) -> T { x }
+      fn a() -> i32 {
+        struct P { x: i32 }
+        let p = identity(P { x: 1 });
+        let q = identity([P { x: 2 }]);
+        p.x + q[0].x
+      }
+      fn b() -> bool {
+        struct P { x: bool }
+        let p = identity(P { x: true });
+        let q = identity([P { x: false }]);
+        p.x || q[0].x
+      }
+      fn main() {
+        print(a());
+        print(b());
+      }
+    `);
+    expect(js.match(/^function identity\$/gm)).toHaveLength(4);
+    expect(runEmittedJs(js)).toEqual(["3", "true"]);
+  });
+
+  it("emits one copy per same-named struct from different scopes behind a reference", (): void => {
+    const js = emittedJs(`
+      #[monomorphize]
+      fn identity<T>(x: T) -> T { x }
+      fn a() -> i32 {
+        struct P { x: i32 }
+        let p = P { x: 1 };
+        let r = identity(&p);
+        r.x
+      }
+      fn b() -> bool {
+        struct P { x: bool }
+        let p = P { x: true };
+        let r = identity(&p);
+        r.x
+      }
+      fn main() {
+        print(a());
+        print(b());
+      }
+    `);
+    expect(js.match(/^function identity\$/gm)).toHaveLength(2);
+    expect(runEmittedJs(js)).toEqual(["1", "true"]);
+  });
+
+  it("calls the reassigned function through a mutable alias of a monomorphized function", (): void => {
+    const js = emittedJs(`
+      #[monomorphize]
+      fn identity<T>(x: T) -> T { x }
+      fn other(x: i32) -> i32 { x + 100 }
+      fn main() {
+        let mut f = identity;
+        f = other;
+        print(f(3));
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["103"]);
+  });
+
+  it("evaluates the side effects of a computed callee of a monomorphized function", (): void => {
+    const js = emittedJs(`
+      #[monomorphize]
+      fn identity<T>(x: T) -> T { x }
+      fn main() {
+        print(({ print(9); identity })(3));
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["9", "3"]);
+  });
+});

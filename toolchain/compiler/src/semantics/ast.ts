@@ -666,6 +666,11 @@ export interface FunctionType {
    * `NamedType` reference (the same shape an ordinary `x: T` gets), left for
    * the call site to substitute against its own resolved bindings. */
   readonly genericParamDefaults: ReadonlyMap<string, Type>;
+  /** The declaring signature's own `tokenId` when it carries the
+   * `#[monomorphize]` hint, so a call site can name exactly which function
+   * it resolved to (a shadowing local fn of the same name is a different
+   * `tokenId`). */
+  readonly monomorphizeDeclTokenId: Option<number>;
 }
 
 /**

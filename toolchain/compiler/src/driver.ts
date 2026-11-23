@@ -83,6 +83,7 @@ export function compile(
           implMethodTargets: analysis.implMethodTargets,
           witnessParams: analysis.witnessParams,
           witnesses: analysis.witnesses,
+          specializations: analysis.specializations,
           extraWitnesses: analysis.extraWitnesses,
           unsizeCoercions: analysis.unsizeCoercions,
           dropImpls: analysis.dropImpls,
