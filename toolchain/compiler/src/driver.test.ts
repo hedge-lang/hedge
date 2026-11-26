@@ -4579,4 +4579,25 @@ describe("dyn Trait downcasting", (): void => {
       `),
     ).toEqual(["the trait bound `(): Draw` is not satisfied"]);
   });
+
+  it.each([
+    ["an array of a generic parameter", "[T; 1]", "fn f<T>", "f::<i32>"],
+    ["a reference to a generic parameter", "&T", "fn f<T>", "f::<i32>"],
+    ["an array of a generic type instantiation", "[W<i32>; 1]", "fn f", "f"],
+  ])(
+    "rejects downcasting to %s",
+    (_name: string, target: string, signature: string, call: string): void => {
+      expect(
+        diagnosticMessages(`
+          trait Draw { fn draw(&self) -> i32; }
+          impl<X> Draw for X { fn draw(&self) -> i32 { 1 } }
+          struct W<T> { v: T }
+          ${signature}(d: &dyn Draw) { let x = d.downcast_ref::<${target}>(); }
+          fn main() { let n: i32 = 1; ${call}(&n); }
+        `),
+      ).toEqual([
+        `cannot downcast to \`${target}\`: generic types are erased at runtime, so it has no runtime identity to compare`,
+      ]);
+    },
+  );
 });

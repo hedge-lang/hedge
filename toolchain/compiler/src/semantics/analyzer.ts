@@ -12030,10 +12030,16 @@ function registerDowncastTagField(ctx: AnalysisContext, traitId: string): void {
 /** A generic parameter or an instantiated generic type: erased generics give
  * every instantiation one shared witness, so neither has a runtime identity. */
 function isGenericDowncastTarget(target: Semantics.Type): boolean {
-  return (
-    target.kind === "NamedType" ||
-    (isNominalType(target) && target.typeArguments.length > 0)
-  );
+  switch (target.kind) {
+    case "NamedType":
+      return true;
+    case "ArrayType":
+      return isGenericDowncastTarget(target.elementType);
+    case "ReferenceType":
+      return isGenericDowncastTarget(target.referent);
+    default:
+      return isNominalType(target) && target.typeArguments.length > 0;
+  }
 }
 
 function downcastTypeArgument(
