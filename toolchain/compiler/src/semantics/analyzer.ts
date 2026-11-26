@@ -12075,7 +12075,8 @@ function checkDowncastTarget(
   traitId: string,
   target: Semantics.Type,
 ): void {
-  if (target.kind === "UnitType") return;
+  const [written] = expression.typeArguments;
+  if (target.kind === "UnitType" && written?.kind !== "UnitType") return;
   if (isGenericDowncastTarget(target)) {
     emitError(
       ctx,

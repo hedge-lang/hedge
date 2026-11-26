@@ -4570,4 +4570,13 @@ describe("dyn Trait downcasting", (): void => {
       "type mismatch: explicit annotation does not match initializer type",
     ]);
   });
+
+  it("rejects downcasting to the unit type when it does not implement the trait", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn f(d: &dyn Draw) { let x = d.downcast_ref::<()>(); }
+        fn main() { let c = Circle { r: 1 }; f(&c); }
+      `),
+    ).toEqual(["the trait bound `(): Draw` is not satisfied"]);
+  });
 });
