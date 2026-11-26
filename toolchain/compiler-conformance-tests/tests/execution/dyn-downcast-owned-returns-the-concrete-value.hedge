@@ -1,0 +1,25 @@
+trait Draw {
+  fn draw(&self) -> i32;
+}
+
+struct Circle {
+  r: i32,
+}
+
+impl Draw for Circle {
+  fn draw(&self) -> i32 {
+    self.r
+  }
+}
+
+fn radius(d: dyn Draw) -> i32 {
+  match d.downcast::<Circle>() {
+    Option::Some(c) => c.r,
+    Option::None => 0 - 1,
+  }
+}
+
+fn main() {
+  let d: dyn Draw = Circle { r: 5 };
+  print(radius(d));
+}

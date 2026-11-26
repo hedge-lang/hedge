@@ -460,6 +460,10 @@ export function renderDiagnosticMessage(kind: DiagnosticKind): string {
       return "cannot assign through a shared reference";
     case "SemAssignThroughDynPlace":
       return `cannot assign through a \`dyn ${kind.trait}\` place; its concrete type is erased - mutate through the trait's methods, or rebind the \`dyn\` value directly`;
+    case "SemDowncastTargetGeneric":
+      return `cannot downcast to \`${kind.target}\`: generic types are erased at runtime, so it has no runtime identity to compare`;
+    case "SemDowncastOwnedThroughReference":
+      return "`downcast` consumes the trait object and cannot be called through a reference; use `downcast_ref` or `downcast_mut`";
     case "OwnBorrowMutThroughShared":
       return `cannot borrow \`${kind.place}\` as mutable because \`${kind.through}\` is a shared reference.`;
     case "OwnBorrowMutNotDeclaredMut":

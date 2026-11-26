@@ -982,7 +982,14 @@ function emitStaticPart(decl: StaticDecl): EmittedPart {
  * unlike an in-Hedge reference site, which is already inlined).
  */
 function emitWitnessObjectDecl(decl: WitnessObjectDecl): string {
-  const direct = decl.directSlots.map((s) => `${s.method}: ${s.value}`);
+  const direct = [
+    ...(isSome(decl.typeTag)
+      ? [
+          `${decl.typeTag.value.field}: ${JSON.stringify(decl.typeTag.value.value)}`,
+        ]
+      : []),
+    ...decl.directSlots.map((s) => `${s.method}: ${s.value}`),
+  ];
   if (decl.closureSlots.length === 0) {
     return `const ${decl.name} = {${direct.join(", ")}};`;
   }

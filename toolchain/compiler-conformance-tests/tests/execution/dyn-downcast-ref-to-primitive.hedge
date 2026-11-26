@@ -1,0 +1,30 @@
+trait Draw {
+  fn draw(&self) -> i32;
+}
+
+impl Draw for i32 {
+  fn draw(&self) -> i32 {
+    *self
+  }
+}
+
+impl Draw for bool {
+  fn draw(&self) -> i32 {
+    1
+  }
+}
+
+fn as_int(d: &dyn Draw) -> i32 {
+  match d.downcast_ref::<i32>() {
+    Option::Some(n) => *n,
+    Option::None => 0 - 1,
+  }
+}
+
+fn main() {
+  let n: i32 = 7;
+  let b = true;
+  print(as_int(&n));
+  print(",");
+  print(as_int(&b));
+}

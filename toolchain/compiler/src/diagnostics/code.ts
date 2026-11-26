@@ -51,6 +51,8 @@ export type DiagnosticCode =
   | "HEDGE-TYPE-016" // method name resolves to more than one instantiation of the same trait
   | "HEDGE-TYPE-017" // trait reference argument count does not match declared generics
   | "HEDGE-TYPE-018" // nominal type reference argument count does not match declared generics
+  | "HEDGE-TYPE-019" // owned downcast called through a reference to a trait object
+  | "HEDGE-TYPE-020" // downcast target is a generic type or parameter
   // Patterns.
   | "HEDGE-PATTERN-001" // refutable pattern in an irrefutable position
   | "HEDGE-PATTERN-002" // non-exhaustive match

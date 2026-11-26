@@ -1,0 +1,28 @@
+trait Draw {
+  fn draw(&self) -> i32;
+}
+
+struct Circle {
+  r: i32,
+}
+
+impl Draw for Circle {
+  fn draw(&self) -> i32 {
+    self.r
+  }
+}
+
+fn grow(d: &mut dyn Draw) {
+  match d.downcast_mut::<Circle>() {
+    Option::Some(c) => {
+      c.r = c.r + 10;
+    }
+    Option::None => {}
+  }
+}
+
+fn main() {
+  let mut c = Circle { r: 3 };
+  grow(&mut c);
+  print(c.r);
+}

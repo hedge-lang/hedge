@@ -1,0 +1,40 @@
+trait Draw {
+  fn draw(&self) -> i32;
+}
+
+fn probe(other: &dyn Draw) -> i32 {
+  struct P {
+    n: i32,
+  }
+
+  impl Draw for P {
+    fn draw(&self) -> i32 {
+      self.n
+    }
+  }
+
+  fn is_p(d: &dyn Draw) -> i32 {
+    match d.downcast_ref::<P>() {
+      Option::Some(p) => 1,
+      Option::None => 0,
+    }
+  }
+
+  let own = P { n: 2 };
+  is_p(&own) * 10 + is_p(other)
+}
+
+fn main() {
+  struct P {
+    n: i32,
+  }
+
+  impl Draw for P {
+    fn draw(&self) -> i32 {
+      self.n
+    }
+  }
+
+  let mine = P { n: 1 };
+  print(probe(&mine));
+}

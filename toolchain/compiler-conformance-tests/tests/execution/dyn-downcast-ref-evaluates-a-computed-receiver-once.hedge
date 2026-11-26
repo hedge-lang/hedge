@@ -1,0 +1,27 @@
+trait Draw {
+  fn draw(&self) -> i32;
+}
+
+struct Circle {
+  r: i32,
+}
+
+impl Draw for Circle {
+  fn draw(&self) -> i32 {
+    self.r
+  }
+}
+
+fn as_dyn(c: &Circle) -> &dyn Draw {
+  print("pick,");
+  c
+}
+
+fn main() {
+  let c = Circle { r: 5 };
+  let r = match as_dyn(&c).downcast_ref::<Circle>() {
+    Option::Some(found) => found.r,
+    Option::None => 0 - 1,
+  };
+  print(r);
+}
