@@ -2644,7 +2644,9 @@ function typeTagFor(ctx: JsimContext, typeId: string): string {
   const bare = bareTypeName(typeId);
   const taken = new Set(ctx.typeTags.values());
   let tag = bare;
-  for (let suffix = 1; taken.has(tag); suffix += 1) {
+  let suffix = 0;
+  while (taken.has(tag)) {
+    suffix += 1;
     tag = `${bare}#${String(suffix)}`;
   }
   ctx.typeTags.set(typeId, tag);
