@@ -112,7 +112,8 @@ returns `Option<&T>`, `d.downcast_mut::<T>()` returns `Option<&mut T>`, and
 `d.downcast::<T>()` consumes the object and returns `Option<T>`. The result is
 `Some` when the value behind the object was created as a `T` and `None` for any other
 type that implements the trait. The consuming form cannot be called through a
-reference, and `downcast_mut` requires a mutable one. A trait that declares a method
+reference, and `downcast_mut` requires a mutable receiver: a `&mut` reference, or
+an owned binding declared `mut`. A trait that declares a method
 of the same name keeps its own method.
 
 The target must implement the trait, since a value of any other type could never

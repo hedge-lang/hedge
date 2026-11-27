@@ -4646,4 +4646,20 @@ describe("dyn Trait downcasting", (): void => {
       `),
     ).toEqual([]);
   });
+
+  it("rejects downcast_mut on a trait object reached by dereferencing a shared reference", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn f(d: &dyn Draw) {
+          match (*d).downcast_mut::<Circle>() {
+            Option::Some(c) => {}
+            Option::None => {}
+          }
+        }
+        fn main() { let c = Circle { r: 1 }; f(&c); }
+      `),
+    ).toEqual([
+      "cannot call `&mut self` method `downcast_mut` through a shared reference",
+    ]);
+  });
 });
