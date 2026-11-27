@@ -4739,6 +4739,9 @@ function parseMutableReferenceExpression(
   expression: Semantics.ReferenceExpression,
 ): JSIM.Expression {
   const place = parseExpression(ctx, expression.operand);
+  // A `dyn` box is already the shape every `&mut dyn` consumer reads, and a
+  // write through the place is rejected, so no cell is needed to write back.
+  if (expression.operand.type.kind === "DynType") return place;
   return { kind: "RefCellExpression", place };
 }
 
