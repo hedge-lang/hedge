@@ -317,6 +317,7 @@ const SAMPLE_KINDS: readonly DiagnosticKind[] = [
   { kind: "SemCannotAssignThroughSharedReference" },
   { kind: "SemAssignThroughDynPlace", trait: "Draw" },
   { kind: "SemDowncastOwnedThroughReference" },
+  { kind: "SemMutMethodOnImmutableBinding", method: "poke", binding: "d" },
   { kind: "SemDowncastTargetGeneric", target: "Wrapper<i32>" },
   { kind: "OwnBorrowMutThroughShared", place: "x", through: "r" },
   { kind: "OwnBorrowMutNotDeclaredMut", baseName: "x" },

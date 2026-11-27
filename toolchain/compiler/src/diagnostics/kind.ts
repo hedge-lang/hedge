@@ -595,6 +595,11 @@ export type DiagnosticKind =
   | { readonly kind: "SemCannotAssignThroughSharedReference" }
   | { readonly kind: "SemAssignThroughDynPlace"; readonly trait: string }
   | { readonly kind: "SemDowncastOwnedThroughReference" }
+  | {
+      readonly kind: "SemMutMethodOnImmutableBinding";
+      readonly method: string;
+      readonly binding: string;
+    }
   | { readonly kind: "SemDowncastTargetGeneric"; readonly target: string }
   // Ownership analysis.
   | {
@@ -885,6 +890,7 @@ export const CODE_BY_KIND: ReadonlyMap<string, DiagnosticCode> = new Map<
   ["SemCannotAssignThroughSharedReference", "HEDGE-BORROW-CHECK-006"],
   ["SemAssignThroughDynPlace", "HEDGE-TYPE-007"],
   ["SemDowncastOwnedThroughReference", "HEDGE-TYPE-019"],
+  ["SemMutMethodOnImmutableBinding", "HEDGE-BORROW-CHECK-007"],
   ["SemDowncastTargetGeneric", "HEDGE-TYPE-020"],
   ["OwnConflictingBorrows", "HEDGE-BORROW-CHECK-001"],
   ["OwnBorrowMutThroughShared", "HEDGE-BORROW-CHECK-002"],

@@ -12103,13 +12103,53 @@ function checkDowncastTarget(
   );
 }
 
+function receiverRootName(expr: Semantics.Expression): string {
+  switch (expr.kind) {
+    case "PathExpression":
+      return expr.path.segments[0] ?? "";
+    case "FieldAccessExpression":
+    case "IndexExpression":
+      return receiverRootName(expr.object);
+    case "DereferenceExpression":
+      return receiverRootName(expr.operand);
+    default:
+      return "";
+  }
+}
+
+function checkOwnedDowncastMutReceiver(
+  ctx: AnalysisContext,
+  expression: Parser.MethodCallExpression,
+  receiver: Semantics.Expression,
+): void {
+  const violation = placeMutabilityViolation(ctx, receiver, true);
+  if (!isSome(violation)) return;
+  const method = expression.method.text;
+  emitError(
+    ctx,
+    violation.value === "immutable-binding"
+      ? {
+          kind: "SemMutMethodOnImmutableBinding",
+          method,
+          binding: receiverRootName(receiver),
+        }
+      : { kind: "SemMutMethodThroughSharedRef", method },
+    expression.tokenId,
+  );
+}
+
 function checkDowncastReceiver(
   ctx: AnalysisContext,
   expression: Parser.MethodCallExpression,
   form: DowncastForm,
-  receiverAsWritten: Semantics.Type,
+  receiver: Semantics.Expression,
 ): void {
-  if (receiverAsWritten.kind !== "ReferenceType") return;
+  const receiverAsWritten = receiver.type;
+  if (receiverAsWritten.kind !== "ReferenceType") {
+    if (form === "mut")
+      checkOwnedDowncastMutReceiver(ctx, expression, receiver);
+    return;
+  }
   switch (form) {
     case "owned":
       emitError(
@@ -12142,12 +12182,12 @@ function tryAnalyzeDowncast(
   ctx: AnalysisContext,
   expression: Parser.MethodCallExpression,
   base: Semantics.MethodCallExpression,
-  receiverAsWritten: Semantics.Type,
+  receiver: Semantics.Expression,
 ): Option<Semantics.MethodCallExpression> {
   const receiverType =
-    receiverAsWritten.kind === "ReferenceType"
-      ? receiverAsWritten.referent
-      : receiverAsWritten;
+    receiver.type.kind === "ReferenceType"
+      ? receiver.type.referent
+      : receiver.type;
   const form = DOWNCAST_FORMS.get(expression.method.text);
   if (
     receiverType.kind !== "DynType" ||
@@ -12158,7 +12198,7 @@ function tryAnalyzeDowncast(
   ) {
     return none();
   }
-  checkDowncastReceiver(ctx, expression, form, receiverAsWritten);
+  checkDowncastReceiver(ctx, expression, form, receiver);
   const typeArgument = downcastTypeArgument(ctx, expression);
   if (typeArgument === undefined) return some(base);
   const target = validateSlice1Type(ctx, typeArgument, expression.tokenId);
@@ -12210,7 +12250,7 @@ function analyzeMethodCallExpression(
   if (lookupType.kind === "UnitType" && isAmbiguousUnitExpr(receiver)) {
     return base;
   }
-  const downcast = tryAnalyzeDowncast(ctx, expression, base, receiver.type);
+  const downcast = tryAnalyzeDowncast(ctx, expression, base, receiver);
   if (isSome(downcast)) return downcast.value;
   const method = resolveMethodCall(
     ctx,

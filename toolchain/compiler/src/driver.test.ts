@@ -4600,4 +4600,50 @@ describe("dyn Trait downcasting", (): void => {
       ]);
     },
   );
+
+  it("rejects downcast_mut on an owned binding that is not declared mut", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn main() {
+          let d: dyn Draw = Circle { r: 1 };
+          match d.downcast_mut::<Circle>() {
+            Option::Some(c) => {}
+            Option::None => {}
+          }
+        }
+      `),
+    ).toEqual([
+      "cannot call `&mut self` method `downcast_mut` on `d`, which is not declared `mut`",
+    ]);
+  });
+
+  it("rejects downcast_mut on an owned parameter that is not declared mut", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn f(d: dyn Draw) {
+          match d.downcast_mut::<Circle>() {
+            Option::Some(c) => {}
+            Option::None => {}
+          }
+        }
+        fn main() { let d: dyn Draw = Circle { r: 1 }; f(d); }
+      `),
+    ).toEqual([
+      "cannot call `&mut self` method `downcast_mut` on `d`, which is not declared `mut`",
+    ]);
+  });
+
+  it("accepts downcast_mut on an owned binding declared mut", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn main() {
+          let mut d: dyn Draw = Circle { r: 1 };
+          match d.downcast_mut::<Circle>() {
+            Option::Some(c) => {}
+            Option::None => {}
+          }
+        }
+      `),
+    ).toEqual([]);
+  });
 });
