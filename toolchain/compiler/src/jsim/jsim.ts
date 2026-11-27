@@ -2669,6 +2669,17 @@ function downcastPayload(
   }
 }
 
+/** A consuming downcast that does not match hands its receiver to nobody, so
+ * the receiver is released here; a borrowing one leaves it with its owner. */
+function mismatchedReceiverCleanup(
+  receiver: string,
+  form: DowncastForm,
+): readonly JSIM.Statement[] {
+  return form === "owned"
+    ? [{ kind: "DisposeCallStatement", target: receiver }]
+    : [];
+}
+
 function jsimDowncast(
   ctx: JsimContext,
   call: Semantics.MethodCallExpression,
@@ -2711,6 +2722,7 @@ function jsimDowncast(
             },
           ],
           elseBranch: some([
+            ...mismatchedReceiverCleanup(recvName, target.form),
             {
               kind: "ReturnStatement",
               value: some(jsimEnumUnitVariantConstruction(["Option", "None"])),
