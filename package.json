@@ -37,7 +37,7 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-boundaries": "^7.4.4",
     "jsonc-eslint-parser": "^3.3.0",
-    "knip": "^6.47.0",
+    "knip": "^6.48.0",
     "npm-run-all2": "^9.1.0",
     "prettier": "^3.10.1",
     "rimraf": "^6.1.4",
