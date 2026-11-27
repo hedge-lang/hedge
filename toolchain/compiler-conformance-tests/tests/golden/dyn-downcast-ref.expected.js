@@ -21,7 +21,7 @@ function radius(d) {
   return (() => {
     const matchScrutinee = ((dynRecv) => {
       if (dynRecv.witness.$type === "Circle") {
-        return ({tag: "Some", data: __hedgeDisposeArray([dynRecv.value]), [Symbol.dispose]() { using _d0 = this.data; }});
+        return ({tag: "Some", data: __hedgeDisposeArray([dynRecv.value]), [Symbol.dispose]() {}});
       } else {
         return ({tag: "None", [Symbol.dispose]() {}});
       }

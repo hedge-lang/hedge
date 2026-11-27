@@ -1,0 +1,15 @@
+struct Loud {
+  id: i32,
+}
+
+impl Drop for Loud {
+  fn drop(&mut self) {
+    print(self.id);
+  }
+}
+
+fn main() {
+  let l = Loud { id: 7 };
+  let o = Option::Some(&l);
+  print("end,");
+}

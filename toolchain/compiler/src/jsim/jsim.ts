@@ -2705,6 +2705,7 @@ function jsimDowncast(
                 jsimEnumPayloadVariant(
                   ["Option", "Some"],
                   [downcastPayload(box, target.form)],
+                  target.form === "owned",
                 ),
               ),
             },
@@ -3169,6 +3170,7 @@ function jsimEnumTupleVariantConstruction(
   return jsimEnumPayloadVariant(
     segments,
     args.map((arg) => parseExpression(ctx, arg)),
+    args.some((arg) => arg.type.kind !== "ReferenceType"),
   );
 }
 
@@ -3179,6 +3181,7 @@ function jsimEnumTupleVariantConstruction(
 function jsimEnumPayloadVariant(
   segments: readonly string[],
   elements: readonly JSIM.Expression[],
+  ownsPayload: boolean,
 ): JSIM.Expression {
   const variantName = segments[1];
   assert(variantName !== undefined, "Unexpected undefined segment");
@@ -3192,7 +3195,7 @@ function jsimEnumPayloadVariant(
         numericKind: none(),
       }),
     ],
-    disposableFields: ENUM_PAYLOAD_DISPOSABLE_FIELDS,
+    disposableFields: ownsPayload ? ENUM_PAYLOAD_DISPOSABLE_FIELDS : [],
     dropFn: none(),
   };
 }

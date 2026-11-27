@@ -1,0 +1,30 @@
+trait Draw {
+  fn draw(&self) -> i32;
+}
+
+struct Loud {
+  id: i32,
+}
+
+impl Drop for Loud {
+  fn drop(&mut self) {
+    print(self.id);
+  }
+}
+
+impl Draw for Loud {
+  fn draw(&self) -> i32 {
+    self.id
+  }
+}
+
+fn probe(d: &dyn Draw) {
+  let result = d.downcast_ref::<Loud>();
+  print("probe,");
+}
+
+fn main() {
+  let l = Loud { id: 7 };
+  probe(&l);
+  print("end,");
+}
