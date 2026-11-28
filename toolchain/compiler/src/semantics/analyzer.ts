@@ -5314,6 +5314,14 @@ export function bareTypeName(identity: string): string {
   return identity.split("::").pop() ?? identity;
 }
 
+/** A witness names its trait by instance (`Tag<i32>`), while per-trait tables
+ * are keyed by the declaration (`Tag`); trait arguments are the only `<` an
+ * identity can contain. */
+export function traitDeclarationId(traitInstanceId: string): string {
+  const open = traitInstanceId.indexOf("<");
+  return open === -1 ? traitInstanceId : traitInstanceId.slice(0, open);
+}
+
 function reportMissingRequiredMethods(
   ctx: AnalysisContext,
   item: Parser.ImplDecl,

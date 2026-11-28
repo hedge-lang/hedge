@@ -15,6 +15,7 @@ import {
 import { collectMethodOwners } from "../ownership/owned-functions.js";
 import {
   bareTypeName,
+  traitDeclarationId,
   constValueToLiteralExpression,
   type DowncastForm,
   type DropImplEntry,
@@ -2629,7 +2630,7 @@ function witnessTypeTag(
   ctx: JsimContext,
   witness: HoistedWitness,
 ): Option<JSIM.WitnessTypeTag> {
-  const field = ctx.downcastTagFields.get(witness.traitId);
+  const field = ctx.downcastTagFields.get(traitDeclarationId(witness.traitId));
   return field === undefined
     ? none()
     : some({ field, value: typeTagFor(ctx, witness.typeId) });

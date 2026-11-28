@@ -4368,6 +4368,29 @@ describe("dyn Trait downcasting", (): void => {
     expect(runEmittedJs(js)).toEqual(["3"]);
   });
 
+  it("downcasts through a trait object of a parameterized trait", (): void => {
+    const js = emittedJs(`
+      trait Tag<T> { fn tag(&self) -> i32; }
+      struct Circle { r: i32 }
+      struct Square { s: i32 }
+      impl Tag<i32> for Circle { fn tag(&self) -> i32 { self.r } }
+      impl Tag<i32> for Square { fn tag(&self) -> i32 { self.s } }
+      fn radius(d: &dyn Tag<i32>) -> i32 {
+        match d.downcast_ref::<Circle>() {
+          Option::Some(c) => c.r,
+          Option::None => 0,
+        }
+      }
+      fn main() {
+        let c = Circle { r: 7 };
+        let s = Square { s: 2 };
+        print(radius(&c));
+        print(radius(&s));
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["7", "0"]);
+  });
+
   it("rejects downcast_mut called through a shared reference to a trait object", (): void => {
     expect(
       diagnosticMessages(`${DRAW_AND_CIRCLE}
