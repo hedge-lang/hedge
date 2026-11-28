@@ -119,7 +119,8 @@ of the same name keeps its own method.
 The target must implement the trait, since a value of any other type could never
 have been behind that object; naming one is a compile error rather than a runtime
 `None`. The target must also be a type with a single runtime identity, which excludes
-a generic parameter and an instantiation of a generic type: because generics are
+a generic parameter, an associated type projection such as `T::Item`, and an
+instantiation of a generic type: because generics are
 erased, every instantiation of a generic type shares one witness at runtime and
 cannot be told apart from another.
 

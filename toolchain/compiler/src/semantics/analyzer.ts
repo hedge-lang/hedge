@@ -12035,11 +12035,13 @@ function registerDowncastTagField(ctx: AnalysisContext, traitId: string): void {
   ctx.downcastTagFieldTable.set(traitId, field);
 }
 
-/** A generic parameter or an instantiated generic type: erased generics give
- * every instantiation one shared witness, so neither has a runtime identity. */
+/** A generic parameter, an unresolved associated-type projection, or an
+ * instantiated generic type: erased generics give every instantiation one
+ * shared witness, so none of them has a runtime identity. */
 function isGenericDowncastTarget(target: Semantics.Type): boolean {
   switch (target.kind) {
     case "NamedType":
+    case "Projection":
       return true;
     case "ArrayType":
       return isGenericDowncastTarget(target.elementType);

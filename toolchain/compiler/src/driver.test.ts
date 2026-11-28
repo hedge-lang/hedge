@@ -4482,6 +4482,25 @@ describe("dyn Trait downcasting", (): void => {
     ]);
   });
 
+  it("rejects downcasting to an associated type projection of a generic parameter", (): void => {
+    expect(
+      diagnosticMessages(`
+        trait Draw { fn draw(&self) -> i32; }
+        trait Source { type Item; fn get(&self) -> i32; }
+        impl<X> Draw for X { fn draw(&self) -> i32 { 1 } }
+        fn f<T: Source>(d: &dyn Draw) {
+          match d.downcast_ref::<T::Item>() {
+            Option::Some(i) => {}
+            Option::None => {}
+          }
+        }
+        fn main() {}
+      `),
+    ).toEqual([
+      "cannot downcast to `T::Item`: generic types are erased at runtime, so it has no runtime identity to compare",
+    ]);
+  });
+
   it("rejects a downcast with no type argument", (): void => {
     expect(
       diagnosticMessages(`${DRAW_AND_CIRCLE}
