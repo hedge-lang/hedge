@@ -89,6 +89,10 @@ export interface AnalysisResult {
    * arguments, called from the type's `[Symbol.dispose]` before releasing
    * the fields. */
   readonly dropImpls: ReadonlyMap<string, readonly DropImplEntry[]>;
+  /** Scoped trait key -> the witness field holding the concrete type's tag,
+   * for each trait some `downcast*` call targets: only those traits'
+   * witnesses are tagged. */
+  readonly downcastTagFields: ReadonlyMap<string, string>;
   /** Witnesses resolved for a concrete-receiver method call's own bounded
    * generic parameters (the method's own `<U: Trait>`), keyed by the
    * method-name token (same convention as `methodTargets`), one entry per
@@ -259,8 +263,23 @@ interface DynMethodTarget {
   readonly returnsSelf: boolean;
 }
 
+export type DowncastForm = "ref" | "mut" | "owned";
+
+/** `d.downcast_ref::<T>()` / `downcast_mut` / `downcast` on a `dyn Trait`
+ * receiver: matches when the receiver witness's concrete type is
+ * `targetTypeId`. */
+interface DowncastMethodTarget {
+  readonly kind: "downcast";
+  readonly traitId: string;
+  readonly targetTypeId: string;
+  readonly form: DowncastForm;
+}
+
 export type MethodTarget =
-  FreeMethodTarget | WitnessMethodTarget | DynMethodTarget;
+  | FreeMethodTarget
+  | WitnessMethodTarget
+  | DynMethodTarget
+  | DowncastMethodTarget;
 
 /** One trait method a witness carries, flattened across the trait's
  * supertrait chain. `definingTrait` is the bare name of the trait that
@@ -484,6 +503,7 @@ interface AnalysisContext {
   readonly unsizeCoercionTable: Map<number, UnsizeCoercion>;
   /** Mutable build-up of `AnalysisResult.dropImpls`. */
   readonly dropImplTable: Map<string, DropImplEntry[]>;
+  readonly downcastTagFieldTable: Map<string, string>;
   /** Mutable build-up of `AnalysisResult.methodCallWitnesses`. */
   readonly methodCallWitnessTable: Map<number, readonly WitnessRef[]>;
   /** Mutable build-up of `AnalysisResult.dropWitnesses`. */
@@ -5290,8 +5310,16 @@ function resolveTraitIdentity(name: string, scope: StructuralScope): string {
 /** Strips a struct/enum's real scoped identity back to its bare,
  * user-facing name for a diagnostic message - the same stripping
  * `describeType`'s own `StructType`/`EnumType` case applies. */
-function bareTypeName(identity: string): string {
+export function bareTypeName(identity: string): string {
   return identity.split("::").pop() ?? identity;
+}
+
+/** A witness names its trait by instance (`Tag<i32>`), while per-trait tables
+ * are keyed by the declaration (`Tag`); trait arguments are the only `<` an
+ * identity can contain. */
+export function traitDeclarationId(traitInstanceId: string): string {
+  const open = traitInstanceId.indexOf("<");
+  return open === -1 ? traitInstanceId : traitInstanceId.slice(0, open);
 }
 
 function reportMissingRequiredMethods(
@@ -11937,6 +11965,269 @@ function methodCallResultType(
     : methodReturnType;
 }
 
+const DOWNCAST_FORMS: ReadonlyMap<string, DowncastForm> = new Map<
+  string,
+  DowncastForm
+>([
+  ["downcast_ref", "ref"],
+  ["downcast_mut", "mut"],
+  ["downcast", "owned"],
+]);
+
+function downcastPayloadType(
+  form: DowncastForm,
+  target: Semantics.Type,
+  tokenId: number,
+): Semantics.Type {
+  switch (form) {
+    case "owned":
+      return target;
+    case "ref":
+      return {
+        kind: "ReferenceType",
+        mutable: false,
+        referent: target,
+        tokenId,
+      };
+    case "mut":
+      return {
+        kind: "ReferenceType",
+        mutable: true,
+        referent: target,
+        tokenId,
+      };
+    default:
+      return assertNever(form);
+  }
+}
+
+function downcastReceiverKind(form: DowncastForm): Semantics.MethodReceiver {
+  switch (form) {
+    case "owned":
+      return { byRef: false, mutable: false };
+    case "ref":
+      return { byRef: true, mutable: false };
+    case "mut":
+      return { byRef: true, mutable: true };
+    default:
+      return assertNever(form);
+  }
+}
+
+function preludeOptionOf(
+  ctx: AnalysisContext,
+  payload: Semantics.Type,
+  tokenId: number,
+): Semantics.Type {
+  const optionType = ctx.frames[0]?.enums.get("Option")?.type;
+  return optionType?.kind === "EnumType"
+    ? { ...optionType, typeArguments: [payload] }
+    : { kind: "UnitType", tokenId };
+}
+
+/** Trailing `$`s keep the field from colliding with a trait method of the
+ * same name, which would overwrite the tag in the emitted witness. */
+function registerDowncastTagField(ctx: AnalysisContext, traitId: string): void {
+  if (ctx.downcastTagFieldTable.has(traitId)) return;
+  const methodNames = new Set(traitMethodSet(ctx, traitId).map((m) => m.name));
+  let field = "$type";
+  while (methodNames.has(field)) field += "$";
+  ctx.downcastTagFieldTable.set(traitId, field);
+}
+
+/** A generic parameter, an unresolved associated-type projection, or an
+ * instantiated generic type: erased generics give every instantiation one
+ * shared witness, so none of them has a runtime identity. */
+function isGenericDowncastTarget(target: Semantics.Type): boolean {
+  switch (target.kind) {
+    case "NamedType":
+    case "Projection":
+      return true;
+    case "ArrayType":
+      return isGenericDowncastTarget(target.elementType);
+    case "ReferenceType":
+      return isGenericDowncastTarget(target.referent);
+    default:
+      return isNominalType(target) && target.typeArguments.length > 0;
+  }
+}
+
+function downcastTypeArgument(
+  ctx: AnalysisContext,
+  expression: Parser.MethodCallExpression,
+): Parser.Type | undefined {
+  const { typeArguments, method } = expression;
+  if (expression.arguments.length > 0) {
+    emitError(
+      ctx,
+      {
+        kind: "SemConstructorArgCountMismatch",
+        calleeKind: "method",
+        name: method.text,
+        expected: 0,
+        count: expression.arguments.length,
+      },
+      expression.tokenId,
+    );
+  }
+  const [typeArgument] = typeArguments;
+  if (typeArguments.length === 1) return typeArgument;
+  emitError(
+    ctx,
+    {
+      kind: "SemTurbofishArgCountMismatch",
+      calleeName: method.text,
+      declared: 1,
+      supplied: typeArguments.length,
+    },
+    expression.tokenId,
+  );
+  return undefined;
+}
+
+function checkDowncastTarget(
+  ctx: AnalysisContext,
+  expression: Parser.MethodCallExpression,
+  traitId: string,
+  target: Semantics.Type,
+): void {
+  const [written] = expression.typeArguments;
+  if (target.kind === "UnitType" && written?.kind !== "UnitType") return;
+  if (isGenericDowncastTarget(target)) {
+    emitError(
+      ctx,
+      { kind: "SemDowncastTargetGeneric", target: describeType(target) },
+      expression.tokenId,
+    );
+    return;
+  }
+  if (isSome(resolveTraitBound(ctx, target, traitId))) return;
+  emitError(
+    ctx,
+    {
+      kind: "SemTraitBoundNotSatisfied",
+      typeName: describeType(target),
+      trait: bareTypeName(traitId),
+    },
+    expression.tokenId,
+  );
+}
+
+function receiverRootName(expr: Semantics.Expression): string {
+  switch (expr.kind) {
+    case "PathExpression":
+      return expr.path.segments[0] ?? "";
+    case "FieldAccessExpression":
+    case "IndexExpression":
+      return receiverRootName(expr.object);
+    case "DereferenceExpression":
+      return receiverRootName(expr.operand);
+    default:
+      return "";
+  }
+}
+
+function checkOwnedDowncastMutReceiver(
+  ctx: AnalysisContext,
+  expression: Parser.MethodCallExpression,
+  receiver: Semantics.Expression,
+): void {
+  const violation = placeMutabilityViolation(ctx, receiver, true);
+  if (!isSome(violation)) return;
+  const method = expression.method.text;
+  emitError(
+    ctx,
+    violation.value === "immutable-binding"
+      ? {
+          kind: "SemMutMethodOnImmutableBinding",
+          method,
+          binding: receiverRootName(receiver),
+        }
+      : { kind: "SemMutMethodThroughSharedRef", method },
+    expression.tokenId,
+  );
+}
+
+function checkDowncastReceiver(
+  ctx: AnalysisContext,
+  expression: Parser.MethodCallExpression,
+  form: DowncastForm,
+  receiver: Semantics.Expression,
+): void {
+  const receiverAsWritten = receiver.type;
+  if (receiverAsWritten.kind !== "ReferenceType") {
+    if (form === "mut")
+      checkOwnedDowncastMutReceiver(ctx, expression, receiver);
+    return;
+  }
+  switch (form) {
+    case "owned":
+      emitError(
+        ctx,
+        { kind: "SemDowncastOwnedThroughReference" },
+        expression.tokenId,
+      );
+      return;
+    case "mut":
+      if (receiverAsWritten.mutable) return;
+      emitError(
+        ctx,
+        {
+          kind: "SemMutMethodThroughSharedRef",
+          method: expression.method.text,
+        },
+        expression.tokenId,
+      );
+      return;
+    case "ref":
+      return;
+    default:
+      assertNever(form);
+  }
+}
+
+/** A trait's own method of the same name wins over the built-in, so a user
+ * trait can still declare `downcast_ref` without being shadowed. */
+function tryAnalyzeDowncast(
+  ctx: AnalysisContext,
+  expression: Parser.MethodCallExpression,
+  base: Semantics.MethodCallExpression,
+  receiver: Semantics.Expression,
+): Option<Semantics.MethodCallExpression> {
+  const receiverType =
+    receiver.type.kind === "ReferenceType"
+      ? receiver.type.referent
+      : receiver.type;
+  const form = DOWNCAST_FORMS.get(expression.method.text);
+  if (
+    receiverType.kind !== "DynType" ||
+    form === undefined ||
+    traitMethodSet(ctx, receiverType.traitId).some(
+      (m) => m.name === expression.method.text,
+    )
+  ) {
+    return none();
+  }
+  checkDowncastReceiver(ctx, expression, form, receiver);
+  const typeArgument = downcastTypeArgument(ctx, expression);
+  if (typeArgument === undefined) return some(base);
+  const target = validateSlice1Type(ctx, typeArgument, expression.tokenId);
+  checkDowncastTarget(ctx, expression, receiverType.traitId, target);
+  ctx.methodTargetTable.set(expression.method.tokenId, {
+    kind: "downcast",
+    traitId: receiverType.traitId,
+    targetTypeId: typeIdentity(target),
+    form,
+  });
+  registerDowncastTagField(ctx, receiverType.traitId);
+  const payload = downcastPayloadType(form, target, expression.tokenId);
+  return some({
+    ...base,
+    type: preludeOptionOf(ctx, payload, expression.tokenId),
+    receiverKind: some(downcastReceiverKind(form)),
+  });
+}
+
 function analyzeMethodCallExpression(
   ctx: AnalysisContext,
   expression: Parser.MethodCallExpression,
@@ -11969,6 +12260,8 @@ function analyzeMethodCallExpression(
   if (lookupType.kind === "UnitType" && isAmbiguousUnitExpr(receiver)) {
     return base;
   }
+  const downcast = tryAnalyzeDowncast(ctx, expression, base, receiver);
+  if (isSome(downcast)) return downcast.value;
   const method = resolveMethodCall(
     ctx,
     lookupType,
@@ -16100,6 +16393,7 @@ export function analyze(
     extraWitnessRefs: [],
     unsizeCoercionTable: new Map(),
     dropImplTable: new Map(),
+    downcastTagFieldTable: new Map(),
     methodCallWitnessTable: new Map(),
     dropWitnessTable: new Map(),
     dropBoundsUnsatisfiedTable: new Set(),
@@ -16168,6 +16462,7 @@ export function analyze(
     extraWitnesses: ctx.extraWitnessRefs,
     unsizeCoercions: ctx.unsizeCoercionTable,
     dropImpls: ctx.dropImplTable,
+    downcastTagFields: ctx.downcastTagFieldTable,
     methodCallWitnesses: ctx.methodCallWitnessTable,
     dropWitnesses: ctx.dropWitnessTable,
     dropBoundsUnsatisfied: ctx.dropBoundsUnsatisfiedTable,

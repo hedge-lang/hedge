@@ -4337,3 +4337,371 @@ describe("#[monomorphize] specialization", (): void => {
     expect(runEmittedJs(js)).toEqual(["9", "3"]);
   });
 });
+
+describe("dyn Trait downcasting", (): void => {
+  const DRAW_AND_CIRCLE = `
+    trait Draw { fn draw(&self) -> i32; }
+    struct Circle { r: i32 }
+    impl Draw for Circle { fn draw(&self) -> i32 { self.r } }
+  `;
+
+  function diagnosticMessages(source: string): string[] {
+    return compile(source).diagnostics.map((d) => messageOf(d));
+  }
+
+  it("downcasts through a trait that declares a method named like the type tag field", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn $type(&self) -> i32; }
+      struct Circle { r: i32 }
+      impl Draw for Circle { fn $type(&self) -> i32 { self.r } }
+      fn radius(d: &dyn Draw) -> i32 {
+        match d.downcast_ref::<Circle>() {
+          Option::Some(c) => c.r,
+          Option::None => 0 - 1,
+        }
+      }
+      fn main() {
+        let c = Circle { r: 3 };
+        print(radius(&c));
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["3"]);
+  });
+
+  it("downcasts through a trait object of a parameterized trait", (): void => {
+    const js = emittedJs(`
+      trait Tag<T> { fn tag(&self) -> i32; }
+      struct Circle { r: i32 }
+      struct Square { s: i32 }
+      impl Tag<i32> for Circle { fn tag(&self) -> i32 { self.r } }
+      impl Tag<i32> for Square { fn tag(&self) -> i32 { self.s } }
+      fn radius(d: &dyn Tag<i32>) -> i32 {
+        match d.downcast_ref::<Circle>() {
+          Option::Some(c) => c.r,
+          Option::None => 0,
+        }
+      }
+      fn main() {
+        let c = Circle { r: 7 };
+        let s = Square { s: 2 };
+        print(radius(&c));
+        print(radius(&s));
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["7", "0"]);
+  });
+
+  it("rejects downcast_mut called through a shared reference to a trait object", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn f(d: &dyn Draw) {
+          match d.downcast_mut::<Circle>() {
+            Option::Some(c) => {}
+            Option::None => {}
+          }
+        }
+        fn main() { let c = Circle { r: 1 }; f(&c); }
+      `),
+    ).toEqual([
+      "cannot call `&mut self` method `downcast_mut` through a shared reference",
+    ]);
+  });
+
+  it("rejects an owned downcast called through a reference to a trait object", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn f(d: &dyn Draw) {
+          match d.downcast::<Circle>() {
+            Option::Some(c) => {}
+            Option::None => {}
+          }
+        }
+        fn main() { let c = Circle { r: 1 }; f(&c); }
+      `),
+    ).toEqual([
+      "`downcast` consumes the trait object and cannot be called through a reference; use `downcast_ref` or `downcast_mut`",
+    ]);
+  });
+
+  it("rejects using a trait object again after an owned downcast consumed it", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn main() {
+          let d: dyn Draw = Circle { r: 5 };
+          let a = d.downcast::<Circle>();
+          let b = d.downcast::<Circle>();
+        }
+      `),
+    ).toEqual(["use of moved value `d`"]);
+  });
+
+  it("rejects annotating a downcast_ref result as an owned Option", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn f(d: &dyn Draw) {
+          let x: Option<Circle> = d.downcast_ref::<Circle>();
+        }
+        fn main() { let c = Circle { r: 1 }; f(&c); }
+      `),
+    ).toEqual([
+      "type mismatch: explicit annotation does not match initializer type",
+    ]);
+  });
+
+  it("rejects downcasting to a generic type, whose instantiations are erased at runtime", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        struct Wrapper<T> { value: T }
+        impl<T> Draw for Wrapper<T> { fn draw(&self) -> i32 { 1 } }
+        fn f(d: &dyn Draw) {
+          match d.downcast_ref::<Wrapper<i32>>() {
+            Option::Some(w) => {}
+            Option::None => {}
+          }
+        }
+        fn main() { let c = Circle { r: 1 }; f(&c); }
+      `),
+    ).toEqual([
+      "cannot downcast to `Wrapper<i32>`: generic types are erased at runtime, so it has no runtime identity to compare",
+    ]);
+  });
+
+  it("rejects downcasting to a generic parameter", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn f<T: Draw>(d: &dyn Draw) {
+          match d.downcast_ref::<T>() {
+            Option::Some(t) => {}
+            Option::None => {}
+          }
+        }
+        fn main() { let c = Circle { r: 1 }; f::<Circle>(&c); }
+      `),
+    ).toEqual([
+      "cannot downcast to `T`: generic types are erased at runtime, so it has no runtime identity to compare",
+    ]);
+  });
+
+  it("rejects downcasting to an associated type projection of a generic parameter", (): void => {
+    expect(
+      diagnosticMessages(`
+        trait Draw { fn draw(&self) -> i32; }
+        trait Source { type Item; fn get(&self) -> i32; }
+        impl<X> Draw for X { fn draw(&self) -> i32 { 1 } }
+        fn f<T: Source>(d: &dyn Draw) {
+          match d.downcast_ref::<T::Item>() {
+            Option::Some(i) => {}
+            Option::None => {}
+          }
+        }
+        fn main() {}
+      `),
+    ).toEqual([
+      "cannot downcast to `T::Item`: generic types are erased at runtime, so it has no runtime identity to compare",
+    ]);
+  });
+
+  it("rejects a downcast with no type argument", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn f(d: &dyn Draw) { let x = d.downcast_ref(); }
+        fn main() { let c = Circle { r: 1 }; f(&c); }
+      `),
+    ).toEqual([
+      "`downcast_ref` declares 1 generic parameter(s), but the turbofish supplies 0",
+    ]);
+  });
+
+  it("rejects a downcast with two type arguments", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn f(d: &dyn Draw) { let x = d.downcast_ref::<Circle, Circle>(); }
+        fn main() { let c = Circle { r: 1 }; f(&c); }
+      `),
+    ).toEqual([
+      "`downcast_ref` declares 1 generic parameter(s), but the turbofish supplies 2",
+    ]);
+  });
+
+  it("rejects a downcast called with a value argument", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn f(d: &dyn Draw) { let x = d.downcast_ref::<Circle>(1); }
+        fn main() { let c = Circle { r: 1 }; f(&c); }
+      `),
+    ).toEqual([
+      "method `downcast_ref` takes 0 argument(s), but 1 was supplied",
+    ]);
+  });
+
+  it("leaves an inherent method named downcast_ref on a concrete receiver alone", (): void => {
+    const js = emittedJs(`
+      struct Holder { n: i32 }
+      impl Holder { fn downcast_ref(&self) -> i32 { self.n } }
+      fn main() {
+        let h = Holder { n: 9 };
+        print(h.downcast_ref());
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["9"]);
+  });
+
+  it("prefers a trait's own method named downcast_ref over the built-in", (): void => {
+    const js = emittedJs(`
+      trait Draw { fn downcast_ref(&self) -> i32; }
+      struct Circle { r: i32 }
+      impl Draw for Circle { fn downcast_ref(&self) -> i32 { self.r } }
+      fn f(d: &dyn Draw) -> i32 { d.downcast_ref() }
+      fn main() {
+        let c = Circle { r: 4 };
+        print(f(&c));
+      }
+    `);
+    expect(runEmittedJs(js)).toEqual(["4"]);
+  });
+
+  it("rejects a downcast on a receiver that is not a trait object", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn main() {
+          let c = Circle { r: 1 };
+          let x = c.downcast_ref::<Circle>();
+        }
+      `),
+    ).toEqual(["no method `downcast_ref` found for type `Circle`"]);
+  });
+
+  it("reports an unresolved downcast target once, without a trait-bound cascade", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn f(d: &dyn Draw) { let x = d.downcast_ref::<Missing>(); }
+        fn main() { let c = Circle { r: 1 }; f(&c); }
+      `),
+    ).toEqual(["cannot find type `Missing` in this scope"]);
+  });
+
+  it("rejects a reference as the downcast target", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn f(d: &dyn Draw) { let x = d.downcast_ref::<&Circle>(); }
+        fn main() { let c = Circle { r: 1 }; f(&c); }
+      `),
+    ).toEqual(["the trait bound `&Circle: Draw` is not satisfied"]);
+  });
+
+  it("types an owned downcast as an Option of the target itself", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn main() {
+          let d: dyn Draw = Circle { r: 1 };
+          let x: Option<Circle> = d.downcast::<Circle>();
+        }
+      `),
+    ).toEqual([]);
+  });
+
+  it("rejects annotating a downcast_mut result as an owned Option", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn f(d: &mut dyn Draw) {
+          let x: Option<Circle> = d.downcast_mut::<Circle>();
+        }
+        fn main() { let mut c = Circle { r: 1 }; f(&mut c); }
+      `),
+    ).toEqual([
+      "type mismatch: explicit annotation does not match initializer type",
+    ]);
+  });
+
+  it("rejects downcasting to the unit type when it does not implement the trait", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn f(d: &dyn Draw) { let x = d.downcast_ref::<()>(); }
+        fn main() { let c = Circle { r: 1 }; f(&c); }
+      `),
+    ).toEqual(["the trait bound `(): Draw` is not satisfied"]);
+  });
+
+  it.each([
+    ["an array of a generic parameter", "[T; 1]", "fn f<T>", "f::<i32>"],
+    ["a reference to a generic parameter", "&T", "fn f<T>", "f::<i32>"],
+    ["an array of a generic type instantiation", "[W<i32>; 1]", "fn f", "f"],
+  ])(
+    "rejects downcasting to %s",
+    (_name: string, target: string, signature: string, call: string): void => {
+      expect(
+        diagnosticMessages(`
+          trait Draw { fn draw(&self) -> i32; }
+          impl<X> Draw for X { fn draw(&self) -> i32 { 1 } }
+          struct W<T> { v: T }
+          ${signature}(d: &dyn Draw) { let x = d.downcast_ref::<${target}>(); }
+          fn main() { let n: i32 = 1; ${call}(&n); }
+        `),
+      ).toEqual([
+        `cannot downcast to \`${target}\`: generic types are erased at runtime, so it has no runtime identity to compare`,
+      ]);
+    },
+  );
+
+  it("rejects downcast_mut on an owned binding that is not declared mut", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn main() {
+          let d: dyn Draw = Circle { r: 1 };
+          match d.downcast_mut::<Circle>() {
+            Option::Some(c) => {}
+            Option::None => {}
+          }
+        }
+      `),
+    ).toEqual([
+      "cannot call `&mut self` method `downcast_mut` on `d`, which is not declared `mut`",
+    ]);
+  });
+
+  it("rejects downcast_mut on an owned parameter that is not declared mut", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn f(d: dyn Draw) {
+          match d.downcast_mut::<Circle>() {
+            Option::Some(c) => {}
+            Option::None => {}
+          }
+        }
+        fn main() { let d: dyn Draw = Circle { r: 1 }; f(d); }
+      `),
+    ).toEqual([
+      "cannot call `&mut self` method `downcast_mut` on `d`, which is not declared `mut`",
+    ]);
+  });
+
+  it("accepts downcast_mut on an owned binding declared mut", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn main() {
+          let mut d: dyn Draw = Circle { r: 1 };
+          match d.downcast_mut::<Circle>() {
+            Option::Some(c) => {}
+            Option::None => {}
+          }
+        }
+      `),
+    ).toEqual([]);
+  });
+
+  it("rejects downcast_mut on a trait object reached by dereferencing a shared reference", (): void => {
+    expect(
+      diagnosticMessages(`${DRAW_AND_CIRCLE}
+        fn f(d: &dyn Draw) {
+          match (*d).downcast_mut::<Circle>() {
+            Option::Some(c) => {}
+            Option::None => {}
+          }
+        }
+        fn main() { let c = Circle { r: 1 }; f(&c); }
+      `),
+    ).toEqual([
+      "cannot call `&mut self` method `downcast_mut` through a shared reference",
+    ]);
+  });
+});

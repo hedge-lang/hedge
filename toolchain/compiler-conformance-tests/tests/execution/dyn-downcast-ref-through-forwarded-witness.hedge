@@ -1,0 +1,42 @@
+trait Draw {
+  fn draw(&self) -> i32;
+}
+
+struct Circle {
+  r: i32,
+}
+
+struct Square {
+  s: i32,
+}
+
+impl Draw for Circle {
+  fn draw(&self) -> i32 {
+    self.r
+  }
+}
+
+impl Draw for Square {
+  fn draw(&self) -> i32 {
+    self.s
+  }
+}
+
+fn as_dyn<T: Draw>(t: &T) -> &dyn Draw {
+  t
+}
+
+fn radius(d: &dyn Draw) -> i32 {
+  match d.downcast_ref::<Circle>() {
+    Option::Some(c) => c.r,
+    Option::None => 0 - 1,
+  }
+}
+
+fn main() {
+  let c = Circle { r: 3 };
+  let q = Square { s: 4 };
+  print(radius(as_dyn(&c)));
+  print(",");
+  print(radius(as_dyn(&q)));
+}

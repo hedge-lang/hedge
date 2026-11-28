@@ -1,0 +1,48 @@
+trait Name {
+  fn name(&self) -> i32;
+}
+
+trait Draw {
+  fn draw(&self) -> i32;
+}
+
+impl<T: Name> Draw for T {
+  fn draw(&self) -> i32 {
+    self.name()
+  }
+}
+
+struct A {
+  v: i32,
+}
+
+struct B {
+  v: i32,
+}
+
+impl Name for A {
+  fn name(&self) -> i32 {
+    self.v
+  }
+}
+
+impl Name for B {
+  fn name(&self) -> i32 {
+    self.v
+  }
+}
+
+fn value_if_a(d: &dyn Draw) -> i32 {
+  match d.downcast_ref::<A>() {
+    Option::Some(a) => a.v,
+    Option::None => 0 - 1,
+  }
+}
+
+fn main() {
+  let a = A { v: 7 };
+  let b = B { v: 8 };
+  print(value_if_a(&a));
+  print(",");
+  print(value_if_a(&b));
+}

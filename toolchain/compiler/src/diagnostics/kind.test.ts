@@ -316,6 +316,9 @@ const SAMPLE_KINDS: readonly DiagnosticKind[] = [
   { kind: "SemCannotAssignToImmutableBinding" },
   { kind: "SemCannotAssignThroughSharedReference" },
   { kind: "SemAssignThroughDynPlace", trait: "Draw" },
+  { kind: "SemDowncastOwnedThroughReference" },
+  { kind: "SemMutMethodOnImmutableBinding", method: "poke", binding: "d" },
+  { kind: "SemDowncastTargetGeneric", target: "Wrapper<i32>" },
   { kind: "OwnBorrowMutThroughShared", place: "x", through: "r" },
   { kind: "OwnBorrowMutNotDeclaredMut", baseName: "x" },
   {
@@ -383,6 +386,8 @@ const KNOWN_CODES = new Set<DiagnosticCode>([
   "HEDGE-TYPE-016",
   "HEDGE-TYPE-017",
   "HEDGE-TYPE-018",
+  "HEDGE-TYPE-019",
+  "HEDGE-TYPE-020",
   "HEDGE-PATTERN-001",
   "HEDGE-PATTERN-002",
   "HEDGE-PATTERN-003",

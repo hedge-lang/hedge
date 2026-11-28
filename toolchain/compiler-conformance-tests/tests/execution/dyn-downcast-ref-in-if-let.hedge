@@ -1,0 +1,39 @@
+trait Draw {
+  fn draw(&self) -> i32;
+}
+
+struct Circle {
+  r: i32,
+}
+
+struct Square {
+  s: i32,
+}
+
+impl Draw for Circle {
+  fn draw(&self) -> i32 {
+    self.r
+  }
+}
+
+impl Draw for Square {
+  fn draw(&self) -> i32 {
+    self.s
+  }
+}
+
+fn describe(d: &dyn Draw) -> i32 {
+  if let Option::Some(c) = d.downcast_ref::<Circle>() {
+    c.r
+  } else {
+    0 - 1
+  }
+}
+
+fn main() {
+  let a = Circle { r: 6 };
+  let b = Square { s: 8 };
+  print(describe(&a));
+  print(",");
+  print(describe(&b));
+}

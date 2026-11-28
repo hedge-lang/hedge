@@ -1,0 +1,42 @@
+trait Draw {
+  fn draw(&self) -> i32;
+}
+
+struct Loud {
+  id: i32,
+}
+
+struct Quiet {
+  id: i32,
+}
+
+impl Drop for Loud {
+  fn drop(&mut self) {
+    print(self.id);
+  }
+}
+
+impl Draw for Loud {
+  fn draw(&self) -> i32 {
+    self.id
+  }
+}
+
+impl Draw for Quiet {
+  fn draw(&self) -> i32 {
+    self.id
+  }
+}
+
+fn probe(d: dyn Draw) -> i32 {
+  match d.downcast::<Quiet>() {
+    Option::Some(q) => q.id,
+    Option::None => 0 - 1,
+  }
+}
+
+fn main() {
+  let d: dyn Draw = Loud { id: 7 };
+  print(probe(d));
+  print(",end,");
+}

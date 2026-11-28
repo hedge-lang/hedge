@@ -29,6 +29,15 @@ export interface WitnessObjectDecl {
   readonly name: string;
   readonly directSlots: readonly WitnessSlot[];
   readonly closureSlots: readonly WitnessSlot[];
+  /** The concrete type's tag under a trait-specific field name, present only
+   * when some `downcast*` call targets this witness's trait, so programs that
+   * never downcast keep byte-identical output. */
+  readonly typeTag: Option<WitnessTypeTag>;
+}
+
+export interface WitnessTypeTag {
+  readonly field: string;
+  readonly value: string;
 }
 
 export interface WitnessSlot {

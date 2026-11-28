@@ -14,7 +14,10 @@ import {
 } from "../ownership/move-check.js";
 import { collectMethodOwners } from "../ownership/owned-functions.js";
 import {
+  bareTypeName,
+  traitDeclarationId,
   constValueToLiteralExpression,
+  type DowncastForm,
   type DropImplEntry,
   findDropTarget,
   type FreeMethodTarget,
@@ -160,6 +163,7 @@ interface JsimContext {
    * matched against a constructed value's own type arguments by
    * `findDropTarget`. */
   readonly dropImpls: ReadonlyMap<string, readonly DropImplEntry[]>;
+  readonly downcastTagFields: ReadonlyMap<string, string>;
   /** `AnalysisResult.methodCallWitnesses` - witnesses resolved for a
    * concrete-receiver method call's own bounded generic parameters, keyed
    * by the method-name token (same convention as `methodTargets`). */
@@ -188,6 +192,9 @@ interface JsimContext {
   /** Same as `primitiveEqWitness`, for the shared primitive-ord witness -
    * allocated on first `PartialOrd`/`Ord` `Primitive` witness reference. */
   readonly primitiveOrdWitness: { name: string | undefined };
+  /** Scoped type identity -> the short tag a downcast compares, assigned on
+   * first use. */
+  readonly typeTags: Map<string, string>;
 }
 
 interface HoistedWitness {
@@ -206,6 +213,22 @@ interface HoistedWitness {
    * arguments, since its free function is the shared, still-generic
    * `Trait$m$blanket`, not a per-type one. */
   readonly boundWitnesses: readonly WitnessRef[];
+}
+
+interface DropAndDowncastInfo {
+  readonly dropImpls: ReadonlyMap<string, readonly DropImplEntry[]>;
+  readonly downcastTagFields: ReadonlyMap<string, string>;
+  readonly dropWitnesses: ReadonlyMap<number, readonly WitnessRef[]>;
+  readonly dropBoundsUnsatisfied: ReadonlySet<number>;
+}
+
+function dropAndDowncastInfo(info: JsimInfo): DropAndDowncastInfo {
+  return {
+    dropImpls: info.dropImpls ?? new Map(),
+    downcastTagFields: info.downcastTagFields ?? new Map(),
+    dropWitnesses: info.dropWitnesses ?? new Map(),
+    dropBoundsUnsatisfied: info.dropBoundsUnsatisfied ?? new Set(),
+  };
 }
 
 function createJsimContext(
@@ -238,14 +261,13 @@ function createJsimContext(
     topLevelFunctionNames,
     extraWitnesses: info.extraWitnesses ?? [],
     unsizeCoercions: info.unsizeCoercions ?? new Map(),
-    dropImpls: info.dropImpls ?? new Map(),
+    ...dropAndDowncastInfo(info),
     methodCallWitnesses: info.methodCallWitnesses ?? new Map(),
-    dropWitnesses: info.dropWitnesses ?? new Map(),
-    dropBoundsUnsatisfied: info.dropBoundsUnsatisfied ?? new Set(),
     methodFreeFnNames: new Map(),
     hoistedWitnesses: new Map(),
     primitiveEqWitness: { name: undefined },
     primitiveOrdWitness: { name: undefined },
+    typeTags: new Map(),
   };
 }
 
@@ -1013,6 +1035,7 @@ export interface JsimInfo {
   readonly extraWitnesses?: readonly WitnessRef[];
   readonly unsizeCoercions?: ReadonlyMap<number, UnsizeCoercion>;
   readonly dropImpls?: ReadonlyMap<string, readonly DropImplEntry[]>;
+  readonly downcastTagFields?: ReadonlyMap<string, string>;
   readonly methodCallWitnesses?: ReadonlyMap<number, readonly WitnessRef[]>;
   readonly dropWitnesses?: ReadonlyMap<number, readonly WitnessRef[]>;
   readonly dropBoundsUnsatisfied?: ReadonlySet<number>;
@@ -1615,6 +1638,7 @@ function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
         },
       ],
       closureSlots: [],
+      typeTag: none(),
     });
   }
   if (ctx.primitiveOrdWitness.name !== undefined) {
@@ -1630,6 +1654,7 @@ function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
         },
       ],
       closureSlots: [],
+      typeTag: none(),
     });
   }
   for (const witness of ctx.hoistedWitnesses.values()) {
@@ -1682,6 +1707,7 @@ function hoistedWitnessDecls(ctx: JsimContext): JSIM.Item[] {
       name: witness.name,
       directSlots: direct,
       closureSlots: closure,
+      typeTag: witnessTypeTag(ctx, witness),
     });
   }
   return decls;
@@ -2322,10 +2348,13 @@ function dynBoxPlace(
   // registered in `ctx.unsizeCoercions` under its own tokenId, so routing it
   // back through `parseExpression`'s coercion intercept would re-enter
   // `jsimUnsizeBox` on the same node and recurse forever.
-  return throughMutableReferenceCell(
-    parseExpressionDispatch(ctx, expression),
-    expression,
-  );
+  const lowered = parseExpressionDispatch(ctx, expression);
+  // The expression's type is already the `dyn` target, so the cell test
+  // cannot go through `isMutableReferenceTyped`: a coercion source is never
+  // itself a `dyn`, so a mutable reference here is a real cell.
+  return expression.type.kind === "ReferenceType" && expression.type.mutable
+    ? { kind: "FieldAccessExpression", object: lowered, field: "v" }
+    : lowered;
 }
 
 // eslint-disable-next-line complexity -- This is a routing function
@@ -2516,6 +2545,9 @@ function jsimMethodCallExpression(
   if (target?.kind === "dyn") {
     return jsimDynDispatch(ctx, methodCallExpression, target, loweredArgs);
   }
+  if (target?.kind === "downcast") {
+    return jsimDowncast(ctx, methodCallExpression, target);
+  }
   // No resolved target - keep the plain JS method call.
   return {
     kind: "MethodCallExpression",
@@ -2590,6 +2622,118 @@ function jsimDynDispatch(
           value: some(
             dispatch({ kind: "Identifier", value: recvName, type: none() }),
           ),
+        },
+      ],
+    },
+    arguments: [parseExpression(ctx, call.receiver)],
+  };
+}
+
+function witnessTypeTag(
+  ctx: JsimContext,
+  witness: HoistedWitness,
+): Option<JSIM.WitnessTypeTag> {
+  const field = ctx.downcastTagFields.get(traitDeclarationId(witness.traitId));
+  return field === undefined
+    ? none()
+    : some({ field, value: typeTagFor(ctx, witness.typeId) });
+}
+
+/** The bare type name keeps the emitted tag readable and independent of
+ * token ids; a numeric suffix tells apart two same-named types from different
+ * scopes. */
+function typeTagFor(ctx: JsimContext, typeId: string): string {
+  const existing = ctx.typeTags.get(typeId);
+  if (existing !== undefined) return existing;
+  const bare = bareTypeName(typeId);
+  const taken = new Set(ctx.typeTags.values());
+  let tag = bare;
+  let suffix = 0;
+  while (taken.has(tag)) {
+    suffix += 1;
+    tag = `${bare}#${String(suffix)}`;
+  }
+  ctx.typeTags.set(typeId, tag);
+  return tag;
+}
+
+/** A `&mut T` payload reads and writes the box's own `value`, like the cell a
+ * `&mut self` dyn dispatch builds, so a whole-value write reaches the owner. */
+function downcastPayload(
+  box: JSIM.Expression,
+  form: DowncastForm,
+): JSIM.Expression {
+  const value = jsimField(box, "value");
+  switch (form) {
+    case "mut":
+      return { kind: "RefCellExpression", place: value };
+    case "ref":
+    case "owned":
+      return value;
+    default:
+      return assertNever(form);
+  }
+}
+
+/** A consuming downcast that does not match hands its receiver to nobody, so
+ * the receiver is released here; a borrowing one leaves it with its owner. */
+function mismatchedReceiverCleanup(
+  receiver: string,
+  form: DowncastForm,
+): readonly JSIM.Statement[] {
+  return form === "owned"
+    ? [{ kind: "DisposeCallStatement", target: receiver }]
+    : [];
+}
+
+function jsimDowncast(
+  ctx: JsimContext,
+  call: Semantics.MethodCallExpression,
+  target: Extract<MethodTarget, { kind: "downcast" }>,
+): JSIM.Expression {
+  const recvName = reserveLocalName(ctx, "dynRecv");
+  const box: JSIM.Expression = {
+    kind: "Identifier",
+    value: recvName,
+    type: none(),
+  };
+  const tagField = ctx.downcastTagFields.get(target.traitId);
+  assert(tagField !== undefined, "downcast on a trait with no tag field");
+  const tagMatches = jsimBinaryExpression(
+    ctx,
+    "Eq",
+    jsimField(jsimField(box, "witness"), tagField),
+    { kind: "StringLiteral", value: typeTagFor(ctx, target.targetTypeId) },
+    call.tokenId,
+  );
+  return {
+    kind: "CallExpression",
+    callee: {
+      kind: "ArrowFunctionExpression",
+      params: [recvName],
+      body: [
+        {
+          kind: "IfStatement",
+          condition: tagMatches,
+          thenBranch: [
+            {
+              kind: "ReturnStatement",
+              value: some(
+                jsimEnumPayloadVariant(
+                  ["Option", "Some"],
+                  [downcastPayload(box, target.form)],
+                  target.form === "owned",
+                ),
+              ),
+            },
+          ],
+          elseBranch: some([
+            ...mismatchedReceiverCleanup(recvName, target.form),
+            {
+              kind: "ReturnStatement",
+              value: some(jsimEnumUnitVariantConstruction(["Option", "None"])),
+            },
+          ]),
         },
       ],
     },
@@ -3036,14 +3180,26 @@ function jsimEnumUnitVariantConstruction(
   };
 }
 
-/** Payload lowers to `JSIM.ArrayExpression` so it reaches the array dispose
- * helper: the wrapper drops `data` as a unit, and a bare tuple carries no
- * disposer of its own. It stays a plain array (never a TypedArray) because a
- * variant's payload has no Vec/array runtime semantics. */
 function jsimEnumTupleVariantConstruction(
   ctx: JsimContext,
   segments: readonly string[],
   args: readonly Semantics.Expression[],
+): JSIM.Expression {
+  return jsimEnumPayloadVariant(
+    segments,
+    args.map((arg) => parseExpression(ctx, arg)),
+    args.some((arg) => arg.type.kind !== "ReferenceType"),
+  );
+}
+
+/** Payload lowers to `JSIM.ArrayExpression` so it reaches the array dispose
+ * helper: the wrapper drops `data` as a unit, and a bare tuple carries no
+ * disposer of its own. It stays a plain array (never a TypedArray) because a
+ * variant's payload has no Vec/array runtime semantics. */
+function jsimEnumPayloadVariant(
+  segments: readonly string[],
+  elements: readonly JSIM.Expression[],
+  ownsPayload: boolean,
 ): JSIM.Expression {
   const variantName = segments[1];
   assert(variantName !== undefined, "Unexpected undefined segment");
@@ -3053,11 +3209,11 @@ function jsimEnumTupleVariantConstruction(
       jsimEnumTagField(variantName),
       jsimEnumDataField({
         kind: "ArrayExpression",
-        elements: args.map((arg) => parseExpression(ctx, arg)),
+        elements,
         numericKind: none(),
       }),
     ],
-    disposableFields: ENUM_PAYLOAD_DISPOSABLE_FIELDS,
+    disposableFields: ownsPayload ? ENUM_PAYLOAD_DISPOSABLE_FIELDS : [],
     dropFn: none(),
   };
 }
@@ -4568,9 +4724,15 @@ function parseAssignStatement(
   };
 }
 
+/** A `&mut dyn` is the `dyn` box itself (see `parseMutableReferenceExpression`),
+ * so there is no cell to read through. */
 function isMutableReferenceTyped(expression: Semantics.Expression): boolean {
   const type = expression.type;
-  return type.kind === "ReferenceType" && type.mutable;
+  return (
+    type.kind === "ReferenceType" &&
+    type.mutable &&
+    type.referent.kind !== "DynType"
+  );
 }
 
 /**
@@ -4604,6 +4766,9 @@ function parseMutableReferenceExpression(
   expression: Semantics.ReferenceExpression,
 ): JSIM.Expression {
   const place = parseExpression(ctx, expression.operand);
+  // A `dyn` box is already the shape every `&mut dyn` consumer reads, and a
+  // write through the place is rejected, so no cell is needed to write back.
+  if (expression.operand.type.kind === "DynType") return place;
   return { kind: "RefCellExpression", place };
 }
 

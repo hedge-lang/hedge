@@ -105,7 +105,24 @@ the receiver, because two different concrete types behind a `dyn Trait` could
 otherwise be combined, which an implementation cannot assume.
 
 Downcasting a `dyn Trait` to a concrete type is a checked operation that returns
-`Option`; there is no unchecked type assertion, since the language has no `as`.
+`Option`; there is no unchecked type assertion, since the language has no `as`. It
+is written as a method on the trait object with the target as its single type
+argument, in three forms that differ in how the object is held: `d.downcast_ref::<T>()`
+returns `Option<&T>`, `d.downcast_mut::<T>()` returns `Option<&mut T>`, and
+`d.downcast::<T>()` consumes the object and returns `Option<T>`. The result is
+`Some` when the value behind the object was created as a `T` and `None` for any other
+type that implements the trait. The consuming form cannot be called through a
+reference, and `downcast_mut` requires a mutable receiver: a `&mut` reference, or
+an owned binding declared `mut`. A trait that declares a method
+of the same name keeps its own method.
+
+The target must implement the trait, since a value of any other type could never
+have been behind that object; naming one is a compile error rather than a runtime
+`None`. The target must also be a type with a single runtime identity, which excludes
+a generic parameter, an associated type projection such as `T::Item`, and an
+instantiation of a generic type: because generics are
+erased, every instantiation of a generic type shares one witness at runtime and
+cannot be told apart from another.
 
 ## Derive
 

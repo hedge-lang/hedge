@@ -87,6 +87,7 @@ export function compile(
           extraWitnesses: analysis.extraWitnesses,
           unsizeCoercions: analysis.unsizeCoercions,
           dropImpls: analysis.dropImpls,
+          downcastTagFields: analysis.downcastTagFields,
           methodCallWitnesses: analysis.methodCallWitnesses,
           dropWitnesses: analysis.dropWitnesses,
           dropBoundsUnsatisfied: analysis.dropBoundsUnsatisfied,
