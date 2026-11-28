@@ -1,0 +1,34 @@
+trait Draw {
+  fn draw(&self) -> i32;
+  fn bump(&mut self);
+}
+
+struct Circle {
+  r: i32,
+}
+
+impl Draw for Circle {
+  fn draw(&self) -> i32 {
+    self.r
+  }
+
+  fn bump(&mut self) {
+    self.r = self.r + 1;
+  }
+}
+
+fn inner(d: &mut dyn Draw) -> i32 {
+  d.bump();
+  d.draw()
+}
+
+fn outer(d: &mut dyn Draw) -> i32 {
+  inner(&mut *d)
+}
+
+fn main() {
+  let mut c = Circle { r: 3 };
+  print(outer(&mut c));
+  print(",");
+  print(outer(&mut c));
+}

@@ -1,0 +1,27 @@
+trait Draw {
+  fn draw(&self) -> i32;
+  fn bump(&mut self);
+}
+
+struct Circle {
+  r: i32,
+}
+
+impl Draw for Circle {
+  fn draw(&self) -> i32 {
+    self.r
+  }
+
+  fn bump(&mut self) {
+    self.r = self.r + 1;
+  }
+}
+
+fn main() {
+  let mut d: dyn Draw = Circle { r: 7 };
+  let r = &mut d;
+  match (*r).downcast_ref::<Circle>() {
+    Option::Some(c) => print(c.r),
+    Option::None => print(0),
+  }
+}

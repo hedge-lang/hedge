@@ -2348,10 +2348,13 @@ function dynBoxPlace(
   // registered in `ctx.unsizeCoercions` under its own tokenId, so routing it
   // back through `parseExpression`'s coercion intercept would re-enter
   // `jsimUnsizeBox` on the same node and recurse forever.
-  return throughMutableReferenceCell(
-    parseExpressionDispatch(ctx, expression),
-    expression,
-  );
+  const lowered = parseExpressionDispatch(ctx, expression);
+  // The expression's type is already the `dyn` target, so the cell test
+  // cannot go through `isMutableReferenceTyped`: a coercion source is never
+  // itself a `dyn`, so a mutable reference here is a real cell.
+  return expression.type.kind === "ReferenceType" && expression.type.mutable
+    ? { kind: "FieldAccessExpression", object: lowered, field: "v" }
+    : lowered;
 }
 
 // eslint-disable-next-line complexity -- This is a routing function
@@ -4721,9 +4724,15 @@ function parseAssignStatement(
   };
 }
 
+/** A `&mut dyn` is the `dyn` box itself (see `parseMutableReferenceExpression`),
+ * so there is no cell to read through. */
 function isMutableReferenceTyped(expression: Semantics.Expression): boolean {
   const type = expression.type;
-  return type.kind === "ReferenceType" && type.mutable;
+  return (
+    type.kind === "ReferenceType" &&
+    type.mutable &&
+    type.referent.kind !== "DynType"
+  );
 }
 
 /**

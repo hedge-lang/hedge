@@ -1,0 +1,35 @@
+trait Draw {
+  fn draw(&self) -> i32;
+  fn bump(&mut self);
+}
+
+struct Circle {
+  r: i32,
+}
+
+impl Draw for Circle {
+  fn draw(&self) -> i32 {
+    self.r
+  }
+
+  fn bump(&mut self) {
+    self.r = self.r + 1;
+  }
+}
+
+fn bump_circle(d: &mut dyn Draw) {
+  match d.downcast_mut::<Circle>() {
+    Option::Some(c) => c.r = c.r + 10,
+    Option::None => {}
+  }
+}
+
+fn outer(d: &mut dyn Draw) {
+  bump_circle(&mut *d);
+}
+
+fn main() {
+  let mut d: dyn Draw = Circle { r: 1 };
+  outer(&mut d);
+  print(d.draw());
+}
